@@ -611,6 +611,28 @@ def _prepare_seed_venv(
     # Prefer an environment that already contains the local build toolchain.
     # Stable sorting preserves active_slot preference when both are complete.
     candidates.sort(key=lambda item: not bool(item[2].get("ready")))
+    fresh_uv_enabled = _env_flag("ADAOS_CORE_UPDATE_FRESH_UV_ENVIRONMENT", "1")
+    locked_checkout = checkout_dir is not None and (checkout_dir / "uv.lock").is_file()
+    uv = shutil.which("uv") if fresh_uv_enabled and locked_checkout and _uv_install_enabled() else None
+    if uv:
+        payload: dict[str, object] = {
+            "ok": True,
+            "seeded": False,
+            "source": "locked_uv_fresh_environment",
+            "reason": "avoid_active_slot_venv_copy",
+            "target_venv_dir": str(venv_dir),
+            "installer": str(uv),
+        }
+        if candidates:
+            fallback_name, fallback_path, fallback_toolchain = candidates[0]
+            payload.update(
+                {
+                    "fallback_source": fallback_name,
+                    "fallback_source_venv_dir": str(fallback_path),
+                    "fallback_source_build_toolchain": fallback_toolchain,
+                }
+            )
+        return payload
     for source_name, source_path, toolchain in candidates:
         try:
             result = _copy_seed_venv(source_path, venv_dir, checkout_dir=checkout_dir)
@@ -646,6 +668,43 @@ def _uv_locked_enabled() -> bool:
     return str(os.getenv("ADAOS_CORE_UPDATE_UV_LOCKED", "1") or "1").strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _uv_link_mode_snapshot(*, uv: str, venv_dir: Path) -> dict[str, object]:
+    requested = str(os.getenv("UV_LINK_MODE") or "").strip().lower()
+    if requested:
+        return {"mode": requested, "reason": "explicit_uv_link_mode"}
+    if not _env_flag("ADAOS_CORE_UPDATE_UV_HARDLINK_CACHE", "1"):
+        return {"mode": "", "reason": "cache_hardlink_disabled"}
+    try:
+        completed = subprocess.run(
+            [uv, "cache", "dir"],
+            capture_output=True,
+            text=True,
+            timeout=15.0,
+        )
+        cache_dir = Path(str(completed.stdout or "").strip()).expanduser().resolve()
+        venv_parent = Path(venv_dir).expanduser().resolve().parent
+        venv_parent.mkdir(parents=True, exist_ok=True)
+        if completed.returncode != 0 or not cache_dir.is_dir():
+            return {"mode": "", "reason": "cache_dir_unavailable"}
+        if cache_dir.stat().st_dev != venv_parent.stat().st_dev:
+            return {
+                "mode": "",
+                "reason": "cache_target_filesystem_mismatch",
+                "cache_dir": str(cache_dir),
+            }
+        return {
+            "mode": "hardlink",
+            "reason": "cache_target_same_filesystem",
+            "cache_dir": str(cache_dir),
+        }
+    except Exception as exc:
+        return {
+            "mode": "",
+            "reason": "cache_link_mode_probe_failed",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
 def _install_slot_project(
     *,
     checkout_dir: Path,
@@ -658,6 +717,9 @@ def _install_slot_project(
     if uv and (checkout_dir / "uv.lock").exists():
         env = dict(os.environ)
         env["UV_PROJECT_ENVIRONMENT"] = str(venv_dir)
+        link_mode = _uv_link_mode_snapshot(uv=uv, venv_dir=venv_dir)
+        if str(link_mode.get("mode") or ""):
+            env["UV_LINK_MODE"] = str(link_mode["mode"])
         cmd = [uv, "sync", "--no-dev", "--python", sys.executable]
         if _uv_locked_enabled():
             cmd.insert(2, "--locked")
@@ -677,6 +739,7 @@ def _install_slot_project(
                 "returncode": int(completed.returncode),
                 "stdout_tail": (completed.stdout or "")[-4000:],
                 "stderr_tail": (completed.stderr or "")[-4000:],
+                "link_mode": link_mode,
             }
         )
         if completed.returncode == 0:
@@ -690,7 +753,36 @@ def _install_slot_project(
                 "attempts": attempts,
             }
 
-    if str(seed.get("copy_method") or "").strip() == "cp_hardlink":
+    effective_seed = seed
+    if str(seed.get("source") or "").strip() == "locked_uv_fresh_environment":
+        fallback_source_raw = str(seed.get("fallback_source_venv_dir") or "").strip()
+        fallback_source = Path(fallback_source_raw).expanduser() if fallback_source_raw else None
+        if fallback_source is not None and _venv_is_usable(fallback_source):
+            shutil.rmtree(venv_dir, ignore_errors=True)
+            try:
+                fallback_seed = _copy_seed_venv(fallback_source, venv_dir, checkout_dir=None)
+            except Exception as exc:
+                fallback_seed = {
+                    "ok": False,
+                    "seeded": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            fallback_seed["source"] = str(seed.get("fallback_source") or "")
+            fallback_seed["source_build_toolchain"] = seed.get("fallback_source_build_toolchain")
+            attempts.append(
+                {
+                    "installer": "deferred_seed",
+                    "returncode": 0 if bool(fallback_seed.get("ok")) else 1,
+                    "reason": "locked_uv_sync_failed",
+                    "copy_method": fallback_seed.get("copy_method"),
+                    "elapsed_s": fallback_seed.get("elapsed_s"),
+                    "error": fallback_seed.get("error"),
+                }
+            )
+            if bool(fallback_seed.get("ok")):
+                effective_seed = fallback_seed
+
+    if str(effective_seed.get("copy_method") or "").strip() == "cp_hardlink":
         attempts.append(
             {
                 "installer": "pip",
@@ -700,8 +792,8 @@ def _install_slot_project(
             }
         )
         shutil.rmtree(venv_dir, ignore_errors=True)
-        source_venv = Path(str(seed.get("source_venv_dir") or "")).expanduser()
-        if str(seed.get("source_venv_dir") or "").strip() and _venv_is_usable(source_venv):
+        source_venv = Path(str(effective_seed.get("source_venv_dir") or "")).expanduser()
+        if str(effective_seed.get("source_venv_dir") or "").strip() and _venv_is_usable(source_venv):
             reseed = _copy_seed_venv(source_venv, venv_dir, checkout_dir=None)
             attempts.append(
                 {
@@ -738,10 +830,10 @@ def _install_slot_project(
                 "returncode": 1,
                 "error": str(first_exc),
                 "error_type": type(first_exc).__name__,
-                "after_seed": bool(seed.get("seeded")),
+                "after_seed": bool(effective_seed.get("seeded")),
             }
         )
-        if bool(seed.get("seeded")):
+        if bool(effective_seed.get("seeded")):
             shutil.rmtree(venv_dir, ignore_errors=True)
             _run([sys.executable, "-m", "venv", str(venv_dir)])
             py = _venv_python(venv_dir)
@@ -756,7 +848,7 @@ def _install_slot_project(
         "started_at": started_at,
         "finished_at": time.time(),
         "elapsed_s": round(time.time() - started_at, 3),
-        "seed": seed,
+        "seed": effective_seed,
         "attempts": attempts,
     }
 

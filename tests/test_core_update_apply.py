@@ -302,6 +302,7 @@ def test_copy_seed_venv_auto_uses_hardlink_after_reflink_fails_for_uv(monkeypatc
 def test_prepare_seed_venv_prefers_source_with_complete_build_toolchain(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 
+    monkeypatch.setenv("ADAOS_CORE_UPDATE_FRESH_UV_ENVIRONMENT", "0")
     active = tmp_path / "active" / "venv"
     root = tmp_path / "root" / ".venv"
     target = tmp_path / "target" / "venv"
@@ -340,6 +341,208 @@ def test_prepare_seed_venv_prefers_source_with_complete_build_toolchain(monkeypa
     assert copied == [root]
     assert result["source"] == "root_venv"
     assert result["source_build_toolchain"]["ready"] is True
+
+
+def test_prepare_seed_venv_prefers_fresh_locked_uv_environment(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "uv.lock").write_text("", encoding="utf-8")
+    target = tmp_path / "slots" / "B" / "venv"
+    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+    monkeypatch.setattr(
+        mod,
+        "_copy_seed_venv",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("active venv must not be copied")),
+    )
+
+    result = mod._prepare_seed_venv(
+        venv_dir=target,
+        slot_dir=tmp_path / "slots" / "B",
+        repo_root_dir=tmp_path / "root",
+        checkout_dir=checkout,
+    )
+
+    assert result == {
+        "ok": True,
+        "seeded": False,
+        "source": "locked_uv_fresh_environment",
+        "reason": "avoid_active_slot_venv_copy",
+        "target_venv_dir": str(target),
+        "installer": "/usr/bin/uv",
+    }
+
+
+def test_prepare_seed_venv_can_restore_copy_fallback_for_locked_uv(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "uv.lock").write_text("", encoding="utf-8")
+    active = tmp_path / "active" / "venv"
+    target = tmp_path / "slots" / "B" / "venv"
+    monkeypatch.setenv("ADAOS_CORE_UPDATE_FRESH_UV_ENVIRONMENT", "0")
+    monkeypatch.setattr(mod, "_active_slot_seed_venv", lambda _slot_dir: active)
+    monkeypatch.setattr(mod, "_root_seed_venv", lambda _repo_root: None)
+    monkeypatch.setattr(mod, "_venv_build_toolchain_snapshot", lambda _path: {"ready": True})
+    monkeypatch.setattr(
+        mod,
+        "_copy_seed_venv",
+        lambda source, target_venv, *, checkout_dir=None: {
+            "ok": True,
+            "seeded": True,
+            "source_venv_dir": str(source),
+            "target_venv_dir": str(target_venv),
+            "copy_method": "cp_archive",
+        },
+    )
+
+    result = mod._prepare_seed_venv(
+        venv_dir=target,
+        slot_dir=tmp_path / "slots" / "B",
+        repo_root_dir=tmp_path / "root",
+        checkout_dir=checkout,
+    )
+
+    assert result["seeded"] is True
+    assert result["source"] == "active_slot"
+    assert result["copy_method"] == "cp_archive"
+
+
+def test_prepare_fresh_locked_uv_records_deferred_active_fallback(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "uv.lock").write_text("", encoding="utf-8")
+    active = tmp_path / "active" / "venv"
+    target = tmp_path / "slots" / "B" / "venv"
+    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+    monkeypatch.setattr(mod, "_active_slot_seed_venv", lambda _slot_dir: active)
+    monkeypatch.setattr(mod, "_root_seed_venv", lambda _repo_root: None)
+    monkeypatch.setattr(mod, "_venv_build_toolchain_snapshot", lambda _path: {"ready": True})
+
+    result = mod._prepare_seed_venv(
+        venv_dir=target,
+        slot_dir=tmp_path / "slots" / "B",
+        repo_root_dir=tmp_path / "root",
+        checkout_dir=checkout,
+    )
+
+    assert result["source"] == "locked_uv_fresh_environment"
+    assert result["fallback_source"] == "active_slot"
+    assert result["fallback_source_venv_dir"] == str(active)
+    assert result["fallback_source_build_toolchain"] == {"ready": True}
+
+
+def test_uv_link_mode_uses_hardlinks_for_same_filesystem_cache(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    cache = tmp_path / "uv-cache"
+    cache.mkdir()
+    monkeypatch.delenv("UV_LINK_MODE", raising=False)
+    monkeypatch.setattr(
+        mod.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, stdout=str(cache), stderr=""),
+    )
+
+    result = mod._uv_link_mode_snapshot(uv="uv", venv_dir=tmp_path / "slot" / "venv")
+
+    assert result == {
+        "mode": "hardlink",
+        "reason": "cache_target_same_filesystem",
+        "cache_dir": str(cache.resolve()),
+    }
+
+
+def test_install_slot_project_applies_cache_hardlink_mode(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "uv.lock").write_text("", encoding="utf-8")
+    venv = tmp_path / "venv"
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+    monkeypatch.setattr(mod, "_low_priority_io_command", lambda cmd: list(cmd))
+    monkeypatch.setattr(
+        mod,
+        "_uv_link_mode_snapshot",
+        lambda **_kwargs: {"mode": "hardlink", "reason": "cache_target_same_filesystem"},
+    )
+
+    def _fake_run(cmd, *, cwd=None, env=None, capture_output=False, text=False):
+        observed.update({"cmd": list(cmd), "cwd": cwd, "env": dict(env or {})})
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run)
+
+    result = mod._install_slot_project(checkout_dir=checkout, venv_dir=venv, seed={"seeded": False})
+
+    assert observed["env"]["UV_LINK_MODE"] == "hardlink"
+    assert observed["env"]["UV_PROJECT_ENVIRONMENT"] == str(venv)
+    assert result["attempts"][0]["link_mode"]["mode"] == "hardlink"
+
+
+def test_install_slot_project_uses_deferred_seed_when_locked_uv_fails(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "uv.lock").write_text("", encoding="utf-8")
+    source = tmp_path / "active-venv"
+    venv = tmp_path / "candidate-venv"
+    copy_calls: list[tuple[Path, Path, Path | None]] = []
+    commands: list[list[str]] = []
+    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+    monkeypatch.setattr(mod, "_low_priority_io_command", lambda cmd: list(cmd))
+    monkeypatch.setattr(mod, "_uv_link_mode_snapshot", lambda **_kwargs: {"mode": "hardlink"})
+    monkeypatch.setattr(mod, "_venv_is_usable", lambda path: Path(path) in {source, venv})
+    monkeypatch.setattr(
+        mod.subprocess,
+        "run",
+        lambda cmd, **_kwargs: subprocess.CompletedProcess(cmd, 1, stdout="", stderr="offline"),
+    )
+
+    def _fake_copy(source_venv, target_venv, *, checkout_dir=None):
+        copy_calls.append((Path(source_venv), Path(target_venv), checkout_dir))
+        return {
+            "ok": True,
+            "seeded": True,
+            "source_venv_dir": str(source_venv),
+            "copy_method": "cp_archive",
+            "elapsed_s": 3.0,
+        }
+
+    monkeypatch.setattr(mod, "_copy_seed_venv", _fake_copy)
+    monkeypatch.setattr(
+        mod,
+        "_venv_build_toolchain_snapshot",
+        lambda _path: {"ready": True, "packages": {"pip": "24", "setuptools": "79", "wheel": "0.45"}},
+    )
+    monkeypatch.setattr(mod, "_run", lambda cmd, *, cwd=None: commands.append(list(cmd)))
+
+    result = mod._install_slot_project(
+        checkout_dir=checkout,
+        venv_dir=venv,
+        seed={
+            "seeded": False,
+            "source": "locked_uv_fresh_environment",
+            "fallback_source": "active_slot",
+            "fallback_source_venv_dir": str(source),
+            "fallback_source_build_toolchain": {"ready": True},
+        },
+    )
+
+    assert copy_calls == [(source, venv, None)]
+    assert result["seed"]["source"] == "active_slot"
+    assert result["attempts"][1]["installer"] == "deferred_seed"
+    assert result["attempts"][1]["reason"] == "locked_uv_sync_failed"
+    assert commands == [
+        [str(mod._venv_python(venv)), "-m", "pip", "install", "--no-build-isolation", str(checkout)]
+    ]
 
 
 def test_install_slot_project_reuses_seeded_build_toolchain_without_online_upgrade(monkeypatch, tmp_path: Path) -> None:
