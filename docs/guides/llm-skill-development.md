@@ -979,6 +979,12 @@ Use these rules for command and subscription handlers:
   ticks and reserve `fetch_endpoint_snapshot()` for the separately budgeted
   refresh; `list_endpoints(sync_registry=False)` still performs a Root request
   and is not a cache-only API.
+- `cache-only` guarantees no network, not necessarily a cheap event-loop path.
+  If the SDK projection is backed by SQLite, JSON, or another process-owned
+  registry, bootstrap it once (and on explicit invalidation/refresh) into a
+  bounded process-local snapshot. Routine ticks read that in-memory snapshot;
+  expose bootstrap count and projection source so stale or repeated disk reads
+  are visible.
 - A periodic business command that legitimately needs the network is not an
   exemption from the refresh rules. Reuse the endpoint projection already
   loaded by the worker instead of resolving it remotely again, and put repeated
