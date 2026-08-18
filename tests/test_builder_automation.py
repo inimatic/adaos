@@ -314,6 +314,8 @@ def test_background_automation_launches_durable_worker_process(tmp_path: Path, m
 
     assert result["pid"] == 4242
     assert result["status"] == "launched"
+    assert result["repo_root"] == str(service.repo_root.resolve())
+    assert result["executable"]
     assert launched[0][0][-2:] == ["--session-id", "automation.scenario.recipes"]
     assert launched[0][1]["env"]["ADAOS_BASE_DIR"] == str(service.state_dir.parent.resolve())
     launch = json.loads(

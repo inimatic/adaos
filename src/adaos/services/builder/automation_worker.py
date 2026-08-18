@@ -4,13 +4,50 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from adaos.apps.bootstrap import init_ctx
 from adaos.services.agent_context import get_ctx
 from adaos.services.builder.automation import BuilderAutomationService, _now_iso
 from adaos.services.settings import Settings
+
+
+_QUEUE_STATUSES = {"starting", "queued"}
+_TERMINAL_STATUSES = {"completed", "failed", "cancelled", "expired"}
+
+
+def _run_until_settled(
+    service: BuilderAutomationService,
+    session_id: str,
+    *,
+    poll_interval_seconds: float = 2.0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict:
+    """Keep a per-session worker alive while its submitted task is queued.
+
+    A local dev node admits one task at a time.  A second durable worker used
+    to call ``run_once`` and exit immediately when that node was occupied,
+    leaving its own task queued without an executor.  Retrying only the exact
+    session task preserves FIFO-independent targeting while avoiding a custom
+    queue or a second execution path.
+    """
+
+    while True:
+        session = service._find_session_by_id(str(session_id))
+        status = str((session or {}).get("status") or "").strip().lower()
+        if status in _TERMINAL_STATUSES:
+            return dict(session or {})
+        if status in _QUEUE_STATUSES:
+            service._run_worker(str(session_id))
+            session = service._find_session_by_id(str(session_id))
+            status = str((session or {}).get("status") or "").strip().lower()
+            if status in _TERMINAL_STATUSES:
+                return dict(session or {})
+        if not session:
+            raise RuntimeError(f"automation session not found: {session_id}")
+        sleep(max(0.05, float(poll_interval_seconds)))
 
 
 def run(session_id: str) -> int:
@@ -24,8 +61,7 @@ def run(session_id: str) -> int:
     worker_root = Path(ctx.paths.state_dir()) / "builder" / "automation_workers" / token
     result_path = worker_root / "result.json"
     try:
-        service._run_worker(str(session_id))
-        session = service._find_session_by_id(str(session_id))
+        session = _run_until_settled(service, str(session_id))
         payload = {
             "schema": "adaos.builder.automation_worker_result.v1",
             "session_id": str(session_id),

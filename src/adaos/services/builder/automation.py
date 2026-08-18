@@ -1962,6 +1962,8 @@ class BuilderAutomationService:
             "session_id": str(session_id),
             "pid": int(process.pid),
             "status": "launched",
+            "repo_root": str(self.repo_root.resolve()),
+            "executable": str(executable.resolve()),
             "stdout_path": str(stdout_path),
             "stderr_path": str(stderr_path),
             "launched_at": _now_iso(),
