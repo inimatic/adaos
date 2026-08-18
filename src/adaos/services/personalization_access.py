@@ -4,6 +4,7 @@ import contextlib
 import json
 from contextlib import contextmanager
 from pathlib import Path
+import threading
 import time
 from typing import Any, Callable, Iterator, Mapping
 from uuid import uuid4
@@ -31,6 +32,29 @@ from adaos.domain.personalization_access import (
 
 class PersonalizationAccessError(RuntimeError):
     """Raised when the Phase 1 access kernel rejects a state transition."""
+
+
+_AUDIT_DIAGNOSTICS_LOCK = threading.Lock()
+_AUDIT_DIAGNOSTICS: dict[str, Any] = {
+    "schema": "adaos.personalization.audit_diagnostics.v1",
+    "successful_read_suppressed_total": 0,
+    "last_successful_read_suppressed_at": None,
+    "last_successful_read_action": None,
+}
+
+
+def _record_successful_read_audit_suppressed(action: str) -> None:
+    with _AUDIT_DIAGNOSTICS_LOCK:
+        _AUDIT_DIAGNOSTICS["successful_read_suppressed_total"] = (
+            int(_AUDIT_DIAGNOSTICS.get("successful_read_suppressed_total") or 0) + 1
+        )
+        _AUDIT_DIAGNOSTICS["last_successful_read_suppressed_at"] = time.time()
+        _AUDIT_DIAGNOSTICS["last_successful_read_action"] = str(action or "").strip() or None
+
+
+def personalization_access_diagnostics() -> dict[str, Any]:
+    with _AUDIT_DIAGNOSTICS_LOCK:
+        return dict(_AUDIT_DIAGNOSTICS)
 
 
 def _now_ts() -> float:
@@ -599,6 +623,7 @@ class PersonalizationAccessService:
         subject: SubjectRef,
         resource: str | None = None,
         context: Mapping[str, Any] | None = None,
+        audit_success: bool = True,
     ) -> PolicyDecision:
         if subject.kind != "user":
             raise PersonalizationAccessError(f"user subject expected: {subject.ref()}")
@@ -610,6 +635,7 @@ class PersonalizationAccessService:
             scope=scope,
             resource=resource,
             context=context,
+            audit_success=audit_success,
         )
         if decision.decision != "allow":
             raise PermissionError(f"user-private content denied: {decision.reason_code or action}")
@@ -1475,6 +1501,7 @@ class PersonalizationAccessService:
         scope: ScopeRef | None = None,
         resource: str | None = None,
         context: Mapping[str, Any] | None = None,
+        audit_success: bool = True,
     ) -> PolicyDecision:
         capability = validate_capability(action)
         context_data = _dict(context)
@@ -1556,16 +1583,19 @@ class PersonalizationAccessService:
                 grant_ids=decision.grant_ids,
                 trace_id=decision.trace_id,
             )
-        self._audit(
-            f"policy.{decision.decision}",
-            actor=actor,
-            subject=subject,
-            scope=scope,
-            device=device_ref,
-            session=session_ref,
-            decision=decision,
-            metadata={"resource": resource, "reason_code": decision.reason_code},
-        )
+        if decision.decision != "allow" or audit_success:
+            self._audit(
+                f"policy.{decision.decision}",
+                actor=actor,
+                subject=subject,
+                scope=scope,
+                device=device_ref,
+                session=session_ref,
+                decision=decision,
+                metadata={"resource": resource, "reason_code": decision.reason_code},
+            )
+        else:
+            _record_successful_read_audit_suppressed(decision.action)
         return decision
 
     def list_audit(self, **kwargs: Any) -> list[dict[str, Any]]:
@@ -1710,4 +1740,5 @@ __all__ = [
     "PersonalizationAccessError",
     "PersonalizationAccessService",
     "PersonalizationAccessStore",
+    "personalization_access_diagnostics",
 ]

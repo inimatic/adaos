@@ -670,8 +670,7 @@ def _listed_invites(service: Any) -> list[dict[str, Any]]:
 
 @router.get("/current-user/header-settings", dependencies=[Depends(require_token)])
 def get_current_user_header(request: Request, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
-    service = _profile(ctx)
-    settings = service.header_settings()
+    settings = personalization_runtime.current_user_header_settings(ctx)
     device_status = _current_device_status(request)
     settings["device_status"] = device_status
     settings["device_trust_status"] = str(device_status.get("label") or settings.get("device_trust_status") or "current")
@@ -709,6 +708,7 @@ def update_current_user_profile(body: dict[str, Any], ctx: AgentContext = Depend
     try:
         service = _profile(ctx)
         profile = service.update_profile(_profile_patch(body), actor=_actor(ctx))
+        personalization_runtime.invalidate_current_user_header_settings(ctx)
         return {"ok": True, "profile": _profile_view(profile)}
     except Exception as exc:
         raise _http_error(exc) from exc
@@ -725,6 +725,7 @@ def update_current_user_preferences(body: dict[str, Any], ctx: AgentContext = De
     try:
         service = _profile(ctx)
         preferences = service.update_preferences(_preferences_patch(body), actor=_actor(ctx))
+        personalization_runtime.invalidate_current_user_header_settings(ctx)
         return {"ok": True, "preferences": preferences}
     except Exception as exc:
         raise _http_error(exc) from exc
@@ -954,6 +955,7 @@ def update_current_user_settings(
             profile = service.update_profile(clean_profile_patch, actor=actor, emit_event=False)
             preferences = service.update_preferences(clean_preferences_patch, actor=actor, emit_event=False)
             settings = service.header_settings()
+        personalization_runtime.invalidate_current_user_header_settings(ctx)
         revision = float(settings.get("preferences_revision") or 0)
         background_tasks.add_task(service.emit_profile_changed, profile.user_id, profile.settings)
         background_tasks.add_task(

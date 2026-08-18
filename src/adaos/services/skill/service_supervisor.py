@@ -537,6 +537,13 @@ def _listener_is_managed_service(listener: Mapping[str, Any]) -> bool:
     )
 
 
+def _poll_service_processes(
+    processes: list[tuple[str, subprocess.Popen]],
+) -> dict[str, tuple[int, int | None]]:
+    """Poll tracked child processes outside the runtime event-loop thread."""
+    return {name: (id(proc), proc.poll()) for name, proc in processes}
+
+
 def _terminate_process_tree(pid: int, *, timeout_s: float = 3.0) -> bool:
     if int(pid or 0) <= 0 or int(pid) == os.getpid():
         return False
@@ -770,6 +777,8 @@ class ServiceSkillSupervisor:
         self._ctx = get_ctx()
         self._procs: dict[str, subprocess.Popen] = {}
         self._proc_specs: dict[str, tuple[Any, ...]] = {}
+        self._process_states: dict[str, dict[str, Any]] = {}
+        self._health_states: dict[str, dict[str, Any]] = {}
         self._specs: dict[str, ServiceSpec] = {}
         self._task: asyncio.Task | None = None
         self._health_task: asyncio.Task | None = None
@@ -911,7 +920,6 @@ class ServiceSkillSupervisor:
     def ui_surface(self, skill_name: str, *, check_health: bool = False) -> dict[str, Any] | None:
         """Return a redacted, same-origin UI surface; never expose the upstream URL."""
 
-        self.ensure_discovered()
         spec = self._specs.get(skill_name)
         if spec is None or not spec.ui_enabled:
             return None
@@ -1027,19 +1035,29 @@ class ServiceSkillSupervisor:
         return cmd, env, log_path
 
     def list(self) -> list[str]:
-        self.ensure_discovered()
         return sorted(self._specs.keys())
 
     def status(self, name: str, *, check_health: bool = False) -> dict[str, Any] | None:
-        self.ensure_discovered()
         spec = self._specs.get(name)
         if not spec:
             return None
 
         proc = self._procs.get(name)
-        running = bool(proc and proc.poll() is None)
+        process_state = dict(self._process_states.get(name) or {})
+        state_matches = bool(proc and process_state.get("process_identity") == id(proc))
+        if state_matches:
+            running = bool(process_state.get("running"))
+            code = process_state.get("exit_code")
+        else:
+            # A newly spawned process is running until the off-loop watchdog
+            # observes an exit. Popen.returncode is a cached value and does not
+            # call waitpid(), so status remains a current-state read.
+            code = getattr(proc, "returncode", None) if proc else None
+            running = bool(proc and code is None)
         pid = int(proc.pid) if proc and proc.pid else None
-        code = None if running else (proc.poll() if proc else None)
+        now = time.time()
+        process_observed_at = process_state.get("observed_at") if state_matches else None
+        process_age_s = max(0.0, now - float(process_observed_at)) if process_observed_at else None
         spec_key = self._spec_key(spec)
         external_ready = self._external_ready_specs.get(name) == spec_key and not running
         resource_activity = dict(
@@ -1061,6 +1079,9 @@ class ServiceSkillSupervisor:
             "running": running,
             "pid": pid,
             "exit_code": code,
+            "process_observed_at": process_observed_at,
+            "process_observation_age_s": round(process_age_s, 3) if process_age_s is not None else None,
+            "process_observation_source": process_state.get("source") if state_matches else "spawn_pending_poll",
             "base_url": spec.base_url,
             "host": spec.host,
             "port": spec.port,
@@ -1101,27 +1122,17 @@ class ServiceSkillSupervisor:
         }
 
         if check_health:
-            ok = _service_health_ok(spec)
-            payload["health_ok"] = ok
-            if ok and not running:
-                listener = _service_listener_snapshot(spec)
-                payload["external_listener"] = listener
-                if _listener_owned_by_current_runtime(listener):
-                    self._external_ready_specs[name] = spec_key
-                    if not external_ready:
-                        self._external_ready_at[name] = time.time()
-                    else:
-                        self._external_ready_at.setdefault(name, time.time())
-                    payload["external_ready"] = True
-                    payload["external_ready_at"] = self._external_ready_at.get(name)
-                else:
-                    self._external_ready_specs.pop(name, None)
-                    self._external_ready_at.pop(name, None)
-                    payload["external_ready"] = False
-                    payload["external_ready_at"] = None
-            elif not ok:
-                self._external_ready_specs.pop(name, None)
-                self._external_ready_at.pop(name, None)
+            health_state = dict(self._health_states.get(name) or {})
+            health_observed_at = health_state.get("observed_at")
+            health_age_s = max(0.0, now - float(health_observed_at)) if health_observed_at else None
+            health_stale_after_s = max(5.0, float(spec.health_interval_s) * 2.0)
+            health_stale = health_age_s is None or health_age_s > health_stale_after_s
+            payload["health_ok"] = None if health_stale else health_state.get("ok")
+            payload["last_health_ok"] = health_state.get("ok")
+            payload["health_observed_at"] = health_observed_at
+            payload["health_observation_age_s"] = round(health_age_s, 3) if health_age_s is not None else None
+            payload["health_observation_stale"] = health_stale
+            payload["health_observation_source"] = health_state.get("source") or "awaiting_background_probe"
 
         return payload
 
@@ -1190,7 +1201,8 @@ class ServiceSkillSupervisor:
         self._external_ready_specs.pop(name, None)
         self._external_ready_at.pop(name, None)
 
-        if proc.poll() is None:
+        code = await asyncio.to_thread(proc.poll)
+        if code is None:
             # Service entrypoints may supervise their own child process (for
             # example an MLflow/Uvicorn server).  Terminating only the tracked
             # launcher can leave a healthy orphan on the configured port; the
@@ -1208,10 +1220,13 @@ class ServiceSkillSupervisor:
                     pass
 
             deadline = time.time() + timeout_s
-            while time.time() < deadline and proc.poll() is None:
+            while time.time() < deadline:
+                code = await asyncio.to_thread(proc.poll)
+                if code is not None:
+                    break
                 await asyncio.sleep(0.05)
 
-            if proc.poll() is None:
+            if code is None:
                 try:
                     proc.kill()
                 except Exception:
@@ -1219,6 +1234,19 @@ class ServiceSkillSupervisor:
 
         self._procs.pop(name, None)
         self._proc_specs.pop(name, None)
+        self._process_states[name] = {
+            "process_identity": id(proc),
+            "pid": int(proc.pid),
+            "running": False,
+            "exit_code": getattr(proc, "returncode", None),
+            "observed_at": time.time(),
+            "source": "stop",
+        }
+        self._health_states[name] = {
+            "ok": False,
+            "observed_at": time.time(),
+            "source": "stop",
+        }
         emit(self._ctx.bus, "skill.service.stopped", {"skill": name, "pid": proc.pid}, source="skill.service")
 
     async def restart(self, name: str) -> None:
@@ -1254,7 +1282,8 @@ class ServiceSkillSupervisor:
                 if str(pid or "").strip().isdigit() and int(pid) > 0
             }
             proc = self._procs.get(name)
-            owner_pid = int(proc.pid) if proc and proc.poll() is None else None
+            proc_code = await asyncio.to_thread(proc.poll) if proc else None
+            owner_pid = int(proc.pid) if proc and proc_code is None else None
             owner_basis = "tracked_process" if owner_pid else None
             listener: dict[str, Any] = {}
             if owner_pid is None and self._external_ready_specs.get(name) == self._spec_key(spec):
@@ -1411,7 +1440,8 @@ class ServiceSkillSupervisor:
             return
         proc = self._procs.get(name)
         spec_key = self._spec_key(spec)
-        if proc and proc.poll() is None:
+        proc_code = await asyncio.to_thread(proc.poll) if proc else None
+        if proc and proc_code is None:
             if self._proc_specs.get(name) == spec_key:
                 self._ensure_failure_counts.pop(name, None)
                 return
@@ -1432,6 +1462,11 @@ class ServiceSkillSupervisor:
                     self._external_ready_at[name] = time.time()
                 else:
                     self._external_ready_at.setdefault(name, time.time())
+                self._health_states[name] = {
+                    "ok": True,
+                    "observed_at": time.time(),
+                    "source": "external_adoption",
+                }
                 if not external_already_marked:
                     emit(
                         self._ctx.bus,
@@ -1536,16 +1571,30 @@ class ServiceSkillSupervisor:
         )
         self._procs[name] = proc
         self._proc_specs[name] = spec_key
+        self._process_states[name] = {
+            "process_identity": id(proc),
+            "pid": int(proc.pid),
+            "running": True,
+            "exit_code": None,
+            "observed_at": time.time(),
+            "source": "spawn",
+        }
         emit(self._ctx.bus, "skill.service.started", {"skill": name, "pid": proc.pid}, source="skill.service")
 
         await self._wait_ready(spec)
-        if proc.poll() is not None and await asyncio.to_thread(_service_health_ok, spec):
+        proc_code = await asyncio.to_thread(proc.poll)
+        if proc_code is not None and await asyncio.to_thread(_service_health_ok, spec):
             listener = await asyncio.to_thread(_service_listener_snapshot, spec)
             if _listener_owned_by_current_runtime(listener):
                 self._procs.pop(name, None)
                 self._proc_specs.pop(name, None)
                 self._external_ready_specs[name] = spec_key
                 self._external_ready_at.setdefault(name, time.time())
+                self._health_states[name] = {
+                    "ok": True,
+                    "observed_at": time.time(),
+                    "source": "launcher_exit_adoption",
+                }
                 emit(
                     self._ctx.bus,
                     "skill.service.ready",
@@ -1608,7 +1657,8 @@ class ServiceSkillSupervisor:
                 self._proc_specs.pop(name, None)
                 self._external_ready_specs.pop(name, None)
                 self._external_ready_at.pop(name, None)
-                if proc and proc.poll() is None:
+                proc_code = await asyncio.to_thread(proc.poll) if proc else None
+                if proc and proc_code is None:
                     with contextlib.suppress(Exception):
                         proc.kill()
         if self._discover_executor:
@@ -1618,6 +1668,27 @@ class ServiceSkillSupervisor:
         self._discover_async_lock_loop = None
 
     # ------------------------------------------------------------------ internals
+    def _record_polled_process_states(
+        self,
+        states: Mapping[str, tuple[int, int | None]],
+        *,
+        source: str,
+    ) -> None:
+        observed_at = time.time()
+        for name, observed in states.items():
+            proc = self._procs.get(name)
+            if not proc or observed[0] != id(proc):
+                continue
+            code = observed[1]
+            self._process_states[name] = {
+                "process_identity": observed[0],
+                "pid": int(proc.pid),
+                "running": code is None,
+                "exit_code": code,
+                "observed_at": observed_at,
+                "source": source,
+            }
+
     def _operation_lock(self, name: str) -> asyncio.Lock:
         loop = asyncio.get_running_loop()
         current = self._operation_locks.get(name)
@@ -1985,10 +2056,20 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
                         json.loads(body)
                     except Exception:
                         pass
+                    self._health_states[spec.skill] = {
+                        "ok": True,
+                        "observed_at": time.time(),
+                        "source": "startup_readiness",
+                    }
                     return
             except Exception:
                 await asyncio.sleep(0.25)
         _log.warning("service skill=%s did not become ready in time (%s)", spec.skill, url)
+        self._health_states[spec.skill] = {
+            "ok": False,
+            "observed_at": time.time(),
+            "source": "startup_readiness_timeout",
+        }
 
     def _record_resource_sample(
         self,
@@ -2090,11 +2171,17 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
 
             # Ensure all discovered services are up (unless in crash cooloff).
             await self.refresh_discovered()
+            process_states = await asyncio.to_thread(
+                _poll_service_processes,
+                list(self._procs.items()),
+            )
+            self._record_polled_process_states(process_states, source="watchdog_ensure")
             for name, spec in list(self._specs.items()):
                 if self._shutdown_requested:
                     return
                 proc = self._procs.get(name)
-                if proc and proc.poll() is None:
+                observed = process_states.get(name)
+                if proc and observed and observed[0] == id(proc) and observed[1] is None:
                     continue
                 cooloff_until = float(self._cooloff_until.get(name) or 0.0)
                 if now < cooloff_until:
@@ -2105,10 +2192,16 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
                     await self._record_ensure_failure(name, spec, exc)
                     _log.warning("failed to ensure service running skill=%s", name, exc_info=True)
 
-            for name, proc in list(self._procs.items()):
+            tracked_processes = list(self._procs.items())
+            process_states = await asyncio.to_thread(_poll_service_processes, tracked_processes)
+            self._record_polled_process_states(process_states, source="watchdog_crash_scan")
+            for name, proc in tracked_processes:
                 if self._shutdown_requested:
                     return
-                code = proc.poll()
+                observed = process_states.get(name)
+                if not observed or observed[0] != id(proc):
+                    continue
+                code = observed[1]
                 if code is None:
                     continue
                 emit(self._ctx.bus, "skill.service.crashed", {"skill": name, "code": code}, source="skill.service")
@@ -2154,6 +2247,11 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
                 return
             now = time.time()
             await self.refresh_discovered()
+            process_states = await asyncio.to_thread(
+                _poll_service_processes,
+                list(self._procs.items()),
+            )
+            self._record_polled_process_states(process_states, source="health_loop")
 
             for name, spec in list(self._specs.items()):
                 if self._shutdown_requested:
@@ -2168,7 +2266,12 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
                 if now >= resource_next_at:
                     self._next_resource_sample_at[name] = now + resource_interval_s
                     proc = self._procs.get(name)
-                    owner_pid = int(proc.pid) if proc and proc.poll() is None else None
+                    observed = process_states.get(name)
+                    owner_pid = (
+                        int(proc.pid)
+                        if proc and observed and observed[0] == id(proc) and observed[1] is None
+                        else None
+                    )
                     if owner_pid is None and self._external_ready_specs.get(name) == self._spec_key(spec):
                         listener = await asyncio.to_thread(_service_listener_snapshot, spec)
                         if _listener_owned_by_current_runtime(listener):
@@ -2192,16 +2295,23 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
                             {"skill": name, "issue_id": issue.get("id"), "activity": activity},
                             source="skill.service",
                         )
-                if not spec.self_managed_enabled:
-                    continue
-
                 next_at = float(self._next_health_check_at.get(name) or 0.0)
                 if now < next_at:
                     continue
                 self._next_health_check_at[name] = now + float(spec.health_interval_s)
 
                 proc = self._procs.get(name)
-                if not proc or proc.poll() is not None:
+                observed = process_states.get(name)
+                tracked_running = bool(
+                    proc and observed and observed[0] == id(proc) and observed[1] is None
+                )
+                external_running = self._external_ready_specs.get(name) == self._spec_key(spec)
+                if not tracked_running and not external_running:
+                    self._health_states[name] = {
+                        "ok": False,
+                        "observed_at": time.time(),
+                        "source": "process_not_running",
+                    }
                     continue
 
                 ok = False
@@ -2212,9 +2322,17 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
                     ok = 200 <= status_code < 300
                 except Exception:
                     ok = False
+                self._health_states[name] = {
+                    "ok": ok,
+                    "observed_at": time.time(),
+                    "source": "background_probe",
+                }
 
                 if ok:
                     self._health_failures[name] = 0
+                    continue
+
+                if not spec.self_managed_enabled:
                     continue
 
                 failures = int(self._health_failures.get(name) or 0) + 1

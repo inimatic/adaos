@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import threading
+import time
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -18,12 +22,76 @@ def _disable_root_invite_registration(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ADAOS_ROOT_TOKEN", raising=False)
     monkeypatch.delenv("HUB_ROOT_TOKEN", raising=False)
     object.__setattr__(get_ctx().settings, "root_token", "")
+    personalization.personalization_runtime._reset_personalization_header_cache_for_tests()
 
 
 def _client() -> TestClient:
     app = FastAPI()
     app.include_router(personalization.router, prefix="/api")
     return TestClient(app)
+
+
+def test_header_settings_cache_coalesces_concurrent_reads_and_invalidates(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = personalization.personalization_runtime
+    ctx = get_ctx()
+    call_total = 0
+    call_lock = threading.Lock()
+
+    class _ProfileService:
+        def header_settings(self) -> dict[str, object]:
+            nonlocal call_total
+            with call_lock:
+                call_total += 1
+                revision = call_total
+            time.sleep(0.05)
+            return {"theme": "dark", "revision": revision}
+
+    monkeypatch.setattr(runtime, "current_user_profile_service", lambda _ctx: _ProfileService())
+    monkeypatch.setattr(runtime, "_header_cache_ttl_s", lambda: 10.0)
+
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        results = list(executor.map(lambda _: runtime.current_user_header_settings(ctx), range(40)))
+
+    assert call_total == 1
+    assert {result["revision"] for result in results} == {1}
+    snapshot = runtime.personalization_header_cache_snapshot()
+    assert snapshot["request_total"] == 40
+    assert snapshot["hit_total"] + snapshot["coalesced_total"] == 39
+    assert snapshot["coalesced_total"] > 0
+
+    runtime.invalidate_current_user_header_settings(ctx)
+    assert runtime.current_user_header_settings(ctx)["revision"] == 2
+    assert call_total == 2
+
+
+def test_header_cache_snapshot_does_not_wait_for_active_computation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = personalization.personalization_runtime
+    ctx = get_ctx()
+    started = threading.Event()
+    release = threading.Event()
+
+    class _ProfileService:
+        @staticmethod
+        def header_settings() -> dict[str, object]:
+            started.set()
+            assert release.wait(timeout=1.0)
+            return {"theme": "dark"}
+
+    monkeypatch.setattr(runtime, "current_user_profile_service", lambda _ctx: _ProfileService())
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(runtime.current_user_header_settings, ctx)
+        assert started.wait(timeout=1.0)
+        before = time.perf_counter()
+        snapshot = runtime.personalization_header_cache_snapshot()
+        elapsed = time.perf_counter() - before
+        release.set()
+        assert future.result(timeout=1.0)["theme"] == "dark"
+
+    assert elapsed < 0.02
+    assert snapshot["inflight_total"] == 1
 
 
 def test_phase4_current_user_profile_preferences_and_denied_role_edit() -> None:

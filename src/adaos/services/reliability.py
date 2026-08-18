@@ -1834,6 +1834,7 @@ def runtime_signal_snapshot() -> dict[str, Any]:
     from adaos.services.reliability_runtime_beacon import reliability_runtime_beacon_snapshot
     from adaos.services.runtime_executor import runtime_default_executor_snapshot
     from adaos.services.subnet_heartbeat_runtime import heartbeat_persistence_snapshot
+    from adaos.services.personalization_runtime import personalization_header_cache_snapshot
 
     try:
         from adaos.services.bootstrap import control_report_runtime_snapshot
@@ -1859,6 +1860,7 @@ def runtime_signal_snapshot() -> dict[str, Any]:
             "logging_queue": logging_queue_snapshot(),
             "reliability_runtime_beacon": reliability_runtime_beacon_snapshot(),
             "subnet_heartbeat_persistence": heartbeat_persistence_snapshot(),
+            "personalization_header_cache": personalization_header_cache_snapshot(),
             "root_control_report": control_report,
         }
 

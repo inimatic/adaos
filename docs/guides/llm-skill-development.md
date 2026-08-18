@@ -963,6 +963,25 @@ Use these rules for command and subscription handlers:
   update them through the SDK async storage route, and identify the returned
   status source. A failed diagnostic persistence write must be counted and
   visible; do not silently return stale persisted counters as current truth.
+- Make status and health reads side-effect free. A status call must read a
+  bounded in-memory projection populated by lifecycle events or a background
+  probe; it must not run process polling, endpoint discovery, remote health
+  requests, database migrations, or persistent audit writes in the caller.
+  Expose observation time and source so a stale projection is visible.
+- Do not store a high-rate successful-read audit trail inside the same JSON or
+  database record as operational state. Persist denials and mutations; sample,
+  coalesce, or append successful reads to a separately bounded audit sink.
+  Rewriting a growing audit array for every widget/status read is write
+  amplification and can starve the runtime channel even when the handler runs
+  in a worker thread.
+- Put a single-flight boundary and a declared concurrency limit around cache
+  misses. TTL alone is insufficient: after expiration, simultaneous browser
+  reads must share one computation instead of parsing the same file or opening
+  the same SQLite record once per request. Publish hit, miss, coalesced/wait,
+  compute-duration, invalidation, and source-size counters. Hold a shared lock
+  only while reading or updating cache metadata; never hold it across file,
+  SQLite, subprocess, model, or network work because an unrelated diagnostic
+  snapshot may run on the channel event loop.
 
 Acceptance must exercise contention, not only a fast mock. Run the handler
 against a realistically sized primary Yjs snapshot while a bounded competing
@@ -973,6 +992,11 @@ commands leaves only the newest request id/state. Also verify flush errors are
 observable, cancellation leaves no orphan task, and the skill's bounded
 diagnostic tool reports active, completed, superseded, failed and rejected
 projection counts.
+For a polled read/status surface, also burst that route concurrently while
+sampling the runtime ping and event-loop watchdog. Acceptance requires one
+single-flight computation per semantic key, no persistence growth from
+successful reads, bounded ping latency, and no watchdog stack in the skill,
+database, audit serializer, process poller, or response path.
 
 Make hot projection writes idempotent before calling the SDK helper. Runtime
 projection code can skip physical no-op mutations, but guard/governance checks
@@ -1864,6 +1888,10 @@ Treat these as defects in LLM-generated skills:
 - applying a payload limit only after reading an entire file, directory,
   database result, or remote response into memory
 - polling a heavy snapshot endpoint to keep normal UI alive
+- running discovery, process/endpoint health probes, or persistent audit writes
+  from a status/read request instead of serving a timestamped read model
+- rewriting a monolithic state-plus-audit file for every successful browser
+  read, or allowing simultaneous cache misses to duplicate that work
 - duplicating the same data in a tool response and Yjs
 - duplicating the same replace-state in both eager stream publishes and Yjs
   projections on every refresh

@@ -106,7 +106,8 @@ def test_profile_updates_persist_access_state_once_per_operation(tmp_path, monke
     assert save_count == 2
 
     service.header_settings()
-    assert save_count == 3
+    service.header_settings()
+    assert save_count == 2
     assert len(store.snapshot()["audit"]) == 2
 
 

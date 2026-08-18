@@ -217,6 +217,48 @@ def test_service_supervisor_refresh_discovery_does_not_block_event_loop():
     assert asyncio.run(_run()) >= 3
 
 
+def test_service_supervisor_watchdog_polls_processes_off_event_loop(monkeypatch):
+    from adaos.services.skill import service_supervisor as mod
+
+    supervisor = mod.ServiceSkillSupervisor()
+    poll_started = threading.Event()
+    original_sleep = asyncio.sleep
+
+    class _SlowProcess:
+        pid = 9199
+        returncode = None
+
+        @staticmethod
+        def poll():
+            poll_started.set()
+            time.sleep(0.15)
+            return None
+
+    async def _refresh_discovered(*, force=False):  # noqa: ARG001
+        return None
+
+    async def _fast_sleep(delay):
+        await original_sleep(0 if delay == 2.0 else delay)
+
+    supervisor._procs["slow_service"] = _SlowProcess()
+    supervisor.refresh_discovered = _refresh_discovered  # type: ignore[method-assign]
+    monkeypatch.setattr(mod.asyncio, "sleep", _fast_sleep)
+
+    async def _exercise() -> int:
+        watchdog = asyncio.create_task(supervisor._watchdog_loop())
+        await asyncio.to_thread(poll_started.wait, 1.0)
+        ticks = 0
+        deadline = time.monotonic() + 0.1
+        while time.monotonic() < deadline:
+            ticks += 1
+            await original_sleep(0.01)
+        supervisor._shutdown_requested = True
+        await asyncio.wait_for(watchdog, timeout=1.0)
+        return ticks
+
+    assert asyncio.run(_exercise()) >= 5
+
+
 def test_service_supervisor_shutdown_prevents_late_service_restart():
     from adaos.services.skill import service_supervisor as mod
 
@@ -629,8 +671,9 @@ def test_service_supervisor_adopts_healthy_untracked_endpoint(monkeypatch):
     )
     replaced_status = supervisor.status(spec.skill, check_health=True)
     assert replaced_status is not None
-    assert replaced_status["external_ready"] is False
-    assert replaced_status["external_listener"]["pid"] == 4343
+    assert replaced_status["external_ready"] is True
+    assert replaced_status["health_observation_source"] == "external_adoption"
+    assert "external_listener" not in replaced_status
 
 
 def test_service_supervisor_stop_terminates_owned_process_tree(monkeypatch):
@@ -927,14 +970,29 @@ def test_service_status_reads_cached_resource_activity(monkeypatch, tmp_path):
 
     class _Proc:
         pid = 141
+        returncode = None
 
         @staticmethod
         def poll():
-            return None
+            raise AssertionError("status must not poll processes")
 
     supervisor = mod.ServiceSkillSupervisor()
     supervisor._specs["cached_service"] = spec
-    supervisor._procs["cached_service"] = _Proc()
+    proc = _Proc()
+    supervisor._procs["cached_service"] = proc
+    supervisor._process_states["cached_service"] = {
+        "process_identity": id(proc),
+        "pid": proc.pid,
+        "running": True,
+        "exit_code": None,
+        "observed_at": time.time(),
+        "source": "test",
+    }
+    supervisor._health_states["cached_service"] = {
+        "ok": True,
+        "observed_at": time.time(),
+        "source": "test",
+    }
     supervisor._resource_activity["cached_service"] = {
         "schema": "adaos.skill_service_resource_activity.v1",
         "available": True,
@@ -946,11 +1004,18 @@ def test_service_status_reads_cached_resource_activity(monkeypatch, tmp_path):
         "_process_tree_resource_counters",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("status must not sample processes")),
     )
+    monkeypatch.setattr(
+        mod,
+        "_service_health_ok",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("status must not probe health")),
+    )
 
-    status = supervisor.status("cached_service")
+    status = supervisor.status("cached_service", check_health=True)
 
     assert status is not None
     assert status["resource_activity"]["write_bytes_per_second"] == 42.0
+    assert status["health_ok"] is True
+    assert status["health_observation_source"] == "test"
 
 
 def test_service_supervisor_serializes_concurrent_starts(monkeypatch):

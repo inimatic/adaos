@@ -60,7 +60,6 @@ def _authorize(request: Request) -> None:
 
 def _service_spec(name: str) -> ServiceSpec:
     supervisor = get_service_supervisor()
-    supervisor.ensure_discovered()
     spec = supervisor._specs.get(name)  # Core gateway and supervisor share this trust boundary.
     if spec is None or not spec.ui_enabled:
         raise HTTPException(status_code=404, detail="service UI surface not found")
@@ -104,7 +103,9 @@ def _proxy_location(name: str, location: str, spec: ServiceSpec) -> str:
 @router.get("/services/{name}/ui-surface")
 async def service_ui_surface(name: str, request: Request) -> dict[str, Any]:
     _authorize(request)
-    surface = get_service_supervisor().ui_surface(name, check_health=True)
+    supervisor = get_service_supervisor()
+    await supervisor.refresh_discovered()
+    surface = supervisor.ui_surface(name, check_health=True)
     if surface is None:
         raise HTTPException(status_code=404, detail="service UI surface not found")
     return {"ok": True, "surface": surface}
@@ -117,6 +118,7 @@ async def service_ui_bootstrap(
     fragment: str | None = None,
 ) -> Response:
     _authorize(request)
+    await get_service_supervisor().refresh_discovered()
     spec = _service_spec(name)
     if spec.ui_embedding not in {"external", "same-origin"}:
         raise HTTPException(status_code=403, detail="service UI embedding is disabled")
@@ -152,6 +154,7 @@ async def service_ui_bootstrap(
 )
 async def service_ui_proxy(name: str, path: str, request: Request) -> Response:
     _authorize(request)
+    await get_service_supervisor().refresh_discovered()
     spec = _service_spec(name)
     status = get_service_supervisor().status(name, check_health=True) or {}
     if not bool(status.get("health_ok")):

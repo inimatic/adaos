@@ -93,6 +93,9 @@ class UserProfileService:
             action=action,
             subject=subject,
             resource="user.profile",
+            # Successful self-profile reads are a high-frequency UI poll. Denials
+            # remain audited, while allowing reads do not rewrite the access store.
+            audit_success=False,
         )
 
     def _contract_profile(self, user_id: str, settings: Mapping[str, object]) -> ContractUserProfile:

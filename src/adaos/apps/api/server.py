@@ -2673,6 +2673,7 @@ async def status():
 @app.get("/api/services", dependencies=[Depends(require_token)])
 async def list_services(check_health: bool = False) -> dict:
     supervisor = get_service_supervisor()
+    await supervisor.refresh_discovered()
     names = supervisor.list()
     return {
         "ok": True,
@@ -2683,6 +2684,7 @@ async def list_services(check_health: bool = False) -> dict:
 @app.get("/api/services/{name}", dependencies=[Depends(require_token)])
 async def get_service_status(name: str, check_health: bool = False) -> dict:
     supervisor = get_service_supervisor()
+    await supervisor.refresh_discovered()
     status = supervisor.status(name, check_health=check_health)
     if not status:
         raise HTTPException(status_code=404, detail="service not found")
@@ -2702,6 +2704,7 @@ async def start_service(name: str) -> dict:
 @app.post("/api/services/{name}/stop", dependencies=[Depends(require_token)])
 async def stop_service(name: str) -> dict:
     supervisor = get_service_supervisor()
+    await supervisor.refresh_discovered()
     # stop is idempotent; 404 only if not configured at all
     if not supervisor.status(name):
         raise HTTPException(status_code=404, detail="service not found")

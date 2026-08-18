@@ -52,9 +52,10 @@ class _UiHandler(BaseHTTPRequestHandler):
 class _Supervisor:
     def __init__(self, spec) -> None:  # noqa: ANN001
         self._specs = {spec.skill: spec}
+        self.refresh_total = 0
 
-    def ensure_discovered(self) -> None:
-        return None
+    async def refresh_discovered(self) -> None:
+        self.refresh_total += 1
 
     def status(self, name: str, *, check_health: bool = False) -> dict:
         assert name in self._specs
@@ -104,13 +105,20 @@ def test_service_ui_proxy_requires_auth_and_replaces_provider_frame_policy(monke
         )
         assert spec is not None
         monkeypatch.setenv("ADAOS_TOKEN", "service-ui-test-token")
-        monkeypatch.setattr(service_ui, "get_service_supervisor", lambda: _Supervisor(spec))
+        supervisor = _Supervisor(spec)
+        monkeypatch.setattr(service_ui, "get_service_supervisor", lambda: supervisor)
         app = FastAPI()
         app.include_router(service_ui.router, prefix="/api")
         client = TestClient(app)
 
         denied = client.get("/api/services/provider_ui/ui/")
         assert denied.status_code == 401
+
+        surface = client.get(
+            "/api/services/provider_ui/ui-surface?token=service-ui-test-token",
+        )
+        assert surface.status_code == 200
+        assert surface.json()["surface"]["health"]["ok"] is True
 
         bootstrap = client.get(
             "/api/services/provider_ui/ui-bootstrap?token=service-ui-test-token",
@@ -169,6 +177,7 @@ def test_service_ui_proxy_requires_auth_and_replaces_provider_frame_policy(monke
             headers={"Origin": "https://foreign.example"},
         )
         assert foreign_origin.status_code == 403
+        assert supervisor.refresh_total == 6
     finally:
         server.shutdown()
         server.server_close()
