@@ -18,6 +18,8 @@ def test_runtime_identity_is_path_free_and_identifies_current_skill(_autocontext
     assert identity["schema"] == "adaos.runtime.identity.v1"
     assert identity["python_version"]
     assert identity["platform"]
+    assert identity["core"]["source_tree"]["kind"] in {"git", "installed"}
+    assert identity["core"]["source_tree"]["clean"] in {True, False, None}
     assert identity["current_skill"]["name"] == "identity_skill"
     assert identity["current_skill"]["version"] == "1.2.3"
     assert identity["current_skill"]["manifest_digest"].startswith("sha256:")
