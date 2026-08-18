@@ -292,6 +292,38 @@ def test_process_activity_history_default_covers_twelve_minutes_at_runtime_sampl
     assert history["history_capacity"] >= history["returned"]
 
 
+def test_process_activity_history_reports_freshness_and_sampling_gaps(monkeypatch) -> None:
+    incidents.reset_incident_registry()
+    monkeypatch.setattr(incidents, "_now", lambda: 141.0)
+    for ts in (100.0, 110.0, 140.0):
+        incidents._PROCESS_ACTIVITY_HISTORY.append(
+            {"ts": ts, "interval_s": 10.0, "top_activity": [], "system_delta": {}}
+        )
+
+    history = incidents.process_activity_history_snapshot()
+
+    assert history["coverage_status"] == "gapped"
+    assert history["expected_interval_s"] == 10.0
+    assert history["last_sample_age_s"] == 1.0
+    assert history["max_gap_s"] == 30.0
+    assert history["gap_breach_total"] == 1
+
+
+def test_process_activity_history_reports_stale_or_empty_evidence(monkeypatch) -> None:
+    incidents.reset_incident_registry()
+    monkeypatch.setattr(incidents, "_now", lambda: 200.0)
+
+    assert incidents.process_activity_history_snapshot()["coverage_status"] == "empty"
+
+    incidents._PROCESS_ACTIVITY_HISTORY.append(
+        {"ts": 100.0, "interval_s": 10.0, "top_activity": [], "system_delta": {}}
+    )
+    stale = incidents.process_activity_history_snapshot()
+
+    assert stale["coverage_status"] == "stale"
+    assert stale["last_sample_age_s"] == 100.0
+
+
 def test_process_activity_name_filter_keeps_channel_related_and_configured_processes(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_INCIDENT_PROCESS_NAME_HINTS", "custom-worker")
 

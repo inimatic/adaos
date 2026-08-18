@@ -373,6 +373,19 @@ def _system_activity_counters() -> dict[str, int]:
     return counters
 
 
+def process_activity_sample_interval_s() -> float:
+    try:
+        return min(
+            60.0,
+            max(
+                1.0,
+                float(str(os.getenv("ADAOS_INCIDENT_PROCESS_SAMPLE_INTERVAL_S") or "10").strip()),
+            ),
+        )
+    except Exception:
+        return 10.0
+
+
 def capture_process_activity_sample(*, limit: int = 10, ts: float | None = None) -> dict[str, Any]:
     """Capture one serialized process/system activity sample for incident lookback."""
 
@@ -510,6 +523,26 @@ def process_activity_history_snapshot(*, limit: int = _PROCESS_ACTIVITY_HISTORY_
         if isinstance(window_started_at, (int, float)) and isinstance(window_ended_at, (int, float))
         else 0.0
     )
+    expected_interval_s = process_activity_sample_interval_s()
+    freshness_limit_s = max(expected_interval_s + 1.0, expected_interval_s * 2.5)
+    timestamps = [
+        float(sample.get("ts"))
+        for sample in selected
+        if isinstance(sample.get("ts"), (int, float))
+    ]
+    gaps = [max(0.0, current - previous) for previous, current in zip(timestamps, timestamps[1:])]
+    gap_breach_total = sum(1 for gap in gaps if gap > freshness_limit_s)
+    last_sample_age_s = max(0.0, _now() - timestamps[-1]) if timestamps else None
+    if not timestamps:
+        coverage_status = "empty"
+    elif len(timestamps) == 1:
+        coverage_status = "warming_up" if last_sample_age_s <= freshness_limit_s else "stale"
+    elif last_sample_age_s > freshness_limit_s:
+        coverage_status = "stale"
+    elif gap_breach_total:
+        coverage_status = "gapped"
+    else:
+        coverage_status = "ready"
     return {
         "sample_total": len(samples),
         "returned": len(selected),
@@ -517,6 +550,11 @@ def process_activity_history_snapshot(*, limit: int = _PROCESS_ACTIVITY_HISTORY_
         "window_started_at": window_started_at,
         "window_ended_at": window_ended_at,
         "coverage_s": round(coverage_s, 3),
+        "coverage_status": coverage_status,
+        "expected_interval_s": round(expected_interval_s, 3),
+        "last_sample_age_s": round(last_sample_age_s, 3) if last_sample_age_s is not None else None,
+        "max_gap_s": round(max(gaps), 3) if gaps else None,
+        "gap_breach_total": gap_breach_total,
         "samples": selected,
     }
 
@@ -1349,6 +1387,7 @@ __all__ = [
     "is_yjs_thread_affinity_fault",
     "local_blocking_evidence",
     "latest_process_activity_sample",
+    "process_activity_sample_interval_s",
     "load_incident_registry",
     "persist_incident_registry",
     "process_io_delta_sample",

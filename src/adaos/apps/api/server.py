@@ -340,15 +340,12 @@ async def _runtime_event_loop_lag_monitor() -> None:
 
 
 async def _runtime_process_activity_monitor() -> None:
-    from adaos.services.incident_registry import capture_process_activity_sample
+    from adaos.services.incident_registry import (
+        capture_process_activity_sample,
+        process_activity_sample_interval_s,
+    )
 
-    try:
-        interval_sec = min(
-            60.0,
-            max(1.0, float(str(os.getenv("ADAOS_INCIDENT_PROCESS_SAMPLE_INTERVAL_S") or "10").strip())),
-        )
-    except Exception:
-        interval_sec = 10.0
+    interval_sec = process_activity_sample_interval_s()
     while True:
         try:
             await asyncio.to_thread(capture_process_activity_sample)
