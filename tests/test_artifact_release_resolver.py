@@ -90,6 +90,95 @@ def test_release_resolves_exact_dependency_and_reverse_consumers() -> None:
     assert plan.release.release_digest == plan.release.computed_digest()
 
 
+def test_project_release_locks_exact_composition_and_project_dependencies() -> None:
+    scenario = _package("scenario", "recipes", "1.2.3", "a")
+    platform_digest = "sha256:" + "9" * 64
+    definition = {
+        "schema": "adaos.project.v1",
+        "kind": "project",
+        "id": "recipes",
+        "version": "1.2.3",
+        "profiles": ["adaos.application.v1"],
+        "components": {
+            "owned": [
+                {
+                    "ref": "scenario:recipes",
+                    "role": "primary",
+                    "exposure": "application",
+                    "lifecycle": "bound",
+                    "relations": ["presents"],
+                }
+            ],
+            "dependencies": [
+                {
+                    "ref": "project:adaos_platform",
+                    "version": "^0.2",
+                    "lifecycle": "shared",
+                    "relations": ["uses"],
+                }
+            ],
+        },
+        "entrypoints": [
+            {
+                "id": "default",
+                "presentation": "scenario:recipes",
+                "default": True,
+                "bindings": {},
+            }
+        ],
+        "catalog": {
+            "title": "Recipes",
+            "description": "",
+            "categories": [],
+            "tags": [],
+        },
+        "compatibility": {
+            "required_entrypoints": ["default"],
+            "validation_profiles": ["project.conformance"],
+        },
+        "lifecycle": {
+            "uninstall": {
+                "components": "remove_if_unreferenced",
+                "runtime_data": "retain",
+                "source_artifacts": "retain",
+            }
+        },
+    }
+
+    plan = build_project_release(
+        project_id="recipes",
+        version="1.2.3",
+        source_ref=_source(),
+        components=(scenario,),
+        catalog=PackageCatalog(),
+        project_definition=definition,
+        project_dependency_locks=(
+            {
+                "project_ref": "project:adaos_platform",
+                "version_spec": "^0.2",
+                "release_digest": platform_digest,
+            },
+        ),
+    )
+
+    lock = plan.release.composition_lock
+    assert lock is not None
+    assert lock.members[0].package_digest == scenario.digest
+    assert lock.project_dependencies[0].release_digest == platform_digest
+    assert lock.compatibility["required_entrypoints"] == ["default"]
+    assert plan.release.from_mapping(plan.release.to_dict()) == plan.release
+
+    with pytest.raises(DependencyResolutionError, match="exactly cover"):
+        build_project_release(
+            project_id="recipes",
+            version="1.2.3",
+            source_ref=_source(),
+            components=(scenario,),
+            catalog=PackageCatalog(),
+            project_definition=definition,
+        )
+
+
 def test_release_rejects_missing_ambiguous_incompatible_and_cyclic_dependencies() -> None:
     scenario = _package("scenario", "recipes", "1.0.0", "a")
     skill_a = _package("skill", "a", "1.0.0", "b")

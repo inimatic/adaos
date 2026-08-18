@@ -13,6 +13,8 @@ from adaos.domain.artifact_release import (
     ArtifactSourceRef,
     DependencyBinding,
     ProjectRef,
+    ProjectCompositionLock,
+    ProjectMemberLock,
     ProjectRelease,
     ResolvedDependency,
     StableSubscription,
@@ -175,6 +177,68 @@ def test_legacy_release_without_contract_locks_keeps_its_original_digest() -> No
 
     assert loaded.contract_locks_present is False
     assert loaded.to_dict() == legacy
+
+
+def test_composition_lock_rejects_component_digest_drift() -> None:
+    component = _package()
+    valid_lock = ProjectCompositionLock(
+        project_definition_digest=_DIGEST_B,
+        profiles=("adaos.application.v1",),
+        members=(
+            ProjectMemberLock(
+                ref=component.key,
+                package_digest=component.digest,
+                role="primary",
+                exposure="application",
+                lifecycle="bound",
+                relations=("presents",),
+            ),
+        ),
+        project_dependencies=(),
+        entrypoints=(),
+        compatibility={},
+        lifecycle={},
+    )
+    release = ProjectRelease(
+        project_id="recipes",
+        version="1.2.3",
+        source_ref=_source(),
+        components=(component,),
+        composition_lock=valid_lock,
+    ).seal()
+
+    jsonschema.Draft202012Validator(
+        _schema("artifact.project-release.v1.schema.json")
+    ).validate(release.to_dict())
+    assert ProjectRelease.from_mapping(release.to_dict()) == release
+
+    drifted_lock = ProjectCompositionLock(
+        project_definition_digest=_DIGEST_B,
+        profiles=valid_lock.profiles,
+        members=(
+            ProjectMemberLock(
+                ref=component.key,
+                package_digest=_DIGEST_B,
+                role="primary",
+                exposure="application",
+                lifecycle="bound",
+                relations=("presents",),
+            ),
+        ),
+        project_dependencies=(),
+        entrypoints=(),
+        compatibility={},
+        lifecycle={},
+    )
+
+    with pytest.raises(ArtifactReleaseContractError, match="do not match"):
+        ProjectRelease(
+            project_id="recipes",
+            version="1.2.3",
+            source_ref=_source(),
+            components=(component,),
+            composition_lock=drifted_lock,
+        )
 
 
 @pytest.mark.parametrize(

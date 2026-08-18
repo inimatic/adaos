@@ -12,8 +12,12 @@ from adaos.domain.artifact_release import (
     ArtifactPackageRef,
     ArtifactSourceRef,
     DependencyBinding,
+    ProjectCompositionLock,
+    ProjectDependencyLock,
+    ProjectMemberLock,
     ProjectRelease,
     ResolvedDependency,
+    canonical_payload_digest,
 )
 
 
@@ -385,6 +389,8 @@ def build_project_release(
     permissions: Iterable[str] = (),
     migrations: Iterable[Mapping[str, Any]] = (),
     validation_evidence: Iterable[Mapping[str, Any]] = (),
+    project_definition: Mapping[str, Any] | None = None,
+    project_dependency_locks: Iterable[Mapping[str, Any]] = (),
 ) -> ReleasePlan:
     owned = tuple(components)
     if not owned:
@@ -505,6 +511,92 @@ def build_project_release(
         for key, package in sorted(selected.items())
         if key not in owned_keys
     )
+    composition_lock = None
+    if project_definition is not None:
+        source_definition = {
+            key: value
+            for key, value in dict(project_definition).items()
+            if key not in {"ref", "manifest_digest", "source_path"}
+        }
+        if source_definition.get("schema") != "adaos.project.v1":
+            raise DependencyResolutionError("project_definition must use adaos.project.v1")
+        if source_definition.get("id") != project_id or source_definition.get("version") != version:
+            raise DependencyResolutionError(
+                "project_definition identity must match the ProjectRelease"
+            )
+        components_value = source_definition.get("components")
+        if not isinstance(components_value, Mapping):
+            raise DependencyResolutionError("project_definition components must be an object")
+        owned_value = components_value.get("owned")
+        dependencies_value = components_value.get("dependencies") or []
+        if not isinstance(owned_value, list) or any(
+            not isinstance(item, Mapping) for item in owned_value
+        ):
+            raise DependencyResolutionError("project_definition owned members must be objects")
+        if not isinstance(dependencies_value, list) or any(
+            not isinstance(item, Mapping) for item in dependencies_value
+        ):
+            raise DependencyResolutionError("project_definition dependencies must be objects")
+        package_by_ref = {item.key: item for item in owned}
+        declared_refs = {str(item.get("ref") or "") for item in owned_value}
+        if declared_refs != set(package_by_ref):
+            raise DependencyResolutionError(
+                "project_definition owned refs must match exact release components"
+            )
+        member_locks = tuple(
+            ProjectMemberLock(
+                ref=str(item.get("ref") or ""),
+                package_digest=package_by_ref[str(item.get("ref") or "")].digest,
+                role=str(item.get("role") or ""),
+                exposure=str(item.get("exposure") or "application"),
+                lifecycle=str(item.get("lifecycle") or "bound"),
+                relations=tuple(item.get("relations") or ("uses",)),
+            )
+            for item in owned_value
+        )
+        declared_project_dependencies = {
+            str(item.get("ref") or ""): str(item.get("version") or "")
+            for item in dependencies_value
+            if str(item.get("ref") or "").startswith("project:")
+        }
+        supplied_project_locks = tuple(
+            ProjectDependencyLock.from_mapping(dict(item))
+            for item in project_dependency_locks
+        )
+        supplied_by_ref = {item.project_ref: item for item in supplied_project_locks}
+        if set(supplied_by_ref) != set(declared_project_dependencies):
+            raise DependencyResolutionError(
+                "project dependency locks must exactly cover declared Project dependencies"
+            )
+        for ref, version_spec in declared_project_dependencies.items():
+            if supplied_by_ref[ref].version_spec != version_spec:
+                raise DependencyResolutionError(
+                    f"project dependency lock version differs from definition: {ref}"
+                )
+        entrypoints = source_definition.get("entrypoints") or []
+        profiles = source_definition.get("profiles") or []
+        compatibility = source_definition.get("compatibility") or {}
+        lifecycle = source_definition.get("lifecycle") or {}
+        if not isinstance(entrypoints, list) or any(
+            not isinstance(item, Mapping) for item in entrypoints
+        ):
+            raise DependencyResolutionError("project_definition entrypoints must be objects")
+        if not isinstance(profiles, list):
+            raise DependencyResolutionError("project_definition profiles must be a list")
+        if not isinstance(compatibility, Mapping) or not isinstance(lifecycle, Mapping):
+            raise DependencyResolutionError(
+                "project_definition compatibility and lifecycle must be objects"
+            )
+        composition_lock = ProjectCompositionLock(
+            project_definition_digest=canonical_payload_digest(source_definition),
+            profiles=tuple(profiles),
+            members=member_locks,
+            project_dependencies=supplied_project_locks,
+            entrypoints=tuple(entrypoints),
+            compatibility=dict(compatibility),
+            lifecycle=dict(lifecycle),
+        )
+
     release = ProjectRelease(
         project_id=project_id,
         version=version,
@@ -519,6 +611,7 @@ def build_project_release(
             for package in sorted(selected.values(), key=lambda item: item.key)
             for lock in package.schema_locks
         ),
+        composition_lock=composition_lock,
     ).seal()
     reverse: dict[str, set[str]] = defaultdict(set)
     for binding in bindings.values():

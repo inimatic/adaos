@@ -14,6 +14,7 @@ PROJECT_REF_SCHEMA = "adaos.artifact.project_ref.v1"
 SOURCE_REF_SCHEMA = "adaos.artifact.source_ref.v1"
 PACKAGE_REF_SCHEMA = "adaos.artifact.package_ref.v1"
 PROJECT_RELEASE_SCHEMA = "adaos.artifact.project_release.v1"
+PROJECT_COMPOSITION_LOCK_SCHEMA = "adaos.artifact.project_composition_lock.v1"
 WORKSPACE_LOCK_SCHEMA = "adaos.workspace.lock.v1"
 SUBSCRIPTION_SCHEMA = "adaos.artifact.subscription.v1"
 
@@ -21,6 +22,8 @@ _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
 _VERSION_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+][0-9A-Za-z.-]+)?$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REVISION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+-]{6,255}$")
+_COMPONENT_REF_RE = re.compile(r"^(skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_PROJECT_REF_RE = re.compile(r"^project:[a-z0-9][a-z0-9_.-]{0,127}$")
 
 
 class ArtifactReleaseContractError(ValueError):
@@ -637,6 +640,224 @@ class ResolvedDependency:
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectMemberLock:
+    ref: str
+    package_digest: str
+    role: str
+    exposure: str
+    lifecycle: str
+    relations: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        ref = _text(self.ref, field="project member ref")
+        if not _COMPONENT_REF_RE.fullmatch(ref):
+            raise ArtifactReleaseContractError("project member ref must address a skill or scenario")
+        if self.role not in {"primary", "implementation", "supporting"}:
+            raise ArtifactReleaseContractError("unsupported project member role")
+        if self.exposure not in {"application", "project_only", "advanced"}:
+            raise ArtifactReleaseContractError("unsupported project member exposure")
+        if self.lifecycle not in {"bound", "shared"}:
+            raise ArtifactReleaseContractError("unsupported project member lifecycle")
+        relations = _unique_texts(self.relations, field="project member relation")
+        if not relations or not set(relations).issubset(
+            {"realizes", "presents", "evaluates", "uses"}
+        ):
+            raise ArtifactReleaseContractError("unsupported project member relation")
+        object.__setattr__(self, "ref", ref)
+        object.__setattr__(
+            self,
+            "package_digest",
+            _digest(self.package_digest, field="project member package_digest"),
+        )
+        object.__setattr__(self, "relations", tuple(sorted(relations)))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ref": self.ref,
+            "package_digest": self.package_digest,
+            "role": self.role,
+            "exposure": self.exposure,
+            "lifecycle": self.lifecycle,
+            "relations": list(self.relations),
+        }
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "ProjectMemberLock":
+        _require_mapping_contract(
+            value,
+            schema=None,
+            allowed={"ref", "package_digest", "role", "exposure", "lifecycle", "relations"},
+            required={"ref", "package_digest", "role", "exposure", "lifecycle", "relations"},
+            field="ProjectMemberLock",
+        )
+        relations = value.get("relations")
+        if not isinstance(relations, list):
+            raise ArtifactReleaseContractError("ProjectMemberLock relations must be a list")
+        return cls(
+            ref=value.get("ref"),
+            package_digest=value.get("package_digest"),
+            role=value.get("role"),
+            exposure=value.get("exposure"),
+            lifecycle=value.get("lifecycle"),
+            relations=tuple(relations),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectDependencyLock:
+    project_ref: str
+    version_spec: str
+    release_digest: str
+
+    def __post_init__(self) -> None:
+        ref = _text(self.project_ref, field="project dependency ref")
+        if not _PROJECT_REF_RE.fullmatch(ref):
+            raise ArtifactReleaseContractError("project dependency ref must be project:<id>")
+        object.__setattr__(self, "project_ref", ref)
+        object.__setattr__(self, "version_spec", str(self.version_spec or "").strip())
+        object.__setattr__(
+            self,
+            "release_digest",
+            _digest(self.release_digest, field="project dependency release_digest"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "project_ref": self.project_ref,
+            "version_spec": self.version_spec,
+            "release_digest": self.release_digest,
+        }
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "ProjectDependencyLock":
+        _require_mapping_contract(
+            value,
+            schema=None,
+            allowed={"project_ref", "version_spec", "release_digest"},
+            required={"project_ref", "version_spec", "release_digest"},
+            field="ProjectDependencyLock",
+        )
+        return cls(
+            project_ref=value.get("project_ref"),
+            version_spec=value.get("version_spec") or "",
+            release_digest=value.get("release_digest"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectCompositionLock:
+    project_definition_digest: str
+    profiles: tuple[str, ...]
+    members: tuple[ProjectMemberLock, ...]
+    project_dependencies: tuple[ProjectDependencyLock, ...]
+    entrypoints: tuple[Mapping[str, Any], ...]
+    compatibility: Mapping[str, Any]
+    lifecycle: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "project_definition_digest",
+            _digest(self.project_definition_digest, field="project_definition_digest"),
+        )
+        if not self.members:
+            raise ArtifactReleaseContractError("ProjectCompositionLock requires members")
+        member_refs = [item.ref for item in self.members]
+        if len(member_refs) != len(set(member_refs)):
+            raise ArtifactReleaseContractError("ProjectCompositionLock member refs must be unique")
+        if len([item for item in self.members if item.role == "primary"]) != 1:
+            raise ArtifactReleaseContractError("ProjectCompositionLock requires exactly one primary member")
+        dependency_refs = [item.project_ref for item in self.project_dependencies]
+        if len(dependency_refs) != len(set(dependency_refs)):
+            raise ArtifactReleaseContractError(
+                "ProjectCompositionLock project dependency refs must be unique"
+            )
+        if any(not isinstance(item, Mapping) for item in self.entrypoints):
+            raise ArtifactReleaseContractError("ProjectCompositionLock entrypoints must be objects")
+        if not isinstance(self.compatibility, Mapping) or not isinstance(self.lifecycle, Mapping):
+            raise ArtifactReleaseContractError(
+                "ProjectCompositionLock compatibility and lifecycle must be objects"
+            )
+        object.__setattr__(self, "profiles", tuple(sorted(_unique_texts(self.profiles, field="profile"))))
+        object.__setattr__(self, "members", tuple(sorted(self.members, key=lambda item: item.ref)))
+        object.__setattr__(
+            self,
+            "project_dependencies",
+            tuple(sorted(self.project_dependencies, key=lambda item: item.project_ref)),
+        )
+        object.__setattr__(
+            self,
+            "entrypoints",
+            tuple(sorted((dict(item) for item in self.entrypoints), key=lambda item: str(item.get("id") or ""))),
+        )
+        object.__setattr__(self, "compatibility", dict(self.compatibility))
+        object.__setattr__(self, "lifecycle", dict(self.lifecycle))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema": PROJECT_COMPOSITION_LOCK_SCHEMA,
+            "project_definition_digest": self.project_definition_digest,
+            "profiles": list(self.profiles),
+            "members": [item.to_dict() for item in self.members],
+            "project_dependencies": [item.to_dict() for item in self.project_dependencies],
+            "entrypoints": [dict(item) for item in self.entrypoints],
+            "compatibility": dict(self.compatibility),
+            "lifecycle": dict(self.lifecycle),
+        }
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "ProjectCompositionLock":
+        fields = {
+            "schema",
+            "project_definition_digest",
+            "profiles",
+            "members",
+            "project_dependencies",
+            "entrypoints",
+            "compatibility",
+            "lifecycle",
+        }
+        _require_mapping_contract(
+            value,
+            schema=PROJECT_COMPOSITION_LOCK_SCHEMA,
+            allowed=fields,
+            required=fields,
+            field="ProjectCompositionLock",
+        )
+        profiles = value.get("profiles")
+        members = value.get("members")
+        dependencies = value.get("project_dependencies")
+        entrypoints = value.get("entrypoints")
+        compatibility = value.get("compatibility")
+        lifecycle = value.get("lifecycle")
+        if not isinstance(profiles, list):
+            raise ArtifactReleaseContractError("ProjectCompositionLock profiles must be a list")
+        if not isinstance(members, list) or any(not isinstance(item, Mapping) for item in members):
+            raise ArtifactReleaseContractError("ProjectCompositionLock members must be objects")
+        if not isinstance(dependencies, list) or any(not isinstance(item, Mapping) for item in dependencies):
+            raise ArtifactReleaseContractError(
+                "ProjectCompositionLock project_dependencies must be objects"
+            )
+        if not isinstance(entrypoints, list) or any(not isinstance(item, Mapping) for item in entrypoints):
+            raise ArtifactReleaseContractError("ProjectCompositionLock entrypoints must be objects")
+        if not isinstance(compatibility, Mapping) or not isinstance(lifecycle, Mapping):
+            raise ArtifactReleaseContractError(
+                "ProjectCompositionLock compatibility and lifecycle must be objects"
+            )
+        return cls(
+            project_definition_digest=value.get("project_definition_digest"),
+            profiles=tuple(profiles),
+            members=tuple(ProjectMemberLock.from_mapping(item) for item in members),
+            project_dependencies=tuple(
+                ProjectDependencyLock.from_mapping(item) for item in dependencies
+            ),
+            entrypoints=tuple(entrypoints),
+            compatibility=dict(compatibility),
+            lifecycle=dict(lifecycle),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectRelease:
     project_id: str
     version: str
@@ -650,6 +871,7 @@ class ProjectRelease:
     migration_locks: tuple[ArtifactContractLock, ...] = ()
     validation_evidence_refs: tuple[str, ...] = ()
     contract_locks_present: bool = True
+    composition_lock: ProjectCompositionLock | None = None
     release_digest: str | None = None
 
     def __post_init__(self) -> None:
@@ -737,6 +959,19 @@ class ProjectRelease:
             )
         if self.release_digest is not None:
             object.__setattr__(self, "release_digest", _digest(self.release_digest, field="release_digest"))
+        if self.composition_lock is not None:
+            if not isinstance(self.composition_lock, ProjectCompositionLock):
+                raise ArtifactReleaseContractError(
+                    "composition_lock must be ProjectCompositionLock"
+                )
+            component_digests = {item.key: item.digest for item in self.components}
+            locked_digests = {
+                item.ref: item.package_digest for item in self.composition_lock.members
+            }
+            if locked_digests != component_digests:
+                raise ArtifactReleaseContractError(
+                    "composition_lock members do not match exact ProjectRelease components"
+                )
 
     def unsigned_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -760,6 +995,8 @@ class ProjectRelease:
                     "validation_evidence_refs": list(self.validation_evidence_refs),
                 }
             )
+        if self.composition_lock is not None:
+            payload["composition_lock"] = self.composition_lock.to_dict()
         return payload
 
     def computed_digest(self) -> str:
@@ -794,6 +1031,7 @@ class ProjectRelease:
                 "schema_locks",
                 "migration_locks",
                 "validation_evidence_refs",
+                "composition_lock",
                 "release_digest",
             },
             required={
@@ -829,6 +1067,9 @@ class ProjectRelease:
         raw_schema_locks = value.get("schema_locks") or []
         raw_migration_locks = value.get("migration_locks") or []
         raw_evidence_refs = value.get("validation_evidence_refs") or []
+        raw_composition_lock = value.get("composition_lock")
+        if "composition_lock" in value and not isinstance(raw_composition_lock, Mapping):
+            raise ArtifactReleaseContractError("composition_lock must be an object")
         if not isinstance(dependencies, list):
             raise ArtifactReleaseContractError("resolved_dependencies must be a list")
         if not isinstance(permissions, list):
@@ -880,6 +1121,11 @@ class ProjectRelease:
             ),
             validation_evidence_refs=tuple(raw_evidence_refs),
             contract_locks_present=present_lock_fields == lock_fields,
+            composition_lock=(
+                ProjectCompositionLock.from_mapping(raw_composition_lock)
+                if isinstance(raw_composition_lock, Mapping)
+                else None
+            ),
             release_digest=value.get("release_digest"),
         )
         return release.seal()
@@ -1179,8 +1425,12 @@ __all__ = [
     "DependencyBinding",
     "PACKAGE_REF_SCHEMA",
     "PROJECT_REF_SCHEMA",
+    "PROJECT_COMPOSITION_LOCK_SCHEMA",
     "PROJECT_RELEASE_SCHEMA",
     "ProjectRef",
+    "ProjectCompositionLock",
+    "ProjectDependencyLock",
+    "ProjectMemberLock",
     "ProjectRelease",
     "ResolvedDependency",
     "SOURCE_REF_SCHEMA",
