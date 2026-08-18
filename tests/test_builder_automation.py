@@ -1417,6 +1417,76 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
     assert saved[-1]["progress"]["task_id"] == "task.1"
 
 
+def test_finalize_reconciles_exact_canonical_checkpoint_without_replay(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    service.materialize_on_completion = True
+    saved: list[dict] = []
+    notified: list[dict] = []
+
+    class FakeWorkflow:
+        def describe(self, object_type, object_id):  # noqa: ARG002
+            return {
+                "generation": 4,
+                "automation": {
+                    "status": "completed",
+                    "head_task_id": "task.1",
+                    "completed_at": "2026-08-18T02:40:45+00:00",
+                },
+                "delivery": {
+                    "status": "checkpoint",
+                    "checkpoint_change_id": "change-1",
+                    "package_digest": "sha256:" + "1" * 64,
+                    "source_revision": "forge-1",
+                    "version": "0.1.1",
+                },
+            }
+
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: FakeWorkflow())
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_checkpoint_completed_artifacts",
+        lambda *args, **kwargs: pytest.fail("Forge checkpoint must not be replayed"),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_prepare_and_activate_dev_skill",
+        lambda *args, **kwargs: pytest.fail("DEV activation must not be replayed"),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_save_session",
+        lambda self, value: saved.append(dict(value)) or dict(value),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_notify_completed_session",
+        lambda self, value: notified.append(dict(value)) or dict(value),
+    )
+
+    service._finalize_completed_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation.skill.research_skill",
+            "object_type": "skill",
+            "object_id": "research_skill",
+            "current_task_id": "task.1",
+            "change_id": "change-1",
+            "status": "commit_ready",
+            "finalizing_task_id": "task.1",
+        }
+    )
+
+    assert saved[-1]["status"] == "completed"
+    assert saved[-1]["completion_readiness"]["ok"] is True
+    checkpoint = saved[-1]["completion_readiness"]["vcs_checkpoints"][0]
+    assert checkpoint["reconciled_from"] == "canonical_builder_workflow"
+    assert checkpoint["package_digest"] == "sha256:" + "1" * 64
+    assert notified[-1]["status"] == "completed"
+
+
 def test_finalize_reenters_failed_workflow_for_checkpoint_reconciliation(
     tmp_path: Path, monkeypatch
 ) -> None:

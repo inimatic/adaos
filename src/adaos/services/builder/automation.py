@@ -2121,8 +2121,117 @@ class BuilderAutomationService:
                     self.event_sink(finalizing_projection)
                 self._finalize_completed_session(session)
 
+    def _reconcile_completed_workflow(
+        self,
+        session: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Recover a session whose canonical workflow already reached checkpoint.
+
+        DEV activation and the Forge write precede the canonical
+        ``checkpoint_recorded`` transition.  Therefore an exact task/change
+        match at that state is sufficient durable evidence that replaying
+        finalization would be both unnecessary and unsafe.
+        """
+
+        if str(session.get("pending_workflow_transition") or "").strip():
+            return None
+        object_type = str(session.get("object_type") or "").strip()
+        object_id = str(session.get("object_id") or "").strip()
+        task_id = str(session.get("current_task_id") or "").strip()
+        change_id = str(session.get("change_id") or "").strip()
+        if not object_type or not object_id or not task_id or not change_id:
+            return None
+        try:
+            workflow = self._workflow().describe(object_type, object_id)
+        except Exception:
+            return None
+        automation = (
+            workflow.get("automation")
+            if isinstance(workflow.get("automation"), Mapping)
+            else {}
+        )
+        delivery = (
+            workflow.get("delivery")
+            if isinstance(workflow.get("delivery"), Mapping)
+            else {}
+        )
+        if not (
+            str(automation.get("status") or "").strip() == "completed"
+            and str(automation.get("head_task_id") or "").strip() == task_id
+            and str(delivery.get("status") or "").strip() == "checkpoint"
+            and str(delivery.get("checkpoint_change_id") or "").strip() == change_id
+            and str(delivery.get("package_digest") or "").strip()
+            and str(delivery.get("source_revision") or "").strip()
+        ):
+            return None
+
+        current = dict(session)
+        readiness = (
+            dict(current.get("completion_readiness"))
+            if isinstance(current.get("completion_readiness"), Mapping)
+            else {}
+        )
+        checkpoints = [
+            dict(item)
+            for item in readiness.get("vcs_checkpoints") or []
+            if isinstance(item, Mapping) and bool(item.get("ok"))
+        ]
+        if not checkpoints:
+            checkpoints = [
+                {
+                    "ok": True,
+                    "kind": object_type,
+                    "name": object_id,
+                    "commit": str(delivery.get("source_revision")),
+                    "source_revision": str(delivery.get("source_revision")),
+                    "package_digest": str(delivery.get("package_digest")),
+                    "version": str(delivery.get("version") or "").strip() or None,
+                    "reconciled_from": "canonical_builder_workflow",
+                }
+            ]
+        completed_at = str(
+            automation.get("completed_at")
+            or delivery.get("checkpoint_at")
+            or _now_iso()
+        )
+        readiness.update(
+            {
+                "ok": True,
+                "task_id": task_id,
+                "iteration": int(current.get("iteration") or 0),
+                "vcs_checkpoints": checkpoints,
+                "completed_at": completed_at,
+                "workflow_reconciliation": {
+                    "status": "already_checkpointed",
+                    "generation": workflow.get("generation"),
+                    "checkpoint_change_id": change_id,
+                    "package_digest": str(delivery.get("package_digest")),
+                    "source_revision": str(delivery.get("source_revision")),
+                },
+            }
+        )
+        readiness.pop("error", None)
+        current["completion_readiness"] = readiness
+        current["status"] = "completed"
+        current["progress"] = {
+            "task_id": task_id,
+            "status": "completed",
+            "message": "Reconciled terminal session from canonical Builder workflow",
+            "updated_at": completed_at,
+        }
+        current["updated_at"] = completed_at
+        current.pop("finalizing_task_id", None)
+        current.pop("reuse_confirmed_checkpoints", None)
+        current.pop("last_failure", None)
+        self._save_session(current)
+        return current
+
     def _finalize_completed_session(self, session: Mapping[str, Any]) -> None:
         """Prepare the DEV runtime, refresh the paired UI, then notify chat."""
+        reconciled = self._reconcile_completed_workflow(session)
+        if reconciled is not None:
+            self._notify_completed_session(reconciled)
+            return
         current = dict(session)
         object_type = str(session.get("object_type") or "").strip()
         object_id = str(session.get("object_id") or "").strip()
