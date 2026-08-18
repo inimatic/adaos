@@ -116,6 +116,54 @@ def test_project_requires_one_primary_component(project_space) -> None:
         compositions.create(value)
 
 
+def test_project_composition_expands_release_defaults_without_rewriting_source(project_space) -> None:
+    _skill(project_space["skills"], "candidate_skill")
+    value = _project("candidate_project", "candidate_skill")
+    value["components"]["owned"][0].update(
+        {
+            "role": "implementation",
+            "exposure": "project_only",
+            "lifecycle": "bound",
+            "relations": ["uses", "realizes"],
+        }
+    )
+    value["components"]["owned"].append(
+        {
+            "ref": "scenario:research_console",
+            "role": "primary",
+            "exposure": "application",
+            "lifecycle": "bound",
+            "relations": ["presents"],
+        }
+    )
+    value["compatibility"] = {
+        "required_entrypoints": ["research"],
+        "required_contracts": ["adaos.research.manager.v1"],
+        "validation_profiles": ["project.conformance"],
+    }
+
+    created = compositions.create(value)
+    normalized = compositions.normalized_definition(created)
+
+    assert created["components"]["owned"][0]["exposure"] == "project_only"
+    candidate = next(
+        item
+        for item in normalized["components"]["owned"]
+        if item["ref"] == "skill:candidate_skill"
+    )
+    assert candidate["relations"] == ["realizes", "uses"]
+    assert normalized["components"]["dependencies"][0]["lifecycle"] == "shared"
+    assert normalized["compatibility"]["required_entrypoints"] == ["research"]
+
+
+def test_project_rejects_undeclared_required_entrypoint(project_space) -> None:
+    value = _project("invalid", "one")
+    value["compatibility"] = {"required_entrypoints": ["missing"]}
+
+    with pytest.raises(compositions.ProjectCompositionError, match="not declared"):
+        compositions.create(value)
+
+
 def test_local_artifact_group_copies_files_and_detects_tampering(project_space, tmp_path: Path) -> None:
     skill_root = _skill(project_space["skills"], "tlp_direction")
     source = tmp_path / "review.md"
@@ -520,6 +568,51 @@ def test_development_session_separates_write_targets_and_readonly_context(projec
         session_id="dev_0000_lexically_earlier",
     )
     assert development_sessions.list_sessions(project_id="tlp_research")[-1]["session_id"] == later["session"]["session_id"]
+
+
+def test_development_session_supports_domain_neutral_contract_handoff(project_space) -> None:
+    _skill(project_space["skills"], "candidate_skill")
+    compositions.create(_project("candidate_project", "candidate_skill"))
+    digest = "sha256:" + "8" * 64
+
+    created = development_sessions.create(
+        "candidate_project",
+        subject_refs=[
+            {
+                "kind": "work_item",
+                "ref": "work-item:42",
+                "revision": 3,
+                "digest": digest,
+            }
+        ],
+        contract_inputs=[
+            {
+                "kind": "implementation_contract",
+                "ref": "contract:work-item:42",
+                "digest": digest,
+                "media_type": "application/json",
+            }
+        ],
+        acceptance_profiles=["project.conformance", "consumer.contracts"],
+        agent_profile={
+            "provider": "local-agent-provider",
+            "model": "qualified-coder",
+            "reasoning_effort": "high",
+            "tool_profile": "adaos-local-bounded-v1",
+        },
+    )
+
+    session = created["session"]
+    assert session["project_ref"] == "project:candidate_project"
+    assert session["artifact_inputs"] == []
+    assert session["subject_refs"][0]["ref"] == "work-item:42"
+    assert session["contract_inputs"][0]["digest"] == digest
+    assert session["acceptance_profiles"] == [
+        "project.conformance",
+        "consumer.contracts",
+    ]
+    assert "automation_brief_digest" not in session["handoff"]
+    assert session["handoff"]["agent_profile"]["provider"] == "local-agent-provider"
 
 
 def test_development_session_uses_filtered_artifact_view_for_agent_audience(project_space, tmp_path: Path) -> None:

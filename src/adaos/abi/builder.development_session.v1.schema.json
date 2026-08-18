@@ -21,13 +21,16 @@
     "context_members": {"type": "array", "maxItems": 200, "items": {"$ref": "#/$defs/contextMember"}},
     "artifact_inputs": {"type": "array", "maxItems": 200, "items": {"$ref": "#/$defs/artifactInput"}},
     "instruction_inputs": {"type": "array", "maxItems": 20, "items": {"$ref": "#/$defs/instructionInput"}},
+    "subject_refs": {"type": "array", "maxItems": 100, "uniqueItems": true, "items": {"$ref": "#/$defs/subjectRef"}},
+    "contract_inputs": {"type": "array", "maxItems": 200, "items": {"$ref": "#/$defs/contractInput"}},
+    "acceptance_profiles": {"type": "array", "maxItems": 100, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 160}},
     "scratch": {
       "type": "object", "required": ["owner", "access", "path"],
       "properties": {"owner": {"const": "session"}, "access": {"const": "read-write"}, "path": {"type": "string", "minLength": 1}},
       "additionalProperties": false
     },
     "handoff": {
-      "type": "object", "required": ["automation_brief_digest", "research_prototype_digest", "artifact_manifest_digests", "prohibited_actions"],
+      "type": "object", "required": ["prohibited_actions"],
       "properties": {
         "automation_brief_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
         "research_prototype_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
@@ -49,14 +52,14 @@
           "type": "object",
           "required": ["provider", "model", "reasoning_effort", "tool_profile"],
           "properties": {
-            "provider": {"const": "openai-codex-cli"},
+            "provider": {"type": "string", "minLength": 1, "maxLength": 128},
             "model": {"type": "string", "minLength": 1, "maxLength": 128},
             "reasoning_effort": {"enum": ["low", "medium", "high", "xhigh"]},
             "tool_profile": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"}
           },
           "additionalProperties": false
         },
-        "prohibited_actions": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+        "prohibited_actions": {"type": "array", "maxItems": 200, "items": {"type": "string", "minLength": 1}}
       },
       "additionalProperties": false
     },
@@ -66,6 +69,27 @@
   },
   "$defs": {
     "componentRef": {"type": "string", "pattern": "^(skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"},
+    "subjectRef": {
+      "type": "object", "required": ["kind", "ref"],
+      "properties": {
+        "kind": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,79}$"},
+        "ref": {"type": "string", "minLength": 1, "maxLength": 500},
+        "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "revision": {"oneOf": [{"type": "string", "minLength": 1}, {"type": "integer", "minimum": 0}]}
+      },
+      "additionalProperties": false
+    },
+    "contractInput": {
+      "type": "object", "required": ["kind", "digest"],
+      "properties": {
+        "kind": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,79}$"},
+        "ref": {"type": "string", "minLength": 1, "maxLength": 500},
+        "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "media_type": {"type": "string", "minLength": 1, "maxLength": 160},
+        "path": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
     "target": {
       "type": "object", "required": ["ref", "access", "context", "source_path"],
       "properties": {"ref": {"$ref": "#/$defs/componentRef"}, "access": {"const": "read-write"}, "context": {"const": "full"}, "source_path": {"type": "string", "minLength": 1}},

@@ -26,6 +26,11 @@ from adaos.sdk.developer import projects as component_projects
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
 _SCHEMA = "adaos.project.v1"
+_MEMBER_DEFAULTS = {
+    "exposure": "application",
+    "lifecycle": "bound",
+    "relations": ("uses",),
+}
 
 
 class ProjectCompositionError(SdkError):
@@ -85,7 +90,69 @@ def validate(value: Mapping[str, Any]) -> dict[str, Any]:
     defaults = [item for item in payload.get("entrypoints") or [] if item.get("default") is True]
     if len(defaults) > 1:
         raise ProjectCompositionError("project may declare at most one default entrypoint")
+    dependency_refs = [str(item.get("ref") or "") for item in payload["components"]["dependencies"]]
+    if len(dependency_refs) != len(set(dependency_refs)):
+        raise ProjectCompositionError("project dependency refs must be unique")
+    overlap = sorted(set(owned_refs).intersection(dependency_refs))
+    if overlap:
+        raise ProjectCompositionError(f"owned components cannot also be dependencies: {overlap}")
+    required_entrypoints = set((payload.get("compatibility") or {}).get("required_entrypoints") or [])
+    declared_entrypoints = {str(item["id"]) for item in payload.get("entrypoints") or []}
+    missing_entrypoints = sorted(required_entrypoints - declared_entrypoints)
+    if missing_entrypoints:
+        raise ProjectCompositionError(
+            f"required Project entrypoints are not declared: {missing_entrypoints}"
+        )
     return payload
+
+
+def normalized_definition(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the compatibility-significant Project definition.
+
+    Defaults are expanded only for release locking. Source manifests are never
+    rewritten, so legacy Project digests and Builder receipts remain stable.
+    """
+
+    payload = validate(
+        {
+            key: item
+            for key, item in value.items()
+            if key not in {"ref", "manifest_digest", "source_path"}
+        }
+    )
+    members = []
+    for raw in payload["components"]["owned"]:
+        item = dict(raw)
+        item.setdefault("exposure", _MEMBER_DEFAULTS["exposure"])
+        item.setdefault("lifecycle", _MEMBER_DEFAULTS["lifecycle"])
+        item.setdefault("relations", list(_MEMBER_DEFAULTS["relations"]))
+        item["relations"] = sorted(item["relations"])
+        members.append(item)
+    dependencies = []
+    for raw in payload["components"]["dependencies"]:
+        item = dict(raw)
+        item.setdefault("version", None)
+        item.setdefault("lifecycle", "shared")
+        item.setdefault("relations", ["uses"])
+        item["relations"] = sorted(item["relations"])
+        dependencies.append(item)
+    return {
+        "schema": payload["schema"],
+        "kind": payload["kind"],
+        "id": payload["id"],
+        "version": payload["version"],
+        "profiles": sorted(payload["profiles"]),
+        "components": {
+            "owned": sorted(members, key=lambda item: item["ref"]),
+            "dependencies": sorted(dependencies, key=lambda item: item["ref"]),
+        },
+        "entrypoints": sorted(
+            (dict(item) for item in payload.get("entrypoints") or []),
+            key=lambda item: item["id"],
+        ),
+        "compatibility": dict(payload.get("compatibility") or {}),
+        "lifecycle": dict(payload["lifecycle"]),
+    }
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -161,61 +228,86 @@ def create(value: Mapping[str, Any]) -> dict[str, Any]:
     return get(str(payload["id"]))
 
 
-def create_research_direction(
+def create_with_primary_component(
     project_id: str,
     *,
+    kind: str,
+    component_id: str | None = None,
+    template: str | None = None,
     title: str,
     description: str = "",
-    skill_id: str | None = None,
-    categories: Sequence[str] = ("research",),
+    profiles: Sequence[str] = (),
+    dependencies: Sequence[Mapping[str, Any]] = (),
+    entrypoints: Sequence[Mapping[str, Any]] = (),
+    categories: Sequence[str] = (),
     tags: Sequence[str] = (),
+    member: Mapping[str, Any] | None = None,
+    compatibility: Mapping[str, Any] | None = None,
     actor: str = "user:local",
 ) -> dict[str, Any]:
-    """Atomically create a one-skill research Project through Builder SDKs."""
+    """Atomically scaffold one component and its distributable Project.
+
+    The operation is deliberately domain-neutral. Domain orchestrators choose
+    templates, profiles, bindings, and contracts; Builder owns source creation
+    and rollback of roots created by this call.
+    """
 
     token = _project_id(project_id)
-    target_skill = _project_id(skill_id or token)
+    component_kind = str(kind or "").strip().lower()
+    if component_kind not in {"skill", "scenario"}:
+        raise ProjectCompositionError("component kind must be skill or scenario")
+    target_component = _project_id(component_id or token)
     project_root = resolve_root(token, required=False)
-    skill_root = component_projects.resolve_root("skill", target_skill, required=False)
+    component_root = component_projects.resolve_root(
+        component_kind, target_component, required=False
+    )
     if project_root.exists():
         raise ProjectCompositionError(f"project:{token} already exists")
-    if skill_root.exists():
-        raise ProjectCompositionError(f"skill:{target_skill} already exists")
-    created_skill = False
+    if component_root.exists():
+        raise ProjectCompositionError(
+            f"{component_kind}:{target_component} already exists"
+        )
+    created_component = False
     created_project = False
     try:
-        component_projects.create("skill", target_skill, template="research_direction")
-        created_skill = True
+        component_projects.create(
+            component_kind,
+            target_component,
+            **({"template": template} if template else {}),
+        )
+        created_component = True
         component_projects.update_metadata(
-            "skill",
-            target_skill,
+            component_kind,
+            target_component,
             title=str(title or token).strip(),
             description=str(description or "").strip(),
         )
+        member_value = {
+            "ref": f"{component_kind}:{target_component}",
+            "role": "primary",
+            "exposure": "application",
+            "lifecycle": "bound",
+            "relations": ["uses"],
+            **dict(member or {}),
+        }
         payload = {
             "schema": _SCHEMA,
             "kind": "project",
             "id": token,
             "version": "0.1.0",
-            "profiles": ["adaos.research.direction.v1"],
+            "profiles": [str(item).strip() for item in profiles if str(item).strip()],
             "components": {
-                "owned": [{"ref": f"skill:{target_skill}", "role": "primary"}],
-                "dependencies": [{"ref": "project:adaos_research_platform", "version": "^0.1"}],
+                "owned": [member_value],
+                "dependencies": [dict(item) for item in dependencies],
             },
-            "entrypoints": [
-                {
-                    "id": "research",
-                    "presentation": "scenario:research_workbench",
-                    "default": True,
-                    "bindings": {"direction_ref": f"skill:{target_skill}"},
-                }
-            ],
+            "entrypoints": [dict(item) for item in entrypoints],
             "catalog": {
                 "title": str(title or token).strip(),
                 "description": str(description or "").strip(),
                 "categories": [str(item).strip() for item in categories if str(item).strip()],
                 "tags": [str(item).strip() for item in tags if str(item).strip()],
             },
+            **({"compatibility": dict(compatibility)} if compatibility is not None else {}),
             "lifecycle": {
                 "uninstall": {
                     "components": "remove_if_unreferenced",
@@ -228,15 +320,74 @@ def create_research_direction(
         }
         result = create(payload)
         created_project = True
-        return {"ok": True, "project": result, "primary_skill": component_projects.describe("skill", target_skill)}
+        return {
+            "ok": True,
+            "project": result,
+            "primary_component": component_projects.describe(
+                component_kind, target_component
+            ),
+        }
     except Exception:
-        # Roll back only roots proven to have been created by this operation.
-        created_project = created_project or project_root.is_dir()
-        if created_project and project_root.parent == _root_parent() and project_root.is_dir():
+        if (created_project or project_root.is_dir()) and project_root.parent == _root_parent():
             shutil.rmtree(project_root)
-        if created_skill and skill_root.parent == component_projects.resolve_root("skill", target_skill, required=False).parent and skill_root.is_dir():
-            shutil.rmtree(skill_root)
+        expected_parent = component_projects.resolve_root(
+            component_kind, target_component, required=False
+        ).parent
+        if created_component and component_root.parent == expected_parent and component_root.is_dir():
+            shutil.rmtree(component_root)
         raise
+
+
+def create_research_direction(
+    project_id: str,
+    *,
+    title: str,
+    description: str = "",
+    skill_id: str | None = None,
+    categories: Sequence[str] = ("research",),
+    tags: Sequence[str] = (),
+    actor: str = "user:local",
+) -> dict[str, Any]:
+    """Compatibility wrapper for legacy direction-as-Project callers."""
+
+    result = create_with_primary_component(
+        project_id,
+        kind="skill",
+        component_id=skill_id,
+        template="research_direction",
+        title=title,
+        description=description,
+        profiles=("adaos.research.direction.v1",),
+        dependencies=(
+            {
+                "ref": "project:adaos_research_platform",
+                "version": "^0.1",
+                "lifecycle": "shared",
+                "relations": ["presents", "uses"],
+            },
+        ),
+        entrypoints=(
+            {
+                "id": "research",
+                "presentation": "scenario:research_workbench",
+                "default": True,
+                "bindings": {"direction_ref": f"skill:{_project_id(skill_id or project_id)}"},
+            },
+        ),
+        categories=categories,
+        tags=tags,
+        member={
+            "exposure": "project_only",
+            "lifecycle": "bound",
+            "relations": ["realizes"],
+        },
+        compatibility={"required_entrypoints": ["research"]},
+        actor=actor,
+    )
+    return {
+        **result,
+        "primary_skill": result["primary_component"],
+    }
 
 
 def project_for_component(component_ref: str) -> dict[str, Any] | None:
@@ -286,9 +437,11 @@ __all__ = [
     "ProjectCompositionError",
     "ProjectCompositionNotFound",
     "create",
+    "create_with_primary_component",
     "create_research_direction",
     "get",
     "list_projects",
+    "normalized_definition",
     "project_for_component",
     "resolve_presentation",
     "resolve_root",

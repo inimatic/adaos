@@ -576,18 +576,21 @@ def list_feedback(
 def create(
     project_id: str,
     *,
-    automation_brief_digest: str,
-    research_prototype_digest: str,
-    artifact_groups: Sequence[str],
+    automation_brief_digest: str | None = None,
+    research_prototype_digest: str | None = None,
+    artifact_groups: Sequence[str] = (),
     artifact_audience: str | None = None,
     artifact_sources: Sequence[Mapping[str, Any]] = (),
+    subject_refs: Sequence[Mapping[str, Any]] = (),
+    contract_inputs: Sequence[Mapping[str, Any]] = (),
+    acceptance_profiles: Sequence[str] = (),
     request: str | None = None,
     execution_budget: Mapping[str, Any] | None = None,
     agent_profile: Mapping[str, Any] | None = None,
     primary_targets: Sequence[str] | None = None,
     secondary_targets: Sequence[str] = (),
     context_members: Sequence[Mapping[str, Any]] = (),
-    prohibited_actions: Sequence[str],
+    prohibited_actions: Sequence[str] = (),
     base_release: Mapping[str, Any] | None = None,
     focus_ref: str | None = None,
     session_id: str | None = None,
@@ -614,11 +617,15 @@ def create(
             "source_path": str(projects.resolve_root(kind, component_id)),
         }
 
-    primary_skill = default_primary.partition(":")[2]
+    primary_kind, _, primary_component_id = default_primary.partition(":")
     artifact_inputs = []
+    if artifact_groups and primary_kind != "skill":
+        raise DevelopmentSessionError(
+            "artifact_groups shorthand requires a primary skill; use artifact_sources"
+        )
     sources = [
         {
-            "skill_id": primary_skill,
+            "skill_id": primary_component_id,
             "group_id": str(group_id),
             "audience": artifact_audience,
         }
@@ -653,12 +660,28 @@ def create(
                 }
             )
         artifact_inputs.append(descriptor)
-    if not artifact_inputs:
-        raise DevelopmentSessionError("at least one exact artifact group is required")
+    normalized_subjects = [dict(item) for item in subject_refs]
+    normalized_contracts = [dict(item) for item in contract_inputs]
+    normalized_acceptance = [
+        str(item).strip() for item in acceptance_profiles if str(item).strip()
+    ]
+
+    legacy_brief_digest = str(automation_brief_digest or "").strip()
+    legacy_prototype_digest = str(research_prototype_digest or "").strip()
+    legacy_seed = legacy_brief_digest.removeprefix("sha256:")[:16]
+    generic_identity = {
+        "project_ref": project["ref"],
+        "targets": requested,
+        "subject_refs": normalized_subjects,
+        "contract_inputs": normalized_contracts,
+        "acceptance_profiles": normalized_acceptance,
+        "artifact_manifest_digests": [item["manifest_digest"] for item in artifact_inputs],
+    }
+    generic_seed = hashlib.sha256(_canonical_bytes(generic_identity)).hexdigest()[:16]
 
     token = _session_id(
         session_id
-        or f"dev_{project['id']}_{str(automation_brief_digest).removeprefix('sha256:')[:16]}"
+        or f"dev_{project['id']}_{legacy_seed or generic_seed}"
     )
     session_path = _path(token)
     scratch = (session_path.parent / "scratch").resolve()
@@ -687,6 +710,33 @@ def create(
             "reasoning_effort": str(agent_profile.get("reasoning_effort") or "").strip(),
             "tool_profile": str(agent_profile.get("tool_profile") or "").strip(),
         }
+    handoff = {
+        **(
+            {"automation_brief_digest": legacy_brief_digest}
+            if legacy_brief_digest
+            else {}
+        ),
+        **(
+            {"research_prototype_digest": legacy_prototype_digest}
+            if legacy_prototype_digest
+            else {}
+        ),
+        **(
+            {
+                "artifact_manifest_digests": [
+                    item["manifest_digest"] for item in artifact_inputs
+                ]
+            }
+            if artifact_inputs
+            else {}
+        ),
+        **({"request": str(request).strip()} if str(request or "").strip() else {}),
+        **({"execution_budget": normalized_budget} if normalized_budget else {}),
+        **({"agent_profile": normalized_agent_profile} if normalized_agent_profile else {}),
+        "prohibited_actions": [
+            str(item).strip() for item in prohibited_actions if str(item).strip()
+        ],
+    }
     payload = {
         "schema": "adaos.builder.development_session.v1",
         "session_id": token,
@@ -699,16 +749,11 @@ def create(
         },
         "context_members": normalized_context,
         "artifact_inputs": artifact_inputs,
+        **({"subject_refs": normalized_subjects} if normalized_subjects else {}),
+        **({"contract_inputs": normalized_contracts} if normalized_contracts else {}),
+        **({"acceptance_profiles": normalized_acceptance} if normalized_acceptance else {}),
         "scratch": {"owner": "session", "access": "read-write", "path": str(scratch)},
-        "handoff": {
-            "automation_brief_digest": str(automation_brief_digest),
-            "research_prototype_digest": str(research_prototype_digest),
-            "artifact_manifest_digests": [item["manifest_digest"] for item in artifact_inputs],
-            **({"request": str(request).strip()} if str(request or "").strip() else {}),
-            **({"execution_budget": normalized_budget} if normalized_budget else {}),
-            **({"agent_profile": normalized_agent_profile} if normalized_agent_profile else {}),
-            "prohibited_actions": [str(item) for item in prohibited_actions if str(item).strip()],
-        },
+        "handoff": handoff,
         "status": "ready",
         "created_at": _now(),
         "created_by": str(actor or "user:local"),
@@ -717,13 +762,19 @@ def create(
     with mutation_lock(session_path.parent / ".mutation.lock"):
         if session_path.is_file():
             previous = get(token)
-            if (
-                previous["project_ref"] == payload["project_ref"]
-                and previous["handoff"] == payload["handoff"]
-                and previous["targets"] == payload["targets"]
-                and previous["base_release"] == payload["base_release"]
-                and previous["artifact_inputs"] == payload["artifact_inputs"]
-            ):
+            identity_fields = (
+                "project_ref",
+                "base_release",
+                "focus",
+                "targets",
+                "context_members",
+                "artifact_inputs",
+                "subject_refs",
+                "contract_inputs",
+                "acceptance_profiles",
+                "handoff",
+            )
+            if all(previous.get(field) == payload.get(field) for field in identity_fields):
                 return {"ok": True, "idempotent": True, "session": previous}
             raise DevelopmentSessionError(f"development session {token!r} already exists with another scope")
         scratch.mkdir(parents=True, exist_ok=True)
