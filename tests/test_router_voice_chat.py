@@ -3146,6 +3146,9 @@ async def test_voice_chat_snapshot_handler_ignores_unrelated_receiver_before_log
     await bus.wait_for_idle(timeout=1.0)
 
     assert not any(message == "voice_chat.snapshot requested type=%s receiver=%s" for message, _args in debug_calls)
+    snapshot = bus.backlog_snapshot()
+    assert snapshot["prefiltered_total"] == 1
+    assert snapshot["bounded_queue_total"] == 0
 
 
 async def test_voice_chat_snapshot_ledger_recovery_does_not_block_event_loop(monkeypatch) -> None:

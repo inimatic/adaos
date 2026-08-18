@@ -467,10 +467,17 @@ def _admit_skill_activation_policy(policy: Any, skill_name: str | None, topic: s
     return admission
 
 
-def subscribe(topic: str):
+def subscribe(topic: str, *, receivers: Iterable[str] | str | None = None):
     """Регистрирует обработчик; фактическая подписка делает register_subscriptions()."""
 
+    raw_patterns = (receivers,) if isinstance(receivers, str) else tuple(receivers or ())
+    receiver_patterns = tuple(
+        dict.fromkeys(str(pattern or "").strip() for pattern in raw_patterns if str(pattern or "").strip())
+    )
+
     def deco(fn: Callable):
+        if receiver_patterns:
+            setattr(fn, "_adaos_receiver_patterns", receiver_patterns)
         subscriptions.append((topic, fn))
         return fn
 
@@ -712,6 +719,9 @@ async def register_subscriptions(
                     skill_name,
                 )
             receiver_patterns = receiver_patterns_by_skill.get(skill_name) or ()
+        explicit_receiver_patterns = tuple(getattr(fn, "_adaos_receiver_patterns", ()) or ())
+        if explicit_receiver_patterns:
+            receiver_patterns = tuple(dict.fromkeys((*receiver_patterns, *explicit_receiver_patterns)))
 
         if skill_name:
             handlers_for_skill = skill_topic_handlers.setdefault(skill_name, {})

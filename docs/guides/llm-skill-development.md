@@ -665,6 +665,11 @@ from declarations before a handler coroutine or bounded-queue item is created.
   receiver set. If dynamic receiver segments are necessary, constrain the
   wildcard to the skill-owned prefix and test both an owned and a foreign
   receiver.
+- Core/internal handlers that have no skill manifest must declare the same
+  ownership at registration, for example
+  `@subscribe("webio.stream.subscription.changed", receivers=("core.status",))`.
+  Skill code still needs the manifest/WebUI declaration as the reviewable
+  product contract; the decorator argument is not a substitute for it.
 - On reload and reconnect, publish one request with many skills loaded and
   assert that only the owning handler is queued. EventBus diagnostics must show
   foreign handlers as prefiltered, with no corresponding bounded supersede or

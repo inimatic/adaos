@@ -162,6 +162,9 @@ def test_load_mark_stream_payload_includes_owner_and_root_rows() -> None:
 
 def test_load_mark_subscription_unwraps_nested_webspace_id() -> None:
     _reset_load_mark_state()
+    assert getattr(load_mark_module.on_webio_stream_subscription_changed, "_adaos_receiver_patterns") == (
+        "infrastate.yjs.load_mark",
+    )
 
     load_mark_module.on_webio_stream_subscription_changed(
         {

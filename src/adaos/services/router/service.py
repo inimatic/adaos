@@ -3848,6 +3848,12 @@ class RouterService:
                     suppress_unchanged=ev.type == "webio.stream.snapshot.requested",
                 )
 
+        def _voice_chat_stream_event_filter(ev: Event) -> bool:
+            payload = ev.payload or {}
+            return isinstance(payload, dict) and str(payload.get("receiver") or "").strip() == "voice_chat.messages"
+
+        setattr(_on_voice_chat_stream_snapshot, "_adaos_event_filter", _voice_chat_stream_event_filter)
+
         async def _on_conversation_history_more(ev: Event) -> None:
             payload = ev.payload or {}
             if not isinstance(payload, dict):

@@ -364,7 +364,11 @@ def test_stream_subscription_skips_foreign_declared_receiver(tmp_path: Path, mon
         payload = evt.payload if hasattr(evt, "payload") else evt
         calls.append(payload["receiver"])
 
-    monkeypatch.setattr(decorators, "subscriptions", [("webio.stream.snapshot.requested", handler)])
+    monkeypatch.setattr(decorators, "subscriptions", [])
+    decorators.subscribe(
+        "webio.stream.snapshot.requested",
+        receivers=("notebook_skill.explicit",),
+    )(handler)
     monkeypatch.setattr(decorators, "_registered", False)
     monkeypatch.setattr(decorators, "_SKILL_SUBSCRIPTION_GENERATIONS", {})
     monkeypatch.setattr(decorators, "_REGISTERED_SKILL_SUBSCRIPTIONS", {})
@@ -403,11 +407,16 @@ def test_stream_subscription_skips_foreign_declared_receiver(tmp_path: Path, mon
         type="webio.stream.snapshot.requested",
         payload={"webspace_id": "desktop", "receiver": "notebook_skill.notes"},
     )
+    explicit_evt = SimpleNamespace(
+        type="webio.stream.snapshot.requested",
+        payload={"webspace_id": "desktop", "receiver": "notebook_skill.explicit"},
+    )
 
     asyncio.run(wrapped(foreign_evt))  # type: ignore[misc]
     asyncio.run(wrapped(own_evt))  # type: ignore[misc]
+    asyncio.run(wrapped(explicit_evt))  # type: ignore[misc]
 
-    assert calls == ["notebook_skill.notes"]
+    assert calls == ["notebook_skill.notes", "notebook_skill.explicit"]
 
 
 def test_non_stream_subscription_still_uses_yjs_owner_guard(monkeypatch) -> None:

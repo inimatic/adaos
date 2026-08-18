@@ -1471,7 +1471,7 @@ def _load_mark_write_listener(webspace_id: str, update: bytes, meta: dict[str, A
     )
 
 
-@subscribe("webio.stream.subscription.changed")
+@subscribe("webio.stream.subscription.changed", receivers=(_STREAM_RECEIVER,))
 def on_webio_stream_subscription_changed(evt: Any) -> None:
     payload = getattr(evt, "payload", evt)
     if not isinstance(payload, dict):
