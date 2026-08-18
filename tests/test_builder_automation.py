@@ -294,6 +294,7 @@ def test_automation_projects_declared_and_observed_execution_budget(tmp_path: Pa
     assert projected["budget_usage"]["declared"]["max_model_tokens"] == 80000
     assert projected["budget_usage"]["observed"]["model_tokens"] == 1850
     assert projected["budget_usage"]["observed"]["cached_input_tokens"] == 400
+    assert projected["budget_usage"]["observed"]["attempts"] == 2
     assert projected["budget_usage"]["observed"]["wall_seconds"] == 60.0
     assert projected["budget_usage"]["observed"]["terminal"] is True
 

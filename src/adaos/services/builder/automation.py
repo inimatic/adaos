@@ -1320,6 +1320,7 @@ class BuilderAutomationService:
                 "input_tokens": int(usage.get("input_tokens") or 0),
                 "cached_input_tokens": int(usage.get("cached_input_tokens") or 0),
                 "output_tokens": int(usage.get("output_tokens") or 0),
+                "attempts": int(usage.get("attempts") or 0),
                 "wall_seconds": wall_seconds,
                 "terminal": status in _TERMINAL_STATUSES,
             },
@@ -1369,6 +1370,8 @@ class BuilderAutomationService:
         total: dict[str, int] = {}
         for path in paths:
             usage = BuilderAutomationService._codex_journal_usage(str(path))
+            if usage:
+                total["attempts"] = int(total.get("attempts") or 0) + 1
             for key, value in usage.items():
                 if key == "model_tokens":
                     continue
