@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import heapq
 import hmac
 import json
 import mimetypes
@@ -1061,28 +1062,47 @@ def list_hub_public_download_events(
     }
 
 
-def list_hub_public_links(*, ctx: AgentContext | None = None) -> list[dict[str, Any]]:
+def list_hub_public_links(
+    *,
+    limit: Any = None,
+    include_download_stats: bool = True,
+    ctx: AgentContext | None = None,
+) -> list[dict[str, Any]]:
     data = _load_store("hub", ctx)
-    download_data = _load_download_summary_store(ctx)
     links = data.get("links") if isinstance(data.get("links"), dict) else {}
+    records = (record for record in links.values() if isinstance(record, Mapping))
+    bounded_limit: int | None = None
+    if limit is not None:
+        try:
+            bounded_limit = max(1, min(500, int(limit)))
+        except Exception:
+            bounded_limit = 100
+        records = iter(
+            heapq.nlargest(
+                bounded_limit,
+                records,
+                key=lambda record: str(record.get("created_at") or ""),
+            )
+        )
+    download_data = _load_download_summary_store(ctx) if include_download_stats else {}
     out: list[dict[str, Any]] = []
-    for record in links.values():
-        if not isinstance(record, Mapping):
-            continue
+    for record in records:
         item = _public_record(record, include_public_token=True, include_routing=True)
         item["source_id"] = str(record.get("source_id") or "")
         item["source_label"] = str(record.get("source_label") or "")
         item["rel_path"] = str(record.get("rel_path") or "")
         item["revoked_at"] = record.get("revoked_at")
-        stats = _download_summary_for_record(record, download_data)
-        item["download_stats"] = stats
-        item["download_summary"] = (
-            f"{int(stats.get('download_completed_total') or 0)} downloads, "
-            f"{int(stats.get('failed_total') or 0)} failures, "
-            f"{int(stats.get('aborted_total') or 0)} aborted"
-        )
+        if include_download_stats:
+            stats = _download_summary_for_record(record, download_data)
+            item["download_stats"] = stats
+            item["download_summary"] = (
+                f"{int(stats.get('download_completed_total') or 0)} downloads, "
+                f"{int(stats.get('failed_total') or 0)} failures, "
+                f"{int(stats.get('aborted_total') or 0)} aborted"
+            )
         out.append(item)
-    out.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    if bounded_limit is None:
+        out.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
     return out
 
 

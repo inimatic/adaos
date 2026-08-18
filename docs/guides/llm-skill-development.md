@@ -123,6 +123,16 @@ For every `data_routes` entry:
   compact acknowledgement shape. It must not return the same message list,
   table, snapshot, or diagnostic body that it just published through the
   declared route.
+- A route budget must bound source work before materialization, not only the
+  serialized result. `Path.read_bytes()[:limit]`, `list(directory)[:limit]`,
+  fetching every database/API row before slicing, and sorting an unbounded
+  collection all violate the budget. Read at most `limit + 1`, query with a
+  limit/cursor, and retain only the bounded working set needed to report that
+  more data exists.
+- When a browser contract is duplicated in a skill and an installing scenario,
+  add a parity test for receiver names, paths, budgets, and action targets.
+  Marketplace installation commonly materializes the scenario copy, so a
+  skill-only fix is not a deployed UI fix.
 
 For every `data_projections` entry:
 
@@ -274,6 +284,11 @@ background work, or heavy resources:
 - Keep import time passive. Importing a handler module must not start threads,
   load large models, open sockets, register external callbacks, publish events,
   or mutate persistent state. Smoke imports should be safe to repeat.
+- Treat `@tool` and `@subscribe` as declarations, not as permission to perform
+  registration work at module import time. A handler can be imported once for
+  subscription discovery and again under an execution-only module name for a
+  tool call. Do not call bus registration helpers manually, depend on module
+  `__name__`, or use import count as lifecycle state.
 - Make reloads idempotent. Runtime-owned bus subscriptions are deduplicated by
   the core, but skill-owned threads, timers, executors, external callbacks, and
   resource handles still need an owner token, stop signal, and cleanup hook.
@@ -1734,6 +1749,9 @@ Before publishing:
 - verify stream receivers have bounded modes and snapshot-on-subscribe behavior
 - verify stream payloads stay within budget after multiplying by expected
   browser/node fanout
+- verify preview, directory, database, and remote-list builders apply limits
+  before whole-file reads, complete enumeration, sorting, or response
+  normalization; test with an input larger than the declared bound
 - verify client-side `path` selectors are not being mistaken for transport
   filtering; measure the complete receiver payload once per active subscriber
 - verify list, editor/detail, and widget surfaces use separate receivers when
@@ -1741,6 +1759,8 @@ Before publishing:
 - verify receiver budgets and handler constants agree: `webui.json`,
   `skill.yaml`, and the actual stream builder must use the same item/text/byte
   caps, including `max_fanout`
+- verify duplicated skill/scenario UI manifests expose identical receiver
+  contracts and that the installation-owned copy has the same bindings
 - verify stream receivers have `initialState`, freshness metadata, and a
   recovery path after resubscribe
 - verify `webui.json` declares shared interaction behavior for first focus,
@@ -1813,6 +1833,8 @@ Treat these as defects in LLM-generated skills:
   `data.installed`, or `data.desktop`
 - unbounded chat/log/event arrays in Yjs
 - returning a huge snapshot from `refresh_snapshot`
+- applying a payload limit only after reading an entire file, directory,
+  database result, or remote response into memory
 - polling a heavy snapshot endpoint to keep normal UI alive
 - duplicating the same data in a tool response and Yjs
 - duplicating the same replace-state in both eager stream publishes and Yjs

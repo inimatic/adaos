@@ -208,6 +208,9 @@ def test_root_drive_public_folder_lists_and_streams_children(monkeypatch, tmp_pa
     public_links = list_hub_public_links(ctx=fake_ctx)
     assert public_links[0]["download_stats"]["failed_total"] >= 1
     assert "failures" in public_links[0]["download_summary"]
+    summary_links = list_hub_public_links(ctx=fake_ctx, limit=1, include_download_stats=False)
+    assert len(summary_links) == 1
+    assert "download_stats" not in summary_links[0]
 
 
 def test_root_drive_public_link_registration_requires_root_auth(monkeypatch, tmp_path: Path) -> None:
