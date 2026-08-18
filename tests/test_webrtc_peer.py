@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import json
 import sys
+import threading
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -173,6 +174,47 @@ def test_handle_rtc_offer_reuses_existing_clean_peer(monkeypatch) -> None:
     assert existing.webspace_id == "desk-next"
     assert existing._send_ice is send_ice_cb
     assert existing.emitted_reasons == ["webspace:offer.renegotiate"]
+
+
+def test_handle_rtc_offer_constructs_new_peer_off_event_loop_thread(monkeypatch) -> None:
+    peer_mod = _load_peer_module(monkeypatch)
+    owner_thread = threading.get_ident()
+    construction_threads: list[int] = []
+
+    class NewPeer:
+        def __init__(self, device_id, webspace_id, send_ice_cb, generation_id=None) -> None:
+            construction_threads.append(threading.get_ident())
+            self.device_id = device_id
+            self.webspace_id = webspace_id
+            self._send_ice = send_ice_cb
+            self.generation_id = generation_id
+            self.pc = SimpleNamespace(connectionState="new")
+
+        async def handle_offer(self, sdp: str, type: str = "offer") -> dict[str, str]:
+            return {"sdp": f"answer:{sdp}", "type": type}
+
+        def _emit_state_event(self, *, reason: str) -> None:  # noqa: ARG002
+            return None
+
+    monkeypatch.setattr(peer_mod, "HubPeer", NewPeer)
+    peer_mod._peers.clear()
+
+    async def send_ice_cb(candidate: dict[str, object]) -> None:  # noqa: ARG001
+        return None
+
+    answer = asyncio.run(
+        peer_mod.handle_rtc_offer(
+            offer_sdp="offer-sdp",
+            offer_type="offer",
+            device_id="browser-threaded",
+            webspace_id="desktop",
+            send_ice_cb=send_ice_cb,
+        )
+    )
+
+    assert answer == {"sdp": "answer:offer-sdp", "type": "offer"}
+    assert len(construction_threads) == 1
+    assert construction_threads[0] != owner_thread
 
 
 def test_fresh_generation_replaces_connecting_peer(monkeypatch) -> None:

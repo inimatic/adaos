@@ -1680,7 +1680,15 @@ async def handle_rtc_offer(
                 exc_info=True,
             )
 
-    peer = HubPeer(device_id, webspace_id, send_ice_cb, generation_id=incoming_generation)
+    # aiortc generates an ephemeral DTLS certificate in RTCPeerConnection's
+    # constructor. Keep that CPU-heavy crypto work off the channel owner loop.
+    peer = await asyncio.to_thread(
+        HubPeer,
+        device_id,
+        webspace_id,
+        send_ice_cb,
+        incoming_generation,
+    )
     # Assign after construction to preserve compatibility with embedders and
     # tests that provide a legacy HubPeer factory without the new keyword.
     peer.peer_id = peer_key

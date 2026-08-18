@@ -669,7 +669,7 @@ def _listed_invites(service: Any) -> list[dict[str, Any]]:
 
 
 @router.get("/current-user/header-settings", dependencies=[Depends(require_token)])
-async def get_current_user_header(request: Request, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
+def get_current_user_header(request: Request, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
     service = _profile(ctx)
     settings = service.header_settings()
     device_status = _current_device_status(request)
@@ -680,7 +680,7 @@ async def get_current_user_header(request: Request, ctx: AgentContext = Depends(
 
 
 @router.get("/options", dependencies=[Depends(require_token)])
-async def get_personalization_options(ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
+def get_personalization_options(ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
     languages = _language_options(ctx)
     return {
         "ok": True,
@@ -699,13 +699,13 @@ async def get_personalization_options(ctx: AgentContext = Depends(get_ctx)) -> d
 
 
 @router.get("/current-user/profile", dependencies=[Depends(require_token)])
-async def get_current_user_profile(ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
+def get_current_user_profile(ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
     service = _profile(ctx)
     return {"ok": True, "profile": _profile_view(service.get_profile())}
 
 
 @router.patch("/current-user/profile", dependencies=[Depends(require_token)])
-async def update_current_user_profile(body: dict[str, Any], ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
+def update_current_user_profile(body: dict[str, Any], ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
     try:
         service = _profile(ctx)
         profile = service.update_profile(_profile_patch(body), actor=_actor(ctx))
@@ -715,13 +715,13 @@ async def update_current_user_profile(body: dict[str, Any], ctx: AgentContext = 
 
 
 @router.get("/current-user/preferences", dependencies=[Depends(require_token)])
-async def get_current_user_preferences(ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
+def get_current_user_preferences(ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
     service = _profile(ctx)
     return {"ok": True, "preferences": service.get_preferences()}
 
 
 @router.patch("/current-user/preferences", dependencies=[Depends(require_token)])
-async def update_current_user_preferences(body: dict[str, Any], ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
+def update_current_user_preferences(body: dict[str, Any], ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
     try:
         service = _profile(ctx)
         preferences = service.update_preferences(_preferences_patch(body), actor=_actor(ctx))
@@ -731,7 +731,7 @@ async def update_current_user_preferences(body: dict[str, Any], ctx: AgentContex
 
 
 @router.get("/policy/explain", dependencies=[Depends(require_token)])
-async def explain_policy(
+def explain_policy(
     action: str,
     subject_kind: str = Query(default="user"),
     subject_id: str | None = Query(default=None),
@@ -750,7 +750,7 @@ async def explain_policy(
 
 
 @router.post("/invites/guest", dependencies=[Depends(require_token)])
-async def create_guest_invite(
+def create_guest_invite(
     body: GuestInviteCreateRequest,
     request: Request,
     ctx: AgentContext = Depends(get_ctx),
@@ -771,7 +771,7 @@ async def create_guest_invite(
 
 
 @router.post("/invites/targeted", dependencies=[Depends(require_token)])
-async def create_targeted_invite(
+def create_targeted_invite(
     body: TargetedInviteCreateRequest,
     request: Request,
     ctx: AgentContext = Depends(get_ctx),
@@ -799,7 +799,7 @@ async def create_targeted_invite(
 
 
 @router.post("/devices/pairing-links", dependencies=[Depends(require_token)])
-async def create_device_pairing_link(
+def create_device_pairing_link(
     body: DevicePairingLinkCreateRequest,
     request: Request,
     ctx: AgentContext = Depends(get_ctx),
@@ -822,7 +822,7 @@ async def create_device_pairing_link(
 
 
 @router.post("/recovery/admin-links", dependencies=[Depends(require_token)])
-async def create_admin_recovery_link(
+def create_admin_recovery_link(
     body: AdminRecoveryLinkCreateRequest,
     request: Request,
     ctx: AgentContext = Depends(get_ctx),
@@ -848,7 +848,7 @@ async def create_admin_recovery_link(
 
 
 @router.get("/invites", dependencies=[Depends(require_token)])
-async def list_invites(request: Request, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
+def list_invites(request: Request, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
     service = _access(ctx)
     return {
         "ok": True,
@@ -857,7 +857,7 @@ async def list_invites(request: Request, ctx: AgentContext = Depends(get_ctx)) -
 
 
 @router.get("/invites/{invite_id}/preview")
-async def preview_invite(invite_id: str, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
+def preview_invite(invite_id: str, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
     try:
         preview = _access(ctx).preview_invite(invite_id)
         return {"ok": True, "preview": preview}
@@ -866,7 +866,7 @@ async def preview_invite(invite_id: str, ctx: AgentContext = Depends(get_ctx)) -
 
 
 @router.post("/invites/{invite_id}/claim")
-async def claim_invite(invite_id: str, body: InviteClaimRequest, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
+def claim_invite(invite_id: str, body: InviteClaimRequest, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
     try:
         service = _access(ctx)
         preview = service.preview_invite(invite_id)
@@ -938,7 +938,7 @@ async def claim_invite(invite_id: str, body: InviteClaimRequest, ctx: AgentConte
 
 
 @router.patch("/current-user/settings", dependencies=[Depends(require_token)])
-async def update_current_user_settings(
+def update_current_user_settings(
     body: dict[str, Any],
     background_tasks: BackgroundTasks,
     ctx: AgentContext = Depends(get_ctx),
@@ -973,7 +973,7 @@ async def update_current_user_settings(
 
 
 @router.get("/admin/summary", dependencies=[Depends(require_token)])
-async def admin_summary(
+def admin_summary(
     audit_limit: int = Query(default=50, ge=1, le=200),
     ctx: AgentContext = Depends(get_ctx),
 ) -> dict[str, Any]:
@@ -984,7 +984,7 @@ async def admin_summary(
 
 
 @router.post("/admin/grants", dependencies=[Depends(require_token)])
-async def admin_grant_role(body: AdminGrantRequest, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
+def admin_grant_role(body: AdminGrantRequest, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
     try:
         result = _access(ctx).grant_role_preset(
             subject=_user_subject(body.subject_id, fallback="granted-user"),
@@ -999,7 +999,7 @@ async def admin_grant_role(body: AdminGrantRequest, ctx: AgentContext = Depends(
 
 
 @router.post("/admin/devices/{device_id}/revoke", dependencies=[Depends(require_token)])
-async def admin_revoke_device(
+def admin_revoke_device(
     device_id: str,
     body: AdminRevokeRequest,
     ctx: AgentContext = Depends(get_ctx),
@@ -1014,7 +1014,7 @@ async def admin_revoke_device(
 
 
 @router.post("/admin/sessions/{session_id}/revoke", dependencies=[Depends(require_token)])
-async def admin_revoke_session(
+def admin_revoke_session(
     session_id: str,
     body: AdminRevokeRequest,
     ctx: AgentContext = Depends(get_ctx),
@@ -1029,7 +1029,7 @@ async def admin_revoke_session(
 
 
 @router.post("/invites/{invite_id}/revoke", dependencies=[Depends(require_token)])
-async def revoke_invite(
+def revoke_invite(
     invite_id: str,
     body: InviteRevokeRequest,
     request: Request,
@@ -1044,7 +1044,7 @@ async def revoke_invite(
 
 
 @router.post("/invites/{invite_id}/guest-sessions/revoke", dependencies=[Depends(require_token)])
-async def revoke_guest_sessions(
+def revoke_guest_sessions(
     invite_id: str,
     body: InviteRevokeRequest,
     request: Request,
