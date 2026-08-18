@@ -541,6 +541,14 @@ checks a hand-written lookalike. Exercise the actual consumer path and include
 at least one value that would fail if a required nested field or summary path
 were absent.
 
+Operation names and request/response schemas are ABI. An implementation with a
+semantically similar alias is not conformant: for example, `run_protocol_stage`
+does not satisfy a required `prepare_attempt`. Before coding, read the
+authoritative consumer schema or admitted conformance fixture, then bind its
+exact operations to production handlers and manifest exports. Keep explanatory
+prose useful, but do not make the model infer an executable boundary from prose
+when AdaOS already publishes it as data.
+
 For source-derived systems, also carry an exact machine-readable system
 specification. Names such as "ConvNet-style", "standard preprocessing", or
 "equivalent architecture" leave room for the coding model to change the
@@ -562,6 +570,28 @@ policy explicitly admitted by the platform, or another supported provider.
 Do not rely on a library that happens to be installed in Builder's Python
 environment. Validation should predict installer refusal before packaging,
 and the environment evidence should identify the resolved library versions.
+Inspect `src/adaos/services/skill/skill_schema.json` and
+`docs/skill_runtime.md` rather than guessing dependency fields. The temporary
+in-process exception is the explicit `allow_heavy_dependencies` policy; merely
+listing `torch`, `tensorflow`, or another heavy/native package under
+`dependencies` does not authorize it. Run
+`SkillValidationService.validate_path(..., strict=True, probe_tools=True)` (or
+the ordinary install path that invokes equivalent install-mode validation) so
+manifest shape, imports, exported provider operations, dependency declaration,
+and isolation are reported in one bounded pass.
+
+Do not place a Python module or package named after a standard-library module
+at the skill root. Names such as `operator.py`, `types.py`, `json.py`, or
+`collections/` can shadow Python itself when validation, tests, or dependency
+installation run from that directory. Put domain code below an unambiguous
+package (for example `tlp_domain/operator.py`). AdaOS validation reports this
+as `runtime.python.stdlib_shadowing` before packaging.
+
+Autonomous Builder execution receives a task-scoped `ADAOS_BASE_DIR`. Generated
+code must still use CTX/SDK paths and must never derive the host `.adaos` root,
+but tests and CLI probes may legitimately create runtime state inside that
+admitted task bucket. Such state is evidence, not source; writes to the
+repository-level `.adaos/state` remain an out-of-scope failure.
 
 Acceptance tests should use the bounded production entrypoint rather than a
 second test-only implementation. Recovery tests must inject a real failure at

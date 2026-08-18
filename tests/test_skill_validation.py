@@ -159,6 +159,42 @@ def ping():
     assert "runtime.dependencies.heavy_isolation" in codes
 
 
+def test_validation_rejects_root_module_that_shadows_stdlib(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+""",
+        extra_files={"operator.py": "DOMAIN_OPERATOR = True\n"},
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir)
+
+    issue = next(item for item in report.issues if item.code == "runtime.python.stdlib_shadowing")
+    assert report.ok is False
+    assert issue.where == "operator.py"
+
+
+def test_validation_allows_nested_module_named_like_stdlib(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+""",
+        extra_files={"domain/operator.py": "DOMAIN_OPERATOR = True\n"},
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir)
+
+    assert "runtime.python.stdlib_shadowing" not in {issue.code for issue in report.issues}
+
+
 def test_validation_rejects_unexported_provider_contract_operation(tmp_path: Path) -> None:
     skill_dir = _write_skill(
         tmp_path,

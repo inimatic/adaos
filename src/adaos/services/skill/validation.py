@@ -306,8 +306,53 @@ def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
     issues.extend(_direct_projection_write_issues(skill_dir))
     issues.extend(_async_subscription_blocking_issues(skill_dir))
     issues.extend(_personalization_manifest_policy_issues(data, install_mode=install_mode))
+    issues.extend(validate_python_stdlib_shadowing(skill_dir))
     issues.extend(validate_dependency_isolation_contract(skill_dir, data, install_mode=install_mode))
     issues.extend(_conversation_native_static_checks(skill_dir, manifest=data, install_mode=install_mode))
+    return issues
+
+
+def validate_python_stdlib_shadowing(skill_dir: Path) -> List[Issue]:
+    """Reject root modules that can break Python tooling run from a skill slot.
+
+    Installers, validators, tests, and skill processes may put the skill root
+    first on ``sys.path``.  A root ``operator.py`` (or a package such as
+    ``json/``) can therefore shadow the standard library before AdaOS has a
+    chance to activate the skill and can even prevent pip from starting.
+    """
+
+    stdlib_names = {
+        str(name).casefold()
+        for name in getattr(sys, "stdlib_module_names", ())
+        if str(name).strip()
+    }
+    if not stdlib_names:
+        return []
+
+    issues: List[Issue] = []
+    try:
+        children = tuple(skill_dir.iterdir())
+    except OSError:
+        return issues
+    for child in children:
+        module_name = ""
+        if child.is_file() and child.suffix.casefold() == ".py":
+            module_name = child.stem
+        elif child.is_dir() and (child / "__init__.py").is_file():
+            module_name = child.name
+        if not module_name or module_name == "__init__":
+            continue
+        if module_name.casefold() not in stdlib_names:
+            continue
+        issues.append(
+            Issue(
+                "error",
+                "runtime.python.stdlib_shadowing",
+                f"root Python module {child.name!r} shadows standard-library module "
+                f"{module_name!r}; move or rename it before validation, testing, or installation",
+                child.name,
+            )
+        )
     return issues
 
 
