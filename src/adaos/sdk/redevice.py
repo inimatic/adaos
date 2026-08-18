@@ -707,6 +707,20 @@ def _local_registry_endpoints(*, hub_id: str | None = None, owner_id: str | None
     return result
 
 
+def list_cached_endpoints(
+    *,
+    hub_id: str | None = None,
+    owner_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return the local ReDevice projection without opening a network connection."""
+    expected_hub, expected_owner = _local_scope()
+    expected_hub = _text(hub_id) or expected_hub
+    expected_owner = _text(owner_id) or expected_owner
+    return current_endpoint_records(
+        _local_registry_endpoints(hub_id=expected_hub, owner_id=expected_owner)
+    )
+
+
 @dataclass(frozen=True)
 class ReDeviceBridge:
     root_base: str | None = None
@@ -771,7 +785,7 @@ class ReDeviceBridge:
         ]
         merged = list(endpoints)
         seen = {endpoint_id(item) for item in merged if endpoint_id(item)}
-        for local in _local_registry_endpoints(hub_id=expected_hub, owner_id=expected_owner):
+        for local in list_cached_endpoints(hub_id=expected_hub, owner_id=expected_owner):
             eid = endpoint_id(local)
             if eid and eid in seen:
                 continue

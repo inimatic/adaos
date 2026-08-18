@@ -102,6 +102,26 @@ def test_redevice_module_list_accepts_custom_timeout(monkeypatch) -> None:
     assert captured["timeout"] == 3.5
 
 
+def test_redevice_cached_list_never_requests_root(monkeypatch) -> None:
+    monkeypatch.setattr(redevice, "_local_scope", lambda: ("sn_local", "sn_local"))
+    monkeypatch.setattr(
+        redevice,
+        "_local_registry_endpoints",
+        lambda **_kwargs: [_endpoint("LOCAL", "sn_local")],
+    )
+    monkeypatch.setattr(
+        redevice.ReDeviceBridge,
+        "request_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cached endpoint reads must not request Root")
+        ),
+    )
+
+    endpoints = redevice.list_cached_endpoints()
+
+    assert [item["code"] for item in endpoints] == ["LOCAL"]
+
+
 def test_redevice_sync_local_registry_skips_foreign_subnet(monkeypatch) -> None:
     monkeypatch.setattr(redevice, "_local_scope", lambda: ("sn_local", "sn_local"))
 

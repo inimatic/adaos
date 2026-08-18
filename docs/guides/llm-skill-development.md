@@ -968,6 +968,19 @@ Use these rules for command and subscription handlers:
   probe; it must not run process polling, endpoint discovery, remote health
   requests, database migrations, or persistent audit writes in the caller.
   Expose observation time and source so a stale projection is visible.
+- Treat an interval worker as a high-frequency read path too. Its normal tick
+  must use an API whose contract explicitly guarantees cache-only/local
+  projection access; a flag named `sync=false` is not sufficient evidence that
+  the getter avoids the network. Put any required remote refresh on a separate
+  single-flight schedule with exponential backoff, jitter, a maximum attempt
+  rate, and counters for attempts, failures, duration, last success, and next
+  eligibility. Test the cache-only path with the network opener replaced by a
+  failure.
+- Assign exactly one owner to every polling loop. A child service must not both
+  start a handler-owned poll thread and run the same poll from its own main
+  loop. Rehydration, lifecycle hooks, reloads, and service startup must leave
+  one named worker; expose its PID/owner and local-versus-remote read counters
+  in health diagnostics.
 - Do not store a high-rate successful-read audit trail inside the same JSON or
   database record as operational state. Persist denials and mutations; sample,
   coalesce, or append successful reads to a separately bounded audit sink.
@@ -1847,6 +1860,9 @@ Before publishing:
 - verify stream snapshot builders use bounded read models or compact caches and
   do not call remote discovery, root relay, sync repair, or legacy fallback
   paths during browser state rebuilds
+- verify every interval worker uses an explicitly cache-only SDK contract on
+  routine ticks, has one lifecycle owner after rehydrate/reload, and cannot
+  multiply remote requests when its child service is also active
 - verify status cards stay small and point to details instead of embedding
   detail payloads
 - verify status-card compact-boundary diagnostics stay clean:
