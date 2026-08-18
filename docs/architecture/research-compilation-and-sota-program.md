@@ -42,7 +42,9 @@ boundary:
 ```text
 source artifacts and human intent
   -> source analysis and scientific critique
-  -> accepted research problem
+  -> problem landscape and dependency-aware ResearchAgenda
+  -> one or more bounded ResearchTask contracts
+  -> accepted task-scoped research problem
   -> operationalized experimental protocol
   -> engineering and evidence contract
   -> bounded autonomous implementation
@@ -55,6 +57,13 @@ human-readable but is also versioned, machine-actionable, digest-bound, and
 testable. The compiler does not decide that a hypothesis is true and does not
 replace scientific judgment. It makes the transfers of responsibility
 explicit and exposes where information or validity was lost.
+
+The planning boundary precedes compilation. A broad direction may produce a
+portfolio of tasks with explicit objective, inputs, expected artifacts,
+evaluation, boundaries, dependencies, and integration intent. Each accepted
+ResearchCompilation belongs to one ResearchTask. This prevents both one
+oversized autonomous prompt and a flat list of overlapping engineering chores.
+The agenda remains revisable; an accepted task/compilation digest does not.
 
 The first falsifiable framework hypothesis is:
 
@@ -70,9 +79,12 @@ negative results if the comparison does not support it.
 
 ## Research Compilation Stages
 
-The stages are logical contracts. They may initially be stored as sections and
-revisions of `ResearchPrototype` and `AutomationBrief`; they do not each earn
-a new core entity merely by being named here.
+The stages are logical contracts. SourceAnalysis, ResearchProblem, and
+ExperimentalProtocol may initially be stored as facets/revisions of
+`ResearchPrototype`; they do not each earn a new core entity merely by being
+named here. ResearchTask, accepted ResearchCompilation, and
+ImplementationTrack cross durable actor/authority boundaries and therefore
+have stable research-domain identities.
 
 ### 1. Source analysis
 
@@ -123,7 +135,8 @@ without knowing TLP or another domain's implementation.
 `AutomationBrief` and the direction manifest project the accepted protocol
 into bounded implementation obligations:
 
-- exact writable targets and read-only source/context refs;
+- exact direction, ResearchTask, ResearchCompilation, ImplementationTrack,
+  Project, writable targets, and read-only source/context refs;
 - provider operations such as `prepare`, `run`, `collect`, and `verify`;
 - RunSpec, observation, result, checkpoint, and artifact schemas;
 - artifact roles, storage ownership, retries, idempotency, and recovery;
@@ -135,6 +148,12 @@ Codex remains free to choose internal modules, algorithms, libraries within
 policy, optimizations, and diagnostic structures. It is not free to silently
 change the question, estimand, comparator, evidence boundary, or confirmation
 policy.
+
+Builder receives the whole Project compatibility envelope but hydrates context
+progressively: composition/contracts/digests first, full source for writable
+targets, and read-only dependency source only on demand. Project scope is a
+correctness boundary, not permission to flood the model context or mutate every
+member.
 
 ### 5. Bidirectional feasibility feedback
 
@@ -233,6 +252,11 @@ The objective is a Pareto frontier, not the arm with the largest schema. The
 comparison measures scientific fidelity and operational reliability against
 context size, cost, human effort, autonomy, and portability. TLP is the first
 calibration task; it cannot establish generality or SOTA by itself.
+
+All arms belong to one ResearchDirection, one ResearchTask, and one matched
+Study. Arm workspaces, generated skills, Development Sessions, and candidates
+are internal ImplementationTrack/evaluation records. They are not separate
+top-level directions or independently discoverable applications.
 
 The implementation keeps two digest-linked views of a compilation. The full
 `research.compilation_package` is the audit authority for reviewers and
@@ -383,11 +407,18 @@ baselines pass.
 
 AdaOS should reuse proven ideas and standards rather than claim them as new:
 
-- [FirstResearch](https://arxiv.org/abs/2607.05682) makes question derivation
-  inspectable through assumptions, mechanism, falsifier, minimal decisive
-  test, expected observations, and a failure-update rule. Its reported
-  evaluation is preliminary and judge-heavy, but the certificate is direct
-  prior art for the formulation boundary.
+- [FirstResearch](https://arxiv.org/abs/2607.05682) proposed making question
+  derivation inspectable through assumptions, mechanism, falsifier, minimal
+  decisive test, expected observations, and a failure-update rule. The paper
+  was withdrawn on 28 July 2026 for further improvement/consolidation. Its
+  certificate remains useful non-authoritative design prior art, but its
+  reported LLM-judge evaluation is not evidence for a SOTA claim.
+- The August 2026 [Project2Task preprint](https://arxiv.org/abs/2608.05225)
+  explicitly treats a research project as a portfolio of bounded,
+  dependency-aware tasks with contribution ownership, inputs, outputs,
+  evaluation and boundary constraints. Its early reported gains support the
+  Direction -> Agenda -> Task split, but the small recent preprint is emerging
+  evidence rather than a mature standard.
 - [DiscoveryBench](https://arxiv.org/abs/2407.01725) demonstrates a pragmatic
   facet-based formalism that is constrained enough for reproducible evaluation
   while spanning diverse data-driven discovery tasks.
@@ -420,7 +451,7 @@ AdaOS should reuse proven ideas and standards rather than claim them as new:
   `Dataset`, `Task`, `Flow`, and `Run` semantics and independently evaluated
   run results.
 - [Workflow Run RO-Crate](https://arxiv.org/abs/2312.07852),
-  [W3C PROV](https://www.w3.org/TR/prov-overview/), and
+  [W3C PROV-O](https://www.w3.org/TR/prov-o/), and
   [Common Workflow Language](https://www.commonwl.org/specification/) provide
   portable workflow and provenance concepts. AdaOS should map/export to these
   standards rather than invent a closed archival vocabulary.
@@ -436,6 +467,12 @@ Before treating the generated TLP direction as the start of an autonomous
 Study, the Workbench and core contracts should support one clean research-
 compilation proof:
 
+- represent TLP calibration as one ResearchDirection with one bounded
+  ResearchTask, one Study, and C0-C4 condition/implementation records;
+- show the direction portfolio as cards and the selected direction through a
+  generic outline/tree plus full-page selected-node view;
+- bind every formulation, compilation, AutomationBrief, Builder session,
+  implementation candidate, and evaluation result to exact direction/task ids;
 - show Source Analysis, Problem, Protocol, and Engineering Contract as related
   revisions rather than one opaque consensus block;
 - show source/review coverage, unresolved decisions, and traceability gaps;
@@ -452,6 +489,11 @@ compilation proof:
   evaluator, with no TLP-specific UI required from Codex;
 - freeze the receipt as the first calibration package, explicitly without a
   TLP efficacy or cross-domain SOTA claim.
+
+After the clean single-task proof, the next evaluation introduces a small
+ResearchAgenda with dependent and parallel tasks and compares it with a direct
+project-sized prompt under matched budgets. This tests whether task planning
+adds value beyond the already isolated formulation/typing effect.
 
 This proof is the admission gate for widening autonomous execution. It makes
 the next implementation iteration serve the long-term AI-driven-science claim

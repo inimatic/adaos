@@ -6,10 +6,12 @@ first ARF7 technical precursor proved typed formulation revisions and an exact
 AutomationBrief; ARF7.2 validated bounded Codex realization of the direction
 skill. ARF7.1 also validates the pre-Codex mechanics and its strengthened
 authoring gate; the final authenticated browser reload receipt remains an
-explicit UX acceptance item:
+explicit UX acceptance item. ARF7.4 now specifies the required normalization
+from the compatible one-Project/one-direction representation to explicit
+ResearchDirection/ResearchTask/ImplementationTrack identities:
 creation, artifact intake, focus, and formulation begin in a shared Research
-Workbench over an explicit local Project and Builder Development Session, not
-in a research-specific Builder tab. State-scoped full-surface layout variants,
+Workbench, while implementation opens an explicit Project-scoped Builder
+Development Session rather than a research-specific Builder tab. State-scoped full-surface layout variants,
 provenance-aware artifact extraction, disclosed LLM context coverage, and a
 core-owned deterministic admission review now prevent partial UI state or LLM
 self-readiness from becoming an implementation handoff. Clean from-raw
@@ -45,13 +47,13 @@ pack, and aResearcher as a solution agent or workbench are governed by the
 2. **aResearcher** remains a useful future product or assistant name. It may be
    the conversational surface over the fabric, but it is not the name of the
    persistence and execution contracts.
-3. A research direction is one ordinary AdaOS Project whose primary owned
-   component is a `research.direction` skill. The skill is the direction
-   identity and future domain-code/runner owner; the Project is its
-   distribution definition. It does not require a direction-specific scenario.
-   The shared Research Workbench and `research_orchestrator_skill` provide the
-   portfolio, focus, intake, and formulation surface; Builder is opened only
-   for the bounded development session.
+3. A `ResearchDirection` is a live scientific domain aggregate, not an AdaOS
+   Project, skill, or scenario identity. Its logical owner is the user or
+   Assistant; `research_orchestrator_skill` is the custodian and transition
+   authority. A direction may reference one or more ProjectReleases containing
+   its implementation skills. The current one-component Project/direction-skill
+   path remains a readable compatibility form, but target APIs never assume
+   `direction_id == project_id`.
 4. Research uses the existing skill, optional scenario, workflow, package, and
    activation lifecycle. There is no separate `adaos research ...`
    installation or runtime CLI.
@@ -82,15 +84,15 @@ pack, and aResearcher as a solution agent or workbench are governed by the
    modal, and conversational help/next-step intents all consume one
    workflow-aware projection rather than maintaining separate action advice.
 13. Builder is the only software-authoring and adaptation control plane for a
-    research direction, but it is not the research-management UI. Research
-    Workbench creates the Project/direction skill through Builder SDK, owns
-    intake and formulation, and later links to a Builder Development Session.
-    Neither the orchestrator nor Workbench edits installed package sources.
-14. Human/LLM research design produces a versioned `ResearchPrototype`, not an
-    authoritative chat transcript. Human consensus accepts an exact digest;
-    Automation receives a bounded implementation handoff naming the exact
-    Project, development targets, local artifact groups, read-only context,
-    and accepted revision.
+    research implementation, but it is not the research-management UI. Research
+    Workbench invokes domain capabilities and links to a Project-scoped Builder
+    Development Session. Neither the orchestrator nor Workbench edits installed
+    package sources.
+14. Human/LLM research design produces task-scoped, versioned
+    `ResearchPrototype` and `ResearchCompilation` artifacts, not an authoritative
+    chat transcript. Human consensus accepts exact digests; Automation receives
+    a bounded implementation handoff naming the exact direction, task, Project,
+    targets, artifact views, read-only context, and accepted revision.
 15. Full autonomy is a delegated execution mode over the same contracts. A
     signed `ResearchMandate` defines scope, budgets, tools, data access,
     software-mutation authority, stop conditions, and escalation. It never
@@ -114,10 +116,11 @@ pack, and aResearcher as a solution agent or workbench are governed by the
     refs and bounded reads, and Codex receives native filesystem paths. An
     external artifact provider or MCP adapter may later resolve the same refs
     but is not a pre-Codex admission dependency.
-21. Project distribution and Builder development context are distinct.
-    Projects declare jointly shipped components and entry points; mutable
-    focus, write targets, read-only dependencies, artifacts, and scratch access
-    belong to a Builder Development Session.
+21. ResearchDirection, Project distribution, ProjectInstallation, and Builder
+    development context are distinct. Projects declare jointly shipped
+    components and entry points; mutable scientific state belongs to the
+    direction; focus, write targets, read-only dependencies, artifacts, and
+    scratch access belong to a Development Session.
 22. UI-as-data supports state-selected full-surface layout variants. Page
     state is scoped by webspace, scenario, and page; missing staged defaults
     are healed without overwriting user navigation. A detail view therefore
@@ -155,6 +158,24 @@ pack, and aResearcher as a solution agent or workbench are governed by the
     claims require frozen matched baselines, controlled typing ablations,
     repeated held-out tasks, uncertainty, independent review, and portable
     evidence packages.
+30. A direction contains a dependency-aware `ResearchAgenda` of bounded
+    `ResearchTask` objects. Formulation, compilation, implementation tracks,
+    Studies, evidence, reviews, and decisions are scoped to a task and retain
+    parent/branch lineage. The first UI may admit one active task, but the ABI
+    must not encode a universal one-direction/one-task/one-skill relation.
+31. Workbench navigation is a projection, not lifecycle authority. Portfolio
+    cards select a direction; the selected direction uses a generic outline/tree
+    plus a full-page selected-node view. Timeline, lineage graph, and run tables
+    remain separate projections rather than being forced into one tree.
+32. Software publication, direction export, and scientific-result publication
+    are three explicit effects: `ProjectRelease`, `ResearchDirectionSnapshot`,
+    and `ResearchRelease`. Export/import creates a derived local direction;
+    true multi-writer federation is deferred until authority, ACL, conflict,
+    and artifact-ownership contracts exist.
+33. Branching is typed at the narrowest scientific or engineering level. A new
+    question creates a ResearchTask; a protocol change creates a revision; an
+    alternative engineering architecture creates an ImplementationTrack; seeds
+    create Trials/Runs; and infrastructure retries create ExecutionAttempts.
 
 ## Why `Research Fabric`
 
@@ -335,21 +356,22 @@ notebooks / prose / code / papers
         v
 shared Research Workbench ----------- portfolio / selected direction
         |
-        +---- research orchestrator --- create Project through Builder SDK
-        |                               create/focus direction skill
-        |                               local artifacts/partN + manifest
-        |                               dialogue / activity journal
-        |                               ResearchPrototype revisions
-        |                               exact human acceptance
-        |                               digest-bound AutomationBrief
+        +---- research orchestrator --- ResearchDirection + ResearchAgenda
+        |                               bounded ResearchTask(s)
+        |                               artifacts/partN custody + manifests
+        |                               dialogue / joined activity journal
+        |                               task-scoped staged formulation
+        |                               accepted ResearchCompilation
+        |                               ImplementationTrack + AutomationBrief
         v
-Builder Development Session -------- primary direction-skill write target
+Builder Project Development Session - exact Project compatibility envelope
+        |                             admitted implementation-skill targets
         |                             read-only presentation/dependencies
         |                             native read-only artifact paths
         v
 isolated Builder/Codex change -------- validation / Trial / Publication
         v
-published research-direction skill --- domain runner + primary-data owner
+candidate/published ProjectRelease ---- implementation + project-only helpers
         |
         +---- aResearcher ------------ Research Mandate / autonomous controller
         |                        plan / review / decision proposals
@@ -358,13 +380,17 @@ research-manager skill --------------- deterministic research governance
         |
         +---- governed workflow / campaign / approval / evidence / claims
         +---- relational-storage capability binding
-        +---- runner-provider port ------- research-direction skill
+        +---- runner-provider port ------- research implementation skill
         +---- experiment-tracker port ---- local tracker
         |                              `-- MLflow service skill
         +---- executor port ------------ local process runner
         |                              `-- selected AdaOS member node
         |                              `-- Ray provider (deferred)
         `---- ResearchRelease ---------- future read-only writer skill
+
+ResearchDirection --------------------- references exact ProjectRelease(s),
+                                         Study/Campaign, evidence and decisions;
+                                         never aliases any one of them
 
 AdaOS core supplies lifecycle, policy, identity, secrets, service discovery,
 generic storage/execution seams, Project/presentation/session contracts,
@@ -470,9 +496,11 @@ contract `1.0` for new sessions.
 | AdaOS core | Skill/scenario/Project lifecycle, presentation and Development Session contracts, workflow rails, identity, policy, secrets, service supervision, capability binding, generic run/attempt records, artifact refs, event envelopes | TLP protocols, statistical conclusions, MLflow schema, Ray scheduler state |
 | Builder | Project/template creation SDK, explicit development targets/context, source mutation, Preview, isolated Codex Runs, software Trial, ProjectRelease Publication, dependency locks | Research portfolio/focus, formulation workflow, scientific execution state, test unblinding, claim truth, live research data |
 | aResearcher | Human/LLM design dialogue, mandate-bound planning, candidate hypotheses/campaigns/analyses, admitted autonomous decisions, evidence-grounded synthesis | Direct source mutation, implicit permission growth, tracker/executor authority, external publication |
+| ResearchDirection aggregate | Direction identity, metadata, source manifests, agenda/tasks, accepted decisions, implementation/release refs, domain activity lineage | Project package composition, Builder source mutation, provider-private state |
+| Research orchestrator skill | Durable custody and transition authority for directions, task formulation/compilation, activity normalization, Workbench commands, export/import policy | Logical ownership of a user's science, component source mutation, tracker/executor internals |
 | Research manager skill | Provider-neutral Study/Experiment model, protocol locks, analysis plan, trial/run/attempt identity, tracker journal, evidence manifests, claim review, workflow guidance | Domain runner code, primary datasets, provider internals, global DB credentials, accelerator scheduling |
-| Domain runner/data-owner skill | Domain preparation, primary data binding, execution descriptor, normalized output collection, owned-artifact verification | Research approvals, tracker authority, another skill's database |
-| Shared Research Workbench | Direction portfolio and focus, Builder-SDK Project creation, local artifact intake/inspection, formulation, activity, exact acceptance, Development Session handoff, and progress projection | Direction identity, direct source mutation, Codex implementation, scientific truth |
+| Domain runner/data-owner skill | Domain preparation, logical source/artifact custody through scoped SDK bindings, primary data binding, execution descriptor, normalized output collection, owned-artifact verification | Research approvals, tracker authority, another skill's database |
+| Shared Research Workbench | UI projection of portfolio/focus, artifact intake/inspection, formulation, activity, exact acceptance, Builder handoff, and progress; commands are delegated to owning capabilities | Direction persistence/identity, direct source mutation, Codex implementation, scientific truth, a second workflow state |
 | Optional domain scenario | Specialized post-publication workflow/views when the shared Workbench cannot express a domain need | Default direction identity, new installation semantics, or private infrastructure |
 | Tracker provider | Parameter, metric, tag, and run-artifact ingestion and query | Protocol authority, approvals, claim truth |
 | Executor provider | Submission, scheduling, logs, status, cancellation, resource placement | Study state, statistical plan, tracker identity |
@@ -481,26 +509,61 @@ contract `1.0` for new sessions.
 
 ## Research Domain Model
 
-The research-manager skill owns versioned schemas for these concepts:
+Research-domain skills own versioned schemas and transition capabilities for
+these concepts. Logical ownership remains with the named aggregate; the shared
+Workbench is only their projection.
+
+`ResearchDirection`
+: Long-lived scientific workspace containing identity/description, source
+  manifests, `ResearchAgenda`, decisions, implementation and release refs,
+  aggregate status, and activity lineage. It may outlive or reuse any one
+  software Project. Its current Project and skill ids are explicit refs, not
+  aliases.
+
+`ResearchAgenda`
+: Versioned dependency-aware portfolio (DAG) of bounded ResearchTasks,
+  alternatives, priorities, prerequisites, contribution ownership, and
+  integration goals. It makes parallel and follow-up questions visible without
+  turning an entire direction into one oversized prompt.
+
+`ResearchTask`
+: One bounded scientific question with objective, inputs, expected artifacts,
+  hypotheses/falsifiers, protocol/evaluation requirements, boundary
+  constraints, dependencies, order, status, and parent/branch lineage. A task
+  is the primary scope of formulation and engineering compilation.
+
+`ResearchCompilation`
+: Immutable accepted bridge for one ResearchTask. It binds SourceAnalysis,
+  ResearchProblem, ExperimentalProtocol, traceability/coverage, exact source
+  views, unresolved decisions, and the AutomationBrief used by Builder.
+
+`ImplementationTrack`
+: One engineering line for realizing a ResearchTask, including architecture
+  choice, implementation Project, writable targets, Development Sessions,
+  candidate/ProjectRelease lineage, validation status, and feasibility feedback.
+  Multiple tracks may compete or provide independent replications without
+  duplicating the scientific task.
 
 `SourceBundle`
 : Immutable logical selection of manifested `artifacts/partN` items, optional
   additional ArtifactRefs, and deterministic extracted metadata supplied to a
-  research Project. Local files are the first provider and remain directly
-  readable by Codex. Trust, license, sensitivity, origin, publication policy,
-  and exploratory/authoritative status are explicit; notebook outputs are
-  never silently promoted to observations.
+  ResearchDirection or ResearchTask. Local files are the first provider and
+  remain directly readable by Codex. Trust, license, sensitivity, origin,
+  publication policy, and exploratory/authoritative status are explicit;
+  notebook outputs are never silently promoted to observations.
 
 `ResearchPrototype`
 : Research-orchestrator-owned design-time candidate containing the research brief,
   hypotheses, campaign, analysis plan, capability requirements, assumptions,
-  and open questions. Acceptance fixes one digest plus the exact Project,
-  artifact groups, and target policy for Automation and later Study
+  and open questions for one ResearchTask. Acceptance fixes one digest plus the
+  exact direction/task, artifact groups, implementation Project, and target
+  policy for Automation and later Study
   instantiation; chat remains linked provenance rather than the object.
 
 `Study`
-: Stable aggregate for a research question, owners, policy, budget, and
-  lifecycle.
+: Stable execution/evaluation aggregate instantiated from one accepted task and
+  protocol, with owners, policy, budget, and lifecycle. A direction may contain
+  multiple Studies over time.
 
 `ResearchMandate`
 : Human- or policy-approved authority envelope for one assisted or autonomous
@@ -581,14 +644,77 @@ The research-manager skill owns versioned schemas for these concepts:
 The model deliberately distinguishes scientific identity (`Trial`, `Run`) from
 infrastructure identity (`ExecutionAttempt`). This prevents a preemption or
 worker loss from inflating the sample count. It also distinguishes design-time
-source (`ResearchPrototype`), live scientific state (`Study`/`Campaign`),
-software publication (`ProjectRelease`), and result publication
-(`ResearchRelease`) so none becomes a second mutable copy of another.
+source (`ResearchPrototype`/`ResearchCompilation`), live portfolio state
+(`ResearchDirection`/`ResearchAgenda`), execution state (`Study`/`Campaign`),
+engineering state (`ImplementationTrack`/Development Session), software
+publication (`ProjectRelease`), and result publication (`ResearchRelease`) so
+none becomes a second mutable copy of another.
+
+The aggregate hierarchy is intentionally small:
+
+```text
+ResearchDirection
+  -> ResearchAgenda (DAG)
+     -> ResearchTask
+        -> formulation and ResearchCompilation revisions
+        -> ImplementationTrack(s)
+           -> Project + DevelopmentSession(s) + candidate ProjectRelease(s)
+        -> Study/Campaign
+           -> TrialGroup -> Trial -> Run -> ExecutionAttempt
+        -> EvidenceBundle -> ClaimDecision -> ClaimSet
+```
+
+This is not a single storage tree. Full event history is a timeline, task and
+artifact derivation is a lineage graph, and repeated executions are tables.
+The hierarchy supplies stable addressing and ownership for navigation and
+policy.
+
+### Branch taxonomy
+
+The type of change determines where a branch belongs:
+
+| Change | New object/revision |
+| --- | --- |
+| New scientific question or result-derived follow-up | `ResearchTask` with dependency/derivation edge |
+| Alternative scientific framing | ResearchPrototype/ResearchCompilation branch |
+| Protocol or analysis change | new immutable Protocol/AnalysisPlan revision |
+| Alternative engineering architecture | `ImplementationTrack` |
+| Independent code implementation | candidate/ProjectRelease within a track or sibling track |
+| Seed, fold, dataset slice, or declared configuration | `Trial`/`Run` |
+| Preemption, retry, or provider resubmission | `ExecutionAttempt` |
+
+Cloning a skill is not the default way to branch scientific meaning. The first
+implementation may constrain one accepted task to one active track and one
+project-only target skill, but that is a UI/policy limit, not the universal ABI.
 
 ## Workflow
 
-The research manager expresses its lifecycle with the existing governed
-workflow model:
+The end-to-end pipeline crosses several authorities without collapsing them:
+
+```text
+Direction intake and source admission
+  -> Problem landscape
+  -> ResearchAgenda DAG and bounded ResearchTask selection
+  -> task-scoped staged formulation
+  -> accepted ResearchCompilation
+  -> implementation planning and capability-gap check
+  -> Project-scoped Builder Development Session
+  -> candidate ProjectRelease and project-wide conformance
+  -> Study/Campaign activation
+  -> Trials/Runs/ExecutionAttempts
+  -> EvidenceBundle and independent analysis/review
+  -> ClaimDecision/ClaimSet
+  -> typed follow-up task, implementation revision, or ResearchRelease
+```
+
+The Research Orchestrator owns direction/task transitions; Builder owns the
+development segment; Research Manager owns Study/Campaign execution and
+evidence gates. Their activity is joined by stable refs and normalized into one
+durable journal. A UI transition or agent message cannot impersonate a domain
+transition.
+
+Within one accepted Study, the research manager expresses its lifecycle with
+the existing governed workflow model:
 
 ```text
 draft
@@ -615,41 +741,66 @@ test leakage an auditable policy violation rather than a notebook convention.
 ## Research Project Authoring and Builder Integration
 
 Research starts in the shared Research Workbench, not in a generic Builder
-modal. The Workbench maintains a portfolio/list projection and one selected
-direction in user-session focus. Creating a direction asks for minimal identity
-metadata, calls Builder SDK to create a local Project plus its primary
-`research_direction` skill, closes and clears the creation modal, and refreshes
-the portfolio. Selection is an explicit second action: the new direction is not
-focused from raw form input because Builder SDK may canonicalize its identity.
-The skill is the research identity and future code/runner owner; the Project is
-the declarative distribution definition.
+modal. The Workbench home is a portfolio of direction cards. Cards expose an
+aggregate status, user-facing domain tags, last activity, and blocker/next step;
+search and filtering operate on displayed metadata. `recent` and `pinned` are
+per-user preferences, not scientific tags or portable direction truth.
 
-Portfolio and direction detail are mutually exclusive full-width Workbench
+Creating a direction asks for minimal identity metadata and calls the Research
+Orchestrator to create the canonical ResearchDirection plus an admitted local
+artifact custodian. The creation modal clears only after success; selection is
+an explicit second action based on the returned canonical id. The current
+compatibility implementation may atomically ask Builder SDK for a one-skill
+draft Project at the same time. That Project is recorded as the first
+implementation ref; it is not the direction identity.
+
+Portfolio and direction workspace are mutually exclusive full-width Workbench
 layouts expressed as `layout.variants`, not as coincident widgets in duplicate
-`main` areas. `researchViewMode` chooses the presentation and
-`selectedDirectionId` supplies the entity identity; the direction variant
-requires both. Local page state is isolated by webspace/scenario/page and its
-defaults are merged for missing fields whenever staged materialization updates
-the same schema. A paired
-Builder selection may be offered as navigation context, but it must never
-overwrite Workbench focus or cause a delayed identity switch. Identity-bearing
-data sources clear their previous value while another direction is loading, so
-the UI cannot temporarily present one direction under another direction's
-heading. The detail layout exposes Overview, Artifacts, Discussion,
-Development, Activity, and Help. Discussion is the durable human/LLM consensus
-surface over the selected direction and its manifested artifacts.
+`main` areas. In a selected direction, the header shows the direction title;
+activating it opens the Direction selector modal (the same searchable/filterable
+portfolio) without permanently reserving screen width for the portfolio.
+
+The direction workspace dedicates its left region to a curated navigation
+outline and its remaining space to the selected node's full-page view. Stable
+top-level nodes are Sources, Research Agenda/Tasks, Formulation,
+Implementations, Studies, Evidence, Review/Decisions, Releases, and Activity.
+Nodes appear only when admitted by data/policy. The outline does not copy
+Builder or LLM stage state and does not become a workflow engine. History is a
+timeline, derivation is a graph, and runs are tables shown in the full-page
+view.
+
+The layout is a general core ABI, not Workbench-specific rendering. A reusable
+outline/navigation source supplies typed node ids, parent ids, labels, icons,
+badges/errors, lazy-child refs, and navigation targets. Core supplies persisted
+selection scoped by webspace/scenario/page/entity, URL/deep-link and back/reload
+semantics, keyboard/accessibility behavior, virtualization, and responsive
+drawer collapse. Research skills supply the nodes and domain views.
+
+`researchViewMode` chooses portfolio or direction workspace and
+`selectedDirectionId` supplies identity; the direction variant requires both.
+Local page state is isolated by webspace/scenario/page and healed for missing
+defaults. A paired Builder selection may be offered as navigation context, but
+it never overwrites Workbench focus. Identity-bearing sources clear or mark the
+old value stale while another direction loads, so one direction's content
+cannot appear under another title. Discussion remains durable human/LLM
+provenance; Current consensus is the human-readable projection of the selected
+task's structured formulation, not a second source of truth.
 
 ```text
 Research Workbench: create direction
-  -> Builder SDK creates local Project + primary direction skill
+  -> Research Orchestrator creates ResearchDirection + artifact custody
+  -> optional compatibility draft Project is linked, not aliased
   -> clear/close creation modal and refresh portfolio
-  -> user selects the canonical Project/direction identity
+  -> user selects the canonical direction identity
   -> add ordinary files under artifacts/part0
   -> validate manifest and form immutable SourceBundle selection
   -> deterministic notebook/document inventory
-  -> durable human/LLM formulation dialogue
-  -> schema-valid ResearchPrototype revisions
-  -> accept exact Research Prototype digest
+  -> derive Problem Landscape and ResearchAgenda
+  -> select/create one bounded ResearchTask
+  -> durable human/LLM task-formulation dialogue
+  -> schema-valid task-scoped ResearchPrototype revisions
+  -> accept exact ResearchCompilation digest
+  -> create/select ImplementationTrack and implementation Project
   -> freeze a private local code checkpoint + exact artifact manifests,
      prototype, and target policy (no Forge upload)
   -> emit immutable AutomationBrief and Builder Development Session
@@ -658,7 +809,8 @@ Research Workbench: create direction
   -> isolated Codex implementation
   -> software validation and CPU Trial
   -> ProjectRelease and Workspace activation
-  -> instantiate Study and ExperimentCampaign from the accepted seed
+  -> link the candidate ProjectRelease to the ImplementationTrack
+  -> instantiate Study and ExperimentCampaign from the accepted task
 ```
 
 The first user-facing implementation is local-first. Source payloads are
@@ -681,6 +833,15 @@ read-only paths; the conversational LLM receives bounded extraction through
 the orchestrator. Logical `ArtifactRef` addressing is provider-neutral so an
 external store or MCP adapter can be added later without being an admission
 dependency now.
+
+This path separates logical from physical ownership. The logical owner key is
+the ResearchDirection (and, when narrowed, the ResearchTask); the activated
+direction/data-owner skill is the current storage custodian and enforces its
+isolated SDK binding. Artifacts are classified as `owned`, `inherited`,
+`admitted_read_only`, `generated`, or `evidence`. A future domain-aggregate
+storage scope or ContentRef provider may move bytes without changing those refs.
+Cross-skill access is granted through a typed view/API or a specialized owner
+skill, never by handing another skill the custodian's database/path binding.
 
 Accepting a ResearchPrototype binds exact group/item digests. A changed file or
 newly selected artifact makes the unaccepted candidate stale. Directory/archive
@@ -742,15 +903,18 @@ research stage, not prompt preparation. Its logical products are:
 SourceAnalysis
   -> ResearchProblem
   -> ExperimentalProtocol
-  -> AutomationBrief plus direction bindings
+  -> accepted ResearchCompilation for ResearchTask
+  -> AutomationBrief plus ImplementationTrack/Project bindings
 ```
 
-They may remain projections and revisions inside `ResearchPrototype` and
-`AutomationBrief` until cross-domain evidence justifies additional persistent
-entities. The important contract is that every material source or human
-decision can be traced through a scientific requirement, protocol element,
-engineering obligation, runtime observation/artifact, and later evidence or
-claim decision. Missing links remain visible findings.
+SourceAnalysis, ResearchProblem, and ExperimentalProtocol may remain typed
+facets/revisions inside ResearchPrototype until cross-domain evidence justifies
+more core entities. ResearchTask, accepted ResearchCompilation, and
+ImplementationTrack cross actor/time/authority boundaries and are durable
+research-domain records now. The important contract is that every material
+source or human decision can be traced through a task, scientific requirement,
+protocol element, engineering obligation, runtime observation/artifact, and
+later evidence or claim decision. Missing links remain visible findings.
 
 The historical TLP `initial-review` performed much of this scientific critique
 and operationalization before AdaOS received the task. It therefore shortened
@@ -776,7 +940,8 @@ Run/Observation/Evidence records, and revisions are strict. The controlled
 evidence-valid-completion endpoint are specified in
 [Research Compilation and Autonomous-Science Evaluation Program](research-compilation-and-sota-program.md).
 
-The accepted `AutomationBrief` contains the exact Project and primary target,
+The accepted `AutomationBrief` contains the exact direction, ResearchTask,
+ResearchCompilation, ImplementationTrack, Project and primary target,
 SourceBundle/group/item digests and native paths, exact ResearchPrototype
 digest and content, implementation requirements, acceptance tests, and
 prohibited actions. It creates a Builder Development Session in which the
@@ -786,6 +951,14 @@ contracts/docs. Acceptance is optimistic and idempotent, rejects stale input,
 and explicitly records `codex_started=false`. Codex later implements the
 experimental base from this handoff; it cannot amend the scientific objective
 or silently mutate a dependency outside the admitted development scope.
+
+Development is selected by ImplementationTrack. Builder always opens the whole
+Project compatibility context while the session grants write access only to
+declared targets. Non-target members and shared Workbench/manager contracts are
+provided as digests, public schemas, docs, or on-demand read-only source. The
+model does not receive the entire workspace merely because compatibility is
+project-scoped. A successful run yields a candidate ProjectRelease plus
+project-wide conformance evidence; it does not mutate the accepted task.
 
 Opening Builder durably binds the Development Session, opens a reusable named
 browser window, and emits `builder.context.selected` through the API host in
@@ -845,6 +1018,35 @@ enforceable, reviewable boundary between source interpretation, human decision,
 software authority, and later evidence. Its schema and review overhead is
 worth paying for repeatable or autonomous research, not automatically for every
 small coding task.
+
+### Publication, export, and federation
+
+Workbench may present three adjacent actions, but each delegates to a different
+owner and produces a different immutable object:
+
+1. **Publish implementation** invokes the ordinary Artifact Pipeline and
+   produces a `ProjectRelease`. It contains software composition and
+   compatibility locks, not private direction state.
+2. **Export direction** invokes the Research Orchestrator and produces a
+   `ResearchDirectionSnapshot`: metadata, source manifests and inclusion
+   policy, agenda/tasks, accepted formulations/compilations, decisions,
+   provenance, and referenced ProjectReleases. Import creates a new local
+   direction id with `derived_from`; it does not silently join two live owners.
+3. **Publish research result** invokes Research Fabric release policy and
+   produces a `ResearchRelease`: Study/Campaign, EvidenceBundles, ClaimSet,
+   methods, exact ProjectRelease, data/environment ids, attribution, and
+   publication policy.
+
+This three-way separation enables reproducibility without leaking local data or
+turning the software registry into a research database. The Workbench does not
+implement Git, package upload, registry mutation, or scientific release storage
+itself; it requests capabilities and projects their operation/activity state.
+
+True federation of one mutable direction across Assistants is deferred. It
+requires distributed authority and ACLs, compare-and-swap revisions/conflict
+handling, participant attribution, activity convergence, and explicit ownership
+of artifacts and sealed data. Snapshot export/import is portable derivation,
+not collaborative multi-writer federation.
 
 ### TLP pre-Codex contract precursor evidence
 
@@ -1234,6 +1436,19 @@ AdaOS ownership:
   models/                            # promoted model registry/artifacts only
 ```
 
+For the current compatibility path, the skill id is both physical custodian
+and storage isolation key. The target SDK admits a domain-qualified logical
+owner such as `{owner_kind: research_direction, owner_id: ...}` while retaining
+an opaque custodian binding. Skills receive only their authorized logical view,
+never another component's physical path or DSN. This general owner-scope
+extension belongs in core storage/blob capabilities; Research Fabric supplies
+the owner kind and access policy.
+
+Changing ownership or custodian is a versioned migration, not a path rewrite.
+The old data is deleted only when the migration declares cleanup, the copy and
+digests have been verified, rollback/retention policy permits deletion, and the
+owning skill's migration receipt is durable.
+
 The local MLflow service skill uses:
 
 ```text
@@ -1450,6 +1665,25 @@ declared primary comparison. Ray portability is a later independent sub-gate.
 The notebook remains exploratory provenance. Its current outputs do not pass
 this gate and are not imported as confirmatory trials.
 
+### TLP compiler-calibration projection
+
+The C0-C4 compiler calibration is represented inside one direction, not as a
+portfolio of synthetic directions or independently published skills:
+
+```text
+ResearchDirection: TLP Research Compiler Calibration
+  -> ResearchTask: does structured formulation improve autonomous realization?
+     -> Study: matched C0-C4 handoff conditions
+        -> condition packet -> DevelopmentSession -> candidate implementation
+        -> independent evaluation result
+```
+
+Condition workspaces and generated skills are task-internal candidate artifacts
+or project-only components. Workbench shows their journals, artifacts,
+compilations, Builder sessions, costs, failures, and evaluator results below the
+task's Development/Evaluation nodes. They do not appear as top-level research
+directions or ordinary Desktop/Catalog applications.
+
 ### Autonomous TLP acceptance
 
 TLP is also the first transparent autonomous-research harness. After the local
@@ -1569,9 +1803,16 @@ reliable evidence:
 
 - auditable question derivation through definitions, assumptions, mechanism,
   falsifier, minimal decisive test, expected observations, and a failure-update
-  rule from [FirstResearch](https://arxiv.org/abs/2607.05682), while treating
-  its early LLM-judge-heavy evidence as promising prior art rather than a
-  settled universal ontology;
+  rule proposed by [FirstResearch](https://arxiv.org/abs/2607.05682). The paper
+  was withdrawn on 28 July 2026 for further improvement/consolidation, so its
+  certificate is retained only as non-authoritative design prior art and its
+  LLM-judge results are not SOTA evidence;
+- project-to-task planning, bounded task contracts, explicit contribution
+  ownership, and dependency-aware lineage from the August 2026
+  [Project2Task preprint](https://arxiv.org/abs/2608.05225). Its reported
+  portfolio/downstream gains directly motivate ResearchAgenda/ResearchTask,
+  but the small recent preprint is emerging evidence, not an established
+  standard or proof of AdaOS's design;
 - pragmatic facet-based formalization and controlled task construction from
   [DiscoveryBench](https://arxiv.org/abs/2407.01725), supporting a small
   semantic waist rather than an attempt to encode all science;
@@ -1587,12 +1828,13 @@ reliable evidence:
   while acknowledging that cross-release and cross-platform bitwise identity
   is not universally guaranteed;
 - provenance-compatible ids and adapters informed by
-  [W3C PROV](https://www.w3.org/TR/prov-overview/),
+  [W3C PROV-O](https://www.w3.org/TR/prov-o/),
   [OpenLineage](https://openlineage.io/docs/), and
   [OpenTelemetry](https://opentelemetry.io/docs/);
 - portable result-export compatibility informed by
   [RO-Crate](https://www.researchobject.org/ro-crate/specification/1.3/index.html),
-  without making JSON-LD the internal governance model;
+  including its Entity/Action/workflow/provenance conventions, without making
+  JSON-LD the internal governance model;
 - the end-to-end ideation, code mutation, experiment-tree, journal, writing,
   and review loop demonstrated by
   [The AI Scientist](https://www.nature.com/articles/s41586-026-10265-5),
@@ -1663,6 +1905,22 @@ autonomous-science product claim. The proposed SOTA target is correspondingly
 narrow and falsifiable: improve evidence-valid artifact-to-experiment
 completion at fixed models and budgets. It is not a claim that AdaOS, TLP, or
 one successful Codex trace already advances scientific SOTA.
+
+The resulting SOTA-aligned stack is deliberately compositional rather than a
+copy of one agent system:
+
+| Layer | External evidence | AdaOS responsibility |
+| --- | --- | --- |
+| Direction and bounded task portfolio | Co-Scientist; emerging Project2Task | ResearchDirection, ResearchAgenda, task contracts, human acceptance |
+| Empirical implementation/search | ERA; AI Scientist | Project-scoped Builder, explicit targets, candidate ProjectRelease |
+| Execution and tracking | MLflow and provider APIs | provider-neutral Run/Attempt/Observation identities and reconciliation |
+| Durable memory and provenance | Kosmos; W3C PROV-O | structured domain state, normalized activity, traceability and evidence gates |
+| Reproducible exchange | RO-Crate/Workflow Run RO-Crate | ProjectRelease, DirectionSnapshot, ResearchRelease export mappings |
+| Evaluation | PaperBench; AIRS-Bench | frozen tasks, hierarchical criteria, matched budgets, independent validators |
+
+AdaOS's candidate advantage is the continuity of contracts and evidence across
+these layers while agents, models, executors, and trackers remain replaceable.
+That advantage must be measured, not inferred from architectural richness.
 
 ## Related AdaOS Documents
 

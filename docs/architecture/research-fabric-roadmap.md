@@ -184,7 +184,8 @@ scientific conclusion. A local demo is not production acceptance.
 | ARF7.1 | Research Workbench creates/focuses a local research Project, admits local artifact groups, exposes provenance/coverage and a deterministic formulation review, and creates a scoped pre-Codex Development Session | `validated-local`, including strengthened TLP admission; authenticated browser reload receipt pending | active UX acceptance gate |
 | ARF7.2 | Codex realizes the exact brief as a validated and published TLP direction skill | `validated-local`; direction-skill checkpoint published, ProjectRelease not yet created | complete locally |
 | ARF7.3 | Clean from-raw research compilation is calibrated under matched C0-C4 TLP arms; the published direction then instantiates and runs the accepted local workflow | `hypothesis` | next integrated authoring/scientific gate alongside ARF6 |
-| ARF8 | aResearcher completes a mandate-bound autonomous TLP loop through ResearchRelease | `hypothesis` | after ARF7 |
+| ARF7.4 | Workbench separates live Direction/Agenda/Task/ImplementationTrack from distributable Project, migrates TLP calibration into one task lineage, and proves generic outline/full-page navigation | `specified` | target-model correction before autonomy |
+| ARF8 | aResearcher completes a mandate-bound autonomous TLP loop through ResearchRelease | `hypothesis` | after ARF7.4 |
 | ARF9 | ResearchCompilerBench/ARRB measures artifact-to-experiment compilation and replication on frozen multi-domain tasks and matched budgets | `hypothesis` | compilation track after ARF7.3; autonomous replication track after ARF8 |
 | ARF10 | Multi-domain evidence, scale, security, and operations justify broader claims/core promotion | `deferred` | long-term |
 
@@ -1004,13 +1005,18 @@ local proof.
 
 ## ARF7. Research-Direction Authoring and Assisted TLP Design
 
-**Outcome:** Research Workbench can create/focus a local research Project and
-primary direction skill, admit manifested local source artifacts, let a human
-and LLM accept an exact ResearchPrototype, create a bounded Builder Development
-Session, adapt only admitted targets through isolated Codex, and publish the
-Project through the ordinary lifecycle. One shared Workbench and orchestrator
-replace both a scenario per direction and a research-management tab in
-Builder.
+**Outcome:** Research Workbench can create/focus a live ResearchDirection,
+admit manifested source artifacts, derive bounded ResearchTasks, let a human
+and LLM accept exact task-scoped formulation/compilation, create a Project-
+scoped Builder Development Session for an ImplementationTrack, adapt only
+admitted targets through isolated Codex, and publish the implementation Project
+through the ordinary lifecycle. One shared Workbench and orchestrator replace
+both a scenario per direction and a research-management tab in Builder.
+
+ARF7.0-ARF7.3 used a one-component Project plus direction skill as a compatible
+first representation. Their receipts remain valid evidence for intake,
+formulation, handoff, and realization, but do not make Project and Direction
+the same target identity. ARF7.4 owns that normalization.
 
 **Admission gate:** ARF4 contracts are locally valid. ARF7 may proceed
 alongside ARF6. Ray is not an admission dependency; Automation and Trial use
@@ -1024,7 +1030,8 @@ ResearchPrototype and AutomationBrief while `codex_started=false`. No raw chat
 or notebook output becomes canonical state.
 
 **ARF7.1 operator exit proof (accepted locally on 2026-08-11):** starting from
-the Research Workbench, a user creates and focuses a TLP Project/direction skill, uploads the
+the Research Workbench, a user creates and focuses the then-current TLP
+Project/direction-skill compatibility representation, uploads the
 notebook and review into `artifacts/part0`, inspects their manifest/extraction,
 conducts and accepts formulation, and obtains a linked Builder Development
 Session. The exact direction skill is the sole read/write target; Workbench and
@@ -1312,10 +1319,11 @@ not substitute for this operator path.
   admission tests before Trial/Publication. The bounded real-path fixture also
   exercises the published manager consumer, native package/install/activation,
   crash/resume, and shared heavy-dependency resolution.
-- [ ] `[must]` `ARF7-14` Publish the direction Project as one exact
-  ProjectRelease containing its owned direction/experiment components and
-  instantiate Study/Campaign seed state from the accepted prototype without
-  retaining two mutable copies.
+- [ ] `[must]` `ARF7-14` Publish the selected ImplementationTrack's Project as
+  one exact ProjectRelease containing its owned research-implementation
+  components; link that release to the ResearchTask and instantiate
+  Study/Campaign state from the accepted ResearchCompilation without retaining
+  two mutable copies.
 - [ ] `[must]` `ARF7-15` Add runtime-to-Builder re-entry: a typed CapabilityGap
   or defect creates a linked Issue/Change with direction, Study/Campaign,
   evidence, handoff, and installed-release refs. Ordinary experiment/campaign
@@ -1411,8 +1419,8 @@ efficacy result or cross-domain SOTA claim.
   solely as coverage/semantic oracles, never as hidden Codex requirements.
 - [ ] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
-  Workbench. The direction supplies bindings and artifacts, not a TLP-specific
-  scenario or management UI.
+  Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and
+  artifacts, not a TLP-specific scenario or management UI.
 - [ ] `[must]` `ARF7.3-13` Freeze a machine-recomputable calibration package,
   document negative and inconclusive outcomes, and record which candidate
   fields remain profile-local. No contract enters core from TLP alone.
@@ -1422,6 +1430,167 @@ efficacy result or cross-domain SOTA claim.
   The package is score-recomputable, but admitted source bytes, licenses,
   runtime images, and an external verification recipe are not yet a portable
   release, so this item remains open.
+
+### ARF7.4 direction/task topology and Project-scoped development
+
+**Outcome:** Research Workbench presents a comprehensible portfolio and one
+full-page selected direction whose scientific agenda, bounded tasks,
+compilations, implementation tracks, studies, evidence, decisions, releases,
+and activity remain connected without turning Projects, skills, Builder
+sessions, or UI nodes into research-direction identities.
+
+**Admission gate:** the ARF7.1 intake/formulation path and ARF7.3 calibration
+records remain readable. Core layout variants, typed navigation targets,
+Project/Development Session contracts, and Artifact Pipeline release services
+are available for extension without a Workbench-private transport or renderer.
+
+**Exit proof:** after restart and reconnect, an operator opens the portfolio,
+selects the canonical TLP calibration direction, navigates one bounded task and
+its C0-C4 development/evaluation lineage, opens the exact Project-scoped Builder
+session, and returns without identity drift. A new accepted task produces a
+task-scoped ResearchCompilation, ImplementationTrack, candidate ProjectRelease,
+Study refs, and one joined activity trail. No calibration candidate appears as
+a top-level direction or ordinary Desktop application.
+
+#### Domain identities, ownership, and migration
+
+- [ ] `[must]` `ARF7.4-01` Define versioned ResearchDirection,
+  ResearchAgenda, ResearchTask, ResearchCompilation, and ImplementationTrack
+  schemas with explicit ids, revisions, parent/branch/dependency refs, statuses,
+  and exact Project/DevelopmentSession/Study/Release refs. Do not encode a
+  universal one-direction/one-task/one-skill cardinality.
+- [ ] `[must]` `ARF7.4-02` Make the research-domain index authoritative for
+  direction discovery. Workbench must not scan Projects, registry descriptions,
+  temporary skills, or Builder sessions to reconstruct the portfolio.
+- [ ] `[must]` `ARF7.4-03` Separate logical ResearchDirection/ResearchTask
+  artifact ownership from physical skill custody. Preserve owner-scoped SDK
+  isolation and classify artifacts as owned, inherited, admitted-read-only,
+  generated, or evidence; never expose another skill's raw binding.
+- [ ] `[must]` `ARF7.4-04` Migrate existing one-component direction Projects and
+  calibration candidates idempotently: retain old ids as aliases/provenance,
+  create canonical direction/task/track refs, preserve journals/artifacts and
+  digests, and remove neither source nor runtime data until copied and verified
+  by an explicit skill migration.
+- [ ] `[should]` `ARF7.4-05` Add aggregate direction status derived from task,
+  blocker, active operation, evidence, and release projections. It is a read
+  model with freshness/error metadata, not a second lifecycle truth.
+
+#### Task-scoped formulation and branching
+
+- [ ] `[must]` `ARF7.4-06` Bind every ResearchPrototype stage, decision ledger,
+  accepted ResearchCompilation, AutomationBrief, clarification, and traceability
+  edge to exact direction/task/revision ids. Reject stale or cross-task refs.
+- [ ] `[must]` `ARF7.4-07` Model branches at the narrowest type: new scientific
+  question -> ResearchTask; alternative framing -> formulation branch;
+  protocol/analysis change -> immutable revision; engineering architecture ->
+  ImplementationTrack; implementation candidate -> candidate release;
+  seed/config -> Trial/Run; infrastructure retry -> ExecutionAttempt.
+- [ ] `[must]` `ARF7.4-08` Support the first bounded policy of one accepted task,
+  one active ImplementationTrack, and one primary writable skill without baking
+  that simplification into schemas or ownership APIs.
+- [ ] `[should]` `ARF7.4-09` Add ResearchAgenda DAG validation for contribution
+  ownership, duplicate/overlapping tasks, dependencies, boundary constraints,
+  expected artifacts/evaluation, cycles, and integration intent.
+- [ ] `[should]` `ARF7.4-10` Let result review create a typed dependent follow-up
+  ResearchTask without mutating the predecessor's accepted compilation or
+  evidence.
+
+#### Project and Builder boundary
+
+- [ ] `[must]` `ARF7.4-11` Make Builder DevelopmentSession domain-neutral and
+  always Project-scoped. Replace mandatory research-specific fields/provider
+  constants with generic subject refs, typed contract inputs, acceptance
+  profiles, agent profile, focus, writable targets, and read-only context;
+  Research Fabric supplies its own overlay.
+- [ ] `[must]` `ARF7.4-12` Extend `adaos.project.v1` with validated member role,
+  exposure (`application|project_only|advanced`), bound/shared lifecycle,
+  relations (`realizes|presents|evaluates|uses`), and project-wide compatibility
+  checks. Project-only members retain packages/digests but stay out of ordinary
+  Desktop/Catalog and independent install/remove.
+- [ ] `[must]` `ARF7.4-13` Complete Artifact Pipeline AP2 composition locks:
+  ProjectRelease binds the exact Project definition, roles/exposure/lifecycle,
+  entry points, profiles, validation policy, and Project dependency closure.
+  Candidate acceptance validates affected consumers/entry points, not only the
+  target skill's self-tests.
+- [ ] `[must]` `ARF7.4-14` Make model context least-read/least-write inside the
+  Project envelope: contracts and digests first, full source for targets,
+  read-only dependencies on demand, and final changed-path enforcement. Whole-
+  Project correctness must not imply whole-workspace prompt hydration.
+- [ ] `[should]` `ARF7.4-15` Migrate the legacy Builder object named Project
+  (currently a raw skill/scenario checkout) to a true Project ref or rename it
+  as a component development aggregate; keep existing sessions readable.
+
+#### Workbench information architecture and observability
+
+- [ ] `[must]` `ARF7.4-16` Keep Portfolio as the Workbench home: direction cards
+  with aggregate status, domain tags, last activity and blocker/next step;
+  client search/filter over displayed metadata; recent/pinned as per-user
+  preferences rather than portable tags.
+- [ ] `[must]` `ARF7.4-17` In direction mode, show the selected title in the
+  header and open the searchable Direction selector modal from it. Give the
+  remaining workspace to a left navigation outline and selected-node full-page
+  view; preserve deep link, back, reload, and responsive behavior.
+- [ ] `[must]` `ARF7.4-18` Add a generic core outline/navigation ABI with typed
+  node/parent/target, lazy loading, virtualization, badges/errors, persisted
+  selection, keyboard/accessibility semantics, and responsive drawer. Research
+  supplies nodes/views; the client does not contain ResearchTask logic.
+- [ ] `[must]` `ARF7.4-19` Project stable nodes for Sources, Agenda/Tasks,
+  Formulation, Implementations, Studies, Evidence, Review/Decisions, Releases,
+  and Activity. Render history as timeline, lineage as graph, and executions as
+  tables rather than overloading the outline with mutable lifecycle details.
+- [ ] `[must]` `ARF7.4-20` Federate the durable activity journal across
+  Orchestrator, Builder, Skill Factory/Codex, executor, tracker, evaluator, and
+  publication operations using normalized actor/origin/stage/status/ref fields.
+  User-visible directives and approvals must appear; hidden prompts/secrets must
+  not.
+- [ ] `[should]` `ARF7.4-21` Add compact cross-node breadcrumbs, stale/unavailable
+  diagnostics, lineage graph, task table, and Development/Evaluation summaries
+  after the generic navigation contract is stable.
+
+#### Publication and portability
+
+- [ ] `[must]` `ARF7.4-22` Expose three separately authorized Workbench actions:
+  publish implementation -> ProjectRelease; export direction ->
+  ResearchDirectionSnapshot; publish result -> ResearchRelease. Workbench
+  delegates to capabilities and never implements package/Git/registry storage.
+- [ ] `[must]` `ARF7.4-23` Define ResearchDirectionSnapshot with metadata,
+  agenda/tasks, accepted formulations/compilations, source manifests and
+  inclusion policy, decisions/provenance, and ProjectRelease refs. Import
+  creates a new local owner/id with `derived_from` and verifies all included
+  content.
+- [ ] `[should]` `ARF7.4-24` Map portable direction/result exports to RO-Crate
+  1.3 and Workflow Run RO-Crate concepts and activity lineage to W3C PROV-O
+  without making JSON-LD the internal workflow authority.
+- [ ] `[could]` `ARF7.4-25` Add optional Desktop shortcuts/deep links for pinned
+  directions after the single shared Workbench application is stable; do not
+  publish every direction or candidate as an Application.
+- [ ] `[deferred]` `ARF7.4-26` Multi-writer live direction federation across
+  Assistants. Resume only with distributed authority/ACL, revision conflicts,
+  activity convergence, artifact ownership, and sealed-data policy.
+- [ ] `[deferred]` `ARF7.4-27` Remote artifact/MCP-only access and Ray execution.
+  Local owner-scoped SDK/filesystem access and member-node execution remain the
+  reference path until a real portability/scale case requires these providers.
+
+#### TLP acceptance and comparative evidence
+
+- [ ] `[must]` `ARF7.4-28` Re-home the existing TLP compiler calibration under
+  one ResearchDirection, one ResearchTask, one matched Study, and C0-C4
+  condition/ImplementationTrack records. Preserve immutable v1/v5 scores and
+  failures; no migration may retroactively improve them.
+- [ ] `[must]` `ARF7.4-29` Show notebook/review source visibility, task
+  formulation, compilation, all arm packets, Builder sessions, generated
+  candidates, costs, activity, failures, and evaluation results as one
+  traversable source-to-result chain. Empty artifacts/current draft/compilation
+  caused by candidate-as-direction projection are release blockers.
+- [ ] `[must]` `ARF7.4-30` Run a fresh local black-box walkthrough and automated
+  restart/reconnect/identity-isolation suite through ordinary API/Yjs/stream
+  paths. Record UI, schema, migration, ProjectRelease, journal, and
+  traceability receipts; no Workbench-private transport or local-only fix is
+  admissible.
+- [ ] `[should]` `ARF7.4-31` After the single-task TLP proof, freeze a small
+  multi-task agenda with dependent and parallel tasks and compare explicit
+  project-to-task planning with a direct project-sized prompt under matched
+  models, tools, budgets, and expert evaluation.
 
 ## ARF8. Autonomous TLP Closed Loop and Scientific Release
 
@@ -1659,7 +1828,7 @@ promotion has cross-domain compatibility evidence.
 | Tracker | Provider conformance, outage/restart, normalized export verification |
 | Executor | Idempotent submit, unknown reconciliation, cancellation, checkpoint, fault injection |
 | Scientific | Locked protocol/analysis plan, paired trial manifest, QC/exclusions, independent recomputation |
-| Authoring | Exact Project/direction identity, manifested local artifact groups, ResearchPrototype diffs, consensus/AutomationBrief, scoped unopened Development Session, source-to-Study lineage |
+| Authoring | Distinct Direction/Task/Compilation/ImplementationTrack/Project identities, manifested artifact groups, ResearchPrototype diffs, consensus/AutomationBrief, scoped unopened Development Session, source-to-Study lineage |
 | Research compilation | Frozen visible/hidden inputs, source analysis, source-to-evidence traceability, C0-C4 matched delivery arms, evidence-valid completion, per-stage failure attribution, cost/intervention evidence |
 | Autonomy | Research Mandate, admitted Agent Decisions, budget ledger, exploration/confirmation isolation, escalation/terminal evidence |
 | Builder re-entry | CapabilityGap, exact installed base, bounded Codex context, tests, Trial candidate, adoption/rollback lineage |
@@ -1695,6 +1864,15 @@ and its attachment-to-published-TLP acceptance story. Because the historical
 TLP path was review-assisted, the authoring MVP also requires the ARF7.3 clean
 from-raw compilation receipt; otherwise only the narrower implementation
 handoff has been proven.
+
+The historical milestone name is retained for receipt continuity. The target
+**Research Direction and Task Authoring MVP** additionally requires every
+ARF7.4 `[must]` item: canonical Direction/Agenda/Task/Compilation/Track
+identities, Project-scoped Builder, composition-locked ProjectRelease, generic
+outline/full-page Workbench navigation, migrated TLP lineage, joined activity,
+and distinct implementation/direction/result publication effects. Until then,
+the system has proven a one-component compatibility path, not the general
+multi-task research model.
 
 The **Autonomous Research Preview** additionally requires every ARF8 `must`
 item, one matched A0/A4 TLP run, and an independently verified ResearchRelease.

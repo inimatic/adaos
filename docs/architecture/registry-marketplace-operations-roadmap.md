@@ -3,7 +3,7 @@
 Status: domain roadmap for registry, publication, installation, and durable
 operation mechanics.
 
-Last reviewed: 2026-08-11.
+Last reviewed: 2026-08-18.
 
 This roadmap owns those mechanics. Their position in the broader managed
 deployment and verified-capability sequence is defined by
@@ -104,6 +104,11 @@ Current MVP priority:
   from ordinary users while retaining an advanced component view
 - complete Project-level install/remove and shared-dependency reference
   accounting in Catalog UX
+- Project member role/exposure/lifecycle/relations and composition-locked
+  ProjectRelease projection
+- exact Project-to-Project release dependency locks
+- a Project-level publish path; current `skill push`/`scenario push` remain
+  component-first compatibility paths
 - shared remote `adaos-registry` catalog semantics are still not fully
   normalized across every skill/scenario push path
 - marketplace content is not yet modeled as a client-facing catalog adapter separate from raw `registry.json`
@@ -214,12 +219,12 @@ Rules:
 ```json
 {
   "kind": "project",
-  "id": "tlp_research",
+  "id": "tlp_research_implementation",
   "version": "0.1.0",
-  "profiles": ["adaos.research.direction.v1"],
+  "profiles": ["adaos.research.implementation.v1"],
   "catalog": {
-    "title": "TLP Research",
-    "description": "Governed TLP research direction",
+    "title": "TLP Research Implementation",
+    "description": "Governed implementation for bounded TLP research tasks",
     "categories": ["research", "machine-learning"],
     "tags": ["tlp", "max-plus"]
   },
@@ -233,11 +238,13 @@ Rules:
     }
   ],
   "release": {
-    "project_release_digest": "sha256:..."
+    "project_release_digest": "sha256:...",
+    "project_definition_digest": "sha256:...",
+    "composition_digest": "sha256:..."
   },
   "install": {
     "kind": "project",
-    "id": "tlp_research"
+    "id": "tlp_research_implementation"
   }
 }
 ```
@@ -247,6 +254,12 @@ published projection and must not become Project runtime state. Profiles and
 capabilities are machine contracts; catalog categories/tags are discovery
 metadata; deployment scope is placement compatibility. See
 [Project Composition, Presentation, and Development Context](project-composition-and-development-context.md).
+
+Live ResearchDirections, conversations, task status, user pins/recent state,
+and scientific evidence are not Project catalog entries. Their owning domain
+may export snapshots or ResearchReleases that reference the immutable
+ProjectRelease; registry sync must not infer them from Project names or copy
+them into `registry.json`.
 
 ### Current anchors
 
@@ -285,14 +298,14 @@ The UI-facing model should be small and explicit:
 ```json
 {
   "kind": "project",
-  "id": "tlp_research",
-  "title": "TLP Research",
+  "id": "tlp_research_implementation",
+  "title": "TLP Research Implementation",
   "version": "0.1.0",
-  "description": "Governed TLP research direction",
-  "profiles": ["adaos.research.direction.v1"],
+  "description": "Governed implementation for bounded TLP research tasks",
+  "profiles": ["adaos.research.implementation.v1"],
   "categories": ["research", "machine-learning"],
   "tags": ["tlp", "max-plus"],
-  "entrypoints": [{"id": "research", "title": "Open research"}],
+  "entrypoints": [{"id": "implementation-diagnostics", "title": "Open diagnostics"}],
   "publisher": "owner-123",
   "installed": false,
   "install_action": {
@@ -494,6 +507,15 @@ Define stable contracts before wiring UI and background workers.
   deployment scope as separate validated fields
 - [ ] `[must]` Project entry points/presentations resolve to catalog
   Applications without making a scenario or skill name the product identity
+- [ ] `[must]` Project member schema separates role, Catalog exposure,
+  bound/shared lifecycle, and semantic relations; `project_only` is a discovery
+  rule rather than a security or package-integrity shortcut
+- [ ] `[must]` ProjectRelease catalog identity includes the exact Project
+  definition/composition digest and Project dependency locks, not only the set
+  of component package digests
+- [ ] `[must]` Project, ProjectRelease, ProjectInstallation, Builder
+  DevelopmentSession, and domain aggregate ids remain distinct in APIs and
+  projections
 - [x] shared operation state model
 - [x] Yjs projection schema for `runtime.operations` and `runtime.notifications`
 - [x] explicit rule that Yjs is projection-only
@@ -515,8 +537,11 @@ Make Project publication plus `skill push` and `scenario push` update
 
 - [ ] `[should]` shared upsert helper reused by Project, skill, and scenario
   entries across local and remote registry sync
-- [ ] `[should]` publish deterministic Project entries from accepted
+- [ ] `[must]` publish deterministic Project entries from accepted
   ProjectRelease records without scanning live Builder sessions
+- [ ] `[should]` add one Project publication SDK/CLI path and make existing
+  component push commands backward-compatible one-component projections; do
+  not add domain-specific publication CLIs
 - [ ] `[should]` preserve raw component discovery for advanced tooling while
   making Project/Application the default catalog read model
 - [ ] `[should]` tests for create/update behavior
@@ -551,6 +576,15 @@ Convert install/update flows from blocking request/response into accepted async 
 
 ### Deliverables
 
+- [ ] `[must]` Project add/update/remove operations resolve one exact
+  ProjectRelease, acquire the ordinary Workspace writer/operation leases, and
+  use the transactional Artifact Pipeline rather than sequencing component
+  install endpoints in the client
+- [ ] `[must]` durable ProjectInstallation/reference accounting preserves
+  shared dependencies, removes bound members only when unreferenced, and keeps
+  runtime/domain data under declared retention policy
+- [ ] `[must]` project-only members are materialized and verified as part of
+  their Project but cannot be independently added/removed from ordinary UI
 - [x] `OperationManager`
 - [x] async install command handlers
 - [x] `operation_id` response contract
@@ -568,6 +602,8 @@ Make the client react to projected operations instead of waiting on request comp
 ### Deliverables
 
 - [ ] `[should]` disable install button for same target while active
+- [ ] `[should]` present one Project/Application operation with expandable
+  component/dependency plan instead of unrelated per-skill progress rows
 - [x] show progress and current step through projected operation state
 - [x] show active operations list in infra UI
 - [x] show success/error notifications on completion

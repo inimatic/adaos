@@ -3,6 +3,8 @@
 Status: target architecture for the single-user artifact development,
 publication, installation, update, and rollback pipeline.
 
+Last reviewed: 2026-08-18.
+
 This document defines the target boundaries and contracts. The bounded package
 path is now `validated-stand` on an isolated same-host stand using the deployed
 external backend; it is not yet broadly production accepted. Delivery maturity is owned by
@@ -84,7 +86,7 @@ deferred until the single-user loop is stable.
 | Component | A scenario, skill, schema, migration, UI descriptor, governed `workflow.json`, or other versioned item included in a project release. |
 | SourceRef | Exact forge-independent reference to source content. |
 | PackageRef | Content-addressed reference to one immutable package. |
-| ProjectRelease | Immutable, dependency-locked set of component packages. |
+| ProjectRelease | Immutable, dependency-locked Project definition and component-package set. |
 | Channel | Mutable discovery pointer to an immutable ProjectRelease. |
 | Candidate | Pre-release ProjectRelease linked to one bounded change and base release. |
 | Activation | Transactional selection of ProjectRelease packages for a workspace slot. |
@@ -460,18 +462,36 @@ project_release:
   version: 2.4.1
   release_digest: sha256:...
   source_ref: { ... }
+  project_definition:
+    schema: adaos.project.v1
+    digest: sha256:...
+    composition_digest: sha256:...
 
   components:
     - kind: scenario
       id: recipes
       version: 2.4.1
       package_digest: sha256:...
+      role: primary
+      exposure: application
+      lifecycle: bound
+      relations: [presents]
     - kind: skill
       id: recipe_planner
       version: 1.3.0
       package_digest: sha256:...
+      role: implementation
+      exposure: project_only
+      lifecycle: bound
+      relations: [realizes]
 
-  resolved_dependencies: [ ... ]
+  entrypoint_locks: [ ... ]
+  profile_locks: [ ... ]
+  resolved_dependencies:
+    - kind: project_release
+      project_id: shared_food_data
+      release_digest: sha256:...
+      resolved_component_closure_digest: sha256:...
   permissions: [ ... ]
   migrations: [ ... ]
   validation_evidence: [ ... ]
@@ -484,6 +504,24 @@ A simple standalone skill Project is a one-component ProjectRelease. A
 scenario with dedicated companion skills can be released as one locked set.
 Shared skills and shared Projects remain separate packages/releases and are
 pinned by digest.
+
+The Project definition is part of the release identity, not publication-time
+advice. The release locks member roles, exposure, bound/shared lifecycle,
+relations, entry points, profiles, compatibility rules, and the exact resolved
+Project dependency closure. A set of the same package digests with a different
+entry point, ownership/lifecycle rule, or exposure policy is a different
+ProjectRelease.
+
+`project_only` controls Catalog and independent-install visibility. Such a
+member is still an ordinary verifiable package and remains directly addressable
+for diagnostics and provenance. Visibility does not grant or restrict runtime
+authority.
+
+Project publication never captures live domain/runtime state. A
+ResearchDirection snapshot, scientific ResearchRelease, user preferences, or
+skill-owned database is exported through its owning domain contract and may
+reference this ProjectRelease; it is not inserted into the software package by
+implication.
 
 Schema locks are collected from every selected package. Migration locks and
 validation evidence references are recomputed from canonical payload bytes at

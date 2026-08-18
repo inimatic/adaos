@@ -5,7 +5,7 @@ Research Workbench pre-Codex milestone are specified here; a published Project
 catalog and transactional multi-component install/remove flow are follow-on
 work.
 
-Last reviewed: 2026-08-16.
+Last reviewed: 2026-08-18.
 
 This page defines the boundary between distributable AdaOS Projects,
 user-facing Applications, skill/scenario components, Builder development
@@ -50,15 +50,29 @@ The research-domain workflow remains owned by
 9. Builder context is least-context and least-write. A Development Session
    explicitly separates selected UI focus, development targets, read-only
    context, artifact inputs, and scratch/runtime access.
-10. A research direction is represented by a Project whose primary owned
-    component is a `research.direction` skill. It normally uses the shared
-    Research Workbench presentation and does not generate a scenario per
-    direction.
+10. A research direction is a live domain aggregate, not a Project identity.
+    It may reference one or more exact ProjectReleases that implement its
+    current research tasks. The current local compatibility path may create a
+    one-component Project and use the same human-readable id, but APIs and
+    persisted refs must not rely on `direction_id == project_id`.
 11. A Development Session carries consumer-owned contract requirements in
     addition to read-only component context. Builder must prove that generated
     providers export the required operations and survive the ordinary package,
     install, and activation boundary; a target-owned mock is not compatibility
     evidence.
+12. Builder always develops in Project scope, even when one skill is the only
+    writable target. Full Project awareness means exact composition, contracts,
+    locks, and compatibility constraints; it does not mean sending every source
+    file to the model.
+13. A ProjectRelease locks the Project definition as well as component package
+    digests. Component roles, exposure, lifecycle, relations, entry points,
+    profiles, and resolved Project dependencies are part of release identity.
+14. Publishing implementation software, exporting a live domain aggregate,
+    and publishing a domain result are separate operations. Project publication
+    must not become an implicit export of private runtime or research state.
+15. Scenarios do not own skills. A scenario may consume a capability or present
+    a binding; Project composition is the authority for jointly shipped/removed
+    components and exact dependency locks.
 
 ## Vocabulary
 
@@ -67,6 +81,7 @@ The research-domain workflow remains owned by
 | Component | Versioned skill or scenario package selected by a Project | User-facing solution identity |
 | Project | Declarative distribution, entry-point, and lifecycle definition | Mutable Builder workspace or process |
 | ProjectRelease | Immutable resolved set of component packages and locks | Registry channel or installed runtime state |
+| ProjectInstallation | Local activation/reference to one exact ProjectRelease | Project source definition or live domain aggregate |
 | Application | Launchable user-facing projection supplied by a Project entry point | Necessarily one package or one scenario identity |
 | Presentation | Explicit binding from a skill/project entry point to a scenario host | Ownership, dependency, or validation evidence |
 | Builder Development Session | Mutable, policy-scoped overlay for one development iteration | Distributable Project manifest |
@@ -74,8 +89,9 @@ The research-domain workflow remains owned by
 | Context member | Read-only or filtered dependency visible to an agent | Implicit write authority |
 | Artifact group | Manifested local source material intended for human/LLM/Codex context | Mutable experiment/runtime data |
 | Runtime data | Skill-owned operational state under its activated runtime bucket | Project source or intake material |
-| Profile | Stable machine-readable semantic role such as `adaos.research.direction.v1` | Localized catalog category |
+| Profile | Stable machine-readable semantic role such as `adaos.research.implementation.v1` | Localized catalog category |
 | Category | User-facing discovery facet such as `research` or `media` | Capability or deployment contract |
+| Domain aggregate | Live user-owned state such as a ResearchDirection | Installable Project or Builder session |
 
 ## Project Distribution Contract
 
@@ -84,32 +100,40 @@ The target source contract is additive to the existing component manifests:
 ```yaml
 schema: adaos.project.v1
 kind: project
-id: tlp_research
+id: tlp_research_implementation
 version: 0.1.0
 
 profiles:
-  - adaos.research.direction.v1
+  - adaos.research.implementation.v1
 
 components:
   owned:
     - ref: skill:tlp_research_skill
       role: primary
+      exposure: project_only
+      lifecycle: bound
+      relations: [realizes]
     - ref: skill:tlp_experiment_skill
-      role: supporting
+      role: implementation
+      exposure: project_only
+      lifecycle: bound
+      relations: [uses]
 
   dependencies:
     - ref: project:adaos_research_platform
       version: ^0.2
+      lifecycle: shared
+      relations: [presents, uses]
 
 entrypoints:
-  - id: research
+  - id: implementation-diagnostics
     presentation: scenario:research_workbench
     bindings:
-      direction_ref: skill:tlp_research_skill
+      implementation_ref: skill:tlp_research_skill
 
 catalog:
-  title: TLP Research
-  description: Governed TLP research direction and experimental base.
+  title: TLP Research Implementation
+  description: Governed implementation and experimental base for TLP tasks.
   categories: [research, machine-learning]
   tags: [tlp, max-plus, pooling]
 
@@ -126,10 +150,46 @@ into the Project or granted source ownership. A Project may contain any
 non-empty combination of skills and scenarios, including one standalone
 headless skill.
 
+Owned members have orthogonal metadata:
+
+- `role` states composition responsibility (`primary`, `implementation`, or
+  `supporting`), not UI visibility;
+- `exposure` states discovery (`application`, `project_only`, or `advanced`),
+  not authorization;
+- `lifecycle` states whether the member is bound to this Project or shared;
+- `relations` state why the member participates (`realizes`, `presents`,
+  `evaluates`, or `uses`).
+
+`project_only` components remain ordinary immutable packages with versions,
+digests, signatures, dependency locks, and direct diagnostic addressing. They
+are omitted from normal Catalog/Desktop discovery and are not independently
+installed or removed. Hiding a component is never a security boundary.
+
 Joint development is a practical consequence of Project ownership, but the
 Project manifest does not record a transient current editing task. Publication
 turns the Project definition plus exact component packages into an immutable
 ProjectRelease.
+
+### Definition, release, installation, and live-state boundary
+
+The four identities must remain separate:
+
+| Object | Mutability | Owns |
+| --- | --- | --- |
+| `ProjectDefinition` | Versioned source | intended composition, entry points, compatibility, lifecycle |
+| `ProjectRelease` | Immutable | exact definition digest, member packages, dependency closure, validation locks |
+| `ProjectInstallation` | Mutable by governed activation | selected release, workspace slot, reference counts, activation evidence |
+| domain aggregate | Mutable by its domain workflow | user data, scientific state, conversations, decisions, runtime refs |
+
+One ProjectRelease may be installed in multiple Assistants and used by multiple
+domain aggregates. Conversely, one aggregate may reference several releases
+over time or compose releases for different tasks. Therefore a Project id is
+never a universal owner key for live state.
+
+Project-to-Project dependencies are locked to exact ProjectRelease identities
+or to an equivalent fully resolved closure. A release is incomplete if it locks
+only leaf skill/scenario packages while dropping the dependency Project,
+composition roles, entry points, or lifecycle policy that made the set valid.
 
 ### Install and remove semantics
 
@@ -160,23 +220,26 @@ selects an entry point:
 
 ```yaml
 presentations:
-  - id: research-workbench
+  - id: research-implementation-diagnostics
     scenario: research_workbench
-    contract: adaos.research.direction.v1
-    default: true
+    contract: adaos.research.implementation.v1
+    default: false
     bindings:
-      direction_ref: skill:self
+      implementation_ref: skill:self
 ```
 
-One shared scenario may therefore present many skill instances. Launching an
-installed research direction resolves to a bound application location such as:
+One shared scenario may therefore present many skill or Project instances.
+Launching a live research direction is a Workbench domain deep link such as:
 
 ```text
-scenario:research_workbench + direction_ref=skill:tlp_research_skill
+scenario:research_workbench + direction_id=research-direction:tlp-01
 ```
 
-It does not copy `research_workbench` into every direction and does not turn a
-"first parent scenario" into an ordering-sensitive runtime rule.
+The Research Orchestrator resolves the direction's current implementation refs;
+the Project entry point does not manufacture domain identity. Legacy
+`direction_ref=skill:*` destinations remain migration inputs only. None of these
+forms copies `research_workbench` into every direction or turns a "first parent
+scenario" into an ordering-sensitive runtime rule.
 
 ### Preview resolution
 
@@ -204,6 +267,14 @@ revisions. A declaration that a skill can use a scenario is not proof that the
 combination was tested.
 
 ## Builder Development Session
+
+Builder opens a Project, never an unscoped component. A single-skill edit is a
+Project-scoped session whose `targets` contains one component. The session
+still receives the exact Project definition/base release, read-only contracts
+for non-target members and dependencies, entry-point compatibility, and
+project-wide validation requirements. Publication produces a candidate
+ProjectRelease and validates affected entry points and consumers, not merely a
+patch that passes the target skill's self-tests.
 
 Builder opens a Project through a mutable session overlay:
 
@@ -351,10 +422,17 @@ The Development Session therefore provides six different constraints:
 | execution budget | which wall-time, token, retry, and intervention envelope is scored |
 | agent profile | which exact provider/model/reasoning/tool configuration performs the work |
 
-All four are digest-bound. Package installation is part of realization:
+All six are digest-bound. Package installation is part of realization:
 dependency declarations and isolation policy are validated before checkpoint,
 then the ordinary package/install/activate lifecycle supplies the runtime
 receipt.
+
+The core Development Session ABI is domain-neutral. It should accept typed
+`subject_refs`, `contract_inputs`, and `acceptance_profiles`; Research Fabric
+projects its AutomationBrief, ResearchCompilation, artifact visibility, and
+scientific prohibitions through those generic fields. Requiring every Builder
+session to carry a `ResearchPrototype` or a specific Codex provider would turn
+the first consumer into core semantics and is therefore a migration defect.
 
 ## Local-First Artifact Context
 
@@ -472,7 +550,7 @@ Classification uses separate fields:
 
 ```yaml
 kind: project
-profiles: [adaos.research.direction.v1]
+profiles: [adaos.research.implementation.v1]
 catalog:
   categories: [research]
   tags: [ml, tlp]
@@ -486,10 +564,12 @@ deployment:
 - `tags` support non-authoritative search;
 - `deployment.scopes` express placement/compatibility, not subject domain.
 
-Research Workbench discovers local directions through the installed/local
-Project and profile index. It must not scan public registry descriptions for
-the word "research". A local draft is not added to the public registry until
-ordinary publication.
+Research Workbench discovers local directions through the research-domain
+index. It resolves each implementation ref through installed/local Projects
+and profiles; it must not discover live directions by scanning Project manifests
+or public registry descriptions for the word "research". A local direction is
+not added to the public registry merely because its implementation was
+published.
 
 The normal Catalog leads with Projects/Applications. An advanced Components
 view may expose raw skills, scenarios, providers, capabilities, versions, and
@@ -504,19 +584,27 @@ project:adaos_research_platform
   owns scenario:research_workbench
   owns skill:research_orchestrator_skill
 
-project:<direction>
-  owns skill:<direction-skill>              # research identity and code target
-  may own supporting experiment skills
+project:tlp_research_implementation
+  owns skill:tlp_research_skill             # bounded task implementation
+  may own project-only supporting skills
   depends on project:adaos_research_platform
-  launches research_workbench(direction_ref=<direction-skill>)
+  may expose a Workbench-compatible diagnostic entry point
+
+ResearchDirection:tlp
+  owns live direction metadata, source manifests, agenda/tasks, and decisions
+  references ProjectRelease:tlp_research_implementation@<digest>
+  is presented by research_workbench(direction_id=<direction-instance>)
 ```
 
 The Research Workbench is the product entry point. It lists directions, keeps
-one direction in session focus, creates a new Project and direction skill via
-Builder SDK, adds local artifact groups, supports formulation and exact
-acceptance, and creates the bounded Builder Development Session. Builder owns
-source mutation and Codex; the Workbench links to that session and observes its
-durable state rather than embedding a Research tab into Builder.
+one direction in session focus, creates the live direction through the
+Research Orchestrator, admits local artifact groups, supports task formulation
+and exact acceptance, and asks Builder SDK for a Project-scoped Development
+Session when implementation is required. The current compatibility path may
+also create a one-component draft Project at direction intake; that shortcut
+must be represented as a linked implementation ref, not as identity equality.
+Builder owns source mutation and Codex; the Workbench links to the session and
+observes its durable state rather than embedding a Research tab into Builder.
 
 Every direction need not appear as a Desktop Application. One Research
 Workbench application and compact activity widget are sufficient. Notifications
@@ -524,7 +612,8 @@ and optional shortcuts may deep-link to a focused direction.
 
 ## Current-Milestone Boundary
 
-The pre-Codex research milestone requires:
+The already proven compatibility form of the pre-Codex research milestone
+requires:
 
 - local Project definition with one primary direction skill;
 - Research Workbench portfolio/list and selected-direction detail;
@@ -540,6 +629,11 @@ The pre-Codex research milestone requires:
 It does not require remote Project catalog publication, an external artifact
 store, MCP artifact access, directory/archive ingestion, autonomous Codex,
 experiment execution, or one Desktop icon/scenario per direction.
+
+The target migration additionally requires an explicit ResearchDirection id,
+task id, implementation Project ref, and Development Session ref; existing
+records that used one id for all four remain readable but must be normalized at
+the domain boundary.
 
 ## Related Documents
 

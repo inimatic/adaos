@@ -90,6 +90,21 @@ Session**. The session records current targets, read-only context, model-facing
 artifacts, and run/checkpoint state; it is not itself installed or published.
 The word Project must not be used for an arbitrary chat tab or Codex process.
 
+## Domain Workspaces
+
+Domain objects are not automatically Projects or Applications. For Research
+Fabric, a **Research direction** is a live body of scientific work, a
+**Research task** is one bounded scientific question inside it, and an
+**Implementation track** is one engineering line that realizes a task. A
+portable Project supplies versioned software for one or more tracks; it does
+not own the live direction merely because Workbench created both during the
+same user action.
+
+The Research Workbench is the Application. Its home surface is the direction
+portfolio. Individual directions are selected domain workspaces/deep links,
+not automatically Desktop Applications. The same rule should be reused by
+future workbenches whose domain instances outnumber useful launchable apps.
+
 ## Term Mapping
 
 | Internal term | Product term | Notes |
@@ -103,6 +118,9 @@ The word Project must not be used for an arbitrary chat tab or Codex process.
 | `project_release` | Release | Immutable dependency-locked Project version; keep the technical term in diagnostics. |
 | `builder development session` | Development session | Mutable Builder overlay with explicit targets and read-only context. Never shown as an installed application. |
 | `presentation` | Application view or launch target | Explicit scenario host/binding for a skill or Project entry point. |
+| `research direction` | Research direction | Live scientific aggregate presented by Research Workbench; not a Project, skill, or scenario identity. |
+| `research task` | Research task | Bounded scientific question with formulation, protocol, evaluation, and lineage. |
+| `implementation track` | Implementation track | Engineering path and Project/Development Session lineage for one task; do not label its skills as separate research directions. |
 | `widget` | Widget, later Panel | Current UI may keep Widget while the broader product model reserves Panel. |
 | `browser`, `member`, `hub`, `subnet endpoint` | Agent | Software participant of the assistant subnet. |
 | `device` | Device | Physical or virtual host. One device may host multiple agents. |
@@ -129,7 +147,7 @@ Debug-first labels such as raw subnet IDs, endpoint IDs, `LINK OK`, or low-level
 
 Catalog categories are discovery labels, not runtime types. For example,
 `research` may be a localized category, while
-`adaos.research.direction.v1` is a machine-readable profile and `member` or
+`adaos.research.implementation.v1` is a machine-readable profile and `member` or
 `home_subnet` is a deployment scope. UI filters must not collapse those three
 axes into one category field.
 

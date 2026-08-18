@@ -3,7 +3,7 @@
 Status: implementation roadmap for
 [Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md).
 
-Last reviewed: 2026-08-04.
+Last reviewed: 2026-08-18.
 
 ## Outcome
 
@@ -372,9 +372,12 @@ selects a dependency implicitly.
 
 **Admission gate:** AP1 component packages are reproducible.
 
-**Exit proof:** a scenario and shared skill form a locked ProjectRelease;
-compatible activation succeeds and an incompatible shared-skill update is
-rejected without changing active state.
+**Exit proof:** a Project definition plus its component roles, exposure,
+lifecycle, entry points, profiles, compatibility policy, packages, and resolved
+Project/component dependencies form one locked ProjectRelease; compatible
+activation succeeds and an incompatible shared update is rejected without
+changing active state. The existing component-package lock is only a partial
+proof until the open composition items below close.
 
 - [x] `[must]` `AP2-01` Add declared dependency ranges to canonical scenario and
   skill manifest handling.
@@ -400,6 +403,22 @@ rejected without changing active state.
   exact dependency package registry contract, persist the resulting
   `workflow_binding_digest` in ProjectRelease, and reject missing, mutable,
   permission-broadening, or package-inconsistent bindings.
+- [ ] `[must]` `AP2-12` Bind the canonical `adaos.project.v1` definition and a
+  normalized composition digest into ProjectRelease. Lock member role,
+  exposure, bound/shared lifecycle, relations, entry points, profiles, and
+  compatibility rules; reject a release that contains only package digests.
+- [ ] `[must]` `AP2-13` Resolve Project-to-Project dependencies to exact
+  ProjectRelease identities or an equivalent complete closure, preserve the
+  dependency edge in the release, and reject cycles/ambiguity without partial
+  publication.
+- [ ] `[must]` `AP2-14` Make Project activation/removal reference-count bound,
+  shared, and `project_only` members. A project-only package remains verifiable
+  and diagnostic-addressable but is not independently installed or removed.
+- [ ] `[should]` `AP2-15` Treat existing `skill push` and `scenario push` as
+  backward-compatible one-component Project publication projections once the
+  Project-level API/CLI is available; do not create a research-specific CLI.
+- [ ] `[should]` `AP2-16` Add composition-lock explain/diff output for Builder,
+  Catalog, activation plans, and release provenance.
 
 `AP2-11` is closed at `validated-local` by the immutable adapter registry,
 package adapter locks, aggregate binding digest, role-policy digest, package
