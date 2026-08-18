@@ -484,7 +484,8 @@ def validate_dependency_isolation_contract(
         for config in (environment, runtime)
         for key in allow_keys
     )
-    if heavy and not explicitly_allowed:
+    effective_heavy = sorted(declared_heavy | imported_heavy)
+    if effective_heavy and not explicitly_allowed:
         boundary = (
             "Keep heavy dependencies behind the service runtime boundary or explicitly set "
             "runtime.env.allow_heavy_dependencies: true for a controlled transitional install."
@@ -496,7 +497,8 @@ def validate_dependency_isolation_contract(
             Issue(
                 level,
                 "runtime.dependencies.heavy_isolation",
-                f"heavy/native Python dependencies ({', '.join(heavy)}) violate the default isolation policy. {boundary}",
+                "heavy/native Python dependencies "
+                f"({', '.join(effective_heavy)}) violate the default isolation policy. {boundary}",
                 "dependencies",
             )
         )

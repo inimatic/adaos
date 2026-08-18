@@ -140,6 +140,25 @@ def ping():
     assert "runtime.dependencies.heavy_undeclared" in {issue.code for issue in report.issues}
 
 
+def test_strict_validation_reports_all_heavy_import_contract_failures(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+import torch
+from adaos.sdk.core.decorators import tool
+@tool(summary="ping")
+def ping():
+    return {"ok": bool(torch.__version__)}
+""",
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, strict=True)
+
+    codes = {issue.code for issue in report.issues}
+    assert "runtime.dependencies.heavy_undeclared" in codes
+    assert "runtime.dependencies.heavy_isolation" in codes
+
+
 def test_validation_rejects_unexported_provider_contract_operation(tmp_path: Path) -> None:
     skill_dir = _write_skill(
         tmp_path,
