@@ -302,5 +302,12 @@ def _load_module_from_skill_source(skill_path: Path, module_name: str):
         if sys.modules.get(synthetic_name) is module:
             sys.modules.pop(synthetic_name, None)
         raise
+    finally:
+        # Tool execution imports handler modules only to resolve the requested
+        # callable. Their decorators must not leak a second set of tools and
+        # event subscriptions into the process-wide declaration registry.
+        from adaos.sdk.core.decorators import retire_module_declarations
+
+        retire_module_declarations({synthetic_name})
     setattr(module, _MODULE_LOAD_COMPLETE, True)
     return module

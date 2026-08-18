@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from adaos.skills import runtime_runner as runtime_runner_module
+from adaos.sdk.core import decorators as sdk_decorators
 
 
 def _write_skill(root: Path, name: str, marker: str) -> Path:
@@ -294,6 +295,9 @@ def test_execute_tool_discards_a_partially_imported_skill_module(tmp_path: Path)
     (skill_dir / "handlers").mkdir(parents=True)
     (skill_dir / "handlers" / "main.py").write_text(
         "import builtins\n"
+        "from adaos.sdk.core.decorators import subscribe\n"
+        "@subscribe('test.partial_import')\n"
+        "def on_event(_event): return None\n"
         "if not getattr(builtins, '_adaos_runtime_allow_test_import', False):\n"
         "    raise RuntimeError('first import fails')\n"
         "def get_snapshot():\n"
@@ -311,6 +315,11 @@ def test_execute_tool_discards_a_partially_imported_skill_module(tmp_path: Path)
                 attr="get_snapshot",
                 payload={},
             )
+        synthetic_prefix = f"_adaos_runtime.{skill_dir.name}."
+        assert not any(
+            str(getattr(fn, "__module__", "")).startswith(synthetic_prefix)
+            for _topic, fn in sdk_decorators.subscriptions
+        )
         setattr(__import__("builtins"), marker, True)
 
         assert runtime_runner_module.execute_tool(
@@ -324,6 +333,37 @@ def test_execute_tool_discards_a_partially_imported_skill_module(tmp_path: Path)
             setattr(__import__("builtins"), marker, before)
         else:
             delattr(__import__("builtins"), marker)
+
+
+def test_execute_tool_does_not_leak_handler_declarations(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "declaration_skill"
+    handler = skill_dir / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text(
+        "from adaos.sdk.core.decorators import subscribe, tool\n"
+        "@subscribe('test.execution_only')\n"
+        "def on_event(_event): return None\n"
+        "@tool('read_state', side_effects='none')\n"
+        "def read_state(_payload=None): return {'ok': True}\n",
+        encoding="utf-8",
+    )
+    snapshot = sdk_decorators._registry_snapshot()
+    try:
+        assert runtime_runner_module.execute_tool(
+            skill_dir,
+            module="handlers.main",
+            attr="read_state",
+            payload={},
+        ) == {"ok": True}
+
+        synthetic_prefix = f"_adaos_runtime.{skill_dir.name}."
+        assert not any(
+            str(getattr(fn, "__module__", "")).startswith(synthetic_prefix)
+            for _topic, fn in sdk_decorators.subscriptions
+        )
+        assert not any(name.startswith(synthetic_prefix) for name in sdk_decorators.tools_registry)
+    finally:
+        sdk_decorators._restore_registry_snapshot(snapshot)
 
 
 def test_execute_tool_serializes_concurrent_first_imports(tmp_path: Path) -> None:
