@@ -236,6 +236,18 @@ validation must cross-check every skill datasource and `callSkill` target
 against declared dependencies, exported tools, tool side effects, and exact
 `data_routes`; incomplete DEV folders must not shadow a valid workspace skill.
 
+State-dependent read parameters must use the resolver contract implemented by
+the data runtime. For skill/API `dataSource.params`, use exact references such
+as `"media_kind": "$state.mediaKind"` (or a documented string template). Do
+not place an action-side declarative expression object such as
+`{"kind":"expression","op":"if",...}` in a data-source parameter unless that
+specific data runtime explicitly documents expression evaluation. Otherwise
+the object is passed to the tool as ordinary JSON; a string filter can silently
+become an unfiltered query. Give optional reads a valid `initialState` scalar or
+normalize the default in the tool. Add a schema contract test that resolves
+every state-dependent parameter and asserts the tool receives the expected
+scalar type and value, including each filter choice.
+
 For new or migrated scenarios, enable release-blocking conformance:
 
 ```yaml
@@ -677,6 +689,16 @@ Every declared Yjs projection should have a reason to be reconnect-stable.
 Every stream receiver should have bounded delivery semantics and an initial or
 snapshot-on-subscribe story. Every declared worker, cache, and heavy resource
 should have an owner, budget, and cleanup path.
+
+When a skill registers references to externally owned files, it must also own
+an idempotent unlink operation. Delete exact registered resource identities,
+not paths inferred by prefix; keep the original files untouched unless a
+separate destructive contract explicitly says otherwise. Serialize import and
+unlink across skill processes with a bounded lease so an in-flight scan cannot
+recreate an orphan reference. On cleanup failure, retain the user-visible root
+or return an explicit partial result with the identities needed for retry. Test
+successful unlink, repeated unlink, concurrent-operation rejection, and source
+file preservation.
 
 ### Receiver ownership and control-event admission
 
@@ -1848,6 +1870,14 @@ Before publishing:
   Enter/default submit actions, pending action feedback, element loading
   states, and skill UI resources instead of hiding these rules in widget
   special cases
+- verify every state-dependent skill/API `dataSource.params` value resolves to
+  the tool's declared scalar/container type; action expression ASTs must not be
+  used as read parameters unless the data runtime explicitly supports them
+- verify selectable collection rows are keyboard-focusable in normal tab order
+  and Enter invokes the same primary action as pointer selection
+- for skill-owned external resource references, verify import and unlink share
+  a cross-process lease, unlink is exact and idempotent, and deleting catalog
+  state leaves source bytes unchanged
 - verify browser-facing icons, avatars, preview images, templates, and i18n
   dictionaries are declared in top-level `resources` and referenced as
   `resource:<id>`; core-delivered files must live under the skill `assets/`

@@ -108,3 +108,35 @@ def test_media_reference_revalidates_root_boundary_on_read(tmp_path: Path) -> No
 
     with pytest.raises(PermissionError, match="path_outside_media_reference_root"):
         media_core.resolve_media_reference(resource.id, db_path=db_path)
+
+
+def test_unregister_media_references_is_exact_idempotent_and_preserves_files(tmp_path: Path) -> None:
+    from adaos.services.media_reference_registry import unregister_media_references
+
+    library = tmp_path / "library"
+    library.mkdir()
+    first = library / "first.mp4"
+    second = library / "second.mp4"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    db_path = tmp_path / "state" / "media_references.sqlite3"
+    first_ref = media_core.register_media_reference(first, root=library, db_path=db_path)
+    second_ref = media_core.register_media_reference(second, root=library, db_path=db_path)
+
+    removed = unregister_media_references(
+        [first_ref.id, first_ref.id, "ref_missing"],
+        db_path=db_path,
+    )
+
+    assert removed == {
+        "ok": True,
+        "requested_count": 2,
+        "deleted_count": 1,
+        "missing_count": 1,
+        "resource_ids": [first_ref.id, "ref_missing"],
+    }
+    with pytest.raises(FileNotFoundError, match="media_reference_not_found"):
+        media_core.resolve_media_reference(first_ref.id, db_path=db_path)
+    assert media_core.resolve_media_reference(second_ref.id, db_path=db_path).path == second.resolve()
+    assert first.read_bytes() == b"first"
+    assert second.read_bytes() == b"second"

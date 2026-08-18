@@ -25,6 +25,9 @@ from adaos.services.media_core import (
     register_media_reference as _core_register_media_reference,
     sanitize_media_filename,
 )
+from adaos.services.media_reference_registry import (
+    unregister_media_references as _core_unregister_media_references,
+)
 from adaos.services.runtime_paths import current_base_dir
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 
@@ -445,6 +448,12 @@ def register_media_file(
     return descriptor
 
 
+def unregister_media_references(resource_ids: list[str] | tuple[str, ...] | set[str]) -> dict[str, Any]:
+    """Unregister exact core media references without deleting source files."""
+
+    return _core_unregister_media_references(resource_ids)
+
+
 def browser_media_descriptor(media: dict[str, Any], *, content_ref: str | None = None) -> dict[str, Any]:
     return {
         "route": media.get("browser_route") or media.get("route") or "hub_browser_media",
@@ -484,4 +493,5 @@ __all__ = [
     "publish_media_file",
     "register_media_file",
     "source_image_cache_dir",
+    "unregister_media_references",
 ]

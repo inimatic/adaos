@@ -206,6 +206,26 @@ def test_sdk_io_media_registers_original_file_without_copy(monkeypatch, tmp_path
     assert [path for path in tmp_path.rglob("movie.mp4")] == [source]
 
 
+def test_sdk_io_media_unregisters_reference_without_deleting_source(monkeypatch, tmp_path):
+    from adaos.sdk.io import media as sdk_media
+    from adaos.services import media_core
+
+    library = tmp_path / "library"
+    library.mkdir()
+    source = library / "movie.mp4"
+    source.write_bytes(b"movie")
+    db_path = tmp_path / "state" / "references.sqlite3"
+    monkeypatch.setenv("ADAOS_MEDIA_REFERENCE_DB_PATH", str(db_path))
+    descriptor = sdk_media.register_media_file(source, root=library)
+
+    result = sdk_media.unregister_media_references([descriptor["resource_id"]])
+
+    assert result["deleted_count"] == 1
+    assert source.read_bytes() == b"movie"
+    with pytest.raises(FileNotFoundError, match="media_reference_not_found"):
+        media_core.resolve_media_reference(descriptor["resource_id"], db_path=db_path)
+
+
 def test_sdk_io_media_lists_normalized_resources(monkeypatch, tmp_path):
     from adaos.sdk.io import media as sdk_media
     from adaos.services import media_core, media_indexer_library
