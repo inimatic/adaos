@@ -1352,19 +1352,19 @@ failure attribution. C0-C4 use the same task, model class, tools, environment,
 and declared budgets. The result is reported as a TLP calibration, not a TLP
 efficacy result or cross-domain SOTA claim.
 
-- [ ] `[must]` `ARF7.3-01` Add versioned artifact stage visibility for
+- [x] `[must]` `ARF7.3-01` Add versioned artifact stage visibility for
   `formulation`, `implementation`, `execution`, `evaluation`, and human-only
   access. Materialize every model/agent context from this policy and record its
   exact included/excluded refs and digest.
-- [ ] `[must]` `ARF7.3-02` Persist a source-analysis projection with inventory,
+- [x] `[must]` `ARF7.3-02` Persist a source-analysis projection with inventory,
   extraction coverage, stable fragment refs, observations, interpretations,
   claims, assumptions, contradictions, ambiguities, environment hints, and
   explicit untrusted-output status.
-- [ ] `[must]` `ARF7.3-03` Extend staged formulation with an auditable
+- [x] `[must]` `ARF7.3-03` Extend staged formulation with an auditable
   ResearchProblem facet covering primitives, tension/gap, primary question,
   assumptions, alternatives, falsifier, minimal decisive test, expected
   observations, failure-update rule, and prohibited claims.
-- [ ] `[must]` `ARF7.3-04` Compile an ExperimentalProtocol facet that maps the
+- [x] `[must]` `ARF7.3-04` Compile an ExperimentalProtocol facet that maps the
   problem to population, intervention/comparator, controlled invariants,
   outcomes/estimand, allocation/pairing, random streams, profiles, seals,
   stopping, uncertainty, decision regions, and evidence requirements.
@@ -1373,25 +1373,29 @@ efficacy result or cross-domain SOTA claim.
   engineering obligation, runtime observation/artifact, and acceptance/claim
   decision. Classify expert-review points as compiled, deferred,
   rejected-with-reason, or unresolved.
-- [ ] `[must]` `ARF7.3-06` Project the accepted protocol into the existing
+- [x] `[must]` `ARF7.3-06` Project the accepted protocol into the existing
   AutomationBrief and direction manifest as a narrow task envelope,
   provider-operation bindings, artifact flow, result/observation schemas,
   ownership/recovery constraints, forbidden scientific mutations, and neutral
   conformance fixtures. Do not prescribe internal code structure without a
   contract reason.
-- [ ] `[must]` `ARF7.3-07` Let Codex return typed clarification, feasibility,
+- [x] `[must]` `ARF7.3-07` Let Codex return typed clarification, feasibility,
   capability-gap, and protocol-conflict results. Require a reviewed new
   formulation/protocol revision instead of silent scientific mutation.
 - [ ] `[must]` `ARF7.3-08` Render Source Analysis, Problem, Protocol,
   Engineering Contract, coverage, and traceability as related Workbench
   revisions. Preserve free narrative beside typed decisions and keep model
   readiness separate from human acceptance.
-- [ ] `[must]` `ARF7.3-09` Implement a matched C0 raw, C1 reviewed-prose, C2
+- [x] `[must]` `ARF7.3-09` Implement a matched C0 raw, C1 reviewed-prose, C2
   staged, C3 typed-execution, and C4 over-specified evaluation harness. Freeze
   model/tool/environment/time/token/compute/retry policy, prevent cross-arm
   workspace leakage, and blacklist legacy TLP implementation sources. Report
   both fixed downstream-Codex budget and fixed total end-to-end budget views;
   charge formulation and expert-review effort rather than hiding it.
+  Task schema v1.1 freezes the exact Codex profile, host/runtime environment,
+  usage accounting policy and explicitly distinguishes workload seeds from
+  unavailable model-randomness control. The v1 C3 diagnostic is a retained
+  budget failure; it is not silently reclassified after the budget was seen.
 - [ ] `[must]` `ARF7.3-10` Measure evidence-valid completion, pass@1, protocol
   drift, unsupported assumptions, source/review coverage, conformance,
   runtime/result validity, reproducibility, leakage, interventions, human

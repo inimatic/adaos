@@ -250,6 +250,19 @@ artifact_inputs:
 scratch:
   owner: session
   access: read-write
+
+handoff:
+  execution_budget:
+    budget_view: fixed_downstream
+    max_wall_seconds: 10800
+    max_model_tokens: 5000000
+    max_attempts: 2
+    max_human_interventions: 0
+  agent_profile:
+    provider: openai-codex-cli
+    model: gpt-5.4
+    reasoning_effort: high
+    tool_profile: adaos-local-bounded-v1
 ```
 
 The three controls are independent:
@@ -327,7 +340,7 @@ refs. This separates a scientific object from the prose used to discuss it.
 Admission rejects unresolved choices and analogy-only descriptions before
 Codex is allowed to fill them with plausible defaults.
 
-The Development Session therefore provides four different constraints:
+The Development Session therefore provides six different constraints:
 
 | Constraint | Purpose |
 | --- | --- |
@@ -335,6 +348,8 @@ The Development Session therefore provides four different constraints:
 | read-only context | which exact dependencies and artifacts it may inspect |
 | contract requirements | which external ABI the target must satisfy |
 | system specification | which scientific structure it must preserve |
+| execution budget | which wall-time, token, retry, and intervention envelope is scored |
+| agent profile | which exact provider/model/reasoning/tool configuration performs the work |
 
 All four are digest-bound. Package installation is part of realization:
 dependency declarations and isolation policy are validated before checkpoint,

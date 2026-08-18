@@ -234,6 +234,17 @@ comparison measures scientific fidelity and operational reliability against
 context size, cost, human effort, autonomy, and portability. TLP is the first
 calibration task; it cannot establish generality or SOTA by itself.
 
+The implementation keeps two digest-linked views of a compilation. The full
+`research.compilation_package` is the audit authority for reviewers and
+recomputation. A compact `research.compilation_projection` gives a developer
+only source stance, the accepted problem, the exact protocol, and the
+source-to-protocol trace. `AutomationBrief` v1.4 is the engineering delta: it
+contains writable authority, provider obligations, acceptance checks, and
+prohibitions, but no duplicate prototype, source inventory, or Builder
+checkpoint. Removing audit-only duplication is not allowed to remove a
+scientific or acceptance obligation; the predecessor and projection digests
+make that check mechanical.
+
 Two budget views are required. A fixed downstream-Codex budget isolates the
 quality of the handoff; formulation tokens and expert-review effort remain
 additional measured costs. A second fixed total end-to-end budget tests whether
@@ -263,6 +274,33 @@ Secondary measures include:
 All failures are attributed to a stage before aggregation. A platform outage,
 bad formulation, invalid experimental design, and Codex defect are not one
 undifferentiated agent failure.
+
+### TLP calibration implementation evidence
+
+The first frozen task, `tlp-research-compiler-calibration-v1` at
+`sha256:56403379f3a441b250edfa18040d24e9e5f4eac01f12922d043eae1b4af0ff4a`,
+is retained as a diagnostic pilot. Its C3 attempt produced a real candidate
+and passed Builder validation after one automatic repair, but consumed
+4,001,013 input tokens plus 22,644 output tokens across the initial and repair
+turns (including cached input), far beyond its frozen 80,000-token budget.
+The exact aggregate is recomputed from the retained JSONL journals rather than
+copied from this prose. This is a scored budget failure, not evidence for C3.
+
+That pilot also exposed two preregistration defects: the task did not freeze an
+exact model/environment, and `paired_seeds` could be misread as model sampling
+control even though Codex CLI exposes no such seed. Task schema v1.1 therefore
+freezes provider, model, reasoning effort, tool profile, core commit, Python,
+platform, executor and measurement policy. Paired seeds are explicitly
+scientific-workload seeds; model random-seed control is recorded as
+`unsupported_not_claimed`. A new task id/digest is required for the corrected
+calibration. The v1 result and budget are immutable and must not be rewritten.
+
+The independent evaluator derives checks from the frozen session, Builder
+state, native validation, public runner operations, a bounded CPU trial and
+content identities. Candidate-authored claims cannot mark a check passed. The
+local trial receipt explicitly says `hostile_isolation=false` and
+`network_enforced=false`; it is developer/workflow evidence, not a hostile-code
+sandbox or confirmatory scientific run.
 
 ## Evidence Required for a Competitive Claim
 

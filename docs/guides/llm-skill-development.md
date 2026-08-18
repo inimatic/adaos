@@ -450,6 +450,26 @@ machine-discoverable reference tables; retain their digest/reference so Codex
 can inspect them on demand. The prompt is an execution view, not a second copy
 of the entire control plane.
 
+For controlled or benchmarked autonomous development, also put both
+`execution_budget` and `agent_profile` in the Development Session. The budget
+declares wall time, charged model tokens, attempts and human interventions.
+The profile declares the provider, exact model, reasoning effort and tool
+profile. Builder carries both into the immutable context receipt and Skill
+Factory assignment; the local Codex executor applies the model and reasoning
+settings to initial and repair turns. Model-token limits are currently measured
+from retained Codex JSONL and scored after a turn; wall time is an active task
+expiry/cancellation boundary. Do not describe the token limit as streaming
+preemption until the provider exposes a trustworthy live counter.
+
+Keep developer validation independent of the generated skill. The
+`builder.project_validation` capability can validate the exact DEV target,
+run packaged tests, activate a disposable runtime, invoke public tools, and
+execute a candidate-produced bounded local `ExecutionSpec`. The evaluator,
+not the candidate, derives pass/fail checks from those receipts. This local
+path records that it does not enforce hostile-code or network isolation and
+must never be promoted to scientific evidence merely because a workflow smoke
+completed.
+
 When some source artifacts are withheld from a stage, use artifact item
 `context_policy` and request an audience-scoped Development Session. Do not
 rely on a prompt instruction such as "ignore initial-review.md" while exposing
