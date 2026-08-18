@@ -879,6 +879,19 @@ def test_codex_executor_uses_current_sdk_and_utf8_python(monkeypatch, tmp_path: 
     assert "OPENAI_API_KEY" not in environment
 
 
+def test_codex_executor_scopes_mutable_adaos_runtime_to_task(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", "C:/host-adaos")
+    executor = SubprocessCodexExecutor(repo_root=tmp_path / "repo")
+    task_runtime = tmp_path / "workspace" / ".adaos" / "tasks" / "task.example" / "adaos-runtime"
+
+    environment = executor._execution_environment(runtime_base_dir=task_runtime)
+
+    assert environment["ADAOS_BASE_DIR"] == str(task_runtime.resolve())
+    assert environment["ADAOS_DISABLE_ACTIVE_SLOT_PYTHON_REEXEC"] == "1"
+    assert environment["ADAOS_DISABLE_ACTIVE_SLOT_ENV_APPLY"] == "1"
+    assert environment["ADAOS_BASE_DIR"] != "C:/host-adaos"
+
+
 def test_worker_applies_frozen_agent_profile_to_codex_executor(monkeypatch, tmp_path: Path) -> None:
     captured: dict[str, str | None] = {}
 

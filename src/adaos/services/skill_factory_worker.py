@@ -297,6 +297,13 @@ class SubprocessCodexExecutor:
                 popen_kwargs["creationflags"] = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
             else:
                 popen_kwargs["start_new_session"] = True
+            task_runtime_root = (
+                workspace
+                / ".adaos"
+                / "tasks"
+                / output_dir.parent.name.lower()
+                / "adaos-runtime"
+            )
             process = subprocess.Popen(
                 command,
                 cwd=str(workspace),
@@ -306,7 +313,7 @@ class SubprocessCodexExecutor:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                env=self._execution_environment(),
+                env=self._execution_environment(runtime_base_dir=task_runtime_root),
                 **popen_kwargs,
             )
             try:
@@ -423,10 +430,18 @@ class SubprocessCodexExecutor:
         }
         return {key: value for key, value in os.environ.items() if key.upper() in allowed and value}
 
-    def _execution_environment(self) -> dict[str, str]:
+    def _execution_environment(self, *, runtime_base_dir: Path | None = None) -> dict[str, str]:
         environment = self._bounded_environment()
         environment["PYTHONUTF8"] = "1"
         environment["PYTHONIOENCODING"] = "utf-8"
+        if runtime_base_dir is not None:
+            # SDK/CLI calls made by generated code must not initialize the
+            # repository-local default ``.adaos/state`` tree.  Keep all
+            # mutable AdaOS state inside the task's already-admitted evidence
+            # scope so source-boundary validation remains meaningful.
+            environment["ADAOS_BASE_DIR"] = str(Path(runtime_base_dir).resolve())
+            environment["ADAOS_DISABLE_ACTIVE_SLOT_PYTHON_REEXEC"] = "1"
+            environment["ADAOS_DISABLE_ACTIVE_SLOT_ENV_APPLY"] = "1"
         python_path = Path(sys.executable).resolve()
         environment["ADAOS_PYTHON"] = str(python_path)
         environment["VIRTUAL_ENV"] = str(python_path.parent.parent)
