@@ -243,6 +243,54 @@ def test_rebuild_workspace_registry_skips_sparse_placeholder_dirs(tmp_path: Path
     assert "required declaration is missing" not in caplog.text
 
 
+def test_authoritative_registry_keeps_sparse_placeholder_entries_without_enrichment_errors(
+    tmp_path: Path,
+    caplog,
+    monkeypatch,
+):
+    monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
+    caplog.set_level(logging.ERROR, logger="adaos.workspace_registry")
+    workspace = tmp_path / "workspace"
+    skill_dir = workspace / "skills" / "remote_only"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / ".gitignore").write_text("*\n", encoding="utf-8")
+    workspace_registry_path(workspace).write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "updated_at": "2026-08-18T00:00:00+00:00",
+                "skills": [
+                    {
+                        "kind": "skill",
+                        "id": "remote_only",
+                        "name": "remote_only",
+                        "version": "9.0.0",
+                        "path": "skills/remote_only",
+                        "manifest": "skills/remote_only/skill.yaml",
+                    }
+                ],
+                "scenarios": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = load_workspace_registry(workspace, fallback_to_scan=False)
+
+    assert payload["skills"] == [
+        {
+            "kind": "skill",
+            "id": "remote_only",
+            "name": "remote_only",
+            "version": "9.0.0",
+            "path": "skills/remote_only",
+            "manifest": "skills/remote_only/skill.yaml",
+        }
+    ]
+    assert "required declaration is missing" not in caplog.text
+
+
 def test_load_workspace_registry_rejects_entries_with_unsupported_manifest(tmp_path: Path, monkeypatch):
     errors = _capture_registry_errors(monkeypatch)
     workspace = tmp_path / "workspace"

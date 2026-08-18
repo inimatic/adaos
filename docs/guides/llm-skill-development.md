@@ -583,6 +583,24 @@ reject the package. Generated work must traverse the ordinary
 validate -> test -> package -> install -> activate path before Builder reports
 a usable candidate.
 
+Installation success is also a browser-materialization contract, not merely a
+registry or subprocess result. For every target webspace, wait for its live
+materialization to report `ready`, then verify that the exact skill/scenario is
+present in the installed projection and that its browser catalog bindings are
+available. For scenario activation, verify the authoritative current-scenario
+pointer and its required skills in the same webspace. An operation `ack`, an
+SQLite registry row, or files appearing in the workspace is insufficient
+evidence when the browser will consume a different live YDoc projection.
+
+Skills and scenarios share one sparse workspace checkout. Never let an
+individual artifact, manager, migration, or generated installer replace the
+sparse-checkout patterns for only its own kind. Use the core workspace sync or
+installation API, which computes the union of installed skills, installed
+scenarios, runtime-required scenarios, and required skill dependencies. Do not
+add unanchored root patterns such as `.gitignore`: in no-cone mode they can
+materialize placeholder files inside unrelated artifact directories and make
+an uninstalled catalog entry look like a broken local installation.
+
 Declare every heavy/native runtime import as a dependency. The manifest must
 also select an allowed isolation boundary: a service runtime, a vendor/shared
 policy explicitly admitted by the platform, or another supported provider.
@@ -1765,6 +1783,12 @@ Before publishing:
   caps, including `max_fanout`
 - verify duplicated skill/scenario UI manifests expose identical receiver
   contracts and that the installation-owned copy has the same bindings
+- verify Marketplace/install completion against the target webspace's live
+  `ready` materialization, installed projection, catalog bindings, and current
+  scenario pointer where applicable; do not accept subprocess success alone
+- run skill/scenario workspace synchronization through the shared core API and
+  prove the resulting sparse set preserves both artifact kinds plus runtime
+  dependency closure
 - verify stream receivers have `initialState`, freshness metadata, and a
   recovery path after resubscribe
 - verify `webui.json` declares shared interaction behavior for first focus,

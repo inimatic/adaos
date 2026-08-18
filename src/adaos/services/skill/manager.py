@@ -690,25 +690,6 @@ class SkillManager:
         self.caps.require("core", "skills.manage", "net.git")
         self.ctx.skills_repo.ensure()
         root = self.ctx.paths.workspace_dir()
-        names = [r.name for r in self.reg.list()]
-        scenario_names: list[str] = []
-        try:
-            from adaos.adapters.db import SqliteScenarioRegistry
-
-            scenario_names = [r.name for r in SqliteScenarioRegistry(self.ctx.sql).list()]
-        except Exception:
-            scenario_names = []
-
-        # Workspace repo hosts both /skills and /scenarios under a single sparse-checkout.
-        # Keep both sets in the sparse pattern list to avoid "disappearing" directories
-        # when syncing one kind.
-        prefixed = [
-            ".gitignore",
-            "registry.json",
-            "schemas",
-            *[f"skills/{n}" for n in names],
-            *[f"scenarios/{n}" for n in scenario_names],
-        ]
         effective_force = (_env_type() != "dev") if force is None else bool(force)
         if effective_force:
             stash_ref = self.ctx.git.stash_push(
@@ -722,12 +703,15 @@ class SkillManager:
                 str(root),
                 str(stash_ref or "-"),
             )
-        else:
-            ensure_clean(self.ctx.git, str(root), prefixed)
-        self.ctx.git.sparse_init(str(root), cone=False)
-        if prefixed:
-            self.ctx.git.sparse_set(str(root), prefixed, no_cone=True)
-        self.ctx.git.pull(str(root))
+
+        from adaos.services.workspace_sync import sync_workspace_sparse_to_registry
+
+        result = sync_workspace_sparse_to_registry(self.ctx)
+        if not bool(result.get("ok")):
+            errors = "; ".join(str(item) for item in (result.get("errors") or []) if str(item).strip())
+            detail = str(result.get("error") or errors or "workspace synchronization failed")
+            raise RuntimeError(detail)
+        names = [str(name) for name in (result.get("skills") or []) if str(name).strip()]
         for name in names:
             skill_dir = self.ctx.paths.skills_dir() / name
             if not skill_dir.exists():
@@ -736,7 +720,12 @@ class SkillManager:
                 publish_skill_assets_from_webui(name, skill_dir=skill_dir, ctx=self.ctx)
             except Exception:
                 _log.debug("failed to publish browser assets after skill sync skill=%s", name, exc_info=True)
-        emit(self.bus, "skill.sync", {"count": len(names)}, "skill.mgr")
+        emit(
+            self.bus,
+            "skill.sync",
+            {"count": len(names), "workspace_sync": result},
+            "skill.mgr",
+        )
 
     def install(
         self,

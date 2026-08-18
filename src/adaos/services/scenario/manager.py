@@ -185,27 +185,6 @@ class ScenarioManager:
         self.caps.require("core", "scenarios.manage", "net.git")
         self.repo.ensure()
         root = self.ctx.paths.workspace_dir()
-        names = [r.name for r in self.reg.list()]
-        skill_names: list[str] = []
-        try:
-            from adaos.adapters.db import SqliteSkillRegistry
-
-            skill_names = [r.name for r in SqliteSkillRegistry(self.ctx.sql).list()]
-        except Exception:
-            skill_names = []
-
-        # Workspace repo hosts both /skills and /scenarios under a single sparse-checkout.
-        # Keep both sets in the sparse pattern list to avoid "disappearing" directories
-        # when syncing one kind.
-        prefixed = [
-            ".gitignore",
-            "registry.json",
-            "schemas",
-            *[f"skills/{n}" for n in skill_names],
-            *[f"scenarios/{n}" for n in names],
-        ]
-        from adaos.services.git.workspace_guard import ensure_clean
-
         effective_force = (_env_type() != "dev") if force is None else bool(force)
         if effective_force:
             stash_ref = self.git.stash_push(
@@ -219,12 +198,15 @@ class ScenarioManager:
                 str(root),
                 str(stash_ref or "-"),
             )
-        else:
-            ensure_clean(self.git, str(root), prefixed)
-        self.git.sparse_init(str(root), cone=False)
-        if prefixed:
-            self.git.sparse_set(str(root), prefixed, no_cone=True)
-        self.git.pull(str(root))
+
+        from adaos.services.workspace_sync import sync_workspace_sparse_to_registry
+
+        result = sync_workspace_sparse_to_registry(self.ctx)
+        if not bool(result.get("ok")):
+            errors = "; ".join(str(item) for item in (result.get("errors") or []) if str(item).strip())
+            detail = str(result.get("error") or errors or "workspace synchronization failed")
+            raise RuntimeError(detail)
+        names = [str(name) for name in (result.get("scenarios") or []) if str(name).strip()]
         for name in names:
             scenario_dir = self.ctx.paths.scenarios_dir() / name
             if not scenario_dir.exists():
@@ -233,7 +215,12 @@ class ScenarioManager:
                 publish_scenario_assets_from_content(name, scenario_dir=scenario_dir, ctx=self.ctx)
             except Exception:
                 _log.debug("failed to publish browser assets after scenario sync scenario=%s", name, exc_info=True)
-        emit(self.bus, "scenario.sync", {"count": len(names)}, "scenario.mgr")
+        emit(
+            self.bus,
+            "scenario.sync",
+            {"count": len(names), "workspace_sync": result},
+            "scenario.mgr",
+        )
 
     def install(self, name: str, *, pin: Optional[str] = None) -> SkillMeta:
         self.caps.require("core", "scenarios.manage", "net.git")

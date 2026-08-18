@@ -693,6 +693,8 @@ def _enrich_registry_entry_from_canonical_manifest(
         raise WorkspaceRegistryError(
             f"workspace registry artifact path escapes {kind}: {artifact_dir}"
         )
+    if _is_sparse_placeholder_dir(resolved_artifact_dir):
+        return item
     canonical = build_registry_entry(kind, resolved_artifact_dir)
     if canonical is None:
         return item
