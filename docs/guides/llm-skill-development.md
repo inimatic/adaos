@@ -849,6 +849,17 @@ Use these rules for command and subscription handlers:
 - Offload blocking external APIs through the admitted SDK async route or a
   bounded worker. Offload CPU, disk and native work explicitly; a coroutine
   that calls blocking code still blocks the event loop.
+- Skill context is scoped state, not a process-global flag. Use
+  `with use_current_skill("name"):` when a callback or worker must establish
+  it explicitly. Do not pair nested `set_current_skill()` /
+  `clear_current_skill()` calls: the inner clear can erase the outer handler's
+  binding and make later SDK calls fail as `current skill is not set`.
+- Prefer SDK async storage operations such as `skill_memory_async_get()` and
+  `skill_memory_async_set()` from async handlers. `asyncio.to_thread()` copies
+  the current `ContextVar` context, while a raw executor or separately started
+  thread may not. If custom worker plumbing is unavoidable, establish a scoped
+  skill context inside that worker and test the SDK call after returning from
+  every nested helper that also touches context.
 - Keep every thread-affine native object's complete lifecycle in one worker:
   create, replay/load, mutate, encode/flush and destroy it there. Never create a
   `y_py` document on one thread and pass it, its transaction, map, exception
@@ -878,7 +889,9 @@ Use these rules for command and subscription handlers:
   diagnostic tool backed only by module globals can report a healthy zero while
   the authoritative subscription runtime is overloaded. Put bounded counters
   and the last compact outcome in skill memory or a runtime-owned status store,
-  update them off the event loop, and identify the returned status source.
+  update them through the SDK async storage route, and identify the returned
+  status source. A failed diagnostic persistence write must be counted and
+  visible; do not silently return stale persisted counters as current truth.
 
 Acceptance must exercise contention, not only a fast mock. Run the handler
 against a realistically sized primary Yjs snapshot while a bounded competing
@@ -1623,7 +1636,13 @@ Before publishing:
   lifecycle when the test target is not yet the registry release:
   `adaos skill install NAME --source workspace --local --test --silent`.
   `--local` chooses where the command executes; it does not by itself change
-  the default source from registry to workspace.
+  the default source from registry to workspace. Verify that the command
+  actually activated the prepared version and slot in
+  `skills/.runtime/NAME/current_runtime.json` and that the next tool and
+  subscription invocation report that same source/version. If a lifecycle path
+  only prepared the slot, run `adaos skill activate NAME --slot SLOT --version
+  VERSION`; testing prepared source while an older slot remains active is not
+  runtime acceptance.
 - verify `data_routes` exists for browser-facing Yjs, stream, details, or
   diagnostic surfaces
 - verify every tool-backed surface names its exact tool and has a causal

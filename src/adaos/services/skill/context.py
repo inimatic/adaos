@@ -42,6 +42,28 @@ class SkillContextService:
     def get_current_skill(self) -> Optional[CurrentSkill]:
         return self.ctx.skill_ctx.get()
 
+    def restore_current_skill(self, current: Optional[CurrentSkill]) -> bool:
+        if current is None:
+            self.ctx.skill_ctx.clear()
+            return True
+
+        setter = getattr(self.ctx.skill_ctx, "set_loaded", None)
+        if not callable(setter):
+            setter = self.ctx.skill_ctx.set
+        try:
+            return bool(
+                setter(
+                    current.name,
+                    Path(current.path),
+                    logs_dir=current.logs_dir,
+                    service_log_path=current.service_log_path,
+                    runtime_log_path=current.runtime_log_path,
+                    ui_diagnostics_log_path=current.ui_diagnostics_log_path,
+                )
+            )
+        except TypeError:
+            return bool(setter(current.name, Path(current.path)))
+
     def _set_skill_ctx(self, token: str, skill_path: Path) -> bool:
         logs_dir = _optional_path(self.ctx.paths, "logs_dir")
         try:
