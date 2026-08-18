@@ -228,6 +228,37 @@ def create(value: Mapping[str, Any]) -> dict[str, Any]:
     return get(str(payload["id"]))
 
 
+def replace(
+    project_id: str,
+    value: Mapping[str, Any],
+    *,
+    expected_manifest_digest: str,
+) -> dict[str, Any]:
+    """Replace one mutable DEV Project definition with optimistic concurrency.
+
+    Published ProjectRelease objects remain immutable. This operation exists
+    for migrations and Builder edits of the source declaration and refuses an
+    identity change or a stale caller snapshot.
+    """
+
+    token = _project_id(project_id)
+    current = get(token)
+    expected = str(expected_manifest_digest or "").strip().lower()
+    if expected != str(current["manifest_digest"]):
+        raise ProjectCompositionError(
+            "project manifest changed since it was read; refresh and retry"
+        )
+    payload = {
+        key: item
+        for key, item in dict(value).items()
+        if key not in {"ref", "manifest_digest", "source_path"}
+    }
+    if str(payload.get("id") or "") != token:
+        raise ProjectCompositionError("replacement cannot change project id")
+    _write(resolve_root(token) / "project.yaml", payload)
+    return get(token)
+
+
 def create_with_primary_component(
     project_id: str,
     *,
@@ -437,6 +468,7 @@ __all__ = [
     "ProjectCompositionError",
     "ProjectCompositionNotFound",
     "create",
+    "replace",
     "create_with_primary_component",
     "create_research_direction",
     "get",

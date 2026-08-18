@@ -164,6 +164,49 @@ def test_project_rejects_undeclared_required_entrypoint(project_space) -> None:
         compositions.create(value)
 
 
+def test_project_replace_is_identity_stable_and_optimistic(project_space) -> None:
+    _skill(project_space["skills"], "candidate_skill")
+    created = compositions.create(_project("candidate_project", "candidate_skill"))
+    replacement = {
+        key: value
+        for key, value in created.items()
+        if key not in {"ref", "manifest_digest", "source_path"}
+    }
+    replacement["profiles"] = ["adaos.research.implementation.v1"]
+    replacement["components"]["owned"][0].update(
+        {
+            "role": "primary",
+            "exposure": "project_only",
+            "lifecycle": "bound",
+            "relations": ["realizes"],
+        }
+    )
+
+    updated = compositions.replace(
+        "candidate_project",
+        replacement,
+        expected_manifest_digest=created["manifest_digest"],
+    )
+
+    assert updated["id"] == created["id"]
+    assert updated["manifest_digest"] != created["manifest_digest"]
+    assert updated["components"]["owned"][0]["exposure"] == "project_only"
+    with pytest.raises(compositions.ProjectCompositionError, match="changed since"):
+        compositions.replace(
+            "candidate_project",
+            replacement,
+            expected_manifest_digest=created["manifest_digest"],
+        )
+
+    replacement["id"] = "other"
+    with pytest.raises(compositions.ProjectCompositionError, match="cannot change"):
+        compositions.replace(
+            "candidate_project",
+            replacement,
+            expected_manifest_digest=updated["manifest_digest"],
+        )
+
+
 def test_local_artifact_group_copies_files_and_detects_tampering(project_space, tmp_path: Path) -> None:
     skill_root = _skill(project_space["skills"], "tlp_direction")
     source = tmp_path / "review.md"
