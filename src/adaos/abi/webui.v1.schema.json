@@ -598,6 +598,7 @@
       "enum": [
         "collection.grid",
         "collection.tree",
+        "navigation.outline",
         "visual.taigaCollectionGrid",
         "visual.taigaMetricChart",
         "visual.taigaTree",
@@ -867,6 +868,14 @@
           }
         },
         {
+          "if": { "properties": { "type": { "const": "navigation.outline" } } },
+          "then": {
+            "properties": {
+              "inputs": { "$ref": "#/$defs/outlineInputs" }
+            }
+          }
+        },
+        {
           "if": { "properties": { "type": { "const": "item.details" } } },
           "then": {
             "properties": {
@@ -1048,6 +1057,7 @@
             "modal",
             "sheet",
             "focus-detail",
+            "outline-detail",
             "desktop-zones"
           ],
           "description": "Renderer intent hint. Keeps skill manifests declarative without requiring renderer-specific CSS."
@@ -1093,7 +1103,7 @@
           "type": "string",
           "enum": [
             "stack", "split", "tabs", "grid", "sidebar-content", "dashboard",
-            "modal", "sheet", "focus-detail", "desktop-zones"
+            "modal", "sheet", "focus-detail", "outline-detail", "desktop-zones"
           ]
         },
         "sidebarWidth": { "type": "integer", "minimum": 200, "maximum": 480 },
@@ -1172,6 +1182,14 @@
           "then": {
             "properties": {
               "inputs": { "$ref": "#/$defs/listInputs" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "navigation.outline" } } },
+          "then": {
+            "properties": {
+              "inputs": { "$ref": "#/$defs/outlineInputs" }
             }
           }
         },
@@ -1416,6 +1434,37 @@
       "type": "string",
       "minLength": 1,
       "description": "Dot-separated path read from the current widget payload or page state."
+    },
+
+    "outlineInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Generic navigation outline. Data may be nested through childrenKey or flat through parentIdKey; typed target objects remain opaque to the renderer and are exposed to declarative actions.",
+      "required": ["stateKey"],
+      "properties": {
+        "stateKey": { "type": "string", "minLength": 1 },
+        "idKey": { "$ref": "#/$defs/fieldPath" },
+        "parentIdKey": { "$ref": "#/$defs/fieldPath" },
+        "titleKey": { "$ref": "#/$defs/fieldPath" },
+        "subtitleKey": { "$ref": "#/$defs/fieldPath" },
+        "kindKey": { "$ref": "#/$defs/fieldPath" },
+        "iconKey": { "$ref": "#/$defs/fieldPath" },
+        "badgeKey": { "$ref": "#/$defs/fieldPath" },
+        "errorKey": { "$ref": "#/$defs/fieldPath" },
+        "targetKey": { "$ref": "#/$defs/fieldPath" },
+        "childrenKey": { "$ref": "#/$defs/fieldPath" },
+        "nodesKey": { "$ref": "#/$defs/fieldPath" },
+        "rootId": { "type": "string", "minLength": 1 },
+        "rootLabel": { "type": "string" },
+        "hideRoot": { "type": "boolean" },
+        "expandedByDefault": { "type": "boolean" },
+        "selectionMode": { "enum": ["all", "leaf"] },
+        "compactIndent": { "type": "boolean" },
+        "wrapTitles": { "type": "boolean" },
+        "emptyText": { "type": "string" },
+        "maxNodes": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "buttons": { "type": "array", "items": { "$ref": "#/$defs/actionButton" } }
+      }
     },
 
     "listInputs": {

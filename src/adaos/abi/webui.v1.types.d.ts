@@ -120,6 +120,7 @@ export interface WebUiDeclarativeExpression {
 export type WebUiWidgetType =
   | 'collection.grid'
   | 'collection.tree'
+  | 'navigation.outline'
   | 'visual.taigaCollectionGrid'
   | 'visual.taigaMetricChart'
   | 'visual.taigaTree'
@@ -462,6 +463,31 @@ export interface WebUiListInputs {
   [key: string]: unknown
 }
 
+export interface WebUiOutlineInputs {
+  stateKey: string
+  idKey?: string
+  parentIdKey?: string
+  titleKey?: string
+  subtitleKey?: string
+  kindKey?: string
+  iconKey?: string
+  badgeKey?: string
+  errorKey?: string
+  targetKey?: string
+  childrenKey?: string
+  nodesKey?: string
+  rootId?: string
+  rootLabel?: string
+  hideRoot?: boolean
+  expandedByDefault?: boolean
+  selectionMode?: 'all' | 'leaf'
+  compactIndent?: boolean
+  wrapTitles?: boolean
+  emptyText?: string
+  maxNodes?: number
+  buttons?: readonly WebUiActionButton[]
+}
+
 export interface WebUiDetailsInputs {
   selectedStateKey?: string
   stateKey?: string
@@ -508,7 +534,7 @@ export interface WebUiWidgetConfig {
   area?: string
   title?: string
   dataSource?: Record<string, unknown>
-  inputs?: WebUiFormInputs | WebUiListInputs | WebUiDetailsInputs | WebUiChatInputs | WebUiActionsInputs | Record<string, unknown>
+  inputs?: WebUiFormInputs | WebUiListInputs | WebUiOutlineInputs | WebUiDetailsInputs | WebUiChatInputs | WebUiActionsInputs | Record<string, unknown>
   actions?: readonly WebUiAction[]
   [key: string]: unknown
 }
@@ -521,6 +547,11 @@ export interface WebUiFormWidgetConfig extends WebUiWidgetConfig {
 export interface WebUiListWidgetConfig extends WebUiWidgetConfig {
   type: 'ui.list'
   inputs?: WebUiListInputs
+}
+
+export interface WebUiOutlineWidgetConfig extends WebUiWidgetConfig {
+  type: 'navigation.outline'
+  inputs: WebUiOutlineInputs
 }
 
 export interface WebUiDetailsWidgetConfig extends WebUiWidgetConfig {

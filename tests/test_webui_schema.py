@@ -1187,3 +1187,61 @@ def test_webui_schema_rejects_ambiguous_layout_variant_without_when_or_default()
 
     with pytest.raises(ValidationError):
         Draft202012Validator(schema).validate(payload)
+
+
+def test_webui_schema_accepts_generic_outline_detail_navigation() -> None:
+    schema = _load_schema()
+    payload = {
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "project_workbench",
+                        "layout": {
+                            "type": "split",
+                            "pattern": "outline-detail",
+                            "sidebarWidth": 320,
+                            "areas": [
+                                {"id": "navigation", "role": "sidebar"},
+                                {"id": "detail", "role": "main"},
+                            ],
+                        },
+                        "widgets": [
+                            {
+                                "id": "outline",
+                                "type": "navigation.outline",
+                                "area": "navigation",
+                                "dataSource": {"kind": "static", "value": {"nodes": []}},
+                                "inputs": {
+                                    "stateKey": "selectedNodeId",
+                                    "idKey": "node_id",
+                                    "parentIdKey": "parent_id",
+                                    "kindKey": "kind",
+                                    "targetKey": "target",
+                                    "badgeKey": "badge",
+                                    "errorKey": "error",
+                                    "maxNodes": 2000,
+                                },
+                                "actions": [
+                                    {
+                                        "on": "select",
+                                        "type": "updateState",
+                                        "params": {
+                                            "selectedNodeId": "$event.id",
+                                            "selectedTarget": "$event.target",
+                                        },
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+    del payload["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["inputs"]["stateKey"]
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(payload)
