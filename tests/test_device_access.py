@@ -170,6 +170,40 @@ def test_sdk_device_access_does_not_resolve_revoked_pair_code_from_admission_his
     assert pair_code == ""
 
 
+def test_sdk_device_access_can_resolve_endpoint_without_remote_refresh(monkeypatch) -> None:
+    from adaos.sdk import redevice as sdk_redevice
+    from adaos.sdk.data import device_access as sdk_device_access
+
+    monkeypatch.setattr(
+        sdk_redevice,
+        "list_endpoints",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cache-only resolution must not request Root")
+        ),
+    )
+    monkeypatch.setattr(
+        sdk_redevice,
+        "list_cached_endpoints",
+        lambda: [
+            {
+                "code": "SNX68P2A",
+                "endpoint_id": "endpoint-1",
+                "state": "consumed",
+                "last_seen_at": 1_900_000_000,
+            }
+        ],
+    )
+
+    endpoint, pair_code = sdk_device_access._resolve_redevice_endpoint(
+        code="SNX68P2A",
+        refresh_remote=False,
+    )
+
+    assert endpoint is not None
+    assert endpoint["endpoint_id"] == "endpoint-1"
+    assert pair_code == "SNX68P2A"
+
+
 def test_sdk_device_access_assign_endpoint_records_owner(monkeypatch) -> None:
     from adaos.sdk.data import device_access as sdk_device_access
 

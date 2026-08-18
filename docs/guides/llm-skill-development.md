@@ -975,7 +975,17 @@ Use these rules for command and subscription handlers:
   single-flight schedule with exponential backoff, jitter, a maximum attempt
   rate, and counters for attempts, failures, duration, last success, and next
   eligibility. Test the cache-only path with the network opener replaced by a
-  failure.
+  failure. For ReDevice inventory, use `list_cached_endpoints()` on routine
+  ticks and reserve `fetch_endpoint_snapshot()` for the separately budgeted
+  refresh; `list_endpoints(sync_registry=False)` still performs a Root request
+  and is not a cache-only API.
+- A periodic business command that legitimately needs the network is not an
+  exemption from the refresh rules. Reuse the endpoint projection already
+  loaded by the worker instead of resolving it remotely again, and put repeated
+  transport failures behind a per-target circuit/backoff budget. Diagnostics
+  must distinguish projection refreshes, command attempts, command failures,
+  and commands suppressed by backoff so normal work is not confused with a
+  discovery or retry storm.
 - Assign exactly one owner to every polling loop. A child service must not both
   start a handler-owned poll thread and run the same poll from its own main
   loop. Rehydration, lifecycle hooks, reloads, and service startup must leave

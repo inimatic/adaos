@@ -770,12 +770,27 @@ class ReDeviceBridge:
         hub_id: str | None = None,
         owner_id: str | None = None,
     ) -> list[dict[str, Any]]:
+        snapshot = self.fetch_endpoint_snapshot(
+            sync_registry=sync_registry,
+            hub_id=hub_id,
+            owner_id=owner_id,
+        )
+        return [dict(item) for item in snapshot["endpoints"]]
+
+    def fetch_endpoint_snapshot(
+        self,
+        *,
+        sync_registry: bool = True,
+        hub_id: str | None = None,
+        owner_id: str | None = None,
+    ) -> dict[str, Any]:
         expected_hub, expected_owner = _local_scope()
         expected_hub = _text(hub_id) or expected_hub
         expected_owner = _text(owner_id) or expected_owner
         path = "/v1/redevice/devices" + self._scope_query(hub_id=expected_hub, owner_id=expected_owner)
         res = self.request_json("GET", path)
         devices = res.get("devices") if isinstance(res, Mapping) else None
+        remote_ok = isinstance(devices, list) and not _text(res.get("error"))
         endpoints = [dict(item) for item in devices if isinstance(item, Mapping)] if isinstance(devices, list) else []
         endpoints = [_apply_root_scope(item, hub_id=expected_hub, owner_id=expected_owner) for item in endpoints]
         endpoints = [
@@ -793,9 +808,20 @@ class ReDeviceBridge:
                 seen.add(eid)
             merged.append(local)
         endpoints = current_endpoint_records(merged)
-        if sync_registry:
+        if sync_registry and remote_ok:
             self.sync_local_registry(endpoints)
-        return endpoints
+        return {
+            "endpoints": endpoints,
+            "remote": {
+                "attempted": True,
+                "ok": remote_ok,
+                "error": "" if remote_ok else _text(res.get("error")) or "invalid_response",
+                "detail": "" if remote_ok else _text(res.get("detail")),
+                "item_count": len([item for item in devices if isinstance(item, Mapping)])
+                if isinstance(devices, list)
+                else 0,
+            },
+        }
 
     def sync_local_registry(self, endpoints: list[Mapping[str, Any]]) -> None:
         try:
@@ -889,6 +915,23 @@ def list_endpoints(
 ) -> list[dict[str, Any]]:
     client = bridge(root_base) if timeout is None else ReDeviceBridge(root_base=root_base, timeout=timeout)
     return client.list_endpoints(sync_registry=sync_registry, hub_id=hub_id, owner_id=owner_id)
+
+
+def fetch_endpoint_snapshot(
+    *,
+    root_base: str | None = None,
+    sync_registry: bool = True,
+    hub_id: str | None = None,
+    owner_id: str | None = None,
+    timeout: int | float | None = None,
+) -> dict[str, Any]:
+    """Fetch Root endpoints and return explicit transport outcome plus merged records."""
+    client = bridge(root_base) if timeout is None else ReDeviceBridge(root_base=root_base, timeout=timeout)
+    return client.fetch_endpoint_snapshot(
+        sync_registry=sync_registry,
+        hub_id=hub_id,
+        owner_id=owner_id,
+    )
 
 
 def send_command(code: str, command: Mapping[str, Any], *, root_base: str | None = None) -> dict[str, Any]:

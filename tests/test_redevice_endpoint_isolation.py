@@ -122,6 +122,42 @@ def test_redevice_cached_list_never_requests_root(monkeypatch) -> None:
     assert [item["code"] for item in endpoints] == ["LOCAL"]
 
 
+def test_redevice_snapshot_reports_remote_failure_without_syncing(monkeypatch) -> None:
+    monkeypatch.setattr(redevice, "_local_scope", lambda: ("sn_local", "sn_local"))
+    monkeypatch.setattr(
+        redevice,
+        "_local_registry_endpoints",
+        lambda **_kwargs: [_endpoint("CACHED", "sn_local")],
+    )
+    monkeypatch.setattr(
+        redevice.ReDeviceBridge,
+        "request_json",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "error": "request_failed",
+            "detail": "timed out",
+        },
+    )
+    monkeypatch.setattr(
+        redevice.ReDeviceBridge,
+        "sync_local_registry",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("failed Root reads must not rewrite the local registry")
+        ),
+    )
+
+    snapshot = redevice.fetch_endpoint_snapshot(timeout=1.5)
+
+    assert [item["code"] for item in snapshot["endpoints"]] == ["CACHED"]
+    assert snapshot["remote"] == {
+        "attempted": True,
+        "ok": False,
+        "error": "request_failed",
+        "detail": "timed out",
+        "item_count": 0,
+    }
+
+
 def test_redevice_sync_local_registry_skips_foreign_subnet(monkeypatch) -> None:
     monkeypatch.setattr(redevice, "_local_scope", lambda: ("sn_local", "sn_local"))
 

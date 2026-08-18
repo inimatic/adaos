@@ -109,7 +109,12 @@ def _normalize_redevice_ref(device_ref: str | None = None, code: str | None = No
     return ref
 
 
-def _resolve_redevice_endpoint(device_ref: str | None = None, code: str | None = None) -> tuple[dict[str, Any] | None, str]:
+def _resolve_redevice_endpoint(
+    device_ref: str | None = None,
+    code: str | None = None,
+    *,
+    refresh_remote: bool = True,
+) -> tuple[dict[str, Any] | None, str]:
     """Resolve a current ReDevice endpoint identity to its active pair code.
 
     Revoked or superseded admission/session history is intentionally ignored.
@@ -121,10 +126,11 @@ def _resolve_redevice_endpoint(device_ref: str | None = None, code: str | None =
     if not target:
         return None, ""
     try:
-        from adaos.sdk.redevice import compact_endpoint, list_endpoints
+        from adaos.sdk.redevice import compact_endpoint, list_cached_endpoints, list_endpoints
     except Exception:
         return None, target
-    for raw in list_endpoints(sync_registry=True):
+    candidates_source = list_endpoints(sync_registry=True) if refresh_remote else list_cached_endpoints()
+    for raw in candidates_source:
         if not isinstance(raw, Mapping):
             continue
         compact = compact_endpoint(raw)
@@ -521,11 +527,15 @@ def send_endpoint_command(
     requested_by: Mapping[str, Any] | None = None,
     constraints: Mapping[str, Any] | None = None,
     timeout: int | float | None = None,
+    refresh_endpoint: bool = True,
 ) -> dict[str, Any]:
     target = _text(device_ref)
     if target and not target.startswith("redevice:"):
         return {"ok": False, "error": "unsupported_endpoint_kind", "device_ref": target}
-    endpoint, pair_code = _resolve_redevice_endpoint(device_ref, code)
+    if refresh_endpoint:
+        endpoint, pair_code = _resolve_redevice_endpoint(device_ref, code)
+    else:
+        endpoint, pair_code = _resolve_redevice_endpoint(device_ref, code, refresh_remote=False)
     if not pair_code:
         return {"ok": False, "error": "endpoint_ref_required", "device_ref": target}
     try:
