@@ -17,6 +17,41 @@ def _append_receiver(patterns: list[str], value: Any) -> None:
         patterns.append(token)
 
 
+def _receiver_from_yjs_path(value: Any) -> str:
+    path = str(value or "").strip().strip("/")
+    parts = [part for part in path.split("/") if part]
+    if len(parts) < 2 or parts[0] != "data":
+        return ""
+    logical_parts = parts[1:]
+    if len(logical_parts) >= 3 and logical_parts[0] == "nodes":
+        logical_parts = logical_parts[2:]
+    return ".".join(logical_parts)
+
+
+def receiver_patterns_from_webui_payload(payload: Any) -> list[str]:
+    """Collect transport receivers and YDoc demand slots from a WebUI tree."""
+
+    patterns: list[str] = []
+    if isinstance(payload, Mapping):
+        webio = payload.get("webio")
+        receivers = webio.get("receivers") if isinstance(webio, Mapping) else None
+        if isinstance(receivers, Mapping):
+            for receiver in receivers:
+                _append_receiver(patterns, receiver)
+
+        kind = str(payload.get("kind") or "").strip().lower()
+        if kind == "y":
+            _append_receiver(patterns, _receiver_from_yjs_path(payload.get("path")))
+        for value in payload.values():
+            for pattern in receiver_patterns_from_webui_payload(value):
+                _append_receiver(patterns, pattern)
+    elif isinstance(payload, list):
+        for value in payload:
+            for pattern in receiver_patterns_from_webui_payload(value):
+                _append_receiver(patterns, pattern)
+    return patterns
+
+
 def _manifest_receiver_patterns(manifest: Mapping[str, Any]) -> list[str]:
     patterns: list[str] = []
     routes = manifest.get("data_routes")
@@ -39,14 +74,7 @@ def _webui_receiver_patterns(artifact_root: Path) -> list[str]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
-    webio = payload.get("webio") if isinstance(payload, dict) else None
-    receivers = webio.get("receivers") if isinstance(webio, dict) else None
-    if not isinstance(receivers, dict):
-        return []
-    patterns: list[str] = []
-    for receiver in receivers:
-        _append_receiver(patterns, receiver)
-    return patterns
+    return receiver_patterns_from_webui_payload(payload)
 
 
 def load_runtime_skill_declarations(
@@ -111,6 +139,7 @@ def clear_runtime_skill_declarations(skill_name: str | None = None) -> None:
 __all__ = [
     "clear_runtime_skill_declarations",
     "load_runtime_skill_declarations",
+    "receiver_patterns_from_webui_payload",
     "runtime_skill_declarations_snapshot",
     "runtime_stream_receiver_patterns",
 ]

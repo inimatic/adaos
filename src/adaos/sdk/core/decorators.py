@@ -852,6 +852,20 @@ async def register_subscriptions(
         setattr(_wrap, "_adaos_topic", topic)
         setattr(_wrap, "_adaos_handler", handler_name)
         setattr(_wrap, "_adaos_generation", generation)
+        if receiver_patterns:
+            def _event_filter(
+                evt,
+                _receiver_patterns=receiver_patterns,
+                _topic=topic,
+                _skill=skill_name,
+            ) -> bool:
+                admission = stream_receiver_event_admission(_receiver_patterns, evt, _topic)
+                allowed = bool(admission.get("allowed", True))
+                if not allowed and _skill:
+                    _log_subscription_receiver_denied(_skill, _topic, admission)
+                return allowed
+
+            setattr(_wrap, "_adaos_event_filter", _event_filter)
         skill_key = skill_name or "<unknown>"
         skill_summaries.setdefault(skill_key, []).append((topic, fn.__name__))
         registered_handler = await on(topic, _wrap)

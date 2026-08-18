@@ -47,6 +47,29 @@ def test_load_skill_activation_policy_uses_registry_metadata(tmp_path: Path) -> 
     assert subscription_strategy_for_policy(policy) == "early_cheap_handlers"
 
 
+def test_load_stream_receivers_includes_nested_yjs_data_sources(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "subnet_env"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "webui.json").write_text(
+        """
+{
+  "webio": {"receivers": {"subnet_env.events": {}}},
+  "widgets": [
+    {"dataSource": {"kind": "y", "path": "data/subnet_env/summary"}},
+    {"dataSource": {"kind": "y", "path": "data/nodes/$node_id/subnet_env/overview"}}
+  ]
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    assert load_skill_stream_receiver_patterns(tmp_path / "skills", "subnet_env") == (
+        "subnet_env.events",
+        "subnet_env.summary",
+        "subnet_env.overview",
+    )
+
+
 def test_allows_background_refresh_respects_policy_guards() -> None:
     workspace = Path(".")
     del workspace  # keep the test explicit about not using filesystem state

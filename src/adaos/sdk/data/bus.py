@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import json
 import os
@@ -265,6 +264,9 @@ async def on(topic: str, handler: Callable[[dict], Awaitable[Any]]):
                 f"{getattr(handler, '__module__', '<unknown>')}.{getattr(handler, '__name__', repr(handler))}",
             ),
         )
+        event_filter = getattr(handler, "_adaos_event_filter", None)
+        if callable(event_filter):
+            setattr(_adapt, "_adaos_event_filter", event_filter)
     except Exception:
         pass
 

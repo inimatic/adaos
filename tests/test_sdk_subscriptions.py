@@ -393,6 +393,7 @@ def test_stream_subscription_skips_foreign_declared_receiver(tmp_path: Path, mon
 
     asyncio.run(decorators.register_subscriptions(force=True))
     wrapped = bus.handlers[0][1]
+    assert callable(getattr(wrapped, "_adaos_event_filter", None))
 
     foreign_evt = SimpleNamespace(
         type="webio.stream.snapshot.requested",

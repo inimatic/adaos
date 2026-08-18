@@ -4399,6 +4399,7 @@ def test_node_reliability_summary_metrics_exposes_acceptance_diagnostics(monkeyp
                         "source": "events_ws",
                         "incoming_total": 3,
                         "queued_total": 2,
+                        "prefiltered_total": 7,
                         "superseded_total": 1,
                         "dropped_total": 0,
                         "last_action": "snapshot",
@@ -4493,6 +4494,7 @@ def test_node_reliability_summary_metrics_exposes_acceptance_diagnostics(monkeyp
     assert acceptance["stream_guard"]["totals"]["published"] == 2
     assert acceptance["stream_guard"]["totals"]["suppressed"] == 1
     assert acceptance["stream_controls"]["totals"]["snapshot_requested"] == 3
+    assert acceptance["stream_controls"]["totals"]["prefiltered"] == 7
     assert acceptance["stream_controls"]["totals"]["coalesced"] == 1
     assert acceptance["stream_controls"]["bounded_queue_total"] == 3
 

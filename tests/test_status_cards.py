@@ -322,6 +322,7 @@ def test_guard_status_cards_project_runtime_pressure() -> None:
                         "receiver": "infrascope.inspector.local",
                         "incoming_total": 3,
                         "queued_total": 9,
+                        "prefiltered_total": 14,
                         "superseded_total": 6,
                     }
                 ]
@@ -337,6 +338,7 @@ def test_guard_status_cards_project_runtime_pressure() -> None:
     assert by_id["guard:yjs_pressure"]["guard_ref"]["quarantine_ttl_s"] == 30.0
     assert by_id["guard:webio_stream"]["guard_ref"]["receiver"] == "infrastate.realtime"
     assert by_id["guard:webio_stream_control"]["status"] == "warning"
+    assert by_id["guard:webio_stream_control"]["guard_ref"]["observed_pressure"]["prefiltered"] == 14
     assert by_id["guard:webio_stream_control"]["guard_ref"]["observed_pressure"]["superseded"] == 6
 
 

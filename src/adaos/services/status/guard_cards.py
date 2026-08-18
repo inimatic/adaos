@@ -287,11 +287,12 @@ def _stream_control_card(
     status, severity = _stream_control_status(backlog)
     incoming = sum(_int(item.get("incoming_total")) for item in rows)
     queued = sum(_int(item.get("queued_total")) for item in rows)
+    prefiltered = sum(_int(item.get("prefiltered_total")) for item in rows)
     superseded = sum(_int(item.get("superseded_total")) for item in rows)
     dropped = sum(_int(item.get("dropped_total")) for item in rows)
     receiver = _text(top.get("receiver"))
     summary = (
-        f"Stream controls incoming={incoming} queued={queued} "
+        f"Stream controls incoming={incoming} queued={queued} prefiltered={prefiltered} "
         f"superseded={superseded} dropped={dropped}"
     )
     if receiver:
@@ -324,6 +325,7 @@ def _stream_control_card(
             "observed_pressure": {
                 "incoming": incoming,
                 "queued": queued,
+                "prefiltered": prefiltered,
                 "superseded": superseded,
                 "dropped": dropped,
             },

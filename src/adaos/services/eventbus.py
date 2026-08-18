@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -236,6 +237,9 @@ class LocalEventBus(EventBus):
         self._last_pending_warn_at = 0.0
         self._incoming_total = 0
         self._incoming_by_type: DefaultDict[str, int] = defaultdict(int)
+        self._prefiltered_total = 0
+        self._prefiltered_by_type: DefaultDict[str, int] = defaultdict(int)
+        self._prefiltered_by_handler: DefaultDict[str, int] = defaultdict(int)
         self._bounded_topics = _bounded_event_topics()
         self._bounded_supersede_by_handler_topics = _bounded_supersede_by_handler_topics()
         self._bounded_concurrency = _bounded_event_concurrency()
@@ -600,11 +604,20 @@ class LocalEventBus(EventBus):
             ((event_type, count) for event_type, count in self._incoming_by_type.items() if count > 0),
             key=lambda item: (-item[1], item[0]),
         )[:5]
+        top_prefiltered_types = sorted(
+            ((event_type, count) for event_type, count in self._prefiltered_by_type.items() if count > 0),
+            key=lambda item: (-item[1], item[0]),
+        )[:5]
+        top_prefiltered_handlers = sorted(
+            ((handler_name, count) for handler_name, count in self._prefiltered_by_handler.items() if count > 0),
+            key=lambda item: (-item[1], item[0]),
+        )[:5]
         top_webio_stream_controls = sorted(
             (dict(item) for item in self._webio_stream_control_stats.values()),
             key=lambda item: (
                 -int(item.get("superseded_total") or 0),
                 -int(item.get("dropped_total") or 0),
+                -int(item.get("prefiltered_total") or 0),
                 -int(item.get("incoming_total") or 0),
                 str(item.get("event_type") or ""),
                 str(item.get("receiver") or ""),
@@ -627,6 +640,9 @@ class LocalEventBus(EventBus):
             "top_active_tasks": active_tasks,
             "incoming_total": int(self._incoming_total),
             "top_incoming_types": top_incoming_types,
+            "prefiltered_total": int(self._prefiltered_total),
+            "top_prefiltered_types": top_prefiltered_types,
+            "top_prefiltered_handlers": top_prefiltered_handlers,
             "bounded_topics": list(self._bounded_topics),
             "bounded_concurrency": int(self._bounded_concurrency),
             "bounded_queue_limit": int(self._bounded_queue_limit),
@@ -994,6 +1010,35 @@ class LocalEventBus(EventBus):
             if prefix != "*" and prefix != "" and not event_type.startswith(prefix):
                 continue
             for h in handlers:
+                event_filter = getattr(h, "_adaos_event_filter", None)
+                if callable(event_filter):
+                    handler_label = _handler_label(h)
+                    try:
+                        filter_result = event_filter(event)
+                        if inspect.isawaitable(filter_result):
+                            if inspect.iscoroutine(filter_result):
+                                filter_result.close()
+                            raise TypeError("event prefilter must be synchronous")
+                    except Exception:
+                        _log.warning(
+                            "event prefilter failed open handler=%s type=%s",
+                            handler_label,
+                            event_type,
+                            exc_info=True,
+                        )
+                    else:
+                        if not bool(filter_result):
+                            with self._lock:
+                                self._prefiltered_total += 1
+                                self._prefiltered_by_type[event_type] += 1
+                                self._prefiltered_by_handler[handler_label] += 1
+                                self._record_webio_stream_control_locked(
+                                    event_type,
+                                    event,
+                                    "prefiltered",
+                                    handler_name=handler_label,
+                                )
+                            continue
                 started = time.perf_counter()
                 try:
                     res = h(event)

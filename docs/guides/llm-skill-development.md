@@ -641,6 +641,35 @@ Every stream receiver should have bounded delivery semantics and an initial or
 snapshot-on-subscribe story. Every declared worker, cache, and heavy resource
 should have an owner, budget, and cleanup path.
 
+### Receiver ownership and control-event admission
+
+Browser stream and Yjs demand uses shared control topics such as
+`webio.stream.snapshot.requested` and `webio.yjs.subscription.changed`. Many
+skills can subscribe to those topics, so receiver ownership must be decidable
+from declarations before a handler coroutine or bounded-queue item is created.
+
+- Treat every `dataSource.kind: "y"` path in `webui.json` as a receiver
+  declaration. The logical demand slot is the path below `data/`, joined with
+  dots. For example, `data/subnet_env/summary` becomes
+  `subnet_env.summary`; `data/nodes/<node>/subnet_env/summary` has the same
+  logical slot after node scoping is removed.
+- Keep those path-derived slots consistent with the handler's accepted slots,
+  `data_projections`, and `data_routes`. A handler-side `startswith()` or early
+  return is a defense-in-depth check, not the ownership contract: it runs too
+  late to prevent cross-skill fanout and queue pressure.
+- Register the cheap demand/control handler before the browser can send its
+  first request. Lazy or `on_demand` activation may defer expensive refresh
+  work, but it must not defer the only subscription capable of observing the
+  activation demand.
+- Do not subscribe to a generic control topic without a bounded declared
+  receiver set. If dynamic receiver segments are necessary, constrain the
+  wildcard to the skill-owned prefix and test both an owned and a foreign
+  receiver.
+- On reload and reconnect, publish one request with many skills loaded and
+  assert that only the owning handler is queued. EventBus diagnostics must show
+  foreign handlers as prefiltered, with no corresponding bounded supersede or
+  drop growth.
+
 Quarantine hooks are discovered as ordinary tools named exactly
 `onQuarantine` or `on_quarantine`. Listing a cleanup function only under
 `lifecycle` is not enough for owner-guard quarantine; declare the quarantine
@@ -1701,6 +1730,13 @@ Before publishing:
 - verify SDK projection diagnostics show the expected `by_event` pressure
   counters for dirty refresh paths before optimizing a noisy event source
 - verify stream request bursts cannot rebuild every skill section by default
+- verify each browser `kind: y` path maps to the receiver slot accepted by its
+  owner, including the node-scoped form under `data/nodes/<node>/...`
+- publish one stream/Yjs control request with all skills registered and verify
+  only the owner executes; foreign handlers must be prefiltered before bounded
+  queue admission, without increasing supersede or drop counters
+- for lazy skills, verify the first demand after runtime start or reconnect is
+  observed without requiring an earlier tool call or manual activation
 - verify generic subscription-change hooks do not publish full snapshots or
   bypass stream coalescing; they may update demand counters, but initial state
   must use the declared snapshot/refresh path

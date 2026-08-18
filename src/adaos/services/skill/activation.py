@@ -8,6 +8,7 @@ from typing import Any, Literal
 import yaml
 
 from adaos.domain.workspace_manifest import SkillActivationPolicy
+from adaos.services.skill.declarations import receiver_patterns_from_webui_payload
 from adaos.services.workspace_registry import find_workspace_registry_entry
 
 
@@ -85,17 +86,7 @@ def _receiver_patterns_from_webui(path: Path) -> list[str]:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return []
-    if not isinstance(raw, dict):
-        return []
-    webio = raw.get("webio")
-    if not isinstance(webio, dict):
-        return []
-    receivers = webio.get("receivers")
-    patterns: list[str] = []
-    if isinstance(receivers, dict):
-        for key in receivers.keys():
-            _append_receiver_pattern(patterns, key)
-    return patterns
+    return receiver_patterns_from_webui_payload(raw)
 
 
 def _receiver_patterns_from_skill_yaml(path: Path) -> list[str]:

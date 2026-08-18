@@ -26,6 +26,41 @@ async def test_local_event_bus_waits_for_async_handlers():
 
 
 @pytest.mark.asyncio
+async def test_local_event_bus_prefilters_foreign_stream_handlers_before_queueing():
+    bus = LocalEventBus()
+    seen: list[int] = []
+
+    for index in range(40):
+        async def handler(_event: Event, _index=index):
+            seen.append(_index)
+
+        handler._adaos_skill = f"skill_{index}"  # type: ignore[attr-defined]
+        handler._adaos_event_filter = (  # type: ignore[attr-defined]
+            lambda event, expected=f"skill_{index}.summary": event.payload.get("receiver") == expected
+        )
+        bus.subscribe("webio.stream.snapshot.requested", handler)
+
+    bus.publish(
+        Event(
+            type="webio.stream.snapshot.requested",
+            payload={"receiver": "skill_17.summary", "webspace_id": "desktop"},
+            source="test",
+            ts=0.0,
+        )
+    )
+
+    snapshot = bus.backlog_snapshot()
+    assert snapshot["prefiltered_total"] == 39
+    assert dict(snapshot["top_prefiltered_types"])["webio.stream.snapshot.requested"] == 39
+    assert snapshot["bounded_queue_total"] <= 1
+    assert snapshot["top_bounded_drops"] == []
+    assert snapshot["top_bounded_superseded_types"] == []
+
+    assert await bus.wait_for_idle(timeout=1.0) is True
+    assert seen == [17]
+
+
+@pytest.mark.asyncio
 async def test_thread_publish_uses_owner_loop_for_async_handlers():
     bus = LocalEventBus()
     owner_loop = asyncio.get_running_loop()
