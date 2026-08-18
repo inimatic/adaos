@@ -5,6 +5,7 @@ from __future__ import annotations
 from ._cap import require_cap
 from ._ctx import require_ctx
 from .errors import CapabilityError, ConflictError, QuotaExceeded, SdkError, SdkRuntimeNotInitialized
+from .environment import runtime_identity
 from .types import (
     Handler,
     Payload,
@@ -28,6 +29,7 @@ __all__ = [
     "QuotaExceeded",
     "SdkError",
     "SdkRuntimeNotInitialized",
+    "runtime_identity",
     "Handler",
     "Payload",
     "ResultEnvelope",
