@@ -1142,6 +1142,27 @@ subscribed should not keep rebuilding full snapshots just in case a browser
 opens later. Prefer receiver-specific builders over one monolithic skill
 snapshot.
 
+Treat a client-side `path` as a selector, not as transport compaction. If a
+list, an editor, and a desktop widget all subscribe to one receiver and select
+different paths, every subscriber still receives the receiver's complete
+payload. A 30 KiB editor value referenced by three surfaces therefore consumes
+roughly 90 KiB per publish before protocol overhead, even when two surfaces
+render only a title or a count.
+
+Split receivers when their payload size, update cadence, visibility, or
+recovery lifecycle differs. For example, use `notebook.notes` for bounded list
+rows, `notebook.editor` for the selected full text, and `notebook.latest` for a
+small desktop card. The snapshot handler must publish only the receiver named
+by `webio.stream.snapshot.requested`; do not answer one receiver's recovery
+request by publishing every read model. Mutations may publish each affected
+receiver, but their tool response must remain a compact acknowledgement.
+
+Do not add a Yjs projection or `ydoc_defaults` copy merely as a second recovery
+route for stream-owned state. Keep it only when an identified browser or peer
+consumer requires reconnect-stable shared-document semantics. Otherwise the
+duplicate primary-document write adds event-loop, persistence, and replay load
+without improving stream recovery.
+
 ## Status cards
 
 Use status cards for small operator summaries that must be cheap to poll,
@@ -1713,6 +1734,10 @@ Before publishing:
 - verify stream receivers have bounded modes and snapshot-on-subscribe behavior
 - verify stream payloads stay within budget after multiplying by expected
   browser/node fanout
+- verify client-side `path` selectors are not being mistaken for transport
+  filtering; measure the complete receiver payload once per active subscriber
+- verify list, editor/detail, and widget surfaces use separate receivers when
+  their payload sizes or update rates differ
 - verify receiver budgets and handler constants agree: `webui.json`,
   `skill.yaml`, and the actual stream builder must use the same item/text/byte
   caps, including `max_fanout`
@@ -1735,6 +1760,8 @@ Before publishing:
 - verify SDK projection diagnostics show the expected `by_event` pressure
   counters for dirty refresh paths before optimizing a noisy event source
 - verify stream request bursts cannot rebuild every skill section by default
+- request each receiver independently and verify the handler publishes only
+  that receiver, with no duplicate Yjs write or timer-based republish tail
 - verify each browser `kind: y` path maps to the receiver slot accepted by its
   owner, including the node-scoped form under `data/nodes/<node>/...`
 - publish one stream/Yjs control request with all skills registered and verify
