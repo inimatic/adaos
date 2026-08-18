@@ -92,6 +92,10 @@ __all__ = [
     "RelationalMigration",
     "RelationalMigrationResult",
     "RelationalStorageRequirements",
+    "blob_store",
+    "BlobStore",
+    "BlobStorageBinding",
+    "BlobStorageRequirements",
 ]
 
 _EXPORTS: dict[str, tuple[str, str]] = {
@@ -110,6 +114,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "RelationalMigration": ("adaos.sdk.data.relational", "RelationalMigration"),
     "RelationalMigrationResult": ("adaos.sdk.data.relational", "RelationalMigrationResult"),
     "RelationalStorageRequirements": ("adaos.sdk.data.relational", "RelationalStorageRequirements"),
+    "blob_store": ("adaos.sdk.data.blob", "store"),
+    "BlobStore": ("adaos.sdk.data.blob", "BlobStore"),
+    "BlobStorageBinding": ("adaos.sdk.data.blob", "BlobStorageBinding"),
+    "BlobStorageRequirements": ("adaos.sdk.data.blob", "BlobStorageRequirements"),
     "get_stt_backend": ("adaos.sdk.data.env", "get_stt_backend"),
     "get_tts_backend": ("adaos.sdk.data.env", "get_tts_backend"),
     "publish": ("adaos.sdk.data.events", "publish"),

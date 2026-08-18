@@ -1,6 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 from adaos.domain.blob_storage import BlobStorageRequirements
+from adaos.sdk.data.blob import store
 from adaos.services.storage.blob import (
     BlobStorageBroker,
     LocalBlobStorageProvider,
@@ -65,3 +68,27 @@ def test_blob_broker_prefers_provisioned_object_binding_without_exposing_uri(tmp
     assert binding.secret_ref == "core:storage/blob"
     assert "s3://" not in str(binding.to_dict())
     assert broker.service_uri(binding, owner_ref=binding.owner_ref).startswith("s3://adaos-research/")
+
+
+def test_sdk_blob_store_is_content_addressed_and_owner_isolated(_autocontext) -> None:
+    ctx = _autocontext
+    for name in ("alpha_skill", "beta_skill"):
+        source = Path(ctx.paths.skills_dir()) / name
+        source.mkdir(parents=True, exist_ok=True)
+        (source / "skill.yaml").write_text(
+            f"name: {name}\nversion: 0.1.0\ncapabilities:\n  - storage.blob\n",
+            encoding="utf-8",
+        )
+    assert ctx.skill_ctx.set("alpha_skill", Path(ctx.paths.skills_dir()) / "alpha_skill")
+    alpha = store("calibrations")
+    blob = alpha.put_json("contract.json", {"accepted": True})
+    path = alpha.materialize_path(blob)
+    assert path.is_file()
+    assert path.read_text(encoding="utf-8") == '{"accepted":true}'
+    assert blob["digest"].startswith("sha256:")
+
+    assert ctx.skill_ctx.set("beta_skill", Path(ctx.paths.skills_dir()) / "beta_skill")
+    beta = store("calibrations")
+    assert beta.put_json("contract.json", {"accepted": True})["binding_id"] != blob["binding_id"]
+    with pytest.raises(ValueError, match="another active skill"):
+        alpha.materialize_path(blob)
