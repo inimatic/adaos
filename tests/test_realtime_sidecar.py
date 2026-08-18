@@ -202,6 +202,40 @@ def test_realtime_handoff_overlap_requires_verified_warm_switch(
     assert "new_is_candidate" in rejected["reason"]
 
 
+@pytest.mark.asyncio
+async def test_remote_connect_backoff_survives_local_session_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ADAOS_REALTIME_REMOTE_CONNECT_RETRY_INITIAL_S", "1")
+    monkeypatch.setenv("ADAOS_REALTIME_REMOTE_CONNECT_RETRY_MAX_S", "10")
+    monkeypatch.setenv("ADAOS_REALTIME_REMOTE_CONNECT_RETRY_FACTOR", "2")
+    monkeypatch.setenv("ADAOS_REALTIME_REMOTE_CONNECT_RETRY_JITTER_RATIO", "0")
+    identity = {"pid": 101, "runtime_instance_id": "runtime-a"}
+    original_route_state = copy.deepcopy(realtime_sidecar_mod._ROUTE_TUNNEL_RUNTIME_STATE)
+    original_media_state = copy.deepcopy(realtime_sidecar_mod._MEDIA_PROXY_RUNTIME_STATE)
+    try:
+        server = RealtimeSidecarServer(host="127.0.0.1", port=0, control_port=0)
+        server._begin_session_stats(session_id="first", client_identity=identity)
+        first_delay = server._schedule_remote_connect_retry()
+        server._begin_session_stats(session_id="replacement", client_identity=identity)
+        second_delay = server._schedule_remote_connect_retry()
+
+        assert first_delay == 1.0
+        assert second_delay == 2.0
+        assert server._remote_retry_delay_s == 4.0
+        assert server._remote_retry_failure_streak == 2
+        assert server._diag_snapshot()["remote_connect_failure_streak"] == 2
+
+        server._reset_remote_connect_backoff()
+        assert server._remote_retry_delay_s == 1.0
+        assert server._remote_retry_failure_streak == 0
+    finally:
+        realtime_sidecar_mod._ROUTE_TUNNEL_RUNTIME_STATE.clear()
+        realtime_sidecar_mod._ROUTE_TUNNEL_RUNTIME_STATE.update(original_route_state)
+        realtime_sidecar_mod._MEDIA_PROXY_RUNTIME_STATE.clear()
+        realtime_sidecar_mod._MEDIA_PROXY_RUNTIME_STATE.update(original_media_state)
+
+
 def test_sidecar_lifecycle_fingerprint_ignores_observation_heartbeat(tmp_path: Path) -> None:
     first = build_sidecar_lifecycle_report(
         base_dir=tmp_path,

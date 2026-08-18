@@ -48,6 +48,14 @@ different owner waits a bounded interval for the prior relay to drain and is
 rejected if that relay is still live. Admission decisions are serialized so
 simultaneous clients cannot pass against the same stale session count.
 
+Remote connection pressure is process-scoped rather than session-scoped. The
+exponential backoff, failure streak, next-attempt deadline, and bounded jitter
+survive same-owner local reconnects. A successful WebSocket opening removes the
+current deadline but does not reset the failure streak; reset occurs only after
+the remote relay remains active for the stable-session window. This prevents a
+local NATS handshake timeout from returning every replacement relay to the
+one-second retry interval during a prolonged Root outage.
+
 Retiring the old runtime is explicitly runtime-scoped. It closes the old
 listener and process-local resources without publishing node-wide
 `subnet.stopping/subnet.stopped`; the replacement runtime and sidecar continue
@@ -76,6 +84,8 @@ Checklist items use the same four-level MoSCoW-style priority vocabulary as
 - records local TCP owner PID, runtime instance/transition role, overlap
   allow/reject/drain and same-owner replacement counters, and the oldest
   unresolved runtime NATS PING
+- records process-wide remote failure streak, current backoff remainder, and
+  next retry delay so retry amplification is visible during an ingress outage
 - acts as the durable diagnostic bridge to Root by combining its transport
   observation with persisted supervisor/runtime lifecycle snapshots; it sends
   on semantic change plus a bounded heartbeat and never becomes the update or
@@ -266,6 +276,11 @@ Success criteria:
   PID/runtime instance actively aborts and drains that old relay before opening
   its replacement. Neither path may increment the admitted-handoff counter or
   leave parallel Root sessions.
+- [x] `[must]` Preserve remote-connect backoff across local NATS client
+  replacement. Serialize remote handshakes through one process-wide gate, apply
+  bounded jitter, expose streak/deadline/next-delay diagnostics, and reset only
+  after `ADAOS_REALTIME_REMOTE_STABLE_SESSION_S`, not after a socket merely
+  opens. A runtime handshake timeout must not restart retries at one second.
 - [x] `[must]` Probe process readiness with `GET /ready` on the loopback control
   port (`ADAOS_REALTIME_CONTROL_PORT`, default NATS port plus four). The response
   carries `adaos.realtime_sidecar.control.v1`; readiness must not open the NATS

@@ -7,6 +7,7 @@ import gc
 import hashlib
 import json
 import os
+import random
 import signal
 import socket
 import ssl
@@ -302,6 +303,15 @@ def _realtime_remote_connect_retry_factor() -> float:
     if value < 1.0:
         value = 1.0
     return value
+
+
+def _realtime_remote_connect_retry_jitter_ratio() -> float:
+    raw = os.getenv("ADAOS_REALTIME_REMOTE_CONNECT_RETRY_JITTER_RATIO")
+    try:
+        value = float(str(raw if raw is not None else "0.2").strip() or "0.2")
+    except Exception:
+        value = 0.2
+    return max(0.0, min(value, 0.5))
 
 
 def _realtime_remote_quarantine_key(url: str) -> str:
@@ -2695,6 +2705,12 @@ def build_sidecar_lifecycle_report(
             "active_session": active_session,
             "remote_connected": remote_connected,
             "remote_connect_retrying": bool(transport_snapshot.get("remote_connect_retrying")),
+            "remote_connect_failure_streak": int(
+                transport_snapshot.get("remote_connect_failure_streak") or 0
+            ),
+            "remote_connect_backoff_remaining_s": transport_snapshot.get(
+                "remote_connect_backoff_remaining_s"
+            ),
             "last_error": transport_error,
             "session_id": str(transport_snapshot.get("session_id") or "").strip() or None,
             "status_reason": transport_classification.get("status_reason"),
@@ -2892,6 +2908,10 @@ class RealtimeSidecarServer:
         self._active_client_identities: dict[asyncio.Task[Any], dict[str, Any]] = {}
         self._active_remote_transports: dict[asyncio.Task[Any], Any] = {}
         self._client_admission_lock = asyncio.Lock()
+        self._remote_connect_gate = asyncio.Lock()
+        self._remote_retry_delay_s = _realtime_remote_connect_retry_initial_s()
+        self._remote_retry_not_before = 0.0
+        self._remote_retry_failure_streak = 0
         _reset_route_tunnel_runtime_state()
         _reset_media_proxy_runtime_state()
 
@@ -3014,6 +3034,12 @@ class RealtimeSidecarServer:
             "remote_connect_retry_total": self._stats.remote_connect_retry_total,
             "remote_connect_retrying": self._stats.remote_connect_retrying,
             "remote_connect_retry_delay_s": self._stats.remote_connect_retry_delay_s,
+            "remote_connect_failure_streak": self._remote_retry_failure_streak,
+            "remote_connect_backoff_remaining_s": round(
+                max(0.0, self._remote_retry_not_before - now),
+                3,
+            ),
+            "remote_connect_next_delay_s": round(self._remote_retry_delay_s, 3),
             "remote_quarantine_total": self._stats.remote_quarantine_total,
             "superseded_total": self._stats.superseded_total,
             "overlap_admitted_total": self._stats.overlap_admitted_total,
@@ -4284,37 +4310,71 @@ class RealtimeSidecarServer:
                 self._log(f"remote connect failed url={target} err={type(exc).__name__}: {exc}")
         raise RuntimeError(f"realtime remote connect failed: {type(last_exc).__name__}: {last_exc}") from last_exc
 
+    def _schedule_remote_connect_retry(self) -> float:
+        initial_s = _realtime_remote_connect_retry_initial_s()
+        max_s = _realtime_remote_connect_retry_max_s()
+        base_s = max(initial_s, min(float(self._remote_retry_delay_s), max_s))
+        jitter = _realtime_remote_connect_retry_jitter_ratio()
+        scheduled_s = base_s * random.uniform(1.0 - jitter, 1.0 + jitter)
+        scheduled_s = max(initial_s, min(scheduled_s, max_s))
+        self._remote_retry_not_before = time.monotonic() + scheduled_s
+        self._remote_retry_delay_s = min(max_s, base_s * _realtime_remote_connect_retry_factor())
+        self._remote_retry_failure_streak += 1
+        return scheduled_s
+
+    def _reset_remote_connect_backoff(self) -> None:
+        self._remote_retry_delay_s = _realtime_remote_connect_retry_initial_s()
+        self._remote_retry_not_before = 0.0
+        self._remote_retry_failure_streak = 0
+
+    async def _reset_remote_connect_backoff_after_stable(self, session_id: str) -> None:
+        await asyncio.sleep(_realtime_remote_stable_session_s())
+        if self._session_is_current(session_id) and self._stats.active_session:
+            self._reset_remote_connect_backoff()
+            self._log(f"remote connect backoff reset after stable session id={session_id}")
+
     async def _connect_remote_with_retry(
         self,
         *,
         session_id: str,
         writer: asyncio.StreamWriter,
     ) -> tuple[Any, str]:
-        delay_s = _realtime_remote_connect_retry_initial_s()
-        max_delay_s = _realtime_remote_connect_retry_max_s()
-        factor = _realtime_remote_connect_retry_factor()
         while not self._stopped.is_set() and not writer.is_closing():
-            try:
-                ws, remote_url = await self._connect_remote(session_id=session_id)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                details = f"{type(exc).__name__}: {exc}"
-                if self._session_is_current(session_id):
-                    self._stats.last_error = details
-                    self._stats.remote_connect_retrying = True
-                    self._stats.remote_connect_retry_delay_s = round(delay_s, 3)
-                self._stats.remote_connect_retry_total = int(self._stats.remote_connect_retry_total or 0) + 1
-                self._log(
-                    f"remote connect retry scheduled id={session_id} in={delay_s:.3f}s err={details}"
-                )
+            async with self._remote_connect_gate:
+                remaining_s = max(0.0, self._remote_retry_not_before - time.monotonic())
+                if remaining_s > 0.0:
+                    if self._session_is_current(session_id):
+                        self._stats.remote_connect_retrying = True
+                        self._stats.remote_connect_retry_delay_s = round(remaining_s, 3)
+                    self._log(
+                        f"remote connect backoff active id={session_id} remaining={remaining_s:.3f}s "
+                        f"streak={self._remote_retry_failure_streak}"
+                    )
+                    try:
+                        await asyncio.wait_for(self._stopped.wait(), timeout=remaining_s)
+                        break
+                    except asyncio.TimeoutError:
+                        pass
                 try:
-                    await asyncio.wait_for(self._stopped.wait(), timeout=delay_s)
-                    break
-                except asyncio.TimeoutError:
-                    delay_s = min(max_delay_s, delay_s * factor)
+                    ws, remote_url = await self._connect_remote(session_id=session_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    details = f"{type(exc).__name__}: {exc}"
+                    delay_s = self._schedule_remote_connect_retry()
+                    if self._session_is_current(session_id):
+                        self._stats.last_error = details
+                        self._stats.remote_connect_retrying = True
+                        self._stats.remote_connect_retry_delay_s = round(delay_s, 3)
+                    self._stats.remote_connect_retry_total = (
+                        int(self._stats.remote_connect_retry_total or 0) + 1
+                    )
+                    self._log(
+                        f"remote connect retry scheduled id={session_id} in={delay_s:.3f}s "
+                        f"streak={self._remote_retry_failure_streak} err={details}"
+                    )
                     continue
-            else:
+                self._remote_retry_not_before = 0.0
                 if self._session_is_current(session_id):
                     self._stats.remote_connect_retrying = False
                     self._stats.remote_connect_retry_delay_s = None
@@ -4501,6 +4561,7 @@ class RealtimeSidecarServer:
     ) -> None:
         ws = None
         remote_url: str | None = None
+        stable_task: asyncio.Task[Any] | None = None
         session_id = f"rt-{uuid.uuid4().hex[:10]}"
         self._begin_session_stats(session_id=session_id, client_identity=client_identity)
         self._stats.session_open_total = int(self._stats.session_open_total or 0) + 1
@@ -4512,6 +4573,10 @@ class RealtimeSidecarServer:
             if self._session_is_current(session_id):
                 self._stats.remote_url = remote_url
                 self._stats.remote_connected_at = time.monotonic()
+            stable_task = asyncio.create_task(
+                self._reset_remote_connect_backoff_after_stable(session_id),
+                name="adaos-realtime-stable-backoff-reset",
+            )
             self._log(f"session open id={session_id} remote={remote_url}")
             await self._relay_local_to_remote(reader, writer, ws, session_id=session_id)
         except asyncio.CancelledError:
@@ -4554,6 +4619,10 @@ class RealtimeSidecarServer:
                 )
             self._log(f"session error id={session_id} err={details}")
         finally:
+            if stable_task is not None and not stable_task.done():
+                stable_task.cancel()
+                with contextlib.suppress(BaseException):
+                    await stable_task
             self._stats.session_close_total = int(self._stats.session_close_total or 0) + 1
             if self._session_is_current(session_id):
                 self._stats.last_session_close_at = time.monotonic()
