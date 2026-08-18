@@ -6872,6 +6872,12 @@ def _yjs_pressure_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any
     runtime = sync_runtime if isinstance(sync_runtime, dict) else {}
     selected_webspace_id = str(runtime.get("selected_webspace_id") or "").strip() or None
     try:
+        from adaos.services.yjs.doc import detached_mutation_diagnostics_snapshot
+
+        detached_mutations = detached_mutation_diagnostics_snapshot()
+    except Exception:
+        detached_mutations = {}
+    try:
         from adaos.services.yjs.load_mark import yjs_primary_doc_policy_snapshot
         from adaos.services.yjs.governance import primary_doc_governance_snapshot
 
@@ -6935,6 +6941,7 @@ def _yjs_pressure_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any
                 ),
                 "last_amplified_branch_owner": str(governance.get("last_amplified_branch_owner") or "").strip()
                 or None,
+                "detached_mutations": detached_mutations,
             }
     except Exception:
         pass
@@ -6978,6 +6985,7 @@ def _yjs_pressure_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any
         "last_affected_roots": [],
         "last_write_amplification_suspects": [],
         "last_amplified_branch_owner": None,
+        "detached_mutations": detached_mutations,
     }
 
 

@@ -315,6 +315,20 @@ def test_process_activity_attributes_windows_skill_runtime_paths() -> None:
     assert incidents._domain_from_cmdline(command) == "skill:downloader_skill"
 
 
+def test_process_activity_attributes_builder_automation_to_target_object() -> None:
+    skill_command = (
+        "python -m adaos.services.builder.automation_worker "
+        "--session-id automation.skill.weather_skill"
+    )
+    scenario_command = (
+        "python -m adaos.services.builder.automation_worker "
+        "--session-id=automation.scenario.mediacenter"
+    )
+
+    assert incidents._domain_from_cmdline(skill_command) == "skill:weather_skill"
+    assert incidents._domain_from_cmdline(scenario_command) == "scenario:mediacenter"
+
+
 def test_transport_incident_persists_process_lookback(monkeypatch, tmp_path) -> None:
     target = tmp_path / "transport-incidents.json"
     monkeypatch.setenv("ADAOS_INCIDENT_REGISTRY_PATH", str(target))

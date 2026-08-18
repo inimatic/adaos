@@ -220,6 +220,16 @@ def _domain_from_cmdline(cmdline: str) -> str:
         skill = tail.split("/", 1)[0].strip()
         if skill:
             return f"skill:{skill}"
+    automation = re.search(
+        r"--session-id(?:=|\s+)[\"']?automation\.(skill|scenario)\.([^\s\"']+)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if automation:
+        object_type = automation.group(1).lower()
+        object_id = automation.group(2).strip(" .")
+        if object_id:
+            return f"skill:{object_id}" if object_type == "skill" else f"scenario:{object_id}"
     if "adaos.apps.supervisor" in text:
         return "core.supervisor"
     if "adaos.services.realtime_sidecar" in text:
@@ -306,6 +316,14 @@ def _process_rows() -> list[dict[str, Any]]:
                 mem = proc.memory_info()
                 cpu_times = proc.cpu_times()
                 io = proc.io_counters() if hasattr(proc, "io_counters") else None
+                try:
+                    priority = proc.nice() if hasattr(proc, "nice") else None
+                except Exception:
+                    priority = None
+                try:
+                    io_priority = proc.ionice() if hasattr(proc, "ionice") else None
+                except Exception:
+                    io_priority = None
             rss = int(getattr(mem, "rss", 0) or 0)
             cpu_time_s = float(getattr(cpu_times, "user", 0.0) or 0.0) + float(
                 getattr(cpu_times, "system", 0.0) or 0.0
@@ -320,6 +338,8 @@ def _process_rows() -> list[dict[str, Any]]:
                     "cpu_time_s": round(cpu_time_s, 6),
                     "read_bytes": read_bytes,
                     "write_bytes": write_bytes,
+                    "priority": str(priority) if priority is not None else None,
+                    "io_priority": str(io_priority) if io_priority is not None else None,
                     "domain": identity.get("domain") or "system.process",
                     "cmdline": identity.get("cmdline") or name,
                 }
@@ -404,6 +424,8 @@ def _capture_process_activity_sample(*, limit: int = 10, ts: float | None = None
                 "domain": row.get("domain"),
                 "cmdline": row.get("cmdline"),
                 "rss_bytes": int(row.get("rss_bytes") or 0),
+                "priority": row.get("priority"),
+                "io_priority": row.get("io_priority"),
                 "cpu_delta_s": round(cpu_delta_s, 6),
                 "cpu_percent": round((cpu_delta_s / interval_s) * 100.0, 3) if interval_s > 0.0 else 0.0,
                 "read_delta_bytes": read_delta,

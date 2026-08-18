@@ -46,6 +46,17 @@ _LIVE_ROOM_COMMAND_DIAGNOSTICS: dict[str, Any] = {
     "owner_handoff_total": 0,
     "last_result": None,
 }
+_DETACHED_MUTATION_DIAGNOSTICS_LOCK = threading.RLock()
+_DETACHED_MUTATION_DIAGNOSTICS: dict[str, Any] = {
+    "submitted_total": 0,
+    "completed_total": 0,
+    "failed_total": 0,
+    "cancel_wait_total": 0,
+    "active_total": 0,
+    "max_active_total": 0,
+    "max_duration_ms": 0.0,
+    "last_result": None,
+}
 
 
 def _elapsed_ms(started: float) -> float:
@@ -77,6 +88,32 @@ def live_room_command_diagnostics_snapshot() -> dict[str, Any]:
     result["schema"] = "adaos.yjs.live-room-command-diagnostics.v1"
     result["updated_at"] = time.time()
     return result
+
+
+def detached_mutation_diagnostics_snapshot() -> dict[str, Any]:
+    with _DETACHED_MUTATION_DIAGNOSTICS_LOCK:
+        result = dict(_DETACHED_MUTATION_DIAGNOSTICS)
+        last_result = result.get("last_result")
+        result["last_result"] = dict(last_result) if isinstance(last_result, dict) else None
+    result["schema"] = "adaos.yjs.detached-mutation-diagnostics.v1"
+    result["updated_at"] = time.time()
+    return result
+
+
+def reset_detached_mutation_diagnostics() -> None:
+    with _DETACHED_MUTATION_DIAGNOSTICS_LOCK:
+        _DETACHED_MUTATION_DIAGNOSTICS.update(
+            {
+                "submitted_total": 0,
+                "completed_total": 0,
+                "failed_total": 0,
+                "cancel_wait_total": 0,
+                "active_total": 0,
+                "max_active_total": 0,
+                "max_duration_ms": 0.0,
+                "last_result": None,
+            }
+        )
 
 
 def _record_live_room_command(result: dict[str, Any]) -> None:
@@ -705,6 +742,11 @@ def get_ydoc(
     timing_prefix: str = "",
     load_mark_roots: list[str] | tuple[str, ...] | None = None,
     governed: bool = False,
+    write_source: str | None = None,
+    write_owner: str | None = None,
+    write_channel: str | None = None,
+    write_update_callback: Callable[[dict[str, Any]], None] | None = None,
+    raise_flush_errors: bool = False,
 ) -> Iterator[Y.YDoc]:
     """
     Synchronously load a webspace-backed YDoc, applying persisted updates on
@@ -719,6 +761,24 @@ def get_ydoc(
         # while a room is live must use read_live_maps_snapshot_sync().
         raise RuntimeError("sync_get_ydoc_live_room_requires_owner_handoff")
     session_started = time.perf_counter()
+    inherited_write_meta = current_ystore_write_metadata()
+    source_for_session = (
+        str(write_source or "").strip()
+        or str(inherited_write_meta.get("source") or "").strip()
+        or "get_ydoc"
+    )
+    owner_for_session = (
+        str(write_owner or "").strip()
+        or str(inherited_write_meta.get("owner") or "").strip()
+        or _resolve_yjs_write_owner()
+    )
+    channel_for_session = (
+        str(write_channel or "").strip()
+        or str(inherited_write_meta.get("channel") or "").strip()
+        or "yjs.doc.sync"
+    )
+    if read_only:
+        owner_for_session = ""
     operation_timeout_s = _sync_get_ydoc_operation_timeout_s()
     wait_started = time.perf_counter()
     sync_slot_key, sync_session_lock = _acquire_sync_get_ydoc_session(
@@ -732,7 +792,6 @@ def get_ydoc(
         # therefore stays outside concurrent sync replay for the same store.
         ystore = get_ystore_for_webspace(webspace_id)
         ydoc = Y.YDoc()
-        owner_for_session = _resolve_yjs_write_owner()
     except BaseException:
         _release_sync_get_ydoc_session(sync_slot_key, sync_session_lock)
         raise
@@ -792,8 +851,8 @@ def get_ydoc(
                             owner=owner,
                             root_names=tracked_load_mark_roots,
                             path=",".join(tracked_load_mark_roots) or "primary_shared_doc",
-                            source="get_ydoc",
-                            channel="yjs.doc.sync",
+                            source=source_for_session,
+                            channel=channel_for_session,
                             update_bytes=len(update or b""),
                         ):
                             _set_doc_timing(timings, "ystore_write_update", 0.0, prefix=timing_prefix)
@@ -806,30 +865,43 @@ def get_ydoc(
                         stage_started = time.perf_counter()
                         async with ystore_write_metadata(
                             root_names=tracked_load_mark_roots,
-                            source="get_ydoc",
+                            source=source_for_session,
                             owner=owner,
-                            channel="yjs.doc.sync",
+                            channel=channel_for_session,
                             governed=True,
                         ):
                             if update:
-                                await ystore.write_update(update, update_kind="diff")
+                                persisted = bool(await ystore.write_update(update, update_kind="diff"))
                             else:
-                                await ystore.write_update(b"", update_kind="diff")
-                        persisted = True
+                                persisted = bool(await ystore.write_update(b"", update_kind="diff"))
                         _record_doc_timing(timings, "ystore_write_update", stage_started, prefix=timing_prefix)
                     except Exception:
                         _record_doc_timing(timings, "ystore_write_update", stage_started, prefix=timing_prefix)
-                        pass
+                        if raise_flush_errors:
+                            raise
                     stage_started = time.perf_counter()
                     _schedule_room_update(
                         webspace_id,
                         update,
                         already_persisted=persisted,
-                        source="get_ydoc",
+                        source=source_for_session,
                         owner=owner,
-                        channel="yjs.doc.sync",
+                        channel=channel_for_session,
                     )
                     _record_doc_timing(timings, "room_update", stage_started, prefix=timing_prefix)
+                    if update and write_update_callback is not None:
+                        write_update_callback(
+                            {
+                                "webspace_id": webspace_id,
+                                "update_bytes": len(update),
+                                "source": source_for_session,
+                                "owner": owner,
+                                "channel": channel_for_session,
+                                "root_names": tracked_load_mark_roots,
+                                "live_room": False,
+                                "persisted": persisted,
+                            }
+                        )
                 else:
                     _set_doc_timing(timings, "encode_diff", 0.0, prefix=timing_prefix)
                     _set_doc_timing(timings, "ystore_write_update", 0.0, prefix=timing_prefix)
@@ -840,6 +912,8 @@ def get_ydoc(
             _run_blocking(_flush(), timeout_s=operation_timeout_s)
         except Exception as exc:
             _log.warning("get_ydoc flush failed for webspace=%s: %s", webspace_id, exc, exc_info=True)
+            if raise_flush_errors:
+                raise
         finally:
             stage_started = time.perf_counter()
             try:
@@ -851,6 +925,167 @@ def get_ydoc(
             _record_doc_timing(timings, "ystore_stop", stage_started, prefix=timing_prefix)
             _record_doc_timing(timings, "total", session_started, prefix=timing_prefix)
             _release_sync_get_ydoc_session(sync_slot_key, sync_session_lock)
+
+
+async def run_detached_ydoc_mutation(
+    webspace_id: str,
+    mutator: Callable[[Y.YDoc], T],
+    *,
+    load_mark_roots: list[str] | tuple[str, ...] | None = None,
+    governed: bool = False,
+    write_source: str | None = None,
+    write_owner: str | None = None,
+    write_channel: str | None = None,
+    write_update_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> T:
+    """Run a complete detached YDoc mutation without blocking the caller loop.
+
+    ``y_py`` objects are thread-affine, so document creation, replay, mutation,
+    diff encoding, and flush all execute in the same worker thread. Cancellation
+    waits for a started worker to finish because Python cannot cancel native
+    work already running in a thread.
+    """
+
+    selected_webspace = str(webspace_id or "").strip() or "default"
+    selected_owner = str(write_owner or "").strip() or _resolve_yjs_write_owner()
+    selected_source = str(write_source or "").strip() or "detached_ydoc_mutation"
+    selected_channel = str(write_channel or "").strip() or "yjs.doc.detached_worker"
+    started = time.perf_counter()
+    with _DETACHED_MUTATION_DIAGNOSTICS_LOCK:
+        diagnostics = _DETACHED_MUTATION_DIAGNOSTICS
+        diagnostics["submitted_total"] = int(diagnostics.get("submitted_total") or 0) + 1
+        diagnostics["active_total"] = int(diagnostics.get("active_total") or 0) + 1
+        diagnostics["max_active_total"] = max(
+            int(diagnostics.get("max_active_total") or 0),
+            int(diagnostics["active_total"]),
+        )
+
+    def _run_native() -> T:
+        with ystore_write_metadata_sync(
+            root_names=load_mark_roots,
+            source=selected_source,
+            owner=selected_owner,
+            channel=selected_channel,
+            governed=governed,
+        ):
+            with get_ydoc(
+                selected_webspace,
+                load_mark_roots=load_mark_roots,
+                governed=governed,
+                write_source=selected_source,
+                write_owner=selected_owner,
+                write_channel=selected_channel,
+                write_update_callback=write_update_callback,
+                raise_flush_errors=True,
+            ) as ydoc:
+                return mutator(ydoc)
+
+    def _run() -> T:
+        try:
+            result = _run_native()
+        except BaseException as exc:
+            # A traceback from the native frame retains its local YDoc and
+            # would move that object back to the caller loop with the Future.
+            # Recreate the exception only after the native frame is gone.
+            try:
+                sanitized = type(exc)(*exc.args)
+            except Exception:
+                sanitized = RuntimeError(f"{type(exc).__name__}: {exc}")
+            exc.__traceback__ = None
+            exc.__cause__ = None
+            exc.__context__ = None
+            raise sanitized from None
+        native_types = tuple(
+            native_type
+            for native_type in (
+                getattr(Y, "YDoc", None),
+                getattr(Y, "YMap", None),
+                getattr(Y, "YArray", None),
+                getattr(Y, "YText", None),
+                getattr(Y, "YTransaction", None),
+                getattr(Y, "YXmlElement", None),
+                getattr(Y, "YXmlText", None),
+            )
+            if isinstance(native_type, type)
+        )
+
+        def _contains_native(value: Any) -> bool:
+            pending = [value]
+            seen: set[int] = set()
+            while pending:
+                item = pending.pop()
+                if native_types and isinstance(item, native_types):
+                    return True
+                if not isinstance(item, (dict, list, tuple, set, frozenset)):
+                    continue
+                identity = id(item)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                if isinstance(item, dict):
+                    pending.extend(item.keys())
+                    pending.extend(item.values())
+                else:
+                    pending.extend(item)
+            return False
+
+        if _contains_native(result):
+            del result
+            raise TypeError("detached YDoc mutator must not return or contain a y_py object")
+        return result
+
+    task = asyncio.create_task(
+        asyncio.to_thread(_run),
+        name=f"yjs-detached-mutation:{selected_webspace}",
+    )
+    error: BaseException | None = None
+    cancelled = False
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        cancelled = True
+        with _DETACHED_MUTATION_DIAGNOSTICS_LOCK:
+            _DETACHED_MUTATION_DIAGNOSTICS["cancel_wait_total"] = int(
+                _DETACHED_MUTATION_DIAGNOSTICS.get("cancel_wait_total") or 0
+            ) + 1
+        try:
+            await asyncio.shield(task)
+        except BaseException as exc:
+            error = exc
+        raise
+    except BaseException as exc:
+        error = exc
+        raise
+    finally:
+        duration_ms = _elapsed_ms(started)
+        with _DETACHED_MUTATION_DIAGNOSTICS_LOCK:
+            diagnostics = _DETACHED_MUTATION_DIAGNOSTICS
+            diagnostics["active_total"] = max(0, int(diagnostics.get("active_total") or 0) - 1)
+            counter = "failed_total" if error is not None else "completed_total"
+            diagnostics[counter] = int(diagnostics.get(counter) or 0) + 1
+            diagnostics["max_duration_ms"] = max(
+                float(diagnostics.get("max_duration_ms") or 0.0),
+                duration_ms,
+            )
+            diagnostics["last_result"] = {
+                "webspace_id": selected_webspace,
+                "owner": selected_owner,
+                "source": selected_source,
+                "channel": selected_channel,
+                "duration_ms": duration_ms,
+                "cancelled": cancelled,
+                "error": type(error).__name__ if error is not None else None,
+                "finished_at": time.time(),
+            }
+        if duration_ms >= 1000.0:
+            _log.warning(
+                "detached YDoc mutation slow but isolated webspace=%s owner=%s source=%s duration_ms=%.1f cancelled=%s",
+                selected_webspace,
+                selected_owner,
+                selected_source,
+                duration_ms,
+                cancelled,
+            )
 
 
 @asynccontextmanager
@@ -1483,13 +1718,16 @@ __all__ = [
     "get_ydoc",
     "async_get_ydoc",
     "async_read_ydoc",
+    "detached_mutation_diagnostics_snapshot",
     "try_read_live_map_value",
     "read_live_maps_snapshot_sync",
     "invalidate_live_map_value_cache",
     "live_room_generation",
     "live_room_command_diagnostics_snapshot",
     "mutate_live_room",
+    "reset_detached_mutation_diagnostics",
     "reset_live_room_command_diagnostics",
+    "run_detached_ydoc_mutation",
     "submit_live_room_mutation",
     "apply_update_to_live_room",
 ]

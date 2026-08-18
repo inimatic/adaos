@@ -16,9 +16,8 @@ from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.node_config import load_config
 from adaos.services.runtime_paths import current_state_dir
 from adaos.services.scenario.node_data_scope import node_scope_data_path
-from adaos.services.yjs.doc import async_get_ydoc, submit_live_room_mutation
+from adaos.services.yjs.doc import run_detached_ydoc_mutation, submit_live_room_mutation
 from adaos.services.yjs.json_merge import set_map_value_if_changed
-from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.user.profile import UserProfileService
 from .projection_registry import ProjectionRegistry, ProjectionTarget
 
@@ -1806,8 +1805,8 @@ class ProjectionService:
                 return
             root.set(txn, top_key, merged)
 
-        if prefer_live_room:
-            live_result = await submit_live_room_mutation(
+        async def _try_live_room_projection() -> Mapping[str, Any]:
+            return await submit_live_room_mutation(
                 ws_id,
                 _mutator,
                 root_names=[root_name],
@@ -1817,6 +1816,9 @@ class ProjectionService:
                 governed=True,
                 update_callback=_on_yjs_update,
             )
+
+        if prefer_live_room:
+            live_result = await _try_live_room_projection()
             if bool(live_result.get("applied")):
                 return
             _log.debug(
@@ -1827,21 +1829,33 @@ class ProjectionService:
                 str(live_result.get("reason") or "not_applied"),
             )
         try:
-            async with ystore_write_metadata(
-                root_names=[root_name],
-                source="projection_service",
-                owner=owner,
-                channel=f"projection.{str(target.backend or 'yjs')}",
-                governed=True,
-            ):
-                async with async_get_ydoc(
+            def _mutate_detached(ydoc: Any) -> None:
+                with ydoc.begin_transaction() as txn:
+                    _mutator(ydoc, txn)
+
+            try:
+                await run_detached_ydoc_mutation(
                     ws_id,
+                    _mutate_detached,
                     load_mark_roots=[root_name],
                     governed=True,
+                    write_source="projection_service",
+                    write_owner=owner,
+                    write_channel=f"projection.{str(target.backend or 'yjs')}.detached_worker",
                     write_update_callback=_on_yjs_update,
-                ) as ydoc:
-                    with ydoc.begin_transaction() as txn:
-                        _mutator(ydoc, txn)
+                )
+            except RuntimeError as exc:
+                if "sync_get_ydoc_live_room_requires_owner_handoff" not in str(exc):
+                    raise
+                live_retry = await _try_live_room_projection()
+                if bool(live_retry.get("applied")):
+                    _log.info(
+                        "projection handed off after detached/live-room race webspace=%s path=%s",
+                        ws_id,
+                        path,
+                    )
+                    return
+                raise
             detached_persisted = False
             if detached_compaction_needed:
                 outcome = await _compact_projection_amplification_store(

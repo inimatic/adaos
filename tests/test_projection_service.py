@@ -4,7 +4,6 @@ import asyncio
 import sys
 import types
 from types import SimpleNamespace
-from contextlib import asynccontextmanager
 
 import pytest
 
@@ -153,24 +152,16 @@ class _FakeDoc:
         return _FakeTxn()
 
 
-class _FakeAsyncDoc:
-    def __init__(self, state: dict[str, _FakeMap]) -> None:
-        self._state = state
-
-    async def __aenter__(self) -> _FakeDoc:
-        return _FakeDoc(self._state)
-
-    async def __aexit__(self, exc_type, exc, tb) -> bool:
-        return False
-
-
-def _fake_async_get_ydoc(state: dict[str, _FakeMap], calls: list[dict[str, object]] | None = None):
-    def _factory(_ws: str, **kwargs) -> _FakeAsyncDoc:
+def _fake_run_detached_ydoc_mutation(
+    state: dict[str, _FakeMap],
+    calls: list[dict[str, object]] | None = None,
+):
+    async def _run(_ws: str, mutator, **kwargs):
         if calls is not None:
             calls.append(dict(kwargs))
-        return _FakeAsyncDoc(state)
+        return mutator(_FakeDoc(state))
 
-    return _factory
+    return _run
 
 
 async def _no_live_room(*_args, **_kwargs) -> dict[str, object]:
@@ -186,44 +177,31 @@ async def _allow_primary_doc_write(*_args, **_kwargs) -> bool:
     return True
 
 
-class _FakeAsyncDocWithUpdateCallback(_FakeAsyncDoc):
-    def __init__(self, state: dict[str, _FakeMap], kwargs: dict[str, object]) -> None:
-        super().__init__(state)
-        self._kwargs = kwargs
-
-    async def __aexit__(self, exc_type, exc, tb) -> bool:
-        callback = self._kwargs.get("write_update_callback")
+def _fake_run_detached_with_update_callback(
+    state: dict[str, _FakeMap],
+    calls: list[dict[str, object]] | None = None,
+):
+    async def _run(_ws: str, mutator, **kwargs):
+        if calls is not None:
+            calls.append(dict(kwargs))
+        result = mutator(_FakeDoc(state))
+        callback = kwargs.get("write_update_callback")
         if callable(callback):
             callback(
                 {
                     "webspace_id": "desktop",
                     "update_bytes": 96 * 1024,
-                    "source": "projection_service",
-                    "owner": "skill:mediaserver",
-                    "channel": "projection.yjs",
-                    "root_names": ["data"],
+                    "source": kwargs.get("write_source") or "projection_service",
+                    "owner": kwargs.get("write_owner") or "skill:mediaserver",
+                    "channel": kwargs.get("write_channel") or "projection.yjs.detached_worker",
+                    "root_names": kwargs.get("load_mark_roots") or ["data"],
                     "live_room": False,
                     "persisted": True,
                 }
             )
-        return False
+        return result
 
-
-def _fake_async_get_ydoc_with_update_callback(
-    state: dict[str, _FakeMap],
-    calls: list[dict[str, object]] | None = None,
-):
-    def _factory(_ws: str, **kwargs) -> _FakeAsyncDocWithUpdateCallback:
-        if calls is not None:
-            calls.append(dict(kwargs))
-        return _FakeAsyncDocWithUpdateCallback(state, dict(kwargs))
-
-    return _factory
-
-
-@asynccontextmanager
-async def _fake_ystore_write_metadata(**kwargs):
-    yield kwargs
+    return _run
 
 
 def test_projection_service_merges_deep_yjs_paths_without_overwriting_siblings(monkeypatch) -> None:
@@ -241,7 +219,11 @@ def test_projection_service_merges_deep_yjs_paths_without_overwriting_siblings(m
     )
 
     monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
-    monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
+    monkeypatch.setattr(
+        projection_service_module,
+        "run_detached_ydoc_mutation",
+        _fake_run_detached_ydoc_mutation(fake_state),
+    )
 
     asyncio.run(
         service.apply(
@@ -264,6 +246,35 @@ def test_projection_service_merges_deep_yjs_paths_without_overwriting_siblings(m
 
     assert fake_state["data"]["skills"]["profile"]["u1"]["settings"] == {"theme": "dark"}
     assert fake_state["data"]["skills"]["profile"]["u2"]["settings"] == {"theme": "light"}
+
+
+def test_projection_service_retries_live_room_handoff_after_detached_race(monkeypatch) -> None:
+    fake_state = {"data": _FakeMap()}
+    target = SimpleNamespace(backend="yjs", path="data/weather", webspace_id=None)
+    registry = SimpleNamespace(resolve=lambda scope, slot: [target])  # noqa: ARG005
+    service = projection_service_module.ProjectionService(ctx=SimpleNamespace(), registry=registry)
+    live_calls = 0
+
+    async def _live_room(_webspace_id, mutator, **_kwargs):
+        nonlocal live_calls
+        live_calls += 1
+        if live_calls == 1:
+            return {"applied": False, "reason": "room_not_ready"}
+        doc = _FakeDoc(fake_state)
+        with doc.begin_transaction() as txn:
+            mutator(doc, txn)
+        return {"applied": True, "reason": "applied"}
+
+    async def _detached_race(*_args, **_kwargs):
+        raise RuntimeError("sync_get_ydoc_live_room_requires_owner_handoff")
+
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _live_room)
+    monkeypatch.setattr(projection_service_module, "run_detached_ydoc_mutation", _detached_race)
+
+    asyncio.run(service.apply("runtime", "weather", {"city": "Moscow"}, webspace_id="desktop"))
+
+    assert live_calls == 2
+    assert fake_state["data"]["weather"] == {"city": "Moscow"}
 
 
 def test_projection_service_skips_identical_flat_yjs_update(monkeypatch) -> None:
@@ -291,7 +302,11 @@ def test_projection_service_skips_identical_flat_yjs_update(monkeypatch) -> None
     )
 
     monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
-    monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
+    monkeypatch.setattr(
+        projection_service_module,
+        "run_detached_ydoc_mutation",
+        _fake_run_detached_ydoc_mutation(fake_state),
+    )
 
     asyncio.run(service.apply("runtime", "weather", {"city": "Moscow"}, webspace_id="ws-test"))
     asyncio.run(service.apply("runtime", "weather", {"city": "Moscow"}, webspace_id="ws-test"))
@@ -323,7 +338,11 @@ def test_projection_service_reconciles_flat_mapping_projection_in_place(monkeypa
 
     monkeypatch.setattr(projection_service_module, "set_map_value_if_changed", _reconcile)
     monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
-    monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
+    monkeypatch.setattr(
+        projection_service_module,
+        "run_detached_ydoc_mutation",
+        _fake_run_detached_ydoc_mutation(fake_state),
+    )
 
     next_value = {
         "status": {"value": "done"},
@@ -362,7 +381,11 @@ def test_projection_service_skips_identical_deep_yjs_update(monkeypatch) -> None
     )
 
     monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
-    monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
+    monkeypatch.setattr(
+        projection_service_module,
+        "run_detached_ydoc_mutation",
+        _fake_run_detached_ydoc_mutation(fake_state),
+    )
 
     asyncio.run(service.apply("runtime", "profile", {"theme": "dark"}, webspace_id="ws-test"))
     asyncio.run(service.apply("runtime", "profile", {"theme": "dark"}, webspace_id="ws-test"))
@@ -371,7 +394,7 @@ def test_projection_service_skips_identical_deep_yjs_update(monkeypatch) -> None
     assert len(fake_root.set_calls) == 1
 
 
-def test_projection_service_passes_target_root_to_async_get_ydoc(monkeypatch) -> None:
+def test_projection_service_passes_target_root_to_detached_worker(monkeypatch) -> None:
     fake_state = {"data": _FakeMap()}
     calls: list[dict[str, object]] = []
 
@@ -389,8 +412,8 @@ def test_projection_service_passes_target_root_to_async_get_ydoc(monkeypatch) ->
     monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
     monkeypatch.setattr(
         projection_service_module,
-        "async_get_ydoc",
-        _fake_async_get_ydoc(fake_state, calls),
+        "run_detached_ydoc_mutation",
+        _fake_run_detached_ydoc_mutation(fake_state, calls),
     )
 
     asyncio.run(service.apply("runtime", "weather", {"city": "Moscow"}, webspace_id="ws-test"))
@@ -582,11 +605,6 @@ def test_projection_service_marks_skill_owner_in_write_metadata(monkeypatch) -> 
     fake_state = {"data": _FakeMap()}
     metadata_calls: list[dict[str, object]] = []
 
-    @asynccontextmanager
-    async def _capture_metadata(**kwargs):
-        metadata_calls.append(dict(kwargs))
-        yield kwargs
-
     target = SimpleNamespace(
         backend="yjs",
         path="data/weather",
@@ -599,8 +617,11 @@ def test_projection_service_marks_skill_owner_in_write_metadata(monkeypatch) -> 
     )
 
     monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
-    monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
-    monkeypatch.setattr(projection_service_module, "ystore_write_metadata", _capture_metadata)
+    monkeypatch.setattr(
+        projection_service_module,
+        "run_detached_ydoc_mutation",
+        _fake_run_detached_ydoc_mutation(fake_state, metadata_calls),
+    )
     monkeypatch.setattr(
         projection_service_module,
         "get_current_skill",
@@ -611,13 +632,15 @@ def test_projection_service_marks_skill_owner_in_write_metadata(monkeypatch) -> 
 
     assert metadata_calls == [
         {
-            "root_names": ["data"],
-            "source": "projection_service",
-            "owner": "skill:infrastate_skill",
-            "channel": "projection.yjs",
+            "load_mark_roots": ["data"],
+            "write_source": "projection_service",
+            "write_owner": "skill:infrastate_skill",
+            "write_channel": "projection.yjs.detached_worker",
             "governed": True,
+            "write_update_callback": metadata_calls[0]["write_update_callback"],
         }
     ]
+    assert callable(metadata_calls[0]["write_update_callback"])
 
 
 def test_projection_service_uses_live_room_fast_path_for_skill_owned_writes(monkeypatch) -> None:
@@ -644,10 +667,9 @@ def test_projection_service_uses_live_room_fast_path_for_skill_owned_writes(monk
     monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _submit_live)
     monkeypatch.setattr(
         projection_service_module,
-        "async_get_ydoc",
-        _fake_async_get_ydoc(fake_state, calls),
+        "run_detached_ydoc_mutation",
+        _fake_run_detached_ydoc_mutation(fake_state, calls),
     )
-    monkeypatch.setattr(projection_service_module, "ystore_write_metadata", _fake_ystore_write_metadata)
     monkeypatch.setattr(
         projection_service_module,
         "get_current_skill",
@@ -688,10 +710,9 @@ def test_projection_service_persists_changed_detached_fallback(monkeypatch) -> N
     )
     monkeypatch.setattr(
         projection_service_module,
-        "async_get_ydoc",
-        _fake_async_get_ydoc_with_update_callback(fake_state),
+        "run_detached_ydoc_mutation",
+        _fake_run_detached_with_update_callback(fake_state),
     )
-    monkeypatch.setattr(projection_service_module, "ystore_write_metadata", _fake_ystore_write_metadata)
     monkeypatch.setattr(projection_service_module, "_persist_detached_projection_store", _persist)
 
     asyncio.run(
@@ -724,10 +745,9 @@ def test_projection_service_surfaces_detached_persistence_failure(monkeypatch) -
     )
     monkeypatch.setattr(
         projection_service_module,
-        "async_get_ydoc",
-        _fake_async_get_ydoc_with_update_callback(fake_state),
+        "run_detached_ydoc_mutation",
+        _fake_run_detached_with_update_callback(fake_state),
     )
-    monkeypatch.setattr(projection_service_module, "ystore_write_metadata", _fake_ystore_write_metadata)
     monkeypatch.setattr(projection_service_module, "_persist_detached_projection_store", _fail_persist)
 
     try:
@@ -776,10 +796,9 @@ def test_projection_service_compacts_inline_after_detached_write_amplification(m
     monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
     monkeypatch.setattr(
         projection_service_module,
-        "async_get_ydoc",
-        _fake_async_get_ydoc_with_update_callback(fake_state, calls),
+        "run_detached_ydoc_mutation",
+        _fake_run_detached_with_update_callback(fake_state, calls),
     )
-    monkeypatch.setattr(projection_service_module, "ystore_write_metadata", _fake_ystore_write_metadata)
     monkeypatch.setattr(projection_service_module, "_compact_projection_amplification_store", _capture_compaction)
     monkeypatch.setattr(
         projection_service_module,
@@ -855,10 +874,9 @@ def test_projection_service_suppresses_recent_amplified_projection(monkeypatch, 
     monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
     monkeypatch.setattr(
         projection_service_module,
-        "async_get_ydoc",
-        _fake_async_get_ydoc_with_update_callback(fake_state, calls),
+        "run_detached_ydoc_mutation",
+        _fake_run_detached_with_update_callback(fake_state, calls),
     )
-    monkeypatch.setattr(projection_service_module, "ystore_write_metadata", _fake_ystore_write_metadata)
     monkeypatch.setattr(projection_service_module, "_compact_projection_amplification_store", _capture_compaction)
     monkeypatch.setattr(projection_service_module, "_local_node_id", lambda: "hub")
     monkeypatch.setattr(
@@ -900,7 +918,11 @@ def test_projection_service_throttles_skill_owned_primary_doc_writes_when_policy
     )
 
     monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
-    monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
+    monkeypatch.setattr(
+        projection_service_module,
+        "run_detached_ydoc_mutation",
+        _fake_run_detached_ydoc_mutation(fake_state),
+    )
     monkeypatch.setattr(
         projection_service_module,
         "_yjs_primary_doc_policy_state",
@@ -956,7 +978,11 @@ def test_projection_service_blocks_skill_owned_primary_doc_writes_when_policy_re
 
     async_get_calls: list[dict[str, object]] = []
     monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
-    monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state, async_get_calls))
+    monkeypatch.setattr(
+        projection_service_module,
+        "run_detached_ydoc_mutation",
+        _fake_run_detached_ydoc_mutation(fake_state, async_get_calls),
+    )
     monkeypatch.setattr(
         projection_service_module,
         "_yjs_primary_doc_policy_state",
@@ -1012,7 +1038,11 @@ def test_projection_service_degrades_oversized_yjs_projection_before_write(monke
 
     monkeypatch.setattr(projection_service_module, "current_state_dir", lambda: tmp_path / "state")
     monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
-    monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
+    monkeypatch.setattr(
+        projection_service_module,
+        "run_detached_ydoc_mutation",
+        _fake_run_detached_ydoc_mutation(fake_state),
+    )
     monkeypatch.setattr(projection_service_module, "_local_node_id", lambda: "hub")
     monkeypatch.setattr(
         projection_service_module,
@@ -1274,7 +1304,11 @@ def test_projection_governance_attributes_sibling_write_amplification_suspect(mo
 
     monkeypatch.setattr(projection_service_module, "current_state_dir", lambda: tmp_path / "state")
     monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
-    monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
+    monkeypatch.setattr(
+        projection_service_module,
+        "run_detached_ydoc_mutation",
+        _fake_run_detached_ydoc_mutation(fake_state),
+    )
     monkeypatch.setattr(projection_service_module, "_local_node_id", lambda: "hub")
     monkeypatch.setattr(owner_guard, "admit_owner_work", lambda **_kwargs: {"allowed": True})
     monkeypatch.setattr(

@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -87,6 +88,47 @@ def _reject_transport_corruption(value: Any, *, field: str) -> None:
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     atomic_write_json(path, payload)
+
+
+def _automation_worker_resource_policy(
+    command: Sequence[str],
+    *,
+    platform_name: str | None = None,
+) -> tuple[list[str], int, dict[str, Any]]:
+    selected_platform = str(platform_name or os.name).strip().lower()
+    requested = str(os.getenv("ADAOS_BUILDER_AUTOMATION_RESOURCE_PRIORITY") or "background").strip().lower()
+    if requested in {"normal", "off", "disabled"}:
+        return list(command), 0, {
+            "mode": "normal",
+            "cpu_priority": "inherited",
+            "io_priority": "inherited",
+        }
+    if selected_platform == "nt":
+        flag = int(getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0) or 0)
+        return list(command), flag, {
+            "mode": "background",
+            "cpu_priority": "below_normal" if flag else "inherited_unavailable",
+            "io_priority": "inherited",
+            "inherited_by_children": True,
+        }
+
+    try:
+        nice_value = max(1, min(int(os.getenv("ADAOS_BUILDER_AUTOMATION_NICE") or "10"), 19))
+    except ValueError:
+        nice_value = 10
+    wrapped = list(command)
+    nice_path = shutil.which("nice")
+    ionice_path = shutil.which("ionice")
+    if nice_path:
+        wrapped = [nice_path, "-n", str(nice_value), *wrapped]
+    if ionice_path:
+        wrapped = [ionice_path, "-c", "3", *wrapped]
+    return wrapped, 0, {
+        "mode": "background",
+        "cpu_priority": f"nice:{nice_value}" if nice_path else "inherited_unavailable",
+        "io_priority": "idle" if ionice_path else "inherited_unavailable",
+        "inherited_by_children": True,
+    }
 
 
 def _prefer_persisted_session(
@@ -1996,6 +2038,7 @@ class BuilderAutomationService:
             "--session-id",
             str(session_id),
         ]
+        command, priority_creationflags, resource_policy = _automation_worker_resource_policy(command)
         env = os.environ.copy()
         env["ADAOS_BASE_DIR"] = str(self.state_dir.parent.resolve())
         env["ADAOS_DISABLE_ACTIVE_SLOT_PYTHON_REEXEC"] = "1"
@@ -2018,6 +2061,7 @@ class BuilderAutomationService:
                 getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
                 | getattr(subprocess, "DETACHED_PROCESS", 0)
                 | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                | priority_creationflags
             )
         else:
             popen_kwargs["start_new_session"] = True
@@ -2037,6 +2081,7 @@ class BuilderAutomationService:
             "executable": str(executable.resolve()),
             "stdout_path": str(stdout_path),
             "stderr_path": str(stderr_path),
+            "resource_policy": resource_policy,
             "launched_at": _now_iso(),
         }
         _write_json(launch_path, launched)

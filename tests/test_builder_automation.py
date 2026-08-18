@@ -302,6 +302,7 @@ def test_automation_projects_declared_and_observed_execution_budget(tmp_path: Pa
 def test_background_automation_launches_durable_worker_process(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     service.background = True
+    monkeypatch.delenv("ADAOS_BUILDER_AUTOMATION_RESOURCE_PRIORITY", raising=False)
     launched: list[tuple[list[str], dict]] = []
 
     def _popen(command, **kwargs):
@@ -328,6 +329,52 @@ def test_background_automation_launches_durable_worker_process(tmp_path: Path, m
         ).read_text(encoding="utf-8")
     )
     assert launch["session_id"] == "automation.scenario.recipes"
+    assert launch["resource_policy"]["mode"] == "background"
+    assert launch["resource_policy"]["inherited_by_children"] is True
+
+
+def test_automation_worker_uses_background_priority_on_windows(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_BUILDER_AUTOMATION_RESOURCE_PRIORITY", raising=False)
+    monkeypatch.setattr(automation_module.subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0x4000, raising=False)
+
+    command, creationflags, policy = automation_module._automation_worker_resource_policy(
+        ["python", "-m", "worker"],
+        platform_name="nt",
+    )
+
+    assert command == ["python", "-m", "worker"]
+    assert creationflags & 0x4000
+    assert policy["cpu_priority"] == "below_normal"
+    assert policy["inherited_by_children"] is True
+
+
+def test_automation_worker_uses_nice_and_idle_io_on_linux(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_BUILDER_AUTOMATION_RESOURCE_PRIORITY", raising=False)
+    monkeypatch.setattr(
+        automation_module.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name in {"nice", "ionice"} else None,
+    )
+
+    command, creationflags, policy = automation_module._automation_worker_resource_policy(
+        ["python", "-m", "worker"],
+        platform_name="posix",
+    )
+
+    assert command == [
+        "/usr/bin/ionice",
+        "-c",
+        "3",
+        "/usr/bin/nice",
+        "-n",
+        "10",
+        "python",
+        "-m",
+        "worker",
+    ]
+    assert creationflags == 0
+    assert policy["cpu_priority"] == "nice:10"
+    assert policy["io_priority"] == "idle"
 
 
 def test_automation_rejects_unvalidated_prototype_handoff_before_mutation(tmp_path: Path) -> None:

@@ -835,6 +835,56 @@ Avoid in normal skills:
 If a legacy skill still needs direct Yjs access, document why and keep it on a
 short migration path toward `ProjectionService` / `ctx_subnet`.
 
+### Event-loop and resource isolation
+
+An `async def` subscription is not automatically non-blocking. Unless the
+runtime contract explicitly provides another executor, the handler shares a
+runtime event loop with heartbeat, status, transport and other skill work.
+Synchronous disk access, CPU-heavy parsing, native CRDT replay, model loading,
+compression and blocking HTTP in that handler can therefore turn an otherwise
+healthy channel into browser `Recovering`.
+
+Use these rules for command and subscription handlers:
+
+- Offload blocking external APIs through the admitted SDK async route or a
+  bounded worker. Offload CPU, disk and native work explicitly; a coroutine
+  that calls blocking code still blocks the event loop.
+- Keep every thread-affine native object's complete lifecycle in one worker:
+  create, replay/load, mutate, encode/flush and destroy it there. Never create a
+  `y_py` document on one thread and pass it, its transaction, map, exception
+  traceback or return value to another thread.
+- Treat `ctx_subnet.set_async()` as a potentially expensive primary-document
+  mutation when no live room can accept the write. Keep the payload compact
+  and idempotent. Do not publish `pending` and then `complete` to Yjs for one
+  action; use local action feedback or a bounded stream for transient progress
+  and write one reconnect-stable terminal snapshot.
+- Coalesce work by the narrow ownership key, normally
+  `(webspace_id, receiver/slot, target_node_id)`. For replace-state commands,
+  use latest-request-wins semantics with a monotonic generation or request id.
+  Reject stale results immediately before persistence and projection.
+- Cancellation is not proof that worker-thread or native work stopped. If a
+  started mutation cannot be interrupted safely, await its completion before
+  allowing a newer mutation on the same key, then recheck the generation. This
+  prevents an old write from landing after the new result.
+- Do not detach a task merely to return from a subscription callback. Either
+  await it in the runtime-tracked handler or register it with an explicit
+  lifecycle owner, cancellation path and bounded task registry.
+- Start skill-owned subprocess families with an inherited background resource
+  policy. On Windows use a below-normal priority class; on Linux use a positive
+  nice value and idle/best-effort I/O scheduling where available. Keep actual
+  CPU, I/O, RSS, priority, command owner and target skill/scenario in incident
+  evidence so throttling does not hide a regression.
+
+Acceptance must exercise contention, not only a fast mock. Run the handler
+against a realistically sized primary Yjs snapshot while a bounded competing
+CPU/I/O worker is active. Sample runtime heartbeat/status throughout and assert
+that it stays ready within the declared latency budget, event-loop lag remains
+bounded, exactly one terminal projection is delivered, and a rapid pair of
+commands leaves only the newest request id/state. Also verify flush errors are
+observable, cancellation leaves no orphan task, and the skill's bounded
+diagnostic tool reports active, completed, superseded, failed and rejected
+projection counts.
+
 Make hot projection writes idempotent before calling the SDK helper. Runtime
 projection code can skip physical no-op mutations, but guard/governance checks
 still see the attempted write. For refresh-heavy skills, keep a small

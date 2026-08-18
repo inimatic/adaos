@@ -10,7 +10,12 @@ import y_py as Y
 
 from adaos.services.yjs import doc as ydoc_module
 from adaos.services.yjs import store as ystore_module
-from adaos.services.yjs.doc import async_get_ydoc, async_read_ydoc, get_ydoc
+from adaos.services.yjs.doc import (
+    async_get_ydoc,
+    async_read_ydoc,
+    get_ydoc,
+    run_detached_ydoc_mutation,
+)
 from adaos.services.yjs.store import get_ystore_for_webspace, reset_ystore_for_webspace, ystore_write_metadata
 
 pytestmark = pytest.mark.anyio
@@ -1492,3 +1497,133 @@ async def test_submit_live_room_mutation_reports_pending_room(monkeypatch) -> No
     assert result["reason"] == "room_not_ready"
     diagnostics = ydoc_module.live_room_command_diagnostics_snapshot()
     assert diagnostics["pending_room_total"] == 1
+
+
+async def test_detached_ydoc_mutation_keeps_event_loop_responsive_and_thread_affine() -> None:
+    webspace_id = _webspace_id("detached-responsive")
+    caller_thread = threading.get_ident()
+    worker_threads: list[int] = []
+    ticks = 0
+    ydoc_module.reset_detached_mutation_diagnostics()
+
+    async def _ticker() -> None:
+        nonlocal ticks
+        while True:
+            ticks += 1
+            await asyncio.sleep(0.005)
+
+    def _mutate(ydoc: Y.YDoc) -> str:
+        worker_threads.append(threading.get_ident())
+        threading.Event().wait(0.1)
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "status", "ready")
+        return "applied"
+
+    ticker = asyncio.create_task(_ticker())
+    try:
+        result = await run_detached_ydoc_mutation(
+            webspace_id,
+            _mutate,
+            load_mark_roots=["data"],
+            governed=True,
+            write_owner="skill:test",
+        )
+        assert result == "applied"
+        assert worker_threads and worker_threads[0] != caller_thread
+        assert ticks >= 5
+        async with async_get_ydoc(webspace_id, read_only=True) as ydoc:
+            assert ydoc.get_map("data").get("status") == "ready"
+        diagnostics = ydoc_module.detached_mutation_diagnostics_snapshot()
+        assert diagnostics["submitted_total"] == 1
+        assert diagnostics["completed_total"] == 1
+        assert diagnostics["failed_total"] == 0
+        assert diagnostics["active_total"] == 0
+        assert diagnostics["last_result"]["owner"] == "skill:test"
+    finally:
+        ticker.cancel()
+        await asyncio.gather(ticker, return_exceptions=True)
+        reset_ystore_for_webspace(webspace_id)
+
+
+async def test_detached_ydoc_mutation_waits_for_started_worker_after_cancellation() -> None:
+    webspace_id = _webspace_id("detached-cancel")
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    ydoc_module.reset_detached_mutation_diagnostics()
+
+    def _mutate(ydoc: Y.YDoc) -> None:
+        worker_started.set()
+        release_worker.wait(2.0)
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "status", "persisted-after-cancel")
+
+    task = asyncio.create_task(
+        run_detached_ydoc_mutation(
+            webspace_id,
+            _mutate,
+            load_mark_roots=["data"],
+            governed=True,
+        )
+    )
+    try:
+        assert await asyncio.to_thread(worker_started.wait, 1.0)
+        task.cancel()
+        await asyncio.sleep(0.02)
+        assert task.done() is False
+        release_worker.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        async with async_get_ydoc(webspace_id, read_only=True) as ydoc:
+            assert ydoc.get_map("data").get("status") == "persisted-after-cancel"
+        diagnostics = ydoc_module.detached_mutation_diagnostics_snapshot()
+        assert diagnostics["cancel_wait_total"] == 1
+        assert diagnostics["completed_total"] == 1
+        assert diagnostics["active_total"] == 0
+        assert diagnostics["last_result"]["cancelled"] is True
+    finally:
+        release_worker.set()
+        reset_ystore_for_webspace(webspace_id)
+
+
+async def test_detached_ydoc_mutation_surfaces_flush_failure(monkeypatch) -> None:
+    webspace_id = _webspace_id("detached-flush-failure")
+    store = get_ystore_for_webspace(webspace_id)
+    ydoc_module.reset_detached_mutation_diagnostics()
+
+    async def _fail_write(*_args, **_kwargs) -> bool:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store, "write_update", _fail_write)
+
+    def _mutate(ydoc: Y.YDoc) -> None:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "status", "must-fail")
+
+    try:
+        with pytest.raises(OSError, match="disk full"):
+            await run_detached_ydoc_mutation(
+                webspace_id,
+                _mutate,
+                load_mark_roots=["data"],
+                governed=True,
+            )
+        diagnostics = ydoc_module.detached_mutation_diagnostics_snapshot()
+        assert diagnostics["failed_total"] == 1
+        assert diagnostics["completed_total"] == 0
+        assert diagnostics["active_total"] == 0
+        assert diagnostics["last_result"]["error"] == "OSError"
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
+async def test_detached_ydoc_mutation_rejects_nested_native_return_value() -> None:
+    webspace_id = _webspace_id("detached-native-return")
+    try:
+        with pytest.raises(TypeError, match="must not return or contain"):
+            await run_detached_ydoc_mutation(
+                webspace_id,
+                lambda ydoc: {"nested": [ydoc]},
+                governed=True,
+            )
+    finally:
+        reset_ystore_for_webspace(webspace_id)

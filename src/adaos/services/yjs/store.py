@@ -1085,11 +1085,12 @@ class AdaosMemoryYStore(BaseYStore):
                 self._last_apply_mode = apply_mode
         if slow_update_ms > 0.0:
             _log.warning(
-                "YStore apply_update blocked event loop webspace=%s update_bytes=%d elapsed_ms=%.1f updates=%d",
+                "YStore apply_update slow native replay webspace=%s update_bytes=%d elapsed_ms=%.1f updates=%d thread=%s",
                 self.path,
                 slow_update_bytes,
                 slow_update_ms,
                 len(updates),
+                threading.current_thread().name,
             )
 
     async def current_state_vector(self) -> bytes | None:
