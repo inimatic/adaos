@@ -80,6 +80,21 @@ def test_bootstrap_test_ctx_provides_runtime(monkeypatch, skill_slot):
     assert require_ctx() is original_ctx
 
 
+def test_bootstrap_test_ctx_honours_isolated_base_inside_host_adaos(monkeypatch, tmp_path):
+    host_base = tmp_path / ".adaos"
+    slot = host_base / "state" / "skill_factory" / "runs" / "task.demo" / "workspace" / "skill"
+    slot.mkdir(parents=True)
+    isolated_base = slot / ".adaos" / "tasks" / "task.demo" / "adaos-runtime"
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(isolated_base))
+
+    handle = bootstrap_test_ctx(skill_name="demo", skill_slot_dir=slot, secrets={})
+    try:
+        assert handle.ctx.paths.base_dir().resolve() == isolated_base.resolve()
+        assert handle.ctx.paths.state_dir().resolve().is_relative_to(isolated_base.resolve())
+    finally:
+        handle.teardown()
+
+
 def test_tests_entry_executes_script_with_context(monkeypatch, skill_slot):
     base = skill_slot.parents[6]
     monkeypatch.setenv("ADAOS_BASE_DIR", str(base))

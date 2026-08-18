@@ -140,6 +140,13 @@ class TestContextHandle:
 
 
 def _infer_base_dir(slot_dir: Path) -> Path:
+    override = os.getenv("ADAOS_BASE_DIR")
+    if override:
+        # An isolation boundary supplied by the worker/test harness is
+        # authoritative.  Isolated workspaces may themselves live below the
+        # host's `.adaos/state`; ancestor discovery would otherwise escape the
+        # task bucket and mutate host runtime state.
+        return Path(override).expanduser().resolve()
     for parent in slot_dir.resolve().parents:
         if parent.name == ".adaos":
             return parent
@@ -152,9 +159,6 @@ def _infer_base_dir(slot_dir: Path) -> Path:
         if paths is not None and hasattr(paths, "base_dir"):
             base_dir = paths.base_dir()
             return base_dir if isinstance(base_dir, Path) else Path(base_dir).resolve()
-    override = os.getenv("ADAOS_BASE_DIR")
-    if override:
-        return Path(override).expanduser().resolve()
     return Path(Settings.from_sources().base_dir).expanduser().resolve()
 
 
