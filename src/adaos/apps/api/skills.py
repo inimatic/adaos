@@ -309,6 +309,7 @@ class RuntimePrepareReq(BaseModel):
     name: str
     run_tests: bool = False
     slot: str | None = None
+    allow_deactivated: bool = False
 
 
 class RuntimeActivateReq(BaseModel):
@@ -704,12 +705,15 @@ async def push(body: PushReq, mgr: SkillManager = Depends(_get_manager)):
 
 @router.post("/runtime/prepare")
 async def runtime_prepare(body: RuntimePrepareReq, mgr: SkillManager = Depends(_get_manager)):
+    if body.allow_deactivated and not body.run_tests:
+        raise HTTPException(status_code=400, detail="deactivated runtime recovery requires run_tests=true")
     try:
         result = await asyncio.to_thread(
             mgr.prepare_runtime,
             body.name,
             run_tests=body.run_tests,
             preferred_slot=body.slot,
+            allow_deactivated=body.allow_deactivated,
         )
     except (SkillCoreCompatibilityError, SkillDependencyIsolationError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

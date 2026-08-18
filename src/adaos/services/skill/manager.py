@@ -287,6 +287,28 @@ def _is_newer_quarantine_recovery(
         return False
 
 
+def _deactivation_applies_to_runtime(
+    value: Mapping[str, Any] | None,
+    *,
+    version: str,
+    slot: str | None = None,
+) -> bool:
+    """Return whether a blocking marker targets this runtime selection."""
+
+    payload = _mapping_or_empty(value)
+    if not bool(payload.get("deactivated")):
+        return False
+    marker_version = str(payload.get("version") or "").strip()
+    marker_slot = str(payload.get("slot") or "").strip().upper()
+    selected_version = str(version or "").strip()
+    selected_slot = str(slot or "").strip().upper()
+    if marker_version and marker_version != selected_version:
+        return False
+    if marker_slot and selected_slot and marker_slot != selected_slot:
+        return False
+    return True
+
+
 def _skill_tool_yjs_governance(tool_spec: Mapping[str, Any] | None) -> dict[str, Any]:
     spec = _mapping_or_empty(tool_spec)
     governance = dict(_mapping_or_empty(spec.get("yjs_governance") or spec.get("yjs")))
@@ -2051,7 +2073,11 @@ class SkillManager:
         env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=name)
         deactivation = env.read_deactivation()
         newer_recovery = _is_newer_quarantine_recovery(deactivation, version)
-        if bool(deactivation.get("deactivated")) and not allow_deactivated and not newer_recovery:
+        if (
+            _deactivation_applies_to_runtime(deactivation, version=version)
+            and not allow_deactivated
+            and not newer_recovery
+        ):
             reason = str(deactivation.get("reason") or "deactivated").strip() or "deactivated"
             raise RuntimeError(f"skill '{name}' is deactivated; runtime prepare skipped ({reason})")
         env.prepare_version(version)
@@ -2293,6 +2319,11 @@ class SkillManager:
             previous_version=previous_active_version,
             previous_slot=previous_active_slot,
         )
+        if previous_deactivation and (
+            str(previous_deactivation.get("version") or "").strip(),
+            str(previous_deactivation.get("slot") or "").strip().upper(),
+        ) != (target_version, target_slot):
+            self._record_slot_quarantine(env=env, payload=previous_deactivation)
         env.clear_deactivation()
         try:
             after_activate = self._invoke_slot_lifecycle_hook(
@@ -2362,6 +2393,7 @@ class SkillManager:
         target_slot_meta = metadata.setdefault("slots", {}).setdefault(target_slot, {})
         target_slot_meta.setdefault("version", target_version)
         target_slot_meta.setdefault("runtime_bucket", env.runtime_bucket(target_version))
+        target_slot_meta.pop("quarantine", None)
         target_slot_meta["lifecycle"] = dict(lifecycle)
         env.write_version_metadata(target_version, metadata)
         self._prune_runtime_history(env=env, current_version=target_version, previous_version=previous_active_version)
@@ -2650,6 +2682,7 @@ class SkillManager:
             "source": deactivation_source,
             "committed_core_switch": bool(committed_core_switch),
         }
+        self._record_slot_quarantine(env=env, payload=payload)
         env.write_deactivation(payload)
         try:
             install_skill_in_capacity(name, version, active=False)
@@ -2790,7 +2823,17 @@ class SkillManager:
         )
         history = metadata.get("history", {})
         deactivation = env.read_deactivation()
-        deactivated = bool(deactivation.get("deactivated"))
+        deactivation_applies = _deactivation_applies_to_runtime(
+            deactivation,
+            version=version,
+            slot=active_slot,
+        )
+        alternate_quarantined = _deactivation_applies_to_runtime(
+            deactivation,
+            version=version,
+            slot=alternate_slot,
+        )
+        deactivated = bool(deactivation.get("deactivated")) and deactivation_applies
         state: Dict[str, Any] = {
             "name": name,
             "version": version,
@@ -2800,9 +2843,10 @@ class SkillManager:
             "ready": ready,
             "active_selection_valid": bool(active_selection["valid"]),
             "active_selection_reason": active_selection["reason"],
-            "recoverable_slot": alternate_slot if alternate["valid"] else None,
+            "recoverable_slot": alternate_slot if alternate["valid"] and not alternate_quarantined else None,
             "active": not deactivated,
             "deactivated": deactivated,
+            "deactivation_applies_to_active": deactivation_applies,
             "deactivation": deactivation,
             "tests": slot_meta.get("tests", {}),
             "history": history,
@@ -2858,7 +2902,17 @@ class SkillManager:
         )
         history = metadata.get("history", {})
         deactivation = env.read_deactivation()
-        deactivated = bool(deactivation.get("deactivated"))
+        deactivation_applies = _deactivation_applies_to_runtime(
+            deactivation,
+            version=version,
+            slot=active_slot,
+        )
+        alternate_quarantined = _deactivation_applies_to_runtime(
+            deactivation,
+            version=version,
+            slot=alternate_slot,
+        )
+        deactivated = bool(deactivation.get("deactivated")) and deactivation_applies
         state: Dict[str, Any] = {
             "name": name,
             "version": version,
@@ -2868,9 +2922,10 @@ class SkillManager:
             "ready": ready,
             "active_selection_valid": bool(active_selection["valid"]),
             "active_selection_reason": active_selection["reason"],
-            "recoverable_slot": alternate_slot if alternate["valid"] else None,
+            "recoverable_slot": alternate_slot if alternate["valid"] and not alternate_quarantined else None,
             "active": not deactivated,
             "deactivated": deactivated,
+            "deactivation_applies_to_active": deactivation_applies,
             "deactivation": deactivation,
             "tests": slot_meta.get("tests", {}),
             "history": history,
@@ -2925,6 +2980,7 @@ class SkillManager:
             "committed_core_switch": bool(committed_core_switch),
             "dev": True,
         }
+        self._record_slot_quarantine(env=env, payload=payload)
         env.write_deactivation(payload)
         try:
             install_skill_in_capacity(name, version, active=False, dev=True)
@@ -4538,7 +4594,10 @@ class SkillManager:
         slot_meta = metadata.get("slots", {}).get(selected_slot, {})
         manifest_path = Path(slot_meta.get("resolved_manifest") or paths.resolved_manifest)
         source_root = paths.src_dir / "skills" / name
-        if not manifest_path.is_file():
+        quarantine = _mapping_or_empty(slot_meta.get("quarantine"))
+        if bool(quarantine.get("quarantined")):
+            reason = "quarantined_runtime"
+        elif not manifest_path.is_file():
             reason = "resolved_manifest_missing"
         elif not source_root.is_dir() or not any(source_root.iterdir()):
             reason = "skill_source_missing"
@@ -4560,6 +4619,36 @@ class SkillManager:
             "resolved_manifest": str(manifest_path),
             "skill_source_root": str(source_root),
         }
+
+    def _record_slot_quarantine(
+        self,
+        *,
+        env: SkillRuntimeEnvironment,
+        payload: Mapping[str, Any],
+    ) -> None:
+        if (
+            not bool(payload.get("deactivated"))
+            or bool(payload.get("transient"))
+            or str(payload.get("status") or "quarantined").strip() != "quarantined"
+        ):
+            return
+        version = str(payload.get("version") or "").strip()
+        slot = str(payload.get("slot") or "").strip().upper()
+        if not version or slot not in {"A", "B"}:
+            return
+        metadata = env.read_version_metadata(version)
+        slot_meta = metadata.setdefault("slots", {}).setdefault(slot, {})
+        slot_meta["quarantine"] = {
+            "quarantined": True,
+            "reason": str(payload.get("reason") or "deactivated").strip(),
+            "failure_kind": str(payload.get("failure_kind") or "").strip(),
+            "failed_stage": str(payload.get("failed_stage") or "").strip(),
+            "source": str(payload.get("source") or "").strip(),
+            "operation_id": str(payload.get("operation_id") or "").strip(),
+            "comment": str(payload.get("comment") or "").strip(),
+            "updated_at": time.time(),
+        }
+        env.write_version_metadata(version, metadata)
 
     def _select_valid_rollback_runtime(
         self,
@@ -4590,11 +4679,15 @@ class SkillManager:
 
         rejected: list[str] = []
         seen: set[tuple[str, str]] = set()
+        deactivation = env.read_deactivation()
         for version, slot, source in candidates:
             identity = (version, slot)
             if not version or slot not in {"A", "B"} or identity == (current_version, current_slot) or identity in seen:
                 continue
             seen.add(identity)
+            if _deactivation_applies_to_runtime(deactivation, version=version, slot=slot):
+                rejected.append(f"{source}:{version}/{slot}:quarantined_runtime")
+                continue
             evidence = self._runtime_selection_evidence(
                 env=env,
                 name=name,
@@ -5286,6 +5379,12 @@ class SkillManager:
             previous_version=previous_active_version,
             previous_slot=previous_active_slot,
         )
+        if previous_deactivation and (
+            str(previous_deactivation.get("version") or "").strip(),
+            str(previous_deactivation.get("slot") or "").strip().upper(),
+        ) != (target_version, target_slot):
+            self._record_slot_quarantine(env=env, payload=previous_deactivation)
+        env.clear_deactivation()
         try:
             lifecycle["after_activate"] = self._invoke_slot_lifecycle_hook(
                 env=env,
@@ -5335,6 +5434,7 @@ class SkillManager:
         target_slot_meta = metadata.setdefault("slots", {}).setdefault(target_slot, {})
         target_slot_meta.setdefault("version", target_version)
         target_slot_meta.setdefault("runtime_bucket", env.runtime_bucket(target_version))
+        target_slot_meta.pop("quarantine", None)
         target_slot_meta["lifecycle"] = dict(lifecycle)
         env.write_version_metadata(target_version, metadata)
         self._prune_runtime_history(env=env, current_version=target_version, previous_version=previous_active_version)

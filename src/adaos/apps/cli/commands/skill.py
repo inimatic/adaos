@@ -1366,6 +1366,11 @@ def cmd_validate(
 def cmd_install(
     name: str,
     test: bool = typer.Option(False, "--test", help=_("cli.skill.install.option.test")),
+    recover: bool = typer.Option(
+        False,
+        "--recover",
+        help="Prepare and test a replacement slot for a deactivated runtime.",
+    ),
     slot: Optional[str] = typer.Option(None, "--slot", help=_("cli.skill.install.option.slot")),
     silent: bool = typer.Option(False, "--silent", help=_("cli.skill.install.option.silent")),
     safe: bool = typer.Option(False, "--safe", help=_("cli.skill.install.option.safe")),
@@ -1375,6 +1380,8 @@ def cmd_install(
     source_mode = str(source or "registry").strip().lower()
     if source_mode not in {"registry", "workspace"}:
         raise typer.BadParameter("source must be 'registry' or 'workspace'", param_hint="--source")
+    if recover and not test:
+        raise typer.BadParameter("--recover requires --test", param_hint="--recover")
 
     if source_mode == "registry" and not local and _hub_api_ready(timeout_s=3.0):
         # API-first: install/prepare/activate via the running hub server (works even if repo root is stale vs active slot).
@@ -1401,7 +1408,12 @@ def cmd_install(
         try:
             prep = _hub_post(
                 "/api/skills/runtime/prepare",
-                body={"name": skill_id, "run_tests": bool(test), "slot": (slot or None)},
+                body={
+                    "name": skill_id,
+                    "run_tests": bool(test),
+                    "slot": (slot or None),
+                    "allow_deactivated": bool(recover),
+                },
             )
         except Exception as exc:
             typer.secho(f"runtime preparation failed (hub api): {exc}", fg=typer.colors.RED)
@@ -1513,12 +1525,14 @@ def cmd_install(
         raise typer.Exit(1)
 
     try:
-        runtime = mgr.prepare_runtime(
-            skill_name,
-            path=runtime_source_path,
-            run_tests=test,
-            preferred_slot=slot,
-        )
+        prepare_kwargs: dict[str, Any] = {
+            "path": runtime_source_path,
+            "run_tests": test,
+            "preferred_slot": slot,
+        }
+        if recover:
+            prepare_kwargs["allow_deactivated"] = True
+        runtime = mgr.prepare_runtime(skill_name, **prepare_kwargs)
     except Exception as exc:
         typer.secho(f"runtime preparation failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(1) from exc

@@ -267,6 +267,44 @@ def test_skill_api_install_rejects_strict_validation_before_runtime_prepare() ->
     assert "prepare_runtime:demo" not in skill_mgr.calls
 
 
+def test_skill_runtime_prepare_recovery_requires_tests_and_forwards_explicit_flag() -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _RecoverySkillManager(_FakeSkillManager):
+        def prepare_runtime(self, name: str, **kwargs: Any):
+            calls.append({"name": name, **kwargs})
+            return SimpleNamespace(
+                name=name,
+                version="1.0.0",
+                slot="B",
+                resolved_manifest="resolved.manifest.json",
+                tests={"pytest": SimpleNamespace(status="passed")},
+            )
+
+    client = _make_client(_RecoverySkillManager(), _FakeScenarioManager())
+
+    rejected = client.post(
+        "/api/skills/runtime/prepare",
+        json={"name": "demo", "allow_deactivated": True, "run_tests": False},
+    )
+    assert rejected.status_code == 400
+    assert calls == []
+
+    accepted = client.post(
+        "/api/skills/runtime/prepare",
+        json={"name": "demo", "allow_deactivated": True, "run_tests": True, "slot": "B"},
+    )
+    assert accepted.status_code == 200
+    assert calls == [
+        {
+            "name": "demo",
+            "run_tests": True,
+            "preferred_slot": "B",
+            "allow_deactivated": True,
+        }
+    ]
+
+
 def test_skill_api_list_prefers_workspace_version(monkeypatch) -> None:
     skill_mgr = _FakeSkillManager()
     scenario_mgr = _FakeScenarioManager()

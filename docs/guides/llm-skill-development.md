@@ -1557,6 +1557,28 @@ genuinely reconnect-stable and bounded by domain rules.
 
 Every skill should make failures diagnosable.
 
+Install-time and migration tests are part of the availability boundary. A
+failing test may quarantine the complete skill, so tests that launch threads,
+subprocesses, local execution jobs, sockets, or temporary services must:
+
+- use an isolated runtime/state root and deterministic owner/idempotency keys;
+- budget both execution time and scheduler/startup delay instead of assuming an
+  idle node;
+- poll a bounded terminal contract and cancel non-terminal work on timeout;
+- include attempt id, last status, bounded failure data, and last heartbeat in
+  the raised error or preserved test log;
+- prove teardown leaves no child process, listener, worker, or shared runtime
+  mutation behind;
+- keep one explicit integration test for the real provider contract, while
+  testing domain behavior with deterministic fakes where provider scheduling
+  is not the behavior under test.
+
+Do not make migration pass by blindly retrying a failed test or only increasing
+its timeout. First classify whether the failure is a deterministic domain
+failure, provider failure, scheduler starvation, or teardown leak. Preserve
+that classification in candidate-test diagnostics so a future LLM repair does
+not convert an availability incident into an intermittent one.
+
 Use:
 
 - stable error codes
@@ -1642,7 +1664,10 @@ Before publishing:
   subscription invocation report that same source/version. If a lifecycle path
   only prepared the slot, run `adaos skill activate NAME --slot SLOT --version
   VERSION`; testing prepared source while an older slot remains active is not
-  runtime acceptance.
+  runtime acceptance. If the current runtime is quarantined, use the explicit
+  repair path `adaos skill install NAME --source workspace --local --recover
+  --test --silent`; recovery without tests is rejected, and the quarantine must
+  remain effective until candidate activation succeeds.
 - verify `data_routes` exists for browser-facing Yjs, stream, details, or
   diagnostic surfaces
 - verify every tool-backed surface names its exact tool and has a causal

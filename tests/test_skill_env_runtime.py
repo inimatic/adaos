@@ -1251,6 +1251,75 @@ def test_patch_runtime_uses_ab_slots_and_rollback_restores_slot_version(monkeypa
     assert mgr.runtime_status(skill_name)["version"] == "0.1.0"
 
 
+def test_rollback_rejects_quarantined_previous_slot_without_blocking_active_slot(monkeypatch) -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
+    skill_name = "quarantined_rollback_skill"
+    skill_dir = Path(ctx.paths.skills_dir()) / skill_name
+    (skill_dir / "handlers").mkdir(parents=True, exist_ok=True)
+    (skill_dir / "handlers" / "main.py").write_text(
+        "def handle(payload=None):\n    return payload or {}\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "skill.yaml").write_text(
+        "name: quarantined_rollback_skill\nversion: '1.0.0'\n",
+        encoding="utf-8",
+    )
+    env = SkillRuntimeEnvironment(skills_root=Path(ctx.paths.skills_dir()), skill_name=skill_name)
+
+    monkeypatch.setattr(mgr, "_prepare_runtime_environment", lambda **kwargs: (Path("python"), []))
+    monkeypatch.setattr(
+        mgr,
+        "_enrich_manifest",
+        lambda **kwargs: {
+            "name": skill_name,
+            "version": "1.0.0",
+            "slot": kwargs["slot"].slot,
+            "source": str(kwargs["skill_dir"]),
+            "runtime": {
+                "skill_env": str(kwargs["slot"].skill_env_path),
+                "skill_memory": str(kwargs["slot"].skill_memory_path),
+            },
+            "tools": {},
+            "default_tool": "",
+            "data_migration_tool": "",
+            "data_migration": {},
+        },
+    )
+    monkeypatch.setattr(skill_manager_module, "install_skill_in_capacity", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mgr, "_smoke_import", lambda **kwargs: None)
+
+    first = mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="A")
+    mgr.activate_runtime(skill_name, version=first.version, slot="A")
+    mgr.deactivate_runtime(
+        skill_name,
+        reason="runtime_migration_failed",
+        failure_kind="migration",
+        failed_stage="tests",
+        source="test",
+    )
+    second = mgr.prepare_runtime(
+        skill_name,
+        run_tests=False,
+        preferred_slot="B",
+        allow_deactivated=True,
+    )
+    mgr.activate_runtime(skill_name, version=second.version, slot="B")
+
+    status = mgr.runtime_status(skill_name)
+    assert status["active_slot"] == "B"
+    assert status["active"] is True
+    assert status["deactivated"] is False
+    assert status["deactivation_applies_to_active"] is False
+    assert status["recoverable_slot"] is None
+    assert status["deactivation"] == {}
+    assert env.read_version_metadata("1.0.0")["slots"]["A"]["quarantine"]["quarantined"] is True
+
+    with pytest.raises(RuntimeError, match="quarantined_runtime"):
+        mgr.rollback_runtime(skill_name)
+    assert env.read_active_slot("1.0.0") == "B"
+
+
 def test_minor_runtime_migrates_bucket_data_and_rollback_restores_previous_bucket(monkeypatch) -> None:
     ctx = get_ctx()
     mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
