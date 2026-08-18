@@ -289,6 +289,10 @@ background work, or heavy resources:
   subscription discovery and again under an execution-only module name for a
   tool call. Do not call bus registration helpers manually, depend on module
   `__name__`, or use import count as lifecycle state.
+- Test helpers must resolve the handler from the skill under test, not whichever
+  global `handlers.main` package another test imported first. Run each skill's
+  isolated candidate suite and a combined workspace suite; both must pass in a
+  single process and with a different collection order.
 - Make reloads idempotent. Runtime-owned bus subscriptions are deduplicated by
   the core, but skill-owned threads, timers, executors, external callbacks, and
   resource handles still need an owner token, stop signal, and cleanup hook.
