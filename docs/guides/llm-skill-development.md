@@ -470,6 +470,15 @@ path records that it does not enforce hostile-code or network isolation and
 must never be promoted to scientific evidence merely because a workflow smoke
 completed.
 
+For durable immutable files owned by a skill, declare `storage.blob` and use
+`adaos.sdk.data.blob.store()`. `put_bytes`/`put_json` return a content-addressed
+object with an opaque binding ref; `materialize_path` verifies the digest and
+returns a local path only for a provider that supports local materialization.
+Do not derive `.adaos/workspace/skills/.runtime/<skill>/<version>/data` or rely
+on `ADAOS_SKILL_DATA_DIR` in business code. Relational records may retain the
+opaque blob ref and digest; they must not invent a second physical database or
+let a caller select a filesystem root.
+
 When some source artifacts are withheld from a stage, use artifact item
 `context_policy` and request an audience-scoped Development Session. Do not
 rely on a prompt instruction such as "ignore initial-review.md" while exposing

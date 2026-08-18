@@ -421,6 +421,14 @@ adapter may resolve the same ref. That extension must not force the local
 first milestone to duplicate files in a new database or require Codex to
 discover an undocumented MCP server.
 
+Skill-internal immutable files use the adjacent neutral `storage.blob`
+capability. The SDK returns an owner-scoped opaque binding and
+content-addressed object receipt; a local filesystem provider may materialize
+the verified object for a Development Session without revealing or accepting
+another skill's data root. Relational storage and blob storage remain separate
+capabilities under one owner boundary, so a component never installs its own
+database merely to retain structured metadata plus files.
+
 ## Digest-Bound Traceability
 
 `adaos.traceability.graph.v1` is a domain-neutral graph for connecting exact
