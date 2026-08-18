@@ -184,7 +184,7 @@ scientific conclusion. A local demo is not production acceptance.
 | ARF7.1 | Research Workbench creates/focuses a local research Project, admits local artifact groups, exposes provenance/coverage and a deterministic formulation review, and creates a scoped pre-Codex Development Session | `validated-local`, including strengthened TLP admission; authenticated browser reload receipt pending | active UX acceptance gate |
 | ARF7.2 | Codex realizes the exact brief as a validated and published TLP direction skill | `validated-local`; direction-skill checkpoint published, ProjectRelease not yet created | complete locally |
 | ARF7.3 | Clean from-raw research compilation is calibrated under matched C0-C4 TLP arms; the published direction then instantiates and runs the accepted local workflow | `hypothesis` | next integrated authoring/scientific gate alongside ARF6 |
-| ARF7.4 | Workbench separates live Direction/Agenda/Task/ImplementationTrack from distributable Project, migrates TLP calibration into one task lineage, and proves generic outline/full-page navigation | `specified` | target-model correction before autonomy |
+| ARF7.4 | Workbench separates live Direction/Agenda/Task/ImplementationTrack from distributable Project, migrates TLP calibration into one task lineage, and proves generic outline/full-page navigation | `implemented-partial` | domain normalization, Project contracts, generic navigation, and TLP lineage are locally proven; release/export and full recovery proof remain open |
 | ARF8 | aResearcher completes a mandate-bound autonomous TLP loop through ResearchRelease | `hypothesis` | after ARF7.4 |
 | ARF9 | ResearchCompilerBench/ARRB measures artifact-to-experiment compilation and replication on frozen multi-domain tasks and matched budgets | `hypothesis` | compilation track after ARF7.3; autonomous replication track after ARF8 |
 | ARF10 | Multi-domain evidence, scale, security, and operations justify broader claims/core promotion | `deferred` | long-term |
@@ -1459,19 +1459,19 @@ a top-level direction or ordinary Desktop application.
   schemas with explicit ids, revisions, parent/branch/dependency refs, statuses,
   and exact Project/DevelopmentSession/Study/Release refs. Do not encode a
   universal one-direction/one-task/one-skill cardinality.
-- [ ] `[must]` `ARF7.4-02` Make the research-domain index authoritative for
+- [x] `[must]` `ARF7.4-02` Make the research-domain index authoritative for
   direction discovery. Workbench must not scan Projects, registry descriptions,
   temporary skills, or Builder sessions to reconstruct the portfolio.
-- [ ] `[must]` `ARF7.4-03` Separate logical ResearchDirection/ResearchTask
+- [x] `[must]` `ARF7.4-03` Separate logical ResearchDirection/ResearchTask
   artifact ownership from physical skill custody. Preserve owner-scoped SDK
   isolation and classify artifacts as owned, inherited, admitted-read-only,
   generated, or evidence; never expose another skill's raw binding.
-- [ ] `[must]` `ARF7.4-04` Migrate existing one-component direction Projects and
+- [x] `[must]` `ARF7.4-04` Migrate existing one-component direction Projects and
   calibration candidates idempotently: retain old ids as aliases/provenance,
   create canonical direction/task/track refs, preserve journals/artifacts and
   digests, and remove neither source nor runtime data until copied and verified
   by an explicit skill migration.
-- [ ] `[should]` `ARF7.4-05` Add aggregate direction status derived from task,
+- [x] `[should]` `ARF7.4-05` Add aggregate direction status derived from task,
   blocker, active operation, evidence, and release projections. It is a read
   model with freshness/error metadata, not a second lifecycle truth.
 
@@ -1480,12 +1480,12 @@ a top-level direction or ordinary Desktop application.
 - [ ] `[must]` `ARF7.4-06` Bind every ResearchPrototype stage, decision ledger,
   accepted ResearchCompilation, AutomationBrief, clarification, and traceability
   edge to exact direction/task/revision ids. Reject stale or cross-task refs.
-- [ ] `[must]` `ARF7.4-07` Model branches at the narrowest type: new scientific
+- [x] `[must]` `ARF7.4-07` Model branches at the narrowest type: new scientific
   question -> ResearchTask; alternative framing -> formulation branch;
   protocol/analysis change -> immutable revision; engineering architecture ->
   ImplementationTrack; implementation candidate -> candidate release;
   seed/config -> Trial/Run; infrastructure retry -> ExecutionAttempt.
-- [ ] `[must]` `ARF7.4-08` Support the first bounded policy of one accepted task,
+- [x] `[must]` `ARF7.4-08` Support the first bounded policy of one accepted task,
   one active ImplementationTrack, and one primary writable skill without baking
   that simplification into schemas or ownership APIs.
 - [ ] `[should]` `ARF7.4-09` Add ResearchAgenda DAG validation for contribution
@@ -1497,17 +1497,17 @@ a top-level direction or ordinary Desktop application.
 
 #### Project and Builder boundary
 
-- [ ] `[must]` `ARF7.4-11` Make Builder DevelopmentSession domain-neutral and
+- [x] `[must]` `ARF7.4-11` Make Builder DevelopmentSession domain-neutral and
   always Project-scoped. Replace mandatory research-specific fields/provider
   constants with generic subject refs, typed contract inputs, acceptance
   profiles, agent profile, focus, writable targets, and read-only context;
   Research Fabric supplies its own overlay.
-- [ ] `[must]` `ARF7.4-12` Extend `adaos.project.v1` with validated member role,
+- [x] `[must]` `ARF7.4-12` Extend `adaos.project.v1` with validated member role,
   exposure (`application|project_only|advanced`), bound/shared lifecycle,
   relations (`realizes|presents|evaluates|uses`), and project-wide compatibility
   checks. Project-only members retain packages/digests but stay out of ordinary
   Desktop/Catalog and independent install/remove.
-- [ ] `[must]` `ARF7.4-13` Complete Artifact Pipeline AP2 composition locks:
+- [x] `[must]` `ARF7.4-13` Complete Artifact Pipeline AP2 composition locks:
   ProjectRelease binds the exact Project definition, roles/exposure/lifecycle,
   entry points, profiles, validation policy, and Project dependency closure.
   Candidate acceptance validates affected consumers/entry points, not only the
@@ -1573,7 +1573,7 @@ a top-level direction or ordinary Desktop application.
 
 #### TLP acceptance and comparative evidence
 
-- [ ] `[must]` `ARF7.4-28` Re-home the existing TLP compiler calibration under
+- [x] `[must]` `ARF7.4-28` Re-home the existing TLP compiler calibration under
   one ResearchDirection, one ResearchTask, one matched Study, and C0-C4
   condition/ImplementationTrack records. Preserve immutable v1/v5 scores and
   failures; no migration may retroactively improve them.
@@ -1591,6 +1591,49 @@ a top-level direction or ordinary Desktop application.
   multi-task agenda with dependent and parallel tasks and compare explicit
   project-to-task planning with a direct project-sized prompt under matched
   models, tools, budgets, and expert evaluation.
+
+#### ARF7.4 implementation checkpoint (2026-08-18)
+
+The completed boxes above are backed by local contract tests and the installed
+TLP projection, not only by UI fixtures. The current implementation provides:
+
+- versioned Direction, Agenda, Task, Compilation, and ImplementationTrack
+  records, an authoritative direction index, owner/admission-aware artifact
+  projections, idempotent legacy aliases, and derived direction status;
+- domain-neutral, Project-scoped Development Sessions with typed subject and
+  contract inputs, writable targets, read-only context, and scope review;
+- validated Project member role/exposure/lifecycle/relations and immutable
+  ProjectRelease composition locks in the Artifact Pipeline;
+- the generic `outlineDetail` layout ABI and client renderer, exact selected
+  task/track routing, searchable direction selection, and full-page Workbench
+  detail views; and
+- canonical `research-direction:tlp_compiler_calibration` with one accepted
+  task, accepted Compilation
+  `research-compilation:tlp_compiler_calibration.task-001:1`, matched Study
+  `study:tlp-research-compiler-calibration-v5:fixed_downstream`, the admitted
+  notebook source, and five immutable failed C0-C4 ImplementationTracks.
+
+The following checklist items remain open by design. `ARF7.4-01` still needs a
+first-class Study/Release-ref schema instead of only typed external Study
+metadata. `ARF7.4-06` needs exhaustive stale/cross-task proofs for every legacy
+formulation stage. `ARF7.4-09/10` need full Agenda cycle/overlap/integration and
+review-to-follow-up behavior. `ARF7.4-14/15` need complete least-context and
+legacy Builder migration proofs. `ARF7.4-16..21` need user preferences, deep
+links, lazy/virtualized navigation, specialized timeline/graph/table views,
+and activity federation beyond Orchestrator/evaluator records.
+`ARF7.4-22..24` remain the publication/export track. `ARF7.4-29` is traversable
+for all records that exist, but the historical calibration has no retained
+DevelopmentSession ref or candidate ProjectRelease. `ARF7.4-30` has local API,
+schema, migration, and Forge-route evidence but not yet the complete
+restart/reconnect, ProjectRelease, and joined-journal acceptance proof. Thus
+ARF7.4 is materially implemented but not closed.
+
+Published local checkpoint: Research Orchestrator `0.27.0` (workspace release
+`fc713e2f`), Research Workbench `0.1.4` (Forge commit `eed9fefe`), Research
+Evaluator `0.1.15`, and calibration runner `0.1.9`. The Workbench scenario is
+strictly validated with exact read policies for outline, lineage, and Study
+surfaces. Re-adoption is idempotent and preserves the frozen v5 score of `0/5`
+evidence-valid completions.
 
 ## ARF8. Autonomous TLP Closed Loop and Scientific Release
 

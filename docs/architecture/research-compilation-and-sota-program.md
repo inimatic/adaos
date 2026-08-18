@@ -380,6 +380,22 @@ local trial receipt explicitly says `hostile_isolation=false` and
 `network_enforced=false`; it is developer/workflow evidence, not a hostile-code
 sandbox or confirmatory scientific run.
 
+#### Canonical Workbench integration checkpoint
+
+On 2026-08-18 the immutable v5 records were adopted idempotently into
+`research-direction:tlp_compiler_calibration`, task
+`research-task:tlp_compiler_calibration.task-001`. The task references accepted
+Compilation `research-compilation:tlp_compiler_calibration.task-001:1`, matched
+Study `study:tlp-research-compiler-calibration-v5:fixed_downstream`, one owned
+and admitted notebook source, and five C0-C4 ImplementationTracks. Workbench
+reads these through exact task-scoped outline, Study, and lineage routes.
+
+This integration used Research Orchestrator `0.27.0`, Research Evaluator
+`0.1.15`, calibration runner `0.1.9`, and Research Workbench `0.1.4`. It changes
+neither the frozen task/summary/result digests nor the `0/5` EVC outcome. It is
+evidence that the domain and UI projection preserve a source-to-result chain;
+it is not a rerun, ProjectRelease, ResearchRelease, or comparative SOTA result.
+
 ## Evidence Required for a Competitive Claim
 
 A TLP receipt is a case study. A defensible comparative or SOTA claim requires:

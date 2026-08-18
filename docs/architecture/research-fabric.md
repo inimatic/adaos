@@ -1684,6 +1684,16 @@ compilations, Builder sessions, costs, failures, and evaluator results below the
 task's Development/Evaluation nodes. They do not appear as top-level research
 directions or ordinary Desktop/Catalog applications.
 
+The 2026-08-18 local checkpoint realizes this projection for the records that
+survived the frozen v5 calibration: one canonical Direction and Task, the
+notebook as an owned/admitted source, one accepted ResearchCompilation, five
+immutable failed ImplementationTracks, and one evaluator-owned Study ref. The
+generic outline/full-page layout and exact task/track data routes are reusable
+core ABI; TLP node construction remains Orchestrator-owned. Historical runs did
+not retain DevelopmentSession or candidate ProjectRelease identities, so those
+links are explicitly absent rather than reconstructed from names. Publication
+and portable Direction/Research releases remain later capability effects.
+
 ### Autonomous TLP acceptance
 
 TLP is also the first transparent autonomous-research harness. After the local
