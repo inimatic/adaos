@@ -13,6 +13,11 @@ depend on:
 - route contracts for local HTTP, root media relay, hub WebRTC, and
   member-browser direct media
 
+Generic distributed service membership, partition/replica topology,
+authority/freshness, and route resolution may also be core responsibilities,
+but they are not media-plane semantics. Their boundary is defined in
+[Distributed Service And Data Topology](distributed-service-and-data-topology.md).
+
 Skills own the meaning of media:
 
 - scanning user directories
@@ -54,7 +59,8 @@ deduplication, domain metadata, playlists, watch history, and any product-level
 catalog state.
 
 The first product slice using this boundary is documented in
-[Media Center MVP](media-center-mvp.md).
+[Media Center MVP](media-center-mvp.md). Its distributed target is documented
+in [Distributed Media Center Target Architecture](media-center-target-architecture.md).
 
 ## Compatibility Rules
 

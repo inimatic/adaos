@@ -209,6 +209,48 @@ Builder ProjectRelease compatibility only. Remote Project registry entries and
 full transactional multi-component removal are not admission dependencies for
 the pre-Codex handoff.
 
+### Distributed deployment and live service topology
+
+Project release, distributed deployment, presentation placement, and live
+service/data topology are separate identities:
+
+| Object | Question answered |
+| --- | --- |
+| `ProjectRelease` | What exact compatible software set is deliverable? |
+| `ProjectDeployment` | On which nodes should each component be active? |
+| `ComponentActivation` | What exact component is observed active on one node? |
+| `ProjectPlacement` | In which webspace/presentation context is an entry point exposed? |
+| `ServiceGroup` / `ServiceInstance` | Which activated runtimes currently form one logical service? |
+| `Dataset` / `Partition` / `Replica` | Where is distributed state authoritative, derived, cached, fresh, or unavailable? |
+
+The current `adaos.project.placement.v1` contract is webspace-oriented and must
+not be overloaded with per-component node activation. The target core adds a
+durable `ProjectDeployment` desired-state record, immutable reviewed deployment
+plans, per-node activation evidence, and journaled install/update/drain/remove
+operations. Initial placement modes include explicit singleton,
+`selected_nodes`, capability-based `all_matching`, `per_endpoint`, and
+`co_located_with` policies. Webspace exposure remains a separate
+`ProjectPlacement` decision.
+
+A subnet-wide rollout is not one atomic filesystem transaction. Each node
+activation is transactional and idempotent within its authority boundary; the
+deployment records partial success, compatible version skew, stop policy,
+bounded retry, and rollback evidence truthfully. Stateful component removal
+cordons and drains the runtime before package removal. Runtime/derived-data
+retention remains an independent declared decision.
+
+An active package does not by itself prove a ready distributed service or a
+fresh replica. `ComponentActivation` feeds the generic
+[Distributed Service And Data Topology](distributed-service-and-data-topology.md),
+which owns service membership, authority leases/epochs, partitions, replicas,
+freshness and route facts. Domain adapters own partition meaning, payloads,
+snapshot/delta implementation, conflict resolution and query merge.
+
+The source Project definition may declare required service and placement
+profiles, but mutable node selection, service instances, topology generations,
+capacity observations, leases and replica checkpoints remain outside the
+immutable ProjectRelease.
+
 ## Application and Presentation Model
 
 Scenario remains the implementation term for a UI/workflow host. Application

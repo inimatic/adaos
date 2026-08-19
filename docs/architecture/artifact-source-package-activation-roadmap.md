@@ -189,6 +189,7 @@ proof is not silently promoted to stand or production acceptance.
 | AP5 | 7/10 | validated-stand + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend admission and atomic channel CAS, durable post-CAS continuation, and successful external package/release/channel round-trip across a backend redeploy | metadata rebase policy and later merge-queue support |
 | AP6 | 12/14 | validated-local + recovered-live (bounded) | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, Builder review/apply UI, digest-reviewed remote-to-local reconciliation, attested recovery of missing remote immutable state, one fail-closed package/legacy route contract, and explicit no-op planning for an up-to-date subscription | production deployment/observation of the route contract and later evidence-based retirement of the compatibility route |
 | AP7 | 15/17 | validated-stand + second-machine-core-recovered + local workflow proof (bounded), route-fix pending | source-faithful representative LLM/Codex scenario+skill proof, bounded resilience regressions, live Builder publication, external-backend clean required-mode activation, package/release/channel survival across redeploy, exact-build local A/B recovery, generation-bound second-machine core convergence, and manifest-bound workflow authoring/package/role/migration/rollback proof | candidate-before-health proxy admission, frontend/WebSocket continuity, offline browser-draft merge, plus broad production and marketplace acceptance remain open/deferred |
+| AP8 | 0/13 | specified | ProjectDeployment boundary and first Media Center consumer are specified | schemas, planner, SDK, per-node activation, staged rollout, drain/remove and stand proof are open |
 
 ## Milestone AP0: Contracts And Compatibility Boundary
 
@@ -857,6 +858,69 @@ root parity had no mismatched paths, restart count advanced exactly once, and
 both status and attempt reported no subsequent transition. This is bounded
 second-machine core convergence, not broad production, multi-zone, or
 long-lived browser WebSocket acceptance.
+
+## Milestone AP8: Distributed Project Deployment
+
+**Outcome:** one immutable ProjectRelease can express and reconcile exact
+component activation across selected trusted nodes without conflating software
+deployment, presentation placement, or domain data sharding.
+
+**Admission gate:** AP2 ProjectRelease compatibility locks and AP3
+transactional activation are integrated for the target node runtimes.
+
+**Exit proof:** one reviewed deployment installs a representative coordinator
+and two worker components on selected nodes, exposes independent webspace
+placements, survives partial failure and staged update, and drains/removes one
+worker without deleting retained domain data.
+
+- [ ] `[must]` `AP8-01` Define `ProjectDeployment`, `DeploymentRevision`,
+  immutable `DeploymentPlan`, per-node `ComponentActivation`, and journaled
+  `DeploymentOperation` boundaries without changing `ProjectPlacement` into a
+  node deployment record.
+- [ ] `[must]` `AP8-02` Add fail-closed versioned schemas and typed models for
+  desired component placement, exact release/package refs, node targets,
+  compatibility, rollout, retention, operation phases, and observed evidence.
+- [ ] `[must]` `AP8-03` Resolve `singleton`, `selected_nodes`, `all_matching`,
+  `per_endpoint`, and `co_located_with` policies against trusted node
+  inventory, capabilities, labels, architecture, capacity and current
+  activations; keep webspace exposure in `ProjectPlacement`.
+- [ ] `[must]` `AP8-04` Produce an immutable compare-and-switch deployment plan
+  that explains installs, updates, no-ops, drains, removals, compatibility
+  blocks, approvals, expected availability impact, and rollback limits before
+  mutation.
+- [ ] `[must]` `AP8-05` Execute package fetch, verification, staging,
+  activation, health evidence and commit through one idempotent operation per
+  node; record partial subnet success instead of claiming cross-node atomicity.
+- [ ] `[must]` `AP8-06` Reconcile desired and observed generations with bounded
+  retries, explicit uncertain outcomes, compatible version-skew policy, staged
+  batches, stop conditions and per-node rollback.
+- [ ] `[must]` `AP8-07` Implement generic cordon/drain/deactivate/remove phases
+  and keep package removal, runtime-data retention, derived-data retention and
+  external-data ownership as separate reviewed decisions.
+- [ ] `[must]` `AP8-08` Publish cursor-backed deployment inventory and bounded
+  desired/observed/operation projections suitable for skills, Builder and
+  operator UI.
+- [ ] `[must]` `AP8-09` Expose planning, apply, inspect, drain, remove and
+  reconcile through a public SDK/control-plane boundary; skills must not import
+  package store, Workspace, supervisor or node-inventory internals.
+- [ ] `[must]` `AP8-10` Enforce trusted node identity, exact release admission,
+  remote-install permission, retention confirmation, audit and secret-safe
+  diagnostics.
+- [ ] `[must]` `AP8-11` Preserve a one-node deployment as an ordinary policy and
+  migrate current scenario-driven companion-skill installation without a
+  second compatibility installer.
+- [ ] `[should]` `AP8-12` Validate the representative Media Center Project on
+  two physical nodes plus separate TV/controller placements, including partial
+  failure, staged update, drain, retained data and exact revision evidence.
+- [ ] `[could]` `AP8-13` Add planner recommendations and unattended
+  capability-based placement only after manual selected-node plans are
+  validated on stand.
+
+Live service membership, authority leases, partition/replica topology,
+freshness and data movement begin after component activation and are owned by
+the [Distributed Service And Data Topology Roadmap](distributed-service-and-data-topology-roadmap.md).
+`AP8` installs exact software; it does not infer domain shards or replicate
+arbitrary runtime data.
 
 ## Explicit Deferred Backlog
 

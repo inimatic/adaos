@@ -3,6 +3,11 @@
 AdaOS Media Center is a product skill and scenario built on top of the shared
 media SDK boundary. It is not a new core media subsystem.
 
+This page records the bounded implemented product slice. The distributed target
+and delivery sequence are maintained separately in
+[Distributed Media Center Target Architecture](media-center-target-architecture.md)
+and the [Media Center Roadmap](media-center-roadmap.md).
+
 The first production-oriented slice is intentionally small:
 
 - `media_center_skill` owns catalog state, reconciliation, favorites,
@@ -114,7 +119,7 @@ Background behavior must be explicit and inspectable:
 - current resource, queue position, checkpoint age, presentation mode, output
   lease, and last interruption reason are available as bounded runtime status
 
-## Deferred Product Capabilities
+## Deferred From The Bounded Slice
 
 The MVP deliberately defers production media-center features that need their own
 contracts:
@@ -130,7 +135,10 @@ contracts:
 
 These belong in the media-center skill family or future product scenarios. They
 should depend on core media descriptors and routing instead of expanding the
-core plane.
+core media plane. Generic component placement and distributed service/data
+topology are valid core responsibilities, but their contracts remain
+domain-neutral as specified by
+[Distributed Service And Data Topology](distributed-service-and-data-topology.md).
 
 ## Compatibility Position
 
