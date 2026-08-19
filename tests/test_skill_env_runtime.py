@@ -4,11 +4,12 @@ import asyncio
 import json
 import os
 import shutil
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -1119,13 +1120,20 @@ def test_prepare_runtime_runs_reserved_data_migration_file(monkeypatch) -> None:
     (skill_dir / "handlers").mkdir(parents=True, exist_ok=True)
     (skill_dir / "handlers" / "main.py").write_text("def handle(payload=None):\n    return payload or {}\n", encoding="utf-8")
     (skill_dir / "migrations").mkdir(parents=True, exist_ok=True)
+    (skill_dir / "shared_domain").mkdir(parents=True, exist_ok=True)
+    (skill_dir / "shared_domain" / "__init__.py").write_text("", encoding="utf-8")
+    (skill_dir / "shared_domain" / "repository.py").write_text(
+        "OWNER = 'reserved-migration-target'\n",
+        encoding="utf-8",
+    )
     (skill_dir / "migrations" / "data_migration.py").write_text(
         "from pathlib import Path\n"
+        "from shared_domain.repository import OWNER\n"
         "def migrate(payload):\n"
         "    target = Path(payload['target_internal_dir'])\n"
         "    target.mkdir(parents=True, exist_ok=True)\n"
         "    (target / 'migrated.txt').write_text(payload['source_runtime_bucket'] + '->' + payload['target_runtime_bucket'], encoding='utf-8')\n"
-        "    return {'ok': True, 'via': 'reserved-file'}\n",
+        "    return {'ok': True, 'via': 'reserved-file', 'owner': OWNER}\n",
         encoding="utf-8",
     )
     (skill_dir / "skill.yaml").write_text("name: reserved_migration_file_skill\nversion: '2.1.0'\n", encoding="utf-8")
@@ -1136,11 +1144,22 @@ def test_prepare_runtime_runs_reserved_data_migration_file(monkeypatch) -> None:
 
     monkeypatch.setattr(mgr, "_prepare_runtime_environment", lambda **kwargs: (Path("python"), []))
 
+    conflicting_package = ModuleType("shared_domain")
+    conflicting_package.__path__ = []
+    conflicting_package.__file__ = str(skill_dir.parent / "other_skill" / "shared_domain" / "__init__.py")
+    conflicting_repository = ModuleType("shared_domain.repository")
+    conflicting_repository.__file__ = str(skill_dir.parent / "other_skill" / "shared_domain" / "repository.py")
+    conflicting_repository.OWNER = "other-skill"
+    monkeypatch.setitem(sys.modules, "shared_domain", conflicting_package)
+    monkeypatch.setitem(sys.modules, "shared_domain.repository", conflicting_repository)
+
     result = mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="B")
 
     assert result.data_migration["mode"] == "file"
     assert str(result.data_migration["tool"]).replace("\\", "/") == "migrations/data_migration.py"
     assert result.data_migration["result"]["via"] == "reserved-file"
+    assert result.data_migration["result"]["owner"] == "reserved-migration-target"
+    assert sys.modules["shared_domain.repository"] is conflicting_repository
     assert (env.internal_root("2.1.0") / "migrated.txt").read_text(encoding="utf-8") == "v2.0->v2.1"
 
 

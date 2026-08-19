@@ -7,6 +7,7 @@ import importlib
 import importlib.util
 import sys
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -15,6 +16,46 @@ from adaos.services.logging import configure_skill_module_logging
 _SKILL_SOURCE_SNAPSHOTS: dict[str, int] = {}
 _MODULE_LOAD_LOCK = threading.RLock()
 _MODULE_LOAD_COMPLETE = "__adaos_runtime_load_complete__"
+
+
+@contextmanager
+def isolated_skill_import_state(
+    skill_dir: Path,
+    *,
+    extra_paths: Iterable[Path] | None = None,
+):
+    """Temporarily isolate short-name packages owned by one skill.
+
+    Lifecycle hooks and migrations execute inside the node process but often
+    use natural sibling imports such as ``from research.repository import``.
+    Preserve modules belonging to another skill, load the target's packages
+    for the bounded operation, then restore the prior process state.
+    """
+
+    skill_path = Path(skill_dir).resolve()
+    with _MODULE_LOAD_LOCK:
+        original_sys_path = list(sys.path)
+        local_roots = _local_import_roots(skill_path)
+        previous_modules = {
+            key: module
+            for key, module in list(sys.modules.items())
+            if key.split(".", 1)[0] in local_roots
+        }
+        for key in previous_modules:
+            sys.modules.pop(key, None)
+        import_paths = [skill_path, skill_path.parent]
+        import_paths.extend(Path(extra).resolve() for extra in extra_paths or ())
+        _prioritize_import_paths(import_paths)
+        importlib.invalidate_caches()
+        try:
+            yield
+        finally:
+            for key in list(sys.modules):
+                if key.split(".", 1)[0] in local_roots:
+                    sys.modules.pop(key, None)
+            sys.modules.update(previous_modules)
+            sys.path[:] = original_sys_path
+            importlib.invalidate_caches()
 
 
 def execute_tool(

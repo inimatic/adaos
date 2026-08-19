@@ -51,7 +51,7 @@ from adaos.services.models.artifacts import (
     local_artifact_state,
 )
 from adaos.services.root.client import RootHttpClient, RootHttpError
-from adaos.skills.runtime_runner import execute_tool
+from adaos.skills.runtime_runner import execute_tool, isolated_skill_import_state
 from adaos.services.skill.validation import SkillValidationService, ValidationReport
 from adaos.services.crypto.secrets_service import SecretsService
 from adaos.services.skill.secrets_backend import SkillSecretsBackend
@@ -4284,7 +4284,6 @@ class SkillManager:
         prev_internal_active = os.environ.get("ADAOS_SKILL_INTERNAL_ACTIVE_PATH")
         prev_internal_target = os.environ.get("ADAOS_SKILL_INTERNAL_TARGET_PATH")
         prev_secrets = ctx.secrets
-        original_sys_path = list(sys.path)
         ctx.secrets = SecretsService(SkillSecretsBackend(slot.data_root / "files" / "secrets.json"), ctx.caps)
 
         try:
@@ -4295,17 +4294,17 @@ class SkillManager:
             os.environ["ADAOS_SKILL_INTERNAL_DATA_ROOT"] = str(slot.internal_data_dir)
             os.environ["ADAOS_SKILL_INTERNAL_ACTIVE_PATH"] = str(payload.get("source_internal_dir") or "")
             os.environ["ADAOS_SKILL_INTERNAL_TARGET_PATH"] = str(payload.get("target_internal_dir") or "")
-            for candidate in reversed([src_root, *extra_paths]):
-                if candidate and candidate not in sys.path:
-                    sys.path.insert(0, candidate)
-            with use_ctx(ctx):
-                spec.loader.exec_module(module)
-                migrate = getattr(module, "migrate", None)
-                if not callable(migrate):
-                    raise AttributeError(f"data migration file must expose migrate(payload): {migration_file}")
-                result = migrate(dict(payload))
+            with isolated_skill_import_state(
+                skill_dir,
+                extra_paths=[Path(src_root), *(Path(item) for item in extra_paths)],
+            ):
+                with use_ctx(ctx):
+                    spec.loader.exec_module(module)
+                    migrate = getattr(module, "migrate", None)
+                    if not callable(migrate):
+                        raise AttributeError(f"data migration file must expose migrate(payload): {migration_file}")
+                    result = migrate(dict(payload))
         finally:
-            sys.path[:] = original_sys_path
             ctx.secrets = prev_secrets
             if previous is None:
                 ctx.skill_ctx.clear()
