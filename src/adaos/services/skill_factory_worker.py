@@ -298,13 +298,13 @@ class SubprocessCodexExecutor:
                 popen_kwargs["creationflags"] = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
             else:
                 popen_kwargs["start_new_session"] = True
-            task_runtime_root = (
-                workspace
-                / ".adaos"
-                / "tasks"
-                / output_dir.parent.name.lower()
-                / "adaos-runtime"
-            )
+            # Mutable SDK state belongs to the runner-owned task envelope, not
+            # to the candidate git worktree.  Keeping it under ``workspace``
+            # makes owner-scoped evidence/database files look like source and
+            # lets ``git add`` traverse arbitrarily deep runtime paths on
+            # Windows.  The output parent is already isolated per task and is
+            # retained with the worker evidence after finalization.
+            task_runtime_root = self._task_runtime_root(output_dir)
             process = subprocess.Popen(
                 command,
                 cwd=str(workspace),
@@ -350,6 +350,10 @@ class SubprocessCodexExecutor:
             final_message=final_message,
             command=tuple(command),
         )
+
+    @staticmethod
+    def _task_runtime_root(output_dir: Path) -> Path:
+        return Path(output_dir).resolve().parent / "adaos-runtime"
 
     @staticmethod
     def _terminate_process_tree(process: subprocess.Popen[str]) -> None:

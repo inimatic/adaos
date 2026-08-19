@@ -1031,6 +1031,16 @@ def test_codex_executor_scopes_mutable_adaos_runtime_to_task(monkeypatch, tmp_pa
     assert environment["ADAOS_BASE_DIR"] != "C:/host-adaos"
 
 
+def test_codex_task_runtime_is_outside_candidate_worktree(tmp_path: Path) -> None:
+    workspace = tmp_path / "run" / "workspace"
+    output_dir = tmp_path / "run" / "output"
+
+    task_runtime = SubprocessCodexExecutor._task_runtime_root(output_dir)
+
+    assert workspace not in task_runtime.parents
+    assert task_runtime.parent == output_dir.parent
+
+
 def test_worker_applies_frozen_agent_profile_to_codex_executor(monkeypatch, tmp_path: Path) -> None:
     captured: dict[str, str | None] = {}
 
