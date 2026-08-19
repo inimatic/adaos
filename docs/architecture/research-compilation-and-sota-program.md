@@ -77,6 +77,63 @@ The first falsifiable framework hypothesis is:
 This is an empirical claim, not an architectural assumption. AdaOS must retain
 negative results if the comparison does not support it.
 
+## TLP Structured-Realization Proof Protocol
+
+The first proof is intentionally narrower than a cross-domain SOTA claim. It
+tests the local causal claim that, for the frozen TLP realization task and one
+declared Builder/Codex profile, a staged `ResearchCompilation` plus its typed
+execution handoff increases the probability of an evidence-valid autonomous
+implementation relative to the same raw source artifacts and high-level
+request.
+
+The experimental unit is one fresh, disposable Builder realization. `C0_raw`
+is the control and `C3_typed_execution` is the treatment. Attempts are paired
+by task, admitted artifacts, host/core/skill revisions, budget, and declared
+workload seed. The Codex provider does not expose a controllable model-sampling
+seed; this limitation is recorded and no stronger randomness claim is made.
+Legacy TLP implementations, the historical expert review, evaluator code,
+hidden rubric, prior candidates, and results are excluded from both arms.
+
+The primary endpoint is the binary `evidence_valid_completion`, computed by an
+independent evaluator only after all mandatory checks pass: context isolation,
+protocol fidelity, native AdaOS validation, runner-provider conformance, a
+real three-epoch CPU workflow smoke, and content-addressed evidence
+verification. A fluent Codex answer, generated files, passing self-authored
+tests, or a successful smoke in isolation is not a primary success.
+
+The proof has two gates:
+
+1. **End-to-end operability.** A fresh C3 attempt must produce a validated
+   candidate, an immutable ProjectRelease installed by the normal Artifact
+   Pipeline, a manager-owned StudyRealization, a real local CPU Study run, and
+   independently accepted Evidence. This proves that the structured path can
+   close; one success alone does not prove a probability difference.
+2. **Paired comparative evidence.** Five preregistered C0/C3 pairs are run
+   without post-start human directives. Missing or infrastructure-invalid
+   outcomes remain failures unless the preregistered exclusion rule proves the
+   fault occurred before arm-specific context was consumed and both members of
+   the pair are rerun. The primary analysis is a one-sided exact paired test on
+   discordant outcomes, accompanied by arm-wise Wilson intervals and the
+   observed risk difference. The local claim is supported only when
+   `p <= 0.05`, the observed C3-minus-C0 risk difference is positive, every
+   retained result is within budget, and no context leakage is detected. With
+   five pairs this requires five C3 wins and no C0 win; any weaker result is
+   explicitly inconclusive or negative rather than repaired after observation.
+
+Secondary outcomes are protocol drift, first failure stage, mandatory-check
+coverage, model tokens, wall time, automatic repair attempts, and post-start
+human interventions. Both fixed downstream-agent and fixed total-system budget
+views are retained. The latter charges formulation work and therefore prevents
+the structured condition from obtaining hidden free effort.
+
+The immutable proof package binds the hypothesis and decision rule to exact
+input digests, visibility receipts, DevelopmentSessions, agent/runtime
+identities, ProjectReleases, StudyRealizations, execution/tracker receipts,
+results, and the recomputable comparison. Restarts and reconnects must preserve
+the same lineage. Results support only the frozen TLP task/profile/host
+population; wider claims require materially different tasks and external
+benchmarks.
+
 ## Research Compilation Stages
 
 The stages are logical contracts. SourceAnalysis, ResearchProblem, and

@@ -1417,6 +1417,11 @@ efficacy result or cross-domain SOTA claim.
   repeated paired design sufficient to expose run variance. Keep
   `initial-review` visible only in C1 and evaluation; use it and legacy TLP
   solely as coverage/semantic oracles, never as hidden Codex requirements.
+  The frozen primary contrast is C3 versus C0 over five fresh paired Builder
+  realizations. Its primary endpoint is independent evidence-valid completion;
+  the one-sided exact paired decision rule, missing-result policy, Wilson
+  intervals, and risk difference are fixed before execution. One successful
+  C3 is an operability gate, not probability evidence.
 - [ ] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and
@@ -1430,6 +1435,19 @@ efficacy result or cross-domain SOTA claim.
   The package is score-recomputable, but admitted source bytes, licenses,
   runtime images, and an external verification recipe are not yet a portable
   release, so this item remains open.
+- [ ] `[must]` `ARF7.3-14` Bind the successful candidate through one immutable
+  `StudyRealization` joining ResearchDirection, ResearchTask,
+  ResearchCompilation, ImplementationTrack, DevelopmentSession,
+  ProjectRelease, installed runner provider, and manager-owned Study. Reject
+  mutable or digest-incomplete realization links.
+- [ ] `[must]` `ARF7.3-15` Federate Builder, Artifact Pipeline, Study execution,
+  tracker, and evaluator events into the direction activity projection with
+  original actor/origin/time/subject refs and idempotent source-event ids.
+  Workbench is a projection consumer, not a second journal owner.
+- [ ] `[must]` `ARF7.3-16` Close the local structured-realization proof only
+  after a normal installed ProjectRelease completes the real CPU Study path,
+  independent evidence acceptance, process restart/reconnect, and exact
+  source-to-result lineage reconstruction. Preserve all failed attempts.
 
 ### ARF7.4 direction/task topology and Project-scoped development
 
