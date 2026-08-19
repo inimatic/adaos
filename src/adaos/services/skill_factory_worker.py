@@ -942,6 +942,26 @@ class LocalSkillFactoryWorker:
                     }
                 else:
                     test_report = self._validate_workspace(assignment, workspace)
+                    # Generated tests are untrusted code and may create files
+                    # after the pre-test scope check.  Re-establish the source
+                    # boundary before accepting the report so a side effect
+                    # cannot surface later as an opaque commit/finalization
+                    # failure.
+                    self._cleanup_generated_files(workspace)
+                    changed_paths = self._changed_paths(workspace)
+                    try:
+                        self._validate_changed_paths(assignment, changed_paths)
+                    except ValueError as exc:
+                        test_report["ok"] = False
+                        test_report["status"] = "failed"
+                        test_report.setdefault("checks", []).append(
+                            {
+                                "id": "post_test_source_boundary",
+                                "status": "failed",
+                                "changed_paths": list(changed_paths),
+                            }
+                        )
+                        test_report.setdefault("errors", []).append(str(exc))
                 _write_json(output_dir / "test_report.json", test_report)
                 if test_report["ok"]:
                     break
@@ -1986,8 +2006,15 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     }
                 )
                 continue
-            environment = SubprocessCodexExecutor._bounded_environment()
-            environment["PYTHONPATH"] = str(self.repo_root / "src")
+            # Deterministic validation has the same mutable-state boundary as
+            # the Codex turn.  Without a task-owned ADAOS_BASE_DIR an otherwise
+            # correct SDK fallback can write ``skills/.runtime`` into the
+            # disposable source checkout after the pre-test boundary check.
+            environment = SubprocessCodexExecutor(
+                repo_root=self.repo_root
+            )._execution_environment(
+                runtime_base_dir=workspace.parent / "adaos-runtime"
+            )
             result = _run(
                 [sys.executable, "-m", "pytest", "-q", str(tests_dir), "-p", "no:cacheprovider"],
                 cwd=workspace,
@@ -2007,6 +2034,16 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
 
     @staticmethod
     def _cleanup_generated_files(root: Path) -> None:
+        # Reserved platform runtime projections are not package source.  Keep
+        # this list deliberately narrow: arbitrary out-of-scope files must
+        # remain visible to the fail-closed source-boundary check.
+        for runtime_dir in (
+            root / "skills" / ".runtime",
+            root / "scenarios" / ".runtime",
+            root / "scenario" / ".runtime",
+        ):
+            if runtime_dir.is_dir():
+                shutil.rmtree(runtime_dir)
         for cache_dir in sorted(root.rglob("__pycache__"), reverse=True):
             if cache_dir.is_dir():
                 shutil.rmtree(cache_dir)

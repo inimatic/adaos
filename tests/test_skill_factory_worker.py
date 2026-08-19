@@ -1082,6 +1082,54 @@ def test_codex_task_runtime_is_outside_candidate_worktree(tmp_path: Path) -> Non
     assert task_runtime.parent == output_dir.parent
 
 
+def test_generated_tests_receive_task_owned_runtime_outside_candidate(tmp_path: Path) -> None:
+    workspace = tmp_path / "run" / "workspace"
+    tests_dir = workspace / "skills" / "candidate" / "tests"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_runtime_boundary.py").write_text(
+        "import os\n"
+        "from pathlib import Path\n\n"
+        "def test_runtime_boundary():\n"
+        "    runtime = Path(os.environ['ADAOS_BASE_DIR']).resolve()\n"
+        "    workspace = Path.cwd().resolve()\n"
+        "    assert runtime != workspace\n"
+        "    assert workspace not in runtime.parents\n"
+        "    (runtime / 'validation-marker.txt').parent.mkdir(parents=True, exist_ok=True)\n"
+        "    (runtime / 'validation-marker.txt').write_text('ok', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    worker._run_generated_tests(workspace, checks, errors)
+
+    assert errors == []
+    assert checks[0]["ok"] is True
+    assert (workspace.parent / "adaos-runtime" / "validation-marker.txt").is_file()
+    assert not (workspace / "skills" / ".runtime").exists()
+
+
+def test_generated_cleanup_removes_only_reserved_runtime_projection(tmp_path: Path) -> None:
+    reserved = tmp_path / "skills" / ".runtime" / "candidate" / "state.json"
+    arbitrary = tmp_path / ".adaos_validation_base" / "state.json"
+    reserved.parent.mkdir(parents=True)
+    arbitrary.parent.mkdir(parents=True)
+    reserved.write_text("{}", encoding="utf-8")
+    arbitrary.write_text("{}", encoding="utf-8")
+
+    LocalSkillFactoryWorker._cleanup_generated_files(tmp_path)
+
+    assert not (tmp_path / "skills" / ".runtime").exists()
+    assert arbitrary.is_file()
+
+
 def test_worker_applies_frozen_agent_profile_to_codex_executor(monkeypatch, tmp_path: Path) -> None:
     captured: dict[str, str | None] = {}
 
@@ -1577,6 +1625,57 @@ def test_worker_reasks_codex_to_repair_source_boundary_violation(tmp_path: Path)
             runtime_file.unlink()
             runtime_file.parent.rmdir()
             runtime_file.parent.parent.rmdir()
+        return CodexRunResult(returncode=0, final_message="done")
+
+    worker = LocalSkillFactoryWorker(
+        state_dir=state_dir,
+        repo_root=repo_root,
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=dev_scenarios,
+        runs_root=tmp_path / "runs",
+        executor=fake_codex,
+        max_repair_attempts=1,
+    )
+
+    result = worker.run_once()
+
+    assert result["ok"] is True, result
+    assert len(calls) == 2
+    assert "Deterministic validation repair" in calls[1]
+    assert "outside the task scope" in calls[1]
+
+
+def test_worker_rechecks_source_boundary_after_generated_tests(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    state_dir = tmp_path / "state"
+    dev_skills = tmp_path / "dev" / "skills"
+    dev_scenarios = tmp_path / "dev" / "scenarios"
+    dev_skills.mkdir(parents=True)
+    _core_created_skill_fixture(repo_root, dev_skills, "boundary_skill")
+    factory = SkillFactoryService(state_dir=state_dir)
+    factory.submit_realize_request(
+        {
+            "target": {"type": "skill", "id": "boundary_skill"},
+            "repo": {"sparse_paths": ["skills/boundary_skill/"]},
+        }
+    )
+    calls: list[str] = []
+
+    def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:  # noqa: ARG001
+        calls.append(prompt)
+        test_file = workspace / "skills" / "boundary_skill" / "tests" / "test_side_effect.py"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        escaped = workspace / "escaped-validation.txt"
+        if len(calls) == 1:
+            test_file.write_text(
+                "from pathlib import Path\n\n"
+                "def test_side_effect():\n"
+                "    (Path.cwd() / 'escaped-validation.txt').write_text('runtime', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+        else:
+            test_file.write_text("def test_side_effect():\n    assert True\n", encoding="utf-8")
+            escaped.unlink(missing_ok=True)
         return CodexRunResult(returncode=0, final_message="done")
 
     worker = LocalSkillFactoryWorker(
