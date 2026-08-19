@@ -8,7 +8,7 @@ license = {text = "MIT"}
 name = "adaos"
 readme = "README.md"
 requires-python = ">=3.11.9,<3.12"
-version = "0.1.865"
+version = "0.1.866"
 
 authors = [
   {name = "AdaOS Team"},
