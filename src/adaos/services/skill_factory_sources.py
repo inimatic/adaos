@@ -37,7 +37,7 @@ def _safe_relative(value: Any) -> str:
     return path.as_posix().strip("/")
 
 
-def _projection_excluded_dirs(item: Mapping[str, Any]) -> frozenset[str]:
+def source_projection_excluded_dirs(item: Mapping[str, Any]) -> frozenset[str]:
     projection = item.get("source_projection")
     if not isinstance(projection, Mapping):
         return frozenset()
@@ -230,7 +230,7 @@ def verify_source_snapshot(*, state_dir: Path, reference: Mapping[str, Any]) -> 
             if not isinstance(item, Mapping):
                 raise SourceSnapshotError(f"invalid source snapshot {group} entry")
             path = root / Path(_safe_relative(item.get("path")))
-            excluded_dirs = _projection_excluded_dirs(item) if group == "artifacts" else frozenset()
+            excluded_dirs = source_projection_excluded_dirs(item) if group == "artifacts" else frozenset()
             if source_tree_digest(path, excluded_dirs=excluded_dirs) != str(item.get("digest") or ""):
                 raise SourceSnapshotError(f"source snapshot content mismatch: {item.get('path')}")
     return dict(stored)
@@ -249,7 +249,7 @@ def materialize_source_snapshot(
         _copy_source_tree(
             snapshot_root / Path(relative),
             Path(workspace) / Path(relative),
-            excluded_dirs=_projection_excluded_dirs(item),
+            excluded_dirs=source_projection_excluded_dirs(item),
         )
     for item in manifest.get("attachments") or []:
         source = snapshot_root / Path(_safe_relative(item.get("path")))
@@ -265,6 +265,7 @@ __all__ = [
     "SourceSnapshotError",
     "capture_source_snapshot",
     "materialize_source_snapshot",
+    "source_projection_excluded_dirs",
     "source_tree_digest",
     "verify_source_snapshot",
 ]

@@ -52,6 +52,57 @@ def test_source_snapshot_keeps_reserved_artifacts_out_of_codex_workspace(tmp_pat
     ).is_file()
 
 
+def test_projected_snapshot_activation_preserves_owner_artifacts(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    dev_skills = tmp_path / "dev" / "skills"
+    dev_scenarios = tmp_path / "dev" / "scenarios"
+    skill = dev_skills / "direction_skill"
+    (skill / "artifacts" / "part0").mkdir(parents=True)
+    (skill / "skill.yaml").write_text(
+        "name: direction_skill\nversion: 0.1.0\n", encoding="utf-8"
+    )
+    (skill / "artifacts" / "part0" / "source.md").write_text(
+        "owner evidence", encoding="utf-8"
+    )
+    (skill / "prompt_state.json").write_text("{}\n", encoding="utf-8")
+    snapshot = capture_source_snapshot(
+        state_dir=state_dir,
+        artifacts=(("skill", "direction_skill", skill),),
+        created_at="2026-08-19T00:00:00Z",
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    materialize_source_snapshot(
+        state_dir=state_dir,
+        reference=snapshot,
+        workspace=workspace,
+    )
+    (workspace / "skills" / "direction_skill" / "skill.yaml").write_text(
+        "name: direction_skill\nversion: 0.1.1\n", encoding="utf-8"
+    )
+    worker = LocalSkillFactoryWorker(
+        state_dir=state_dir,
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=dev_scenarios,
+        runs_root=tmp_path / "runs",
+    )
+
+    worker._sync_artifacts(
+        {
+            "target": {"type": "skill", "id": "direction_skill"},
+            "forge": {"source_snapshot": snapshot},
+        },
+        workspace,
+    )
+
+    assert "0.1.1" in (skill / "skill.yaml").read_text(encoding="utf-8")
+    assert (skill / "artifacts" / "part0" / "source.md").read_text(
+        encoding="utf-8"
+    ) == "owner evidence"
+    assert (skill / "prompt_state.json").is_file()
+
+
 def _scenario(root: Path, scenario_id: str) -> Path:
     target = root / scenario_id
     target.mkdir(parents=True)

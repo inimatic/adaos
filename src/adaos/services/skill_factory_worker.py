@@ -23,6 +23,7 @@ from adaos.services.skill_factory import SkillFactoryService
 from adaos.services.skill_factory_sources import (
     SourceSnapshotError,
     materialize_source_snapshot,
+    source_projection_excluded_dirs,
     source_tree_digest,
     verify_source_snapshot,
 )
@@ -1930,8 +1931,8 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         snapshot_reference = dict((assignment.get("forge") or {}).get("source_snapshot") or {})
         if snapshot_reference:
             manifest = verify_source_snapshot(state_dir=self.state_dir, reference=snapshot_reference)
-            expected = {
-                str(item.get("path") or "").strip().replace("\\", "/"): str(item.get("digest") or "")
+            snapshot_artifacts = {
+                str(item.get("path") or "").strip().replace("\\", "/"): dict(item)
                 for item in manifest.get("artifacts") or []
                 if isinstance(item, Mapping)
             }
@@ -1941,21 +1942,30 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     if destination.parent == self.dev_scenarios_root
                     else f"skills/{destination.name}"
                 )
-                expected_digest = expected.get(relative)
-                if not expected_digest:
+                descriptor = snapshot_artifacts.get(relative)
+                if not descriptor:
                     raise SourceSnapshotError(f"task snapshot does not contain mutable source {relative}")
-                actual_digest = source_tree_digest(destination)
+                expected_digest = str(descriptor.get("digest") or "")
+                excluded_dirs = source_projection_excluded_dirs(descriptor)
+                actual_digest = source_tree_digest(destination, excluded_dirs=excluded_dirs)
                 if actual_digest != expected_digest:
                     raise SourceSnapshotError(
                         f"DEV source changed while Codex was running: {relative}; "
                         "the completed result was preserved in the task workspace and was not applied"
                     )
             expected_by_destination = {
-                destination: expected[
+                destination: (
+                    str(snapshot_artifacts[
                     f"scenarios/{destination.name}"
                     if destination.parent == self.dev_scenarios_root
                     else f"skills/{destination.name}"
-                ]
+                    ].get("digest") or ""),
+                    source_projection_excluded_dirs(snapshot_artifacts[
+                        f"scenarios/{destination.name}"
+                        if destination.parent == self.dev_scenarios_root
+                        else f"skills/{destination.name}"
+                    ]),
+                )
                 for _source, destination in sources
             }
             self._replace_artifacts_transactionally(
@@ -1978,7 +1988,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         self,
         sources: Sequence[tuple[Path, Path]],
         *,
-        expected_by_destination: Mapping[Path, str],
+        expected_by_destination: Mapping[Path, tuple[str, frozenset[str]]],
     ) -> None:
         transaction_id = uuid4().hex
         staged_rows: list[tuple[Path, Path, Path]] = []
@@ -1991,6 +2001,23 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 staged = destination.parent / f".{destination.name}.apply.{transaction_id}"
                 backup = destination.parent / f".{destination.name}.backup.{transaction_id}"
                 shutil.copytree(source, staged)
+                _expected_digest, excluded_dirs = expected_by_destination.get(
+                    destination, ("", frozenset())
+                )
+                for relative in sorted(excluded_dirs):
+                    preserved = destination / relative
+                    if not preserved.exists():
+                        continue
+                    projected = staged / relative
+                    if projected.exists():
+                        raise SourceSnapshotError(
+                            f"task result unexpectedly contains excluded source path: {relative}"
+                        )
+                    if preserved.is_dir():
+                        shutil.copytree(preserved, projected)
+                    elif preserved.is_file():
+                        projected.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(preserved, projected)
                 prompt_state = destination / "prompt_state.json"
                 if prompt_state.is_file():
                     shutil.copy2(prompt_state, staged / "prompt_state.json")
@@ -2004,8 +2031,13 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 staged_rows.append((staged, destination, backup))
 
             for staged, destination, backup in staged_rows:
-                expected_digest = str(expected_by_destination.get(destination) or "")
-                if not expected_digest or source_tree_digest(destination) != expected_digest:
+                expected_digest, excluded_dirs = expected_by_destination.get(
+                    destination, ("", frozenset())
+                )
+                if not expected_digest or source_tree_digest(
+                    destination,
+                    excluded_dirs=excluded_dirs,
+                ) != expected_digest:
                     raise SourceSnapshotError(
                         f"DEV source changed during result activation: {destination.name}; "
                         "the transaction was rolled back"
