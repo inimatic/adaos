@@ -1043,12 +1043,19 @@ class LocalSkillFactoryWorker:
         target = dict(assignment.get("target") or {})
         target_type = str(target.get("type") or "skill").strip().lower()
         target_id = _safe_token(target.get("id"), fallback="generated_skill")
+
+        def implementation_source_ignore(_path: str, names: list[str]) -> set[str]:
+            # ``artifacts/`` is reserved project input, not editable
+            # implementation source. Governed tasks receive admitted artifact
+            # views as explicit read-only attachments instead.
+            return {"artifacts"} if "artifacts" in names else set()
+
         if target_type == "scenario":
             source = self.dev_scenarios_root / target_id
             destination = workspace / "scenarios" / target_id
             if not source.exists():
                 raise FileNotFoundError(f"DEV scenario not found: {source}")
-            shutil.copytree(source, destination)
+            shutil.copytree(source, destination, ignore=implementation_source_ignore)
             for skill_id in self._companion_skill_ids(assignment):
                 skill_source = self.dev_skills_root / skill_id
                 skill_destination = workspace / "skills" / skill_id
@@ -1056,7 +1063,11 @@ class LocalSkillFactoryWorker:
                     raise FileNotFoundError(
                         f"DEV companion skill not found: {skill_source}; create it through the core developer lifecycle first"
                     )
-                shutil.copytree(skill_source, skill_destination)
+                shutil.copytree(
+                    skill_source,
+                    skill_destination,
+                    ignore=implementation_source_ignore,
+                )
             automation_snapshot = (
                 self.state_dir
                 / "builder"
@@ -1074,7 +1085,7 @@ class LocalSkillFactoryWorker:
                 raise FileNotFoundError(
                     f"DEV skill not found: {source}; create it through the core developer lifecycle first"
                 )
-            shutil.copytree(source, destination)
+            shutil.copytree(source, destination, ignore=implementation_source_ignore)
         else:
             raise ValueError(f"local worker supports skill or scenario targets, got {target_type!r}")
         return None

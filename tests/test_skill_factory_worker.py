@@ -12,8 +12,44 @@ import yaml
 
 from adaos.services.root.service import _rewrite_skill_template_identity
 from adaos.services.skill_factory import SkillFactoryService
-from adaos.services.skill_factory_sources import capture_source_snapshot
+from adaos.services.skill_factory_sources import capture_source_snapshot, materialize_source_snapshot
 from adaos.services.skill_factory_worker import CodexRunResult, LocalSkillFactoryWorker, SubprocessCodexExecutor
+
+
+def test_source_snapshot_keeps_reserved_artifacts_out_of_codex_workspace(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    skill = tmp_path / "direction_skill"
+    (skill / "artifacts" / "part0").mkdir(parents=True)
+    (skill / "skill.yaml").write_text("name: direction_skill\nversion: 0.1.0\n", encoding="utf-8")
+    (skill / "artifacts" / "part0" / "formulation-only.md").write_text(
+        "hidden review", encoding="utf-8"
+    )
+    admitted = tmp_path / "admitted"
+    admitted.mkdir()
+    (admitted / "notebook.ipynb").write_text("{}", encoding="utf-8")
+
+    snapshot = capture_source_snapshot(
+        state_dir=state_dir,
+        artifacts=(("skill", "direction_skill", skill),),
+        attachments=(("admitted", admitted, ".adaos_context/session/artifacts/00"),),
+        created_at="2026-08-19T00:00:00Z",
+    )
+    artifact = snapshot["artifacts"][0]
+    assert artifact["source_projection"]["excluded_paths"] == ["artifacts/"]
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    materialize_source_snapshot(
+        state_dir=state_dir,
+        reference=snapshot,
+        workspace=workspace,
+    )
+
+    assert (workspace / "skills" / "direction_skill" / "skill.yaml").is_file()
+    assert not (workspace / "skills" / "direction_skill" / "artifacts").exists()
+    assert (
+        workspace / ".adaos_context" / "session" / "artifacts" / "00" / "notebook.ipynb"
+    ).is_file()
 
 
 def _scenario(root: Path, scenario_id: str) -> Path:

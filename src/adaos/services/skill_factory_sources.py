@@ -20,6 +20,7 @@ _IGNORED_DIRS = {
 }
 _IGNORED_FILES = {"prompt_state.json"}
 _IGNORED_SUFFIXES = {".pyc", ".pyo"}
+_RESERVED_PROJECT_INPUT_DIRS = {"artifacts"}
 
 
 class SourceSnapshotError(RuntimeError):
@@ -36,21 +37,41 @@ def _safe_relative(value: Any) -> str:
     return path.as_posix().strip("/")
 
 
-def _ignored(relative: PurePosixPath) -> bool:
+def _projection_excluded_dirs(item: Mapping[str, Any]) -> frozenset[str]:
+    projection = item.get("source_projection")
+    if not isinstance(projection, Mapping):
+        return frozenset()
+    values = {
+        str(value or "").strip().replace("\\", "/").strip("/")
+        for value in projection.get("excluded_paths") or []
+    }
+    unsupported = values - _RESERVED_PROJECT_INPUT_DIRS
+    if unsupported:
+        raise SourceSnapshotError(
+            "unsupported source projection exclusion: " + ", ".join(sorted(unsupported))
+        )
+    return frozenset(values)
+
+
+def _ignored(relative: PurePosixPath, *, excluded_dirs: frozenset[str] = frozenset()) -> bool:
     return (
-        any(part in _IGNORED_DIRS for part in relative.parts)
+        any(part in (_IGNORED_DIRS | excluded_dirs) for part in relative.parts)
         or relative.name in _IGNORED_FILES
         or relative.suffix.lower() in _IGNORED_SUFFIXES
     )
 
 
-def _source_files(root: Path) -> list[tuple[str, Path]]:
+def _source_files(
+    root: Path,
+    *,
+    excluded_dirs: frozenset[str] = frozenset(),
+) -> list[tuple[str, Path]]:
     if not root.is_dir():
         raise SourceSnapshotError(f"source directory does not exist: {root}")
     files: list[tuple[str, Path]] = []
     for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
         relative = PurePosixPath(path.relative_to(root).as_posix())
-        if _ignored(relative):
+        if _ignored(relative, excluded_dirs=excluded_dirs):
             continue
         if path.is_symlink():
             raise SourceSnapshotError(f"symbolic links are not allowed in task sources: {relative}")
@@ -62,9 +83,13 @@ def _source_files(root: Path) -> list[tuple[str, Path]]:
     return files
 
 
-def source_tree_digest(root: Path) -> str:
+def source_tree_digest(
+    root: Path,
+    *,
+    excluded_dirs: frozenset[str] = frozenset(),
+) -> str:
     digest = hashlib.sha256()
-    for relative, path in _source_files(Path(root)):
+    for relative, path in _source_files(Path(root), excluded_dirs=excluded_dirs):
         payload = path.read_bytes()
         encoded = relative.encode("utf-8")
         digest.update(len(encoded).to_bytes(8, "big"))
@@ -74,9 +99,14 @@ def source_tree_digest(root: Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
-def _copy_source_tree(source: Path, target: Path) -> None:
+def _copy_source_tree(
+    source: Path,
+    target: Path,
+    *,
+    excluded_dirs: frozenset[str] = frozenset(),
+) -> None:
     target.mkdir(parents=True, exist_ok=False)
-    for relative, path in _source_files(source):
+    for relative, path in _source_files(source, excluded_dirs=excluded_dirs):
         destination = target / Path(relative)
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, destination)
@@ -101,7 +131,15 @@ def capture_source_snapshot(
             "kind": str(kind).strip().lower().rstrip("s"),
             "id": str(artifact_id).strip(),
             "path": relative,
-            "digest": source_tree_digest(source),
+            "digest": source_tree_digest(
+                source,
+                excluded_dirs=frozenset(_RESERVED_PROJECT_INPUT_DIRS),
+            ),
+            "source_projection": {
+                "mode": "implementation_source",
+                "excluded_paths": ["artifacts/"],
+                "reason": "reserved_project_inputs_are_admitted_only_as_context_attachments",
+            },
         }
         artifact_rows.append(row)
         artifact_sources.append((row, Path(source)))
@@ -148,7 +186,11 @@ def capture_source_snapshot(
     staged.mkdir(parents=False, exist_ok=False)
     try:
         for row, source in artifact_sources:
-            _copy_source_tree(source, staged / Path(row["path"]))
+            _copy_source_tree(
+                source,
+                staged / Path(row["path"]),
+                excluded_dirs=frozenset(_RESERVED_PROJECT_INPUT_DIRS),
+            )
         for row, source in attachment_sources:
             _copy_source_tree(source, staged / Path(row["path"]))
         atomic_write_json(staged / "snapshot.json", manifest)
@@ -188,7 +230,8 @@ def verify_source_snapshot(*, state_dir: Path, reference: Mapping[str, Any]) -> 
             if not isinstance(item, Mapping):
                 raise SourceSnapshotError(f"invalid source snapshot {group} entry")
             path = root / Path(_safe_relative(item.get("path")))
-            if source_tree_digest(path) != str(item.get("digest") or ""):
+            excluded_dirs = _projection_excluded_dirs(item) if group == "artifacts" else frozenset()
+            if source_tree_digest(path, excluded_dirs=excluded_dirs) != str(item.get("digest") or ""):
                 raise SourceSnapshotError(f"source snapshot content mismatch: {item.get('path')}")
     return dict(stored)
 
@@ -203,7 +246,11 @@ def materialize_source_snapshot(
     snapshot_root = _snapshot_root(Path(state_dir)) / str(manifest["snapshot_id"])
     for item in manifest.get("artifacts") or []:
         relative = _safe_relative(item.get("path"))
-        _copy_source_tree(snapshot_root / Path(relative), Path(workspace) / Path(relative))
+        _copy_source_tree(
+            snapshot_root / Path(relative),
+            Path(workspace) / Path(relative),
+            excluded_dirs=_projection_excluded_dirs(item),
+        )
     for item in manifest.get("attachments") or []:
         source = snapshot_root / Path(_safe_relative(item.get("path")))
         target = Path(workspace) / Path(_safe_relative(item.get("target_path")))
