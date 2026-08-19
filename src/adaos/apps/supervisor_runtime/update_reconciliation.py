@@ -23,6 +23,7 @@ class UpdateReconciliationOperations:
     is_terminal_update_status: Any
     read_core_update_status: Any
     read_update_attempt: Any
+    reconcile_completed_attempt_after_runtime_failure: Any
     reconcile_failed_attempt_after_terminal_success: Any
     reconcile_failed_root_restart_after_runtime_recovery: Any
     reconcile_failed_target_mismatch_after_active_switch: Any
@@ -98,6 +99,16 @@ class UpdateReconciliationService:
             payload["status"] = operations.read_core_update_status() or status
             payload["attempt"] = recovered_attempt
             payload["_served_by"] = "supervisor_root_restart_timeout_reconciled"
+            return payload
+        recovered_status = operations.reconcile_completed_attempt_after_runtime_failure(
+            status=status,
+            attempt=attempt,
+            runtime=runtime,
+        )
+        if isinstance(recovered_status, dict):
+            payload["status"] = recovered_status
+            payload["attempt"] = attempt
+            payload["_served_by"] = "supervisor_post_update_runtime_failure_reconciled"
             return payload
 
         now = time.time()

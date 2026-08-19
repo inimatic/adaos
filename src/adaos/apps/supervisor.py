@@ -172,6 +172,9 @@ def _update_reconciliation_operations() -> UpdateReconciliationOperations:
         is_terminal_update_status=_is_terminal_update_status,
         read_core_update_status=read_core_update_status,
         read_update_attempt=_read_update_attempt,
+        reconcile_completed_attempt_after_runtime_failure=(
+            _reconcile_completed_attempt_after_runtime_failure
+        ),
         reconcile_failed_attempt_after_terminal_success=_reconcile_failed_attempt_after_terminal_success,
         reconcile_failed_root_restart_after_runtime_recovery=(
             _reconcile_failed_root_restart_after_runtime_recovery
@@ -1524,6 +1527,76 @@ def _reconcile_failed_attempt_after_terminal_success(
         status=status_map,
         reason="terminal core update success reconciled",
     )
+
+
+def _reconcile_completed_attempt_after_runtime_failure(
+    *,
+    status: dict[str, Any] | None,
+    attempt: dict[str, Any] | None,
+    runtime: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    status_map = status if isinstance(status, dict) else {}
+    attempt_map = attempt if isinstance(attempt, dict) else {}
+    if str(attempt_map.get("state") or "").strip().lower() != "completed":
+        return None
+    if str(attempt_map.get("action") or "update").strip().lower() != "update":
+        return None
+    if str(status_map.get("state") or "").strip().lower() != "failed":
+        return None
+    if str(status_map.get("phase") or "").strip().lower() != "uvicorn.run":
+        return None
+    if not str(status_map.get("message") or "").strip().lower().startswith("autostart runner failed during"):
+        return None
+    if not _runtime_payload_ready(runtime):
+        return None
+    try:
+        completed_at = float(attempt_map.get("completed_at") or 0.0)
+        failed_at = float(status_map.get("updated_at") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if completed_at <= 0.0 or failed_at < completed_at:
+        return None
+
+    last_status = attempt_map.get("last_status") if isinstance(attempt_map.get("last_status"), dict) else {}
+    if str(last_status.get("state") or "").strip().lower() != "succeeded":
+        return None
+    if str(last_status.get("phase") or "").strip().lower() != "validate":
+        return None
+    target_version = str(attempt_map.get("target_version") or last_status.get("target_version") or "").strip()
+    if not target_version:
+        return None
+    try:
+        manifest = active_slot_manifest()
+    except Exception:
+        manifest = None
+    if not _manifest_matches_target_version(manifest, target_version):
+        return None
+
+    now = time.time()
+    recovered = dict(last_status)
+    recovered.update(
+        {
+            "state": "succeeded",
+            "phase": "validate",
+            "action": "update",
+            "target_rev": str(attempt_map.get("target_rev") or last_status.get("target_rev") or ""),
+            "target_version": target_version,
+            "target_slot": str((manifest or {}).get("slot") or last_status.get("target_slot") or ""),
+            "manifest": manifest if isinstance(manifest, dict) else last_status.get("manifest") or {},
+            "message": str(last_status.get("message") or "runtime boot validated"),
+            "post_update_runtime_failure_reconciled": True,
+            "post_update_runtime_failure_reconciled_at": now,
+            "post_update_runtime_failure": {
+                "observed_at": failed_at,
+                "phase": str(status_map.get("phase") or ""),
+                "error_type": str(status_map.get("error_type") or ""),
+                "error": str(status_map.get("error") or "")[:1000],
+                "traceback": str(status_map.get("traceback") or "")[-8000:],
+            },
+            "updated_at": now,
+        }
+    )
+    return write_core_update_status(recovered)
 
 
 def _reconcile_failed_target_mismatch_after_active_switch(

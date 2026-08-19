@@ -395,6 +395,73 @@ def test_reconcile_update_status_clears_failed_attempt_after_terminal_success(mo
     assert attempt["last_status"]["target_slot"] == "A"
 
 
+def test_reconcile_update_status_restores_completed_update_after_later_runtime_failure(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(supervisor.time, "time", lambda: 720.0)
+    target_version = "23592eb4b5889c7d880ec1f2ab189ff30e72c03d"
+    manifest = {
+        "slot": "B",
+        "target_version": target_version,
+        "git_commit": target_version,
+    }
+    monkeypatch.setattr(supervisor, "active_slot_manifest", lambda: dict(manifest))
+    terminal_status = {
+        "state": "succeeded",
+        "phase": "validate",
+        "action": "update",
+        "target_rev": "rev2026",
+        "target_version": target_version,
+        "target_slot": "B",
+        "message": "runtime boot validated on slot B",
+        "updated_at": 690.0,
+    }
+    supervisor._write_update_attempt(
+        {
+            "state": "completed",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": target_version,
+            "requested_at": 600.0,
+            "transitioned_at": 660.0,
+            "updated_at": 700.0,
+            "completed_at": 700.0,
+            "completion_reason": "active slot target already active",
+            "last_status": terminal_status,
+        }
+    )
+
+    payload = supervisor._reconcile_update_status(
+        {
+            "ok": True,
+            "status": {
+                "state": "failed",
+                "phase": "uvicorn.run",
+                "action": "update",
+                "target_rev": "rev2026",
+                "target_version": target_version,
+                "message": "autostart runner failed during uvicorn.run",
+                "error_type": "InvalidStateError",
+                "error": "invalid state",
+                "traceback": "asyncio proactor traceback",
+                "updated_at": 710.0,
+            },
+            "runtime": {
+                "runtime_state": "ready",
+                "listener_running": True,
+                "runtime_api_ready": True,
+            },
+        }
+    )
+
+    assert payload["_served_by"] == "supervisor_post_update_runtime_failure_reconciled"
+    assert payload["status"]["state"] == "succeeded"
+    assert payload["status"]["phase"] == "validate"
+    assert payload["status"]["target_slot"] == "B"
+    assert payload["status"]["post_update_runtime_failure_reconciled"] is True
+    assert payload["status"]["post_update_runtime_failure"]["error_type"] == "InvalidStateError"
+    assert payload["attempt"]["state"] == "completed"
+
+
 def test_reconcile_update_status_clears_failed_target_mismatch_after_slot_switch(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setattr(supervisor.time, "time", lambda: 710.0)

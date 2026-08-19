@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import signal
-import subprocess
 import types
 from pathlib import Path
 
@@ -10,6 +9,59 @@ from adaos.apps import autostart_runner
 from adaos.services import runtime_memory_profile
 from adaos.services.core_update_policy import SKIP_PENDING_CORE_UPDATE_ENV
 from adaos.services.supervisor_memory import read_memory_session_summary, supervisor_memory_session_artifacts_dir
+
+
+def test_terminal_update_status_does_not_own_later_runtime_failure(monkeypatch) -> None:
+    writes: list[dict] = []
+    incidents: list[dict] = []
+    status = {
+        "action": "update",
+        "state": "succeeded",
+        "phase": "validate",
+        "target_slot": "B",
+        "target_rev": "abc123",
+    }
+    monkeypatch.setattr(autostart_runner, "read_status", lambda: dict(status))
+    monkeypatch.setattr(autostart_runner, "write_status", lambda payload: writes.append(dict(payload)))
+    monkeypatch.setattr(
+        autostart_runner,
+        "_record_runtime_process_failure",
+        lambda exc, **kwargs: incidents.append({"exc": exc, **kwargs}),
+    )
+
+    autostart_runner._handle_runner_failure(
+        RuntimeError("event loop failed"),
+        phase="uvicorn.run",
+        authoritative_runtime=True,
+    )
+
+    assert writes == []
+    assert incidents[0]["update_status"] == status
+
+
+def test_active_update_status_records_runner_failure_without_losing_target(monkeypatch) -> None:
+    writes: list[dict] = []
+    status = {
+        "action": "update",
+        "state": "applying",
+        "phase": "apply",
+        "target_slot": "B",
+        "target_rev": "abc123",
+    }
+    monkeypatch.setattr(autostart_runner, "read_status", lambda: dict(status))
+    monkeypatch.setattr(autostart_runner, "write_status", lambda payload: writes.append(dict(payload)))
+    monkeypatch.setattr(autostart_runner, "_record_runtime_process_failure", lambda *args, **kwargs: None)
+
+    autostart_runner._handle_runner_failure(
+        RuntimeError("apply failed"),
+        phase="launch_active_slot",
+        authoritative_runtime=True,
+    )
+
+    assert writes[0]["state"] == "failed"
+    assert writes[0]["target_slot"] == "B"
+    assert writes[0]["target_rev"] == "abc123"
+    assert writes[0]["error_type"] == "RuntimeError"
 
 
 def test_autostart_runner_initializes_context_before_pidfile(monkeypatch) -> None:
@@ -152,10 +204,10 @@ def test_runtime_memory_profile_session_writes_artifacts(monkeypatch, tmp_path: 
             return [_Stat("app.py:10", size=384, count=3, size_diff=128, count_diff=1)]
 
     snapshots = iter([_Snapshot(True), _Snapshot(False)])
-    monkeypatch.setattr(autostart_runner.tracemalloc, "start", lambda frames: None)
-    monkeypatch.setattr(autostart_runner.tracemalloc, "is_tracing", lambda: True)
-    monkeypatch.setattr(autostart_runner.tracemalloc, "take_snapshot", lambda: next(snapshots))
-    monkeypatch.setattr(autostart_runner.tracemalloc, "stop", lambda: None)
+    monkeypatch.setattr(runtime_memory_profile.tracemalloc, "start", lambda frames: None)
+    monkeypatch.setattr(runtime_memory_profile.tracemalloc, "is_tracing", lambda: True)
+    monkeypatch.setattr(runtime_memory_profile.tracemalloc, "take_snapshot", lambda: next(snapshots))
+    monkeypatch.setattr(runtime_memory_profile.tracemalloc, "stop", lambda: None)
     monkeypatch.setattr(runtime_memory_profile, "time", types.SimpleNamespace(time=lambda: 100.0))
 
     session = autostart_runner._RuntimeMemoryProfileSession()
@@ -201,10 +253,10 @@ def test_runtime_trace_profile_session_writes_trace_artifacts(monkeypatch, tmp_p
             return [_Stat("app.py:10", size=512, count=3, size_diff=256, count_diff=1)]
 
     snapshots = iter([_Snapshot(True), _Snapshot(False)])
-    monkeypatch.setattr(autostart_runner.tracemalloc, "start", lambda frames: None)
-    monkeypatch.setattr(autostart_runner.tracemalloc, "is_tracing", lambda: True)
-    monkeypatch.setattr(autostart_runner.tracemalloc, "take_snapshot", lambda: next(snapshots))
-    monkeypatch.setattr(autostart_runner.tracemalloc, "stop", lambda: None)
+    monkeypatch.setattr(runtime_memory_profile.tracemalloc, "start", lambda frames: None)
+    monkeypatch.setattr(runtime_memory_profile.tracemalloc, "is_tracing", lambda: True)
+    monkeypatch.setattr(runtime_memory_profile.tracemalloc, "take_snapshot", lambda: next(snapshots))
+    monkeypatch.setattr(runtime_memory_profile.tracemalloc, "stop", lambda: None)
     monkeypatch.setattr(runtime_memory_profile, "time", types.SimpleNamespace(time=lambda: 100.0))
 
     session = autostart_runner._RuntimeMemoryProfileSession()
@@ -1288,8 +1340,9 @@ def test_autostart_runner_marks_interrupted_restarting_without_plan_failed(monke
     assert "interrupted before validation commit" in str(captured[-1]["message"] or "")
 
 
-def test_autostart_runner_writes_failed_status_on_boot_exception(monkeypatch, tmp_path: Path) -> None:
+def test_autostart_runner_preserves_idle_update_status_on_boot_exception(monkeypatch, tmp_path: Path) -> None:
     captured: list[dict] = []
+    incidents: list[dict] = []
 
     monkeypatch.setattr(
         autostart_runner,
@@ -1298,8 +1351,14 @@ def test_autostart_runner_writes_failed_status_on_boot_exception(monkeypatch, tm
     )
     monkeypatch.setattr(autostart_runner, "init_ctx", lambda: None)
     monkeypatch.setattr(autostart_runner, "read_plan", lambda: None)
+    monkeypatch.setattr(autostart_runner, "read_status", lambda: {"state": "idle", "phase": "runtime"})
     monkeypatch.setattr(autostart_runner, "load_config", lambda: None)
     monkeypatch.setattr(autostart_runner, "write_status", lambda payload: captured.append(dict(payload)))
+    monkeypatch.setattr(
+        autostart_runner,
+        "_record_runtime_process_failure",
+        lambda exc, **kwargs: incidents.append({"exc": exc, **kwargs}),
+    )
     monkeypatch.setattr(autostart_runner, "_resolve_bind", lambda conf, host, port: (host, port))
     monkeypatch.setattr(autostart_runner, "_advertise_base", lambda host, port: f"http://{host}:{port}")
     monkeypatch.setattr(autostart_runner, "_stop_previous_server", lambda host, port: None)
@@ -1318,10 +1377,10 @@ def test_autostart_runner_writes_failed_status_on_boot_exception(monkeypatch, tm
     else:
         raise AssertionError("expected RuntimeError")
 
-    assert captured[-1]["state"] == "failed"
-    assert captured[-1]["phase"] == "launch_active_slot"
-    assert captured[-1]["error_type"] == "RuntimeError"
-    assert "boom" in str(captured[-1]["error"])
+    assert captured[-1]["state"] == "idle"
+    assert all(payload.get("state") != "failed" for payload in captured)
+    assert incidents[-1]["phase"] == "launch_active_slot"
+    assert str(incidents[-1]["exc"]) == "boom"
 
 
 def test_validate_sidecar_runtime_payload_requires_listener_when_enabled() -> None:

@@ -10,7 +10,6 @@ import signal
 import subprocess
 import sys
 import time
-import tracemalloc
 import traceback
 from http import HTTPStatus
 from pathlib import Path
@@ -31,7 +30,6 @@ from adaos.apps.cli.commands.api import (
     _uvicorn_loop_mode,
     _write_pidfile,
 )
-from adaos.services.agent_context import get_ctx
 from adaos.services.core_update import (
     clear_plan,
     execute_pending_update,
@@ -65,6 +63,99 @@ from adaos.services.runtime_paths import current_base_dir, current_logs_dir
 from adaos.services.root.client import RootHttpClient
 from adaos.services.root.core_update_sync import build_core_update_report
 _LOG = logging.getLogger("adaos.autostart")
+
+_ACTIVE_UPDATE_STATES = {
+    "applying",
+    "pending",
+    "prepared",
+    "prepared_restart",
+    "restarting",
+    "running",
+    "validating",
+}
+_TERMINAL_UPDATE_STATES = {"completed", "expired", "failed", "idle", "rolled_back", "succeeded"}
+
+
+def _active_core_update_owns_runtime_failure(status: dict[str, Any] | None) -> bool:
+    current = status if isinstance(status, dict) else {}
+    state = str(current.get("state") or "").strip().lower()
+    if state in _TERMINAL_UPDATE_STATES or state not in _ACTIVE_UPDATE_STATES:
+        return False
+    plan = current.get("plan") if isinstance(current.get("plan"), dict) else {}
+    action = str(current.get("action") or plan.get("action") or "").strip().lower()
+    return action == "update"
+
+
+def _record_runtime_process_failure(
+    exc: Exception,
+    *,
+    phase: str,
+    authoritative_runtime: bool,
+    update_status: dict[str, Any] | None,
+) -> None:
+    try:
+        from adaos.services.incident_registry import persist_incident_registry, record_incident
+
+        status = update_status if isinstance(update_status, dict) else {}
+        record_incident(
+            incident_class="runtime_process_failure",
+            signal=f"autostart_runner.{phase}",
+            severity="error",
+            domain="core.runtime",
+            component="autostart_runner",
+            source="adaos.apps.autostart_runner",
+            summary=f"runtime process failed during {phase}",
+            evidence={
+                "authoritative_runtime": bool(authoritative_runtime),
+                "transition_role": "authoritative" if authoritative_runtime else "candidate",
+                "pid": os.getpid(),
+                "phase": phase,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "traceback": traceback.format_exc(limit=20),
+                "update_state": str(status.get("state") or ""),
+                "update_phase": str(status.get("phase") or ""),
+                "update_target_slot": str(status.get("target_slot") or ""),
+                "update_target_rev": str(status.get("target_rev") or ""),
+            },
+            fingerprint_parts=("runtime_process_failure", phase, type(exc).__name__, authoritative_runtime),
+            tags=("runtime", "process_exit", "autostart"),
+        )
+        persist_incident_registry()
+    except Exception:
+        _LOG.exception("failed to persist runtime process failure incident")
+
+
+def _handle_runner_failure(exc: Exception, *, phase: str, authoritative_runtime: bool) -> None:
+    try:
+        update_status = read_status() if authoritative_runtime else {}
+    except Exception:
+        update_status = {}
+
+    if authoritative_runtime and _active_core_update_owns_runtime_failure(update_status):
+        try:
+            failed = dict(update_status)
+            failed.update(
+                {
+                    "state": "failed",
+                    "phase": phase,
+                    "message": f"autostart runner failed during {phase}",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "traceback": traceback.format_exc(limit=20),
+                    "updated_at": time.time(),
+                }
+            )
+            write_status(failed)
+        except Exception:
+            _LOG.exception("failed to persist active core update failure")
+    _record_runtime_process_failure(
+        exc,
+        phase=phase,
+        authoritative_runtime=authoritative_runtime,
+        update_status=update_status,
+    )
+    _LOG.exception("autostart runner process failed during %s", phase)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -1354,23 +1445,7 @@ def main() -> None:
     except SystemExit:
         raise
     except Exception as exc:
-        if authoritative_runtime:
-            try:
-                write_status(
-                    {
-                        "state": "failed",
-                        "phase": phase,
-                        "message": f"autostart runner failed during {phase}",
-                        "error_type": type(exc).__name__,
-                        "error": str(exc),
-                        "traceback": traceback.format_exc(limit=20),
-                        "updated_at": time.time(),
-                    }
-                )
-            except Exception:
-                pass
-        else:
-            _LOG.exception("candidate autostart runner failed during %s", phase)
+        _handle_runner_failure(exc, phase=phase, authoritative_runtime=authoritative_runtime)
         raise
 
 
