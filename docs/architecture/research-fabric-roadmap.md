@@ -1432,6 +1432,48 @@ scientific smoke or confirmatory workloads in package self-tests. Frozen v13
 (`sha256:27f8c8497a918d583ea25bd8ac38aa3072427a36fc9d650cab0c15b3705c02a8`)
 binds those corrections and materialized all 25 packets before execution.
 
+V13 then exposed a different contract gap and is retained as an invalid rail
+pilot, not probability evidence. Both first-pair Builder realizations completed,
+but the accepted smoke protocol bounded epochs, seed and CPU while leaving the
+data workload and input readiness implicit. C0 consequently failed independent
+acceptance (`2/6` mandatory checks). C3 correctly implemented a real full
+STL-10 path, attempted dataset acquisition despite an unenforced offline intent,
+and exceeded the evaluator's caller window; an operator terminated the leaked
+child process tree. Repeating evaluation started the workload again. These
+observations invalidate the pair and establish four generic requirements:
+workload cardinality and input readiness belong to the public execution ABI;
+network intent must not be reported as enforcement; evaluator replay must be
+idempotent; and timeouts must terminate the exact owned process tree.
+
+The amended rail is contract version 1.3/runner ABI 1.4/evaluator task 1.6.
+Every workflow-smoke profile now freezes `workload.mode`, named limits with
+units, input source/readiness/sampling, network mode, and planned versus observed
+counts. Research Manager rejects any observed limit overflow or policy drift.
+The evaluator derives the same expectation from the accepted public protocol,
+returns an existing immutable result on replay, and freezes the consumer call
+window. Core commits `bd58cdf1` and `3bbe6d61` fence Builder finalization,
+preserve the governed ExecutionSpec environment, and terminate an owned process
+tree on timeout. Hostile isolation and network enforcement remain explicitly
+false on this Windows local-provider proof.
+
+The replacement formulation is another immutable branch,
+`tlp_structured_proof_02.task-003`. Two failed formulation runs revealed that a
+free-text semantic gate treated an explicit prohibition of per-epoch final-test
+metrics as if it required those metrics and then returned no exact field path to
+the repair model. Orchestrator 0.43.0 distinguishes affirmative requirements
+from prohibitions and reports the violating JSON path plus rejected text. With
+the same directive and source bundle the next staged run completed with one
+repair. Accepted prototype
+`sha256:aa28946c9cc915da2100ebea02b26c90daf71221ce578326e2c4d8c532a5464a`,
+Compilation
+`sha256:d0d1df3f2125cae2f20827c97ebaa56fdc76950dc0456e48110ca46112206dfb`,
+and AutomationBrief
+`sha256:6081d1ba36a698feb4b34806dafc17a1e5b68e500344919a87288ed0ec6579fd`
+freeze an offline deterministic contract fixture, 128 train/64 validation/64
+robustness samples, three epochs, one seed pair and 900 seconds. It is a real
+non-inferential computation-path smoke; the full accepted STL-10 confirmatory
+profile remains separate and will not be executed by the rail calibration.
+
 **Exit proof:** a frozen calibration package contains the visible inputs,
 hidden/evaluator inputs, source-analysis and formulation revisions,
 traceability graph, exact AutomationBrief, Builder/Codex traces, ProjectRelease,
@@ -1507,8 +1549,10 @@ efficacy result or cross-domain SOTA claim.
   repeated paired design sufficient to expose run variance. Keep
   `initial-review` visible only in C1 and evaluation; use it and legacy TLP
   solely as coverage/semantic oracles, never as hidden Codex requirements.
-  The frozen primary contrast is C3 versus C0 over five fresh paired Builder
-  realizations. Its primary endpoint is independent evidence-valid completion;
+  V9-v13 retain their frozen five-pair designs. The first valid amended primary
+  contrast is C3 versus C0 over six fresh paired Builder realizations so one
+  tied pair does not make the one-sided exact test mathematically unreachable.
+  Its primary endpoint is independent evidence-valid completion;
   the one-sided exact paired decision rule, missing-result policy, Wilson
   intervals, and risk difference are fixed before execution. One successful
   C3 is an operability gate, not probability evidence. v9 stopped after its
@@ -1516,8 +1560,10 @@ efficacy result or cross-domain SOTA claim.
   infrastructure-invalid because its evaluator failed before candidate code.
   v11 is retained infrastructure-invalid after its first C3 finalization. v12
   stopped after its first 0/0 EVC tie made the frozen significance threshold
-  unreachable. v13 is the frozen post-measurement-fix task and does not replace
-  any earlier result.
+  unreachable. v13 is the frozen post-measurement-fix rail pilot, invalidated by
+  the unbounded-workload and timeout-containment defects above; it does not
+  replace any earlier result. The amended six-pair task must be frozen before
+  executing either arm and may not reuse v9-v13 outcomes.
 - [ ] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and
