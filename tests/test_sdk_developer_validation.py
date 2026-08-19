@@ -114,8 +114,8 @@ def test_developer_trial_uses_candidate_owned_working_directory(
     script = source / "runner.py"
     script.write_text(
         "from pathlib import Path\n"
-        "import json\n"
-        "Path('result.json').write_text(json.dumps({'ok': True}), encoding='utf-8')\n",
+        "import json, os\n"
+        "Path('result.json').write_text(json.dumps({'ok': True, 'contract': os.environ['TEST_CONTRACT']}), encoding='utf-8')\n",
         encoding="utf-8",
     )
     runtime_bucket = "v0.1"
@@ -161,6 +161,7 @@ def test_developer_trial_uses_candidate_owned_working_directory(
         command=(sys.executable, str(script.resolve())),
         working_directory=str(workdir),
         network=ExecutionNetworkPolicy(mode="offline"),
+        environment={"TEST_CONTRACT": "preserved"},
         expected_outputs=("result.json",),
     )
 
@@ -173,11 +174,14 @@ def test_developer_trial_uses_candidate_owned_working_directory(
     )
 
     assert receipt["ok"] is True
-    assert receipt["documents"]["result.json"] == {"ok": True}
+    assert receipt["documents"]["result.json"] == {"ok": True, "contract": "preserved"}
     assert receipt["provider"]["process_tree_isolated"] is True
     assert receipt["provider"]["network_enforced"] is False
     assert receipt["limits"]["wall_time_exceeded"] is False
-    assert json.loads((workdir / "result.json").read_text(encoding="utf-8")) == {"ok": True}
+    assert json.loads((workdir / "result.json").read_text(encoding="utf-8")) == {
+        "ok": True,
+        "contract": "preserved",
+    }
 
 
 def test_developer_trial_timeout_terminates_the_owned_process_tree(

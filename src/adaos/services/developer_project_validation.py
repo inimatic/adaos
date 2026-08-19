@@ -294,6 +294,12 @@ def execute_dev_spec(
     }
     environment.update(
         {
+            str(key_name): str(value_text)
+            for key_name, value_text in spec.environment.items()
+        }
+    )
+    environment.update(
+        {
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
             "ADAOS_SKILL_NAME": str(project_id),
