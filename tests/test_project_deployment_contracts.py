@@ -13,6 +13,7 @@ from adaos.domain.project_deployment import (
     ComponentPlacementPolicy,
     DataRetentionPolicy,
     DeploymentCompatibilityPolicy,
+    DeploymentComponentResult,
     DeploymentNodeResult,
     DeploymentOperation,
     DeploymentPhaseResult,
@@ -83,6 +84,7 @@ def _node(node_id: str = "node-a", *, endpoint: bool = True) -> NodeInventoryRec
         architecture="x86_64",
         runtime_version="0.1.900",
         capabilities=("project.activate", "media.catalog"),
+        protocols={"project_activation": "1"},
         labels={"zone": "living-room"},
         capacity={"cpu_millicores": 2000, "memory_bytes": 4_000_000_000},
         endpoints=(_endpoint(),) if endpoint else (),
@@ -173,8 +175,15 @@ def _operation() -> DeploymentOperation:
             DeploymentNodeResult(
                 node_id="node-a",
                 state="succeeded",
-                phases=(phase,),
-                activation_ref="activation:media-center-home:node-a:agent",
+                components=(
+                    DeploymentComponentResult(
+                        component_ref="skill:media_library_agent",
+                        action="install",
+                        state="succeeded",
+                        phases=(phase,),
+                        activation_ref="activation:media-center-home:node-a:agent",
+                    ),
+                ),
             ),
         ),
         created_at=_NOW,
@@ -326,7 +335,7 @@ def test_operation_phases_preserve_order_and_uncertain_state_is_explicit() -> No
         DeploymentNodeResult(
             node_id="node-a",
             state="succeeded",
-            phases=(),
+            components=(),
             uncertain=True,
         )
 

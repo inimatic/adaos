@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": [
     "schema", "node_id", "subnet_id", "trust_state", "online",
-    "architecture", "runtime_version", "capabilities", "labels", "capacity",
+    "architecture", "runtime_version", "capabilities", "protocols", "labels", "capacity",
     "endpoints", "observed_at", "revision"
   ],
   "properties": {
@@ -18,6 +18,10 @@
     "architecture": { "type": "string", "minLength": 1, "maxLength": 80 },
     "runtime_version": { "type": "string", "minLength": 1, "maxLength": 120 },
     "capabilities": { "$ref": "#/$defs/stringSet" },
+    "protocols": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
     "labels": { "$ref": "#/$defs/labels" },
     "capacity": { "$ref": "#/$defs/capacity" },
     "endpoints": {

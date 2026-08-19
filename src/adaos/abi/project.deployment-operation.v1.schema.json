@@ -45,15 +45,28 @@
         "finished_at": { "type": ["string", "null"], "format": "date-time" }
       }
     },
-    "nodeResult": {
+    "componentResult": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["node_id", "state", "phases", "activation_ref", "error", "uncertain"],
+      "required": ["component_ref", "action", "state", "phases", "activation_ref", "error", "uncertain"],
       "properties": {
-        "node_id": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "component_ref": { "type": "string", "pattern": "^(skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$" },
+        "action": { "enum": ["install", "update", "noop", "cordon", "drain", "deactivate", "remove"] },
         "state": { "enum": ["accepted", "running", "succeeded", "partial", "failed", "uncertain", "rolled_back", "cancelled"] },
         "phases": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/phaseResult" } },
         "activation_ref": { "type": ["string", "null"], "maxLength": 500 },
+        "error": { "type": "object" },
+        "uncertain": { "type": "boolean" }
+      }
+    },
+    "nodeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_id", "state", "components", "error", "uncertain"],
+      "properties": {
+        "node_id": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "state": { "enum": ["accepted", "running", "succeeded", "partial", "failed", "uncertain", "rolled_back", "cancelled"] },
+        "components": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/componentResult" } },
         "error": { "type": "object" },
         "uncertain": { "type": "boolean" }
       }

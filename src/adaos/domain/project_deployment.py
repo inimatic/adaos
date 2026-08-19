@@ -310,6 +310,7 @@ class NodeInventoryRecord:
     architecture: str
     runtime_version: str
     capabilities: tuple[str, ...] = ()
+    protocols: Mapping[str, str] = field(default_factory=dict)
     labels: Mapping[str, str] = field(default_factory=dict)
     capacity: Mapping[str, int] = field(default_factory=dict)
     endpoints: tuple[NodeEndpointRecord, ...] = ()
@@ -341,6 +342,11 @@ class NodeInventoryRecord:
         )
         object.__setattr__(
             self, "capabilities", _texts(list(self.capabilities), "capabilities")
+        )
+        object.__setattr__(
+            self,
+            "protocols",
+            {str(key): str(item) for key, item in dict(self.protocols).items()},
         )
         labels = {str(key): str(item) for key, item in dict(self.labels).items()}
         object.__setattr__(self, "labels", labels)
@@ -377,6 +383,7 @@ class NodeInventoryRecord:
             "architecture": self.architecture,
             "runtime_version": self.runtime_version,
             "capabilities": list(self.capabilities),
+            "protocols": dict(self.protocols),
             "labels": dict(self.labels),
             "capacity": dict(self.capacity),
             "endpoints": [item.to_dict() for item in self.endpoints],
@@ -399,6 +406,7 @@ class NodeInventoryRecord:
                 "architecture",
                 "runtime_version",
                 "capabilities",
+                "protocols",
                 "labels",
                 "capacity",
                 "endpoints",
@@ -414,6 +422,7 @@ class NodeInventoryRecord:
                 "architecture",
                 "runtime_version",
                 "capabilities",
+                "protocols",
                 "labels",
                 "capacity",
                 "endpoints",
@@ -431,6 +440,7 @@ class NodeInventoryRecord:
             architecture=payload["architecture"],
             runtime_version=payload["runtime_version"],
             capabilities=_texts(payload["capabilities"], "capabilities"),
+            protocols=_optional_mapping(payload["protocols"], "protocols"),
             labels=_optional_mapping(payload["labels"], "labels"),
             capacity=_optional_mapping(payload["capacity"], "capacity"),
             endpoints=tuple(
@@ -449,6 +459,7 @@ class ComponentPlacementPolicy:
     selected_node_ids: tuple[str, ...] = ()
     required_capabilities: tuple[str, ...] = ()
     required_labels: Mapping[str, str] = field(default_factory=dict)
+    required_capacity: Mapping[str, int] = field(default_factory=dict)
     endpoint_role: str | None = None
     co_located_with: str | None = None
     min_instances: int = 1
@@ -476,6 +487,12 @@ class ComponentPlacementPolicy:
             "required_labels",
             {str(key): str(item) for key, item in dict(self.required_labels).items()},
         )
+        required_capacity: dict[str, int] = {}
+        for key, value in dict(self.required_capacity).items():
+            required_capacity[str(key)] = _integer(
+                value, f"required capacity {key}", minimum=0
+            )
+        object.__setattr__(self, "required_capacity", required_capacity)
         endpoint_role = _optional_token(self.endpoint_role, max_length=80)
         if mode == "per_endpoint" and not endpoint_role:
             raise ProjectDeploymentContractError(
@@ -518,6 +535,7 @@ class ComponentPlacementPolicy:
             "selected_node_ids": list(self.selected_node_ids),
             "required_capabilities": list(self.required_capabilities),
             "required_labels": dict(self.required_labels),
+            "required_capacity": dict(self.required_capacity),
             "endpoint_role": self.endpoint_role,
             "co_located_with": self.co_located_with,
             "min_instances": self.min_instances,
@@ -533,6 +551,7 @@ class ComponentPlacementPolicy:
             "selected_node_ids",
             "required_capabilities",
             "required_labels",
+            "required_capacity",
             "endpoint_role",
             "co_located_with",
             "min_instances",
@@ -554,6 +573,9 @@ class ComponentPlacementPolicy:
             ),
             required_labels=_optional_mapping(
                 payload.get("required_labels"), "required_labels"
+            ),
+            required_capacity=_optional_mapping(
+                payload.get("required_capacity"), "required_capacity"
             ),
             endpoint_role=payload.get("endpoint_role"),
             co_located_with=payload.get("co_located_with"),
@@ -1465,8 +1487,9 @@ class DeploymentPhaseResult:
 
 
 @dataclass(frozen=True, slots=True)
-class DeploymentNodeResult:
-    node_id: str
+class DeploymentComponentResult:
+    component_ref: str
+    action: str
     state: str
     phases: tuple[DeploymentPhaseResult, ...]
     activation_ref: str | None = None
@@ -1474,19 +1497,23 @@ class DeploymentNodeResult:
     uncertain: bool = False
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "node_id", _token(self.node_id, "node_id", max_length=300)
-        )
-        state = _token(self.state, "node result state", max_length=20).lower()
+        object.__setattr__(self, "component_ref", _component_ref(self.component_ref))
+        action = _token(self.action, "component result action", max_length=20).lower()
+        if action not in PLAN_ACTIONS:
+            raise ProjectDeploymentContractError(
+                "deployment component result action is invalid"
+            )
+        object.__setattr__(self, "action", action)
+        state = _token(self.state, "component result state", max_length=20).lower()
         if state not in OPERATION_STATES:
             raise ProjectDeploymentContractError(
-                "deployment node result state is invalid"
+                "deployment component result state is invalid"
             )
         if not isinstance(self.uncertain, bool):
             raise ProjectDeploymentContractError("uncertain must be a boolean")
         if self.uncertain and state not in {"uncertain", "partial", "failed"}:
             raise ProjectDeploymentContractError(
-                "uncertain node results must expose uncertain/partial/failed state"
+                "uncertain component results must expose uncertain/partial/failed state"
             )
         if any(not isinstance(item, DeploymentPhaseResult) for item in self.phases):
             raise ProjectDeploymentContractError(
@@ -1508,7 +1535,8 @@ class DeploymentNodeResult:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "node_id": self.node_id,
+            "component_ref": self.component_ref,
+            "action": self.action,
             "state": self.state,
             "phases": [item.to_dict() for item in self.phases],
             "activation_ref": self.activation_ref,
@@ -1517,9 +1545,96 @@ class DeploymentNodeResult:
         }
 
     @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "DeploymentComponentResult":
+        payload = _mapping(value, "DeploymentComponentResult")
+        allowed = {
+            "component_ref",
+            "action",
+            "state",
+            "phases",
+            "activation_ref",
+            "error",
+            "uncertain",
+        }
+        unknown = set(payload).difference(allowed)
+        missing = allowed.difference(payload)
+        if unknown or missing:
+            detail = sorted(unknown or missing)
+            problem = "unsupported" if unknown else "missing"
+            raise ProjectDeploymentContractError(
+                f"DeploymentComponentResult contains {problem} fields: {', '.join(detail)}"
+            )
+        if not isinstance(payload["uncertain"], bool):
+            raise ProjectDeploymentContractError("uncertain must be a boolean")
+        return cls(
+            component_ref=payload["component_ref"],
+            action=payload["action"],
+            state=payload["state"],
+            phases=tuple(
+                DeploymentPhaseResult.from_mapping(item)
+                for item in _mappings(payload["phases"], "phases", max_items=20)
+            ),
+            activation_ref=payload["activation_ref"],
+            error=_optional_mapping(payload["error"], "error"),
+            uncertain=payload["uncertain"],
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentNodeResult:
+    node_id: str
+    state: str
+    components: tuple[DeploymentComponentResult, ...]
+    error: Mapping[str, Any] = field(default_factory=dict)
+    uncertain: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "node_id", _token(self.node_id, "node_id", max_length=300)
+        )
+        state = _token(self.state, "node result state", max_length=20).lower()
+        if state not in OPERATION_STATES:
+            raise ProjectDeploymentContractError(
+                "deployment node result state is invalid"
+            )
+        if not isinstance(self.uncertain, bool):
+            raise ProjectDeploymentContractError("uncertain must be a boolean")
+        if self.uncertain and state not in {"uncertain", "partial", "failed"}:
+            raise ProjectDeploymentContractError(
+                "uncertain node results must expose uncertain/partial/failed state"
+            )
+        if any(
+            not isinstance(item, DeploymentComponentResult) for item in self.components
+        ):
+            raise ProjectDeploymentContractError(
+                "components must contain DeploymentComponentResult values"
+            )
+        component_refs = [item.component_ref for item in self.components]
+        if len(component_refs) != len(set(component_refs)):
+            raise ProjectDeploymentContractError(
+                "deployment node component results must be unique"
+            )
+        object.__setattr__(self, "state", state)
+        object.__setattr__(
+            self,
+            "components",
+            tuple(sorted(self.components, key=lambda item: item.component_ref)),
+        )
+        object.__setattr__(self, "error", dict(self.error))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "node_id": self.node_id,
+            "state": self.state,
+            "components": [item.to_dict() for item in self.components],
+            "error": dict(self.error),
+            "uncertain": self.uncertain,
+        }
+
+    @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "DeploymentNodeResult":
         payload = _mapping(value, "DeploymentNodeResult")
-        allowed = {"node_id", "state", "phases", "activation_ref", "error", "uncertain"}
+        allowed = {"node_id", "state", "components", "error", "uncertain"}
         unknown = set(payload).difference(allowed)
         missing = allowed.difference(payload)
         if unknown or missing:
@@ -1533,11 +1648,12 @@ class DeploymentNodeResult:
         return cls(
             node_id=payload["node_id"],
             state=payload["state"],
-            phases=tuple(
-                DeploymentPhaseResult.from_mapping(item)
-                for item in _mappings(payload["phases"], "phases", max_items=20)
+            components=tuple(
+                DeploymentComponentResult.from_mapping(item)
+                for item in _mappings(
+                    payload["components"], "components", max_items=100
+                )
             ),
-            activation_ref=payload["activation_ref"],
             error=_optional_mapping(payload["error"], "error"),
             uncertain=payload["uncertain"],
         )
@@ -1707,6 +1823,7 @@ __all__ = [
     "ComponentPlacementPolicy",
     "DataRetentionPolicy",
     "DeploymentCompatibilityPolicy",
+    "DeploymentComponentResult",
     "DeploymentNodeResult",
     "DeploymentOperation",
     "DeploymentPhaseResult",
