@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import json
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from adaos.domain.execution import ExecutionNetworkPolicy, ExecutionSpec
 from adaos.sdk.developer import validation
+from adaos.services import developer_project_validation as service
 
 
 def test_developer_validation_requires_narrow_capability_and_calls_service(monkeypatch) -> None:
@@ -94,3 +101,121 @@ def test_developer_trial_execution_is_capability_gated(monkeypatch) -> None:
     assert result["ok"] is True
     assert result["key"] == "smoke-17"
     assert admitted == ["builder.project_validation"]
+
+
+def test_developer_trial_uses_candidate_owned_working_directory(
+    monkeypatch, tmp_path: Path
+) -> None:
+    dev_skills = tmp_path / "dev" / "skills"
+    source = dev_skills / "candidate"
+    source.mkdir(parents=True)
+    script = source / "runner.py"
+    script.write_text(
+        "from pathlib import Path\n"
+        "import json\n"
+        "Path('result.json').write_text(json.dumps({'ok': True}), encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    runtime_bucket = "v0.1"
+    runtime_source = (
+        dev_skills
+        / ".runtime"
+        / "candidate"
+        / runtime_bucket
+        / "slots"
+        / "A"
+        / "src"
+        / "skills"
+        / "candidate"
+    )
+    runtime_source.mkdir(parents=True)
+    manifest = runtime_source / "resolved.manifest.json"
+    manifest.write_text("{}\n", encoding="utf-8")
+    workdir = dev_skills / ".runtime" / "candidate" / runtime_bucket / "data" / "internal" / "attempt"
+    workdir.mkdir(parents=True)
+    state_dir = tmp_path / "state"
+    package_path = tmp_path / "package"
+    package_path.mkdir()
+    ctx = SimpleNamespace(
+        paths=SimpleNamespace(
+            dev_skills_dir=lambda: dev_skills,
+            state_dir=lambda: state_dir,
+            package_path=lambda: package_path,
+        )
+    )
+
+    class _Manager:
+        @staticmethod
+        def dev_runtime_status(_project_id: str) -> dict:
+            return {
+                "resolved_manifest": str(manifest),
+                "runtime_bucket": runtime_bucket,
+            }
+
+    monkeypatch.setattr(service, "_manager", lambda _ctx: _Manager())
+    execution = ExecutionSpec(
+        spec_id="candidate-smoke",
+        owner_ref="skill:candidate",
+        command=(sys.executable, str(script.resolve())),
+        working_directory=str(workdir),
+        network=ExecutionNetworkPolicy(mode="offline"),
+        expected_outputs=("result.json",),
+    )
+
+    receipt = service.execute_dev_spec(
+        ctx,
+        "candidate",
+        execution.to_dict(),
+        idempotency_key="smoke-17",
+        timeout=30,
+    )
+
+    assert receipt["ok"] is True
+    assert receipt["documents"]["result.json"] == {"ok": True}
+    assert json.loads((workdir / "result.json").read_text(encoding="utf-8")) == {"ok": True}
+
+
+def test_developer_trial_rejects_foreign_working_directory(monkeypatch, tmp_path: Path) -> None:
+    dev_skills = tmp_path / "dev" / "skills"
+    source = dev_skills / "candidate"
+    source.mkdir(parents=True)
+    script = source / "runner.py"
+    script.write_text("raise SystemExit(0)\n", encoding="utf-8")
+    runtime_bucket = "v0.1"
+    runtime_source = dev_skills / ".runtime" / "candidate" / runtime_bucket / "src"
+    runtime_source.mkdir(parents=True)
+    manifest = runtime_source / "resolved.manifest.json"
+    manifest.write_text("{}\n", encoding="utf-8")
+    ctx = SimpleNamespace(
+        paths=SimpleNamespace(
+            dev_skills_dir=lambda: dev_skills,
+            state_dir=lambda: tmp_path / "state",
+            package_path=lambda: tmp_path,
+        )
+    )
+
+    class _Manager:
+        @staticmethod
+        def dev_runtime_status(_project_id: str) -> dict:
+            return {
+                "resolved_manifest": str(manifest),
+                "runtime_bucket": runtime_bucket,
+            }
+
+    monkeypatch.setattr(service, "_manager", lambda _ctx: _Manager())
+    execution = ExecutionSpec(
+        spec_id="candidate-smoke",
+        owner_ref="skill:candidate",
+        command=(sys.executable, str(script.resolve())),
+        working_directory=str(tmp_path / "foreign"),
+        network=ExecutionNetworkPolicy(mode="offline"),
+    )
+
+    with pytest.raises(PermissionError, match="working directory"):
+        service.execute_dev_spec(
+            ctx,
+            "candidate",
+            execution.to_dict(),
+            idempotency_key="smoke-foreign",
+            timeout=30,
+        )

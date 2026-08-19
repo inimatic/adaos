@@ -225,6 +225,17 @@ def execute_dev_spec(
     status = manager.dev_runtime_status(str(project_id))
     manifest_path = Path(str(status.get("resolved_manifest") or "")).resolve()
     runtime_root = manifest_path.parent if manifest_path.is_file() else source_root
+    runtime_bucket = str(status.get("runtime_bucket") or "").strip()
+    if not runtime_bucket:
+        raise RuntimeError("developer runtime has no compatibility bucket")
+    data_root = (
+        Path(ctx.paths.dev_skills_dir()).resolve()
+        / ".runtime"
+        / str(project_id)
+        / runtime_bucket
+        / "data"
+    ).resolve()
+    internal_data_root = (data_root / "internal").resolve()
     if not any(_under(script, root) for root in (source_root, runtime_root)):
         raise PermissionError("developer trial command is outside evaluated skill sources")
     if not script.is_file() or script.suffix.lower() != ".py":
@@ -247,6 +258,17 @@ def execute_dev_spec(
     output_root.mkdir(parents=True, exist_ok=False)
     stdout_path = output_root / "stdout.log"
     stderr_path = output_root / "stderr.log"
+    declared_working_directory = Path(spec.working_directory).expanduser()
+    if not declared_working_directory.is_absolute():
+        declared_working_directory = runtime_root / declared_working_directory
+    declared_working_directory = declared_working_directory.resolve()
+    if not any(
+        _under(declared_working_directory, root)
+        for root in (source_root, runtime_root, data_root)
+    ):
+        raise PermissionError("developer trial working directory is outside evaluated skill scope")
+    if not declared_working_directory.is_dir():
+        raise FileNotFoundError("developer trial working directory is unavailable")
     maximum = min(
         float(timeout or spec.resources.wall_time_s or 300),
         float(spec.resources.wall_time_s or timeout or 300),
@@ -274,6 +296,10 @@ def execute_dev_spec(
             "PYTHONIOENCODING": "utf-8",
             "ADAOS_SKILL_NAME": str(project_id),
             "ADAOS_SKILL_ROOT": str(runtime_root),
+            "ADAOS_SKILL_INTERNAL_DATA_ROOT": str(internal_data_root),
+            "ADAOS_SKILL_INTERNAL_ACTIVE_PATH": str(internal_data_root),
+            "ADAOS_SKILL_INTERNAL_TARGET_PATH": str(internal_data_root),
+            "ADAOS_SKILL_ENV_PATH": str(data_root / "db" / "skill_env.json"),
             "PYTHONPATH": os.pathsep.join((str(runtime_root), str(ctx.paths.package_path()))),
         }
     )
@@ -281,7 +307,7 @@ def execute_dev_spec(
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
             completed = subprocess.run(
                 command,
-                cwd=str(output_root),
+                cwd=str(declared_working_directory),
                 env=environment,
                 stdout=stdout,
                 stderr=stderr,
@@ -297,10 +323,15 @@ def execute_dev_spec(
         failure = "wall_time_exceeded"
     outputs = []
     documents: dict[str, Any] = {}
-    for path in sorted(item for item in output_root.rglob("*") if item.is_file()):
-        if path in {receipt_path, stdout_path, stderr_path}:
-            continue
-        relative = path.relative_to(output_root).as_posix()
+    output_paths: list[Path] = []
+    for expected in spec.expected_outputs:
+        path = (declared_working_directory / Path(expected)).resolve()
+        if not _under(path, declared_working_directory):
+            raise PermissionError("developer trial expected output escapes its working directory")
+        if path.is_file():
+            output_paths.append(path)
+    for path in sorted(output_paths):
+        relative = path.relative_to(declared_working_directory).as_posix()
         raw = path.read_bytes()
         outputs.append(
             {
