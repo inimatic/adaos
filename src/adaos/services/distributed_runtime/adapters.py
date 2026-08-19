@@ -275,9 +275,12 @@ def execute_topology_phase_request(
         raise TopologyExecutionError("topology_phase_adapter_tool_mismatch")
     if str(payload.get("phase") or "") not in step.phases:
         raise TopologyExecutionError("topology_phase_not_in_reviewed_plan")
+    expected_epoch = plan.authority_epoch + (
+        1 if plan.kind == "handoff" and str(payload.get("phase") or "") in {"promote", "route", "demote"} else 0
+    )
     if (
         int(payload.get("authority_epoch") or 0) != partition.authority_epoch
-        or plan.authority_epoch != partition.authority_epoch
+        or expected_epoch != partition.authority_epoch
     ):
         raise TopologyExecutionError("topology_phase_authority_epoch_mismatch")
     result = executor(skill_id, str(payload.get("adapter_tool") or ""), dict(payload))

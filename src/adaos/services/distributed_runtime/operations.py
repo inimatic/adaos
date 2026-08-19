@@ -95,6 +95,9 @@ class TopologyExecutor:
     store: DistributedRuntimeStore
     adapter: TopologyAdapter
     pressure_probe: Callable[[TopologyPlanStep], float] | None = None
+    authority_handoff: Callable[
+        [TopologyPlanStep, TopologyOperation, DistributedPrincipal, int], int
+    ] | None = None
     sleep: Callable[[float], None] = time.sleep
     max_attempts: int = 2
     pressure_limit: float = 0.9
@@ -132,15 +135,28 @@ class TopologyExecutor:
         operation = replace(operation, state="running", updated_at=utc_now())
         self.store.put_operation(operation)
         completed: list[TopologyPhaseResult] = []
+        authority_epoch = plan.authority_epoch
         try:
             for step in plan.steps:
                 self._validate_retention(step)
                 for phase in step.phases:
+                    if phase == "promote":
+                        if self.authority_handoff is None:
+                            raise TopologyExecutionError(
+                                "authority_handoff_committer_not_configured"
+                            )
+                        authority_epoch = self.authority_handoff(
+                            step,
+                            operation,
+                            principal,
+                            authority_epoch,
+                        )
                     result = self._run_phase(
                         operation=operation,
                         plan=plan,
                         step=step,
                         phase=phase,
+                        authority_epoch=authority_epoch,
                     )
                     completed.append(result)
                     operation = replace(
@@ -181,7 +197,14 @@ class TopologyExecutor:
         except Exception:
             persisted = self.store.get_operation(operation.operation_id)
             completed = list(persisted.phases)
-            completed.extend(self._truthful_release(operation, plan, completed))
+            completed.extend(
+                self._truthful_release(
+                    operation,
+                    plan,
+                    completed,
+                    authority_epoch=authority_epoch,
+                )
+            )
             operation = replace(
                 operation,
                 state="failed",
@@ -198,6 +221,7 @@ class TopologyExecutor:
         plan: TopologyPlan,
         step: TopologyPlanStep,
         phase: str,
+        authority_epoch: int | None = None,
     ) -> TopologyPhaseResult:
         max_attempts = max(1, min(int(self.max_attempts), 5))
         for attempt in range(1, max_attempts + 1):
@@ -208,7 +232,11 @@ class TopologyExecutor:
                 plan_digest=str(plan.plan_digest),
                 step=step,
                 phase=phase,
-                authority_epoch=plan.authority_epoch,
+                authority_epoch=(
+                    plan.authority_epoch
+                    if authority_epoch is None
+                    else authority_epoch
+                ),
                 idempotency_key=phase_key,
                 attempt=attempt,
             )
@@ -296,6 +324,8 @@ class TopologyExecutor:
         operation: TopologyOperation,
         plan: TopologyPlan,
         completed: list[TopologyPhaseResult],
+        *,
+        authority_epoch: int,
     ) -> list[TopologyPhaseResult]:
         results: list[TopologyPhaseResult] = []
         completed_steps = {item.phase.split(".", 1)[0] for item in completed}
@@ -312,6 +342,7 @@ class TopologyExecutor:
                         plan=plan,
                         step=step,
                         phase="release",
+                        authority_epoch=authority_epoch,
                     )
                 )
             except Exception:

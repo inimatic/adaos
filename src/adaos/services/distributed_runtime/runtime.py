@@ -486,6 +486,16 @@ class DistributedRuntime:
         operation = TopologyExecutor(
             store=self.store,
             adapter=self.topology_adapter,
+            authority_handoff=lambda step, operation, actor, epoch: self.handoff_authority(
+                step.partition_id,
+                str(step.target_instance_id or ""),
+                expected_partition_revision=self.store.get_partition(
+                    step.partition_id
+                ).revision,
+                expected_epoch=epoch,
+                operation_id=operation.operation_id,
+                principal=actor,
+            ).epoch,
         ).execute(
             plan,
             principal=principal,

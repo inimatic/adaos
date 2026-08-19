@@ -444,6 +444,76 @@ def test_fenced_handoff_rejects_old_owner_and_routes_partial_topology(
     assert [item.replica_id for item in route.endpoints] == ["root-a-node-b"]
 
 
+def test_reviewed_handoff_plan_commits_epoch_before_domain_promotion(
+    tmp_path: Path,
+) -> None:
+    runtime, _, release = _runtime(tmp_path)
+    _register_both(runtime, release)
+    _external_topology(runtime)
+    lease_a = runtime.handoff_authority(
+        "media-files:root-a",
+        "media-agent-node-a",
+        expected_partition_revision=1,
+        expected_epoch=0,
+        operation_id="initial-authority",
+        principal=_principal(),
+    )
+    for node_id, role in (("node-a", "authority"), ("node-b", "follower")):
+        runtime.observe_replica(
+            Replica(
+                replica_id=f"root-a-{node_id}",
+                partition_id="media-files:root-a",
+                instance_id=f"media-agent-{node_id}",
+                node_id=node_id,
+                role=role,
+                lifecycle="ready",
+                content_state="non_empty",
+                authority_epoch=lease_a.epoch,
+                checkpoint="scan:10",
+                source_ref="file:///mnt/disk1/Music",
+                freshness_seconds=1,
+                item_count=10,
+                byte_count=1000,
+                observed_at=_NOW.isoformat(),
+            ),
+            expected_revision=0,
+            principal=_principal(),
+        )
+    adapter = FakeTopologyAdapter()
+    runtime.topology_adapter = adapter
+    plan = runtime.plan_replica_change(
+        "media-files:root-a",
+        action="handoff",
+        source_instance_id="media-agent-node-a",
+        target_instance_id="media-agent-node-b",
+        replica_role="authority",
+        principal=_principal(),
+    )
+    operation = runtime.apply_topology_plan(
+        str(plan.plan_digest),
+        idempotency_key="reviewed-handoff-a-to-b",
+        principal=_principal(),
+    )
+    partition = runtime.store.get_partition("media-files:root-a")
+
+    assert operation.state == "succeeded"
+    assert operation.authority_epoch == 1
+    assert partition.authority_epoch == 2
+    promote_index = next(
+        index for index, call in enumerate(adapter.calls) if call[0] == "promote"
+    )
+    verify_index = next(
+        index for index, call in enumerate(adapter.calls) if call[0] == "verify"
+    )
+    assert verify_index < promote_index
+    with pytest.raises(StaleAuthorityEpochError):
+        runtime.assert_authority(
+            scope_ref="partition:media-files:root-a",
+            instance_id="media-agent-node-a",
+            epoch=1,
+        )
+
+
 class FakeTopologyAdapter:
     def __init__(
         self, *, retry: str | None = None, uncertain: str | None = None
