@@ -1581,12 +1581,18 @@ class BuilderAutomationService:
         snapshot = self.factory.snapshot(include_tasks=True)
         task = next((item for item in snapshot.get("tasks", []) if item.get("task_id") == task_id), task)
         task_status = task.get("status")
-        current["status"] = (
-            "commit_ready"
-            if task_status == "completed"
-            and str(current.get("finalizing_task_id") or "").strip() == task_id
-            else task_status
+        materialization_pending = bool(
+            task_status == "completed"
+            and self.materialize_on_completion
+            and not isinstance(current.get("completion_readiness"), Mapping)
         )
+        current["status"] = "commit_ready" if materialization_pending else task_status
+        if materialization_pending:
+            # The Skill Factory result is only an intermediate checkpoint.
+            # Mark finalization ownership before publishing any projection so
+            # readers can never mistake a validated candidate for a fully
+            # activated/checkpointed terminal Automation result.
+            current["finalizing_task_id"] = task_id
         current["task"] = task
         current["updated_at"] = task.get("updated_at") or _now_iso()
         realize_request = (
@@ -2204,7 +2210,7 @@ class BuilderAutomationService:
                     should_finalize = bool(
                         isinstance(worker_result, Mapping)
                         and worker_result.get("ok")
-                        and session.get("status") == "completed"
+                        and session.get("status") in {"completed", "commit_ready"}
                         and self.materialize_on_completion
                     )
                     if should_finalize:
