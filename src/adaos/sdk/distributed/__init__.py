@@ -131,6 +131,26 @@ def drain(instance_id: str, *, expected_revision: int) -> ServiceInstance:
     )
 
 
+def invoke(
+    instance_id: str,
+    operation_id: str,
+    arguments: Mapping[str, object] | None = None,
+    *,
+    request_id: str,
+    timeout_seconds: float = 30.0,
+) -> object:
+    """Invoke one public operation on an admitted distributed service instance."""
+
+    return get_distributed_runtime().invoke_instance(
+        instance_id,
+        operation_id,
+        arguments or {},
+        request_id=request_id,
+        timeout_seconds=timeout_seconds,
+        principal=_principal(("distributed.service.invoke",)),
+    )
+
+
 def define_dataset(dataset: Dataset, *, expected_revision: int) -> Dataset:
     return get_distributed_runtime().define_dataset(
         dataset,
@@ -305,6 +325,7 @@ __all__ = [
     "explain_route",
     "handoff_authority",
     "inspect",
+    "invoke",
     "observe_replica",
     "plan_replica_change",
     "plan_rebalance",

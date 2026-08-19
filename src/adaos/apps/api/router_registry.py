@@ -16,6 +16,7 @@ def runtime_routers() -> tuple[RuntimeRouter, ...]:
     from adaos.apps.api import (
         builder,
         distributed_topology,
+        distributed_service,
         io_webhooks,
         join_api,
         nlu_teacher_api,
@@ -47,6 +48,7 @@ def runtime_routers() -> tuple[RuntimeRouter, ...]:
         RuntimeRouter(personalization.router, "/api"),
         RuntimeRouter(project_deployment.router, "/api/node/project-deployment"),
         RuntimeRouter(distributed_topology.router, "/api/node/distributed-topology"),
+        RuntimeRouter(distributed_service.router, "/api/node/distributed-service"),
         RuntimeRouter(observe_api.router, "/api/observe"),
         RuntimeRouter(operations.router, "/api/operations"),
         RuntimeRouter(release_validation.router, "/api/release-validation"),

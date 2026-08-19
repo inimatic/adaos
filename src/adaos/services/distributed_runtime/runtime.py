@@ -26,6 +26,7 @@ from adaos.services.project_deployment.store import ProjectDeploymentStore
 from .authorization import DistributedPrincipal
 from .projections import build_distributed_projection
 from .operations import TopologyAdapter, TopologyExecutor
+from .service_invocation import ServiceInvocationAdapter
 from .store import DistributedRuntimeStore
 
 
@@ -107,6 +108,7 @@ class DistributedRuntime:
     releases: DistributedReleaseProvider
     inventory: DistributedNodeInventoryProvider
     topology_adapter: TopologyAdapter | None = None
+    service_invoker: ServiceInvocationAdapter | None = None
     projection_publisher: Callable[[Mapping[str, Any]], Any] | None = None
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
 
@@ -116,6 +118,40 @@ class DistributedRuntime:
         principal.require("distributed.service.manage")
         result = self.store.put_definition(definition)
         self._publish_projection()
+        return result
+
+    def invoke_instance(
+        self,
+        instance_id: str,
+        operation_id: str,
+        arguments: Mapping[str, Any],
+        *,
+        request_id: str,
+        timeout_seconds: float,
+        principal: DistributedPrincipal,
+    ) -> Any:
+        principal.require("distributed.service.invoke")
+        if self.service_invoker is None:
+            raise DistributedRuntimeError("service_invoker_not_configured")
+        instance = self.store.get_instance(instance_id)
+        self._require_active_membership(instance)
+        if not instance.readiness or instance.status != "ready":
+            raise DistributedRuntimeError("service_instance_not_ready")
+        result = self.service_invoker.invoke(
+            instance=instance,
+            operation_id=str(operation_id),
+            arguments=dict(arguments),
+            request_id=str(request_id),
+            timeout_seconds=max(1.0, min(float(timeout_seconds), 600.0)),
+            actor_ref=principal.actor_ref,
+        )
+        self.store.append_audit(
+            "service.instance.invoked",
+            instance_id=instance.instance_id,
+            operation_id=str(operation_id),
+            request_id=str(request_id),
+            actor_ref=principal.actor_ref,
+        )
         return result
 
     def save_topology_plan(

@@ -22,11 +22,14 @@ from adaos.services.artifact_pipeline.packages import ContentAddressedPackageSto
 from adaos.services.artifact_pipeline.releases import ReleasePlan
 from adaos.services.distributed_runtime.bootstrap import configure_distributed_runtime
 from adaos.services.distributed_runtime import (
+    HttpServiceInvocationTransport,
     HttpTopologyPhaseTransport,
+    RoutingServiceInvocationAdapter,
     SkillToolTopologyAdapter,
     TopologyExecutionError,
     UncertainTopologyPhaseError,
     register_topology_phase_receiver,
+    register_service_invocation_receiver,
 )
 from adaos.services.project_deployment.adapters import (
     LocalComponentDeploymentAdapter,
@@ -380,9 +383,62 @@ def configure_default_distributed_runtimes(
                 source_node_id=str(conf.node_id),
             ),
         )
+
+        def execute_service_tool(
+            instance: Any,
+            operation_id: str,
+            arguments: Mapping[str, Any],
+            timeout_seconds: float,
+        ) -> Any:
+            try:
+                activation = deployment.store.get_activation(instance.activation_id)
+            except FileNotFoundError as exc:
+                raise TopologyExecutionError(
+                    "service_invocation_activation_missing"
+                ) from exc
+            if (
+                activation.status != "active"
+                or activation.node_id != str(conf.node_id)
+                or activation.component_ref != instance.component_ref
+                or activation.release_digest != instance.release_digest
+                or activation.generation != instance.runtime_generation
+            ):
+                raise TopologyExecutionError(
+                    "service_invocation_activation_identity_mismatch"
+                )
+            kind, separator, skill_id = instance.component_ref.partition(":")
+            if kind != "skill" or separator != ":" or not skill_id:
+                raise TopologyExecutionError(
+                    "service_invocation_component_not_skill"
+                )
+            try:
+                return AdaOSComponentLifecycleHooks(current)._skill_manager().run_tool(
+                    skill_id,
+                    operation_id,
+                    arguments,
+                    timeout=timeout_seconds,
+                )
+            except TimeoutError as exc:
+                raise UncertainTopologyPhaseError(
+                    "service_invocation_skill_timeout"
+                ) from exc
+
+        distributed.service_invoker = RoutingServiceInvocationAdapter(
+            local_node_id=str(conf.node_id),
+            local_executor=execute_service_tool,
+            remote=HttpServiceInvocationTransport(
+                endpoint_resolver=endpoint,
+                token_provider=lambda: str(conf.token or ""),
+                source_node_id=str(conf.node_id),
+            ),
+        )
         register_local_deployment_receiver(local_adapter, node_id=str(conf.node_id))
         register_topology_phase_receiver(
             execute_topology_tool,
+            node_id=str(conf.node_id),
+        )
+        register_service_invocation_receiver(
+            execute_service_tool,
             node_id=str(conf.node_id),
         )
         _configured_key = key

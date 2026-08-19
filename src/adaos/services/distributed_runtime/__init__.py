@@ -16,6 +16,14 @@ from .operations import (
     UncertainTopologyPhaseError,
 )
 from .projections import build_distributed_projection
+from .service_invocation import (
+    HttpServiceInvocationTransport,
+    RoutingServiceInvocationAdapter,
+    ServiceInvocationAdapter,
+    execute_registered_service_invocation,
+    execute_service_invocation_request,
+    register_service_invocation_receiver,
+)
 from .runtime import (
     DistributedInspection,
     DistributedNodeInventoryProvider,
@@ -51,8 +59,11 @@ __all__ = [
     "DistributedRuntimeError",
     "DistributedRuntimeStore",
     "DistributedStoreError",
+    "HttpServiceInvocationTransport",
     "HttpTopologyPhaseTransport",
     "RetryableTopologyPhaseError",
+    "RoutingServiceInvocationAdapter",
+    "ServiceInvocationAdapter",
     "StaleAuthorityEpochError",
     "SkillToolTopologyAdapter",
     "TopologyAdapter",
@@ -65,8 +76,11 @@ __all__ = [
     "build_distributed_projection",
     "configure_distributed_runtime",
     "execute_registered_topology_phase",
+    "execute_registered_service_invocation",
+    "execute_service_invocation_request",
     "execute_topology_phase_request",
     "get_distributed_runtime",
     "register_distributed_runtime",
+    "register_service_invocation_receiver",
     "register_topology_phase_receiver",
 ]

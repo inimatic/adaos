@@ -18,6 +18,10 @@ from adaos.services.distributed_runtime.operations import (
     TopologyStepContext,
     UncertainTopologyPhaseError,
 )
+from adaos.services.distributed_runtime.service_invocation import (
+    HttpServiceInvocationTransport,
+    execute_service_invocation_request,
+)
 
 
 _DIGEST = "sha256:" + "1" * 64
@@ -222,4 +226,55 @@ def test_http_topology_transport_marks_lost_ack_uncertain(monkeypatch) -> None:
         transport.execute_phase(
             node_id="node-b",
             payload={"idempotency_key": "phase-1"},
+        )
+
+
+def test_service_invocation_receiver_validates_target_instance() -> None:
+    instance = _instance("documents-node-b", "node-b")
+    payload = {
+        "schema": "adaos.distributed.service_invocation.v1",
+        "requesting_node_id": "node-a",
+        "target_node_id": "node-b",
+        "actor_ref": "skill:document_coordinator",
+        "request_id": "pull-1",
+        "instance": instance.to_dict(),
+        "operation_id": "pull_deltas",
+        "arguments": {"limit": 100},
+        "timeout_seconds": 20,
+    }
+    result = execute_service_invocation_request(
+        payload,
+        local_node_id="node-b",
+        executor=lambda _instance, operation, arguments, _timeout: {
+            "operation": operation,
+            "limit": arguments["limit"],
+        },
+    )
+    assert result["result"] == {"operation": "pull_deltas", "limit": 100}
+    with pytest.raises(TopologyExecutionError, match="target_node_mismatch"):
+        execute_service_invocation_request(
+            payload,
+            local_node_id="node-c",
+            executor=lambda *_args: {},
+        )
+
+
+def test_http_service_invocation_marks_lost_ack_uncertain(monkeypatch) -> None:
+    def timeout(*_args, **_kwargs):
+        raise httpx.ReadTimeout("lost ack")
+
+    monkeypatch.setattr(httpx, "post", timeout)
+    transport = HttpServiceInvocationTransport(
+        endpoint_resolver=lambda _node_id: "http://node-b",
+        token_provider=lambda: "token",
+        source_node_id="node-a",
+    )
+    with pytest.raises(UncertainTopologyPhaseError, match="ack_timeout"):
+        transport.invoke(
+            instance=_instance("documents-node-b", "node-b"),
+            operation_id="pull_deltas",
+            arguments={"limit": 100},
+            request_id="pull-1",
+            timeout_seconds=20,
+            actor_ref="skill:document_coordinator",
         )

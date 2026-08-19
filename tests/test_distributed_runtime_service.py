@@ -129,6 +129,7 @@ def _principal() -> DistributedPrincipal:
         "distributed.service.renew",
         "distributed.service.reconcile",
         "distributed.service.drain",
+        "distributed.service.invoke",
         "distributed.topology.manage",
         "distributed.topology.inspect",
         "distributed.topology.plan",
@@ -352,6 +353,49 @@ def test_membership_expiry_is_independent_from_last_health(
     assert observed.status == "expired"
     assert observed.readiness is False
     assert observed.health["status"] == "passing"
+
+
+class FakeServiceInvoker:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def invoke(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(kwargs)
+        return {"ok": True, "instance_id": kwargs["instance"].instance_id}
+
+
+def test_service_invocation_is_bound_to_ready_leased_instance(tmp_path: Path) -> None:
+    runtime, clock, release = _runtime(tmp_path)
+    registered = runtime.register_instance(
+        _instance(release, "node-a"),
+        expected_revision=0,
+        lease_seconds=30,
+        principal=_principal(),
+    )
+    invoker = FakeServiceInvoker()
+    runtime.service_invoker = invoker
+
+    result = runtime.invoke_instance(
+        registered.instance_id,
+        "pull_deltas",
+        {"limit": 100},
+        request_id="catalog-pull-1",
+        timeout_seconds=20,
+        principal=_principal(),
+    )
+    assert result == {"ok": True, "instance_id": registered.instance_id}
+    assert invoker.calls[0]["arguments"] == {"limit": 100}
+
+    clock.advance(31)
+    with pytest.raises(DistributedRuntimeError, match="instance_membership_not_active"):
+        runtime.invoke_instance(
+            registered.instance_id,
+            "pull_deltas",
+            {},
+            request_id="catalog-pull-2",
+            timeout_seconds=20,
+            principal=_principal(),
+        )
 
 
 def test_fenced_handoff_rejects_old_owner_and_routes_partial_topology(
