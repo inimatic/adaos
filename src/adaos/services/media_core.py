@@ -414,9 +414,25 @@ def _resolve_media_reference_target(path: str | Path, root: str | Path) -> tuple
     io_root = _prefer_mapped_drive_path(stored_root, mappings=mappings)
     uses_alias = io_target != stored_target or io_root != stored_root
 
+    if uses_alias:
+        # Path.resolve() asks some WinFsp providers to canonicalize the mapped
+        # path back through UNC, which can block indefinitely. The selected
+        # mapping already fixes the share identity, so enforce the root boundary
+        # on normalized absolute paths and retain the drive spelling for I/O.
+        target = Path(os.path.abspath(os.path.normpath(str(io_target))))
+        root_path = Path(os.path.abspath(os.path.normpath(str(io_root))))
+        if not root_path.is_dir():
+            raise NotADirectoryError("media_reference_root_not_directory")
+        if not target.is_file():
+            raise FileNotFoundError("media_reference_file_not_found")
+        if target.suffix.lower() not in SUPPORTED_MEDIA_EXTENSIONS:
+            raise ValueError("unsupported_extension")
+        if not _is_relative_to(target, root_path):
+            raise PermissionError("path_outside_media_reference_root")
+        return target, root_path
+
     # Boundary checks still use canonical identities. Resolving a mapped path
-    # is acceptable here; only the path retained for subsequent I/O must keep
-    # the mapped-drive spelling.
+    # is unnecessary because aliases returned above retain their drive spelling.
     canonical_root = io_root.resolve(strict=True)
     if not canonical_root.is_dir():
         raise NotADirectoryError("media_reference_root_not_directory")
@@ -428,8 +444,6 @@ def _resolve_media_reference_target(path: str | Path, root: str | Path) -> tuple
     if not _is_relative_to(canonical_target, canonical_root):
         raise PermissionError("path_outside_media_reference_root")
 
-    if uses_alias:
-        return io_target, io_root
     return canonical_target, canonical_root
 
 
