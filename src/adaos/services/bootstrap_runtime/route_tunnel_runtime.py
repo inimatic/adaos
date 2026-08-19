@@ -43,6 +43,7 @@ from adaos.services.hub_root_outbox_store import (
     outbox_store_path,
     save_outbox_items,
 )
+from adaos.services.media_core import media_path_source_kind
 from adaos.services.nats_config import (
     nats_url_uses_websocket,
     order_nats_ws_candidates,
@@ -105,12 +106,7 @@ _T = TypeVar("_T")
 
 
 def _media_source_kind(path: Path) -> str:
-    raw = str(path or "")
-    if raw.startswith(("\\\\", "//")):
-        return "unc"
-    if "://" in raw:
-        return "remote"
-    return "local"
+    return media_path_source_kind(path)
 
 
 def _media_path_digest(path: Path) -> str:
@@ -2565,7 +2561,8 @@ class NatsRouteTunnelRuntime:
 
                 sent = 0
                 use_isolated_reader = bool(
-                    MEDIA_RELAY_ISOLATED_UNC_READER and _media_source_kind(target) == "unc"
+                    MEDIA_RELAY_ISOLATED_UNC_READER
+                    and _media_source_kind(target) in {"mapped_drive", "unc"}
                 )
                 if use_isolated_reader:
                     handle = await _route_media_async_io(

@@ -7,7 +7,7 @@ import os
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Iterator
 from urllib.parse import quote
 
@@ -390,20 +390,34 @@ def _prefer_mapped_drive_path(
     mappings: tuple[tuple[str, str], ...] | None = None,
 ) -> Path:
     """Use an existing drive alias for UNC I/O without changing path identity."""
-    raw = str(path)
+    raw = str(PureWindowsPath(str(path)))
     candidates = _windows_mapped_drive_roots() if mappings is None else mappings
     raw_folded = raw.casefold()
     for remote_root, drive_root in candidates:
-        remote = str(remote_root).rstrip("/" + os.sep)
+        remote = str(PureWindowsPath(str(remote_root))).rstrip("\\/")
         remote_folded = remote.casefold()
-        if raw_folded != remote_folded and not raw_folded.startswith(remote_folded + os.sep):
+        if raw_folded != remote_folded and not raw_folded.startswith(remote_folded + "\\"):
             continue
-        suffix = raw[len(remote) :].lstrip("/" + os.sep)
+        suffix = raw[len(remote) :].lstrip("\\/")
         translated = Path(str(drive_root))
         if suffix:
-            translated = translated.joinpath(*suffix.replace("/", os.sep).split(os.sep))
+            translated = translated.joinpath(*PureWindowsPath(suffix).parts)
         return translated
     return Path(path)
+
+
+def media_path_source_kind(path: str | Path) -> str:
+    raw = str(path or "")
+    if raw.startswith(("\\\\", "//")):
+        return "unc"
+    if "://" in raw:
+        return "remote"
+    drive = str(PureWindowsPath(raw).drive or "").casefold()
+    if drive:
+        for _remote_root, drive_root in _windows_mapped_drive_roots():
+            if drive == str(PureWindowsPath(drive_root).drive or "").casefold():
+                return "mapped_drive"
+    return "local"
 
 
 def _resolve_media_reference_target(path: str | Path, root: str | Path) -> tuple[Path, Path]:
@@ -691,6 +705,7 @@ __all__ = [
     "iter_media_store_resources",
     "media_content_response_parts",
     "media_indexer_content_path",
+    "media_path_source_kind",
     "media_reference_content_path",
     "media_reference_db_path",
     "media_resource_content_path",

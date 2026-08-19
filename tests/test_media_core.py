@@ -124,6 +124,18 @@ def test_media_reference_prefers_mapped_drive_alias_for_unc_path(tmp_path: Path)
     assert resolved == target
 
 
+def test_media_source_kind_distinguishes_mapped_drive(monkeypatch) -> None:
+    monkeypatch.setattr(
+        media_core,
+        "_windows_mapped_drive_roots",
+        lambda: ((r"\\server\home", "A:\\"),),
+    )
+
+    assert media_core.media_path_source_kind(r"\\server\home\Video\clip.avi") == "unc"
+    assert media_core.media_path_source_kind(r"A:\Video\clip.avi") == "mapped_drive"
+    assert media_core.media_path_source_kind(r"C:\Video\clip.avi") == "local"
+
+
 def test_media_reference_resolves_existing_unc_rows_through_mapped_alias(monkeypatch, tmp_path: Path) -> None:
     mapped_root = tmp_path / "mapped"
     target = mapped_root / "Video" / "clip.avi"

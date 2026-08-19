@@ -6373,7 +6373,7 @@ async def node_yjs_restore(webspace_id: str) -> dict[str, Any]:
 
 def _stream_media_resource(resource: MediaResource, request: Request) -> StreamingResponse | Response:
     target = resource.path
-    size = int(target.stat().st_size)
+    size = int(resource.size_bytes)
     try:
         byte_range = parse_media_range(request.headers.get("range"), size=size)
     except Exception:
@@ -6411,7 +6411,7 @@ async def media_indexer_file_content(
         x_adaos_token=x_adaos_token,
     )
     try:
-        resource = resolve_media_indexer_resource(playback_id)
+        resource = await asyncio.to_thread(resolve_media_indexer_resource, playback_id)
     except ValueError as exc:
         _raise_400(str(exc))
     except PermissionError as exc:
@@ -6435,7 +6435,7 @@ async def media_reference_content(
         x_adaos_token=x_adaos_token,
     )
     try:
-        resource = resolve_media_reference(resource_id)
+        resource = await asyncio.to_thread(resolve_media_reference, resource_id)
     except ValueError as exc:
         _raise_400(str(exc))
     except PermissionError as exc:
