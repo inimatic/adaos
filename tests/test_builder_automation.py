@@ -99,7 +99,7 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["status"] == "completed"
     assert status["session"]["source_prototype_version"] == "0.1.0"
     assert status["automation"]["source_prototype_version"] == "0.1.0"
-    assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.3.0"
+    assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.3.1"
     assert status["session"]["created_artifacts"][0]["kind"] == "skill"
     assert status["session"]["created_artifacts"][0]["name"] == "recipes_skill"
     task = next(
@@ -1233,6 +1233,59 @@ def test_refresh_defers_finalization_while_detached_worker_owner_is_active(
     assert refreshed["status"] == "commit_ready"
     assert refreshed["finalizing_task_id"] == task_id
     assert refreshed["last_result"]["summary"] == "Validated result."
+
+
+def test_refresh_never_projects_factory_completion_as_terminal_before_finalization(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    service.materialize_on_completion = True
+    task_id = "task.factory-complete"
+    session_id = "automation.skill.direction"
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": session_id,
+        "object_type": "skill",
+        "object_id": "direction",
+        "webspace_id": "builder-calibration",
+        "current_task_id": task_id,
+        "status": "in_progress",
+    }
+    service._save_session(session)
+    service.factory = SimpleNamespace(
+        snapshot=lambda **_kwargs: {
+            "tasks": [
+                {
+                    "task_id": task_id,
+                    "status": "completed",
+                    "updated_at": "2026-08-19T22:59:40+00:00",
+                    "result": {"summary": "Candidate validation completed."},
+                    "progress": [],
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_detached_worker_is_active",
+        lambda _service, _session_id: True,
+    )
+    finalized: list[dict] = []
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_finalize_completed_session",
+        lambda _service, value: finalized.append(dict(value)),
+    )
+
+    refreshed = service.refresh_session(session)
+    projection = service.project_session(refreshed)
+
+    assert finalized == []
+    assert refreshed["status"] == "commit_ready"
+    assert refreshed["finalizing_task_id"] == task_id
+    assert projection["terminal"] is False
+    assert projection["busy"] is True
 
 
 def test_projection_backfills_missing_conversation_before_notification(tmp_path: Path, monkeypatch) -> None:

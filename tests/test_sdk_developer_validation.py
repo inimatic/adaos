@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import psutil
 import pytest
 
 from adaos.domain.execution import ExecutionNetworkPolicy, ExecutionSpec
@@ -112,8 +114,8 @@ def test_developer_trial_uses_candidate_owned_working_directory(
     script = source / "runner.py"
     script.write_text(
         "from pathlib import Path\n"
-        "import json\n"
-        "Path('result.json').write_text(json.dumps({'ok': True}), encoding='utf-8')\n",
+        "import json, os\n"
+        "Path('result.json').write_text(json.dumps({'ok': True, 'contract': os.environ['TEST_CONTRACT']}), encoding='utf-8')\n",
         encoding="utf-8",
     )
     runtime_bucket = "v0.1"
@@ -159,6 +161,7 @@ def test_developer_trial_uses_candidate_owned_working_directory(
         command=(sys.executable, str(script.resolve())),
         working_directory=str(workdir),
         network=ExecutionNetworkPolicy(mode="offline"),
+        environment={"TEST_CONTRACT": "preserved"},
         expected_outputs=("result.json",),
     )
 
@@ -171,8 +174,91 @@ def test_developer_trial_uses_candidate_owned_working_directory(
     )
 
     assert receipt["ok"] is True
-    assert receipt["documents"]["result.json"] == {"ok": True}
-    assert json.loads((workdir / "result.json").read_text(encoding="utf-8")) == {"ok": True}
+    assert receipt["documents"]["result.json"] == {"ok": True, "contract": "preserved"}
+    assert receipt["provider"]["process_tree_isolated"] is True
+    assert receipt["provider"]["network_enforced"] is False
+    assert receipt["limits"]["wall_time_exceeded"] is False
+    assert json.loads((workdir / "result.json").read_text(encoding="utf-8")) == {
+        "ok": True,
+        "contract": "preserved",
+    }
+
+
+def test_developer_trial_timeout_terminates_the_owned_process_tree(
+    monkeypatch, tmp_path: Path
+) -> None:
+    dev_skills = tmp_path / "dev" / "skills"
+    source = dev_skills / "candidate"
+    source.mkdir(parents=True)
+    script = source / "runner.py"
+    script.write_text(
+        "import subprocess, sys, time\n"
+        "from pathlib import Path\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        "Path('child.pid').write_text(str(child.pid), encoding='utf-8')\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    runtime_bucket = "v0.1"
+    runtime_source = (
+        dev_skills
+        / ".runtime"
+        / "candidate"
+        / runtime_bucket
+        / "slots"
+        / "A"
+        / "src"
+        / "skills"
+        / "candidate"
+    )
+    runtime_source.mkdir(parents=True)
+    manifest = runtime_source / "resolved.manifest.json"
+    manifest.write_text("{}\n", encoding="utf-8")
+    workdir = dev_skills / ".runtime" / "candidate" / runtime_bucket / "data" / "internal" / "attempt"
+    workdir.mkdir(parents=True)
+    state_dir = tmp_path / "state"
+    package_path = tmp_path / "package"
+    package_path.mkdir()
+    ctx = SimpleNamespace(
+        paths=SimpleNamespace(
+            dev_skills_dir=lambda: dev_skills,
+            state_dir=lambda: state_dir,
+            package_path=lambda: package_path,
+        )
+    )
+
+    class _Manager:
+        @staticmethod
+        def dev_runtime_status(_project_id: str) -> dict:
+            return {"resolved_manifest": str(manifest), "runtime_bucket": runtime_bucket}
+
+    monkeypatch.setattr(service, "_manager", lambda _ctx: _Manager())
+    execution = ExecutionSpec(
+        spec_id="candidate-timeout",
+        owner_ref="skill:candidate",
+        command=(sys.executable, str(script.resolve())),
+        working_directory=str(workdir),
+        network=ExecutionNetworkPolicy(mode="offline"),
+    )
+
+    receipt = service.execute_dev_spec(
+        ctx,
+        "candidate",
+        execution.to_dict(),
+        idempotency_key="smoke-timeout",
+        timeout=0.5,
+    )
+
+    child_pid = int((workdir / "child.pid").read_text(encoding="utf-8"))
+    for _ in range(20):
+        if not psutil.pid_exists(child_pid):
+            break
+        time.sleep(0.05)
+    assert receipt["ok"] is False
+    assert receipt["failure"] == "wall_time_exceeded"
+    assert receipt["provider"]["process_tree_terminated"] is True
+    assert receipt["limits"]["wall_time_exceeded"] is True
+    assert not psutil.pid_exists(child_pid)
 
 
 def test_developer_trial_rejects_foreign_working_directory(monkeypatch, tmp_path: Path) -> None:

@@ -13,10 +13,12 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+import psutil
 import yaml
 
 from adaos.services.skill.tests_runner import run_tests
@@ -292,6 +294,12 @@ def execute_dev_spec(
     }
     environment.update(
         {
+            str(key_name): str(value_text)
+            for key_name, value_text in spec.environment.items()
+        }
+    )
+    environment.update(
+        {
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
             "ADAOS_SKILL_NAME": str(project_id),
@@ -303,24 +311,49 @@ def execute_dev_spec(
             "PYTHONPATH": os.pathsep.join((str(runtime_root), str(ctx.paths.package_path()))),
         }
     )
+    environment["ADAOS_EXECUTION_NETWORK_MODE"] = spec.network.mode
+    environment["ADAOS_EXECUTION_SPEC_DIGEST"] = spec.digest
+    started_monotonic = time.monotonic()
+    process: subprocess.Popen[Any] | None = None
+    timed_out = False
     try:
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-            completed = subprocess.run(
+            process = subprocess.Popen(  # noqa: S603 - immutable candidate command is contract-checked above
                 command,
                 cwd=str(declared_working_directory),
                 env=environment,
                 stdout=stdout,
                 stderr=stderr,
-                timeout=maximum,
-                check=False,
+                creationflags=(
+                    int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+                    if os.name == "nt"
+                    else 0
+                ),
+                start_new_session=(os.name != "nt"),
             )
-        status_name = "succeeded" if completed.returncode == 0 else "failed"
-        exit_code = int(completed.returncode)
-        failure = None if exit_code == 0 else "process_exit_nonzero"
-    except subprocess.TimeoutExpired:
-        status_name = "failed"
-        exit_code = None
-        failure = "wall_time_exceeded"
+            try:
+                exit_code = int(process.wait(timeout=maximum))
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                _terminate_process_tree(process)
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    _terminate_process_tree(process)
+                exit_code = None
+        status_name = "failed" if timed_out or exit_code != 0 else "succeeded"
+        failure = (
+            "wall_time_exceeded"
+            if timed_out
+            else None
+            if exit_code == 0
+            else "process_exit_nonzero"
+        )
+    except Exception:
+        if process is not None and process.poll() is None:
+            _terminate_process_tree(process)
+        raise
+    elapsed_seconds = round(max(0.0, time.monotonic() - started_monotonic), 6)
     outputs = []
     documents: dict[str, Any] = {}
     output_paths: list[Path] = []
@@ -361,6 +394,13 @@ def execute_dev_spec(
             "hostile_isolation": False,
             "network_intent": spec.network.mode,
             "network_enforced": False,
+            "process_tree_isolated": True,
+            "process_tree_terminated": bool(timed_out),
+        },
+        "limits": {
+            "wall_time_seconds": maximum,
+            "elapsed_seconds": elapsed_seconds,
+            "wall_time_exceeded": bool(timed_out),
         },
         "expected_outputs": list(spec.expected_outputs),
         "missing_outputs": missing,
@@ -373,6 +413,42 @@ def execute_dev_spec(
         json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     return receipt
+
+
+def _terminate_process_tree(process: subprocess.Popen[Any]) -> None:
+    """Terminate only the process family created for one DEV execution.
+
+    ``subprocess.run(..., timeout=...)`` kills only the immediate process on
+    Windows.  Scientific runners commonly spawn Python/DataLoader children, so
+    that behaviour can leave an unowned workload consuming the node after the
+    evaluator has returned.  Creation-time scoped psutil handles avoid killing
+    an unrelated process after PID reuse.
+    """
+
+    try:
+        root = psutil.Process(process.pid)
+        expected_create_time = root.create_time()
+        children = root.children(recursive=True)
+    except (psutil.Error, OSError):
+        root = None
+        expected_create_time = None
+        children = []
+    for child in reversed(children):
+        try:
+            child.kill()
+        except (psutil.Error, OSError):
+            pass
+    if root is not None:
+        try:
+            if expected_create_time is None or abs(root.create_time() - expected_create_time) < 0.01:
+                root.kill()
+        except (psutil.Error, OSError):
+            pass
+    elif process.poll() is None:
+        try:
+            process.kill()
+        except OSError:
+            pass
 
 
 def _under(path: Path, root: Path) -> bool:

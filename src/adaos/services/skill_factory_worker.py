@@ -34,7 +34,8 @@ from adaos.services.workflow_artifacts import (
 )
 
 
-RUNNER_VERSION = "adaos-local-codex-worker/0.3.0"
+RUNNER_VERSION = "adaos-local-codex-worker/0.3.1"
+GENERATED_TEST_TIMEOUT_SECONDS = 60
 PACKET_SCHEMA = "adaos.skill_factory.codex_packet.v1"
 LOCAL_SESSION_SCHEMA = "adaos.skill_factory.local_run.v1"
 _log = logging.getLogger("adaos.skill_factory.local_worker")
@@ -1313,7 +1314,7 @@ When `scenarios/{target_id}/.builder_current_publication` exists, treat it as th
 14. Never substitute fabricated metrics, synthetic success defaults, placeholder digests, or caller-asserted invariants for requested execution. Fixtures may make tests bounded, but they must drive the same model, data, storage, tracker, recovery, and analysis components used by the real path.
 15. Resolve skill-owned runtime storage through AdaOS SDK/capability bindings. Do not let ordinary tool callers choose arbitrary filesystem roots. Use typed platform contracts such as ContentRef and tracker providers when the brief requires them instead of look-alike dictionaries local to the skill.
 16. Audit the final implementation against every Issue and acceptance criterion in the governed context. If any item is not implemented, state it as an open item; do not describe the project as complete. The prohibition on running a scientific workload during code generation does not permit omitting the executable scientific path.
-17. Tests must be capable of failing for a stubbed implementation: cover real operator/model behavior, real manifest verification, storage isolation, provider calls, retry/idempotency boundaries, and event completeness where those concerns are required. Keep every native suite within its lifecycle time budget by bounding fixtures or splitting suites, never by replacing the production path with a faster look-alike.
+17. Tests must be capable of failing for a stubbed implementation: cover real operator/model behavior, real manifest verification, storage isolation, provider calls, retry/idempotency boundaries, and event completeness where those concerns are required. The standard native fallback pytest suite has a 60-second lifecycle budget. Keep it within that budget by bounding fixtures or splitting suites, never by replacing the production path with a faster look-alike. Do not execute a scientific smoke or confirmatory workload from packaged tests; test the production path with bounded fixtures and let the admitted consumer own real workflow-smoke execution.
 18. Treat typed provider operation names and schemas as ABI, not suggestions. Implement every required operation under its exact declared name, export it as a tool, and run any admitted consumer/conformance fixture against the production handler path; a semantically similar alias does not satisfy the contract.
 19. Before adding or importing a third-party Python package, inspect the authoritative manifest schema at `${{ADAOS_REPO_ROOT}}/src/adaos/services/skill/skill_schema.json` and the dependency-isolation policy in `${{ADAOS_REPO_ROOT}}/docs/skill_runtime.md`. Declare every imported dependency. Heavy/native dependencies require a service boundary or the explicit documented transitional `allow_heavy_dependencies` allowance. Run install-strict `SkillValidationService.validate_path(...)` so manifest schema, imports, exported tools, and dependency isolation fail in one bounded pass before concluding.
 20. This checkout is an isolated candidate, not the canonical AdaOS workspace. Run source-tree validation and bounded tests here, but do not copy into or mutate the canonical workspace/runtime and do not publish, install, or activate the candidate yourself. The trusted worker finalizer owns package, install, activation, and rollback receipts after your turn."""
@@ -2018,7 +2019,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             result = _run(
                 [sys.executable, "-m", "pytest", "-q", str(tests_dir), "-p", "no:cacheprovider"],
                 cwd=workspace,
-                timeout=180.0,
+                timeout=float(GENERATED_TEST_TIMEOUT_SECONDS),
                 env=environment,
             )
             checks.append(
