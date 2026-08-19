@@ -1235,6 +1235,8 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(tmp_path: P
     assert "fabricated metrics" in prompt
     assert "Resolve skill-owned runtime storage through AdaOS SDK" in prompt
     assert "does not permit omitting the executable scientific path" in prompt
+    assert "60-second lifecycle budget" in prompt
+    assert "Do not execute a scientific smoke or confirmatory workload from packaged tests" in prompt
     assert "exact declared name" in prompt
     assert "skill_schema.json" in prompt
     assert "allow_heavy_dependencies" in prompt
