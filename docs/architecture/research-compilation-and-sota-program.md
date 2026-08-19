@@ -484,15 +484,50 @@ including a role-keyed `split_bindings` object and full portable `ContentRef`
 shape. It is active in `research_manager_skill 0.16.0`, contract digest
 `sha256:334fb4fd47e619705eabb2835051604cfe59e5115eb10eca12a0003c1a01baa5`.
 
-The next frozen task is v10, digest
+Frozen task v10, digest
 `sha256:be05e18f0d84b16b3eff006ae20f5a6dfa1756140b55ba653b337639f2affc55`.
 It retains the same scientific question, model profile, budgets, five paired
-workload seeds, execution order, endpoint, and decision rule while binding the
-new consumer ABI. v5-v9 are diagnostic development evidence and remain
-visible; none is a positive comparative result. Because the rails were adapted
-on the TLP case, even a successful v10 supports only a local post-hardening
-claim. An unbiased generalization claim requires the later held-out multi-task
-benchmark.
+workload seeds, execution order, endpoint, and decision rule while binding that
+consumer ABI. Its first C3 evaluation is infrastructure-invalid, not a
+candidate failure: the accepted formulation used pair labels `S1`...`S10` in a
+field later consumed as integer RNG seeds, so the independent manager raised
+before it could execute candidate code. The same audit found that the hidden
+judge expected three smoke-document filenames and a seed-label convention that
+were not yet in the public consumer contract. Neither defect may be charged to
+the autonomous implementation.
+
+Runner contract 1.3 makes that boundary public and machine-checkable. It types
+`run_log.json`, `evaluation_audit.json`, `artifacts_index.json`, collection
+identity, integer RNG seeds, and the canonical derived pair id `seed-{seed}`.
+The index explicitly does not index itself: requiring a document to contain
+its own stable content digest is mathematically unsatisfiable. Active
+`research_manager_skill 0.19.0` exposes contract digest
+`sha256:572b8502687fbad722a8df4c835bab930f0e9b64e3ba76b85aaacf40cafbbb43`
+and independently checks the same rules after the real CPU smoke.
+
+The repaired scientific handoff is not an in-place rewrite. Immutable task
+`tlp_structured_proof_02.task-001` remains retained; task
+`tlp_structured_proof_02.task-002` is an explicit branch with accepted
+ResearchPrototype
+`sha256:210bfb55fda2e83acb81aaf6f015e9aea2cefcd6030859a533d31b72037dd115`,
+Compilation
+`sha256:5cc995bfa672d7a0bb8bbab4e3712754853ba2b91f8ee68f2c142935f874f53c`,
+and AutomationBrief
+`sha256:a72d850494cc97eb8832ea23953e72933d4feda28e92da7d142f67ff82944fe4`.
+Smoke uses integer seed `[17]`; confirmatory execution and pairing allocation
+use the exact ordered integers `[1..10]`. The formulation-only review remains
+physically excluded from implementation context.
+
+Frozen paired task v11 has digest
+`sha256:a8bd0c71956034c562a93ee58e93674d5a4642402cce354c21cbff4e2e3fe3b8`.
+It binds core `9f243cbc`, skill-workspace `773089fb`, the 1.3 consumer contract,
+the same preregistered five-pair order and fixed-downstream budgets, and a
+clean C3 packet
+`sha256:7213cad34993b48c1798d9c3087d2126acdf8346cb3baf1c1b940ecaa1947145`.
+v5-v10 remain diagnostic development evidence and none is relabelled as a
+success. Because all rail changes were learned on TLP, even a positive v11 can
+support only a local post-hardening claim; an unbiased generalization claim
+requires the later held-out multi-task benchmark.
 
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and

@@ -413,6 +413,23 @@ coverage and fragment refs to the user; bind generated claims only to supplied
 refs. Do not let a model-provided `ready` flag substitute for a deterministic
 admission review.
 
+Fail before inference when the active domain object is immutable. An accepted
+ResearchTask must be revised by creating and activating an explicit branch
+task; do not run a costly staged LLM pipeline and discover immutability only at
+the final write. Durable stage recovery may reuse outputs only when their
+recorded task id, source-context receipt, and active task all match.
+
+Version numbers belong to their aggregate boundary. When one Direction owns
+multiple ResearchTasks, ResearchPrototype revision uniqueness is task-scoped;
+a fresh branch may validly start at revision 1. Preserve direction-level
+ordering separately through event sequence/generation rather than a legacy
+`(direction_id, revision)` uniqueness constraint.
+
+Content indexes must not require a digest fixed point. A manifest can be a
+required output and can bind every collected evidence artifact, but it must
+not list its own content digest inside itself. State this exclusion in the
+public producer/consumer contract and test it at the consumer boundary.
+
 For notebooks, preprocessing is semantic rather than byte-prefix truncation:
 
 - parse code and Markdown cells before applying a character budget;

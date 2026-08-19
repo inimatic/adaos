@@ -1389,8 +1389,30 @@ is immutable EVC=false. `research_manager_skill 0.16.0` now publishes full
 input/output JSON Schemas as runner contract 1.2, digest
 `sha256:334fb4fd47e619705eabb2835051604cfe59e5115eb10eca12a0003c1a01baa5`.
 Frozen v10 (`sha256:be05e18f0d84b16b3eff006ae20f5a6dfa1756140b55ba653b337639f2affc55`)
-is the next local post-hardening run. It is physically isolated at core commit
-`9f243cbc`; earlier failures do not become successes retroactively.
+is retained as infrastructure-invalid: the independent evaluator failed before
+candidate execution because accepted pair labels `S1`...`S10` reached an
+integer RNG-seed boundary. Its audit also showed that smoke-document names and
+identity rules were hidden evaluator conventions rather than public provider
+ABI. Runner contract 1.3 now publishes schemas for all three smoke documents,
+integer seed canonicalization, collection identity, and a non-self-referential
+artifact index. Research Manager `0.19.0` exposes digest
+`sha256:572b8502687fbad722a8df4c835bab930f0e9b64e3ba76b85aaacf40cafbbb43`.
+
+The correction is an immutable ResearchTask branch, not an in-place accepted
+prototype edit. `tlp_structured_proof_02.task-002` binds prototype
+`sha256:210bfb55fda2e83acb81aaf6f015e9aea2cefcd6030859a533d31b72037dd115`,
+Compilation
+`sha256:5cc995bfa672d7a0bb8bbab4e3712754853ba2b91f8ee68f2c142935f874f53c`,
+and AutomationBrief
+`sha256:a72d850494cc97eb8832ea23953e72933d4feda28e92da7d142f67ff82944fe4`.
+The branch exposed and fixed two generic multi-task defects: staged inference
+now fails before model work on an accepted immutable task, and prototype
+revision uniqueness is scoped to ResearchTask rather than ResearchDirection.
+Frozen v11
+(`sha256:a8bd0c71956034c562a93ee58e93674d5a4642402cce354c21cbff4e2e3fe3b8`)
+is physically isolated at core commit `9f243cbc`, binds the repaired public ABI,
+and preserves the original five-pair order. Earlier failures do not become
+successes retroactively.
 
 **Exit proof:** a frozen calibration package contains the visible inputs,
 hidden/evaluator inputs, source-analysis and formulation revisions,
@@ -1473,7 +1495,8 @@ efficacy result or cross-domain SOTA claim.
   intervals, and risk difference are fixed before execution. One successful
   C3 is an operability gate, not probability evidence. v9 stopped after its
   first C3 failure because five-pair significance was then unreachable; v10 is
-  a new frozen post-hardening task, not a replacement result under the v9 id.
+  infrastructure-invalid because its evaluator failed before candidate code.
+  v11 is the new frozen post-hardening task and does not replace either result.
 - [ ] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and
