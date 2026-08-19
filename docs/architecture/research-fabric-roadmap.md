@@ -1411,8 +1411,16 @@ revision uniqueness is scoped to ResearchTask rather than ResearchDirection.
 Frozen v11
 (`sha256:a8bd0c71956034c562a93ee58e93674d5a4642402cce354c21cbff4e2e3fe3b8`)
 is physically isolated at core commit `9f243cbc`, binds the repaired public ABI,
-and preserves the original five-pair order. Earlier failures do not become
-successes retroactively.
+and preserves the original five-pair order. Its first C3 attempt completed
+generation and deterministic tests but exposed a generic finalization defect:
+generated tests lacked the task-owned `ADAOS_BASE_DIR` used during the Codex
+turn and created a reserved runtime projection inside the source checkout.
+The attempt is infrastructure-invalid. Core `4b37c72f` unifies both runtime
+boundaries and rechecks scope after untrusted tests. Frozen v12
+(`sha256:17e80f0891d0e0961a17752ec833bf8ee0251dafe9adfd56616593dc03c31314`)
+binds that exact core and unchanged public inputs, budgets, consumer ABI and
+five-pair design; all 25 packets were created before execution. Earlier
+failures do not become successes retroactively.
 
 **Exit proof:** a frozen calibration package contains the visible inputs,
 hidden/evaluator inputs, source-analysis and formulation revisions,
@@ -1496,7 +1504,8 @@ efficacy result or cross-domain SOTA claim.
   C3 is an operability gate, not probability evidence. v9 stopped after its
   first C3 failure because five-pair significance was then unreachable; v10 is
   infrastructure-invalid because its evaluator failed before candidate code.
-  v11 is the new frozen post-hardening task and does not replace either result.
+  v11 is retained infrastructure-invalid after its first C3 finalization; v12
+  is the frozen post-fix task and does not replace any earlier result.
 - [ ] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and

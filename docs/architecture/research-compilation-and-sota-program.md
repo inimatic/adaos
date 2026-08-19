@@ -524,10 +524,25 @@ It binds core `9f243cbc`, skill-workspace `773089fb`, the 1.3 consumer contract,
 the same preregistered five-pair order and fixed-downstream budgets, and a
 clean C3 packet
 `sha256:7213cad34993b48c1798d9c3087d2126acdf8346cb3baf1c1b940ecaa1947145`.
-v5-v10 remain diagnostic development evidence and none is relabelled as a
-success. Because all rail changes were learned on TLP, even a positive v11 can
-support only a local post-hardening claim; an unbiased generalization claim
-requires the later held-out multi-task benchmark.
+Its first C3 realization completed Codex generation and deterministic tests,
+then failed before result admission because the validation subprocess did not
+inherit the Codex turn's task-owned `ADAOS_BASE_DIR`. The same SDK fallback
+therefore wrote a reserved `skills/.runtime` projection into the disposable
+source checkout only during validation. This is retained as an
+infrastructure-invalid attempt, not scored as a candidate failure.
+
+Core commit `4b37c72f` gives Codex and generated tests the same task-owned
+runtime boundary, removes only reserved runtime projections before source
+diffing, and rechecks the fail-closed source boundary after untrusted tests.
+Frozen paired task v12, digest
+`sha256:17e80f0891d0e0961a17752ec833bf8ee0251dafe9adfd56616593dc03c31314`,
+binds that exact clean core, the unchanged skill-workspace `773089fb`, runner
+contract 1.3, five paired workload seeds, fixed budgets, and a preregistered
+alternating C0/C3 order beginning with C0. Its 25 arm packets were materialized
+before the first attempt. v5-v11 remain diagnostic development evidence and
+none is relabelled as a success. Because all rail changes were learned on TLP,
+even a positive v12 can support only a local post-hardening claim; an unbiased
+generalization claim requires the later held-out multi-task benchmark.
 
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and
