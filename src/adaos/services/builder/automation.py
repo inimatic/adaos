@@ -1702,6 +1702,24 @@ class BuilderAutomationService:
                 "updated_at": failure.get("reported_at") or current.get("updated_at"),
             }
         self._save_session(current)
+        needs_detached_finalization = bool(
+            self.materialize_on_completion
+            and task_status == "completed"
+            and finalizing
+            and isinstance(current.get("last_result"), Mapping)
+            and not isinstance(current.get("completion_readiness"), Mapping)
+        )
+        if needs_detached_finalization:
+            # A node-level orphan recovery may finish the validated Skill
+            # Factory task after the Automation worker process has died.  The
+            # durable finalizing_task_id is the ownership marker that makes
+            # this replay bounded; finalization itself reconciles an existing
+            # workflow checkpoint before performing any writes.
+            self._finalize_completed_session(current)
+            return self.get_session(
+                str(current.get("object_type") or ""),
+                str(current.get("object_id") or ""),
+            ) or current
         return current
 
     def _recover_orphaned_task(

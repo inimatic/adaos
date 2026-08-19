@@ -1109,6 +1109,61 @@ def test_refresh_recovers_terminal_orphan_once_and_finalizes_without_rerunning_c
     assert refreshed["completion_readiness"]["ok"] is True
 
 
+def test_refresh_resumes_detached_completed_task_finalization(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    service.materialize_on_completion = True
+    task_id = "task.detached-complete"
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.skill.direction",
+        "object_type": "skill",
+        "object_id": "direction",
+        "webspace_id": "builder-calibration",
+        "current_task_id": task_id,
+        "finalizing_task_id": task_id,
+        "status": "commit_ready",
+    }
+    service._save_session(session)
+    service.factory = SimpleNamespace(
+        snapshot=lambda **_kwargs: {
+            "tasks": [
+                {
+                    "task_id": task_id,
+                    "status": "completed",
+                    "updated_at": "2026-08-19T11:58:14+00:00",
+                    "result": {"summary": "Recovered validated result."},
+                    "progress": [],
+                }
+            ]
+        }
+    )
+    finalized: list[dict] = []
+
+    def finalize(_service, value):
+        finalized.append(dict(value))
+        completed = dict(value)
+        completed["status"] = "completed"
+        completed["completion_readiness"] = {
+            "ok": True,
+            "task_id": task_id,
+            "completed_at": "2026-08-19T11:58:15+00:00",
+        }
+        completed.pop("finalizing_task_id", None)
+        _service._save_session(completed)
+
+    monkeypatch.setattr(BuilderAutomationService, "_finalize_completed_session", finalize)
+
+    refreshed = service.refresh_session(session)
+
+    assert finalized[0]["status"] == "commit_ready"
+    assert finalized[0]["last_result"]["summary"] == "Recovered validated result."
+    assert refreshed["status"] == "completed"
+    assert refreshed["completion_readiness"]["ok"] is True
+
+
 def test_projection_backfills_missing_conversation_before_notification(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     service.start_from_execute(
