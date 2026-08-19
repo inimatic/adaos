@@ -12,11 +12,23 @@ dependencies: []
 events:
   subscribe: []
   publish: []
+provider_contracts:
+  - contract: "adaos.research.runner.v1"
+    capability: "research.runner"
+    operations:
+      - prepare_attempt
+      - collect_attempt
+      - verify_artifact
+      - dataset_status
 exports:
   tools:
     - describe_direction
     - validate_research_prototype
     - execution_readiness
+    - prepare_attempt
+    - collect_attempt
+    - verify_artifact
+    - dataset_status
 tools:
   - name: describe_direction
     description: "Return the typed research-direction descriptor and current implementation readiness."
@@ -48,6 +60,48 @@ tools:
     output_schema:
       type: object
       required: [ok, ready, missing]
+  - name: prepare_attempt
+    description: "Prepare an executable attempt package without starting scientific execution. Pre-Codex stub fails closed."
+    entry: "handlers.main:prepare_attempt"
+    side_effects: local_write
+    input_schema:
+      type: object
+      required: [request]
+      properties:
+        request: {type: object}
+      additionalProperties: false
+    output_schema: {type: object}
+  - name: collect_attempt
+    description: "Collect normalized observations and portable content references. Pre-Codex stub fails closed."
+    entry: "handlers.main:collect_attempt"
+    side_effects: read_only
+    input_schema:
+      type: object
+      required: [output_ref]
+      properties:
+        output_ref: {type: string, minLength: 1}
+      additionalProperties: false
+    output_schema: {type: object}
+  - name: verify_artifact
+    description: "Verify a content-addressed artifact owned by this direction. Pre-Codex stub fails closed."
+    entry: "handlers.main:verify_artifact"
+    side_effects: read_only
+    input_schema:
+      type: object
+      required: [uri, digest]
+      properties:
+        uri: {type: string, minLength: 1}
+        digest: {type: string, pattern: "^sha256:[0-9a-f]{64}$"}
+      additionalProperties: false
+    output_schema: {type: object}
+  - name: dataset_status
+    description: "Report immutable validation, robustness and sealed-test identities. Pre-Codex stub reports not ready."
+    entry: "handlers.main:dataset_status"
+    side_effects: read_only
+    input_schema:
+      type: object
+      additionalProperties: false
+    output_schema: {type: object}
 
 research_direction:
   schema: "adaos.research.direction.v1"

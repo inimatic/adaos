@@ -17,3 +17,10 @@ scenario.
 Notebook outputs are source material, never accepted evidence. Do not mark
 `implementation.state: ready` until the runner contract and its conformance
 tests pass.
+
+The template declares the universal `adaos.research.runner.v1` provider
+surface (`prepare_attempt`, `collect_attempt`, `verify_artifact`, and
+`dataset_status`) for every research direction. Its handlers deliberately fail
+closed before Codex. This common scaffold removes AdaOS integration discovery
+from comparative evaluations while leaving the scientific model, data path,
+execution, evidence, and recovery implementation entirely task-specific.
