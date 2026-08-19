@@ -155,6 +155,22 @@ def list_deployments(
     )
 
 
+def recommend_nodes(
+    deployment_id: str,
+    component_ref: str,
+    *,
+    limit: int = 20,
+) -> dict[str, object]:
+    """Rank bounded eligible nodes without changing desired deployment state."""
+
+    return get_project_deployment_runtime().recommend_nodes(
+        deployment_id,
+        component_ref,
+        limit=limit,
+        principal=_principal(("project.deployment.inspect",)),
+    )
+
+
 def drain(
     activation_id: str,
     *,
@@ -205,6 +221,7 @@ __all__ = [
     "inspect",
     "list_deployments",
     "plan",
+    "recommend_nodes",
     "reconcile",
     "remove",
 ]

@@ -181,6 +181,34 @@ class ProjectDeploymentRuntime:
         principal.require("project.deployment.inspect")
         return self.store.list_deployments(cursor=cursor, limit=limit)
 
+    def recommend_nodes(
+        self,
+        deployment_id: str,
+        component_ref: str,
+        *,
+        principal: DeploymentPrincipal,
+        limit: int = 20,
+    ) -> dict[str, object]:
+        principal.require("project.deployment.inspect")
+        desired = self.store.get_deployment(deployment_id)
+        placement = next(
+            (
+                item
+                for item in desired.placements
+                if item.component_ref == str(component_ref)
+            ),
+            None,
+        )
+        if placement is None:
+            raise KeyError(f"component placement not found: {component_ref}")
+        return ProjectDeploymentPlanner().recommend_nodes(
+            desired,
+            placement,
+            inventory=tuple(self.inventory.list_nodes(desired.subnet_id)),
+            activations=self._all_activations(deployment_id),
+            limit=limit,
+        )
+
     def drain(
         self,
         activation_id: str,

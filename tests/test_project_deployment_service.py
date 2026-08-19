@@ -667,3 +667,34 @@ def test_subnet_snapshot_inventory_requires_explicit_deployment_capabilities() -
     assert records[0].capabilities == ("media.catalog", "project.activate")
     assert records[0].capacity["cpu_millicores"] == 1500
     assert records[0].endpoints[0].role == "display"
+
+
+def test_placement_recommendations_are_bounded_explainable_and_read_only() -> None:
+    release_plan = _release()
+    desired = _deployment(release_plan)
+    placement = next(
+        item
+        for item in desired.placements
+        if item.component_ref == "skill:media_center_coordinator"
+    )
+
+    result = ProjectDeploymentPlanner().recommend_nodes(
+        desired,
+        placement,
+        inventory=(
+            _node("node-a", cpu=8000),
+            _node("node-b", cpu=4000),
+            _node("node-untrusted", trusted=False),
+        ),
+        limit=2,
+    )
+
+    assert result["dry_run"] is True
+    assert [item["node_id"] for item in result["candidates"]] == [
+        "node-a",
+        "node-b",
+    ]
+    assert result["candidates"][0]["headroom"]["cpu_millicores"] == 7500
+    assert result["rejected"] == [
+        {"node_id": "node-untrusted", "reason": "node_untrusted"}
+    ]

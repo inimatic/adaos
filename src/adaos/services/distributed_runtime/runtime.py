@@ -255,6 +255,224 @@ class DistributedRuntime:
         )
         return self.save_topology_plan(plan, principal=principal)
 
+    def plan_rebalance(
+        self,
+        dataset_id: str,
+        *,
+        max_steps: int = 16,
+        max_parallel: int = 2,
+        throughput_bytes_per_second: int = 25 * 1024 * 1024,
+        principal: DistributedPrincipal,
+    ) -> dict[str, Any]:
+        """Build a bounded, reviewed replica plan; never mutate topology directly."""
+
+        principal.require("distributed.topology.plan")
+        dataset = self.store.get_dataset(dataset_id)
+        partitions = _all_pages(self.store.list_partitions, dataset_id=dataset_id)
+        groups = [
+            item
+            for item in _all_pages(self.store.list_groups)
+            if dataset_id in item.linked_datasets
+        ]
+        group_ids = {item.group_id for item in groups}
+        instances: list[ServiceInstance] = []
+        for instance in _all_pages(self.store.list_instances):
+            if (
+                instance.group_id not in group_ids
+                or instance.status != "ready"
+                or not instance.readiness
+            ):
+                continue
+            try:
+                self._require_active_membership(instance)
+            except DistributedRuntimeError:
+                continue
+            instances.append(instance)
+        instances.sort(
+            key=lambda item: (
+                str(item.pressure.get("level") or "normal") != "normal",
+                float(item.pressure.get("score") or 0),
+                item.instance_id,
+            )
+        )
+        bounded_steps = max(1, min(int(max_steps), 32))
+        parallel = max(1, min(int(max_parallel), 4))
+        throughput = max(1, min(int(throughput_bytes_per_second), 10 * 1024 * 1024 * 1024))
+        role = {
+            "derived_projection": "derived",
+            "read_through_cache": "cache",
+        }.get(dataset.consistency_profile, "follower")
+        steps: list[TopologyPlanStep] = []
+        warnings: list[str] = []
+        total_bytes = 0
+        temporary_bytes = 0
+        replica_load: dict[str, int] = {item.instance_id: 0 for item in instances}
+        replicas_by_partition: dict[str, tuple[Replica, ...]] = {}
+        for partition in partitions:
+            replicas = tuple(
+                item
+                for item in _all_pages(
+                    self.store.list_replicas, partition_id=partition.partition_id
+                )
+                if item.lifecycle not in {"removed", "failed"}
+            )
+            replicas_by_partition[partition.partition_id] = replicas
+            for replica in replicas:
+                replica_load[replica.instance_id] = replica_load.get(replica.instance_id, 0) + 1
+
+        for partition in sorted(partitions, key=lambda item: item.partition_id):
+            if len(steps) >= bounded_steps:
+                break
+            replicas = list(replicas_by_partition[partition.partition_id])
+            desired_count = partition.desired_replicas
+            source = next(
+                (
+                    item
+                    for item in replicas
+                    if item.lifecycle == "ready"
+                    and item.content_state not in {"unknown", "unavailable"}
+                ),
+                None,
+            )
+            expected_bytes = (
+                source.byte_count
+                if source is not None and source.byte_count is not None
+                else int(partition.selector.get("estimated_bytes") or 0) or None
+            )
+            occupied = {item.instance_id for item in replicas}
+            while len(replicas) < desired_count and len(steps) < bounded_steps:
+                targets = [item for item in instances if item.instance_id not in occupied]
+                targets.sort(key=lambda item: (replica_load.get(item.instance_id, 0), item.instance_id))
+                if not targets:
+                    warnings.append(f"partition:{partition.partition_id}:no_eligible_target")
+                    break
+                target = targets[0]
+                estimate = expected_bytes or 0
+                step = TopologyPlanStep(
+                    step_id=f"rebalance-create-{partition.partition_id}-{target.instance_id}",
+                    action="create",
+                    partition_id=partition.partition_id,
+                    source_instance_id=source.instance_id if source is not None else None,
+                    target_instance_id=target.instance_id,
+                    replica_role=role,
+                    phases=(
+                        "inspect",
+                        "reserve",
+                        "prepare",
+                        "snapshot",
+                        "stream_deltas",
+                        "catch_up",
+                        "verify",
+                        "activate_read",
+                        "route",
+                    ),
+                    expected_bytes=expected_bytes,
+                    temporary_bytes=estimate,
+                    retention="retain" if dataset.data_class == "external" else "rebuild",
+                    adapter_options={
+                        "max_parallel": parallel,
+                        "expected_partition_revision": partition.revision,
+                        "estimated_seconds": None
+                        if expected_bytes is None
+                        else max(1, (expected_bytes + throughput - 1) // throughput),
+                    },
+                )
+                steps.append(step)
+                occupied.add(target.instance_id)
+                replica_load[target.instance_id] = replica_load.get(target.instance_id, 0) + 1
+                replicas.append(
+                    replace(
+                        source,
+                        replica_id=f"planned:{step.step_id}",
+                        instance_id=target.instance_id,
+                        node_id=target.node_id,
+                        role=role,
+                    )
+                    if source is not None
+                    else None
+                )
+                total_bytes += estimate
+                temporary_bytes += estimate
+            removable = [item for item in replicas if item is not None and item.role != "authority"]
+            removable.sort(
+                key=lambda item: (
+                    item.lifecycle == "ready",
+                    -(item.freshness_seconds or 0),
+                    item.replica_id,
+                )
+            )
+            while len([item for item in replicas if item is not None]) > desired_count and removable and len(steps) < bounded_steps:
+                candidate = removable.pop(0)
+                steps.append(
+                    TopologyPlanStep(
+                        step_id=f"rebalance-remove-{partition.partition_id}-{candidate.instance_id}",
+                        action="remove",
+                        partition_id=partition.partition_id,
+                        source_instance_id=candidate.instance_id,
+                        target_instance_id=None,
+                        replica_role=candidate.role,
+                        phases=("inspect", "drain", "remove", "route", "release"),
+                        expected_bytes=candidate.byte_count,
+                        availability_impact="reduced_capacity",
+                        retention="retain" if dataset.data_class == "external" else "rebuild",
+                        adapter_options={
+                            "max_parallel": parallel,
+                            "expected_partition_revision": partition.revision,
+                            "estimated_seconds": 1,
+                        },
+                    )
+                )
+                replicas.remove(candidate)
+
+        estimated_seconds = 0 if total_bytes == 0 else max(
+            1, (total_bytes + throughput * parallel - 1) // (throughput * parallel)
+        )
+        if any(step.expected_bytes is None for step in steps):
+            warnings.append("one_or_more_step_byte_estimates_unavailable")
+        plan: TopologyPlan | None = None
+        if steps:
+            observed_revision = dataset.observed_revision
+            authority_epoch = max((item.authority_epoch for item in partitions), default=0)
+            plan = self.save_topology_plan(
+                TopologyPlan(
+                    plan_id=_identity(
+                        "plan",
+                        "rebalance",
+                        dataset_id,
+                        dataset.desired_revision,
+                        observed_revision,
+                        *[item.step_id for item in steps],
+                    ),
+                    kind="reconcile",
+                    target_ref=f"dataset:{dataset_id}",
+                    expected_desired_revision=dataset.desired_revision,
+                    expected_observed_revision=observed_revision,
+                    authority_epoch=authority_epoch,
+                    steps=tuple(steps),
+                    required_approvals=("replica_remove",)
+                    if any(item.action == "remove" for item in steps)
+                    else (),
+                    warnings=tuple(dict.fromkeys(warnings)),
+                ),
+                principal=principal,
+            )
+        return {
+            "schema": "adaos.distributed.rebalance_plan.v1",
+            "dataset_id": dataset_id,
+            "dry_run": True,
+            "status": "ready" if plan is not None else "noop",
+            "plan": plan.to_dict() if plan is not None else None,
+            "estimates": {
+                "bytes": total_bytes,
+                "temporary_bytes": temporary_bytes,
+                "seconds": estimated_seconds,
+                "throughput_bytes_per_second": throughput,
+                "max_parallel": parallel,
+            },
+            "warnings": list(dict.fromkeys(warnings)),
+            "truncated": len(steps) >= bounded_steps,
+        }
+
     def apply_topology_plan(
         self,
         plan_digest: str,

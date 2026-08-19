@@ -324,7 +324,12 @@ class TopologyExecutor:
             dataset = self.store.get_dataset(partition.dataset_id)
             if dataset.desired_revision != plan.expected_desired_revision:
                 raise TopologyExecutionError("topology_desired_revision_changed")
-            if partition.revision != plan.expected_observed_revision:
+            expected_partition_revision = int(
+                step.adapter_options.get(
+                    "expected_partition_revision", plan.expected_observed_revision
+                )
+            )
+            if partition.revision != expected_partition_revision:
                 raise TopologyExecutionError("topology_observed_revision_changed")
             if (
                 plan.kind == "handoff"

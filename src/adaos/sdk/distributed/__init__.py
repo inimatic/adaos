@@ -201,6 +201,24 @@ def save_plan(plan: TopologyPlan) -> TopologyPlan:
     )
 
 
+def plan_rebalance(
+    dataset_id: str,
+    *,
+    max_steps: int = 16,
+    max_parallel: int = 2,
+    throughput_bytes_per_second: int = 25 * 1024 * 1024,
+) -> dict[str, object]:
+    """Create a bounded reviewed rebalance plan with explicit resource estimates."""
+
+    return get_distributed_runtime().plan_rebalance(
+        dataset_id,
+        max_steps=max_steps,
+        max_parallel=max_parallel,
+        throughput_bytes_per_second=throughput_bytes_per_second,
+        principal=_principal(("distributed.topology.plan",)),
+    )
+
+
 def apply_plan(
     plan_digest: str,
     *,
@@ -289,6 +307,7 @@ __all__ = [
     "inspect",
     "observe_replica",
     "plan_replica_change",
+    "plan_rebalance",
     "put_partition",
     "register",
     "renew",

@@ -71,6 +71,64 @@ def _latest_activations(
 class ProjectDeploymentPlanner:
     """Resolve component placement without importing presentation or domain sharding."""
 
+    def recommend_nodes(
+        self,
+        desired: ProjectDeployment,
+        placement: ComponentPlacementPolicy,
+        *,
+        inventory: Iterable[NodeInventoryRecord],
+        activations: Iterable[ComponentActivation] = (),
+        limit: int = 20,
+    ) -> dict[str, object]:
+        """Rank eligible nodes without changing desired placement or reservations."""
+
+        bounded = max(1, min(int(limit), 100))
+        current = _latest_activations(activations, desired.deployment_id)
+        candidates: list[dict[str, object]] = []
+        rejected: list[dict[str, str]] = []
+        for node in sorted(inventory, key=lambda item: item.node_id):
+            if node.subnet_id != desired.subnet_id:
+                continue
+            reason = self._node_rejection(desired, placement, node, reserved={})
+            if reason is not None:
+                rejected.append({"node_id": node.node_id, "reason": reason})
+                continue
+            headroom = {
+                resource: max(0, int(node.capacity.get(resource, 0)) - required)
+                for resource, required in placement.required_capacity.items()
+            }
+            exact = current.get((placement.component_ref, node.node_id))
+            score = (1000 if exact is not None and exact.status == "active" else 0) + sum(
+                min(value, 1_000_000_000) for value in headroom.values()
+            )
+            candidates.append(
+                {
+                    "node_id": node.node_id,
+                    "score": score,
+                    "already_active": exact is not None and exact.status == "active",
+                    "architecture": node.architecture,
+                    "runtime_version": node.runtime_version,
+                    "labels": dict(node.labels),
+                    "headroom": headroom,
+                    "reasons": [
+                        "exact_activation" if exact is not None and exact.status == "active" else "eligible",
+                        "capacity_headroom",
+                    ],
+                }
+            )
+        candidates.sort(key=lambda item: (-int(item["score"]), str(item["node_id"])))
+        return {
+            "schema": "adaos.project.placement_recommendation.v1",
+            "deployment_id": desired.deployment_id,
+            "desired_revision": desired.revision,
+            "component_ref": placement.component_ref,
+            "mode": placement.mode,
+            "dry_run": True,
+            "candidates": candidates[:bounded],
+            "rejected": rejected[:bounded],
+            "truncated": len(candidates) > bounded or len(rejected) > bounded,
+        }
+
     def plan(
         self,
         desired: ProjectDeployment,

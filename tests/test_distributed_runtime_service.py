@@ -646,3 +646,83 @@ def test_non_media_document_fixture_uses_same_opaque_partition_contract() -> Non
     )
     assert dataset.partition_scheme["kind"] == "collection_prefix"
     assert partition.selector["prefix"] == ["a", "f"]
+
+
+def test_rebalance_plan_is_bounded_costed_and_does_not_mutate_replicas(
+    tmp_path: Path,
+) -> None:
+    runtime, _clock, release = _runtime(tmp_path)
+    _register_both(runtime, release)
+    runtime.define_dataset(
+        Dataset(
+            dataset_id="media-catalog",
+            owner_ref="skill:media_center_coordinator",
+            contract="media.catalog.v1",
+            consistency_profile="derived_projection",
+            partition_scheme={"kind": "root"},
+            retention={"on_remove": "rebuild"},
+            data_class="derived",
+            desired_revision=1,
+        ),
+        expected_revision=0,
+        principal=_principal(),
+    )
+    runtime.put_partition(
+        Partition(
+            partition_id="media-catalog:root-a",
+            dataset_id="media-catalog",
+            selector={"root_id": "root-a", "estimated_bytes": 50_000_000},
+            desired_replicas=2,
+            topology_generation=1,
+            authority_lease_id=None,
+            authority_epoch=0,
+            checkpoint="catalog:10",
+            status="degraded",
+        ),
+        expected_revision=0,
+        principal=_principal(),
+    )
+    runtime.observe_replica(
+        Replica(
+            replica_id="catalog-root-a-node-a",
+            partition_id="media-catalog:root-a",
+            instance_id="media-agent-node-a",
+            node_id="node-a",
+            role="derived",
+            lifecycle="ready",
+            content_state="non_empty",
+            authority_epoch=0,
+            checkpoint="catalog:10",
+            source_ref="media-files:root-a",
+            freshness_seconds=1,
+            item_count=100,
+            byte_count=50_000_000,
+            observed_at=_NOW.isoformat(),
+        ),
+        expected_revision=0,
+        principal=_principal(),
+    )
+
+    before = runtime.inspect(principal=_principal()).replicas
+    result = runtime.plan_rebalance(
+        "media-catalog",
+        max_steps=4,
+        max_parallel=99,
+        throughput_bytes_per_second=10_000_000,
+        principal=_principal(),
+    )
+    after = runtime.inspect(principal=_principal()).replicas
+
+    assert result["status"] == "ready"
+    assert result["dry_run"] is True
+    assert result["estimates"] == {
+        "bytes": 50_000_000,
+        "temporary_bytes": 50_000_000,
+        "seconds": 2,
+        "throughput_bytes_per_second": 10_000_000,
+        "max_parallel": 4,
+    }
+    step = result["plan"]["steps"][0]
+    assert step["target_instance_id"] == "media-agent-node-b"
+    assert step["adapter_options"]["expected_partition_revision"] == 1
+    assert before == after
