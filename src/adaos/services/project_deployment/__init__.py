@@ -1,4 +1,13 @@
 from .authorization import DeploymentPrincipal, ProjectDeploymentAuthorizationError
+from .bootstrap import configure_project_deployment_runtime
+from .adapters import (
+    CallbackComponentLifecycleHooks,
+    ComponentLifecycleHooks,
+    LocalComponentDeploymentAdapter,
+    NodeDeploymentTransport,
+    NoopComponentLifecycleHooks,
+    RoutingComponentDeploymentAdapter,
+)
 from .execution import (
     ComponentDeploymentAdapter,
     ProjectDeploymentExecutionError,
@@ -25,9 +34,15 @@ from .store import (
 
 __all__ = [
     "ComponentDeploymentAdapter",
+    "CallbackComponentLifecycleHooks",
+    "ComponentLifecycleHooks",
     "DeploymentPrincipal",
     "DeploymentInspection",
     "NodeInventoryProvider",
+    "NodeDeploymentTransport",
+    "NoopComponentLifecycleHooks",
+    "LocalComponentDeploymentAdapter",
+    "RoutingComponentDeploymentAdapter",
     "ProjectDeploymentAuthorizationError",
     "ProjectDeploymentConflictError",
     "ProjectDeploymentExecutionError",
@@ -42,6 +57,7 @@ __all__ = [
     "SnapshotNodeInventoryProvider",
     "UncertainDeploymentPhaseError",
     "build_project_deployment_projection",
+    "configure_project_deployment_runtime",
     "get_project_deployment_runtime",
     "register_project_deployment_runtime",
 ]

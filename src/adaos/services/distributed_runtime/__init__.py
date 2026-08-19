@@ -1,4 +1,5 @@
 from .authorization import DistributedAuthorizationError, DistributedPrincipal
+from .bootstrap import configure_distributed_runtime
 from .operations import (
     RetryableTopologyPhaseError,
     TopologyAdapter,
@@ -53,6 +54,7 @@ __all__ = [
     "TransferTransportError",
     "UncertainTopologyPhaseError",
     "build_distributed_projection",
+    "configure_distributed_runtime",
     "get_distributed_runtime",
     "register_distributed_runtime",
 ]

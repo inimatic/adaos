@@ -122,13 +122,17 @@ class ProjectDeploymentPlanner:
             (item for item in desired.placements if item.mode != "co_located_with"),
             key=lambda item: item.component_ref,
         )
-        dependent = sorted(
-            (item for item in desired.placements if item.mode == "co_located_with"),
-            key=lambda item: item.component_ref,
+        pending = list(
+            sorted(
+                (item for item in desired.placements if item.mode == "co_located_with"),
+                key=lambda item: item.component_ref,
+            )
         )
-        for placement in (*independent, *dependent):
+
+        def resolve_placement(placement: ComponentPlacementPolicy) -> None:
             if placement.component_ref not in package_by_ref:
-                continue
+                targets[placement.component_ref] = ()
+                return
             selected, rejection = self._select_nodes(
                 desired,
                 placement,
@@ -146,6 +150,22 @@ class ProjectDeploymentPlanner:
                     reservations[node_id][resource] += required
                 if local_node_id is None or node_id != local_node_id:
                     approvals.add("remote_install")
+
+        for placement in independent:
+            resolve_placement(placement)
+
+        while pending:
+            ready = [item for item in pending if str(item.co_located_with) in targets]
+            if not ready:
+                for item in pending:
+                    targets[item.component_ref] = ()
+                    warnings.append(
+                        f"blocked:{item.component_ref}:colocation_dependency_cycle_or_missing"
+                    )
+                break
+            pending = [item for item in pending if item not in ready]
+            for placement in ready:
+                resolve_placement(placement)
 
         changes: list[DeploymentPlanChange] = []
         target_pairs: set[tuple[str, str]] = set()
@@ -212,6 +232,11 @@ class ProjectDeploymentPlanner:
             approvals.add("runtime_data_delete")
         if desired.retention.derived_data == "delete":
             approvals.add("derived_data_delete")
+        if desired.rollout.max_unavailable == 0 and any(
+            item.availability_impact != "none" and item.action != "noop"
+            for item in changes
+        ):
+            warnings.append("blocked:rollout:max_unavailable_zero")
 
         status = (
             "blocked"
