@@ -6,6 +6,7 @@ import json
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -15,8 +16,21 @@ from adaos.services.bootstrap_runtime.route_tunnel_runtime import (
     _IsolatedMediaFileReader,
     NatsRouteTunnelRuntime,
     _MediaRelayFlowWindow,
+    _media_source_kind,
     _run_blocking_io_cancellation_safe,
 )
+
+
+def test_media_source_kind_marks_mapped_drive_as_network(monkeypatch) -> None:
+    from adaos.services import media_core
+
+    monkeypatch.setattr(
+        media_core,
+        "_windows_mapped_drive_roots",
+        lambda: ((r"\\server\home", "A:\\"),),
+    )
+
+    assert _media_source_kind(Path(r"A:\Video\clip.mkv")) == "mapped_drive"
 
 
 @pytest.mark.asyncio
