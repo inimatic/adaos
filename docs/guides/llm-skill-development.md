@@ -991,6 +991,20 @@ Use these rules for command and subscription handlers:
   deadlines, bounded concurrency, abort propagation, child cleanup and
   PID/timeout/retry diagnostics. Test a deliberately stalled child and assert
   that the runtime thread pool, API, channel and process table all recover.
+- Do not infer browser compatibility from a media extension or MIME type alone.
+  Probe container, video codec and audio codec in a bounded worker, persist the
+  result with the source resource revision, and let the playback plan distinguish
+  `direct`, `rendition_required`, `rendition_ready`, and `unsupported`. A codec
+  probe timeout is an explicit unknown state, not permission to attempt an
+  unbounded read on the control runtime.
+- Keep transcoding outside the runtime and transport processes. A media skill may
+  own a killable, resource-limited rendition worker and a bounded cache keyed by
+  `(resource_id, source_revision, rendition_profile)`, but it must register the
+  completed rendition as a core `MediaResource` and let the core relay stream it.
+  Expose worker PID, priority, CPU/RSS/I/O, queue depth, progress, cache bytes,
+  cancellation and failure reason without publishing per-frame or per-second
+  progress to Yjs. Test cancel, source replacement, disk exhaustion and a second
+  playback request while a rendition is running; channel probes must stay live.
 - Do not make a scenario modal or widget the lifecycle owner of long-lived
   playback. Put the active media element/player, queue, output lease, volume,
   interruption handling and system-media integration in one shared runtime
