@@ -1420,7 +1420,17 @@ boundaries and rechecks scope after untrusted tests. Frozen v12
 (`sha256:17e80f0891d0e0961a17752ec833bf8ee0251dafe9adfd56616593dc03c31314`)
 binds that exact core and unchanged public inputs, budgets, consumer ABI and
 five-pair design; all 25 packets were created before execution. Earlier
-failures do not become successes retroactively.
+failures do not become successes retroactively. Its first pair was a 0/0 EVC
+tie, making one-sided five-pair significance unreachable (`p >= 0.0625`), so
+the remaining attempts were not spent. The retained results exposed two
+measurement defects: the hidden evaluator treated derived pair id `seed-17` as
+the public integer RNG seed, and Builder package tests had 180 seconds while
+native consumer validation had 60. Evaluator 0.1.25/task schema 1.5 now derives
+and freezes the smoke expectation from the accepted public protocol. Core
+`a84e62dd`/prompt ABI 0.3.1 gives both test boundaries 60 seconds and prohibits
+scientific smoke or confirmatory workloads in package self-tests. Frozen v13
+(`sha256:27f8c8497a918d583ea25bd8ac38aa3072427a36fc9d650cab0c15b3705c02a8`)
+binds those corrections and materialized all 25 packets before execution.
 
 **Exit proof:** a frozen calibration package contains the visible inputs,
 hidden/evaluator inputs, source-analysis and formulation revisions,
@@ -1504,8 +1514,10 @@ efficacy result or cross-domain SOTA claim.
   C3 is an operability gate, not probability evidence. v9 stopped after its
   first C3 failure because five-pair significance was then unreachable; v10 is
   infrastructure-invalid because its evaluator failed before candidate code.
-  v11 is retained infrastructure-invalid after its first C3 finalization; v12
-  is the frozen post-fix task and does not replace any earlier result.
+  v11 is retained infrastructure-invalid after its first C3 finalization. v12
+  stopped after its first 0/0 EVC tie made the frozen significance threshold
+  unreachable. v13 is the frozen post-measurement-fix task and does not replace
+  any earlier result.
 - [ ] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and

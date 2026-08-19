@@ -539,10 +539,41 @@ Frozen paired task v12, digest
 binds that exact clean core, the unchanged skill-workspace `773089fb`, runner
 contract 1.3, five paired workload seeds, fixed budgets, and a preregistered
 alternating C0/C3 order beginning with C0. Its 25 arm packets were materialized
-before the first attempt. v5-v11 remain diagnostic development evidence and
-none is relabelled as a success. Because all rail changes were learned on TLP,
-even a positive v12 can support only a local post-hardening claim; an unbiased
-generalization claim requires the later held-out multi-task benchmark.
+before the first attempt. The first pair was a scored tie: C0 completed 2/6
+mandatory checks with result digest
+`sha256:65d5ec31752253512cfb468cd7781bb284edf5965b19497dbe5b5a5fb2ede4e4`;
+C3 completed 1/6 with result digest
+`sha256:c4ce128e9e7353e7c2e3452ac7b65d3f429f61dc5496ff4047cde293f95d93af`.
+Both have `evidence_valid_completion=false`. With only four pairs remaining,
+even four treatment wins could reach only one-sided exact sign-test
+`p=0.0625`; execution therefore stopped under the frozen decision rule rather
+than consuming more model budget after the primary claim had become
+unreachable.
+
+Post-score audit found two independent measurement defects; neither rewrites
+the immutable v12 result. First, the hidden judge compared the runner's integer
+RNG seed to the derived pair label `"seed-17"`, although the public 1.3
+contract and accepted plan require integer `[17]`. Calibration-task schema 1.5
+now freezes `expected_smoke_profile` directly from the accepted public
+ResearchCompilation, and evaluator 0.1.25 judges that typed value. Second,
+Builder allowed generated tests 180 seconds while the native consumer allowed
+60 seconds. This permitted a C3 package to pass Builder while its package tests
+performed real scientific workloads and timed out downstream. Prompt ABI 0.3.1
+gives both boundaries 60 seconds and explicitly assigns real smoke execution to
+the independent consumer, not package self-tests.
+
+Frozen paired task v13, digest
+`sha256:27f8c8497a918d583ea25bd8ac38aa3072427a36fc9d650cab0c15b3705c02a8`,
+binds core `a84e62dd`, skill-workspace `ce02850`, evaluator 0.1.25,
+Research Manager 0.19.0, runner contract 1.3, prompt ABI 0.3.1, and the same
+scientific question, model profile, budgets, five workload seeds, endpoint and
+alternating order. Its public frozen smoke expectation is CPU, three epochs,
+integer seed 17, `workflow_smoke`, and `inference_allowed=false`; all 25 packets
+were materialized before its first Builder attempt. v5-v12 remain diagnostic
+development evidence and none is relabelled as a success. Because every rail
+change so far was learned on TLP, even a positive v13 can support only a local
+post-hardening claim; an unbiased generalization claim requires the later
+held-out multi-task benchmark.
 
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and
