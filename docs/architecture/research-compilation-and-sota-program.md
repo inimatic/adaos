@@ -170,6 +170,12 @@ This stage answers "what was supplied?", not "what should AdaOS conclude?".
 
 Free prose remains essential here. Typed facets expose decisions that later
 stages must preserve; they do not attempt to encode all scientific reasoning.
+For comparative empirical tasks, formulation stage contract 1.2 adds one
+narrow `experimental_signature`: subject, stable dataset identity, baseline,
+intervention, intervention boundary, and primary outcome. This is not a full
+ontology of science. It is the minimum cross-stage identity needed to prevent
+a locally valid protocol for a different experiment from being joined to the
+accepted question.
 
 ### 3. Operationalization and protocol design
 
@@ -186,6 +192,14 @@ stages must preserve; they do not attempt to encode all scientific reasoning.
 
 This is the first boundary that the generic Research Workbench can manage
 without knowing TLP or another domain's implementation.
+
+Protocol admission preserves the signature exactly at machine boundaries:
+ordered arm ids/labels, primary contrast, dataset id/label, system subject,
+intervention boundary, and primary outcome. The AdaOS workflow-smoke policy is
+checked independently of model prose. The subsequent engineering contract
+binds the exact protocol digest, scientific ids, primary outcome, and public
+runner ABI. Redundant human projections may use either all ordered ids or all
+ordered labels, but mixed or foreign identities fail closed.
 
 ### 4. Engineering compilation
 
@@ -211,6 +225,11 @@ progressively: composition/contracts/digests first, full source for writable
 targets, and read-only dependency source only on demand. Project scope is a
 correctness boundary, not permission to flood the model context or mutate every
 member.
+
+Bounded repair always receives the original directive and upstream typed
+artifacts. The rejected stage is diagnostic input, not the sole authority.
+This matters because a schema-valid repair can otherwise preserve a fluent but
+scientifically unrelated candidate.
 
 ### 5. Bidirectional feasibility feedback
 

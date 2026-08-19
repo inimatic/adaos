@@ -1352,6 +1352,31 @@ review-assisted handoff is labelled as such. The historical `initial-review`,
 legacy TLP packages/scenario, E002 receipts, and evaluator rubric have declared
 stage visibility and cannot enter a clean model or Codex context.
 
+**Structured-realization run in progress (2026-08-19):** direction
+`tlp_structured_proof_01` admitted notebook digest
+`sha256:7c6c9aa6fe3335f5e2729df183f7bf91a4f9167c8c0f4a77c84847a0aa2299ab`
+and formulation-only review digest
+`sha256:1450397b37a754d87575ed7c67b6c64ed1ead40166e5cdd31e3080f91139c02e`.
+An initially admitted revision exposed a cross-stage false positive: a
+TLP/STL-10 problem and engineering contract were joined to a locally valid
+CIFAR-10 augmentation protocol. Stage contract 1.2 now freezes a narrow
+experimental signature, exact protocol-to-engineering bindings, and the AdaOS
+CPU-smoke policy; repairs retain the immutable original input. A subsequent
+over-strict label/id check failed closed after three repairs and was generalized
+to accept either a complete ordered id projection or a complete ordered label
+projection without accepting mixed or foreign identities. The accepted clean
+revision is `sha256:7022ff8916af6c0a0c35ba5f3ee4ba8d308bcdc6d3ae10dcbf89aa33a6d9ea66`,
+Compilation is
+`sha256:6fef2484389607c6653aea1d23b64917f7c66b40cf7b16e4a35b5aeb96b8096d`,
+and AutomationBrief is
+`sha256:93d8cfd38f473704b16bb814114e241f96da5e145fa815d622a6d200b2f6ab64`.
+The implementation view digest
+`sha256:5f4696b15138f8153e1eae4d28d96f81dad5e1216b001f7f14c4478264394031`
+contains only the notebook; `initial-review.md` is physically absent. The
+one-shot C3 Builder attempt has started with no post-start directive. These
+facts are interim lineage evidence, not yet an EVC success or comparative
+claim.
+
 **Exit proof:** a frozen calibration package contains the visible inputs,
 hidden/evaluator inputs, source-analysis and formulation revisions,
 traceability graph, exact AutomationBrief, Builder/Codex traces, ProjectRelease,
@@ -1372,10 +1397,15 @@ efficacy result or cross-domain SOTA claim.
   ResearchProblem facet covering primitives, tension/gap, primary question,
   assumptions, alternatives, falsifier, minimal decisive test, expected
   observations, failure-update rule, and prohibited claims.
+  Formulation contract 1.2 additionally carries the minimal cross-stage
+  experimental signature and rejects baseline/intervention id aliasing.
 - [x] `[must]` `ARF7.3-04` Compile an ExperimentalProtocol facet that maps the
   problem to population, intervention/comparator, controlled invariants,
   outcomes/estimand, allocation/pairing, random streams, profiles, seals,
   stopping, uncertainty, decision regions, and evidence requirements.
+  Protocol admission now deterministically checks signature identity and the
+  exact non-inferential CPU-smoke policy; the engineering stage binds the
+  accepted protocol digest and runner ABI.
 - [ ] `[must]` `ARF7.3-05` Produce and validate a traversable chain from source
   or human decision through scientific requirement, protocol element,
   engineering obligation, runtime observation/artifact, and acceptance/claim
