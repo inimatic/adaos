@@ -136,10 +136,10 @@ known compatibility obligations.
   the target architecture.
 - [x] `[must]` `MC0-02` Publish this prioritized roadmap with milestone
   dependencies, exit proofs, and evidence rules.
-- [ ] `[must]` `MC0-03` Audit the current core, client, scenario, Media Center,
+- [x] `[must]` `MC0-03` Audit the current core, client, scenario, Media Center,
   Media Server, and media-indexer compatibility revisions; record implemented,
   partial, obsolete, and missing behavior against every affected milestone.
-- [ ] `[must]` `MC0-04` Convert active defects and bounded implementation slices
+- [x] `[must]` `MC0-04` Convert active defects and bounded implementation slices
   into Issue Tracker entries linked to these stable task ids; do not duplicate
   the roadmap checklist in issues.
 - [ ] `[should]` `MC0-05` Capture representative library fixtures: 20,000-item
@@ -148,6 +148,8 @@ known compatibility obligations.
   and slow/blocked filesystems.
 - [ ] `[should]` `MC0-06` Record supported minimum node, browser, TV input, and
   network profiles plus explicit CPU, memory, I/O, and latency budgets.
+
+Checked baseline evidence: [Distributed Media Center Baseline - 2026-08-19](distributed-media-center-baseline-2026-08-19.md).
 
 ## Milestone MC1: Project Composition And Agent Deployment
 

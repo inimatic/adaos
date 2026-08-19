@@ -62,13 +62,15 @@ deployment, activation, projections, identity, and transport.
   and adapter boundaries.
 - [x] `[must]` `DS0-02` Map the first Media Center consumer and explicit
   non-guarantees without adding media nouns to core.
-- [ ] `[must]` `DS0-03` Audit existing lifecycle leases, supervisor activation,
+- [x] `[must]` `DS0-03` Audit existing lifecycle leases, supervisor activation,
   endpoint routing, Yjs projections, durable operations, and identity contracts;
   select reuse points and record incompatible private mechanisms.
 - [ ] `[must]` `DS0-04` Produce versioned schema proposals and failure/compatibility
   matrices before implementation.
 - [ ] `[should]` `DS0-05` Select a second contract fixture from model runtime,
   research execution, or document indexing to prevent media-specific bias.
+
+Checked audit evidence: [Distributed Media Center Baseline - 2026-08-19](distributed-media-center-baseline-2026-08-19.md).
 
 ## Milestone DS1: Service Groups, Instances, And Authority
 
