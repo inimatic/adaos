@@ -110,6 +110,40 @@ def test_media_reference_revalidates_root_boundary_on_read(tmp_path: Path) -> No
         media_core.resolve_media_reference(resource.id, db_path=db_path)
 
 
+def test_media_reference_prefers_mapped_drive_alias_for_unc_path(tmp_path: Path) -> None:
+    mapped_root = tmp_path / "mapped"
+    target = mapped_root / "Video" / "clip.avi"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"RIFF")
+
+    resolved = media_core._prefer_mapped_drive_path(
+        r"\\server\home\Video\clip.avi",
+        mappings=((r"\\server\home", str(mapped_root)),),
+    )
+
+    assert resolved == target
+
+
+def test_media_reference_resolves_existing_unc_rows_through_mapped_alias(monkeypatch, tmp_path: Path) -> None:
+    mapped_root = tmp_path / "mapped"
+    target = mapped_root / "Video" / "clip.avi"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"RIFF")
+    monkeypatch.setattr(
+        media_core,
+        "_windows_mapped_drive_roots",
+        lambda: ((r"\\server\home", str(mapped_root)),),
+    )
+
+    resolved, root = media_core._resolve_media_reference_target(
+        r"\\server\home\Video\clip.avi",
+        r"\\server\home\Video",
+    )
+
+    assert resolved == target.resolve()
+    assert root == target.parent.resolve()
+
+
 def test_unregister_media_references_is_exact_idempotent_and_preserves_files(tmp_path: Path) -> None:
     from adaos.services.media_reference_registry import unregister_media_references
 

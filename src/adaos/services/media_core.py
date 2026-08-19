@@ -344,17 +344,89 @@ def _media_reference_connection(db_path: str | Path | None = None) -> sqlite3.Co
     return connection
 
 
+def _windows_mapped_drive_roots() -> tuple[tuple[str, str], ...]:
+    """Return active Windows drive mappings as ``(UNC root, drive root)`` pairs."""
+    if os.name != "nt":
+        return ()
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        logical_drives = int(ctypes.windll.kernel32.GetLogicalDrives())
+        get_connection = ctypes.windll.mpr.WNetGetConnectionW
+        get_connection.argtypes = (
+            wintypes.LPCWSTR,
+            wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD),
+        )
+        get_connection.restype = wintypes.DWORD
+    except (AttributeError, ImportError, OSError):
+        return ()
+
+    mappings: list[tuple[str, str]] = []
+    for index in range(26):
+        if not logical_drives & (1 << index):
+            continue
+        drive = f"{chr(ord('A') + index)}:"
+        size = wintypes.DWORD(512)
+        buffer = ctypes.create_unicode_buffer(int(size.value))
+        try:
+            result = int(get_connection(drive, buffer, ctypes.byref(size)))
+            if result == 234 and int(size.value) > len(buffer):  # ERROR_MORE_DATA
+                buffer = ctypes.create_unicode_buffer(int(size.value))
+                result = int(get_connection(drive, buffer, ctypes.byref(size)))
+        except (OSError, ValueError):
+            continue
+        remote = str(buffer.value or "").rstrip("\\/")
+        if result == 0 and remote.startswith("\\"):
+            mappings.append((remote, f"{drive}\"))
+    mappings.sort(key=lambda item: len(item[0]), reverse=True)
+    return tuple(mappings)
+
+
+def _prefer_mapped_drive_path(
+    path: str | Path,
+    *,
+    mappings: tuple[tuple[str, str], ...] | None = None,
+) -> Path:
+    """Use an existing drive alias for UNC I/O without changing path identity."""
+    raw = str(path)
+    candidates = _windows_mapped_drive_roots() if mappings is None else mappings
+    raw_folded = raw.casefold()
+    for remote_root, drive_root in candidates:
+        remote = str(remote_root).rstrip("\\/")
+        remote_folded = remote.casefold()
+        if raw_folded != remote_folded and not raw_folded.startswith(remote_folded + "\"):
+            continue
+        suffix = raw[len(remote) :].lstrip("\\/")
+        translated = Path(str(drive_root))
+        if suffix:
+            translated = translated.joinpath(*suffix.replace("/", "\").split("\"))
+        return translated
+    return Path(path)
+
+
 def _resolve_media_reference_target(path: str | Path, root: str | Path) -> tuple[Path, Path]:
-    root_path = Path(root).expanduser().resolve(strict=True)
-    if not root_path.is_dir():
+    # Resolve stored paths first so root-boundary checks use canonical identity
+    # even when I/O is later served through a mapped-drive alias.
+    canonical_root = Path(root).expanduser().resolve(strict=True)
+    if not canonical_root.is_dir():
         raise NotADirectoryError("media_reference_root_not_directory")
-    target = Path(path).expanduser().resolve(strict=True)
-    if not target.is_file():
+    canonical_target = Path(path).expanduser().resolve(strict=True)
+    if not canonical_target.is_file():
         raise FileNotFoundError("media_reference_file_not_found")
-    if target.suffix.lower() not in SUPPORTED_MEDIA_EXTENSIONS:
+    if canonical_target.suffix.lower() not in SUPPORTED_MEDIA_EXTENSIONS:
         raise ValueError("unsupported_extension")
-    if not _is_relative_to(target, root_path):
+    if not _is_relative_to(canonical_target, canonical_root):
         raise PermissionError("path_outside_media_reference_root")
+
+    # Some Windows network providers expose both UNC and mapped-drive paths but
+    # stall reads through UNC. Resolving the alias would turn it back into UNC.
+    mappings = _windows_mapped_drive_roots()
+    target = _prefer_mapped_drive_path(path, mappings=mappings)
+    root_path = _prefer_mapped_drive_path(root, mappings=mappings)
+    if target != Path(path) and (not target.is_file() or not root_path.is_dir()):
+        return canonical_target, canonical_root
     return target, root_path
 
 
