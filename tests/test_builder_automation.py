@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -99,7 +100,7 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["status"] == "completed"
     assert status["session"]["source_prototype_version"] == "0.1.0"
     assert status["automation"]["source_prototype_version"] == "0.1.0"
-    assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.3.1"
+    assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.4.0"
     assert status["session"]["created_artifacts"][0]["kind"] == "skill"
     assert status["session"]["created_artifacts"][0]["name"] == "recipes_skill"
     task = next(
@@ -1316,8 +1317,17 @@ def test_projection_backfills_missing_conversation_before_notification(tmp_path:
     assert service.get_session("scenario", "recipes")["conversation_id"] == "conv.builder.recipes"
 
 
-def test_refresh_preserves_finalization_progress_after_worker_completion(tmp_path: Path) -> None:
+def test_refresh_preserves_finalization_progress_after_worker_completion(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     service = _service(tmp_path)
+    service.materialize_on_completion = True
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_detached_worker_is_active",
+        lambda _service, _session_id: True,
+    )
     service.factory = SimpleNamespace(
         snapshot=lambda **_kwargs: {
             "tasks": [
@@ -1344,6 +1354,41 @@ def test_refresh_preserves_finalization_progress_after_worker_completion(tmp_pat
 
     assert refreshed["status"] == "commit_ready"
     assert refreshed["progress"]["message"] == "Forge finalization"
+
+
+def test_finalization_stage_projects_durable_substage_and_heartbeat(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    monkeypatch.setattr(automation_module, "FINALIZATION_HEARTBEAT_SECONDS", 0.01)
+    events: list[dict] = []
+    service.event_sink = lambda payload: events.append(dict(payload))
+    current = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.skill.direction",
+        "object_type": "skill",
+        "object_id": "direction",
+        "current_task_id": "task.1",
+        "finalizing_task_id": "task.1",
+        "status": "commit_ready",
+    }
+    readiness = {"ok": False, "task_id": "task.1"}
+
+    with service._finalization_stage(
+        current,
+        readiness,
+        "activation",
+        "Activating exact package",
+    ):
+        time.sleep(0.12)
+
+    persisted = service.get_session("skill", "direction")
+    assert persisted is not None
+    assert persisted["progress"]["stage"] == "activation"
+    assert persisted["progress"]["heartbeat"] >= 1
+    assert persisted["completion_readiness"]["stage"] == "activation"
+    assert any((event.get("progress") or {}).get("heartbeat", 0) >= 1 for event in events)
 
 
 def test_refresh_preserves_terminal_orchestration_progress_after_worker_completion(

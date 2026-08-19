@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,7 +30,8 @@ from adaos.services.skill_factory_worker import LocalSkillFactoryWorker
 
 
 AUTOMATION_SESSION_SCHEMA = "adaos.builder.automation_session.v1"
-STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.3.1"
+STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.4.0"
+FINALIZATION_HEARTBEAT_SECONDS = 10.0
 AUTOMATION_PROJECTION_SCHEMA = "adaos.builder.automation_projection.v1"
 _LOCK = threading.RLock()
 _WORKER_LOCK = threading.Lock()
@@ -2335,6 +2337,87 @@ class BuilderAutomationService:
         self._save_session(current)
         return current
 
+    def _record_finalization_progress(
+        self,
+        current: dict[str, Any],
+        readiness: dict[str, Any],
+        stage: str,
+        message: str,
+        *,
+        heartbeat: int = 0,
+    ) -> None:
+        now = _now_iso()
+        started_at = str(
+            current.get("finalization_started_at")
+            or readiness.get("started_at")
+            or now
+        )
+        current["finalization_started_at"] = started_at
+        readiness.update(
+            {
+                "stage": stage,
+                "stage_message": message,
+                "started_at": started_at,
+                "heartbeat": max(0, int(heartbeat)),
+                "updated_at": now,
+            }
+        )
+        current["completion_readiness"] = copy.deepcopy(readiness)
+        current["status"] = "commit_ready"
+        current["progress"] = {
+            "task_id": current.get("current_task_id"),
+            "status": "commit_ready",
+            "stage": stage,
+            "message": message,
+            "heartbeat": max(0, int(heartbeat)),
+            "started_at": started_at,
+            "updated_at": now,
+        }
+        current["updated_at"] = now
+        self._save_session(current)
+
+    @contextmanager
+    def _finalization_stage(
+        self,
+        current: dict[str, Any],
+        readiness: dict[str, Any],
+        stage: str,
+        message: str,
+    ):
+        """Project one durable finalization substage with a live heartbeat."""
+
+        self._record_finalization_progress(current, readiness, stage, message)
+        stopped = threading.Event()
+
+        def heartbeat() -> None:
+            sequence = 0
+            while not stopped.wait(max(0.05, float(FINALIZATION_HEARTBEAT_SECONDS))):
+                sequence += 1
+                snapshot = copy.deepcopy(current)
+                snapshot_readiness = copy.deepcopy(readiness)
+                try:
+                    self._record_finalization_progress(
+                        snapshot,
+                        snapshot_readiness,
+                        stage,
+                        message,
+                        heartbeat=sequence,
+                    )
+                except Exception as exc:
+                    _log.debug("Builder finalization heartbeat failed: %s", exc)
+
+        heartbeat_thread = threading.Thread(
+            target=heartbeat,
+            name=f"builder-finalization-{_safe_token(stage)}",
+            daemon=True,
+        )
+        heartbeat_thread.start()
+        try:
+            yield
+        finally:
+            stopped.set()
+            heartbeat_thread.join(timeout=1.0)
+
     def _finalize_completed_session(self, session: Mapping[str, Any]) -> None:
         """Prepare the DEV runtime, refresh the paired UI, then notify chat."""
         reconciled = self._reconcile_completed_workflow(session)
@@ -2360,35 +2443,53 @@ class BuilderAutomationService:
         preview_target: Mapping[str, Any] | None = None
         try:
             pending_transition = str(current.get("pending_workflow_transition") or "").strip()
-            if pending_transition == "return_to_prototype":
-                readiness["workflow_transition"] = self._workflow().snapshot_current_prototype(
-                    object_type,
-                    object_id,
-                    source_task_id=str(current.get("current_task_id") or "").strip() or None,
-                    request_text="Safe prototype derived by the built-in LLM from the Automation result",
-                )
-            else:
-                readiness["automation_snapshot"] = self._workflow().snapshot_current_automation(
-                    object_type,
-                    object_id,
-                    task_id=str(current.get("current_task_id") or "").strip() or None,
-                )
+            with self._finalization_stage(
+                current,
+                readiness,
+                "snapshot",
+                "Recording the validated Automation source snapshot",
+            ):
+                if pending_transition == "return_to_prototype":
+                    readiness["workflow_transition"] = self._workflow().snapshot_current_prototype(
+                        object_type,
+                        object_id,
+                        source_task_id=str(current.get("current_task_id") or "").strip() or None,
+                        request_text="Safe prototype derived by the built-in LLM from the Automation result",
+                    )
+                else:
+                    readiness["automation_snapshot"] = self._workflow().snapshot_current_automation(
+                        object_type,
+                        object_id,
+                        task_id=str(current.get("current_task_id") or "").strip() or None,
+                    )
             companion_skill_ids = self._session_companion_skill_ids(session)
             if companion_skill_ids:
-                readiness["skills"] = [
-                    self._prepare_and_activate_dev_skill(
-                        skill_id,
-                        webspace_id=webspace_id,
-                    )
-                    for skill_id in companion_skill_ids
-                ]
+                with self._finalization_stage(
+                    current,
+                    readiness,
+                    "activation",
+                    "Packaging, validating and activating the DEV skill runtime",
+                ):
+                    readiness["skills"] = [
+                        self._prepare_and_activate_dev_skill(
+                            skill_id,
+                            webspace_id=webspace_id,
+                        )
+                        for skill_id in companion_skill_ids
+                    ]
                 readiness["skill"] = readiness["skills"][0]
 
             if pending_transition != "return_to_prototype":
-                readiness["acceptance"] = self._run_development_acceptance(
-                    session,
-                    activations=list(readiness.get("skills") or []),
-                )
+                with self._finalization_stage(
+                    current,
+                    readiness,
+                    "consumer_acceptance",
+                    "Running admitted consumer-owned acceptance checks",
+                ):
+                    readiness["acceptance"] = self._run_development_acceptance(
+                        session,
+                        activations=list(readiness.get("skills") or []),
+                    )
                 if not bool(readiness["acceptance"].get("ok")):
                     acceptance_failed = True
                     raise RuntimeError(
@@ -2414,7 +2515,13 @@ class BuilderAutomationService:
             if bool(current.get("reuse_confirmed_checkpoints")) and confirmed_checkpoints:
                 readiness["vcs_checkpoints"] = confirmed_checkpoints
             else:
-                readiness["vcs_checkpoints"] = self._checkpoint_completed_artifacts(session)
+                with self._finalization_stage(
+                    current,
+                    readiness,
+                    "forge_checkpoint",
+                    "Creating transactional Forge checkpoints",
+                ):
+                    readiness["vcs_checkpoints"] = self._checkpoint_completed_artifacts(session)
             failed_checkpoints = [
                 item
                 for item in readiness["vcs_checkpoints"]

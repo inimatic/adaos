@@ -20,6 +20,7 @@ __all__ = [
     "read_env",
     "write_env",
     "skill_env_path",
+    "skill_data_root",
     "async_get_env",
     "async_set_env",
     "async_delete_env",
@@ -292,6 +293,26 @@ def skill_env_path() -> Path:
             path = _runtime_env_path_from_skill_dir(current_dir) or (current_dir / ".skill_env.json")
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def skill_data_root() -> Path:
+    """Return the current skill's owner-scoped mutable data directory.
+
+    The runtime injects ``ADAOS_SKILL_INTERNAL_DATA_ROOT`` for isolated tool
+    and Development-session execution.  Normal in-process calls resolve the
+    same boundary from the current skill context through ``skill_env_path``.
+    Skills must use this helper instead of reconstructing ``.runtime`` paths
+    from ``ADAOS_BASE_DIR``: DEV slots, installed slots and compatibility
+    buckets deliberately have different physical layouts.
+    """
+
+    explicit = str(os.getenv("ADAOS_SKILL_INTERNAL_DATA_ROOT") or "").strip()
+    if explicit:
+        root = Path(explicit).expanduser().resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+    # The canonical env store is always ``<data-root>/db/skill_env.json``.
+    return skill_env_path().parent.parent
 
 
 def _legacy_paths(target: Path) -> list[Path]:

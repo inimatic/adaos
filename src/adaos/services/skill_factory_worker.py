@@ -34,7 +34,7 @@ from adaos.services.workflow_artifacts import (
 )
 
 
-RUNNER_VERSION = "adaos-local-codex-worker/0.3.1"
+RUNNER_VERSION = "adaos-local-codex-worker/0.4.0"
 GENERATED_TEST_TIMEOUT_SECONDS = 60
 PACKET_SCHEMA = "adaos.skill_factory.codex_packet.v1"
 LOCAL_SESSION_SCHEMA = "adaos.skill_factory.local_run.v1"
@@ -1319,7 +1319,9 @@ When `scenarios/{target_id}/.builder_current_publication` exists, treat it as th
 19. Before adding or importing a third-party Python package, inspect the authoritative manifest schema at `${{ADAOS_REPO_ROOT}}/src/adaos/services/skill/skill_schema.json` and the dependency-isolation policy in `${{ADAOS_REPO_ROOT}}/docs/skill_runtime.md`. Declare every imported dependency. Heavy/native dependencies require a service boundary or the explicit documented transitional `allow_heavy_dependencies` allowance. Run install-strict `SkillValidationService.validate_path(...)` so manifest schema, imports, exported tools, and dependency isolation fail in one bounded pass before concluding.
 20. This checkout is an isolated candidate, not the canonical AdaOS workspace. Run source-tree validation and bounded tests here, but do not copy into or mutate the canonical workspace/runtime and do not publish, install, or activate the candidate yourself. The trusted worker finalizer owns package, install, activation, and rollback receipts after your turn."""
         required_result += """
-21. Keep every mutable test/runtime file outside the candidate source tree. Use `ADAOS_BASE_DIR` for the default task-owned AdaOS runtime. If a test needs multiple isolated bases, create child directories below `ADAOS_TASK_RUNTIME_DIR` (or an OS temporary directory outside this checkout), and clean them normally; never create repository-relative `.adaos*` runtime directories."""
+21. Keep every mutable test/runtime file outside the candidate source tree. Use `ADAOS_BASE_DIR` for the default task-owned AdaOS runtime. If a test needs multiple isolated bases, create child directories below `ADAOS_TASK_RUNTIME_DIR` (or an OS temporary directory outside this checkout), and clean them normally; never create repository-relative `.adaos*` runtime directories.
+22. Packaged tests must be hermetic. They cannot read `.adaos_context`, Builder Development-session instruction/artifact paths, session IDs, or other authoring-only files that Forge omits. Copy only a bounded non-secret fixture that remains necessary into the skill's own tests/fixtures, or leave admitted-context verification to consumer acceptance.
+23. Never reconstruct a skill's `.runtime`/slot path from `ADAOS_BASE_DIR`. Resolve mutable owner-scoped files with `adaos.sdk.skill_env.skill_data_root()` (or the equivalent typed SDK capability). Core supplies the exact DEV or installed data root through current skill context and execution bindings."""
         required_result = required_result.format(
             target_id=target_id,
             companion=companion,
@@ -1482,6 +1484,12 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         changed_paths = set(self._changed_from_baseline(workspace))
         self._validate_checkpoint_owned_manifest_metadata(workspace, checks, errors)
         self._validate_tests_do_not_pin_checkpoint_metadata(
+            workspace,
+            checks,
+            errors,
+            changed_paths=changed_paths,
+        )
+        self._validate_tests_do_not_depend_on_development_context(
             workspace,
             checks,
             errors,
@@ -1706,6 +1714,51 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 )
             else:
                 checks.append({"kind": "checkpoint_test_contract", "path": relative, "ok": True})
+
+    @staticmethod
+    def _validate_tests_do_not_depend_on_development_context(
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+        *,
+        changed_paths: set[str] | None = None,
+    ) -> None:
+        """Keep generated package tests independent from one Builder session.
+
+        Development inputs are immutable authoring evidence, not release
+        payload. A test that reaches back into ``.adaos_context`` may pass in
+        the isolated Codex checkout and then fail from the exact packaged
+        source that Forge installs. Reject that dependency before commit.
+        """
+
+        forbidden = (
+            ".adaos_context",
+            "builder/development_sessions",
+            "builder\\development_sessions",
+        )
+        for path in sorted(workspace.glob("skills/*/tests/test_*.py")):
+            relative = path.relative_to(workspace).as_posix()
+            if changed_paths is not None and relative not in changed_paths:
+                continue
+            try:
+                source = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                continue
+            matched = next((token for token in forbidden if token in source), None)
+            if matched:
+                errors.append(
+                    f"{relative}: generated package test depends on Development-session "
+                    f"context ({matched}); copy a bounded non-secret fixture into the skill "
+                    "or exercise the admitted context through consumer acceptance"
+                )
+            else:
+                checks.append(
+                    {
+                        "kind": "package_test_context_independence",
+                        "path": relative,
+                        "ok": True,
+                    }
+                )
 
     @staticmethod
     def _validate_skill_data_routes(
@@ -1991,6 +2044,23 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         *,
         skip_frozen_skills: bool = False,
     ) -> None:
+        validation_root = workspace.parent / "package-validation"
+        if validation_root.exists():
+            shutil.rmtree(validation_root)
+        source_skills = workspace / "skills"
+        packaged_skills = validation_root / "skills"
+        if source_skills.is_dir():
+            shutil.copytree(
+                source_skills,
+                packaged_skills,
+                ignore=shutil.ignore_patterns(
+                    ".runtime",
+                    ".adaos_context",
+                    "__pycache__",
+                    ".pytest_cache",
+                    "*.pyc",
+                ),
+            )
         for tests_dir in sorted(path for path in workspace.glob("skills/*/tests") if path.is_dir()):
             test_files = list(tests_dir.glob("test_*.py"))
             if not test_files:
@@ -2007,31 +2077,44 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     }
                 )
                 continue
-            # Deterministic validation has the same mutable-state boundary as
-            # the Codex turn.  Without a task-owned ADAOS_BASE_DIR an otherwise
-            # correct SDK fallback can write ``skills/.runtime`` into the
-            # disposable source checkout after the pre-test boundary check.
+            packaged_tests = validation_root / tests_dir.relative_to(workspace)
+            # Validate the exact package-shaped source projection, without
+            # authoring-only ``.adaos_context``. This closes the gap between
+            # Codex workspace tests and Forge/native installed validation.
             environment = SubprocessCodexExecutor(
                 repo_root=self.repo_root
             )._execution_environment(
-                runtime_base_dir=workspace.parent / "adaos-runtime"
+                runtime_base_dir=workspace.parent / "adaos-runtime-packaged"
             )
             result = _run(
-                [sys.executable, "-m", "pytest", "-q", str(tests_dir), "-p", "no:cacheprovider"],
-                cwd=workspace,
+                [
+                    sys.executable,
+                    "-m",
+                    "pytest",
+                    "-q",
+                    str(packaged_tests),
+                    "-p",
+                    "no:cacheprovider",
+                ],
+                cwd=validation_root,
                 timeout=float(GENERATED_TEST_TIMEOUT_SECONDS),
                 env=environment,
             )
             checks.append(
                 {
-                    "kind": "pytest",
+                    "kind": "pytest.packaged",
                     "path": relative,
                     "ok": result.returncode == 0,
                     "output": (result.stdout + result.stderr)[-4000:],
                 }
             )
             if result.returncode:
-                errors.append(f"{relative}: pytest failed: {(result.stdout + result.stderr)[-2000:]}")
+                errors.append(
+                    f"{relative}: packaged pytest failed: "
+                    f"{(result.stdout + result.stderr)[-2000:]}"
+                )
+        if validation_root.exists():
+            shutil.rmtree(validation_root)
 
     @staticmethod
     def _cleanup_generated_files(root: Path) -> None:

@@ -1112,7 +1112,8 @@ def test_generated_tests_receive_task_owned_runtime_outside_candidate(tmp_path: 
 
     assert errors == []
     assert checks[0]["ok"] is True
-    assert (workspace.parent / "adaos-runtime" / "validation-marker.txt").is_file()
+    assert (workspace.parent / "adaos-runtime-packaged" / "validation-marker.txt").is_file()
+    assert not (workspace.parent / "package-validation").exists()
     assert not (workspace / "skills" / ".runtime").exists()
 
 
@@ -1449,6 +1450,65 @@ def test_worker_allows_semantic_manifest_version_checks(tmp_path: Path) -> None:
     ]
 
 
+def test_worker_rejects_package_tests_bound_to_development_context(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    test_path = workspace / "skills" / "demo" / "tests" / "test_context.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(
+        "from pathlib import Path\n\n"
+        "def test_fixture():\n"
+        "    assert (Path.cwd() / '.adaos_context' / 'devcal-001' / 'fixture.json').exists()\n",
+        encoding="utf-8",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_tests_do_not_depend_on_development_context(
+        workspace,
+        checks,
+        errors,
+        changed_paths={"skills/demo/tests/test_context.py"},
+    )
+
+    assert checks == []
+    assert len(errors) == 1
+    assert "authoring-only" not in errors[0]
+    assert ".adaos_context" in errors[0]
+
+
+def test_worker_runs_generated_tests_from_package_shaped_projection(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = tmp_path / "run" / "workspace"
+    tests_dir = workspace / "skills" / "demo" / "tests"
+    tests_dir.mkdir(parents=True)
+    (workspace / ".adaos_context" / "session").mkdir(parents=True)
+    (workspace / ".adaos_context" / "session" / "fixture.txt").write_text(
+        "authoring-only",
+        encoding="utf-8",
+    )
+    (tests_dir / "test_context.py").write_text(
+        "from pathlib import Path\n\n"
+        "def test_fixture():\n"
+        "    assert (Path.cwd() / '.adaos_context' / 'session' / 'fixture.txt').exists()\n",
+        encoding="utf-8",
+    )
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo_root,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    worker._run_generated_tests(workspace, checks, errors)
+
+    assert checks[0]["kind"] == "pytest.packaged"
+    assert checks[0]["ok"] is False
+    assert any("packaged pytest failed" in error for error in errors)
+
+
 def test_worker_ignores_unchanged_baseline_version_pins(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     baseline_tests = workspace / "skills" / "dependency" / "tests"
@@ -1647,7 +1707,7 @@ def test_worker_reasks_codex_to_repair_source_boundary_violation(tmp_path: Path)
     assert "outside the task scope" in calls[1]
 
 
-def test_worker_rechecks_source_boundary_after_generated_tests(tmp_path: Path) -> None:
+def test_worker_isolates_generated_test_side_effects_from_candidate_source(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"
     dev_skills = tmp_path / "dev" / "skills"
@@ -1693,9 +1753,9 @@ def test_worker_rechecks_source_boundary_after_generated_tests(tmp_path: Path) -
     result = worker.run_once()
 
     assert result["ok"] is True, result
-    assert len(calls) == 2
-    assert "Deterministic validation repair" in calls[1]
-    assert "outside the task scope" in calls[1]
+    assert len(calls) == 1
+    assert not (Path(result["result"]["local_run_dir"]) / "workspace" / "escaped-validation.txt").exists()
+    assert not (Path(result["result"]["local_run_dir"]) / "package-validation").exists()
 
 
 def test_worker_reports_progress_to_automation_callback(tmp_path: Path) -> None:
