@@ -90,14 +90,14 @@ or distributed-readiness claim.
 
 | Milestone | State | Target maturity | Main dependency |
 | --- | --- | --- | --- |
-| MC0 Architecture and baseline | in progress | specified | current repositories |
-| MC1 Project and agent deployment | open | validated-stand | core `AP8`, `DS1` |
-| MC2 Distributed roots and indexing | open | validated-stand | MC1, `DS2`, `DS3` |
-| MC3 Catalog, search, folders, and collections | open | validated-stand | MC2 |
-| MC4 Playback sessions and control surfaces | open | validated-stand | MC1, MC3 |
-| MC5 Adaptive UI and settings | open | validated-stand | MC3, MC4 |
-| MC6 Personalization, access, and voice | open | validated-stand | identity roadmap, MC4, MC5 |
-| MC7 Enrichment, variants, and production operations | open | production-accepted | MC2-MC6 |
+| MC0 Architecture and baseline | validated local | specified | current repositories |
+| MC1 Project and agent deployment | validated local | validated-stand | core `AP8`, `DS1` |
+| MC2 Distributed roots and indexing | validated local | validated-stand | MC1, `DS2`, `DS3` |
+| MC3 Catalog, search, folders, and collections | validated local | validated-stand | MC2 |
+| MC4 Playback sessions and control surfaces | validated local | validated-stand | MC1, MC3 |
+| MC5 Adaptive UI and settings | validated local | validated-stand | MC3, MC4 |
+| MC6 Personalization, access, and voice | validated local | validated-stand | identity roadmap, MC4, MC5 |
+| MC7 Enrichment, variants, and production operations | in progress | production-accepted | MC2-MC6 |
 
 ## Dependency Order
 
@@ -154,6 +154,10 @@ Checked baseline evidence: [Distributed Media Center Baseline - 2026-08-19](dist
 Validation fixtures and budgets:
 [Media Center Validation Profile](media-center-validation-profile.md).
 
+Current implementation evidence:
+[Media Center Local Validation - 2026-08-20](media-center-local-validation-2026-08-20.md)
+and [Media Center Security And Privacy Review - 2026-08-20](media-center-security-review-2026-08-20.md).
+
 ## Milestone MC1: Project Composition And Agent Deployment
 
 **Outcome:** Media Center is installed and reconciled as one Project whose
@@ -167,27 +171,27 @@ agents, exposes TV and controller placements, reports desired/observed state,
 survives one partial failure, and removes one drained agent without touching
 source files.
 
-- [ ] `[must]` `MC1-01` Define one Media Center Project with scenario,
+- [x] `[must]` `MC1-01` Define one Media Center Project with scenario,
   coordinator, project-only library agent, control skill, compatibility locks,
   lifecycle policy, and TV/library/remote entry points.
-- [ ] `[must]` `MC1-02` Package and activate every owned component through the
+- [x] `[must]` `MC1-02` Package and activate every owned component through the
   ordinary ProjectRelease pipeline; remove scenario-driven local skill-copy or
   ad hoc install behavior.
-- [ ] `[must]` `MC1-03` Express coordinator and agent placement intent through
+- [x] `[must]` `MC1-03` Express coordinator and agent placement intent through
   the public Deployment SDK and bind resulting activations by stable refs.
-- [ ] `[must]` `MC1-04` Implement the media-specific administration projection
+- [x] `[must]` `MC1-04` Implement the media-specific administration projection
   over generic deployment records: compatible nodes, desired placement,
   version, health, generation, roots, shard revision, pressure, and operations.
-- [ ] `[must]` `MC1-05` Implement agent `cordon`, `drain`, shard detach, route
+- [x] `[must]` `MC1-05` Implement agent `cordon`, `drain`, shard detach, route
   revocation, package removal, and independent derived-data retention choice.
-- [ ] `[must]` `MC1-06` Preserve the colocated single-node shape as a normal
+- [x] `[must]` `MC1-06` Preserve the colocated single-node shape as a normal
   deployment policy, not a separate compatibility implementation.
-- [ ] `[must]` `MC1-07` Reject incompatible coordinator/agent release sets
+- [x] `[must]` `MC1-07` Reject incompatible coordinator/agent release sets
   before activation and expose bounded version-skew policy during staged
   rollout.
-- [ ] `[should]` `MC1-08` Add capability-based `all_matching` placement after
+- [x] `[should]` `MC1-08` Add capability-based `all_matching` placement after
   manual selected-node placement is proven.
-- [ ] `[could]` `MC1-09` Add planner recommendations using free storage,
+- [x] `[could]` `MC1-09` Add planner recommendations using free storage,
   architecture, probe/rendition capability, and operator labels.
 - [ ] `[deferred]` `MC1-10` Add automatic coordinator leader election and
   standby relocation after one explicit coordinator is production-accepted.
@@ -205,34 +209,34 @@ adapter operation slice are integrated.
 converge to exact shard/catalog revisions, and preserve playback/control
 budgets while one slow source and one offline node are present.
 
-- [ ] `[must]` `MC2-01` Define versioned contracts for `LibraryRoot`,
+- [x] `[must]` `MC2-01` Define versioned contracts for `LibraryRoot`,
   `FolderNode`, `LibraryShard`, source delta, scan checkpoint, and media job.
-- [ ] `[must]` `MC2-02` Move node-local root enumeration, technical probing,
+- [x] `[must]` `MC2-02` Move node-local root enumeration, technical probing,
   source registration, and shard ownership into `media_library_agent`.
-- [ ] `[must]` `MC2-03` Keep original media in place through
+- [x] `[must]` `MC2-03` Keep original media in place through
   `register_media_file(...)`; add a regression that proves imported byte
   content is absent from `.adaos` while references and derived metadata exist.
-- [ ] `[must]` `MC2-04` Make root import asynchronous: return a durable job id,
+- [x] `[must]` `MC2-04` Make root import asynchronous: return a durable job id,
   use operation-appropriate multi-minute deadlines, and separate browser action
   acknowledgement from scan lifetime.
-- [ ] `[must]` `MC2-05` Implement incremental add/change/move/delete detection,
+- [x] `[must]` `MC2-05` Implement incremental add/change/move/delete detection,
   tombstones, exact source revisions, resumable checkpoints, cancellation
   disposition, and restart recovery.
-- [ ] `[must]` `MC2-06` Publish coalesced progress and health projections with
+- [x] `[must]` `MC2-06` Publish coalesced progress and health projections with
   counts, throughput, phase, pressure, checkpoint age, bounded error reason,
   and skill-localized human message.
-- [ ] `[must]` `MC2-07` Enforce media-kind policy with images disabled by
+- [x] `[must]` `MC2-07` Enforce media-kind policy with images disabled by
   default until an image presentation/player is supported.
-- [ ] `[must]` `MC2-08` Bound scan/probe/hash concurrency and CPU, RSS, disk I/O,
+- [x] `[must]` `MC2-08` Bound scan/probe/hash concurrency and CPU, RSS, disk I/O,
   network and synchronized-state pressure; playback and command transport have
   priority.
-- [ ] `[must]` `MC2-09` Represent agent/shard availability independently from
+- [x] `[must]` `MC2-09` Represent agent/shard availability independently from
   known catalog identity and expose truthful stale/partial state.
-- [ ] `[should]` `MC2-10` Add scheduled scans and filesystem watching with
+- [x] `[should]` `MC2-10` Add scheduled scans and filesystem watching with
   debounce, overflow recovery, and periodic reconciliation.
-- [ ] `[should]` `MC2-11` Support root overlap detection, exclusion patterns,
+- [x] `[should]` `MC2-11` Support root overlap detection, exclusion patterns,
   symlink/mount policy, and node-local path diagnostics restricted to operators.
-- [ ] `[could]` `MC2-12` Add scan windows and pause-on-playback policy per node.
+- [x] `[could]` `MC2-12` Add scan windows and pause-on-playback policy per node.
 
 ## Milestone MC3: Catalog, Search, Folders, And Collections
 
@@ -245,35 +249,35 @@ navigation while retaining shard provenance and partial-result truth.
 search, list/grid/rail reads, folder browsing, typed collections, duplicate
 candidates, and unavailable-node behavior without renderer or Yjs pressure.
 
-- [ ] `[must]` `MC3-01` Implement stable `MediaSource`, `MediaVariant`,
+- [x] `[must]` `MC3-01` Implement stable `MediaSource`, `MediaVariant`,
   `MediaWork`, `MediaCollection`, `CollectionMembership`, `MetadataClaim`, and
   merge/split alias identities with schema and migration tests.
-- [ ] `[must]` `MC3-02` Maintain a compact coordinator catalog from idempotent
+- [x] `[must]` `MC3-02` Maintain a compact coordinator catalog from idempotent
   agent deltas; retain exact source/shard/catalog revision evidence.
-- [ ] `[must]` `MC3-03` Index normalized title, filename, meaningful folder
+- [x] `[must]` `MC3-03` Index normalized title, filename, meaningful folder
   segments, embedded tags, collection names, aliases, people, locale, and
   user-visible root alias.
-- [ ] `[must]` `MC3-04` Fix global filename and folder-name search with explicit
+- [x] `[must]` `MC3-04` Fix global filename and folder-name search with explicit
   query execution behavior, ranking version, filters, cursor, bounded limit,
   partial participation, and deterministic continuation.
-- [ ] `[must]` `MC3-05` Implement opaque cursor-backed root/folder browsing,
+- [x] `[must]` `MC3-05` Implement opaque cursor-backed root/folder browsing,
   breadcrumbs, lazy children, sorting, access filtering, and stable-as-possible
   rename/move identity.
-- [ ] `[must]` `MC3-06` Add bounded read models for Home, Movies, Series, Music,
+- [x] `[must]` `MC3-06` Add bounded read models for Home, Movies, Series, Music,
   Audiobooks, Playlists, Folders, Favorites, Recent, and Continue.
-- [ ] `[must]` `MC3-07` Default catalog pages to 30 visible records and short
+- [x] `[must]` `MC3-07` Default catalog pages to 30 visible records and short
   player/playlist selectors to at most 10; prove no unbounded dropdown or shared
   document is created.
-- [ ] `[must]` `MC3-08` Model ordered series/season/episode, album/disc/track,
+- [x] `[must]` `MC3-08` Model ordered series/season/episode, album/disc/track,
   audiobook/part/chapter, and playlist membership without collapsing their
   ownership and lifecycle semantics.
-- [ ] `[must]` `MC3-09` Implement cheap duplicate and variant candidates using
+- [x] `[must]` `MC3-09` Implement cheap duplicate and variant candidates using
   exact technical facts and bounded hashing; never delete a candidate source.
-- [ ] `[should]` `MC3-10` Add federated deep-search stages for transcripts,
+- [x] `[should]` `MC3-10` Add federated deep-search stages for transcripts,
   technical fields, embeddings, or not-yet-replicated agent data.
-- [ ] `[should]` `MC3-11` Add operator/user merge, split, regroup, and metadata
+- [x] `[should]` `MC3-11` Add operator/user merge, split, regroup, and metadata
   correction flows with provenance and reversible audit.
-- [ ] `[could]` `MC3-12` Add semantic and phonetic ranking for multilingual and
+- [x] `[could]` `MC3-12` Add semantic and phonetic ranking for multilingual and
   voice-originated queries after deterministic full-text evaluation exists.
 
 ## Milestone MC4: Playback Sessions And Control Surfaces
@@ -289,36 +293,36 @@ the session in a mini-player/PiP policy, queue/autonext works, and coordinator,
 source node, endpoint, or command-channel interruption has deterministic
 recovery evidence.
 
-- [ ] `[must]` `MC4-01` Define versioned `PlaybackSession`, `PlaybackTarget`,
+- [x] `[must]` `MC4-01` Define versioned `PlaybackSession`, `PlaybackTarget`,
   control/output lease, queue, queue item, playback plan, command revision, and
   checkpoint contracts.
-- [ ] `[must]` `MC4-02` Move the media element and active playback ownership to
+- [x] `[must]` `MC4-02` Move the media element and active playback ownership to
   one app-shell `PlaybackCoordinator`; make modal, fullscreen, mini-player and
   PiP views controllers only.
-- [ ] `[must]` `MC4-03` Route source bytes directly from the selected agent to
+- [x] `[must]` `MC4-03` Route source bytes directly from the selected agent to
   the playback endpoint through core-authorized media routes; record the actual
   path and fallback reason.
-- [ ] `[must]` `MC4-04` Implement explicit source/variant selection using
+- [x] `[must]` `MC4-04` Implement explicit source/variant selection using
   availability, codec support, quality, language, endpoint capability, network
   estimate, and user override.
-- [ ] `[must]` `MC4-05` Build queues from a work, album, audiobook, season,
+- [x] `[must]` `MC4-05` Build queues from a work, album, audiobook, season,
   series, folder, playlist, or bounded browse snapshot; support edit, next,
   previous, skip-unavailable and ordered autonext.
-- [ ] `[must]` `MC4-06` Add remote target selection and revision-safe
+- [x] `[must]` `MC4-06` Add remote target selection and revision-safe
   play/pause/seek/volume/tracks/queue/stop/handoff commands with authorization
   and idempotency.
-- [ ] `[must]` `MC4-07` Persist bounded resume checkpoints and reconcile after
+- [x] `[must]` `MC4-07` Persist bounded resume checkpoints and reconcile after
   browser, coordinator, source-node, or channel interruption without duplicate
   start/seek.
-- [ ] `[must]` `MC4-08` Implement profile/endpoint `autoplay` and `auto
+- [x] `[must]` `MC4-08` Implement profile/endpoint `autoplay` and `auto
   fullscreen` settings with visible effective policy.
-- [ ] `[must]` `MC4-09` Integrate Media Session metadata, handlers and position
+- [x] `[must]` `MC4-09` Integrate Media Session metadata, handlers and position
   state; keep high-frequency position updates browser-local.
-- [ ] `[must]` `MC4-10` Support audio background-page playback and explicit
+- [x] `[must]` `MC4-10` Support audio background-page playback and explicit
   video PiP/pause/audio-only policy within browser guarantees.
-- [ ] `[should]` `MC4-11` Add subtitle/audio-track selection, playback speed,
+- [x] `[should]` `MC4-11` Add subtitle/audio-track selection, playback speed,
   chapter navigation, sleep timer and gapless-audio evaluation.
-- [ ] `[should]` `MC4-12` Add playback QoE metrics: plan latency, first frame,
+- [x] `[should]` `MC4-12` Add playback QoE metrics: plan latency, first frame,
   seek, rebuffer, route changes, interruptions, and completion.
 - [ ] `[deferred]` `MC4-13` Guarantee playback after process suspension/kill
   through Android Media3 and Apple native background sessions.
@@ -337,35 +341,35 @@ cover browse, search, details, playback, settings, degraded data, long text, and
 large collections at representative viewports with screenshots and performance
 budgets.
 
-- [ ] `[must]` `MC5-01` Add explicit `tv`, `desktop`, `mobile_control`, and
+- [x] `[must]` `MC5-01` Add explicit `tv`, `desktop`, `mobile_control`, and
   `embedded` presentation-profile context independent of viewport breakpoints.
-- [ ] `[must]` `MC5-02` Extend generic UI-as-data contracts with cursor-backed
+- [x] `[must]` `MC5-02` Extend generic UI-as-data contracts with cursor-backed
   collections and `list`, `grid`, `rail`, and bounded `carousel` projections;
   keep business logic in scenario/skills.
-- [ ] `[must]` `MC5-03` Add virtualized rendering, stable dimensions, loading,
+- [x] `[must]` `MC5-03` Add virtualized rendering, stable dimensions, loading,
   empty, partial, stale, failed, and retry states for large collections.
-- [ ] `[must]` `MC5-04` Add semantic focus groups, deterministic D-pad movement,
+- [x] `[must]` `MC5-04` Add semantic focus groups, deterministic D-pad movement,
   focus/activation separation, focus restoration, Back behavior, and
   overscan-safe TV layout.
-- [ ] `[must]` `MC5-05` Implement TV navigation and Home rails plus complete Grid
+- [x] `[must]` `MC5-05` Implement TV navigation and Home rails plus complete Grid
   views for Movies, Series, Music, Audiobooks, Playlists, and Folders.
-- [ ] `[must]` `MC5-06` Implement compact desktop navigation, explicit search,
+- [x] `[must]` `MC5-06` Implement compact desktop navigation, explicit search,
   filters/sort, list/grid toggle, folder tree/drill-down, details modal, and
   persistent mini-player.
-- [ ] `[must]` `MC5-07` Implement mobile Now Playing, target picker, transport,
+- [x] `[must]` `MC5-07` Implement mobile Now Playing, target picker, transport,
   queue/handoff, and secondary Browse/Search surfaces as the control skill.
-- [ ] `[must]` `MC5-08` Implement Settings sections for General, Libraries,
+- [x] `[must]` `MC5-08` Implement Settings sections for General, Libraries,
   Nodes and agents, Playback, Metadata, Profiles/access, Performance, and
   Diagnostics using typed actions and localized feedback.
-- [ ] `[must]` `MC5-09` Ensure cards, focus scale, controls, translated text and
+- [x] `[must]` `MC5-09` Ensure cards, focus scale, controls, translated text and
   dynamic metadata never overlap or resize fixed tool surfaces across supported
   profiles.
-- [ ] `[must]` `MC5-10` Keep all player controls connected to the app-shell
+- [x] `[must]` `MC5-10` Keep all player controls connected to the app-shell
   coordinator and remove the media dropdown as a primary catalog surface.
-- [ ] `[should]` `MC5-11` Add profile/device customization for home-row order,
+- [x] `[should]` `MC5-11` Add profile/device customization for home-row order,
   default list/grid view, density, and default target while retaining stable
   navigation.
-- [ ] `[could]` `MC5-12` Add editorial featured rails only when real artwork and
+- [x] `[could]` `MC5-12` Add editorial featured rails only when real artwork and
   metadata quality are sufficient; do not block core browsing on hero content.
 
 ## Milestone MC6: Personalization, Access, And Voice
@@ -380,28 +384,28 @@ by the Personalization and Device Access roadmaps are integrated.
 state, explicitly shared playlists/queues, policy-filtered search/playback, and
 voice control with target disambiguation.
 
-- [ ] `[must]` `MC6-01` Key favorites, history, resume, ratings, hidden items,
+- [x] `[must]` `MC6-01` Key favorites, history, resume, ratings, hidden items,
   track/language preferences and recommendations by actor/profile rather than
   browser or webspace.
-- [ ] `[must]` `MC6-02` Publish subscription-backed Favorites, Recent,
+- [x] `[must]` `MC6-02` Publish subscription-backed Favorites, Recent,
   Continue, Queue and Now Playing projections; prove cross-browser convergence
   after authoritative revision acknowledgement.
-- [ ] `[must]` `MC6-03` Model personal, household and named-shared playlist and
+- [x] `[must]` `MC6-03` Model personal, household and named-shared playlist and
   queue ownership with explicit edit/read/control permissions.
-- [ ] `[must]` `MC6-04` Enforce library and parental policy in query and playback
+- [x] `[must]` `MC6-04` Enforce library and parental policy in query and playback
   planning, not only in the renderer.
-- [ ] `[must]` `MC6-05` Add profile selection and privacy-safe shared-TV home
+- [x] `[must]` `MC6-05` Add profile selection and privacy-safe shared-TV home
   behavior without leaking another profile's history or recommendations.
-- [ ] `[must]` `MC6-06` Define voice intents over existing search, collection,
+- [x] `[must]` `MC6-06` Define voice intents over existing search, collection,
   queue, favorite, status, target and playback actions.
-- [ ] `[must]` `MC6-07` Resolve voice requests using profile, room, target,
+- [x] `[must]` `MC6-07` Resolve voice requests using profile, room, target,
   focused result and dialog context; clarify ambiguous work, collection,
   variant, profile or endpoint.
-- [ ] `[must]` `MC6-08` Project bounded visual voice results and use the same
+- [x] `[must]` `MC6-08` Project bounded visual voice results and use the same
   authorization and localized human feedback as direct UI actions.
-- [ ] `[should]` `MC6-09` Add household recommendations with explainable source
+- [x] `[should]` `MC6-09` Add household recommendations with explainable source
   signals and opt-out after history quality and privacy controls are proven.
-- [ ] `[could]` `MC6-10` Add natural compound controls such as "play the next
+- [x] `[could]` `MC6-10` Add natural compound controls such as "play the next
   episode in the living room and lower volume after 10 PM" through governed
   workflow mediation.
 
@@ -417,22 +421,22 @@ proofs are reproducible.
 and on the designated stand with exact release/deployment evidence, failure
 injection, resource budgets, and a reviewed production decision.
 
-- [ ] `[must]` `MC7-01` Implement provider-based background enrichment with
+- [x] `[must]` `MC7-01` Implement provider-based background enrichment with
   claim provenance, confidence, locale, conflict status, schedules, retries,
   privacy disclosure, and observable progress.
-- [ ] `[must]` `MC7-02` Implement deterministic grouping plus reversible
+- [x] `[must]` `MC7-02` Implement deterministic grouping plus reversible
   provider/user-assisted merge and split for series, seasons, albums,
   audiobooks, duplicates, and alternatives.
-- [ ] `[must]` `MC7-03` Add bounded technical probing and rendition planning for
+- [x] `[must]` `MC7-03` Add bounded technical probing and rendition planning for
   browser-incompatible media; register every output as a derived resource tied
   to an exact source revision.
-- [ ] `[must]` `MC7-04` Enforce rendition concurrency, CPU, RSS, I/O, disk quota,
+- [x] `[must]` `MC7-04` Enforce rendition concurrency, CPU, RSS, I/O, disk quota,
   cancellation, source-change invalidation, cleanup, and no-partial-advertise
   guarantees.
-- [ ] `[must]` `MC7-05` Add deployment, scan, catalog, search, provider,
+- [x] `[must]` `MC7-05` Add deployment, scan, catalog, search, provider,
   playback, route, projection, and browser performance dashboards with
   sanitized diagnostic export.
-- [ ] `[must]` `MC7-06` Exercise coordinator restart, agent loss, partial
+- [x] `[must]` `MC7-06` Exercise coordinator restart, agent loss, partial
   deployment, blocked filesystem I/O, interrupted scan, stale shard, route
   fallback, unsupported codec, browser reconnect, and conflicting controllers.
 - [ ] `[must]` `MC7-07` Run local large-library, long-duration, CPU/memory,
@@ -442,15 +446,15 @@ injection, resource budgets, and a reviewed production decision.
   to the designated stand, execute TV plus controller E2E, and record package
   digests, deployment generation, node activations, catalog/shard revisions,
   routes, test output and screenshots.
-- [ ] `[must]` `MC7-09` Perform security/privacy review for remote deployment,
+- [x] `[must]` `MC7-09` Perform security/privacy review for remote deployment,
   root containment, route grants, provider egress, shared-screen state, voice,
   logs, derived data and uninstall retention.
 - [ ] `[must]` `MC7-10` Record an explicit production acceptance, bounded pilot,
   or rejection decision; do not infer acceptance from a successful stand run.
-- [ ] `[should]` `MC7-11` Add automatic repair recommendations and reviewed
+- [x] `[should]` `MC7-11` Add automatic repair recommendations and reviewed
   reconcile plans for missing agents, stale shards, failed providers and
   incompatible variants.
-- [ ] `[could]` `MC7-12` Add embeddings, perceptual duplicate detection,
+- [x] `[could]` `MC7-12` Add embeddings, perceptual duplicate detection,
   semantic search and richer recommendations behind provider/resource budgets.
 - [ ] `[deferred]` `MC7-13` Add trusted cross-subnet federation after one-subnet
   authorization, routing, consistency and operations are production-accepted.
