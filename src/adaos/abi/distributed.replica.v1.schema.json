@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "distributed.replica.v1.schema.json",
+  "title": "AdaOS Distributed Replica v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "replica_id", "partition_id", "instance_id", "node_id", "role", "lifecycle", "content_state", "authority_epoch", "checkpoint", "source_ref", "freshness_seconds", "item_count", "byte_count", "observed_at", "revision"],
+  "properties": {
+    "schema": { "const": "adaos.distributed.replica.v1" }, "replica_id": { "$ref": "#/$defs/token" }, "partition_id": { "$ref": "#/$defs/token" }, "instance_id": { "$ref": "#/$defs/token" }, "node_id": { "$ref": "#/$defs/token" },
+    "role": { "enum": ["authority", "follower", "derived", "cache"] }, "lifecycle": { "enum": ["preparing", "catching_up", "ready", "draining", "stale", "unavailable", "failed", "removed"] }, "content_state": { "enum": ["unknown", "empty", "non_empty", "unavailable"] },
+    "authority_epoch": { "type": "integer", "minimum": 0 }, "checkpoint": { "$ref": "#/$defs/nullableToken" }, "source_ref": { "$ref": "#/$defs/nullableToken" }, "freshness_seconds": { "type": ["number", "null"], "minimum": 0 }, "item_count": { "type": ["integer", "null"], "minimum": 0 }, "byte_count": { "type": ["integer", "null"], "minimum": 0 }, "observed_at": { "type": "string", "format": "date-time" }, "revision": { "type": "integer", "minimum": 1 }
+  },
+  "$defs": { "token": { "type": "string", "minLength": 1, "maxLength": 500 }, "nullableToken": { "type": ["string", "null"], "minLength": 1, "maxLength": 500 } }
+}

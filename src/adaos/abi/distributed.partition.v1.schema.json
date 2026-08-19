@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "distributed.partition.v1.schema.json",
+  "title": "AdaOS Distributed Partition v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "partition_id", "dataset_id", "selector", "desired_replicas", "topology_generation", "authority_lease_id", "authority_epoch", "checkpoint", "status", "revision"],
+  "properties": {
+    "schema": { "const": "adaos.distributed.partition.v1" }, "partition_id": { "$ref": "#/$defs/token" }, "dataset_id": { "$ref": "#/$defs/token" }, "selector": { "type": "object" },
+    "desired_replicas": { "type": "integer", "minimum": 1 }, "topology_generation": { "type": "integer", "minimum": 1 }, "authority_lease_id": { "$ref": "#/$defs/nullableToken" }, "authority_epoch": { "type": "integer", "minimum": 0 }, "checkpoint": { "$ref": "#/$defs/nullableToken" },
+    "status": { "enum": ["pending", "ready", "degraded", "unavailable", "moving", "removed"] }, "revision": { "type": "integer", "minimum": 1 }
+  },
+  "$defs": { "token": { "type": "string", "minLength": 1, "maxLength": 500 }, "nullableToken": { "type": ["string", "null"], "minLength": 1, "maxLength": 500 } }
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "distributed.dataset.v1.schema.json",
+  "title": "AdaOS Distributed Dataset v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "dataset_id", "owner_ref", "contract", "consistency_profile", "partition_scheme", "retention", "data_class", "desired_revision", "observed_revision", "status", "metadata"],
+  "properties": {
+    "schema": { "const": "adaos.distributed.dataset.v1" }, "dataset_id": { "$ref": "#/$defs/token" }, "owner_ref": { "$ref": "#/$defs/token" }, "contract": { "$ref": "#/$defs/token" },
+    "consistency_profile": { "enum": ["single_authority", "multi_writer_crdt", "derived_projection", "read_through_cache", "external_authority", "domain_managed"] },
+    "partition_scheme": { "type": "object", "required": ["kind"] }, "retention": { "type": "object" }, "data_class": { "enum": ["external", "derived", "authoritative", "cache"] },
+    "desired_revision": { "type": "integer", "minimum": 1 }, "observed_revision": { "type": "integer", "minimum": 0 }, "status": { "enum": ["pending", "ready", "degraded", "unavailable", "reconciling", "removed"] }, "metadata": { "type": "object" }
+  },
+  "$defs": { "token": { "type": "string", "minLength": 1, "maxLength": 500 } }
+}

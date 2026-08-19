@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "distributed.topology-lease.v1.schema.json",
+  "title": "AdaOS Distributed Topology Lease v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "lease_id", "scope_ref", "owner_instance_id", "kind", "epoch", "topology_generation", "operation_ref", "issued_at", "renew_by", "valid_until", "status", "previous_lease_id"],
+  "properties": {
+    "schema": { "const": "adaos.distributed.topology_lease.v1" },
+    "lease_id": { "$ref": "#/$defs/token" }, "scope_ref": { "type": "string", "pattern": "^(service_group|partition):" }, "owner_instance_id": { "$ref": "#/$defs/token" },
+    "kind": { "enum": ["membership", "authority"] }, "epoch": { "type": "integer", "minimum": 0 }, "topology_generation": { "type": "integer", "minimum": 1 },
+    "operation_ref": { "$ref": "#/$defs/nullableToken" }, "issued_at": { "type": "string", "format": "date-time" }, "renew_by": { "type": "string", "format": "date-time" }, "valid_until": { "type": "string", "format": "date-time" },
+    "status": { "enum": ["active", "expired", "revoked", "released"] }, "previous_lease_id": { "$ref": "#/$defs/nullableToken" }
+  },
+  "$defs": { "token": { "type": "string", "minLength": 1, "maxLength": 500 }, "nullableToken": { "type": ["string", "null"], "minLength": 1, "maxLength": 500 } }
+}

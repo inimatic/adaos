@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "distributed.service-group.v1.schema.json",
+  "title": "AdaOS Distributed Service Group v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "group_id", "definition_id", "definition_version", "desired_generation", "desired_instances", "authority_policy", "placement", "linked_datasets", "route_policy", "desired_revision", "observed_revision", "status"],
+  "properties": {
+    "schema": { "const": "adaos.distributed.service_group.v1" },
+    "group_id": { "$ref": "#/$defs/token" },
+    "definition_id": { "$ref": "#/$defs/token" },
+    "definition_version": { "$ref": "#/$defs/token" },
+    "desired_generation": { "type": "integer", "minimum": 1 },
+    "desired_instances": { "type": "integer", "minimum": 1 },
+    "authority_policy": { "enum": ["none", "singleton_fenced"] },
+    "placement": { "type": "object" },
+    "linked_datasets": { "$ref": "#/$defs/stringSet" },
+    "route_policy": { "type": "object" },
+    "desired_revision": { "type": "integer", "minimum": 1 },
+    "observed_revision": { "type": "integer", "minimum": 0 },
+    "status": { "enum": ["pending", "ready", "degraded", "unavailable", "reconciling", "removed"] }
+  },
+  "$defs": {
+    "token": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "stringSet": { "type": "array", "maxItems": 200, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 300 } }
+  }
+}
