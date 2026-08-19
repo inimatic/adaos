@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "distributed.topology-plan.v1.schema.json",
+  "title": "AdaOS Distributed Topology Plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "plan_id", "kind", "target_ref", "expected_desired_revision", "expected_observed_revision", "authority_epoch", "steps", "required_approvals", "warnings", "status", "created_at", "plan_digest"],
+  "properties": {
+    "schema": { "const": "adaos.distributed.topology_plan.v1" }, "plan_id": { "$ref": "#/$defs/token" }, "kind": { "enum": ["reconcile", "replicate", "handoff", "drain", "remove", "repair"] }, "target_ref": { "$ref": "#/$defs/token" }, "expected_desired_revision": { "type": "integer", "minimum": 0 }, "expected_observed_revision": { "type": "integer", "minimum": 0 }, "authority_epoch": { "type": "integer", "minimum": 0 }, "steps": { "type": "array", "minItems": 1, "maxItems": 200, "items": { "$ref": "#/$defs/step" } }, "required_approvals": { "$ref": "#/$defs/stringSet" }, "warnings": { "$ref": "#/$defs/stringSet" }, "status": { "enum": ["ready", "blocked", "applied", "superseded", "failed"] }, "created_at": { "type": "string", "format": "date-time" }, "plan_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  },
+  "$defs": {
+    "token": { "type": "string", "minLength": 1, "maxLength": 500 }, "nullableToken": { "type": ["string", "null"], "minLength": 1, "maxLength": 500 }, "stringSet": { "type": "array", "maxItems": 200, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 1000 } },
+    "step": { "type": "object", "additionalProperties": false, "required": ["step_id", "action", "partition_id", "source_instance_id", "target_instance_id", "replica_role", "phases", "expected_bytes", "temporary_bytes", "availability_impact", "retention", "adapter_options"], "properties": { "step_id": { "$ref": "#/$defs/token" }, "action": { "enum": ["create", "move", "rebuild", "handoff", "drain", "remove", "repair"] }, "partition_id": { "$ref": "#/$defs/token" }, "source_instance_id": { "$ref": "#/$defs/nullableToken" }, "target_instance_id": { "$ref": "#/$defs/nullableToken" }, "replica_role": { "enum": ["authority", "follower", "derived", "cache"] }, "phases": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["inspect", "reserve", "prepare", "snapshot", "stream_deltas", "catch_up", "verify", "activate_read", "promote", "demote", "drain", "remove", "route", "release"] } }, "expected_bytes": { "type": ["integer", "null"], "minimum": 0 }, "temporary_bytes": { "type": "integer", "minimum": 0 }, "availability_impact": { "enum": ["none", "reduced_capacity", "read_only", "temporary_unavailable"] }, "retention": { "enum": ["retain", "delete", "rebuild"] }, "adapter_options": { "type": "object" } } }
+  }
+}

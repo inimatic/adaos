@@ -1318,7 +1318,7 @@ class TopologyPhaseResult:
 
     def __post_init__(self) -> None:
         object.__setattr__(
-            self, "phase", _token(self.phase, "phase", max_length=40).lower()
+            self, "phase", _token(self.phase, "phase", max_length=300).lower()
         )
         state = _token(self.state, "state", max_length=30).lower()
         if state not in {

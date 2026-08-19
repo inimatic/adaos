@@ -176,6 +176,11 @@ from .distributed_runtime import (
     TransferRecord,
     distributed_contract_digest,
 )
+from .distributed_operations import (
+    TOPOLOGY_PHASES,
+    TopologyPlan,
+    TopologyPlanStep,
+)
 
 __all__ = [
     "ClientSubscriptionRecord",
@@ -339,6 +344,9 @@ __all__ = [
     "TopologyPhaseResult",
     "TransferRecord",
     "distributed_contract_digest",
+    "TOPOLOGY_PHASES",
+    "TopologyPlan",
+    "TopologyPlanStep",
     "validate_owner_ref",
     "protocol_compatible",
 ]
