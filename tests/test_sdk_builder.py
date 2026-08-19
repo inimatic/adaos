@@ -54,6 +54,12 @@ def test_automation_facade_recovers_validated_result_without_resubmission(monkey
     ]
 
 
+def test_automation_facade_exposes_standard_prompt_contract() -> None:
+    from adaos.services.builder.automation import STANDARD_PROMPT_VERSION
+
+    assert automation.standard_prompt_version() == STANDARD_PROMPT_VERSION
+
+
 def test_automation_facade_returns_projection_without_exposing_service(monkeypatch) -> None:
     service = _AutomationService()
     monkeypatch.setattr(automation, "_service", lambda: service)

@@ -14,6 +14,14 @@ def _service():
     return BuilderAutomationService.from_context(background=execution_mode != "oneshot")
 
 
+def standard_prompt_version() -> str:
+    """Return the exact standard realization prompt contract in this core build."""
+
+    from adaos.services.builder.automation import STANDARD_PROMPT_VERSION
+
+    return str(STANDARD_PROMPT_VERSION)
+
+
 def _foreground_result(
     service: Any,
     result: Mapping[str, Any],
@@ -213,5 +221,6 @@ __all__ = [
     "recover_validated_result",
     "return_to_prototype",
     "start",
+    "standard_prompt_version",
     "submit",
 ]
