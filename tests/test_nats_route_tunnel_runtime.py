@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import threading
@@ -11,10 +12,64 @@ import pytest
 
 from adaos.services.bootstrap_runtime import HubRouteProxyPolicy
 from adaos.services.bootstrap_runtime.route_tunnel_runtime import (
+    _IsolatedMediaFileReader,
     NatsRouteTunnelRuntime,
     _MediaRelayFlowWindow,
     _run_blocking_io_cancellation_safe,
 )
+
+
+@pytest.mark.asyncio
+async def test_isolated_media_reader_reads_and_seeks(tmp_path) -> None:
+    target = tmp_path / "reader.bin"
+    target.write_bytes(b"0123456789")
+    reader = await _IsolatedMediaFileReader.open(target, 5.0, 5.0)
+    try:
+        assert reader.size == 10
+        assert await reader.read(4) == b"0123"
+        assert reader.seek(7) == 7
+        assert await reader.read(8) == b"789"
+    finally:
+        await reader.close()
+
+
+@pytest.mark.asyncio
+async def test_isolated_media_reader_times_out_and_terminates_stalled_child(tmp_path) -> None:
+    target = tmp_path / "reader.bin"
+    target.write_bytes(b"content")
+    worker = tmp_path / "stall_reader.py"
+    worker.write_text(
+        """
+import os
+import struct
+import sys
+import time
+
+def read_exact(size):
+    data = b''
+    while len(data) < size:
+        chunk = sys.stdin.buffer.read(size - len(data))
+        if not chunk:
+            raise EOFError
+        data += chunk
+    return data
+
+path_size = struct.unpack('!I', read_exact(4))[0]
+read_exact(path_size)
+sys.stdout.buffer.write(struct.pack('!BQ', 0, 7))
+sys.stdout.buffer.flush()
+read_exact(12)
+time.sleep(30)
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    reader = await _IsolatedMediaFileReader.open(target, 5.0, 0.5, worker_path=worker)
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(TimeoutError):
+        await reader.read(4)
+    assert asyncio.get_running_loop().time() - started < 2.0
+    await reader.close()
 
 
 @pytest.mark.asyncio
@@ -174,10 +229,23 @@ async def test_route_media_file_waits_for_root_credit_without_blocking_dispatch(
         )
         await _wait_for_chunks(2)
         await asyncio.sleep(0.02)
-        assert sum(1 for item in published if item.get("t") == "media_http_chunk") == 2
+        chunks = [item for item in published if item.get("t") == "media_http_chunk"]
+        assert len(chunks) == 2
+        assert len(base64.b64decode(chunks[0]["data_b64"])) == 64 * 1024
+        assert len(base64.b64decode(chunks[1]["data_b64"])) == 64 * 1024
 
         await _send({"t": "media_http_ack", "idx": 0})
         await _wait_for_chunks(3)
+
+        from adaos.services.reliability import hub_root_protocol_snapshot
+
+        route_runtime = hub_root_protocol_snapshot()["route_runtime"]
+        io_totals = route_runtime["media_io_total_by_operation"]
+        assert io_totals["stat"] >= 1
+        assert io_totals["open"] >= 1
+        assert io_totals["read"] >= 3
+        assert route_runtime["media_io_max_ms_by_operation"]["read"] >= 0
+        assert route_runtime["media_io_oldest_active_operation"] == ""
         await _send({"t": "media_http_abort", "reason": "test_complete"})
     finally:
         await runtime.close()

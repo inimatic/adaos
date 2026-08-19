@@ -1072,6 +1072,49 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
                 f"bases={route_runtime.get('last_open_base_total') or 0} "
                 f"last_http={route_runtime.get('last_http_method') or '-'}:{route_runtime.get('last_http_path') or '-'}"
             )
+        if route_runtime.get("media_io_workers") is not None:
+            active_by_operation = route_runtime.get("media_io_active_by_operation")
+            active_by_operation = active_by_operation if isinstance(active_by_operation, dict) else {}
+            slow_by_operation = route_runtime.get("media_io_slow_by_operation")
+            slow_by_operation = slow_by_operation if isinstance(slow_by_operation, dict) else {}
+            max_ms_by_operation = route_runtime.get("media_io_max_ms_by_operation")
+            max_ms_by_operation = max_ms_by_operation if isinstance(max_ms_by_operation, dict) else {}
+
+            def _format_media_map(value: dict[str, Any]) -> str:
+                return ",".join(
+                    f"{key}={value[key]}" for key in sorted(value) if value.get(key) not in (None, 0, 0.0, "")
+                ) or "-"
+
+            typer.echo(
+                "protocol.media_relay: "
+                f"tasks={route_runtime.get('media_file_tasks') or 0}/{route_runtime.get('media_file_task_limit') or 0} "
+                f"workers={route_runtime.get('media_io_active') or 0}/{route_runtime.get('media_io_workers') or 0} "
+                f"active={_format_media_map(active_by_operation)} "
+                f"oldest={route_runtime.get('media_io_oldest_active_operation') or '-'}:"
+                f"{route_runtime.get('media_io_oldest_active_age_s') or 0}s "
+                f"flow={route_runtime.get('media_flow_sessions') or 0}/"
+                f"{route_runtime.get('media_flow_in_flight') or 0}:"
+                f"{route_runtime.get('last_media_flow_protocol') or '-'} "
+                f"read={route_runtime.get('last_media_read_result_bytes') or 0}/"
+                f"{route_runtime.get('last_media_read_request_bytes') or 0}B "
+                f"initial={route_runtime.get('media_initial_chunk_bytes') or 0}B*"
+                f"{route_runtime.get('media_initial_chunks') or 0} "
+                f"reader={'process' if route_runtime.get('media_reader_process_enabled') else 'thread'}:"
+                f"{route_runtime.get('media_reader_processes') or 0}:"
+                f"{route_runtime.get('media_reader_timeout_total') or 0}/"
+                f"{route_runtime.get('media_reader_retry_total') or 0} "
+                f"chunks={route_runtime.get('media_chunks_acked_total') or 0}/"
+                f"{route_runtime.get('media_chunks_sent_total') or 0} "
+                f"slow={route_runtime.get('media_io_slow_total') or 0}[{_format_media_map(slow_by_operation)}] "
+                f"max_ms={_format_media_map(max_ms_by_operation)} "
+                f"aborts={route_runtime.get('media_abort_total') or 0} "
+                f"busy={route_runtime.get('media_busy_reject_total') or 0} "
+                f"last={route_runtime.get('last_media_io_operation') or '-'}:"
+                f"{route_runtime.get('last_media_io_ms') if route_runtime.get('last_media_io_ms') is not None else '-'}ms:"
+                f"{route_runtime.get('last_media_source_kind') or '-'}:"
+                f"{route_runtime.get('last_media_path_digest') or '-'}:"
+                f"{route_runtime.get('last_media_key_tag') or '-'}"
+            )
     phase0_comm = (
         runtime.get("event_model_phase0_communication")
         if isinstance(runtime.get("event_model_phase0_communication"), dict)

@@ -61,6 +61,59 @@ Media Center folder imports must use `register_media_file(...)`. This keeps
 large and slow libraries in their original location while preserving the same
 `adaos.media.resource.v1` playback contract for clients and other skills.
 
+Network-file streaming must also preserve the runtime failure boundary. A
+bounded thread executor is sufficient for ordinary local and Linux file I/O,
+but it cannot cancel a Windows thread blocked in synchronous UNC/SMB I/O. The
+Windows UNC relay therefore reads through a short-lived child process with a
+binary pipe protocol, explicit open/read deadlines, one bounded first-read
+retry, and termination on browser abort. Source paths travel over the private
+stdin pipe and diagnostics retain only source kind and path digest. Reader PID,
+active count, starts, timeouts, retries, per-operation latency, chunks, ACKs and
+aborts remain observable from runtime reliability status.
+
+## Playback State And Ownership
+
+Playback state has three owners with different persistence and lifecycle
+rules:
+
+- Browser audio output volume, mute state, and selected output device belong to
+  the browser media scope. Every audio and video element reads and updates the
+  same preference; selecting another item must not reset volume.
+- Video resume position belongs to `(browser scope, node, media resource)`.
+  The browser checkpoints locally at a bounded interval and on pause/source
+  detach, restores only an unfinished item, and clears a completed or explicitly
+  stopped item. A normal `timeupdate` event must not write Yjs, skill memory, or
+  a remote API. Account-level continue-watching can later synchronize the
+  compact latest checkpoint on pause, item switch, and session end.
+- The active player, queue, output lease, and system-media integration belong to
+  a browser-runtime playback coordinator, not to a modal widget. Closing a
+  detail modal detaches that view; it does not imply `stop`. An explicit Stop or
+  Dismiss playback command releases the source and output lease.
+
+The browser implementation should host one persistent media element in the
+application shell and expose modal, compact now-playing, and optional
+Picture-in-Picture presentations as controllers of that player. It should
+publish metadata, playback state, action handlers, and position through the
+[W3C Media Session API](https://www.w3.org/TR/mediasession/). A browser tab can
+provide background-page playback but cannot guarantee playback after the OS
+kills the browser process. Native Android packaging must put the player and
+session in a
+[Media3 `MediaSessionService`](https://developer.android.com/media/media3/session/background-playback),
+and native Apple packaging must use the playback audio-session category plus
+the audio background mode described by
+[Apple's `AVAudioSession` documentation](https://developer.apple.com/documentation/avfaudio/avaudiosession).
+
+Background behavior must be explicit and inspectable:
+
+- audio continues when the detail modal closes and remains controllable from a
+  persistent now-playing surface and platform media controls
+- video continues visibly only in Picture-in-Picture or another attached
+  surface; otherwise product policy chooses pause or audio-only continuation
+- interruption, output-route change, audio-focus loss, and competing playback
+  update the one coordinator instead of creating parallel media elements
+- current resource, queue position, checkpoint age, presentation mode, output
+  lease, and last interruption reason are available as bounded runtime status
+
 ## Deferred Product Capabilities
 
 The MVP deliberately defers production media-center features that need their own

@@ -7,6 +7,9 @@ import hashlib
 import json as _json
 import logging
 import os
+import struct
+import subprocess
+import sys
 import tempfile
 import time
 import traceback
@@ -114,6 +117,129 @@ def _media_path_digest(path: Path) -> str:
     return hashlib.sha256(str(path or "").encode("utf-8", errors="replace")).hexdigest()[:12]
 
 
+class _IsolatedMediaFileReader:
+    """Async subprocess reader whose stuck OS I/O cannot occupy a runtime thread."""
+
+    def __init__(self, process: asyncio.subprocess.Process, *, size: int, read_timeout_s: float) -> None:
+        self._process = process
+        self._offset = 0
+        self._read_timeout_s = max(0.5, float(read_timeout_s or 0.5))
+        self.size = max(0, int(size))
+
+    @classmethod
+    async def open(
+        cls,
+        path: Path,
+        open_timeout_s: float,
+        read_timeout_s: float,
+        *,
+        worker_path: Path | None = None,
+    ) -> "_IsolatedMediaFileReader":
+        creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            str(worker_path or Path(__file__).with_name("media_reader_worker.py")),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            creationflags=creationflags,
+        )
+        try:
+            raw_path = os.fsencode(str(path))
+            if not raw_path or len(raw_path) > 64 * 1024:
+                raise ValueError("invalid media reader path")
+            if process.stdin is None or process.stdout is None:
+                raise RuntimeError("isolated media reader pipes are unavailable")
+            process.stdin.write(struct.pack("!I", len(raw_path)) + raw_path)
+            await process.stdin.drain()
+            response = await asyncio.wait_for(
+                process.stdout.readexactly(9),
+                timeout=max(0.5, float(open_timeout_s or 0.5)),
+            )
+            status, size = struct.unpack("!BQ", response)
+            if status != 0:
+                raise OSError("isolated media reader could not open source")
+            return cls(process, size=int(size), read_timeout_s=read_timeout_s)
+        except asyncio.TimeoutError as exc:
+            await cls._terminate(process)
+            raise TimeoutError("isolated media reader open timed out") from exc
+        except BaseException:
+            await cls._terminate(process)
+            raise
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        if whence == 0:
+            next_offset = int(offset)
+        elif whence == 1:
+            next_offset = self._offset + int(offset)
+        elif whence == 2:
+            next_offset = int(self.size) + int(offset)
+        else:
+            raise ValueError("invalid whence")
+        if next_offset < 0:
+            raise ValueError("negative seek position")
+        self._offset = next_offset
+        return self._offset
+
+    async def read(self, size: int = -1) -> bytes:
+        requested = int(size)
+        if requested < 0:
+            requested = max(0, int(self.size) - self._offset)
+        requested = min(requested, 4 * 1024 * 1024)
+        if requested <= 0:
+            return b""
+        process = self._process
+        if process.stdin is None or process.stdout is None or process.returncode is not None:
+            raise BrokenPipeError("isolated media reader is not running")
+        try:
+            process.stdin.write(struct.pack("!QI", self._offset, requested))
+            await process.stdin.drain()
+            async with asyncio.timeout(self._read_timeout_s):
+                status, payload_size = struct.unpack("!BI", await process.stdout.readexactly(5))
+                payload = await process.stdout.readexactly(int(payload_size)) if payload_size else b""
+            if status != 0:
+                detail = payload.decode("utf-8", errors="replace")[:160]
+                raise OSError(detail or "isolated media reader failed")
+        except TimeoutError:
+            await self.abort()
+            raise
+        self._offset += len(payload)
+        return payload
+
+    async def close(self) -> None:
+        process = self._process
+        try:
+            if process.stdin:
+                process.stdin.close()
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(process.wait(), timeout=0.5)
+        except (asyncio.TimeoutError, TimeoutError):
+            await self._terminate(process)
+
+    async def abort(self) -> None:
+        await self._terminate(self._process)
+
+    @staticmethod
+    async def _terminate(process: asyncio.subprocess.Process) -> None:
+        if process.returncode is not None:
+            return
+        try:
+            process.kill()
+        except ProcessLookupError:
+            return
+        except Exception:
+            try:
+                process.terminate()
+            except Exception:
+                return
+        try:
+            await asyncio.wait_for(process.wait(), timeout=0.5)
+        except Exception:
+            return
+
+
 async def _run_blocking_io_cancellation_safe(
     executor: ThreadPoolExecutor,
     func: Callable[..., _T],
@@ -130,7 +256,7 @@ async def _run_blocking_io_cancellation_safe(
         # file handles from being closed concurrently while leaving the event loop free.
         try:
             await asyncio.shield(future)
-        except asyncio.CancelledError:
+        except BaseException:
             pass
         raise
 
@@ -277,6 +403,7 @@ class NatsRouteTunnelRuntime:
             media_relay_sessions: dict[str, dict[str, Any]] = {}
             media_relay_tasks: dict[str, asyncio.Task] = {}
             media_relay_flow_windows: dict[str, _MediaRelayFlowWindow] = {}
+            media_file_readers: dict[str, _IsolatedMediaFileReader] = {}
             http_body_relay_sessions: dict[str, dict[str, Any]] = {}
             pending_chunks: dict[str, dict[str, Any]] = {}
             outbound_chunk_cache: dict[str, dict[str, Any]] = {}
@@ -317,6 +444,42 @@ class NatsRouteTunnelRuntime:
                 )
             except Exception:
                 MEDIA_RELAY_SLOW_IO_WARN_S = 1.0
+            try:
+                MEDIA_RELAY_INITIAL_CHUNK_BYTES = max(
+                    16 * 1024,
+                    min(
+                        int(os.getenv("HUB_ROUTE_MEDIA_INITIAL_CHUNK_BYTES", str(64 * 1024)) or str(64 * 1024)),
+                        512 * 1024,
+                    ),
+                )
+            except Exception:
+                MEDIA_RELAY_INITIAL_CHUNK_BYTES = 64 * 1024
+            try:
+                MEDIA_RELAY_INITIAL_CHUNKS = max(
+                    1,
+                    min(int(os.getenv("HUB_ROUTE_MEDIA_INITIAL_CHUNKS", "4") or "4"), 16),
+                )
+            except Exception:
+                MEDIA_RELAY_INITIAL_CHUNKS = 4
+            MEDIA_RELAY_ISOLATED_UNC_READER = (
+                os.name == "nt"
+                and str(os.getenv("HUB_ROUTE_MEDIA_ISOLATED_UNC_READER", "1") or "1").strip().lower()
+                not in {"0", "false", "no", "off"}
+            )
+            try:
+                MEDIA_RELAY_READER_OPEN_TIMEOUT_S = max(
+                    1.0,
+                    min(float(os.getenv("HUB_ROUTE_MEDIA_READER_OPEN_TIMEOUT_S", "15") or "15"), 60.0),
+                )
+            except Exception:
+                MEDIA_RELAY_READER_OPEN_TIMEOUT_S = 15.0
+            try:
+                MEDIA_RELAY_READER_READ_TIMEOUT_S = max(
+                    1.0,
+                    min(float(os.getenv("HUB_ROUTE_MEDIA_READER_READ_TIMEOUT_S", "8") or "8"), 60.0),
+                )
+            except Exception:
+                MEDIA_RELAY_READER_READ_TIMEOUT_S = 8.0
 
             _route_verbose = os.getenv("HUB_ROUTE_VERBOSE", "0") == "1"
             _route_diag = _route_verbose or os.getenv("HUB_ROUTE_DIAG", "0") == "1"
@@ -585,6 +748,21 @@ class NatsRouteTunnelRuntime:
                 "media_io_workers": route_media_worker_count,
                 "media_io_active": 0,
                 "media_io_slow_total": 0,
+                "media_io_active_by_operation": {},
+                "media_io_total_by_operation": {},
+                "media_io_slow_by_operation": {},
+                "media_io_last_ms_by_operation": {},
+                "media_io_max_ms_by_operation": {},
+                "media_io_oldest_active_age_s": 0.0,
+                "media_io_oldest_active_operation": "",
+                "media_io_oldest_active_key_tag": "",
+                "media_initial_chunk_bytes": MEDIA_RELAY_INITIAL_CHUNK_BYTES,
+                "media_initial_chunks": MEDIA_RELAY_INITIAL_CHUNKS,
+                "media_reader_process_enabled": MEDIA_RELAY_ISOLATED_UNC_READER,
+                "media_reader_processes": 0,
+                "media_reader_start_total": 0,
+                "media_reader_timeout_total": 0,
+                "media_reader_retry_total": 0,
                 "media_flow_sessions": 0,
                 "media_flow_in_flight": 0,
                 "media_chunks_sent_total": 0,
@@ -596,7 +774,10 @@ class NatsRouteTunnelRuntime:
                 "last_media_source_kind": "",
                 "last_media_path_digest": "",
                 "last_media_key_tag": "",
+                "last_media_read_request_bytes": 0,
+                "last_media_read_result_bytes": 0,
             }
+            media_io_active_operations: dict[str, dict[str, Any]] = {}
 
             def _route_refresh_starvation_state() -> None:
                 try:
@@ -627,6 +808,28 @@ class NatsRouteTunnelRuntime:
                     _route_refresh_guardrail_state()
                 except Exception:
                     pass
+
+            def _route_refresh_media_io_state() -> None:
+                now = time.monotonic()
+                active_by_operation: dict[str, int] = {}
+                oldest_age_s = 0.0
+                oldest_operation = ""
+                oldest_key_tag = ""
+                for entry in media_io_active_operations.values():
+                    operation = str(entry.get("operation") or "unknown")
+                    active_by_operation[operation] = active_by_operation.get(operation, 0) + 1
+                    started = float(entry.get("started") or now)
+                    age_s = max(0.0, now - started)
+                    if age_s >= oldest_age_s:
+                        oldest_age_s = age_s
+                        oldest_operation = operation
+                        oldest_key_tag = str(entry.get("key_tag") or "")
+                route_diag_state["media_io_active"] = len(media_io_active_operations)
+                route_diag_state["media_io_active_by_operation"] = active_by_operation
+                route_diag_state["media_io_oldest_active_age_s"] = round(oldest_age_s, 3)
+                route_diag_state["media_io_oldest_active_operation"] = oldest_operation
+                route_diag_state["media_io_oldest_active_key_tag"] = oldest_key_tag
+                route_diag_state["media_reader_processes"] = len(media_file_readers)
 
             def _route_refresh_guardrail_state() -> None:
                 try:
@@ -722,6 +925,7 @@ class NatsRouteTunnelRuntime:
             def _update_route_protocol_runtime(**details: Any) -> None:
                 try:
                     _route_refresh_starvation_state()
+                    _route_refresh_media_io_state()
                     pending_events = 0
                     for items0 in pending_tunnel_events.values():
                         try:
@@ -1270,6 +1474,7 @@ class NatsRouteTunnelRuntime:
                                 *[str(k) for k in media_relay_sessions.keys()],
                                 *[str(k) for k in media_relay_tasks.keys()],
                                 *[str(k) for k in media_relay_flow_windows.keys()],
+                                *[str(k) for k in media_file_readers.keys()],
                                 *[str(k) for k in http_body_relay_sessions.keys()],
                                 *[
                                     str(st.get("key"))
@@ -1315,6 +1520,12 @@ class NatsRouteTunnelRuntime:
                         pass
                     try:
                         _drop_outbound_chunk_cache_for_key(key)
+                    except Exception:
+                        pass
+                    try:
+                        reader0 = media_file_readers.pop(key, None)
+                        if reader0:
+                            await reader0.abort()
                     except Exception:
                         pass
                     try:
@@ -1957,8 +2168,17 @@ class NatsRouteTunnelRuntime:
                 source_kind = _media_source_kind(target)
                 path_digest = _media_path_digest(target)
                 started = time.monotonic()
-                route_diag_state["media_io_active"] = int(route_diag_state.get("media_io_active") or 0) + 1
-                route_diag_state["last_media_io_operation"] = str(operation or "")
+                operation_name = str(operation or "unknown")
+                operation_token = f"{_key_tag(key)}:{operation_name}:{id(asyncio.current_task())}:{started}"
+                media_io_active_operations[operation_token] = {
+                    "operation": operation_name,
+                    "started": started,
+                    "key_tag": _key_tag(key),
+                }
+                total_by_operation = dict(route_diag_state.get("media_io_total_by_operation") or {})
+                total_by_operation[operation_name] = int(total_by_operation.get(operation_name) or 0) + 1
+                route_diag_state["media_io_total_by_operation"] = total_by_operation
+                route_diag_state["last_media_io_operation"] = operation_name
                 route_diag_state["last_media_source_kind"] = source_kind
                 route_diag_state["last_media_path_digest"] = path_digest
                 route_diag_state["last_media_key_tag"] = _key_tag(key)
@@ -1971,25 +2191,107 @@ class NatsRouteTunnelRuntime:
                     )
                 finally:
                     elapsed_s = max(0.0, time.monotonic() - started)
-                    route_diag_state["media_io_active"] = max(
-                        0,
-                        int(route_diag_state.get("media_io_active") or 0) - 1,
-                    )
+                    media_io_active_operations.pop(operation_token, None)
                     route_diag_state["last_media_io_ms"] = round(elapsed_s * 1000.0, 1)
+                    last_ms_by_operation = dict(route_diag_state.get("media_io_last_ms_by_operation") or {})
+                    max_ms_by_operation = dict(route_diag_state.get("media_io_max_ms_by_operation") or {})
+                    elapsed_ms = round(elapsed_s * 1000.0, 1)
+                    last_ms_by_operation[operation_name] = elapsed_ms
+                    max_ms_by_operation[operation_name] = max(
+                        float(max_ms_by_operation.get(operation_name) or 0.0),
+                        elapsed_ms,
+                    )
+                    route_diag_state["media_io_last_ms_by_operation"] = last_ms_by_operation
+                    route_diag_state["media_io_max_ms_by_operation"] = max_ms_by_operation
                     if elapsed_s >= MEDIA_RELAY_SLOW_IO_WARN_S:
                         route_diag_state["media_io_slow_total"] = int(
                             route_diag_state.get("media_io_slow_total") or 0
                         ) + 1
+                        slow_by_operation = dict(route_diag_state.get("media_io_slow_by_operation") or {})
+                        slow_by_operation[operation_name] = int(
+                            slow_by_operation.get(operation_name) or 0
+                        ) + 1
+                        route_diag_state["media_io_slow_by_operation"] = slow_by_operation
+                        message = (
+                            f"[hub-route] media I/O slow key={_key_tag(key)} "
+                            f"operation={operation_name} source={source_kind} path_digest={path_digest} "
+                            f"took_ms={elapsed_ms:.1f} "
+                            f"active={len(media_io_active_operations)}"
+                        )
                         _rl_log(
-                            f"hub-route.media_io_slow.{_key_tag(key)}.{operation}",
-                            (
-                                f"[hub-route] media I/O slow key={_key_tag(key)} "
-                                f"operation={operation} source={source_kind} path_digest={path_digest} "
-                                f"took_ms={elapsed_s * 1000.0:.1f} "
-                                f"active={route_diag_state.get('media_io_active')}"
-                            ),
+                            f"hub-route.media_io_slow.{_key_tag(key)}.{operation_name}",
+                            message,
                             every_s=5.0,
                         )
+                        try:
+                            service._log.warning(message)
+                        except Exception:
+                            pass
+                    _update_route_protocol_runtime()
+
+            async def _route_media_async_io(
+                key: str,
+                target: Path,
+                operation: str,
+                awaitable: Any,
+            ) -> Any:
+                source_kind = _media_source_kind(target)
+                path_digest = _media_path_digest(target)
+                started = time.monotonic()
+                operation_name = str(operation or "unknown")
+                operation_token = f"{_key_tag(key)}:{operation_name}:{id(asyncio.current_task())}:{started}"
+                media_io_active_operations[operation_token] = {
+                    "operation": operation_name,
+                    "started": started,
+                    "key_tag": _key_tag(key),
+                }
+                total_by_operation = dict(route_diag_state.get("media_io_total_by_operation") or {})
+                total_by_operation[operation_name] = int(total_by_operation.get(operation_name) or 0) + 1
+                route_diag_state["media_io_total_by_operation"] = total_by_operation
+                route_diag_state["last_media_io_operation"] = operation_name
+                route_diag_state["last_media_source_kind"] = source_kind
+                route_diag_state["last_media_path_digest"] = path_digest
+                route_diag_state["last_media_key_tag"] = _key_tag(key)
+                _update_route_protocol_runtime()
+                try:
+                    return await awaitable
+                finally:
+                    elapsed_s = max(0.0, time.monotonic() - started)
+                    elapsed_ms = round(elapsed_s * 1000.0, 1)
+                    media_io_active_operations.pop(operation_token, None)
+                    route_diag_state["last_media_io_ms"] = elapsed_ms
+                    last_ms_by_operation = dict(route_diag_state.get("media_io_last_ms_by_operation") or {})
+                    max_ms_by_operation = dict(route_diag_state.get("media_io_max_ms_by_operation") or {})
+                    last_ms_by_operation[operation_name] = elapsed_ms
+                    max_ms_by_operation[operation_name] = max(
+                        float(max_ms_by_operation.get(operation_name) or 0.0),
+                        elapsed_ms,
+                    )
+                    route_diag_state["media_io_last_ms_by_operation"] = last_ms_by_operation
+                    route_diag_state["media_io_max_ms_by_operation"] = max_ms_by_operation
+                    if elapsed_s >= MEDIA_RELAY_SLOW_IO_WARN_S:
+                        route_diag_state["media_io_slow_total"] = int(
+                            route_diag_state.get("media_io_slow_total") or 0
+                        ) + 1
+                        slow_by_operation = dict(route_diag_state.get("media_io_slow_by_operation") or {})
+                        slow_by_operation[operation_name] = int(
+                            slow_by_operation.get(operation_name) or 0
+                        ) + 1
+                        route_diag_state["media_io_slow_by_operation"] = slow_by_operation
+                        message = (
+                            f"[hub-route] media I/O slow key={_key_tag(key)} "
+                            f"operation={operation_name} source={source_kind} path_digest={path_digest} "
+                            f"took_ms={elapsed_ms:.1f} active={len(media_io_active_operations)}"
+                        )
+                        _rl_log(
+                            f"hub-route.media_io_slow.{_key_tag(key)}.{operation_name}",
+                            message,
+                            every_s=5.0,
+                        )
+                        try:
+                            service._log.warning(message)
+                        except Exception:
+                            pass
                     _update_route_protocol_runtime()
 
             async def _route_media_send_chunk(key: str, *, idx: int, blob: bytes) -> None:
@@ -2185,6 +2487,7 @@ class NatsRouteTunnelRuntime:
                 request_headers: dict[str, Any] | None,
                 display_name: str | None = None,
                 mime_type: str | None = None,
+                known_size_bytes: int | None = None,
                 download: bool = False,
                 on_failed: Any | None = None,
             ) -> int | None:
@@ -2195,8 +2498,11 @@ class NatsRouteTunnelRuntime:
                     parse_media_range,
                 )
 
-                stat = await _route_media_io(key, target, "stat", target.stat)
-                total_size = int(stat.st_size)
+                if known_size_bytes is None:
+                    stat = await _route_media_io(key, target, "stat", target.stat)
+                    total_size = int(stat.st_size)
+                else:
+                    total_size = max(0, int(known_size_bytes))
                 headers_in = request_headers if isinstance(request_headers, dict) else {}
                 range_header = str(headers_in.get("range") or headers_in.get("Range") or "").strip()
                 response_name = str(display_name or target.name)
@@ -2258,19 +2564,98 @@ class NatsRouteTunnelRuntime:
                     return 0
 
                 sent = 0
-                handle = await _route_media_io(key, target, "open", target.open, "rb")
+                use_isolated_reader = bool(
+                    MEDIA_RELAY_ISOLATED_UNC_READER and _media_source_kind(target) == "unc"
+                )
+                if use_isolated_reader:
+                    handle = await _route_media_async_io(
+                        key,
+                        target,
+                        "reader_open",
+                        _IsolatedMediaFileReader.open(
+                            target,
+                            MEDIA_RELAY_READER_OPEN_TIMEOUT_S,
+                            MEDIA_RELAY_READER_READ_TIMEOUT_S,
+                        ),
+                    )
+                    media_file_readers[key] = handle
+                    route_diag_state["media_reader_start_total"] = int(
+                        route_diag_state.get("media_reader_start_total") or 0
+                    ) + 1
+                else:
+                    # A BufferedReader may turn one requested read into additional
+                    # opaque buffering work. Keep reads one-to-one with OS reads.
+                    handle = await _route_media_io(key, target, "open", target.open, "rb", 0)
                 try:
-                    await _route_media_io(key, target, "seek", handle.seek, start)
+                    if use_isolated_reader:
+                        handle.seek(start)
+                    else:
+                        await _route_media_io(key, target, "seek", handle.seek, start)
                     idx0 = 0
                     remaining = length
+                    read_retry_total = 0
                     while remaining > 0:
-                        blob = await _route_media_io(
-                            key,
-                            target,
-                            "read",
-                            handle.read,
-                            min(int(ROOT_MEDIA_RELAY_CHUNK_BYTES), remaining),
-                        )
+                        chunk_bytes = int(ROOT_MEDIA_RELAY_CHUNK_BYTES)
+                        if idx0 < MEDIA_RELAY_INITIAL_CHUNKS:
+                            chunk_bytes = min(chunk_bytes, MEDIA_RELAY_INITIAL_CHUNK_BYTES)
+                        read_bytes = min(chunk_bytes, remaining)
+                        route_diag_state["last_media_read_request_bytes"] = read_bytes
+                        try:
+                            if use_isolated_reader:
+                                blob = await _route_media_async_io(
+                                    key,
+                                    target,
+                                    "read",
+                                    handle.read(read_bytes),
+                                )
+                            else:
+                                blob = await _route_media_io(
+                                    key,
+                                    target,
+                                    "read",
+                                    handle.read,
+                                    read_bytes,
+                                )
+                        except TimeoutError:
+                            route_diag_state["media_reader_timeout_total"] = int(
+                                route_diag_state.get("media_reader_timeout_total") or 0
+                            ) + 1
+                            if not use_isolated_reader or read_retry_total >= 1 or sent > 0:
+                                raise
+                            try:
+                                await handle.abort()
+                            except Exception:
+                                pass
+                            try:
+                                await _route_media_async_io(
+                                    key,
+                                    target,
+                                    "reader_close",
+                                    handle.close(),
+                                )
+                            except Exception:
+                                pass
+                            handle = await _route_media_async_io(
+                                key,
+                                target,
+                                "reader_reopen",
+                                _IsolatedMediaFileReader.open(
+                                    target,
+                                    MEDIA_RELAY_READER_OPEN_TIMEOUT_S,
+                                    MEDIA_RELAY_READER_READ_TIMEOUT_S,
+                                ),
+                            )
+                            media_file_readers[key] = handle
+                            read_retry_total += 1
+                            route_diag_state["media_reader_start_total"] = int(
+                                route_diag_state.get("media_reader_start_total") or 0
+                            ) + 1
+                            route_diag_state["media_reader_retry_total"] = int(
+                                route_diag_state.get("media_reader_retry_total") or 0
+                            ) + 1
+                            handle.seek(start)
+                            continue
+                        route_diag_state["last_media_read_result_bytes"] = len(blob or b"")
                         if not blob:
                             break
                         await _route_media_send_chunk(key, idx=idx0, blob=blob)
@@ -2280,7 +2665,14 @@ class NatsRouteTunnelRuntime:
                         route_diag_state["last_media_bytes_sent"] = sent
                         route_diag_state["last_media_chunk_idx"] = idx0 - 1
                 finally:
-                    await _route_media_io(key, target, "close", handle.close)
+                    try:
+                        if use_isolated_reader:
+                            await _route_media_async_io(key, target, "close", handle.close())
+                        else:
+                            await _route_media_io(key, target, "close", handle.close)
+                    finally:
+                        if media_file_readers.get(key) is handle:
+                            media_file_readers.pop(key, None)
                 await _route_reply(
                     key,
                     {
@@ -2299,6 +2691,7 @@ class NatsRouteTunnelRuntime:
                 request_headers: dict[str, Any] | None,
                 display_name: str | None = None,
                 mime_type: str | None = None,
+                known_size_bytes: int | None = None,
                 download: bool = False,
                 on_completed: Any | None = None,
                 on_failed: Any | None = None,
@@ -2313,6 +2706,7 @@ class NatsRouteTunnelRuntime:
                             request_headers=request_headers,
                             display_name=display_name,
                             mime_type=mime_type,
+                            known_size_bytes=known_size_bytes,
                             download=download,
                             on_failed=on_failed,
                         )
@@ -3780,6 +4174,7 @@ class NatsRouteTunnelRuntime:
                                     request_headers=headers,
                                     display_name=response_name,
                                     mime_type=response_mime,
+                                    known_size_bytes=response_size,
                                     download=download_flag,
                                     on_completed=_record_drive_public_completed,
                                     on_failed=_record_drive_public_stream_failed,
@@ -3839,6 +4234,7 @@ class NatsRouteTunnelRuntime:
                                     request_headers=headers,
                                     display_name=resource.name,
                                     mime_type=resource.mime_type,
+                                    known_size_bytes=resource.size_bytes,
                                 )
                                 route_outcome = "media_reference_content_started"
                                 return
@@ -3894,6 +4290,7 @@ class NatsRouteTunnelRuntime:
                                     request_headers=headers,
                                     display_name=resource.name,
                                     mime_type=resource.mime_type,
+                                    known_size_bytes=resource.size_bytes,
                                 )
                                 route_outcome = "media_indexer_content_started"
                                 return
@@ -4201,6 +4598,12 @@ class NatsRouteTunnelRuntime:
                         return
 
                     if t == "media_http_abort":
+                        try:
+                            reader0 = media_file_readers.get(key)
+                            if reader0:
+                                await reader0.abort()
+                        except Exception:
+                            pass
                         try:
                             task0 = media_relay_tasks.pop(key, None)
                             if task0:

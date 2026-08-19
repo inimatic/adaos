@@ -984,6 +984,34 @@ Use these rules for command and subscription handlers:
   command and sync probes must remain live; in-flight bytes, workers and tasks
   must stay bounded; the first request must produce an observable abort; and the
   second resource must remain usable without a runtime or skill restart.
+- A thread pool protects the event loop but does not make synchronous network
+  filesystem I/O cancellable. When the supported OS/storage combination can
+  leave `open`, metadata, or `read` blocked after task cancellation, put that
+  operation behind a killable process boundary with explicit open/read
+  deadlines, bounded concurrency, abort propagation, child cleanup and
+  PID/timeout/retry diagnostics. Test a deliberately stalled child and assert
+  that the runtime thread pool, API, channel and process table all recover.
+- Do not make a scenario modal or widget the lifecycle owner of long-lived
+  playback. Put the active media element/player, queue, output lease, volume,
+  interruption handling and system-media integration in one shared runtime
+  coordinator. A modal is a controller/presentation: closing it detaches the
+  view or switches to a compact player, while an explicit Stop releases the
+  source. This prevents modal teardown from either killing intended background
+  playback or leaving an anonymous playback loop behind.
+- Treat output preferences and progress as different state. Volume/mute/output
+  device are browser-scoped shared preferences and apply before every new item.
+  Video position is keyed by stable node and media-resource identity, written
+  locally on a bounded interval and at pause/switch/stop boundaries, restored
+  only for unfinished playback, and cleared at completion. Never publish Yjs or
+  remote skill-memory writes from every browser `timeupdate`; synchronize a
+  compact checkpoint only at coarse lifecycle boundaries when cross-device
+  continue-watching is a product requirement.
+- Browser background playback is not process-lifetime playback. Use a
+  shell-owned player plus Media Session controls for browser/PWA behavior; use a
+  platform media service/session for a native wrapper. Keep Close, Pause, Stop,
+  and Dismiss playback as separate commands, and expose current item,
+  presentation mode, output owner, checkpoint age and interruption reason in a
+  bounded status projection.
 - Do not detach a task merely to return from a subscription callback. Either
   await it in the runtime-tracked handler or register it with an explicit
   lifecycle owner, cancellation path and bounded task registry.
