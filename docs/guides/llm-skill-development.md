@@ -991,6 +991,10 @@ Use these rules for command and subscription handlers:
   deadlines, bounded concurrency, abort propagation, child cleanup and
   PID/timeout/retry diagnostics. Test a deliberately stalled child and assert
   that the runtime thread pool, API, channel and process table all recover.
+  Treat a mapped drive letter or local mount point backed by SMB, NFS, FUSE,
+  WinFsp or rclone as network storage; path spelling is not an I/O isolation
+  boundary. Compare both aliases only in bounded probes and retain source kind,
+  path digest, deadline, retry and selected-alias evidence.
 - Do not infer browser compatibility from a media extension or MIME type alone.
   Probe container, video codec and audio codec in a bounded worker, persist the
   result with the source resource revision, and let the playback plan distinguish
