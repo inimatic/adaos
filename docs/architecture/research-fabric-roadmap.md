@@ -1377,6 +1377,21 @@ one-shot C3 Builder attempt has started with no post-start directive. These
 facts are interim lineage evidence, not yet an EVC success or comparative
 claim.
 
+The later repeated-proof diagnostics are also retained rather than rewritten.
+Builder rail failures in v5-v8 produced generic task-runtime, repair,
+cross-process owner-fence, full-finalization fence, and physically frozen
+core/docs changes. In v9 the C3 candidate passed its own tests and native
+installation but failed independent consumer acceptance because runner
+contract 1.1 named `split_bindings` and its fields without specifying whether
+the value was an array or a role-keyed object. Result
+`sha256:94153928d9e03ac0fdbefbf019f554303151913342dd113cd74b30caf4482e04`
+is immutable EVC=false. `research_manager_skill 0.16.0` now publishes full
+input/output JSON Schemas as runner contract 1.2, digest
+`sha256:334fb4fd47e619705eabb2835051604cfe59e5115eb10eca12a0003c1a01baa5`.
+Frozen v10 (`sha256:be05e18f0d84b16b3eff006ae20f5a6dfa1756140b55ba653b337639f2affc55`)
+is the next local post-hardening run. It is physically isolated at core commit
+`9f243cbc`; earlier failures do not become successes retroactively.
+
 **Exit proof:** a frozen calibration package contains the visible inputs,
 hidden/evaluator inputs, source-analysis and formulation revisions,
 traceability graph, exact AutomationBrief, Builder/Codex traces, ProjectRelease,
@@ -1417,6 +1432,11 @@ efficacy result or cross-domain SOTA claim.
   ownership/recovery constraints, forbidden scientific mutations, and neutral
   conformance fixtures. Do not prescribe internal code structure without a
   contract reason.
+- [x] `[must]` `ARF7.3-06a` Require every consumer operation fixture to carry
+  complete input and output JSON Schemas, including nested container shape,
+  identity patterns, and extension policy. Treat required-field lists and
+  prose invariants as indexes only. Contract 1.2 includes a negative
+  array-versus-role-map regression test derived from the immutable v9 failure.
 - [x] `[must]` `ARF7.3-07` Let Codex return typed clarification, feasibility,
   capability-gap, and protocol-conflict results. Require a reviewed new
   formulation/protocol revision instead of silent scientific mutation.
@@ -1451,7 +1471,9 @@ efficacy result or cross-domain SOTA claim.
   realizations. Its primary endpoint is independent evidence-valid completion;
   the one-sided exact paired decision rule, missing-result policy, Wilson
   intervals, and risk difference are fixed before execution. One successful
-  C3 is an operability gate, not probability evidence.
+  C3 is an operability gate, not probability evidence. v9 stopped after its
+  first C3 failure because five-pair significance was then unreachable; v10 is
+  a new frozen post-hardening task, not a replacement result under the v9 id.
 - [ ] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and

@@ -449,6 +449,51 @@ and size 41,031 bytes. This makes the score recomputable from one bound object,
 but a portable public release must still materialize admitted input bytes,
 source licenses, frozen runtime artifacts, and an external verification recipe.
 
+#### Repeated-proof hardening after v5
+
+The repeated C0/C3 proof did not proceed by relabelling failed attempts. Each
+observed rail defect retained its original task identity and caused a new
+frozen task after the generic platform or consumer contract changed:
+
+- v5 exposed candidate-created runtime files inside the immutable source
+  boundary; Builder prompt ABI `0.3.0` now supplies `ADAOS_TASK_RUNTIME_DIR`
+  and routes source-boundary violations through one bounded autonomous repair;
+- v6 exposed cross-process orphan recovery stealing a live Codex result from
+  its detached worker; local runs now persist PID plus process creation time;
+- v7 exposed a second ownership window after the Skill Factory task became
+  terminal but before dependency installation, DEV activation, and Forge
+  checkpoints completed; commit `9f243cbc` extends the durable owner fence to
+  the whole Automation finalization transaction;
+- v8 was cancelled before scoring because a moving shared checkout could
+  change public SDK/docs read through `ADAOS_REPO_ROOT`; subsequent proof runs
+  use detached worktree `D:\git\inimatic\adaos-proof-9f243cbc` at exact core
+  commit `9f243cbc20f6d14acb7904dbefe4806efb2a125c`;
+- v9 (`sha256:60729d6e2ee15ec3fef3c0af41c61f7f51740721b8242bb4f97af7b4996c8217`)
+  produced an installable C3 candidate, but the independent consumer rejected
+  it: `dataset_status.split_bindings` was a role-labelled array while the
+  consumer required an object keyed by role. Result digest
+  `sha256:94153928d9e03ac0fdbefbf019f554303151913342dd113cd74b30caf4482e04`
+  remains `evidence_valid_completion=false`.
+
+The v9 failure was not a missing field or an irrational model choice. Runner
+contract 1.1 listed the required output name, roles, identity fields, and prose
+invariants but did not type the container. The model wrote a consistent array
+implementation and a passing test for that interpretation. Runner contract
+1.2 therefore publishes complete JSON Schema outputs for all four operations,
+including a role-keyed `split_bindings` object and full portable `ContentRef`
+shape. It is active in `research_manager_skill 0.16.0`, contract digest
+`sha256:334fb4fd47e619705eabb2835051604cfe59e5115eb10eca12a0003c1a01baa5`.
+
+The next frozen task is v10, digest
+`sha256:be05e18f0d84b16b3eff006ae20f5a6dfa1756140b55ba653b337639f2affc55`.
+It retains the same scientific question, model profile, budgets, five paired
+workload seeds, execution order, endpoint, and decision rule while binding the
+new consumer ABI. v5-v9 are diagnostic development evidence and remain
+visible; none is a positive comparative result. Because the rails were adapted
+on the TLP case, even a successful v10 supports only a local post-hardening
+claim. An unbiased generalization claim requires the later held-out multi-task
+benchmark.
+
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and
 content identities. Candidate-authored claims cannot mark a check passed. The

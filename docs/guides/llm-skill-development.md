@@ -580,6 +580,22 @@ exact operations to production handlers and manifest exports. Keep explanatory
 prose useful, but do not make the model infer an executable boundary from prose
 when AdaOS already publishes it as data.
 
+Every published operation descriptor must carry complete `input_schema` and
+`output_schema` objects. `output_required`, field-name lists, examples, and
+prose invariants are navigation aids, not a substitute for a schema. In
+particular, the schema must make container shape explicit (`object` keyed by
+role versus an array containing `role`), declare required nested fields,
+identity patterns, closed/open extension policy, and admissible variants. A
+coding model can otherwise produce a locally coherent provider that passes its
+own tests while disagreeing with a hidden consumer normalization rule.
+
+The governing consumer should validate fixtures against the same published
+output schema and separately test its semantic invariants. Contract tests must
+include at least one plausible wrong shape, not only a valid example. A digest
+change to either schema is an ABI revision and must flow through the
+Development Session, conformance fixture, evaluator environment identity, and
+result provenance before another autonomous attempt is compared.
+
 For source-derived systems, also carry an exact machine-readable system
 specification. Names such as "ConvNet-style", "standard preprocessing", or
 "equivalent architecture" leave room for the coding model to change the
