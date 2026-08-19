@@ -717,7 +717,21 @@ class LocalSkillFactoryWorker:
         )
         try:
             return self.recover_validated_run(task_id)
-        except Exception as exc:
+        except Exception as validation_exc:
+            # The supervisor may die after the first deterministic validation
+            # report was written but before the normal bounded repair loop
+            # started.  Preserve the original task and consume the same repair
+            # budget here; repair_preserved_run fails closed unless there is an
+            # uncommitted worktree plus explicit deterministic errors.
+            try:
+                return self.repair_preserved_run(task_id)
+            except Exception as repair_exc:
+                exc = (
+                    repair_exc
+                    if not isinstance(repair_exc, ValueError)
+                    or "preserved repair" not in str(repair_exc)
+                    else validation_exc
+                )
             try:
                 self.factory.fail_task(
                     {

@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -729,6 +730,57 @@ def test_local_worker_repairs_preserved_precommit_result_once(tmp_path: Path) ->
     assert recovered["ok"] is True
     assert calls == 2
     assert "# repaired" in (skill_root / "handlers" / "main.py").read_text(encoding="utf-8")
+
+
+def test_orphaned_completion_resumes_bounded_deterministic_repair(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    task_id = "task.orphan-repair"
+    runs_root = tmp_path / "runs"
+    run_root = runs_root / task_id
+    input_dir = run_root / "input"
+    output_dir = run_root / "output"
+    input_dir.mkdir(parents=True)
+    output_dir.mkdir(parents=True)
+    (input_dir / "assignment.json").write_text(
+        json.dumps({"task_id": task_id}),
+        encoding="utf-8",
+    )
+    (output_dir / "last_message.md").write_text("Initial result.", encoding="utf-8")
+    (output_dir / "codex-live.jsonl").write_text(
+        '{"type":"turn.completed"}\n',
+        encoding="utf-8",
+    )
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=runs_root,
+    )
+    failures: list[dict] = []
+    worker.factory = SimpleNamespace(fail_task=lambda value: failures.append(dict(value)))
+    repairs: list[str] = []
+    monkeypatch.setattr(
+        worker,
+        "recover_validated_run",
+        lambda _value: (_ for _ in ()).throw(
+            ValueError("result recovery requires a passed deterministic test report")
+        ),
+    )
+    monkeypatch.setattr(
+        worker,
+        "repair_preserved_run",
+        lambda value: repairs.append(value) or {"ok": True, "repaired": True},
+    )
+
+    recovered = worker.recover_orphaned_codex_run(task_id)
+
+    assert recovered == {"ok": True, "repaired": True}
+    assert repairs == [task_id]
+    assert failures[0]["retryable"] is True
+    assert not any(item.get("retryable") is False for item in failures)
 
 
 def test_return_to_prototype_uses_snapshot_but_cannot_modify_automation_skill(tmp_path: Path) -> None:
