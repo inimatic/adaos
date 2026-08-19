@@ -1,13 +1,189 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
 
 from adaos.services.bootstrap_runtime import HubRouteProxyPolicy
-from adaos.services.bootstrap_runtime.route_tunnel_runtime import NatsRouteTunnelRuntime
+from adaos.services.bootstrap_runtime.route_tunnel_runtime import (
+    NatsRouteTunnelRuntime,
+    _MediaRelayFlowWindow,
+    _run_blocking_io_cancellation_safe,
+)
+
+
+@pytest.mark.asyncio
+async def test_blocking_media_io_does_not_stall_event_loop() -> None:
+    started = threading.Event()
+    release = threading.Event()
+    executor = ThreadPoolExecutor(max_workers=1)
+
+    def _blocking_read() -> bytes:
+        started.set()
+        assert release.wait(timeout=2.0)
+        return b"chunk"
+
+    try:
+        read_task = asyncio.create_task(_run_blocking_io_cancellation_safe(executor, _blocking_read))
+        for _ in range(50):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.001)
+        assert started.is_set()
+        await asyncio.wait_for(asyncio.sleep(0.01), timeout=0.1)
+        assert not read_task.done()
+        release.set()
+        assert await read_task == b"chunk"
+    finally:
+        release.set()
+        executor.shutdown(wait=True, cancel_futures=True)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_media_io_keeps_worker_ownership_until_read_returns() -> None:
+    started = threading.Event()
+    release = threading.Event()
+    executor = ThreadPoolExecutor(max_workers=1)
+
+    def _blocking_read() -> bytes:
+        started.set()
+        assert release.wait(timeout=2.0)
+        return b"chunk"
+
+    try:
+        read_task = asyncio.create_task(_run_blocking_io_cancellation_safe(executor, _blocking_read))
+        for _ in range(50):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.001)
+        read_task.cancel()
+        await asyncio.sleep(0.01)
+        assert not read_task.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await read_task
+    finally:
+        release.set()
+        executor.shutdown(wait=True, cancel_futures=True)
+
+
+@pytest.mark.asyncio
+async def test_media_flow_window_bounds_in_flight_chunks_and_deduplicates_acks() -> None:
+    flow = _MediaRelayFlowWindow(enabled=True, window_chunks=2, ack_timeout_s=1.0)
+    await flow.before_send(0)
+    await flow.before_send(1)
+
+    blocked = asyncio.create_task(flow.before_send(2))
+    await asyncio.sleep(0)
+    assert not blocked.done()
+    assert flow.in_flight == 2
+
+    assert flow.acknowledge(0) is True
+    await asyncio.wait_for(blocked, timeout=0.1)
+    assert flow.in_flight == 2
+    assert flow.acknowledge(0) is False
+    assert flow.in_flight == 2
+    assert flow.sent_total == 3
+    assert flow.acked_total == 1
+
+
+@pytest.mark.asyncio
+async def test_route_media_file_waits_for_root_credit_without_blocking_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    from adaos.services import media_library
+    from adaos.services.media_core import ROOT_MEDIA_RELAY_CHUNK_BYTES
+
+    target = tmp_path / "movie.bin"
+    target.write_bytes(b"x" * (int(ROOT_MEDIA_RELAY_CHUNK_BYTES) * 5))
+    monkeypatch.setattr(media_library, "media_file_path", lambda _name: target)
+
+    published: list[dict] = []
+    subscriptions: dict[str, object] = {}
+
+    class _Nats:
+        _pending_data_size = 0
+
+        async def publish(self, _subject: str, payload: bytes) -> None:
+            published.append(json.loads(payload.decode("utf-8")))
+
+        async def flush(self, *args, **kwargs) -> None:
+            return None
+
+    async def _subscribe(subject: str, *, cb: object) -> object:
+        subscriptions[subject] = cb
+        return SimpleNamespace(subject=subject, cb=cb)
+
+    service = SimpleNamespace(
+        _log=logging.getLogger("test.nats-route-media-flow"),
+        _route_policy=HubRouteProxyPolicy(),
+        ctx=SimpleNamespace(config=SimpleNamespace()),
+        _mark_hub_root_authority_ready=lambda: None,
+    )
+    workers: list[asyncio.Task] = []
+    runtime = NatsRouteTunnelRuntime(
+        service,
+        rate_limited_log=lambda *args, **kwargs: None,
+        is_ready=lambda: True,
+    )
+    await runtime.install(
+        nc=_Nats(),
+        subscribe=_subscribe,
+        sub_workers=workers,
+        hub_id="sn_flow",
+        candidate_passive_mode=False,
+        runtime_instance="active",
+        hub_nats_verbose=False,
+        hub_nats_quiet=True,
+    )
+    callback = subscriptions["route.v2.to_hub.sn_flow.*"]
+    key = "sn_flow--media--request"
+    subject = f"route.v2.to_hub.sn_flow.{key}"
+
+    async def _send(payload: dict) -> None:
+        await callback(
+            SimpleNamespace(
+                subject=subject,
+                data=json.dumps(payload).encode("utf-8"),
+            )
+        )
+
+    async def _wait_for_chunks(count: int) -> None:
+        for _ in range(200):
+            if sum(1 for item in published if item.get("t") == "media_http_chunk") >= count:
+                return
+            await asyncio.sleep(0.005)
+        raise AssertionError(f"timed out waiting for {count} chunks")
+
+    try:
+        await _send(
+            {
+                "t": "media_http_open",
+                "method": "GET",
+                "path": "/media/files/content/movie.bin",
+                "headers": {},
+                "flow_control": "media_ack_v1",
+                "window_chunks": 2,
+            }
+        )
+        await _wait_for_chunks(2)
+        await asyncio.sleep(0.02)
+        assert sum(1 for item in published if item.get("t") == "media_http_chunk") == 2
+
+        await _send({"t": "media_http_ack", "idx": 0})
+        await _wait_for_chunks(3)
+        await _send({"t": "media_http_abort", "reason": "test_complete"})
+    finally:
+        await runtime.close()
+        for worker in workers:
+            worker.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
 
 
 @pytest.mark.asyncio

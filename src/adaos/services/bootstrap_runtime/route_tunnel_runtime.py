@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import hashlib
 import json as _json
 import logging
@@ -13,7 +14,7 @@ import uuid
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, List
+from typing import Any, Callable, List, TypeVar
 
 import nats as _nats
 
@@ -97,6 +98,81 @@ def _route_http_lane_index(key: str, workers: int) -> int:
     return int.from_bytes(digest, "big") % worker_total
 
 
+_T = TypeVar("_T")
+
+
+def _media_source_kind(path: Path) -> str:
+    raw = str(path or "")
+    if raw.startswith(("\\\\", "//")):
+        return "unc"
+    if "://" in raw:
+        return "remote"
+    return "local"
+
+
+def _media_path_digest(path: Path) -> str:
+    return hashlib.sha256(str(path or "").encode("utf-8", errors="replace")).hexdigest()[:12]
+
+
+async def _run_blocking_io_cancellation_safe(
+    executor: ThreadPoolExecutor,
+    func: Callable[..., _T],
+    *args: Any,
+) -> _T:
+    """Keep ownership of a blocking operation until its worker has returned."""
+
+    loop = asyncio.get_running_loop()
+    future = loop.run_in_executor(executor, functools.partial(func, *args))
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError:
+        # ThreadPoolExecutor work cannot be cancelled once running. Waiting here keeps
+        # file handles from being closed concurrently while leaving the event loop free.
+        try:
+            await asyncio.shield(future)
+        except asyncio.CancelledError:
+            pass
+        raise
+
+
+class _MediaRelayFlowWindow:
+    def __init__(self, *, enabled: bool, window_chunks: int, ack_timeout_s: float) -> None:
+        self.enabled = bool(enabled)
+        self.window_chunks = max(1, min(int(window_chunks or 1), 16))
+        self.ack_timeout_s = max(1.0, float(ack_timeout_s or 1.0))
+        self._credits = asyncio.Semaphore(self.window_chunks)
+        self._in_flight: set[int] = set()
+        self.sent_total = 0
+        self.acked_total = 0
+        self.last_sent_idx = -1
+        self.last_acked_idx = -1
+
+    async def before_send(self, idx: int) -> None:
+        if not self.enabled:
+            return
+        await asyncio.wait_for(self._credits.acquire(), timeout=self.ack_timeout_s)
+        idx0 = int(idx)
+        self._in_flight.add(idx0)
+        self.sent_total += 1
+        self.last_sent_idx = idx0
+
+    def acknowledge(self, idx: int) -> bool:
+        if not self.enabled:
+            return False
+        idx0 = int(idx)
+        if idx0 not in self._in_flight:
+            return False
+        self._in_flight.remove(idx0)
+        self._credits.release()
+        self.acked_total += 1
+        self.last_acked_idx = max(self.last_acked_idx, idx0)
+        return True
+
+    @property
+    def in_flight(self) -> int:
+        return len(self._in_flight)
+
+
 class NatsRouteTunnelRuntime:
     """Own browser/root route tunnel state for one NATS connection."""
 
@@ -117,6 +193,7 @@ class NatsRouteTunnelRuntime:
         self.tunnel_tasks: dict[str, asyncio.Task] = {}
         self.reset_callback: Any = None
         self._http_executor: ThreadPoolExecutor | None = None
+        self._media_executor: ThreadPoolExecutor | None = None
 
     async def install(
         self,
@@ -172,6 +249,19 @@ class NatsRouteTunnelRuntime:
                 thread_name_prefix="adaos-route-http",
             )
             self._http_executor = route_http_executor
+            try:
+                route_media_worker_count = int(os.getenv("HUB_ROUTE_MEDIA_IO_WORKERS", "4") or "4")
+            except Exception:
+                route_media_worker_count = 4
+            route_media_worker_count = max(1, min(route_media_worker_count, 8))
+            previous_media_executor = self._media_executor
+            if previous_media_executor is not None:
+                previous_media_executor.shutdown(wait=False, cancel_futures=True)
+            route_media_executor = ThreadPoolExecutor(
+                max_workers=route_media_worker_count,
+                thread_name_prefix="adaos-route-media",
+            )
+            self._media_executor = route_media_executor
             # Optional dependency: if `websockets` is missing, keep HTTP proxy working
             # and gracefully deny WS tunnel opens.
             websockets_mod = None
@@ -186,6 +276,7 @@ class NatsRouteTunnelRuntime:
             tunnel_tasks = self.tunnel_tasks
             media_relay_sessions: dict[str, dict[str, Any]] = {}
             media_relay_tasks: dict[str, asyncio.Task] = {}
+            media_relay_flow_windows: dict[str, _MediaRelayFlowWindow] = {}
             http_body_relay_sessions: dict[str, dict[str, Any]] = {}
             pending_chunks: dict[str, dict[str, Any]] = {}
             outbound_chunk_cache: dict[str, dict[str, Any]] = {}
@@ -205,6 +296,27 @@ class NatsRouteTunnelRuntime:
                 )
             except Exception:
                 MAX_PENDING_TUNNEL_EVENTS = 128
+            try:
+                MEDIA_RELAY_MAX_ACTIVE_TASKS = max(
+                    route_media_worker_count,
+                    min(int(os.getenv("HUB_ROUTE_MEDIA_MAX_ACTIVE", "16") or "16"), 64),
+                )
+            except Exception:
+                MEDIA_RELAY_MAX_ACTIVE_TASKS = max(route_media_worker_count, 16)
+            try:
+                MEDIA_RELAY_ACK_TIMEOUT_S = max(
+                    5.0,
+                    min(float(os.getenv("HUB_ROUTE_MEDIA_ACK_TIMEOUT_S", "125") or "125"), 600.0),
+                )
+            except Exception:
+                MEDIA_RELAY_ACK_TIMEOUT_S = 125.0
+            try:
+                MEDIA_RELAY_SLOW_IO_WARN_S = max(
+                    0.05,
+                    float(os.getenv("HUB_ROUTE_MEDIA_SLOW_IO_WARN_S", "1.0") or "1.0"),
+                )
+            except Exception:
+                MEDIA_RELAY_SLOW_IO_WARN_S = 1.0
 
             _route_verbose = os.getenv("HUB_ROUTE_VERBOSE", "0") == "1"
             _route_diag = _route_verbose or os.getenv("HUB_ROUTE_DIAG", "0") == "1"
@@ -468,6 +580,22 @@ class NatsRouteTunnelRuntime:
                 "last_subnet_sync_backpressure_path": "",
                 "last_subnet_sync_backpressure_type": "",
                 "last_subnet_sync_backpressure_payload_bytes": 0,
+                "media_file_tasks": 0,
+                "media_file_task_limit": MEDIA_RELAY_MAX_ACTIVE_TASKS,
+                "media_io_workers": route_media_worker_count,
+                "media_io_active": 0,
+                "media_io_slow_total": 0,
+                "media_flow_sessions": 0,
+                "media_flow_in_flight": 0,
+                "media_chunks_sent_total": 0,
+                "media_chunks_acked_total": 0,
+                "media_abort_total": 0,
+                "media_busy_reject_total": 0,
+                "last_media_io_operation": "",
+                "last_media_io_ms": 0.0,
+                "last_media_source_kind": "",
+                "last_media_path_digest": "",
+                "last_media_key_tag": "",
             }
 
             def _route_refresh_starvation_state() -> None:
@@ -607,6 +735,13 @@ class NatsRouteTunnelRuntime:
                                 active_reader_tasks += 1
                         except Exception:
                             continue
+                    flow_windows = [
+                        flow0 for flow0 in media_relay_flow_windows.values() if flow0.enabled
+                    ]
+                    route_diag_state["media_flow_sessions"] = len(flow_windows)
+                    route_diag_state["media_flow_in_flight"] = sum(
+                        flow0.in_flight for flow0 in flow_windows
+                    )
                     observe_hub_root_route_runtime(
                         active_tunnels=len(tunnels),
                         active_reader_tasks=active_reader_tasks,
@@ -1134,6 +1269,7 @@ class NatsRouteTunnelRuntime:
                                 *[str(k) for k in reply_subjects.keys()],
                                 *[str(k) for k in media_relay_sessions.keys()],
                                 *[str(k) for k in media_relay_tasks.keys()],
+                                *[str(k) for k in media_relay_flow_windows.keys()],
                                 *[str(k) for k in http_body_relay_sessions.keys()],
                                 *[
                                     str(st.get("key"))
@@ -1187,6 +1323,7 @@ class NatsRouteTunnelRuntime:
                             task2.cancel()
                     except Exception:
                         pass
+                    media_relay_flow_windows.pop(key, None)
                     try:
                         _cleanup_media_relay_session(key, remove_temp=True)
                     except Exception:
@@ -1445,11 +1582,12 @@ class NatsRouteTunnelRuntime:
                 publish_elapsed_s = 0.0
                 try:
                     try:
+                        encoded_payload = _json.dumps(payload, ensure_ascii=False).encode("utf-8")
                         publish_step_started = time.monotonic()
                         await asyncio.wait_for(
                             nc.publish(
                                 reply_subject,
-                                _json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                                encoded_payload,
                             ),
                             timeout=max(0.1, float(_route_send_timeout_s)),
                         )
@@ -1476,7 +1614,7 @@ class NatsRouteTunnelRuntime:
                             reply_subject,
                             ok=True,
                             traffic_class="route",
-                            payload_bytes=len(_json.dumps(payload, ensure_ascii=False).encode("utf-8")),
+                            payload_bytes=len(encoded_payload),
                             latency_ms=(time.monotonic() - reply_started) * 1000.0,
                         )
                     except Exception:
@@ -1809,44 +1947,121 @@ class NatsRouteTunnelRuntime:
                     except Exception:
                         pass
 
+            async def _route_media_io(
+                key: str,
+                target: Path,
+                operation: str,
+                func: Callable[..., _T],
+                *args: Any,
+            ) -> _T:
+                source_kind = _media_source_kind(target)
+                path_digest = _media_path_digest(target)
+                started = time.monotonic()
+                route_diag_state["media_io_active"] = int(route_diag_state.get("media_io_active") or 0) + 1
+                route_diag_state["last_media_io_operation"] = str(operation or "")
+                route_diag_state["last_media_source_kind"] = source_kind
+                route_diag_state["last_media_path_digest"] = path_digest
+                route_diag_state["last_media_key_tag"] = _key_tag(key)
+                _update_route_protocol_runtime()
+                try:
+                    return await _run_blocking_io_cancellation_safe(
+                        route_media_executor,
+                        func,
+                        *args,
+                    )
+                finally:
+                    elapsed_s = max(0.0, time.monotonic() - started)
+                    route_diag_state["media_io_active"] = max(
+                        0,
+                        int(route_diag_state.get("media_io_active") or 0) - 1,
+                    )
+                    route_diag_state["last_media_io_ms"] = round(elapsed_s * 1000.0, 1)
+                    if elapsed_s >= MEDIA_RELAY_SLOW_IO_WARN_S:
+                        route_diag_state["media_io_slow_total"] = int(
+                            route_diag_state.get("media_io_slow_total") or 0
+                        ) + 1
+                        _rl_log(
+                            f"hub-route.media_io_slow.{_key_tag(key)}.{operation}",
+                            (
+                                f"[hub-route] media I/O slow key={_key_tag(key)} "
+                                f"operation={operation} source={source_kind} path_digest={path_digest} "
+                                f"took_ms={elapsed_s * 1000.0:.1f} "
+                                f"active={route_diag_state.get('media_io_active')}"
+                            ),
+                            every_s=5.0,
+                        )
+                    _update_route_protocol_runtime()
+
+            async def _route_media_send_chunk(key: str, *, idx: int, blob: bytes) -> None:
+                flow = media_relay_flow_windows.get(key)
+                if flow is not None:
+                    try:
+                        await flow.before_send(idx)
+                    except asyncio.TimeoutError as exc:
+                        route_diag_state["last_media_key_tag"] = _key_tag(key)
+                        route_diag_state["last_media_flow_error"] = "ack_timeout"
+                        _update_route_protocol_runtime()
+                        raise RuntimeError("media relay acknowledgment timeout") from exc
+                await _route_reply(
+                    key,
+                    {
+                        "t": "media_http_chunk",
+                        "idx": int(idx),
+                        "data_b64": base64.b64encode(blob).decode("ascii"),
+                    },
+                )
+                route_diag_state["media_chunks_sent_total"] = int(
+                    route_diag_state.get("media_chunks_sent_total") or 0
+                ) + 1
+                route_diag_state["last_media_key_tag"] = _key_tag(key)
+                if flow is None or not flow.enabled:
+                    # Legacy Root versions have no consumer acknowledgment. Yield and
+                    # drain each chunk so their upgrade window cannot monopolize NATS.
+                    try:
+                        await asyncio.wait_for(nc.flush(), timeout=max(0.1, _route_flush_timeout_s))
+                    except Exception:
+                        pass
+                _update_route_protocol_runtime()
+
             async def _route_media_reply_json(
                 key: str,
                 *,
                 status: int,
                 payload: dict[str, Any],
             ) -> None:
-                raw = _json.dumps(payload, ensure_ascii=False).encode("utf-8")
-                await _route_reply(
-                    key,
-                    {
-                        "t": "media_http_meta",
-                        "status": int(status),
-                        "headers": {
-                            "content-type": "application/json",
-                            "content-length": str(len(raw)),
-                        },
-                    },
-                )
-                idx0 = 0
-                for off in range(0, len(raw), 256 * 1024):
-                    part = raw[off : off + (256 * 1024)]
+                # Control/catalog responses are bounded and are produced inside the
+                # per-key dispatch lane. Do not wait for an ACK that the same lane
+                # cannot process until this handler returns.
+                media_relay_flow_windows.pop(key, None)
+                try:
+                    raw = _json.dumps(payload, ensure_ascii=False).encode("utf-8")
                     await _route_reply(
                         key,
                         {
-                            "t": "media_http_chunk",
-                            "idx": idx0,
-                            "data_b64": base64.b64encode(bytes(part)).decode("ascii"),
+                            "t": "media_http_meta",
+                            "status": int(status),
+                            "headers": {
+                                "content-type": "application/json",
+                                "content-length": str(len(raw)),
+                            },
                         },
                     )
-                    idx0 += 1
-                await _route_reply(
-                    key,
-                    {
-                        "t": "media_http_end",
-                        "total_bytes": len(raw),
-                        "truncated": False,
-                    },
-                )
+                    idx0 = 0
+                    for off in range(0, len(raw), 256 * 1024):
+                        part = raw[off : off + (256 * 1024)]
+                        await _route_media_send_chunk(key, idx=idx0, blob=bytes(part))
+                        idx0 += 1
+                    await _route_reply(
+                        key,
+                        {
+                            "t": "media_http_end",
+                            "total_bytes": len(raw),
+                            "truncated": False,
+                        },
+                    )
+                finally:
+                    media_relay_flow_windows.pop(key, None)
+                    _update_route_protocol_runtime()
 
             def _route_local_http_request(
                 *,
@@ -1980,7 +2195,7 @@ class NatsRouteTunnelRuntime:
                     parse_media_range,
                 )
 
-                stat = target.stat()
+                stat = await _route_media_io(key, target, "stat", target.stat)
                 total_size = int(stat.st_size)
                 headers_in = request_headers if isinstance(request_headers, dict) else {}
                 range_header = str(headers_in.get("range") or headers_in.get("Range") or "").strip()
@@ -2020,12 +2235,22 @@ class NatsRouteTunnelRuntime:
                     safe_name = safe_name.replace("\r", "").replace("\n", "").strip() or "download"
                     headers["content-disposition"] = f'attachment; filename="{safe_name}"'
                 length = int(headers.get("content-length") or 0)
+                flow = media_relay_flow_windows.get(key)
+                flow_meta = (
+                    {
+                        "flow_control": "media_ack_v1",
+                        "window_chunks": flow.window_chunks,
+                    }
+                    if flow is not None and flow.enabled
+                    else {}
+                )
                 await _route_reply(
                     key,
                     {
                         "t": "media_http_meta",
                         "status": status,
                         "headers": headers,
+                        **flow_meta,
                     },
                 )
                 if str(method or "").upper() == "HEAD" or length <= 0:
@@ -2033,25 +2258,29 @@ class NatsRouteTunnelRuntime:
                     return 0
 
                 sent = 0
-                with target.open("rb") as handle:
-                    handle.seek(start)
+                handle = await _route_media_io(key, target, "open", target.open, "rb")
+                try:
+                    await _route_media_io(key, target, "seek", handle.seek, start)
                     idx0 = 0
                     remaining = length
                     while remaining > 0:
-                        blob = handle.read(min(int(ROOT_MEDIA_RELAY_CHUNK_BYTES), remaining))
+                        blob = await _route_media_io(
+                            key,
+                            target,
+                            "read",
+                            handle.read,
+                            min(int(ROOT_MEDIA_RELAY_CHUNK_BYTES), remaining),
+                        )
                         if not blob:
                             break
-                        await _route_reply(
-                            key,
-                            {
-                                "t": "media_http_chunk",
-                                "idx": idx0,
-                                "data_b64": base64.b64encode(blob).decode("ascii"),
-                            },
-                        )
+                        await _route_media_send_chunk(key, idx=idx0, blob=blob)
                         idx0 += 1
                         sent += len(blob)
                         remaining -= len(blob)
+                        route_diag_state["last_media_bytes_sent"] = sent
+                        route_diag_state["last_media_chunk_idx"] = idx0 - 1
+                finally:
+                    await _route_media_io(key, target, "close", handle.close)
                 await _route_reply(
                     key,
                     {
@@ -2122,11 +2351,37 @@ class NatsRouteTunnelRuntime:
                             current = asyncio.current_task()
                             if media_relay_tasks.get(key) is current:
                                 media_relay_tasks.pop(key, None)
+                            media_relay_flow_windows.pop(key, None)
                             route_diag_state["media_file_tasks"] = int(len(media_relay_tasks))
                             _update_route_protocol_runtime()
                         except Exception:
                             pass
 
+                active_tasks = sum(1 for task0 in media_relay_tasks.values() if not task0.done())
+                if active_tasks >= MEDIA_RELAY_MAX_ACTIVE_TASKS:
+                    route_diag_state["media_busy_reject_total"] = int(
+                        route_diag_state.get("media_busy_reject_total") or 0
+                    ) + 1
+                    route_diag_state["last_media_key_tag"] = _key_tag(key)
+
+                    async def _reject_busy() -> None:
+                        try:
+                            await _route_reply(
+                                key,
+                                {
+                                    "t": "media_http_error",
+                                    "status": 503,
+                                    "error": "media_relay_busy",
+                                    "detail": "media relay concurrency limit reached",
+                                },
+                            )
+                        finally:
+                            media_relay_flow_windows.pop(key, None)
+                            _update_route_protocol_runtime()
+
+                    asyncio.create_task(_reject_busy(), name=f"hub-route-media-busy-{_key_tag(key)}")
+                    _update_route_protocol_runtime()
+                    return
                 previous = media_relay_tasks.pop(key, None)
                 try:
                     if previous:
@@ -3226,9 +3481,34 @@ class NatsRouteTunnelRuntime:
                             search = str((data or {}).get("search") or "")
                             headers = (data or {}).get("headers") if isinstance((data or {}).get("headers"), dict) else {}
                             content_length = int((data or {}).get("content_length") or 0)
+                            flow_protocol = str((data or {}).get("flow_control") or "").strip().lower()
+                            try:
+                                flow_window_chunks = max(
+                                    1,
+                                    min(int((data or {}).get("window_chunks") or 4), 16),
+                                )
+                            except Exception:
+                                flow_window_chunks = 4
+                            if method in ("GET", "HEAD"):
+                                media_relay_flow_windows[key] = _MediaRelayFlowWindow(
+                                    enabled=flow_protocol == "media_ack_v1",
+                                    window_chunks=flow_window_chunks,
+                                    ack_timeout_s=MEDIA_RELAY_ACK_TIMEOUT_S,
+                                )
+                                route_diag_state["last_media_flow_protocol"] = (
+                                    "media_ack_v1" if flow_protocol == "media_ack_v1" else "legacy"
+                                )
+                                route_diag_state["last_media_flow_window_chunks"] = flow_window_chunks
+                                route_diag_state["last_media_key_tag"] = _key_tag(key)
+                                _update_route_protocol_runtime()
 
                             if method in ("GET", "HEAD") and path_norm == "/media/files":
-                                payload0 = media_snapshot()
+                                payload0 = await _route_media_io(
+                                    key,
+                                    Path("media-library"),
+                                    "snapshot",
+                                    media_snapshot,
+                                )
                                 payload0["proxy_limits"] = {
                                     "root_routed_response_limit_bytes": ROOT_ROUTED_MEDIA_BODY_LIMIT_BYTES,
                                     "root_media_relay_max_upload_bytes": MEDIA_RELAY_MAX_UPLOAD_BYTES,
@@ -3238,7 +3518,12 @@ class NatsRouteTunnelRuntime:
                                 return
 
                             if method in ("GET", "HEAD") and path_norm == "/media/runtime":
-                                runtime0 = media_runtime_snapshot()
+                                runtime0 = await _route_media_io(
+                                    key,
+                                    Path("media-runtime"),
+                                    "runtime_snapshot",
+                                    media_runtime_snapshot,
+                                )
                                 runtime0["ok"] = True
                                 runtime0["proxy_limits"] = {
                                     "root_routed_response_limit_bytes": ROOT_ROUTED_MEDIA_BODY_LIMIT_BYTES,
@@ -3246,7 +3531,12 @@ class NatsRouteTunnelRuntime:
                                 }
                                 runtime0["capabilities"] = media_capabilities()
                                 runtime0["files"] = {
-                                    "items": list_media_files(),
+                                    "items": await _route_media_io(
+                                        key,
+                                        Path("media-library"),
+                                        "list_files",
+                                        list_media_files,
+                                    ),
                                 }
                                 await _route_media_reply_json(key, status=200, payload=runtime0)
                                 route_outcome = "media_runtime_replied"
@@ -3511,7 +3801,13 @@ class NatsRouteTunnelRuntime:
                                 try:
                                     from adaos.services.media_core import resolve_media_reference
 
-                                    resource = resolve_media_reference(media_reference_id)
+                                    resource = await _route_media_io(
+                                        key,
+                                        Path("media-reference"),
+                                        "resolve_reference",
+                                        resolve_media_reference,
+                                        media_reference_id,
+                                    )
                                 except ValueError as exc:
                                     await _route_media_reply_json(
                                         key,
@@ -3560,7 +3856,13 @@ class NatsRouteTunnelRuntime:
                                 try:
                                     from adaos.services.media_indexer_library import resolve_media_indexer_resource
 
-                                    resource = resolve_media_indexer_resource(media_indexer_playback_id)
+                                    resource = await _route_media_io(
+                                        key,
+                                        Path("media-indexer"),
+                                        "resolve_indexer_resource",
+                                        resolve_media_indexer_resource,
+                                        media_indexer_playback_id,
+                                    )
                                 except ValueError as exc:
                                     await _route_media_reply_json(
                                         key,
@@ -3599,12 +3901,24 @@ class NatsRouteTunnelRuntime:
                             if method in ("GET", "HEAD") and path_norm.startswith("/media/files/content/"):
                                 filename = unquote(path_norm[len("/media/files/content/"):])
                                 try:
-                                    target = media_file_path(filename)
+                                    target = await _route_media_io(
+                                        key,
+                                        Path("media-library"),
+                                        "resolve_file",
+                                        media_file_path,
+                                        filename,
+                                    )
                                 except ValueError as exc:
                                     try:
                                         from adaos.services.media_indexer_library import resolve_media_indexer_resource_by_name
 
-                                        resource = resolve_media_indexer_resource_by_name(filename)
+                                        resource = await _route_media_io(
+                                            key,
+                                            Path("media-indexer"),
+                                            "resolve_indexer_name",
+                                            resolve_media_indexer_resource_by_name,
+                                            filename,
+                                        )
                                     except ValueError:
                                         await _route_media_reply_json(
                                             key,
@@ -3635,11 +3949,23 @@ class NatsRouteTunnelRuntime:
                                 else:
                                     display_name = None
                                     mime_type = None
-                                if not target.exists() or not target.is_file():
+                                target_ready = await _route_media_io(
+                                    key,
+                                    target,
+                                    "validate_file",
+                                    lambda: target.exists() and target.is_file(),
+                                )
+                                if not target_ready:
                                     try:
                                         from adaos.services.media_indexer_library import resolve_media_indexer_resource_by_name
 
-                                        resource = resolve_media_indexer_resource_by_name(filename)
+                                        resource = await _route_media_io(
+                                            key,
+                                            Path("media-indexer"),
+                                            "resolve_indexer_name",
+                                            resolve_media_indexer_resource_by_name,
+                                            filename,
+                                        )
                                     except ValueError as exc:
                                         await _route_media_reply_json(
                                             key,
@@ -3755,15 +4081,19 @@ class NatsRouteTunnelRuntime:
                             route_outcome = "media_not_found"
                             return
                         except Exception as e:
-                            await _route_reply(
-                                key,
-                                {
-                                    "t": "media_http_error",
-                                    "status": 502,
-                                    "error": "media_route_open_failed",
-                                    "detail": str(e),
-                                },
-                            )
+                            try:
+                                await _route_reply(
+                                    key,
+                                    {
+                                        "t": "media_http_error",
+                                        "status": 502,
+                                        "error": "media_route_open_failed",
+                                        "detail": str(e),
+                                    },
+                                )
+                            finally:
+                                media_relay_flow_windows.pop(key, None)
+                                _update_route_protocol_runtime()
                             route_outcome = f"media_http_open_fail:{type(e).__name__}"
                             return
 
@@ -3852,6 +4182,24 @@ class NatsRouteTunnelRuntime:
                             route_outcome = f"media_end_fail:{type(e).__name__}"
                         return
 
+                    if t == "media_http_ack":
+                        flow = media_relay_flow_windows.get(key)
+                        try:
+                            ack_idx = int((data or {}).get("idx"))
+                        except Exception:
+                            ack_idx = -1
+                        if flow is not None and ack_idx >= 0 and flow.acknowledge(ack_idx):
+                            route_diag_state["media_chunks_acked_total"] = int(
+                                route_diag_state.get("media_chunks_acked_total") or 0
+                            ) + 1
+                            route_diag_state["last_media_ack_idx"] = ack_idx
+                            route_diag_state["last_media_key_tag"] = _key_tag(key)
+                            _update_route_protocol_runtime()
+                            route_outcome = "media_http_ack"
+                        else:
+                            route_outcome = "media_http_ack_ignored"
+                        return
+
                     if t == "media_http_abort":
                         try:
                             task0 = media_relay_tasks.pop(key, None)
@@ -3859,7 +4207,16 @@ class NatsRouteTunnelRuntime:
                                 task0.cancel()
                         except Exception:
                             pass
+                        media_relay_flow_windows.pop(key, None)
+                        route_diag_state["media_abort_total"] = int(
+                            route_diag_state.get("media_abort_total") or 0
+                        ) + 1
+                        route_diag_state["last_media_abort_reason"] = str(
+                            (data or {}).get("reason") or "unknown"
+                        )[:80]
+                        route_diag_state["last_media_key_tag"] = _key_tag(key)
                         _cleanup_media_relay_session(key, remove_temp=True)
+                        _update_route_protocol_runtime()
                         route_outcome = "media_http_abort"
                         return
 
@@ -4510,7 +4867,7 @@ class NatsRouteTunnelRuntime:
                 except Exception:
                     raw = b""
                 key0 = _route_key_from_subject(subject)
-                is_http = bool(key0 and "--http--" in key0)
+                is_http = bool(key0 and ("--http--" in key0 or "--media--" in key0))
                 if is_http:
                     lane_index = _route_http_lane_index(key0, route_http_worker_count)
                     target_queue = route_http_queues[lane_index]
@@ -4696,6 +5053,13 @@ class NatsRouteTunnelRuntime:
 
     async def close(self) -> None:
         service = self._service
+        route_reset = self.reset_callback
+        self.reset_callback = None
+        if callable(route_reset):
+            try:
+                await route_reset(reason="route_runtime_close", notify_browser=False)
+            except Exception:
+                pass
         route_http_executor = self._http_executor
         self._http_executor = None
         if route_http_executor is not None:
@@ -4703,9 +5067,16 @@ class NatsRouteTunnelRuntime:
                 route_http_executor.shutdown(wait=False, cancel_futures=True)
             except Exception:
                 pass
+        route_media_executor = self._media_executor
+        self._media_executor = None
+        if route_media_executor is not None:
+            try:
+                route_media_executor.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
         try:
             current_route_reset = getattr(service, "_hub_root_route_reset", None)
-            if current_route_reset is self.reset_callback:
+            if current_route_reset is route_reset:
                 setattr(service, "_hub_root_route_reset", None)
         except Exception:
             pass

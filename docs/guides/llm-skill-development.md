@@ -970,6 +970,20 @@ Use these rules for command and subscription handlers:
   started mutation cannot be interrupted safely, await its completion before
   allowing a newer mutation on the same key, then recheck the generation. This
   prevents an old write from landing after the new result.
+- Media skills own discovery, indexing, favorites and stable resource metadata;
+  they do not own browser file transport. Return or register a bounded core
+  `MediaResource` reference and let the core relay enforce range semantics,
+  cancellation, worker isolation and end-to-end flow control. Never run
+  `open()` / `seek()` / `read()` loops, SMB/NFS access, base64 chunking or
+  transport publication from a skill tool, subscription, timer or projection
+  builder. An `await publish(...)` call is not consumer backpressure unless the
+  receiving HTTP/media boundary returns explicit credit.
+- Test media-backed skills with storage behavior, not only catalog fixtures.
+  Open one resource, close it while a range request is active, immediately open
+  another, and inject a slow or stalled file operation. Runtime ping, heartbeat,
+  command and sync probes must remain live; in-flight bytes, workers and tasks
+  must stay bounded; the first request must produce an observable abort; and the
+  second resource must remain usable without a runtime or skill restart.
 - Do not detach a task merely to return from a subscription callback. Either
   await it in the runtime-tracked handler or register it with an explicit
   lifecycle owner, cancellation path and bounded task registry.
