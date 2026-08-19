@@ -407,12 +407,20 @@ def _prefer_mapped_drive_path(
 
 
 def _resolve_media_reference_target(path: str | Path, root: str | Path) -> tuple[Path, Path]:
-    # Resolve stored paths first so root-boundary checks use canonical identity
-    # even when I/O is later served through a mapped-drive alias.
-    canonical_root = Path(root).expanduser().resolve(strict=True)
+    mappings = _windows_mapped_drive_roots()
+    stored_target = Path(path).expanduser()
+    stored_root = Path(root).expanduser()
+    io_target = _prefer_mapped_drive_path(stored_target, mappings=mappings)
+    io_root = _prefer_mapped_drive_path(stored_root, mappings=mappings)
+    uses_alias = io_target != stored_target or io_root != stored_root
+
+    # Boundary checks still use canonical identities. Resolving a mapped path
+    # is acceptable here; only the path retained for subsequent I/O must keep
+    # the mapped-drive spelling.
+    canonical_root = io_root.resolve(strict=True)
     if not canonical_root.is_dir():
         raise NotADirectoryError("media_reference_root_not_directory")
-    canonical_target = Path(path).expanduser().resolve(strict=True)
+    canonical_target = io_target.resolve(strict=True)
     if not canonical_target.is_file():
         raise FileNotFoundError("media_reference_file_not_found")
     if canonical_target.suffix.lower() not in SUPPORTED_MEDIA_EXTENSIONS:
@@ -420,14 +428,9 @@ def _resolve_media_reference_target(path: str | Path, root: str | Path) -> tuple
     if not _is_relative_to(canonical_target, canonical_root):
         raise PermissionError("path_outside_media_reference_root")
 
-    # Some Windows network providers expose both UNC and mapped-drive paths but
-    # stall reads through UNC. Resolving the alias would turn it back into UNC.
-    mappings = _windows_mapped_drive_roots()
-    target = _prefer_mapped_drive_path(path, mappings=mappings)
-    root_path = _prefer_mapped_drive_path(root, mappings=mappings)
-    if target != Path(path) and (not target.is_file() or not root_path.is_dir()):
-        return canonical_target, canonical_root
-    return target, root_path
+    if uses_alias:
+        return io_target, io_root
+    return canonical_target, canonical_root
 
 
 def register_media_reference(
