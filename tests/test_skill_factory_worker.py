@@ -783,6 +783,46 @@ def test_orphaned_completion_resumes_bounded_deterministic_repair(
     assert not any(item.get("retryable") is False for item in failures)
 
 
+def test_orphaned_recovery_refuses_a_live_durable_worker_owner(tmp_path: Path) -> None:
+    task_id = "task.live-owner"
+    runs_root = tmp_path / "runs"
+    run_root = runs_root / task_id
+    input_dir = run_root / "input"
+    output_dir = run_root / "output"
+    runtime_dir = run_root / "runtime"
+    for path in (input_dir, output_dir, runtime_dir):
+        path.mkdir(parents=True)
+    (input_dir / "assignment.json").write_text(
+        json.dumps({"task_id": task_id}),
+        encoding="utf-8",
+    )
+    (output_dir / "last_message.md").write_text("Finished turn.", encoding="utf-8")
+    (output_dir / "codex-live.jsonl").write_text(
+        '{"type":"turn.completed"}\n',
+        encoding="utf-8",
+    )
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=runs_root,
+    )
+    (runtime_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "schema": "adaos.skill_factory.local_run.v1",
+                "status": "in_progress",
+                "owner": worker._current_process_owner(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="original worker process is still active"):
+        worker.recover_orphaned_codex_run(task_id)
+
+
 def test_return_to_prototype_uses_snapshot_but_cannot_modify_automation_skill(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"

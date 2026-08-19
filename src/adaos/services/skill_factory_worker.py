@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from uuid import uuid4
 
+import psutil
 import yaml
 
 from adaos.services.artifact_pipeline.storage import replace_with_retry
@@ -33,7 +34,7 @@ from adaos.services.workflow_artifacts import (
 )
 
 
-RUNNER_VERSION = "adaos-local-codex-worker/0.2.0"
+RUNNER_VERSION = "adaos-local-codex-worker/0.3.0"
 PACKET_SCHEMA = "adaos.skill_factory.codex_packet.v1"
 LOCAL_SESSION_SCHEMA = "adaos.skill_factory.local_run.v1"
 _log = logging.getLogger("adaos.skill_factory.local_worker")
@@ -514,6 +515,32 @@ class LocalSkillFactoryWorker:
             }
         )
 
+    @staticmethod
+    def _current_process_owner() -> dict[str, Any]:
+        process = psutil.Process(os.getpid())
+        return {
+            "pid": int(process.pid),
+            "create_time": float(process.create_time()),
+        }
+
+    @staticmethod
+    def _process_owner_is_active(value: Any) -> bool:
+        owner = dict(value) if isinstance(value, Mapping) else {}
+        try:
+            pid = int(owner.get("pid") or 0)
+            expected_create_time = float(owner.get("create_time"))
+        except (TypeError, ValueError):
+            return False
+        if pid <= 0:
+            return False
+        try:
+            process = psutil.Process(pid)
+            if abs(float(process.create_time()) - expected_create_time) > 0.001:
+                return False
+            return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+        except (psutil.Error, OSError):
+            return False
+
     def run_once(self, *, task_id: str | None = None) -> dict[str, Any]:
         self.ensure_registered()
         polled = self.factory.poll_assignment(self.node_id, task_id=task_id)
@@ -692,6 +719,12 @@ class LocalSkillFactoryWorker:
         local_status = str(local_state.get("status") or "").strip()
         if local_status in {"completed", "failed"}:
             raise ValueError(f"orphaned recovery is not available for local status {local_status!r}")
+        if self._process_owner_is_active(local_state.get("owner")):
+            # API/status readers execute in a different process, so a
+            # module-level lock cannot prove that the detached worker died.
+            # The PID plus process creation time is the durable ownership
+            # fence; PID reuse therefore cannot steal finalization.
+            raise ValueError("orphaned recovery refused: the original worker process is still active")
 
         events_path = output_dir / "codex-live.jsonl"
         final_message_path = output_dir / "last_message.md"
@@ -839,6 +872,16 @@ class LocalSkillFactoryWorker:
         agent_profile = dict((assignment.get("codex") or {}).get("agent_profile") or {})
         for path in (input_dir, output_dir, runtime_dir):
             path.mkdir(parents=True, exist_ok=True)
+        process_owner = self._current_process_owner()
+        _write_json(
+            runtime_dir / "state.json",
+            {
+                "schema": LOCAL_SESSION_SCHEMA,
+                "status": "in_progress",
+                "owner": process_owner,
+                "started_at": _now_iso(),
+            },
+        )
 
         try:
             self._progress(task_id, "workspace_preparing", "Preparing isolated local workspace")
@@ -989,15 +1032,29 @@ class LocalSkillFactoryWorker:
             }
             _write_json(output_dir / "result.json", result)
             completed = self.factory.complete_task(result)
-            _write_json(runtime_dir / "state.json", {"schema": LOCAL_SESSION_SCHEMA, "status": "completed", "completed_at": _now_iso()})
+            _write_json(
+                runtime_dir / "state.json",
+                {
+                    "schema": LOCAL_SESSION_SCHEMA,
+                    "status": "completed",
+                    "owner": process_owner,
+                    "completed_at": _now_iso(),
+                },
+            )
             return {"ok": True, "assignment": dict(assignment), "result": result, "completed": completed}
         except TaskExecutionCancelled as exc:
             cancelled = {"status": "cancelled", "error": str(exc), "cancelled_at": _now_iso()}
-            _write_json(runtime_dir / "state.json", {"schema": LOCAL_SESSION_SCHEMA, **cancelled})
+            _write_json(
+                runtime_dir / "state.json",
+                {"schema": LOCAL_SESSION_SCHEMA, "owner": process_owner, **cancelled},
+            )
             return {"ok": False, "assignment": dict(assignment), **cancelled, "run_dir": str(run_root)}
         except Exception as exc:
             failure = {"status": "failed", "error": f"{type(exc).__name__}: {exc}", "failed_at": _now_iso()}
-            _write_json(runtime_dir / "state.json", {"schema": LOCAL_SESSION_SCHEMA, **failure})
+            _write_json(
+                runtime_dir / "state.json",
+                {"schema": LOCAL_SESSION_SCHEMA, "owner": process_owner, **failure},
+            )
             try:
                 self.factory.fail_task(
                     {
