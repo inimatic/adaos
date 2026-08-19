@@ -4,8 +4,10 @@ from types import SimpleNamespace
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.distributed_runtime import (
+    SkillToolTopologyAdapter,
     get_distributed_runtime,
     register_distributed_runtime,
+    register_topology_phase_receiver,
 )
 from adaos.services.project_deployment import (
     get_project_deployment_runtime,
@@ -46,7 +48,9 @@ def test_default_runtimes_share_durable_store_and_publish_local_inventory(monkey
     assert "project.activate" in node.capabilities
     assert node.endpoints[0].role == "deployment"
     assert payload["protocols"]["distributed_topology"] == "1"
+    assert isinstance(distributed.topology_adapter, SkillToolTopologyAdapter)
 
     register_project_deployment_runtime(None)
     register_distributed_runtime(None)
     register_local_deployment_receiver(None)
+    register_topology_phase_receiver(None)

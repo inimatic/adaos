@@ -1,4 +1,11 @@
 from .authorization import DistributedAuthorizationError, DistributedPrincipal
+from .adapters import (
+    HttpTopologyPhaseTransport,
+    SkillToolTopologyAdapter,
+    execute_registered_topology_phase,
+    execute_topology_phase_request,
+    register_topology_phase_receiver,
+)
 from .bootstrap import configure_distributed_runtime
 from .operations import (
     RetryableTopologyPhaseError,
@@ -44,8 +51,10 @@ __all__ = [
     "DistributedRuntimeError",
     "DistributedRuntimeStore",
     "DistributedStoreError",
+    "HttpTopologyPhaseTransport",
     "RetryableTopologyPhaseError",
     "StaleAuthorityEpochError",
+    "SkillToolTopologyAdapter",
     "TopologyAdapter",
     "TopologyExecutionError",
     "TopologyExecutor",
@@ -55,6 +64,9 @@ __all__ = [
     "UncertainTopologyPhaseError",
     "build_distributed_projection",
     "configure_distributed_runtime",
+    "execute_registered_topology_phase",
+    "execute_topology_phase_request",
     "get_distributed_runtime",
     "register_distributed_runtime",
+    "register_topology_phase_receiver",
 ]

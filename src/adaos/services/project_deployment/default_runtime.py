@@ -21,6 +21,13 @@ from adaos.services.artifact_pipeline.channels import ReleaseRepository
 from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
 from adaos.services.artifact_pipeline.releases import ReleasePlan
 from adaos.services.distributed_runtime.bootstrap import configure_distributed_runtime
+from adaos.services.distributed_runtime import (
+    HttpTopologyPhaseTransport,
+    SkillToolTopologyAdapter,
+    TopologyExecutionError,
+    UncertainTopologyPhaseError,
+    register_topology_phase_receiver,
+)
 from adaos.services.project_deployment.adapters import (
     LocalComponentDeploymentAdapter,
     RoutingComponentDeploymentAdapter,
@@ -302,7 +309,82 @@ def configure_default_distributed_runtimes(
             deployment_store=deployment.store,
             projection_publisher=_publisher(ctx=current, topic="distributed.topology.projection"),
         )
+
+        def execute_topology_tool(
+            skill_id: str,
+            tool: str,
+            payload: Mapping[str, Any],
+        ) -> Mapping[str, Any]:
+            selected_instance_id = str(payload.get("selected_instance_id") or "")
+            selected = next(
+                (
+                    item
+                    for item in (
+                        payload.get("source_instance"),
+                        payload.get("target_instance"),
+                    )
+                    if isinstance(item, Mapping)
+                    and str(item.get("instance_id") or "") == selected_instance_id
+                ),
+                None,
+            )
+            if selected is None:
+                raise TopologyExecutionError("topology_skill_instance_missing")
+            try:
+                activation = deployment.store.get_activation(
+                    str(selected.get("activation_id") or "")
+                )
+            except FileNotFoundError as exc:
+                raise TopologyExecutionError(
+                    "topology_skill_activation_missing"
+                ) from exc
+            if (
+                activation.status != "active"
+                or activation.node_id != str(conf.node_id)
+                or activation.component_ref != f"skill:{skill_id}"
+                or activation.release_digest
+                != str(selected.get("release_digest") or "")
+                or activation.generation
+                != int(selected.get("runtime_generation") or 0)
+            ):
+                raise TopologyExecutionError(
+                    "topology_skill_activation_identity_mismatch"
+                )
+            try:
+                result = AdaOSComponentLifecycleHooks(current)._skill_manager().run_tool(
+                    skill_id,
+                    tool,
+                    payload,
+                    timeout=600.0,
+                    bypass_yjs_guard=True,
+                )
+            except TimeoutError as exc:
+                raise UncertainTopologyPhaseError(
+                    "topology_skill_adapter_timeout"
+                ) from exc
+            except (KeyError, FileNotFoundError) as exc:
+                raise TopologyExecutionError(
+                    "topology_skill_adapter_unavailable"
+                ) from exc
+            if not isinstance(result, Mapping):
+                raise TopologyExecutionError("topology_skill_adapter_result_invalid")
+            return result
+
+        distributed.topology_adapter = SkillToolTopologyAdapter(
+            store=distributed.store,
+            local_node_id=str(conf.node_id),
+            local_executor=execute_topology_tool,
+            remote=HttpTopologyPhaseTransport(
+                endpoint_resolver=endpoint,
+                token_provider=lambda: str(conf.token or ""),
+                source_node_id=str(conf.node_id),
+            ),
+        )
         register_local_deployment_receiver(local_adapter, node_id=str(conf.node_id))
+        register_topology_phase_receiver(
+            execute_topology_tool,
+            node_id=str(conf.node_id),
+        )
         _configured_key = key
         return {
             "ok": True,
