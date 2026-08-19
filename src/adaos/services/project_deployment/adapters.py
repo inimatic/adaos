@@ -406,10 +406,8 @@ class RoutingComponentDeploymentAdapter:
         if node.node_id == self.local_node_id:
             return self.local.execute_phase(**kwargs)
         try:
-            remote_kwargs = dict(kwargs)
-            remote_kwargs.pop("node", None)
             return self.remote.execute_component_phase(
-                node_id=node.node_id, **remote_kwargs
+                node_id=node.node_id, **kwargs
             )
         except UncertainDeploymentPhaseError:
             raise

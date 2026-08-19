@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 from typing import Any, Mapping
 
 import pytest
+import httpx
 
 from adaos.domain.artifact_release import ArtifactSourceRef, ProjectRelease
 from adaos.domain.project_deployment import (
@@ -18,9 +20,13 @@ from adaos.services.artifact_pipeline.packages import (
 from adaos.services.artifact_pipeline.releases import ReleasePlan
 from adaos.services.project_deployment import (
     LocalComponentDeploymentAdapter,
+    HttpNodeDeploymentTransport,
     NoopComponentLifecycleHooks,
+    ProjectDeploymentExecutionError,
     RoutingComponentDeploymentAdapter,
     UncertainDeploymentPhaseError,
+    execute_remote_component_phase,
+    register_local_deployment_receiver,
 )
 
 
@@ -203,3 +209,112 @@ def replace_node(change: DeploymentPlanChange, node_id: str) -> DeploymentPlanCh
     from dataclasses import replace
 
     return replace(change, node_id=node_id)
+
+
+def test_remote_receiver_revalidates_identity_and_package_digest(tmp_path: Path) -> None:
+    package = _package(tmp_path)
+    release = _release(package)
+    store = ContentAddressedPackageStore(tmp_path / "remote-packages")
+    adapter = LocalComponentDeploymentAdapter(
+        local_node_id="node-b",
+        workspace_root=tmp_path / "remote-workspace",
+        state_root=tmp_path / "remote-state",
+        package_store=store,
+        fetch_package=lambda ref: store.read(ref.digest),
+        hooks=NoopComponentLifecycleHooks(),
+    )
+    register_local_deployment_receiver(adapter, node_id="node-b")
+    change = replace_node(_change("install", package), "node-b")
+    payload = {
+        "schema": "adaos.project.remote_component_phase.v1",
+        "source_node_id": "node-a",
+        "target_node_id": "node-b",
+        "phase": "fetch",
+        "node": _node("node-b").to_dict(),
+        "change": change.to_dict(),
+        "desired": _desired(release).to_dict(),
+        "release_plan": {
+            "schema": "adaos.artifact.release_plan.v1",
+            **release.explain(),
+        },
+        "package": package.ref.to_dict(),
+        "current_activation": None,
+        "idempotency_key": "remote:test-worker:fetch",
+        "attempt": 1,
+        "package_archive_b64": base64.b64encode(package.archive_bytes).decode("ascii"),
+    }
+
+    result = execute_remote_component_phase(payload)
+
+    assert result["schema"] == "adaos.project.remote_component_phase_result.v1"
+    assert result["target_node_id"] == "node-b"
+    assert store.verify(package.ref.digest).ref == package.ref
+    with pytest.raises(ProjectDeploymentExecutionError, match="target_identity_mismatch"):
+        execute_remote_component_phase({**payload, "target_node_id": "node-c"})
+    register_local_deployment_receiver(None)
+
+
+def test_http_transport_sends_exact_contract_and_marks_lost_ack_uncertain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package = _package(tmp_path)
+    release = _release(package)
+    change = replace_node(_change("install", package), "node-b")
+    captured: dict[str, Any] = {}
+
+    def successful_post(url: str, **kwargs: Any) -> httpx.Response:
+        captured.update(url=url, **kwargs)
+        return httpx.Response(
+            200,
+            json={
+                "schema": "adaos.project.remote_component_phase_result.v1",
+                "target_node_id": "node-b",
+                "phase": "fetch",
+                "receipt": {"package_digest": package.ref.digest},
+            },
+        )
+
+    monkeypatch.setattr(httpx, "post", successful_post)
+    transport = HttpNodeDeploymentTransport(
+        endpoint_resolver=lambda node_id: "http://node-b:8778",
+        token_provider=lambda: "subnet-token",
+        package_reader=lambda digest: package.archive_bytes,
+        source_node_id="node-a",
+    )
+    receipt = transport.execute_component_phase(
+        node_id="node-b",
+        phase="fetch",
+        node=_node("node-b"),
+        change=change,
+        desired=_desired(release),
+        release_plan=release,
+        package=package.ref,
+        current_activation=None,
+        idempotency_key="remote:test-worker:fetch",
+        attempt=1,
+    )
+
+    assert receipt["package_digest"] == package.ref.digest
+    assert captured["url"] == "http://node-b:8778/api/node/project-deployment/phase"
+    assert captured["json"]["node"]["node_id"] == "node-b"
+    assert captured["headers"]["X-AdaOS-Token"] == "subnet-token"
+
+    def lost_ack(*args: Any, **kwargs: Any) -> httpx.Response:
+        request = httpx.Request("POST", str(args[0]))
+        raise httpx.ReadTimeout("ack lost", request=request)
+
+    monkeypatch.setattr(httpx, "post", lost_ack)
+    with pytest.raises(UncertainDeploymentPhaseError, match="timed out after dispatch"):
+        transport.execute_component_phase(
+            node_id="node-b",
+            phase="fetch",
+            node=_node("node-b"),
+            change=change,
+            desired=_desired(release),
+            release_plan=release,
+            package=package.ref,
+            current_activation=None,
+            idempotency_key="remote:test-worker:fetch-uncertain",
+            attempt=1,
+        )

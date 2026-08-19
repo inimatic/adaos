@@ -54,6 +54,9 @@ _CONTROL_PLANE_CACHE_TTL_S = 1.0
 _CONTROL_PLANE_CACHE: dict[str, tuple[float, list[Any]]] = {}
 _CONTROL_PLANE_CACHE_LOCK = threading.Lock()
 _CONTROL_PLANE_CACHE_BUILD_LOCKS: dict[str, threading.Lock] = {}
+_DEPLOYMENT_INVENTORY_CACHE_TTL_S = 5.0
+_DEPLOYMENT_INVENTORY_CACHE: tuple[float, dict[str, Any]] = (0.0, {})
+_DEPLOYMENT_INVENTORY_CACHE_LOCK = threading.Lock()
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:
@@ -170,6 +173,7 @@ def current_node_status_payload() -> dict[str, Any]:
         runtime_state["sidecar_source"] = "reliability.sidecar_runtime_snapshot"
         supervisor_runtime["runtime"] = runtime_state
     core_update_status = supervisor_runtime.get("status")
+    deployment = _deployment_inventory_status_payload()
     return {
         **identity,
         "runtime": {
@@ -180,7 +184,30 @@ def current_node_status_payload() -> dict[str, Any]:
             "core_update_status": core_update_status if isinstance(core_update_status, dict) else {},
         },
         "environment": runtime_environment,
+        "deployment": deployment,
     }
+
+
+def _deployment_inventory_status_payload() -> dict[str, Any]:
+    global _DEPLOYMENT_INVENTORY_CACHE
+    now = time.monotonic()
+    cached_at, cached = _DEPLOYMENT_INVENTORY_CACHE
+    if cached and now - cached_at < _DEPLOYMENT_INVENTORY_CACHE_TTL_S:
+        return dict(cached)
+    with _DEPLOYMENT_INVENTORY_CACHE_LOCK:
+        cached_at, cached = _DEPLOYMENT_INVENTORY_CACHE
+        if cached and now - cached_at < _DEPLOYMENT_INVENTORY_CACHE_TTL_S:
+            return dict(cached)
+        try:
+            from adaos.services.project_deployment.default_runtime import (
+                deployment_runtime_inventory_payload,
+            )
+
+            payload = deployment_runtime_inventory_payload()
+        except Exception:
+            payload = {}
+        _DEPLOYMENT_INVENTORY_CACHE = (now, dict(payload))
+        return dict(payload)
 
 
 def _bounded_interval_seconds(raw: Any, *, default: float, minimum: float) -> float:
@@ -393,6 +420,8 @@ def compact_node_status_transport_payload(payload: dict[str, Any]) -> dict[str, 
         "core_update_status": _compact_core_update_status(runtime.get("core_update_status")),
     }
     compact["environment"] = environment
+    deployment = payload.get("deployment")
+    compact["deployment"] = dict(deployment) if isinstance(deployment, dict) else {}
     meta = dict(payload.get("_meta") or {}) if isinstance(payload.get("_meta"), dict) else {}
     meta.update(
         {

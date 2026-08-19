@@ -31,6 +31,11 @@ from .store import (
     ProjectDeploymentStore,
     ProjectDeploymentStoreError,
 )
+from .transport import (
+    HttpNodeDeploymentTransport,
+    execute_remote_component_phase,
+    register_local_deployment_receiver,
+)
 
 __all__ = [
     "ComponentDeploymentAdapter",
@@ -40,6 +45,7 @@ __all__ = [
     "DeploymentInspection",
     "NodeInventoryProvider",
     "NodeDeploymentTransport",
+    "HttpNodeDeploymentTransport",
     "NoopComponentLifecycleHooks",
     "LocalComponentDeploymentAdapter",
     "RoutingComponentDeploymentAdapter",
@@ -59,5 +65,7 @@ __all__ = [
     "build_project_deployment_projection",
     "configure_project_deployment_runtime",
     "get_project_deployment_runtime",
+    "execute_remote_component_phase",
+    "register_local_deployment_receiver",
     "register_project_deployment_runtime",
 ]
