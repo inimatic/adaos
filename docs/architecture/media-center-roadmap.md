@@ -3,7 +3,7 @@
 Status: implementation roadmap for the
 [Distributed Media Center Target Architecture](media-center-target-architecture.md).
 
-Last reviewed: 2026-08-19.
+Last reviewed: 2026-08-20.
 
 ## Outcome
 
@@ -142,14 +142,17 @@ known compatibility obligations.
 - [x] `[must]` `MC0-04` Convert active defects and bounded implementation slices
   into Issue Tracker entries linked to these stable task ids; do not duplicate
   the roadmap checklist in issues.
-- [ ] `[should]` `MC0-05` Capture representative library fixtures: 20,000-item
+- [x] `[should]` `MC0-05` Capture representative library fixtures: 20,000-item
   synthetic catalog, nested audiobook folders, series/seasons, album/disc
   metadata, duplicates, unavailable nodes, non-ASCII names, unsupported codecs,
   and slow/blocked filesystems.
-- [ ] `[should]` `MC0-06` Record supported minimum node, browser, TV input, and
+- [x] `[should]` `MC0-06` Record supported minimum node, browser, TV input, and
   network profiles plus explicit CPU, memory, I/O, and latency budgets.
 
 Checked baseline evidence: [Distributed Media Center Baseline - 2026-08-19](distributed-media-center-baseline-2026-08-19.md).
+
+Validation fixtures and budgets:
+[Media Center Validation Profile](media-center-validation-profile.md).
 
 ## Milestone MC1: Project Composition And Agent Deployment
 
