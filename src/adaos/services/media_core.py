@@ -345,7 +345,7 @@ def _media_reference_connection(db_path: str | Path | None = None) -> sqlite3.Co
 
 
 def _windows_mapped_drive_roots() -> tuple[tuple[str, str], ...]:
-    """Return active Windows drive mappings as ``(UNC root, drive root)`` pairs."""
+    """Return active Windows drive mappings as (UNC root, drive root) pairs."""
     if os.name != "nt":
         return ()
     try:
@@ -377,9 +377,9 @@ def _windows_mapped_drive_roots() -> tuple[tuple[str, str], ...]:
                 result = int(get_connection(drive, buffer, ctypes.byref(size)))
         except (OSError, ValueError):
             continue
-        remote = str(buffer.value or "").rstrip("\\/")
-        if result == 0 and remote.startswith("\\"):
-            mappings.append((remote, f"{drive}\"))
+        remote = str(buffer.value or "").rstrip("/" + os.sep)
+        if result == 0 and remote.startswith(os.sep * 2):
+            mappings.append((remote, drive + os.sep))
     mappings.sort(key=lambda item: len(item[0]), reverse=True)
     return tuple(mappings)
 
@@ -394,14 +394,14 @@ def _prefer_mapped_drive_path(
     candidates = _windows_mapped_drive_roots() if mappings is None else mappings
     raw_folded = raw.casefold()
     for remote_root, drive_root in candidates:
-        remote = str(remote_root).rstrip("\\/")
+        remote = str(remote_root).rstrip("/" + os.sep)
         remote_folded = remote.casefold()
-        if raw_folded != remote_folded and not raw_folded.startswith(remote_folded + "\"):
+        if raw_folded != remote_folded and not raw_folded.startswith(remote_folded + os.sep):
             continue
-        suffix = raw[len(remote) :].lstrip("\\/")
+        suffix = raw[len(remote) :].lstrip("/" + os.sep)
         translated = Path(str(drive_root))
         if suffix:
-            translated = translated.joinpath(*suffix.replace("/", "\").split("\"))
+            translated = translated.joinpath(*suffix.replace("/", os.sep).split(os.sep))
         return translated
     return Path(path)
 
