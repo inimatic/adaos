@@ -24,6 +24,7 @@
     "subject_refs": {"type": "array", "maxItems": 100, "uniqueItems": true, "items": {"$ref": "#/$defs/subjectRef"}},
     "contract_inputs": {"type": "array", "maxItems": 200, "items": {"$ref": "#/$defs/contractInput"}},
     "acceptance_profiles": {"type": "array", "maxItems": 100, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 160}},
+    "acceptance_requirements": {"type": "array", "maxItems": 50, "items": {"$ref": "#/$defs/acceptanceRequirement"}},
     "scratch": {
       "type": "object", "required": ["owner", "access", "path"],
       "properties": {"owner": {"const": "session"}, "access": {"const": "read-write"}, "path": {"type": "string", "minLength": 1}},
@@ -123,6 +124,19 @@
         "digest_mode": {"enum": ["canonical-json", "bytes"]},
         "content_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
         "path": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "acceptanceRequirement": {
+      "type": "object",
+      "required": ["id", "profile", "provider_ref", "operation", "required"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$"},
+        "profile": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,159}$"},
+        "provider_ref": {"type": "string", "pattern": "^skill:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"},
+        "operation": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"},
+        "required": {"type": "boolean"},
+        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600}
       },
       "additionalProperties": false
     }

@@ -658,6 +658,44 @@ def test_development_session_supports_domain_neutral_contract_handoff(project_sp
     assert session["handoff"]["agent_profile"]["provider"] == "local-agent-provider"
 
 
+def test_development_session_binds_executable_acceptance_to_admitted_consumer(project_space) -> None:
+    _skill(project_space["skills"], "candidate_skill")
+    compositions.create(_project("candidate_project", "candidate_skill"))
+    requirement = {
+        "id": "consumer.contracts",
+        "profile": "consumer.contracts",
+        "provider_ref": "skill:consumer_skill",
+        "operation": "validate_development_candidate",
+        "required": True,
+        "timeout_seconds": 120,
+    }
+    created = development_sessions.create(
+        "candidate_project",
+        context_members=[
+            {
+                "ref": "skill:consumer_skill",
+                "relation": "contract-consumer",
+                "access": "read-only",
+                "context": "contract",
+            }
+        ],
+        acceptance_profiles=["project.conformance", "consumer.contracts"],
+        acceptance_requirements=[requirement],
+    )
+    assert created["session"]["acceptance_requirements"] == [requirement]
+
+    with pytest.raises(
+        development_sessions.DevelopmentSessionError,
+        match="acceptance providers must be admitted",
+    ):
+        development_sessions.create(
+            "candidate_project",
+            context_members=[],
+            acceptance_requirements=[requirement],
+            session_id="candidate_outside_consumer",
+        )
+
+
 def test_development_session_uses_filtered_artifact_view_for_agent_audience(project_space, tmp_path: Path) -> None:
     _skill(project_space["skills"], "tlp_direction")
     compositions.create(_project("tlp_research", "tlp_direction"))

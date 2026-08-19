@@ -1450,7 +1450,7 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
         }
     )
 
-    assert calls == ["checkpoint", "activate:recipes_skill", "ensure", "notify"]
+    assert calls == ["activate:recipes_skill", "checkpoint", "ensure", "notify"]
     assert saved[-1]["completion_readiness"]["ok"] is True
     assert saved[-1]["completion_readiness"]["materialization"]["preview_webspace_id"] == "desktop-dev"
     assert saved[-1]["completion_readiness"]["task_id"] == "task.1"
@@ -1731,6 +1731,69 @@ def test_finalize_records_live_readiness_failure_without_success_chat(tmp_path: 
     assert notified == []
 
 
+def test_finalize_stops_before_checkpoint_when_consumer_acceptance_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    saved: list[dict] = []
+    checkpoints: list[str] = []
+    class FakeWorkflow:
+        def snapshot_current_automation(self, *args, **kwargs):  # noqa: ARG002
+            return {"path": "automation/task.1"}
+
+        def transition(self, *args, **kwargs):  # noqa: ARG002
+            return {"ok": True}
+
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: FakeWorkflow())
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_prepare_and_activate_dev_skill",
+        lambda self, skill_id, **kwargs: {"ok": True, "id": skill_id, "version": "0.1.0"},
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_run_development_acceptance",
+        lambda self, session, **kwargs: {
+            "schema": "adaos.builder.acceptance_summary.v1",
+            "ok": False,
+            "errors": ["consumer.contracts: prepare_attempt is incompatible"],
+            "receipts": [],
+        },
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_checkpoint_completed_artifacts",
+        lambda self, session: checkpoints.append("checkpoint") or [],
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_save_session",
+        lambda self, value: saved.append(dict(value)),
+    )
+
+    service._finalize_completed_session(
+        {
+            "session_id": "automation.skill.research_skill",
+            "development_session_id": "dev_research_skill",
+            "object_type": "skill",
+            "object_id": "research_skill",
+            "companion_skill_id": "research_skill",
+            "webspace_id": "research-dev",
+            "current_task_id": "task.1",
+            "change_id": "change-1",
+            "status": "completed",
+        }
+    )
+
+    assert checkpoints == []
+    assert saved[-1]["status"] == "failed"
+    assert saved[-1]["last_failure"]["stage"] == "consumer_acceptance", [
+        item.get("last_failure") for item in saved
+    ]
+    assert saved[-1]["completion_readiness"]["acceptance"]["ok"] is False
+
+
 def test_finalize_compensates_failed_follow_active_preview_after_workflow_completion(
     tmp_path: Path,
     monkeypatch,
@@ -1839,7 +1902,7 @@ def test_finalize_fails_when_forge_checkpoint_is_not_confirmed(tmp_path: Path, m
     assert saved[-1]["completion_readiness"]["ok"] is False
     assert "Forge checkpoint failed" in saved[-1]["completion_readiness"]["error"]
     assert saved[-1]["last_failure"]["stage"] == "forge_checkpoint"
-    assert activations == []
+    assert activations == ["recipes_skill"]
 
 
 def test_explicit_checkpoint_reconciliation_does_not_rerun_codex(tmp_path: Path, monkeypatch) -> None:

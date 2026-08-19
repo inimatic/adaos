@@ -397,6 +397,10 @@ class BuilderAutomationService:
             "agent_profile": copy.deepcopy(session["handoff"].get("agent_profile")),
             "artifact_inputs": artifact_receipts,
             "instruction_inputs": instruction_receipts,
+            "acceptance_profiles": list(session.get("acceptance_profiles") or []),
+            "acceptance_requirements": copy.deepcopy(
+                list(session.get("acceptance_requirements") or [])
+            ),
             "prohibited_actions": list(session["handoff"]["prohibited_actions"]),
         }
         return {**identity, "digest": _canonical_digest(identity)}, attachments
@@ -2295,6 +2299,7 @@ class BuilderAutomationService:
             "completed_at": None,
         }
         failed_checkpoints: list[Mapping[str, Any]] = []
+        acceptance_failed = False
         existing_binding: dict[str, Any] = {}
         preview_target: Mapping[str, Any] | None = None
         try:
@@ -2312,6 +2317,34 @@ class BuilderAutomationService:
                     object_id,
                     task_id=str(current.get("current_task_id") or "").strip() or None,
                 )
+            companion_skill_ids = self._session_companion_skill_ids(session)
+            if companion_skill_ids:
+                readiness["skills"] = [
+                    self._prepare_and_activate_dev_skill(
+                        skill_id,
+                        webspace_id=webspace_id,
+                    )
+                    for skill_id in companion_skill_ids
+                ]
+                readiness["skill"] = readiness["skills"][0]
+
+            if pending_transition != "return_to_prototype":
+                readiness["acceptance"] = self._run_development_acceptance(
+                    session,
+                    activations=list(readiness.get("skills") or []),
+                )
+                if not bool(readiness["acceptance"].get("ok")):
+                    acceptance_failed = True
+                    raise RuntimeError(
+                        "Consumer acceptance failed: "
+                        + "; ".join(
+                            str(item) for item in readiness["acceptance"].get("errors") or []
+                        )
+                    )
+
+            # Forge checkpoints are durable release inputs.  Create them only
+            # after activation and every required consumer-owned acceptance
+            # receipt have passed, never merely after candidate-owned tests.
             previous_readiness = (
                 session.get("completion_readiness")
                 if isinstance(session.get("completion_readiness"), Mapping)
@@ -2337,16 +2370,6 @@ class BuilderAutomationService:
                     for item in failed_checkpoints
                 )
                 raise RuntimeError(f"Forge checkpoint failed for {failed_refs}")
-            companion_skill_ids = self._session_companion_skill_ids(session)
-            if companion_skill_ids:
-                readiness["skills"] = [
-                    self._prepare_and_activate_dev_skill(
-                        skill_id,
-                        webspace_id=webspace_id,
-                    )
-                    for skill_id in companion_skill_ids
-                ]
-                readiness["skill"] = readiness["skills"][0]
 
             if object_type == "scenario" and object_id:
                 from adaos.services.builder.workbench import BuilderWorkbenchService
@@ -2600,7 +2623,13 @@ class BuilderAutomationService:
             current.pop("finalizing_task_id", None)
             current.pop("pending_workflow_transition", None)
             current["last_failure"] = {
-                "stage": "forge_checkpoint" if failed_checkpoints else "live_readiness",
+                "stage": (
+                    "forge_checkpoint"
+                    if failed_checkpoints
+                    else "consumer_acceptance"
+                    if acceptance_failed
+                    else "live_readiness"
+                ),
                 "message": readiness["error"],
                 "updated_at": readiness["completed_at"],
             }
@@ -2792,6 +2821,183 @@ class BuilderAutomationService:
             "slot": slot,
             "resolved_manifest": str(prepared.resolved_manifest),
         }
+
+    def _run_development_acceptance(
+        self,
+        session: Mapping[str, Any],
+        *,
+        activations: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Run consumer-owned, digest-bound checks after DEV activation.
+
+        Builder deliberately knows nothing about research, media, home control,
+        or any other consumer domain.  A Development Session may instead name
+        an admitted read-only context skill and one of its public operations.
+        The provider receives the exact immutable instructions plus the active
+        DEV candidate identity and returns a typed receipt.  Required failures
+        stop checkpointing and publication.
+        """
+
+        development_session_id = str(session.get("development_session_id") or "").strip()
+        if not development_session_id:
+            return {
+                "schema": "adaos.builder.acceptance_summary.v1",
+                "ok": True,
+                "profiles": [],
+                "requirements": [],
+                "receipts": [],
+                "errors": [],
+            }
+        from adaos.sdk.builder import development_sessions
+
+        policy = development_sessions.get(development_session_id)
+        requirements = [
+            dict(item)
+            for item in policy.get("acceptance_requirements") or []
+            if isinstance(item, Mapping)
+        ]
+        profiles = [str(item) for item in policy.get("acceptance_profiles") or []]
+        if not requirements:
+            return {
+                "schema": "adaos.builder.acceptance_summary.v1",
+                "ok": True,
+                "profiles": profiles,
+                "requirements": [],
+                "receipts": [],
+                "errors": [],
+            }
+        admitted_context = {
+            str(item.get("ref") or ""): dict(item)
+            for item in policy.get("context_members") or []
+            if isinstance(item, Mapping)
+        }
+        instructions: dict[str, Any] = {}
+        instruction_identities: list[dict[str, Any]] = []
+        for descriptor in policy.get("instruction_inputs") or []:
+            if not isinstance(descriptor, Mapping):
+                continue
+            kind = str(descriptor.get("kind") or "").strip()
+            loaded = development_sessions.get_instruction(development_session_id, kind)
+            instruction_identities.append(
+                {
+                    "kind": kind,
+                    "content_digest": descriptor.get("content_digest"),
+                    "media_type": descriptor.get("media_type"),
+                }
+            )
+            if isinstance(loaded.get("value"), Mapping):
+                instructions[kind] = dict(loaded["value"])
+
+        candidate_ref = f"{str(session.get('object_type') or '').strip()}:{str(session.get('object_id') or '').strip()}"
+        candidate = next(
+            (
+                dict(item)
+                for item in activations
+                if f"skill:{str(item.get('id') or '').strip()}" == candidate_ref
+            ),
+            dict(activations[0]) if activations else {},
+        )
+        request = {
+            "schema": "adaos.builder.acceptance_candidate.v1",
+            "development_session_id": development_session_id,
+            "project_ref": policy["project_ref"],
+            "candidate_ref": candidate_ref,
+            "candidate": candidate,
+            "subject_refs": copy.deepcopy(list(policy.get("subject_refs") or [])),
+            "contract_inputs": copy.deepcopy(list(policy.get("contract_inputs") or [])),
+            "instruction_inputs": instruction_identities,
+            "instructions": instructions,
+        }
+
+        from adaos.adapters.db import SqliteSkillRegistry
+        from adaos.services.agent_context import get_ctx
+        from adaos.services.skill.manager import SkillManager
+
+        ctx = get_ctx()
+        manager = SkillManager(
+            repo=ctx.skills_repo,
+            registry=SqliteSkillRegistry(ctx.sql),
+            git=ctx.git,
+            paths=ctx.paths,
+            bus=getattr(ctx, "bus", None),
+            caps=ctx.caps,
+            settings=ctx.settings,
+        )
+        receipts: list[dict[str, Any]] = []
+        failures: list[str] = []
+        for requirement in requirements:
+            requirement_id = str(requirement["id"])
+            profile = str(requirement["profile"])
+            provider_ref = str(requirement["provider_ref"])
+            provider = admitted_context.get(provider_ref)
+            if not provider or str(provider.get("relation") or "") != "contract-consumer":
+                failures.append(
+                    f"{requirement_id}: provider is not an admitted contract-consumer"
+                )
+                continue
+            provider_id = provider_ref.partition(":")[2]
+            operation = str(requirement["operation"])
+            required = bool(requirement["required"])
+            try:
+                raw = manager.run_tool(
+                    provider_id,
+                    operation,
+                    {"request": {**request, "profile": profile}},
+                    timeout=float(requirement.get("timeout_seconds") or 300),
+                )
+                if not isinstance(raw, Mapping):
+                    raise ValueError("acceptance provider returned a non-object receipt")
+                value = dict(raw)
+                if value.get("schema") != "adaos.builder.acceptance_receipt.v1":
+                    raise ValueError("acceptance provider returned an incompatible receipt schema")
+                if str(value.get("profile") or "") != profile:
+                    raise ValueError("acceptance receipt profile differs from the requirement")
+                provider_ok = bool(value.get("ok"))
+                receipt_identity = {
+                    **value,
+                    "requirement_id": requirement_id,
+                    "provider_ref": provider_ref,
+                    "operation": operation,
+                    "required": required,
+                    "candidate_ref": candidate_ref,
+                    "development_session_id": development_session_id,
+                }
+                receipt = {
+                    **receipt_identity,
+                    "digest": _canonical_digest(receipt_identity),
+                }
+                receipts.append(receipt)
+                if required and not provider_ok:
+                    details = "; ".join(str(item) for item in value.get("errors") or [])
+                    failures.append(f"{requirement_id}: {details or 'consumer acceptance failed'}")
+            except Exception as exc:
+                receipt_identity = {
+                    "schema": "adaos.builder.acceptance_receipt.v1",
+                    "profile": profile,
+                    "ok": False,
+                    "checks": [],
+                    "errors": [f"{type(exc).__name__}: {exc}"],
+                    "requirement_id": requirement_id,
+                    "provider_ref": provider_ref,
+                    "operation": operation,
+                    "required": required,
+                    "candidate_ref": candidate_ref,
+                    "development_session_id": development_session_id,
+                }
+                receipts.append(
+                    {**receipt_identity, "digest": _canonical_digest(receipt_identity)}
+                )
+                if required:
+                    failures.append(f"{requirement_id}: {type(exc).__name__}: {exc}")
+        identity = {
+            "schema": "adaos.builder.acceptance_summary.v1",
+            "ok": not failures,
+            "profiles": profiles,
+            "requirements": requirements,
+            "receipts": receipts,
+            "errors": failures,
+        }
+        return {**identity, "digest": _canonical_digest(identity)}
 
     def _notify_completed_session(self, session: Mapping[str, Any]) -> dict[str, Any]:
         """Publish one idempotent terminal Builder message for a local task."""

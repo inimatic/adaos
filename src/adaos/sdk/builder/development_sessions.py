@@ -584,6 +584,7 @@ def create(
     subject_refs: Sequence[Mapping[str, Any]] = (),
     contract_inputs: Sequence[Mapping[str, Any]] = (),
     acceptance_profiles: Sequence[str] = (),
+    acceptance_requirements: Sequence[Mapping[str, Any]] = (),
     request: str | None = None,
     execution_budget: Mapping[str, Any] | None = None,
     agent_profile: Mapping[str, Any] | None = None,
@@ -665,6 +666,22 @@ def create(
     normalized_acceptance = [
         str(item).strip() for item in acceptance_profiles if str(item).strip()
     ]
+    normalized_acceptance_requirements = [dict(item) for item in acceptance_requirements]
+    requirement_ids = [str(item.get("id") or "").strip() for item in normalized_acceptance_requirements]
+    if len(requirement_ids) != len(set(requirement_ids)):
+        raise DevelopmentSessionError("acceptance requirement ids must be unique")
+    context_refs = {str(item.get("ref") or "").strip() for item in context_members}
+    outside_consumers = sorted(
+        {
+            str(item.get("provider_ref") or "").strip()
+            for item in normalized_acceptance_requirements
+            if str(item.get("provider_ref") or "").strip() not in context_refs
+        }
+    )
+    if outside_consumers:
+        raise DevelopmentSessionError(
+            f"acceptance providers must be admitted context members: {outside_consumers}"
+        )
 
     legacy_brief_digest = str(automation_brief_digest or "").strip()
     legacy_prototype_digest = str(research_prototype_digest or "").strip()
@@ -675,6 +692,7 @@ def create(
         "subject_refs": normalized_subjects,
         "contract_inputs": normalized_contracts,
         "acceptance_profiles": normalized_acceptance,
+        "acceptance_requirements": normalized_acceptance_requirements,
         "artifact_manifest_digests": [item["manifest_digest"] for item in artifact_inputs],
     }
     generic_seed = hashlib.sha256(_canonical_bytes(generic_identity)).hexdigest()[:16]
@@ -752,6 +770,11 @@ def create(
         **({"subject_refs": normalized_subjects} if normalized_subjects else {}),
         **({"contract_inputs": normalized_contracts} if normalized_contracts else {}),
         **({"acceptance_profiles": normalized_acceptance} if normalized_acceptance else {}),
+        **(
+            {"acceptance_requirements": normalized_acceptance_requirements}
+            if normalized_acceptance_requirements
+            else {}
+        ),
         "scratch": {"owner": "session", "access": "read-write", "path": str(scratch)},
         "handoff": handoff,
         "status": "ready",
@@ -772,6 +795,7 @@ def create(
                 "subject_refs",
                 "contract_inputs",
                 "acceptance_profiles",
+                "acceptance_requirements",
                 "handoff",
             )
             if all(previous.get(field) == payload.get(field) for field in identity_fields):
