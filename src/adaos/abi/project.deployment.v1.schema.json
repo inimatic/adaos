@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "project.deployment.v1.schema.json",
+  "title": "AdaOS Project Deployment v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "deployment_id", "project_ref", "release_digest", "subnet_id",
+    "revision", "placements", "compatibility", "rollout", "retention", "status",
+    "created_at", "updated_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.project.deployment.v1" },
+    "deployment_id": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "project_ref": { "type": "string", "pattern": "^project:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$" },
+    "release_digest": { "$ref": "#/$defs/digest" },
+    "subnet_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "revision": { "type": "integer", "minimum": 1 },
+    "placements": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/placement" }
+    },
+    "compatibility": { "$ref": "#/$defs/compatibility" },
+    "rollout": { "$ref": "#/$defs/rollout" },
+    "retention": { "$ref": "#/$defs/retention" },
+    "status": {
+      "enum": ["draft", "planned", "applying", "active", "degraded", "failed", "removing", "removed"]
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "componentRef": {
+      "type": "string",
+      "pattern": "^(skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+    },
+    "stringSet": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+    },
+    "placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component_ref", "mode", "selected_node_ids", "required_capabilities",
+        "required_labels", "endpoint_role", "co_located_with", "min_instances", "max_instances"
+      ],
+      "properties": {
+        "component_ref": { "$ref": "#/$defs/componentRef" },
+        "mode": { "enum": ["singleton", "selected_nodes", "all_matching", "per_endpoint", "co_located_with"] },
+        "selected_node_ids": { "$ref": "#/$defs/stringSet" },
+        "required_capabilities": { "$ref": "#/$defs/stringSet" },
+        "required_labels": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "endpoint_role": { "type": ["string", "null"], "maxLength": 80 },
+        "co_located_with": {
+          "oneOf": [{ "$ref": "#/$defs/componentRef" }, { "type": "null" }]
+        },
+        "min_instances": { "type": "integer", "minimum": 0 },
+        "max_instances": { "type": ["integer", "null"], "minimum": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "selected_nodes" } } },
+          "then": { "properties": { "selected_node_ids": { "minItems": 1 } } }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "per_endpoint" } } },
+          "then": { "properties": { "endpoint_role": { "type": "string", "minLength": 1 } } }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "co_located_with" } } },
+          "then": { "properties": { "co_located_with": { "$ref": "#/$defs/componentRef" } } }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "singleton" } } },
+          "then": {
+            "properties": {
+              "min_instances": { "const": 1 },
+              "max_instances": { "enum": [1, null] }
+            }
+          }
+        }
+      ]
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["architectures", "minimum_runtime_version", "required_protocols", "allow_release_skew"],
+      "properties": {
+        "architectures": { "$ref": "#/$defs/stringSet" },
+        "minimum_runtime_version": { "type": ["string", "null"], "maxLength": 120 },
+        "required_protocols": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "allow_release_skew": { "type": "boolean" }
+      }
+    },
+    "rollout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["batch_size", "max_unavailable", "pause_seconds", "stop_on_failure", "rollback_on_failure"],
+      "properties": {
+        "batch_size": { "type": "integer", "minimum": 1 },
+        "max_unavailable": { "type": "integer", "minimum": 0 },
+        "pause_seconds": { "type": "integer", "minimum": 0 },
+        "stop_on_failure": { "type": "boolean" },
+        "rollback_on_failure": { "type": "boolean" }
+      }
+    },
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime_data", "derived_data", "external_data"],
+      "properties": {
+        "runtime_data": { "enum": ["retain", "delete"] },
+        "derived_data": { "enum": ["retain", "delete", "rebuild"] },
+        "external_data": { "const": "retain" }
+      }
+    }
+  }
+}

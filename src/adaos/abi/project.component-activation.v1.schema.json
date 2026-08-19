@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "project.component-activation.v1.schema.json",
+  "title": "AdaOS Project Component Activation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "activation_id", "deployment_id", "component_ref", "node_id",
+    "release_digest", "package_digest", "generation", "status", "health",
+    "evidence", "created_at", "updated_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.project.component_activation.v1" },
+    "activation_id": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "deployment_id": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "component_ref": { "type": "string", "pattern": "^(skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$" },
+    "node_id": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "release_digest": { "$ref": "#/$defs/digest" },
+    "package_digest": { "$ref": "#/$defs/digest" },
+    "generation": { "type": "integer", "minimum": 1 },
+    "status": { "enum": ["preparing", "active", "draining", "inactive", "failed", "uncertain", "removed"] },
+    "health": { "type": "object" },
+    "evidence": { "type": "object" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

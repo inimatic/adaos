@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "project.deployment-revision.v1.schema.json",
+  "title": "AdaOS Project Deployment Revision v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "deployment_id", "revision", "desired", "desired_digest",
+    "previous_desired_digest", "actor_ref", "reason", "created_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.project.deployment_revision.v1" },
+    "deployment_id": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "revision": { "type": "integer", "minimum": 1 },
+    "desired": { "$ref": "project.deployment.v1.schema.json" },
+    "desired_digest": { "$ref": "#/$defs/digest" },
+    "previous_desired_digest": {
+      "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }]
+    },
+    "actor_ref": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

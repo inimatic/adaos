@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "project.deployment-plan.v1.schema.json",
+  "title": "AdaOS Project Deployment Plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "plan_id", "deployment_id", "expected_revision", "release_digest",
+    "inventory_revision", "changes", "warnings", "required_approvals", "status",
+    "created_at", "plan_digest"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.project.deployment_plan.v1" },
+    "plan_id": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "deployment_id": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "expected_revision": { "type": "integer", "minimum": 1 },
+    "release_digest": { "$ref": "#/$defs/digest" },
+    "inventory_revision": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "changes": { "type": "array", "maxItems": 1000, "items": { "$ref": "#/$defs/change" } },
+    "warnings": { "$ref": "#/$defs/stringSet" },
+    "required_approvals": { "$ref": "#/$defs/stringSet" },
+    "status": { "enum": ["ready", "blocked", "applied", "superseded", "failed"] },
+    "created_at": { "type": "string", "format": "date-time" },
+    "plan_digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "componentRef": {
+      "type": "string",
+      "pattern": "^(skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+    },
+    "stringSet": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action", "component_ref", "node_id", "target_package_digest",
+        "current_activation_ref", "reason", "phases", "availability_impact"
+      ],
+      "properties": {
+        "action": { "enum": ["install", "update", "noop", "cordon", "drain", "deactivate", "remove"] },
+        "component_ref": { "$ref": "#/$defs/componentRef" },
+        "node_id": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "target_package_digest": {
+          "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }]
+        },
+        "current_activation_ref": { "type": ["string", "null"], "maxLength": 500 },
+        "reason": { "type": "string", "maxLength": 1000 },
+        "phases": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["fetch", "verify", "stage", "activate", "health", "commit", "cordon", "drain", "deactivate", "remove", "rollback"] }
+        },
+        "availability_impact": { "enum": ["none", "reduced_capacity", "read_only", "temporary_unavailable"] }
+      }
+    }
+  }
+}
