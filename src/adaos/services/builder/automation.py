@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+import psutil
 import yaml
 
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
@@ -1715,6 +1716,12 @@ class BuilderAutomationService:
             # durable finalizing_task_id is the ownership marker that makes
             # this replay bounded; finalization itself reconciles an existing
             # workflow checkpoint before performing any writes.
+            if self._detached_worker_is_active(str(current.get("session_id") or "")):
+                # The worker remains responsible after the nested Skill
+                # Factory run becomes terminal.  In particular, dependency
+                # installation and DEV activation may still be running; a
+                # status reader must not execute those writes concurrently.
+                return current
             self._finalize_completed_session(current)
             return self.get_session(
                 str(current.get("object_type") or ""),
@@ -2094,10 +2101,15 @@ class BuilderAutomationService:
                 stderr=stderr,
                 **popen_kwargs,
             )
+        try:
+            process_create_time: float | None = float(psutil.Process(process.pid).create_time())
+        except (psutil.Error, OSError):
+            process_create_time = None
         launched = {
             "schema": "adaos.builder.automation_worker_launch.v1",
             "session_id": str(session_id),
             "pid": int(process.pid),
+            "create_time": process_create_time,
             "status": "launched",
             "repo_root": str(self.repo_root.resolve()),
             "executable": str(executable.resolve()),
@@ -2108,6 +2120,26 @@ class BuilderAutomationService:
         }
         _write_json(launch_path, launched)
         return launched
+
+    def _detached_worker_is_active(self, session_id: str) -> bool:
+        """Return whether the durable worker still owns orchestration.
+
+        A Skill Factory task becomes terminal before Builder finishes DEV
+        activation, dependency installation, and Forge checkpoints.  API
+        readers must therefore fence the whole detached Automation process,
+        not only the nested Codex run.  PID creation time prevents a reused
+        process id from suppressing legitimate recovery.
+        """
+
+        token = _safe_token(session_id, fallback="automation")
+        launch_path = self.state_dir / "builder" / "automation_workers" / token / "launch.json"
+        try:
+            launched = json.loads(launch_path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError):
+            return False
+        if str(launched.get("session_id") or "") != str(session_id or ""):
+            return False
+        return LocalSkillFactoryWorker._process_owner_is_active(launched)
 
     def _run_worker(self, session_id: str) -> None:
         with _WORKER_LOCK:

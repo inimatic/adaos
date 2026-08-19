@@ -1164,6 +1164,77 @@ def test_refresh_resumes_detached_completed_task_finalization(
     assert refreshed["completion_readiness"]["ok"] is True
 
 
+def test_refresh_defers_finalization_while_detached_worker_owner_is_active(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    service.materialize_on_completion = True
+    task_id = "task.detached-owned"
+    session_id = "automation.skill.direction"
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": session_id,
+        "object_type": "skill",
+        "object_id": "direction",
+        "webspace_id": "builder-calibration",
+        "current_task_id": task_id,
+        "finalizing_task_id": task_id,
+        "status": "commit_ready",
+    }
+    service._save_session(session)
+    service.factory = SimpleNamespace(
+        snapshot=lambda **_kwargs: {
+            "tasks": [
+                {
+                    "task_id": task_id,
+                    "status": "completed",
+                    "updated_at": "2026-08-19T14:47:38+00:00",
+                    "result": {"summary": "Validated result."},
+                    "progress": [],
+                }
+            ]
+        }
+    )
+    worker_root = (
+        service.state_dir
+        / "builder"
+        / "automation_workers"
+        / "automation.skill.direction"
+    )
+    worker_root.mkdir(parents=True)
+    (worker_root / "launch.json").write_text(
+        json.dumps(
+            {
+                "schema": "adaos.builder.automation_worker_launch.v1",
+                "session_id": session_id,
+                "pid": 4242,
+                "create_time": 1234.5,
+                "status": "launched",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        LocalSkillFactoryWorker,
+        "_process_owner_is_active",
+        staticmethod(lambda value: value["pid"] == 4242 and value["create_time"] == 1234.5),
+    )
+    finalized: list[dict] = []
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_finalize_completed_session",
+        lambda _service, value: finalized.append(dict(value)),
+    )
+
+    refreshed = service.refresh_session(session)
+
+    assert finalized == []
+    assert refreshed["status"] == "commit_ready"
+    assert refreshed["finalizing_task_id"] == task_id
+    assert refreshed["last_result"]["summary"] == "Validated result."
+
+
 def test_projection_backfills_missing_conversation_before_notification(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     service.start_from_execute(
