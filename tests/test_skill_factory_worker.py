@@ -1026,6 +1026,7 @@ def test_codex_executor_scopes_mutable_adaos_runtime_to_task(monkeypatch, tmp_pa
     environment = executor._execution_environment(runtime_base_dir=task_runtime)
 
     assert environment["ADAOS_BASE_DIR"] == str(task_runtime.resolve())
+    assert environment["ADAOS_TASK_RUNTIME_DIR"] == str(task_runtime.resolve())
     assert environment["ADAOS_DISABLE_ACTIVE_SLOT_PYTHON_REEXEC"] == "1"
     assert environment["ADAOS_DISABLE_ACTIVE_SLOT_ENV_APPLY"] == "1"
     assert environment["ADAOS_BASE_DIR"] != "C:/host-adaos"
@@ -1151,6 +1152,8 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(tmp_path: P
     assert "allow_heavy_dependencies" in prompt
     assert "install-strict" in prompt
     assert "trusted worker finalizer owns package" in prompt
+    assert "ADAOS_TASK_RUNTIME_DIR" in prompt
+    assert "never create repository-relative `.adaos*` runtime directories" in prompt
     assert "do not copy into or mutate the canonical workspace/runtime" in prompt
     assert "workflow.json" in prompt
     assert "irrelevant.full.catalog" not in prompt
@@ -1504,6 +1507,54 @@ def test_worker_reasks_codex_to_repair_validation_failure(tmp_path: Path) -> Non
     assert len(calls) == 2
     assert "Deterministic validation repair" in calls[1]
     assert "required file missing" in calls[1]
+
+
+def test_worker_reasks_codex_to_repair_source_boundary_violation(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    state_dir = tmp_path / "state"
+    dev_skills = tmp_path / "dev" / "skills"
+    dev_scenarios = tmp_path / "dev" / "scenarios"
+    dev_skills.mkdir(parents=True)
+    _scenario(dev_scenarios, "recipe_book")
+    _core_created_skill_fixture(repo_root, dev_skills, "recipe_book_skill")
+    factory = SkillFactoryService(state_dir=state_dir)
+    factory.submit_realize_request(
+        {
+            "target": {"type": "scenario", "id": "recipe_book"},
+            "artifacts": {"companion_skill_id": "recipe_book_skill"},
+            "repo": {"sparse_paths": ["scenarios/recipe_book/", "skills/recipe_book_skill/"]},
+        }
+    )
+    calls: list[str] = []
+
+    def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:  # noqa: ARG001
+        calls.append(prompt)
+        runtime_file = workspace / ".adaos_validation_base" / "state" / "adaos.db"
+        if len(calls) == 1:
+            runtime_file.parent.mkdir(parents=True)
+            runtime_file.write_text("ephemeral", encoding="utf-8")
+        else:
+            runtime_file.unlink()
+            runtime_file.parent.rmdir()
+            runtime_file.parent.parent.rmdir()
+        return CodexRunResult(returncode=0, final_message="done")
+
+    worker = LocalSkillFactoryWorker(
+        state_dir=state_dir,
+        repo_root=repo_root,
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=dev_scenarios,
+        runs_root=tmp_path / "runs",
+        executor=fake_codex,
+        max_repair_attempts=1,
+    )
+
+    result = worker.run_once()
+
+    assert result["ok"] is True, result
+    assert len(calls) == 2
+    assert "Deterministic validation repair" in calls[1]
+    assert "outside the task scope" in calls[1]
 
 
 def test_worker_reports_progress_to_automation_callback(tmp_path: Path) -> None:

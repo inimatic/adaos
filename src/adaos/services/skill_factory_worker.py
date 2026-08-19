@@ -33,7 +33,7 @@ from adaos.services.workflow_artifacts import (
 )
 
 
-RUNNER_VERSION = "adaos-local-codex-worker/0.1.0"
+RUNNER_VERSION = "adaos-local-codex-worker/0.2.0"
 PACKET_SCHEMA = "adaos.skill_factory.codex_packet.v1"
 LOCAL_SESSION_SCHEMA = "adaos.skill_factory.local_run.v1"
 _log = logging.getLogger("adaos.skill_factory.local_worker")
@@ -444,7 +444,13 @@ class SubprocessCodexExecutor:
             # repository-local default ``.adaos/state`` tree.  Keep all
             # mutable AdaOS state inside the task's already-admitted evidence
             # scope so source-boundary validation remains meaningful.
-            environment["ADAOS_BASE_DIR"] = str(Path(runtime_base_dir).resolve())
+            task_runtime_dir = str(Path(runtime_base_dir).resolve())
+            environment["ADAOS_BASE_DIR"] = task_runtime_dir
+            # Explicit task-scoped alias for tests that need more than one
+            # isolated AdaOS base.  They may create child directories below
+            # this root without guessing a repository-relative ``.adaos*``
+            # path that would violate the immutable source boundary.
+            environment["ADAOS_TASK_RUNTIME_DIR"] = task_runtime_dir
             environment["ADAOS_DISABLE_ACTIVE_SLOT_PYTHON_REEXEC"] = "1"
             environment["ADAOS_DISABLE_ACTIVE_SLOT_ENV_APPLY"] = "1"
         python_path = Path(sys.executable).resolve()
@@ -870,8 +876,30 @@ class LocalSkillFactoryWorker:
                 self._progress(task_id, "tests_running", "Validating generated manifests, Python and Web UI")
                 self._cleanup_generated_files(workspace)
                 changed_paths = self._changed_paths(workspace)
-                self._validate_changed_paths(assignment, changed_paths)
-                test_report = self._validate_workspace(assignment, workspace)
+                try:
+                    self._validate_changed_paths(assignment, changed_paths)
+                except ValueError as exc:
+                    # A scope violation is deterministic and often
+                    # repairable (for example, a test placed mutable runtime
+                    # state beside source).  Keep the boundary fail-closed,
+                    # but feed the exact violation through the same bounded
+                    # autonomous repair loop as manifest/test failures.
+                    test_report = {
+                        "schema": "adaos.skill_factory.test_report.v1",
+                        "status": "failed",
+                        "ok": False,
+                        "checks": [
+                            {
+                                "id": "source_boundary",
+                                "status": "failed",
+                                "changed_paths": list(changed_paths),
+                            }
+                        ],
+                        "errors": [str(exc)],
+                    }
+                else:
+                    test_report = self._validate_workspace(assignment, workspace)
+                _write_json(output_dir / "test_report.json", test_report)
                 if test_report["ok"]:
                     break
                 if repair_attempt >= self.max_repair_attempts:
@@ -1212,6 +1240,8 @@ When `scenarios/{target_id}/.builder_current_publication` exists, treat it as th
 18. Treat typed provider operation names and schemas as ABI, not suggestions. Implement every required operation under its exact declared name, export it as a tool, and run any admitted consumer/conformance fixture against the production handler path; a semantically similar alias does not satisfy the contract.
 19. Before adding or importing a third-party Python package, inspect the authoritative manifest schema at `${{ADAOS_REPO_ROOT}}/src/adaos/services/skill/skill_schema.json` and the dependency-isolation policy in `${{ADAOS_REPO_ROOT}}/docs/skill_runtime.md`. Declare every imported dependency. Heavy/native dependencies require a service boundary or the explicit documented transitional `allow_heavy_dependencies` allowance. Run install-strict `SkillValidationService.validate_path(...)` so manifest schema, imports, exported tools, and dependency isolation fail in one bounded pass before concluding.
 20. This checkout is an isolated candidate, not the canonical AdaOS workspace. Run source-tree validation and bounded tests here, but do not copy into or mutate the canonical workspace/runtime and do not publish, install, or activate the candidate yourself. The trusted worker finalizer owns package, install, activation, and rollback receipts after your turn."""
+        required_result += """
+21. Keep every mutable test/runtime file outside the candidate source tree. Use `ADAOS_BASE_DIR` for the default task-owned AdaOS runtime. If a test needs multiple isolated bases, create child directories below `ADAOS_TASK_RUNTIME_DIR` (or an OS temporary directory outside this checkout), and clean them normally; never create repository-relative `.adaos*` runtime directories."""
         required_result = required_result.format(
             target_id=target_id,
             companion=companion,
