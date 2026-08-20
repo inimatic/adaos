@@ -668,6 +668,7 @@ def test_development_session_binds_executable_acceptance_to_admitted_consumer(pr
         "operation": "validate_development_candidate",
         "required": True,
         "timeout_seconds": 120,
+        "parameters": {"execute_workflow_smoke": True},
     }
     created = development_sessions.create(
         "candidate_project",

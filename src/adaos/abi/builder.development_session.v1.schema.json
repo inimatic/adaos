@@ -136,7 +136,8 @@
         "provider_ref": {"type": "string", "pattern": "^skill:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"},
         "operation": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"},
         "required": {"type": "boolean"},
-        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600}
+        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
+        "parameters": {"type": "object", "maxProperties": 50}
       },
       "additionalProperties": false
     }
