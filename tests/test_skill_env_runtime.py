@@ -1986,6 +1986,59 @@ def test_shutdown_active_runtimes_runs_requested_hook_subset(monkeypatch) -> Non
     assert status["lifecycle"]["dispose"]["skipped"] is True
 
 
+def test_process_lifecycle_hooks_target_only_the_active_runtime(monkeypatch, tmp_path) -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
+    manifest_path = tmp_path / "resolved.json"
+    metadata = {"slots": {"B": {"lifecycle": {}}}}
+    writes: list[tuple[str, dict]] = []
+    calls: list[tuple[str, dict]] = []
+
+    env = SimpleNamespace(
+        build_slot_paths=lambda version, slot: SimpleNamespace(
+            slot=slot,
+            resolved_manifest=manifest_path,
+        ),
+        read_version_metadata=lambda version: metadata,
+        write_version_metadata=lambda version, payload: writes.append((version, payload)),
+    )
+    monkeypatch.setattr(
+        mgr,
+        "runtime_status",
+        lambda name: {"version": "2.0.0", "active_slot": "B", "deactivated": False},
+    )
+    monkeypatch.setattr(mgr, "_runtime_env", lambda name: env)
+    monkeypatch.setattr(mgr, "_read_json_dict", lambda path: {"name": "process_lifecycle_skill"})
+
+    def _invoke(**kwargs):
+        calls.append((kwargs["hook_key"], dict(kwargs["payload"])))
+        return {"ok": True, "skipped": False, "hook": kwargs["hook_key"]}
+
+    monkeypatch.setattr(mgr, "_invoke_slot_lifecycle_hook", _invoke)
+
+    disposed = mgr.dispose_runtime_process_resources(
+        "process_lifecycle_skill",
+        reason="worker_exit",
+        event_type="skill.runtime.worker_exit",
+    )
+    rehydrated = mgr.rehydrate_active_runtime(
+        "process_lifecycle_skill",
+        reason="owner_finalize",
+        event_type="skill.runtime.owner_finalize",
+    )
+
+    assert disposed["ok"] is True
+    assert rehydrated["ok"] is True
+    assert [hook for hook, _payload in calls] == ["dispose", "rehydrate"]
+    assert calls[0][1]["state"] == "disposing_process_resources"
+    assert calls[1][1]["state"] == "rehydrating_owner_resources"
+    assert all(payload["version"] == "2.0.0" for _hook, payload in calls)
+    assert all(payload["slot"] == "B" for _hook, payload in calls)
+    assert [version for version, _payload in writes] == ["2.0.0", "2.0.0"]
+    assert metadata["slots"]["B"]["lifecycle"]["dispose"]["ok"] is True
+    assert metadata["slots"]["B"]["lifecycle"]["rehydrate"]["ok"] is True
+
+
 def test_deactivate_runtime_persists_committed_switch_metadata(monkeypatch) -> None:
     ctx = get_ctx()
     mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())

@@ -409,6 +409,7 @@ def test_precommit_quarantine_recovers_automatically_for_newer_candidate(monkeyp
 def test_explicit_quarantine_recovery_retries_once_and_clears_status(monkeypatch, tmp_path):
     ctx = SimpleNamespace()
     refresh_calls: list[dict] = []
+    dispose_calls: list[dict] = []
 
     class _Manager:
         def deactivate_runtime(self, name: str, **kwargs):
@@ -416,6 +417,10 @@ def test_explicit_quarantine_recovery_retries_once_and_clears_status(monkeypatch
 
         def runtime_status(self, name: str):
             return {"version": "0.75.59", "active_slot": "A", "deactivated": True}
+
+        def dispose_runtime_process_resources(self, name: str, **kwargs):
+            dispose_calls.append({"name": name, **kwargs})
+            return {"ok": True, "skipped": False, "hook": "dispose"}
 
     def _refresh(_mgr, name: str, **kwargs):
         assert name == "infrastate_skill"
@@ -472,6 +477,15 @@ def test_explicit_quarantine_recovery_retries_once_and_clears_status(monkeypatch
     assert refresh_calls[0]["retry_deactivated"] is True
     assert refresh_calls[0]["defer_webspace_rebuild"] is True
     assert refresh_calls[0]["run_candidate_tests"] is True
+    assert dispose_calls == [
+        {
+            "name": "infrastate_skill",
+            "reason": "skill_runtime_migration_worker_candidate_complete",
+            "event_type": "skill.runtime.migration_worker_candidate_complete",
+        }
+    ]
+    assert result["skills"][0]["worker_dispose"]["ok"] is True
+    assert result["worker_dispose_failed_total"] == 0
 
 
 def test_noop_migration_skips_webspace_rebuild(monkeypatch):
@@ -565,7 +579,12 @@ def test_owner_finalization_reloads_handlers_before_activation_and_rebuild(monke
         order.append("rebuild")
         return {"ok": True}
 
-    monkeypatch.setattr(worker, "_manager", lambda _ctx: object())
+    class _Manager:
+        def rehydrate_active_runtime(self, name: str, **_kwargs) -> dict:
+            order.append(f"rehydrate:{name}")
+            return {"ok": True, "skipped": False, "hook": "rehydrate"}
+
+    monkeypatch.setattr(worker, "_manager", lambda _ctx: _Manager())
     monkeypatch.setattr(worker, "_reload_owner_skill_handlers", _reload)
     monkeypatch.setattr(worker, "_invalidate_owner_materialization", _invalidate)
     monkeypatch.setattr(
@@ -604,6 +623,7 @@ def test_owner_finalization_reloads_handlers_before_activation_and_rebuild(monke
 
     assert order == [
         "reload:weather_skill",
+        "rehydrate:weather_skill",
         "invalidate:op-live",
         "emit:skills.activated:weather_skill",
         "rebuild",
@@ -613,6 +633,7 @@ def test_owner_finalization_reloads_handlers_before_activation_and_rebuild(monke
     assert result["state"] == "succeeded"
     assert result["live_finalized_total"] == 1
     assert result["skills"][0]["activation_emitted"] is True
+    assert result["skills"][0]["owner_rehydrate"]["ok"] is True
 
 
 def test_owner_finalization_restores_fallback_when_live_reload_fails(monkeypatch, tmp_path):
@@ -676,6 +697,66 @@ def test_owner_finalization_restores_fallback_when_live_reload_fails(monkeypatch
     assert result["skills"][0]["fallback_handler_reload"]["ok"] is True
     assert preservation_calls[0]["reload_fallback_handlers"] is False
     assert events == []
+
+
+def test_owner_finalization_restores_fallback_when_owner_rehydrate_fails(monkeypatch, tmp_path):
+    preservation_calls: list[dict] = []
+    ctx = SimpleNamespace(
+        paths=SimpleNamespace(skills_dir=lambda: tmp_path / "skills"),
+        bus=object(),
+    )
+
+    class _Manager:
+        def rehydrate_active_runtime(self, name: str, **_kwargs) -> dict:
+            raise RuntimeError(f"{name} owner state unavailable")
+
+    async def _reload(_ctx, _name: str) -> dict:
+        return {"ok": True, "handlers": ["candidate/handlers/main.py"]}
+
+    def _preserve(_ctx, _mgr, **kwargs) -> dict:
+        preservation_calls.append(kwargs)
+        kwargs["entry"]["fallback_preserved"] = True
+        return {"status": "candidate_quarantined", "fallback_version": "2.6.22", "fallback_slot": "A"}
+
+    monkeypatch.setattr(worker, "_manager", lambda _ctx: _Manager())
+    monkeypatch.setattr(worker, "_reload_owner_skill_handlers", _reload)
+    monkeypatch.setattr(worker, "_preserve_runtime_after_candidate_failure", _preserve)
+    monkeypatch.setattr(worker, "_installed_runtime_version_records", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(worker, "bus_emit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(worker, "_write_status", lambda _ctx, payload: dict(payload))
+
+    result = asyncio.run(
+        worker._finalize_owner_runtime_migration(
+            ctx,
+            {
+                "ok": True,
+                "state": "succeeded",
+                "phase": "complete",
+                "pending": False,
+                "operation_id": "op-rehydrate-fail",
+                "started_at": worker._now(),
+                "skills": [
+                    {
+                        "skill": "weather_skill",
+                        "workspace_version": "2.6.23",
+                        "ok": True,
+                        "active_version_before": "2.6.22",
+                        "active_slot_before": "A",
+                    }
+                ],
+            },
+            operation_id="op-rehydrate-fail",
+            webspace_id="desktop",
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["state"] == "failed"
+    assert result["owner_rehydrate_failed_total"] == 1
+    assert result["skills"][0]["owner_rehydrate"]["ok"] is False
+    assert result["skills"][0]["handler_reload"]["reason"] == "owner_rehydrate_failed"
+    assert result["skills"][0]["fallback_preserved"] is True
+    assert preservation_calls[0]["reload_fallback_handlers"] is False
 
 
 def test_candidate_failure_preserves_only_the_exact_pre_attempt_selection(monkeypatch):

@@ -4485,6 +4485,103 @@ class SkillManager:
                 }
         return results
 
+    def _invoke_active_runtime_lifecycle_hook(
+        self,
+        name: str,
+        *,
+        hook_key: str,
+        reason: str,
+        event_type: str,
+        state: str,
+    ) -> dict[str, Any]:
+        status = self.runtime_status(name)
+        entry: dict[str, Any] = {
+            "ok": True,
+            "skipped": False,
+            "skill": name,
+            "hook": hook_key,
+            "reason": reason,
+            "event_type": event_type,
+            "version": str(status.get("version") or ""),
+            "slot": str(status.get("active_slot") or ""),
+        }
+        if bool(status.get("deactivated")):
+            entry["skipped"] = True
+            entry["reason_detail"] = str(
+                (status.get("deactivation") or {}).get("reason") or "runtime_deactivated"
+            )
+            return entry
+        version = str(status.get("version") or "").strip()
+        slot_name = str(status.get("active_slot") or "").strip().upper()
+        if not version or slot_name not in {"A", "B"}:
+            entry["skipped"] = True
+            entry["reason_detail"] = "inactive_runtime"
+            return entry
+        env = self._runtime_env(name)
+        slot = env.build_slot_paths(version, slot_name)
+        resolved_manifest = self._read_json_dict(slot.resolved_manifest)
+        if not resolved_manifest:
+            entry["skipped"] = True
+            entry["reason_detail"] = "missing_resolved_manifest"
+            return entry
+        hook_result = self._invoke_slot_lifecycle_hook(
+            env=env,
+            slot=slot,
+            resolved_manifest=resolved_manifest,
+            hook_key=hook_key,
+            payload={
+                "skill": name,
+                "version": version,
+                "slot": slot_name,
+                "reason": reason,
+                "event_type": event_type,
+                "state": state,
+            },
+        )
+        metadata = env.read_version_metadata(version)
+        lifecycle = self._slot_lifecycle_state(metadata=metadata, slot=slot_name)
+        lifecycle[hook_key] = hook_result
+        metadata.setdefault("slots", {}).setdefault(slot_name, {})["lifecycle"] = lifecycle
+        env.write_version_metadata(version, metadata)
+        entry["hook_result"] = hook_result
+        entry["ok"] = bool(hook_result.get("ok", True))
+        entry["skipped"] = bool(hook_result.get("skipped", False))
+        return entry
+
+    def dispose_runtime_process_resources(
+        self,
+        name: str,
+        *,
+        reason: str = "runtime_process_exit",
+        event_type: str = "skill.runtime.process_exit",
+    ) -> dict[str, Any]:
+        """Release resources created by lifecycle hooks in this process only."""
+
+        return self._invoke_active_runtime_lifecycle_hook(
+            name,
+            hook_key="dispose",
+            reason=reason,
+            event_type=event_type,
+            state="disposing_process_resources",
+        )
+
+    def rehydrate_active_runtime(
+        self,
+        name: str,
+        *,
+        reason: str = "runtime_owner_rehydrate",
+        event_type: str = "skill.runtime.owner_rehydrate",
+    ) -> dict[str, Any]:
+        """Recreate active-skill process resources in the long-lived owner."""
+
+        return self._invoke_active_runtime_lifecycle_hook(
+            name,
+            hook_key="rehydrate",
+            reason=reason,
+            event_type=event_type,
+            state="rehydrating_owner_resources",
+        )
+
     def shutdown_active_runtimes(
         self,
         *,
