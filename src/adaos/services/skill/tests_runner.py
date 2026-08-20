@@ -27,6 +27,16 @@ _TEST_TIMEOUTS = {
 }
 
 
+def _fallback_pytest_timeout() -> int:
+    try:
+        value = int(
+            str(os.getenv("ADAOS_SKILL_PYTEST_TIMEOUT_SECONDS") or "180").strip()
+        )
+    except (TypeError, ValueError):
+        value = 180
+    return max(60, min(900, value))
+
+
 def run_tests(
     root: Path,
     *,
@@ -130,7 +140,7 @@ def run_tests(
                     suite_name="pytest",
                     tests_dir=runtime_tests_root,
                     marker=None,
-                    timeout=max(_TEST_TIMEOUTS.values()),
+                    timeout=_fallback_pytest_timeout(),
                     log=log,
                     interpreter=interpreter,
                     env=env_template,

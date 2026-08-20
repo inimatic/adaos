@@ -82,3 +82,23 @@ def test_run_dev_skill_tests_calls_imported_runner_alias(tmp_path, monkeypatch) 
     assert result["pytest"].status == "passed"
     assert captured["skill_source"] == skill_dir.resolve()
     assert captured["dev_mode"] is True
+
+
+def test_runtime_fallback_pytest_uses_bounded_production_budget(
+    tmp_path, monkeypatch
+) -> None:
+    skill_root = tmp_path / "skill"
+    (skill_root / "tests").mkdir(parents=True)
+    captured = []
+
+    def fake_pytest(**kwargs):
+        captured.append(kwargs["timeout"])
+        return mod.TestResult(name="pytest", status="passed")
+
+    monkeypatch.setattr(mod, "_run_pytest_suite", fake_pytest)
+    monkeypatch.delenv("ADAOS_SKILL_PYTEST_TIMEOUT_SECONDS", raising=False)
+    mod.run_tests(skill_root, log_path=tmp_path / "default.log")
+    monkeypatch.setenv("ADAOS_SKILL_PYTEST_TIMEOUT_SECONDS", "5000")
+    mod.run_tests(skill_root, log_path=tmp_path / "bounded.log")
+
+    assert captured == [180, 900]
