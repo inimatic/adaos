@@ -559,7 +559,21 @@ def _parse_runtime_preflight_result(stdout: str) -> dict[str, object] | None:
     return None
 
 
-def _run_runtime_import_preflight(repo_root: Path, skills_root: Path, *, timeout: float = 45.0) -> dict[str, object]:
+def _runtime_import_preflight_timeout_sec() -> float:
+    raw = str(os.getenv("ADAOS_API_RUNTIME_IMPORT_PREFLIGHT_TIMEOUT_SEC") or "300").strip()
+    try:
+        return max(45.0, min(float(raw), 900.0))
+    except (TypeError, ValueError):
+        return 300.0
+
+
+def _run_runtime_import_preflight(
+    repo_root: Path,
+    skills_root: Path,
+    *,
+    timeout: float | None = None,
+) -> dict[str, object]:
+    timeout_sec = _runtime_import_preflight_timeout_sec() if timeout is None else max(5.0, float(timeout))
     env = merged_runtime_dotenv_env(os.environ.copy())
     src_root = str((repo_root / "src").resolve())
     existing_pythonpath = str(env.get("PYTHONPATH") or "")
@@ -575,7 +589,7 @@ def _run_runtime_import_preflight(repo_root: Path, skills_root: Path, *, timeout
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=max(5.0, float(timeout)),
+            timeout=timeout_sec,
         )
     except subprocess.TimeoutExpired as exc:
         return {
