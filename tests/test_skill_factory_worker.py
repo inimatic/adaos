@@ -1503,6 +1503,196 @@ def _document_contract_assignment(workspace: Path) -> dict:
     }
 
 
+def _operation_contract_assignment(
+    workspace: Path,
+    *,
+    candidate_input_schema: dict,
+    declared_operations: list[str] | None = None,
+) -> dict:
+    instruction = workspace / ".adaos_context" / "dev-ops" / "instructions" / "contract.json"
+    instruction.parent.mkdir(parents=True)
+    contract_input = {
+        "type": "object",
+        "required": ["request"],
+        "properties": {
+            "request": {
+                "type": "object",
+                "required": ["schema", "value"],
+                "properties": {
+                    "schema": {"const": "example.probe.v1"},
+                    "value": {"type": "number"},
+                },
+                "additionalProperties": False,
+            }
+        },
+        "additionalProperties": False,
+    }
+    contract_output = {
+        "type": "object",
+        "required": ["schema", "value"],
+        "properties": {
+            "schema": {"const": "example.probe_result.v1"},
+            "value": {"type": "number"},
+        },
+        "additionalProperties": False,
+    }
+    instruction.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.contract.operation_set.v1",
+                "contract": "example.probe_provider.v1",
+                "operations": {
+                    "implementation_probe": {
+                        "input_schema": contract_input,
+                        "output_schema": contract_output,
+                    }
+                },
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    skill = workspace / "skills" / "example_skill"
+    skill.mkdir(parents=True)
+    candidate_output = dict(contract_output)
+    candidate_output["description"] = "Annotation differences are not ABI differences."
+    (skill / "skill.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "example_skill",
+                "version": "0.1.0",
+                "provider_contracts": [
+                    {
+                        "contract": "example.probe_provider.v1",
+                        "capability": "example.probe",
+                        "operations": declared_operations
+                        if declared_operations is not None
+                        else ["implementation_probe"],
+                    }
+                ],
+                "tools": [
+                    {
+                        "name": "implementation_probe",
+                        "entry": "handlers.main:implementation_probe",
+                        "input_schema": candidate_input_schema,
+                        "output_schema": candidate_output,
+                    }
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "realize_request": {
+            "artifacts": {
+                "development_context": {
+                    "instruction_inputs": [
+                        {
+                            "kind": "consumer_contract",
+                            "media_type": "application/json",
+                            "path": instruction.relative_to(workspace).as_posix(),
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+
+def test_worker_binds_provider_tool_schema_to_admitted_operation_contract(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    exact_input = {
+        "type": "object",
+        "required": ["request"],
+        "properties": {
+            "request": {
+                "type": "object",
+                "required": ["schema", "value"],
+                "properties": {
+                    "schema": {"const": "example.probe.v1"},
+                    "value": {"type": "number"},
+                },
+                "additionalProperties": False,
+            }
+        },
+        "additionalProperties": False,
+        "description": "This annotation may differ from the consumer contract.",
+    }
+    assignment = _operation_contract_assignment(
+        workspace, candidate_input_schema=exact_input
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_admitted_operation_schemas(
+        assignment, workspace, checks, errors
+    )
+
+    assert errors == []
+    assert checks == [
+        {
+            "kind": "admitted_contract.operation_schema",
+            "contract": "example.probe_provider.v1",
+            "operation": "implementation_probe",
+            "path": "skills/example_skill/skill.yaml",
+            "ok": True,
+        }
+    ]
+
+
+def test_worker_rejects_flat_tool_input_for_wrapped_consumer_operation(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _operation_contract_assignment(
+        workspace,
+        candidate_input_schema={
+            "type": "object",
+            "required": ["schema", "value"],
+            "properties": {
+                "schema": {"const": "example.probe.v1"},
+                "value": {"type": "number"},
+            },
+            "additionalProperties": False,
+        },
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_admitted_operation_schemas(
+        assignment, workspace, checks, errors
+    )
+
+    assert checks == []
+    assert len(errors) == 1
+    assert "implementation_probe input_schema differs" in errors[0]
+    assert "/properties missing keys ['request']" in errors[0]
+
+
+def test_worker_requires_every_admitted_operation_in_provider_declaration(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _operation_contract_assignment(
+        workspace,
+        candidate_input_schema={"type": "object"},
+        declared_operations=[],
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_admitted_operation_schemas(
+        assignment, workspace, checks, errors
+    )
+
+    assert checks == []
+    assert errors == [
+        "skills/example_skill/skill.yaml: provider contract example.probe_provider.v1 "
+        "does not declare admitted operation implementation_probe"
+    ]
+
+
 def test_worker_validates_admitted_contract_runtime_documents(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

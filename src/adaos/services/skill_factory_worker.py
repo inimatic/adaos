@@ -1568,6 +1568,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         self._validate_skill_data_routes(workspace, checks, errors)
         self._validate_skill_dependency_isolation(workspace, checks, errors)
         self._validate_brief_contract_requirements(assignment, workspace, checks, errors)
+        self._validate_admitted_operation_schemas(assignment, workspace, checks, errors)
         for path in sorted(workspace.rglob("*.json")):
             if ".git" in path.parts:
                 continue
@@ -2409,6 +2410,203 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 )
         if validation_root.exists():
             shutil.rmtree(validation_root)
+
+    @staticmethod
+    def _validate_admitted_operation_schemas(
+        assignment: Mapping[str, Any],
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        """Bind provider tool schemas to admitted consumer-owned operation sets.
+
+        A tool name alone is not an ABI.  In particular, accepting a flat
+        object where the consumer sends ``{"request": ...}`` makes an
+        otherwise valid provider fail only after activation.  Operation-set
+        instructions are immutable Development-session inputs, so the trusted
+        worker can compare their machine boundary with the generated manifest
+        before committing the candidate.
+
+        JSON Schema annotation keywords do not change the accepted instance
+        set and are ignored.  All validation keywords remain exact.  This
+        deliberately favours an explicit version bump over silently widening
+        or narrowing a consumer boundary.
+        """
+
+        request = (
+            assignment.get("realize_request")
+            if isinstance(assignment.get("realize_request"), Mapping)
+            else {}
+        )
+        artifacts = (
+            request.get("artifacts")
+            if isinstance(request.get("artifacts"), Mapping)
+            else {}
+        )
+        development = (
+            artifacts.get("development_context")
+            if isinstance(artifacts.get("development_context"), Mapping)
+            else {}
+        )
+        workspace_root = workspace.resolve()
+        contracts: list[tuple[str, dict[str, Any]]] = []
+        for descriptor in development.get("instruction_inputs") or []:
+            if not isinstance(descriptor, Mapping):
+                continue
+            if str(descriptor.get("media_type") or "").lower() != "application/json":
+                continue
+            relative = Path(str(descriptor.get("path") or ""))
+            if relative.is_absolute() or ".." in relative.parts:
+                continue
+            source = (workspace_root / relative).resolve()
+            try:
+                source.relative_to(workspace_root)
+                contract = _read_json(source)
+            except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+                continue
+            if contract.get("schema") != "adaos.contract.operation_set.v1":
+                continue
+            operations = contract.get("operations")
+            if not isinstance(operations, Mapping) or not operations:
+                continue
+            label = str(contract.get("contract") or descriptor.get("kind") or "contract")
+            contracts.append((label, dict(contract)))
+
+        if not contracts:
+            return
+
+        manifests: list[tuple[str, Mapping[str, Any]]] = []
+        for path in sorted(workspace.glob("skills/*/skill.yaml")):
+            relative = path.relative_to(workspace).as_posix()
+            try:
+                value = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except Exception:
+                continue
+            if isinstance(value, Mapping):
+                manifests.append((relative, value))
+
+        annotations = {
+            "$comment",
+            "default",
+            "deprecated",
+            "description",
+            "examples",
+            "readOnly",
+            "title",
+            "writeOnly",
+        }
+
+        def semantic_schema(value: Any) -> Any:
+            if isinstance(value, Mapping):
+                return {
+                    str(key): semantic_schema(item)
+                    for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+                    if str(key) not in annotations
+                }
+            if isinstance(value, list):
+                return [semantic_schema(item) for item in value]
+            return value
+
+        def first_difference(expected: Any, actual: Any, pointer: str = "") -> str | None:
+            if isinstance(expected, Mapping) and isinstance(actual, Mapping):
+                expected_keys = set(expected)
+                actual_keys = set(actual)
+                missing = sorted(expected_keys - actual_keys)
+                if missing:
+                    return f"{pointer or '/'} missing keys {missing}"
+                unexpected = sorted(actual_keys - expected_keys)
+                if unexpected:
+                    return f"{pointer or '/'} has unexpected keys {unexpected}"
+                for key in sorted(expected_keys):
+                    escaped = str(key).replace("~", "~0").replace("/", "~1")
+                    difference = first_difference(
+                        expected[key], actual[key], f"{pointer}/{escaped}"
+                    )
+                    if difference:
+                        return difference
+                return None
+            if isinstance(expected, list) and isinstance(actual, list):
+                if expected != actual:
+                    return f"{pointer or '/'} expected {expected!r}, got {actual!r}"
+                return None
+            if expected != actual:
+                return f"{pointer or '/'} expected {expected!r}, got {actual!r}"
+            return None
+
+        for contract_label, contract in contracts:
+            operations = dict(contract.get("operations") or {})
+            providers: list[tuple[str, Mapping[str, Any], set[str]]] = []
+            for relative, manifest in manifests:
+                for declaration in manifest.get("provider_contracts") or []:
+                    if not isinstance(declaration, Mapping):
+                        continue
+                    if str(declaration.get("contract") or "").strip() != contract_label:
+                        continue
+                    declared = {
+                        str(item).strip()
+                        for item in declaration.get("operations") or []
+                        if str(item).strip()
+                    }
+                    providers.append((relative, manifest, declared))
+            if not providers:
+                # A context-only operation set need not be implemented by this
+                # candidate.  The AutomationBrief validator separately
+                # requires provider declarations for provider-role contracts.
+                continue
+
+            for relative, manifest, declared in providers:
+                tools = {
+                    str(item.get("name") or "").strip(): item
+                    for item in manifest.get("tools") or []
+                    if isinstance(item, Mapping) and str(item.get("name") or "").strip()
+                }
+                for operation_name, operation_contract in sorted(operations.items()):
+                    if not isinstance(operation_contract, Mapping):
+                        errors.append(
+                            f"admitted operation contract {contract_label}.{operation_name} is not an object"
+                        )
+                        continue
+                    if operation_name not in declared:
+                        errors.append(
+                            f"{relative}: provider contract {contract_label} does not declare admitted operation {operation_name}"
+                        )
+                        continue
+                    tool = tools.get(str(operation_name))
+                    if tool is None:
+                        errors.append(
+                            f"{relative}: provider contract {contract_label} declares {operation_name} but exports no matching tool"
+                        )
+                        continue
+                    operation_ok = True
+                    for schema_key in ("input_schema", "output_schema"):
+                        expected_schema = operation_contract.get(schema_key)
+                        if not isinstance(expected_schema, Mapping):
+                            continue
+                        actual_schema = tool.get(schema_key)
+                        if not isinstance(actual_schema, Mapping):
+                            errors.append(
+                                f"{relative}: {contract_label}.{operation_name} has no declared {schema_key}"
+                            )
+                            operation_ok = False
+                            continue
+                        difference = first_difference(
+                            semantic_schema(expected_schema), semantic_schema(actual_schema)
+                        )
+                        if difference:
+                            errors.append(
+                                f"{relative}: {contract_label}.{operation_name} {schema_key} differs from the admitted consumer ABI at {difference}"
+                            )
+                            operation_ok = False
+                    if operation_ok:
+                        checks.append(
+                            {
+                                "kind": "admitted_contract.operation_schema",
+                                "contract": contract_label,
+                                "operation": str(operation_name),
+                                "path": relative,
+                                "ok": True,
+                            }
+                        )
 
     @staticmethod
     def _cleanup_generated_files(root: Path) -> None:
