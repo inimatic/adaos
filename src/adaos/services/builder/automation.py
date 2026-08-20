@@ -2320,11 +2320,11 @@ class BuilderAutomationService:
         _write_json(launch_path, launched)
         try:
             ready_timeout = float(
-                os.getenv("ADAOS_BUILDER_WORKER_READY_TIMEOUT_SECONDS", "15")
+                os.getenv("ADAOS_BUILDER_WORKER_READY_TIMEOUT_SECONDS", "60")
             )
         except (TypeError, ValueError):
-            ready_timeout = 15.0
-        ready_timeout = min(120.0, max(1.0, ready_timeout))
+            ready_timeout = 60.0
+        ready_timeout = min(180.0, max(5.0, ready_timeout))
         deadline = time.monotonic() + ready_timeout
         ready: dict[str, Any] | None = None
         while time.monotonic() < deadline:
