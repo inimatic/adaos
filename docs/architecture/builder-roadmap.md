@@ -82,8 +82,9 @@ clean-stand or multi-user production acceptance claim.
   shared conversational input/output contract, NLU data boundary,
   Teacher-to-Builder promotion path, and conversation-story testing model.
 - [Development Signals And Evolution Feedback](development-signals.md) defines
-  feedback intake, scoped signal storage, autonomous-versus-interactive Builder
-  handoff, and the boundary with NLU Teacher.
+  feedback intake, scoped signal storage, Dev Tickets,
+  autonomous-versus-interactive Builder handoff, and the boundary with NLU
+  Teacher.
 - [Builder SDK Boundary](builder-sdk-boundary.md) defines the public SDK
   dependency direction and tracks the functional replacement-control slice.
 - [Navigation Intent And Location](navigation-intent-and-location.md) defines

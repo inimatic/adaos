@@ -2,10 +2,10 @@
 
 Status: proposed cross-domain roadmap.
 
-Last reviewed: 2026-08-18.
+Last reviewed: 2026-08-20.
 
 This roadmap sequences the work needed to make evolution feedback a governed,
-natural AdaOS interface. It is subordinate to
+natural AdaOS interface for both people and Codex. It is subordinate to
 [Development Signals And Evolution Feedback](development-signals.md) for
 architecture and to the domain roadmaps for implementation details.
 
@@ -27,11 +27,12 @@ hypothesis -> specified -> implemented -> integrated
 ## DS0. Contract And Storage Spine
 
 Goal: observations become immutable, scoped records before they become
-Builder tasks, NLU corrections, or Issues.
+Dev Tickets, Builder tasks, NLU corrections, or Issues.
 
 Exit proof: a user feedback note, a runtime compatibility finding, and an NLU
 miss are all captured as Development Signals with scope, artifact identity,
-evidence refs, dedup metadata, and terminal or deferred state.
+evidence refs, dedup metadata, and terminal or deferred state; at least one
+signal becomes a Dev Ticket visible to a person and consumable by Codex.
 
 - [ ] `[must]` `DS0-01` Specify `adaos.development_signal.v1` with `owner_scope`,
   `origin_scope`, `target_scope`, `artifact_refs`, conversation refs, Teacher
@@ -56,15 +57,29 @@ evidence refs, dedup metadata, and terminal or deferred state.
 - [ ] `[could]` `DS0-08` Provide import/migration from current
   `builder.development_feedback.v1`, Builder repair tasks, review anchors, and
   NLU Teacher promotion candidates.
+- [ ] `[must]` `DS0-09` Specify `adaos.dev_ticket.v1` as the user/Codex-visible
+  backlog object over one or more Development Signals, with status, target,
+  severity, owner, dedup group, pending action refs, Builder refs, external
+  refs, and closure evidence.
+- [ ] `[must]` `DS0-10` Implement a workspace ticket store that keeps Dev
+  Tickets local/private by default and links each ticket to its source signals.
+- [ ] `[must]` `DS0-11` Define ticket lifecycle states:
+  `captured`, `proposed`, `accepted`, `deferred`, `waiting_for_user`,
+  `ready_for_builder`, `in_builder`, `resolved`, `closed`, `superseded`, and
+  `stale`.
+- [ ] `[should]` `DS0-12` Add ticket projection indexes by current scenario,
+  skill, modal/surface, status, blocker flag, source, and target artifact
+  version.
 
 ## DS1. Feedback Skill Intake
 
-Goal: a person can record a scoped remark or improvement request from UI,
-chat, or voice without entering Builder.
+Goal: a person can record and review scoped tickets from UI, chat, or voice
+without entering Builder.
 
 Exit proof: a feedback action opened from a scenario header, skill panel, and
 modal creates correctly scoped signals; screenshot capture hides and restores
-the modal; voice input stores transcript and not raw audio by default.
+the modal; voice input stores transcript and not raw audio by default; the
+resulting Dev Ticket is visible in the same context.
 
 - [ ] `[must]` `DS1-01` Implement the Feedback Skill modal with summary,
   category, scope display, scope correction, severity, and record/postpone/
@@ -87,6 +102,14 @@ the modal; voice input stores transcript and not raw audio by default.
   ...' when command understanding was wrong."
 - [ ] `[could]` `DS1-08` Add component-level attachment helpers for UI controls
   that can pass a stable semantic component id.
+- [ ] `[must]` `DS1-09` Add a scenario-header ticket affordance that opens a
+  context-filtered list and can create a scenario-scoped ticket.
+- [ ] `[must]` `DS1-10` Add a modal/panel ticket affordance that creates and
+  lists tickets scoped to the active surface.
+- [ ] `[must]` `DS1-11` Add a ticket detail view with summary, status, scope,
+  target version, evidence refs, screenshots, source, dedup links, and actions.
+- [ ] `[should]` `DS1-12` Keep the ticket UI separate from Builder while
+  providing explicit "open Builder" and "repair autonomously" actions.
 
 ## DS2. Conversational Failure Triage
 
@@ -148,12 +171,12 @@ understanding correction remains inside NLU Teacher.
 ## DS4. Runtime Compatibility And Legacy Receiver Findings
 
 Goal: deterministic runtime contract problems become repairable signals
-instead of compatibility fallbacks or raw logs.
+and Dev Tickets instead of compatibility fallbacks or raw logs.
 
 Exit proof: a legacy skill that handles stream/Yjs events without declared
 receiver/data-route contracts produces one deduplicated compatibility signal,
-one repair context, and one Pending Action with autonomous and interactive
-Builder options.
+one Dev Ticket, one repair context, and one Pending Action with autonomous and
+interactive Builder options.
 
 - [ ] `[must]` `DS4-01` Add compatibility finding codes for missing or invalid
   `data_routes`, `webio.receivers`, projection slots, receiver ownership, and
@@ -161,6 +184,9 @@ Builder options.
 - [ ] `[must]` `DS4-02` Convert activation, validation, stream-admission, route
   pressure, and projection-rule-miss evidence into Development Signals and
   Builder repair tasks when design-time fixable.
+- [ ] `[must]` `DS4-09` Convert user-visible or blocking compatibility signals
+  into Dev Tickets before creating Pending Actions, so people and Codex inspect
+  one backlog object rather than raw diagnostic records.
 - [ ] `[must]` `DS4-03` Add computed blocker fields:
   `blocking`, `run_policy`, `design_time_fixable`, and
   `autonomous_repair_eligible`.
@@ -181,12 +207,12 @@ Builder options.
 
 ## DS5. Builder Handoff And Closure
 
-Goal: a signal can become autonomous or interactive Builder work without
-losing scope, evidence, or version lineage.
+Goal: a Dev Ticket can become autonomous or interactive Builder work without
+losing its underlying signal scope, evidence, or version lineage.
 
 Exit proof: both "repair autonomously" and "open Builder" create the same
-typed Builder context; completion links the result back to the originating
-signal and closes only with evidence.
+typed Builder context; completion links the result back to the originating Dev
+Ticket and signals, and closes only with evidence.
 
 - [ ] `[must]` `DS5-01` Define the handoff packet from Development Signal to
   `builder.task.v1`, `builder.repair_task.v1`, or `builder.realize_request.v1`.
@@ -210,6 +236,18 @@ signal and closes only with evidence.
   version, still blocked, or cannot be fixed locally.
 - [ ] `[could]` `DS5-08` Add comparison/evaluation hooks for multiple repair
   strategies when a signal is eligible for more than one adaptation method.
+- [ ] `[must]` `DS5-09` Add `adaos dev ticket` commands for
+  `new`, `list`, `show`, `defer`, `handoff`, `resolve`, and `close` as the
+  Codex/developer CLI over the same ticket service used by the client UI.
+- [ ] `[must]` `DS5-10` Allow Codex to create proposed tickets during core,
+  skill, scenario, or review work with source, target, reason, evidence refs,
+  dedup key, proposed action, and acceptance hint.
+- [ ] `[must]` `DS5-11` Keep Codex-created tickets in `captured` or `proposed`
+  unless deterministic policy accepts them as blockers; human or policy
+  triage moves them to accepted/deferred/refused.
+- [ ] `[should]` `DS5-12` Add Builder context filters that surface active Dev
+  Tickets for the current artifact without flooding Builder with unrelated
+  workspace debt.
 
 ## DS6. Analytics, Campaigns, And Policy Hardening
 
@@ -239,6 +277,31 @@ outcomes without leaking private evidence.
 - [ ] `[deferred]` `DS6-08` Use aggregated signal evidence for public capability
   ranking only after GE5 defines verified reuse, privacy, and comparability.
 
+## DS7. External Issue Tracker Projection
+
+Goal: AdaOS can link or export tickets to GitHub Issues or another external
+tracker without making the external tracker the internal source of truth.
+
+Exit proof: one internal Dev Ticket can link to an existing GitHub issue and
+one redacted draft can be prepared for human approval, while private evidence
+remains local.
+
+- [ ] `[should]` `DS7-01` Add `external_refs` to Dev Tickets with provider,
+  repository, issue id, target path, privacy, sync mode, and provenance.
+- [ ] `[should]` `DS7-02` Support `none`, `link_only`, `draft_export`,
+  `private_repo_issue`, `public_upstream_issue`, and `mirror_status` policy
+  modes.
+- [ ] `[should]` `DS7-03` Generate redacted GitHub issue drafts from ticket
+  summaries, public artifact versions, expected/actual behavior, and safe
+  reproduction steps.
+- [ ] `[must]` `DS7-04` Block automatic public issue creation for screenshots,
+  logs, NLU examples, DOM state, local paths, device names, runtime traces, or
+  private workspace evidence unless redaction and explicit approval pass.
+- [ ] `[could]` `DS7-05` Add status-only mirroring for private team repos after
+  the internal ticket lifecycle is stable.
+- [ ] `[deferred]` `DS7-06` Defer public upstream automation until the first
+  internal ticket and Builder repair loop is validated locally.
+
 ## Recommended First Slice
 
 The first implementation should be narrow:
@@ -247,6 +310,7 @@ The first implementation should be narrow:
 Feedback Skill modal + workspace inbox
   -> screenshot artifact ref
   -> Development Signal schema
+  -> Dev Ticket
   -> runtime receiver compatibility finding
   -> BuilderRepairService report
   -> Pending Action: autonomous repair or open Builder
