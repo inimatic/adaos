@@ -100,6 +100,7 @@ class _Runtime:
         self.register_calls = 0
         self.renew_calls = 0
         self.expire_calls = 0
+        self.authority_renew_calls = 0
 
     def register_instance(self, instance, *, expected_revision, lease_seconds, principal):
         self.register_calls += 1
@@ -155,6 +156,12 @@ class _Runtime:
         principal.require("distributed.service.reconcile")
         return ("old-membership",)
 
+    def renew_authority_leases_for_instance(self, instance_id, *, principal):
+        self.authority_renew_calls += 1
+        principal.require("distributed.authority.renew")
+        assert instance_id == self.store.instance.instance_id
+        return ("authority-lease",)
+
 
 def test_membership_supervisor_registers_and_renews_exact_activation(monkeypatch) -> None:
     runtime = _Runtime()
@@ -197,6 +204,8 @@ def test_membership_supervisor_registers_and_renews_exact_activation(monkeypatch
     assert renewed["action"] == "renewed"
     assert runtime.register_calls == 1
     assert runtime.renew_calls == 1
+    assert runtime.authority_renew_calls == 3
+    assert renewed["renewed_authority_leases"] == ["authority-lease"]
     assert runtime.store.instance.endpoints[0].address_ref == (
         "skill://node-a/media_library_agent/catalog"
     )

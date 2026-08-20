@@ -1009,6 +1009,68 @@ class DistributedRuntime:
         ):
             raise StaleAuthorityEpochError("stale_or_unowned_authority_epoch")
 
+    def renew_authority_leases_for_instance(
+        self,
+        instance_id: str,
+        *,
+        principal: DistributedPrincipal,
+    ) -> tuple[str, ...]:
+        """Renew current fenced authority while its exact service owner is ready."""
+
+        principal.require("distributed.authority.renew")
+        instance = self.store.get_instance(instance_id)
+        self._require_active_membership(instance)
+        if not instance.readiness or instance.status != "ready":
+            return ()
+        now = self.clock()
+        renewed: list[str] = []
+        for lease in _all_pages(self.store.list_leases):
+            if (
+                lease.kind != "authority"
+                or lease.owner_instance_id != instance_id
+                or lease.status != "active"
+                or _utc(lease.valid_until) <= now
+                or _utc(lease.renew_by) > now
+            ):
+                continue
+            partition_id = str(lease.scope_ref).removeprefix("partition:")
+            partition = self.store.get_partition(partition_id)
+            if (
+                partition.authority_lease_id != lease.lease_id
+                or partition.authority_epoch != lease.epoch
+                or partition.topology_generation != lease.topology_generation
+            ):
+                continue
+            duration = max(
+                30,
+                min(
+                    int(
+                        (
+                            _utc(lease.valid_until) - _utc(lease.renew_by)
+                        ).total_seconds()
+                        * 3
+                    ),
+                    600,
+                ),
+            )
+            self.store.put_lease(
+                replace(
+                    lease,
+                    renew_by=_iso(now + timedelta(seconds=duration * 2 // 3)),
+                    valid_until=_iso(now + timedelta(seconds=duration)),
+                )
+            )
+            renewed.append(lease.lease_id)
+        if renewed:
+            self.store.append_audit(
+                "authority.leases.renewed",
+                instance_id=instance_id,
+                lease_ids=renewed,
+                actor_ref=principal.actor_ref,
+            )
+            self._publish_projection()
+        return tuple(renewed)
+
     def resolve_route(
         self,
         dataset_id: str,
