@@ -7,7 +7,6 @@ import os
 import requests
 import shutil
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -154,11 +153,11 @@ def _update_command_output_tail_chars() -> int:
 
 
 def _root_promotion_preflight_timeout_sec() -> float:
-    raw = str(os.getenv("ADAOS_CORE_ROOT_PROMOTION_PREFLIGHT_TIMEOUT_SEC") or "180").strip()
+    raw = str(os.getenv("ADAOS_CORE_ROOT_PROMOTION_PREFLIGHT_TIMEOUT_SEC") or "300").strip()
     try:
         return max(45.0, min(float(raw), 900.0))
     except (TypeError, ValueError):
-        return 180.0
+        return 300.0
 
 
 class _OutputTailBuffer:
@@ -821,14 +820,21 @@ def _preflight_root_promotion(
             (str((candidate_root / "src").resolve()), str((root_dir / "src").resolve()))
         )
         env["PYTHONNOUSERSITE"] = "1"
-        completed = subprocess.run(
-            [str(control_python), "-c", script, str(candidate_root), *modules],
-            cwd=str(candidate_root),
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=_root_promotion_preflight_timeout_sec(),
-        )
+        timeout_sec = _root_promotion_preflight_timeout_sec()
+        try:
+            completed = subprocess.run(
+                [str(control_python), "-c", script, str(candidate_root), *modules],
+                cwd=str(candidate_root),
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                "root promotion import preflight timed out before root mutation "
+                f"after {timeout_sec:.1f} seconds"
+            ) from exc
         if completed.returncode != 0:
             detail = str(completed.stderr or completed.stdout or "import preflight failed").strip()[-4000:]
             raise RuntimeError(f"root promotion import preflight failed: {detail}")

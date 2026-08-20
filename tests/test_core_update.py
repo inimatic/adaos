@@ -933,7 +933,7 @@ def test_root_promotion_preflight_timeout_is_bounded_and_tolerates_io_pressure(m
     import adaos.services.core_update as core_update
 
     monkeypatch.delenv("ADAOS_CORE_ROOT_PROMOTION_PREFLIGHT_TIMEOUT_SEC", raising=False)
-    assert core_update._root_promotion_preflight_timeout_sec() == 180.0
+    assert core_update._root_promotion_preflight_timeout_sec() == 300.0
 
     monkeypatch.setenv("ADAOS_CORE_ROOT_PROMOTION_PREFLIGHT_TIMEOUT_SEC", "10")
     assert core_update._root_promotion_preflight_timeout_sec() == 45.0
@@ -942,7 +942,56 @@ def test_root_promotion_preflight_timeout_is_bounded_and_tolerates_io_pressure(m
     assert core_update._root_promotion_preflight_timeout_sec() == 900.0
 
     monkeypatch.setenv("ADAOS_CORE_ROOT_PROMOTION_PREFLIGHT_TIMEOUT_SEC", "invalid")
-    assert core_update._root_promotion_preflight_timeout_sec() == 180.0
+    assert core_update._root_promotion_preflight_timeout_sec() == 300.0
+
+
+def test_promote_root_reports_preflight_timeout_before_root_mutation(monkeypatch, tmp_path) -> None:
+    import adaos.services.core_update as core_update
+    from adaos.services.core_slots import activate_slot, write_slot_manifest
+
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path / "base"))
+    root_dir = tmp_path / "root"
+    slot_repo = tmp_path / "slot" / "repo"
+    root_supervisor = root_dir / "src" / "adaos" / "apps" / "supervisor.py"
+    slot_supervisor = slot_repo / "src" / "adaos" / "apps" / "supervisor.py"
+    root_supervisor.parent.mkdir(parents=True)
+    slot_supervisor.parent.mkdir(parents=True)
+    root_supervisor.write_text("old\n", encoding="utf-8")
+    slot_supervisor.write_text("new\n", encoding="utf-8")
+    (slot_repo / "pyproject.toml").write_text(
+        "[project]\nname='adaos'\nversion='0.0.0'\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(core_update, "_repo_root", lambda: root_dir)
+    monkeypatch.setattr(
+        core_update, "current_control_python", lambda _root: Path(os.sys.executable)
+    )
+    monkeypatch.setattr(
+        core_update.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+        ),
+    )
+    write_slot_manifest(
+        "B",
+        {
+            "slot": "B",
+            "repo_dir": str(slot_repo),
+            "bootstrap_update": {
+                "required": True,
+                "changed_paths": ["src/adaos/apps/supervisor.py"],
+            },
+        },
+    )
+    activate_slot("B")
+
+    with pytest.raises(
+        RuntimeError,
+        match="preflight timed out before root mutation after 300.0 seconds",
+    ):
+        core_update.promote_root_from_slot()
+
+    assert root_supervisor.read_text(encoding="utf-8") == "old\n"
 
 
 def test_write_status_retries_transient_windows_replace_denial(monkeypatch, tmp_path) -> None:
