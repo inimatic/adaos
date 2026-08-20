@@ -134,6 +134,15 @@ class DistributedRuntimeStore:
     def _path(self, kind: str, identity: str) -> Path:
         return self.root / kind / f"{_token(identity)}.json"
 
+    def _definition_values(self) -> tuple[ServiceDefinition, ...]:
+        values: dict[tuple[str, str], ServiceDefinition] = {}
+        root = self.root / "definitions"
+        if root.is_dir():
+            for path in root.glob("*.json"):
+                value = ServiceDefinition.from_mapping(_read_mapping(path))
+                values[(value.definition_id, value.version)] = value
+        return tuple(values.values())
+
     def _audit(self, event: str, **details: Any) -> None:
         payload = {
             "schema": "adaos.distributed.audit.v1",
@@ -184,7 +193,7 @@ class DistributedRuntimeStore:
     def put_definition(self, definition: ServiceDefinition) -> ServiceDefinition:
         path = self._path(
             "definitions",
-            definition.definition_id,
+            f"{definition.definition_id}@{definition.version}",
         )
         with mutation_lock(self.lock_path, timeout_s=30.0):
             if path.is_file():
@@ -196,20 +205,46 @@ class DistributedRuntimeStore:
             self._audit(
                 "service.definition.saved",
                 definition_id=definition.definition_id,
+                version=definition.version,
                 release_digest=definition.release_digest,
             )
         return definition
 
-    def get_definition(self, definition_id: str) -> ServiceDefinition:
-        return self._get("definitions", definition_id, ServiceDefinition.from_mapping)
+    def get_definition(
+        self, definition_id: str, version: str | None = None
+    ) -> ServiceDefinition:
+        if version is not None:
+            path = self._path("definitions", f"{definition_id}@{version}")
+            if path.is_file():
+                return ServiceDefinition.from_mapping(_read_mapping(path))
+            legacy = self._path("definitions", definition_id)
+            if legacy.is_file():
+                value = ServiceDefinition.from_mapping(_read_mapping(legacy))
+                if value.version == version:
+                    return value
+            raise FileNotFoundError(
+                f"distributed definitions record not found: {definition_id}@{version}"
+            )
+
+        selected = [
+            item
+            for item in self._definition_values()
+            if item.definition_id == definition_id
+        ]
+        if not selected:
+            raise FileNotFoundError(
+                f"distributed definitions record not found: {definition_id}"
+            )
+        if len(selected) != 1:
+            raise DistributedStoreError("service definition version is required")
+        return selected[0]
 
     def list_definitions(
         self, *, cursor: str | None = None, limit: int = 50
     ) -> tuple[tuple[ServiceDefinition, ...], str | None]:
-        return self._list(
-            "definitions",
-            ServiceDefinition.from_mapping,
-            key=lambda item: item.definition_id,
+        return _page(
+            self._definition_values(),
+            key=lambda item: f"{item.definition_id}@{item.version}",
             cursor=cursor,
             limit=limit,
         )

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
 
 import httpx
 import pytest
 
 from adaos.domain.distributed_operations import TopologyPlan, TopologyPlanStep
-from adaos.domain.distributed_runtime import Dataset, Partition, ServiceInstance
+from adaos.domain.distributed_runtime import (
+    Dataset,
+    Partition,
+    Replica,
+    ServiceInstance,
+)
 from adaos.services.distributed_runtime.adapters import (
     HttpTopologyPhaseTransport,
     MemberLinkTopologyPhaseTransport,
@@ -106,6 +111,8 @@ def _plan() -> TopologyPlan:
 
 @dataclass
 class _Store:
+    replicas: dict[str, Replica] = field(default_factory=dict)
+
     def get_partition(self, _partition_id: str) -> Partition:
         return _partition()
 
@@ -120,6 +127,29 @@ class _Store:
 
     def get_plan(self, _plan_digest: str) -> TopologyPlan:
         return _plan()
+
+    def get_replica(self, replica_id: str) -> Replica:
+        try:
+            return self.replicas[replica_id]
+        except KeyError as exc:
+            raise FileNotFoundError(replica_id) from exc
+
+    def put_replica(self, replica: Replica, *, expected_revision: int) -> Replica:
+        previous = self.replicas.get(replica.replica_id)
+        assert expected_revision == (previous.revision if previous else 0)
+        self.replicas[replica.replica_id] = replica
+        return replica
+
+    def list_replicas(self, *, partition_id: str, limit: int):
+        assert limit == 200
+        return (
+            tuple(
+                item
+                for item in self.replicas.values()
+                if item.partition_id == partition_id
+            ),
+            None,
+        )
 
 
 class _Remote:
@@ -174,6 +204,66 @@ def test_skill_adapter_routes_source_and_target_phases_to_owning_nodes() -> None
     )
 
 
+def test_skill_adapter_commits_remote_replica_receipt_to_authority_store() -> None:
+    store = _Store()
+    replica = Replica(
+        replica_id="replica-documents-node-b",
+        partition_id="documents:a-f",
+        instance_id="documents-node-b",
+        node_id="node-b",
+        role="derived",
+        lifecycle="ready",
+        content_state="non_empty",
+        authority_epoch=0,
+        checkpoint="offset:10",
+        source_ref=None,
+        freshness_seconds=0,
+        item_count=10,
+        byte_count=100,
+        observed_at="2026-08-19T00:00:00+00:00",
+    )
+    adapter = SkillToolTopologyAdapter(
+        store=store,  # type: ignore[arg-type]
+        local_node_id="node-b",
+        local_executor=lambda *_args: {
+            "ok": True,
+            "receipt": {"replica": replica.to_dict()},
+        },
+        remote=_Remote(),
+    )
+    receipt = adapter.verify(
+        TopologyStepContext(
+            operation_id="operation-1",
+            plan_digest=str(_plan().plan_digest),
+            step=_step(),
+            phase="verify",
+            authority_epoch=0,
+            idempotency_key="phase-1",
+            attempt=1,
+        )
+    )
+    assert receipt["replica"]["revision"] == 1
+    assert store.get_replica(replica.replica_id).checkpoint == "offset:10"
+
+    invalid = replace(replica, node_id="node-a")
+    adapter.local_executor = lambda *_args: {
+        "ok": True,
+        "receipt": {"replica": invalid.to_dict()},
+    }
+    with pytest.raises(TopologyExecutionError, match="identity_mismatch"):
+        adapter.verify(
+            TopologyStepContext(
+                operation_id="operation-2",
+                plan_digest=str(_plan().plan_digest),
+                step=_step(),
+                phase="verify",
+                authority_epoch=0,
+                idempotency_key="phase-2",
+                attempt=1,
+            )
+        )
+
+
 def test_receiver_validates_target_identity_and_reviewed_phase() -> None:
     source = _instance("documents-node-a", "node-a")
     target = _instance("documents-node-b", "node-b")
@@ -196,6 +286,8 @@ def test_receiver_validates_target_identity_and_reviewed_phase() -> None:
         "partition": _partition().to_dict(),
         "source_instance": source.to_dict(),
         "target_instance": target.to_dict(),
+        "source_replica": None,
+        "target_replica": None,
     }
     result = execute_topology_phase_request(
         payload,

@@ -335,6 +335,64 @@ def test_registration_is_bound_to_activation_release_protocol_and_capacity(
         )
 
 
+def test_service_definition_upgrade_is_versioned_and_fail_closed(
+    tmp_path: Path,
+) -> None:
+    runtime, _, release = _runtime(tmp_path)
+    current = runtime.store.get_group("media-library-home")
+    compatible = ServiceDefinition(
+        definition_id="media-library-agent",
+        version="1.1",
+        release_digest=str(release.release.release_digest),
+        compatible_components=("skill:media_library_agent",),
+        provided_contracts=("media.catalog.v1", "media.search.v1"),
+        topology_mode="multi_instance",
+        protocol_version="1",
+        required_capabilities=("media.catalog",),
+        adapter_contracts=("adaos.distributed.adapter.v1",),
+    )
+    runtime.define_service(compatible, principal=_principal())
+    upgraded = runtime.define_group(
+        replace(
+            current,
+            definition_version="1.1",
+            desired_generation=2,
+            desired_revision=2,
+        ),
+        expected_revision=1,
+        principal=_principal(),
+    )
+    assert upgraded.definition_version == "1.1"
+    assert {item.version for item in runtime.store.list_definitions(limit=10)[0]} == {
+        "1",
+        "1.1",
+    }
+    with pytest.raises(RuntimeError, match="version is required"):
+        runtime.store.get_definition("media-library-agent")
+
+    incompatible = replace(
+        compatible,
+        version="2",
+        protocol_version="2",
+        adapter_contracts=("adaos.distributed.adapter.v2",),
+    )
+    runtime.define_service(incompatible, principal=_principal())
+    with pytest.raises(
+        DistributedRuntimeError, match="incompatible_service_definition_upgrade"
+    ):
+        runtime.define_group(
+            replace(
+                upgraded,
+                definition_version="2",
+                desired_generation=3,
+                desired_revision=3,
+            ),
+            expected_revision=2,
+            principal=_principal(),
+        )
+    assert runtime.store.get_group("media-library-home") == upgraded
+
+
 def test_membership_expiry_is_independent_from_last_health(
     tmp_path: Path,
 ) -> None:

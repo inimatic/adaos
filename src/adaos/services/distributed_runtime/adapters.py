@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from threading import RLock
 from typing import Any, Callable, Mapping, Protocol
 
 import httpx
 
 from adaos.domain.distributed_operations import TopologyPlan, TopologyPlanStep
-from adaos.domain.distributed_runtime import Dataset, Partition, ServiceInstance
+from adaos.domain.distributed_runtime import (
+    Dataset,
+    Partition,
+    Replica,
+    ServiceInstance,
+)
 
 from .operations import (
     RetryableTopologyPhaseError,
@@ -25,7 +30,9 @@ DEFAULT_TOPOLOGY_ADAPTER_TOOL = "distributed_topology_phase"
 
 _receiver_lock = RLock()
 _receiver_node_id = ""
-_receiver_executor: Callable[[str, str, Mapping[str, Any]], Mapping[str, Any]] | None = None
+_receiver_executor: (
+    Callable[[str, str, Mapping[str, Any]], Mapping[str, Any]] | None
+) = None
 
 
 class RemoteTopologyPhaseTransport(Protocol):
@@ -85,6 +92,67 @@ class SkillToolTopologyAdapter:
     local_executor: Callable[[str, str, Mapping[str, Any]], Mapping[str, Any]]
     remote: RemoteTopologyPhaseTransport
 
+    def _replica_for_instance(
+        self, partition_id: str, instance: ServiceInstance | None
+    ) -> Replica | None:
+        if instance is None:
+            return None
+        replicas, cursor = self.store.list_replicas(
+            partition_id=partition_id, limit=200
+        )
+        if cursor is not None:
+            raise TopologyExecutionError("topology_partition_replica_limit_exceeded")
+        return next(
+            (item for item in replicas if item.instance_id == instance.instance_id),
+            None,
+        )
+
+    def _commit_replica_receipt(
+        self,
+        receipt: Mapping[str, Any],
+        *,
+        partition: Partition,
+        selected: ServiceInstance,
+        context: TopologyStepContext,
+    ) -> dict[str, Any]:
+        committed = dict(receipt)
+        raw_replica = committed.get("replica")
+        if not isinstance(raw_replica, Mapping):
+            return committed
+        try:
+            replica = Replica.from_mapping(raw_replica)
+        except Exception as exc:
+            raise TopologyExecutionError("topology_replica_receipt_invalid") from exc
+        if (
+            replica.partition_id != partition.partition_id
+            or replica.instance_id != selected.instance_id
+            or replica.node_id != selected.node_id
+        ):
+            raise TopologyExecutionError("topology_replica_receipt_identity_mismatch")
+        if (
+            replica.role == "authority"
+            and replica.authority_epoch != context.authority_epoch
+        ):
+            raise TopologyExecutionError("topology_replica_receipt_epoch_mismatch")
+        try:
+            previous = self.store.get_replica(replica.replica_id)
+        except FileNotFoundError:
+            previous = None
+        revision = 0 if previous is None else previous.revision
+        replica = replace(replica, revision=revision + 1)
+        if previous is not None:
+            previous_value = previous.to_dict()
+            candidate_value = replica.to_dict()
+            for field in ("observed_at", "revision"):
+                previous_value.pop(field, None)
+                candidate_value.pop(field, None)
+            if previous_value == candidate_value:
+                committed["replica"] = previous.to_dict()
+                return committed
+        saved = self.store.put_replica(replica, expected_revision=revision)
+        committed["replica"] = saved.to_dict()
+        return committed
+
     def _call(self, context: TopologyStepContext) -> Mapping[str, Any]:
         step = context.step
         partition = self.store.get_partition(step.partition_id)
@@ -106,9 +174,7 @@ class SkillToolTopologyAdapter:
         )
         skill_id = _owner_skill(dataset.owner_ref)
         plan = self.store.get_plan(context.plan_digest)
-        if plan.status != "ready" or not any(
-            item == step for item in plan.steps
-        ):
+        if plan.status != "ready" or not any(item == step for item in plan.steps):
             raise TopologyExecutionError("topology_phase_plan_not_reviewed")
         if selected.component_ref != f"skill:{skill_id}":
             raise TopologyExecutionError("topology_adapter_component_owner_mismatch")
@@ -137,14 +203,34 @@ class SkillToolTopologyAdapter:
             "partition": partition.to_dict(),
             "source_instance": source.to_dict() if source is not None else None,
             "target_instance": target.to_dict() if target is not None else None,
+            "source_replica": (
+                replica.to_dict()
+                if (replica := self._replica_for_instance(partition.partition_id, source))
+                is not None
+                else None
+            ),
+            "target_replica": (
+                replica.to_dict()
+                if (replica := self._replica_for_instance(partition.partition_id, target))
+                is not None
+                else None
+            ),
         }
         if len(str(payload).encode("utf-8")) > MAX_TOPOLOGY_PHASE_BYTES:
             raise TopologyExecutionError("topology_phase_request_too_large")
         if selected.node_id == self.local_node_id:
             result = self.local_executor(skill_id, adapter_tool, payload)
         else:
-            result = self.remote.execute_phase(node_id=selected.node_id, payload=payload)
-        return _bounded_result(result)
+            result = self.remote.execute_phase(
+                node_id=selected.node_id, payload=payload
+            )
+        receipt = _bounded_result(result)
+        return self._commit_replica_receipt(
+            receipt,
+            partition=partition,
+            selected=selected,
+            context=context,
+        )
 
     inspect = reserve = prepare = snapshot = stream_deltas = catch_up = _call
     verify = activate_read = promote = demote = drain = remove = route = release = _call
@@ -183,11 +269,11 @@ class HttpTopologyPhaseTransport:
         except httpx.ConnectError as exc:
             raise RetryableTopologyPhaseError("remote_topology_connect_failed") from exc
         except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as exc:
-            raise UncertainTopologyPhaseError(
-                "remote_topology_ack_timeout"
-            ) from exc
+            raise UncertainTopologyPhaseError("remote_topology_ack_timeout") from exc
         except httpx.RequestError as exc:
-            raise RetryableTopologyPhaseError("remote_topology_transport_failed") from exc
+            raise RetryableTopologyPhaseError(
+                "remote_topology_transport_failed"
+            ) from exc
         try:
             body = response.json()
         except ValueError as exc:
@@ -198,7 +284,9 @@ class HttpTopologyPhaseTransport:
             )
         if response.status_code >= 400:
             raise TopologyExecutionError(
-                str(body.get("detail") or f"remote_topology_http_{response.status_code}")
+                str(
+                    body.get("detail") or f"remote_topology_http_{response.status_code}"
+                )
             )
         if not isinstance(body, Mapping):
             raise TopologyExecutionError("remote_topology_response_invalid")
@@ -225,10 +313,19 @@ class MemberLinkTopologyPhaseTransport:
         except TimeoutError as exc:
             raise UncertainTopologyPhaseError("remote_topology_ack_timeout") from exc
         except ConnectionError as exc:
-            raise RetryableTopologyPhaseError("remote_topology_member_link_unavailable") from exc
+            raise RetryableTopologyPhaseError(
+                "remote_topology_member_link_unavailable"
+            ) from exc
         except RuntimeError as exc:
             reason = str(exc)
-            if any(token in reason for token in ("member_not_connected", "member_rpc_busy", "link_replaced")):
+            if any(
+                token in reason
+                for token in (
+                    "member_not_connected",
+                    "member_rpc_busy",
+                    "link_replaced",
+                )
+            ):
                 raise RetryableTopologyPhaseError(reason) from exc
             raise TopologyExecutionError(reason) from exc
         if not isinstance(body, Mapping):
@@ -263,6 +360,8 @@ def execute_topology_phase_request(
         "partition",
         "source_instance",
         "target_instance",
+        "source_replica",
+        "target_replica",
     }
     if set(payload) != fields or payload.get("schema") != TOPOLOGY_PHASE_REQUEST_SCHEMA:
         raise TopologyExecutionError("topology_phase_request_schema_invalid")
@@ -282,13 +381,39 @@ def execute_topology_phase_request(
         if isinstance(payload.get("target_instance"), Mapping)
         else None
     )
-    if partition.partition_id != step.partition_id or partition.dataset_id != dataset.dataset_id:
+    source_replica = (
+        Replica.from_mapping(payload["source_replica"])
+        if isinstance(payload.get("source_replica"), Mapping)
+        else None
+    )
+    target_replica = (
+        Replica.from_mapping(payload["target_replica"])
+        if isinstance(payload.get("target_replica"), Mapping)
+        else None
+    )
+    if (
+        partition.partition_id != step.partition_id
+        or partition.dataset_id != dataset.dataset_id
+    ):
         raise TopologyExecutionError("topology_phase_resource_identity_mismatch")
     if plan.plan_digest != str(payload.get("plan_digest") or ""):
         raise TopologyExecutionError("topology_phase_plan_digest_mismatch")
     if plan.status != "ready" or not any(item == step for item in plan.steps):
         raise TopologyExecutionError("topology_phase_plan_not_reviewed")
-    selected = _selected_instance(str(payload.get("phase") or ""), source=source, target=target)
+    selected = _selected_instance(
+        str(payload.get("phase") or ""), source=source, target=target
+    )
+    for instance, replica in (
+        (source, source_replica),
+        (target, target_replica),
+    ):
+        if replica is not None and (
+            instance is None
+            or replica.partition_id != partition.partition_id
+            or replica.instance_id != instance.instance_id
+            or replica.node_id != instance.node_id
+        ):
+            raise TopologyExecutionError("topology_phase_replica_identity_mismatch")
     if selected.node_id != local_node_id:
         raise TopologyExecutionError("topology_phase_participant_node_mismatch")
     if selected.instance_id != str(payload.get("selected_instance_id") or ""):
@@ -299,15 +424,17 @@ def execute_topology_phase_request(
     if selected.component_ref != f"skill:{skill_id}":
         raise TopologyExecutionError("topology_phase_component_identity_mismatch")
     expected_tool = str(
-        dataset.metadata.get("topology_adapter_tool")
-        or DEFAULT_TOPOLOGY_ADAPTER_TOOL
+        dataset.metadata.get("topology_adapter_tool") or DEFAULT_TOPOLOGY_ADAPTER_TOOL
     ).strip()
     if str(payload.get("adapter_tool") or "") != expected_tool:
         raise TopologyExecutionError("topology_phase_adapter_tool_mismatch")
     if str(payload.get("phase") or "") not in step.phases:
         raise TopologyExecutionError("topology_phase_not_in_reviewed_plan")
     expected_epoch = plan.authority_epoch + (
-        1 if plan.kind == "handoff" and str(payload.get("phase") or "") in {"promote", "route", "demote"} else 0
+        1
+        if plan.kind == "handoff"
+        and str(payload.get("phase") or "") in {"promote", "route", "demote"}
+        else 0
     )
     if (
         int(payload.get("authority_epoch") or 0) != partition.authority_epoch

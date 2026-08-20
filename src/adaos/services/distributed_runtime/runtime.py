@@ -333,7 +333,9 @@ class DistributedRuntime:
         )
         bounded_steps = max(1, min(int(max_steps), 32))
         parallel = max(1, min(int(max_parallel), 4))
-        throughput = max(1, min(int(throughput_bytes_per_second), 10 * 1024 * 1024 * 1024))
+        throughput = max(
+            1, min(int(throughput_bytes_per_second), 10 * 1024 * 1024 * 1024)
+        )
         role = {
             "derived_projection": "derived",
             "read_through_cache": "cache",
@@ -354,7 +356,9 @@ class DistributedRuntime:
             )
             replicas_by_partition[partition.partition_id] = replicas
             for replica in replicas:
-                replica_load[replica.instance_id] = replica_load.get(replica.instance_id, 0) + 1
+                replica_load[replica.instance_id] = (
+                    replica_load.get(replica.instance_id, 0) + 1
+                )
 
         for partition in sorted(partitions, key=lambda item: item.partition_id):
             if len(steps) >= bounded_steps:
@@ -377,10 +381,19 @@ class DistributedRuntime:
             )
             occupied = {item.instance_id for item in replicas}
             while len(replicas) < desired_count and len(steps) < bounded_steps:
-                targets = [item for item in instances if item.instance_id not in occupied]
-                targets.sort(key=lambda item: (replica_load.get(item.instance_id, 0), item.instance_id))
+                targets = [
+                    item for item in instances if item.instance_id not in occupied
+                ]
+                targets.sort(
+                    key=lambda item: (
+                        replica_load.get(item.instance_id, 0),
+                        item.instance_id,
+                    )
+                )
                 if not targets:
-                    warnings.append(f"partition:{partition.partition_id}:no_eligible_target")
+                    warnings.append(
+                        f"partition:{partition.partition_id}:no_eligible_target"
+                    )
                     break
                 target = targets[0]
                 estimate = expected_bytes or 0
@@ -388,7 +401,9 @@ class DistributedRuntime:
                     step_id=f"rebalance-create-{partition.partition_id}-{target.instance_id}",
                     action="create",
                     partition_id=partition.partition_id,
-                    source_instance_id=source.instance_id if source is not None else None,
+                    source_instance_id=source.instance_id
+                    if source is not None
+                    else None,
                     target_instance_id=target.instance_id,
                     replica_role=role,
                     phases=(
@@ -404,7 +419,9 @@ class DistributedRuntime:
                     ),
                     expected_bytes=expected_bytes,
                     temporary_bytes=estimate,
-                    retention="retain" if dataset.data_class == "external" else "rebuild",
+                    retention="retain"
+                    if dataset.data_class == "external"
+                    else "rebuild",
                     adapter_options={
                         "max_parallel": parallel,
                         "expected_partition_revision": partition.revision,
@@ -415,7 +432,9 @@ class DistributedRuntime:
                 )
                 steps.append(step)
                 occupied.add(target.instance_id)
-                replica_load[target.instance_id] = replica_load.get(target.instance_id, 0) + 1
+                replica_load[target.instance_id] = (
+                    replica_load.get(target.instance_id, 0) + 1
+                )
                 replicas.append(
                     replace(
                         source,
@@ -429,7 +448,11 @@ class DistributedRuntime:
                 )
                 total_bytes += estimate
                 temporary_bytes += estimate
-            removable = [item for item in replicas if item is not None and item.role != "authority"]
+            removable = [
+                item
+                for item in replicas
+                if item is not None and item.role != "authority"
+            ]
             removable.sort(
                 key=lambda item: (
                     item.lifecycle == "ready",
@@ -437,7 +460,11 @@ class DistributedRuntime:
                     item.replica_id,
                 )
             )
-            while len([item for item in replicas if item is not None]) > desired_count and removable and len(steps) < bounded_steps:
+            while (
+                len([item for item in replicas if item is not None]) > desired_count
+                and removable
+                and len(steps) < bounded_steps
+            ):
                 candidate = removable.pop(0)
                 steps.append(
                     TopologyPlanStep(
@@ -450,7 +477,9 @@ class DistributedRuntime:
                         phases=("inspect", "drain", "remove", "route", "release"),
                         expected_bytes=candidate.byte_count,
                         availability_impact="reduced_capacity",
-                        retention="retain" if dataset.data_class == "external" else "rebuild",
+                        retention="retain"
+                        if dataset.data_class == "external"
+                        else "rebuild",
                         adapter_options={
                             "max_parallel": parallel,
                             "expected_partition_revision": partition.revision,
@@ -460,15 +489,21 @@ class DistributedRuntime:
                 )
                 replicas.remove(candidate)
 
-        estimated_seconds = 0 if total_bytes == 0 else max(
-            1, (total_bytes + throughput * parallel - 1) // (throughput * parallel)
+        estimated_seconds = (
+            0
+            if total_bytes == 0
+            else max(
+                1, (total_bytes + throughput * parallel - 1) // (throughput * parallel)
+            )
         )
         if any(step.expected_bytes is None for step in steps):
             warnings.append("one_or_more_step_byte_estimates_unavailable")
         plan: TopologyPlan | None = None
         if steps:
             observed_revision = dataset.observed_revision
-            authority_epoch = max((item.authority_epoch for item in partitions), default=0)
+            authority_epoch = max(
+                (item.authority_epoch for item in partitions), default=0
+            )
             plan = self.save_topology_plan(
                 TopologyPlan(
                     plan_id=_identity(
@@ -522,7 +557,10 @@ class DistributedRuntime:
         operation = TopologyExecutor(
             store=self.store,
             adapter=self.topology_adapter,
-            authority_handoff=lambda step, operation, actor, epoch: self.handoff_authority(
+            authority_handoff=lambda step,
+            operation,
+            actor,
+            epoch: self.handoff_authority(
                 step.partition_id,
                 str(step.target_instance_id or ""),
                 expected_partition_revision=self.store.get_partition(
@@ -548,9 +586,38 @@ class DistributedRuntime:
         principal: DistributedPrincipal,
     ) -> ServiceGroup:
         principal.require("distributed.service.manage")
-        definition = self.store.get_definition(group.definition_id)
-        if definition.version != group.definition_version:
-            raise DistributedRuntimeError("incompatible_service_definition_version")
+        definition = self.store.get_definition(
+            group.definition_id, group.definition_version
+        )
+        try:
+            previous_group = self.store.get_group(group.group_id)
+        except FileNotFoundError:
+            previous_group = None
+        if previous_group is not None:
+            if previous_group.definition_id != group.definition_id:
+                raise DistributedRuntimeError("service_group_definition_changed")
+            if previous_group.definition_version != group.definition_version:
+                previous_definition = self.store.get_definition(
+                    previous_group.definition_id,
+                    previous_group.definition_version,
+                )
+                compatible = (
+                    previous_definition.protocol_version == definition.protocol_version
+                    and set(previous_definition.provided_contracts).issubset(
+                        definition.provided_contracts
+                    )
+                    and set(previous_definition.adapter_contracts).issubset(
+                        definition.adapter_contracts
+                    )
+                )
+                if not compatible:
+                    raise DistributedRuntimeError(
+                        "incompatible_service_definition_upgrade"
+                    )
+                if group.desired_generation <= previous_group.desired_generation:
+                    raise DistributedRuntimeError(
+                        "service_definition_upgrade_requires_new_generation"
+                    )
         result = self.store.save_group(
             group, expected_revision=expected_revision, actor_ref=principal.actor_ref
         )
@@ -567,7 +634,9 @@ class DistributedRuntime:
     ) -> ServiceInstance:
         principal.require("distributed.service.register")
         group = self.store.get_group(instance.group_id)
-        definition = self.store.get_definition(group.definition_id)
+        definition = self.store.get_definition(
+            group.definition_id, group.definition_version
+        )
         activation = self.deployment_store.get_activation(instance.activation_id)
         if activation.status != "active":
             raise DistributedRuntimeError("component_activation_not_active")
