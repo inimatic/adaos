@@ -279,12 +279,17 @@ class ProjectDeploymentExecutor:
         stop = False
         for start in range(0, len(actionable), batch_size):
             for change in actionable[start : start + batch_size]:
+                package = (
+                    package_by_ref.get(change.component_ref)
+                    if change.action in {"install", "update", "noop"}
+                    else None
+                )
                 operation, result = self._execute_change(
                     operation,
                     change=change,
                     desired=desired,
                     release_plan=release_plan,
-                    package=package_by_ref.get(change.component_ref),
+                    package=package,
                     node=nodes[change.node_id],
                 )
                 if result.uncertain or result.state == "failed":

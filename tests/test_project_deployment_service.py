@@ -212,6 +212,7 @@ class FakeDeploymentAdapter:
                 "attempt": int(kwargs["attempt"]),
                 "component_ref": kwargs["change"].component_ref,
                 "node_id": kwargs["node"].node_id,
+                "package_digest": getattr(kwargs.get("package"), "digest", None),
             }
         )
         if phase == self.uncertain_phase:
@@ -670,6 +671,13 @@ def test_runtime_exposes_plan_apply_inspect_drain_and_remove(tmp_path: Path) -> 
     assert inspection.desired == desired
     assert drained.state == "succeeded"
     assert removed.state == "succeeded"
+    lifecycle_calls = [
+        item
+        for item in adapter.calls
+        if item["key"].startswith(("runtime:drain:1", "runtime:remove:1"))
+    ]
+    assert lifecycle_calls
+    assert all(item["package_digest"] is None for item in lifecycle_calls)
     assert store.get_activation(activation.activation_id).status == "removed"
     assert published[-1]["schema"] == "adaos.project.deployment_projection.v1"
     assert published[-1]["items"][0]["observed"]["operation_total"] == 3
