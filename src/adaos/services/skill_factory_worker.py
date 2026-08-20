@@ -1385,7 +1385,7 @@ When `scenarios/{target_id}/.builder_current_publication` exists, treat it as th
 22. Packaged tests must be hermetic. They cannot read `.adaos_context`, Builder Development-session instruction/artifact paths, session IDs, or other authoring-only files that Forge omits. Copy only a bounded non-secret fixture that remains necessary into the skill's own tests/fixtures, or leave admitted-context verification to consumer acceptance.
 23. Never reconstruct a skill's `.runtime`/slot path from `ADAOS_BASE_DIR`. Resolve mutable owner-scoped files with `adaos.sdk.skill_env.skill_data_root()` (or the equivalent typed SDK capability). Core supplies the exact DEV or installed data root through current skill context and execution bindings."""
         required_result += """
-24. Treat every admitted `adaos.contract.operation_set.v1` instruction as executable consumer authority. Read its exact contract, capability, operation schemas and `conformance_fixtures`; honor every `required`, `const`, enum, and `additionalProperties` boundary. An operation set with `candidate_role: provider` requires the target skill to declare a matching `provider_contracts` entry with that exact contract and capability; keep independent contracts (for example a generic runner and a domain probe) as independent provider declarations rather than merging their operations. Exercise the production provider itself with a bounded fixture below `ADAOS_TASK_RUNTIME_DIR`, including the declared operation sequence rather than only a helper that resembles it, so the trusted worker can validate the newest complete document set. When a provider returns `working_directory` and `expected_outputs`, execute its returned command in that exact directory and require every output at the exact relative path `Path(working_directory) / expected_outputs[i]`; an undeclared implicit subdirectory is a missing output. Exercise collection through the returned `output_ref` and verification through the provider's declared operation. Do not replace consumer schemas with a permissive local look-alike."""
+24. Treat every admitted `adaos.contract.operation_set.v1` instruction as executable consumer authority. Read its exact contract, capability, operation schemas and `conformance_fixtures`; honor every `required`, `const`, enum, and `additionalProperties` boundary. An operation set with `candidate_role: provider` requires the target skill to declare a matching `provider_contracts` entry with that exact contract and capability; keep independent contracts (for example a generic runner and a domain probe) as independent provider declarations rather than merging their operations. Exercise the production provider itself with a bounded fixture below `ADAOS_TASK_RUNTIME_DIR`, including the declared operation sequence rather than only a helper that resembles it, so the trusted worker can validate the newest complete document set. If the SDK normally resolves provider output through `skill_data_root()`, bind `ADAOS_SKILL_INTERNAL_DATA_ROOT` to a dedicated child of `ADAOS_TASK_RUNTIME_DIR` for this conformance execution; an OS-temporary or other owner-data root is not visible to trusted task validation. When a provider returns `working_directory` and `expected_outputs`, execute its returned command in that exact directory and require every output at the exact relative path `Path(working_directory) / expected_outputs[i]`; an undeclared implicit subdirectory is a missing output. Exercise collection through the returned `output_ref` and verification through the provider's declared operation. Do not replace consumer schemas with a permissive local look-alike."""
         required_result += """
 25. For a governed scientific handoff, treat the accepted `experiment_plan.system` object and its digest as executable subject authority. Realize the declared system, component settings, arm semantics, intervention boundary, and locked invariants on the production runner path. A bounded fixture may reduce sample counts or runtime only where the accepted execution profile permits it; it must not substitute another model family, operator, input geometry, output space, or scientific subject. Emit the required implementation-observation document from that same path so an independent consumer can detect semantic substitution."""
         required_result = required_result.format(
@@ -1885,9 +1885,22 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             ]
             if not complete_roots:
                 if bool(fixture.get("required", True)):
+                    found = [
+                        f"{root.relative_to(runtime_root).as_posix() or '.'}="
+                        + ",".join(sorted(names))
+                        for root, names in sorted(
+                            candidates.items(),
+                            key=lambda item: item[0].as_posix(),
+                        )[:20]
+                    ]
+                    found_detail = "; ".join(found) if found else "none"
                     errors.append(
                         f"admitted contract fixture {label} produced no complete runtime document set; "
-                        f"required: {', '.join(required_documents)}"
+                        f"required: {', '.join(required_documents)}; "
+                        f"trusted task runtime root: {runtime_root}; "
+                        f"incomplete sets found: {found_detail}. "
+                        "Conformance outputs written to an OS-temporary or owner-data root "
+                        "outside ADAOS_TASK_RUNTIME_DIR are not admissible."
                     )
                 continue
             selected = max(

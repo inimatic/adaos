@@ -1278,6 +1278,7 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(tmp_path: P
     assert "install-strict" in prompt
     assert "trusted worker finalizer owns package" in prompt
     assert "ADAOS_TASK_RUNTIME_DIR" in prompt
+    assert "bind `ADAOS_SKILL_INTERNAL_DATA_ROOT` to a dedicated child" in prompt
     assert "Path(working_directory) / expected_outputs[i]" in prompt
     assert "collection through the returned `output_ref`" in prompt
     assert "never create repository-relative `.adaos*` runtime directories" in prompt
@@ -1845,10 +1846,41 @@ def test_worker_requires_admitted_contract_document_set(tmp_path: Path) -> None:
     )
 
     assert checks == []
-    assert errors == [
+    assert len(errors) == 1
+    assert errors[0].startswith(
         "admitted contract fixture example.runner.v1:bounded-output produced no complete "
-        "runtime document set; required: run_log.json, index.json"
-    ]
+        "runtime document set; required: run_log.json, index.json; trusted task runtime root: "
+    )
+    assert str(runtime.resolve()) in errors[0]
+    assert "incomplete sets found: none" in errors[0]
+    assert "outside ADAOS_TASK_RUNTIME_DIR are not admissible" in errors[0]
+
+
+def test_worker_reports_incomplete_contract_document_roots(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _document_contract_assignment(workspace)
+    runtime = tmp_path / "runtime"
+    partial = runtime / "candidate-self-check" / "attempt-1"
+    partial.mkdir(parents=True)
+    (partial / "run_log.json").write_text(
+        '{"network": {"mode": "offline", "accessed": false}}\n',
+        encoding="utf-8",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_admitted_contract_documents(
+        assignment,
+        workspace,
+        runtime_dir=runtime,
+        checks=checks,
+        errors=errors,
+    )
+
+    assert checks == []
+    assert len(errors) == 1
+    assert "incomplete sets found: candidate-self-check/attempt-1=run_log.json" in errors[0]
 
 
 def test_workspace_validates_contract_output_from_codex_task_runtime(tmp_path: Path) -> None:
