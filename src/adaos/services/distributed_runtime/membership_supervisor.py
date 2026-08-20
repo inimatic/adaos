@@ -127,6 +127,7 @@ class DistributedServiceMembershipSupervisor:
                 "distributed.service.register",
                 "distributed.service.renew",
                 "distributed.service.reconcile",
+                "distributed.authority.renew",
             },
         )
         if not self._is_member_node():
@@ -351,6 +352,14 @@ class DistributedServiceMembershipSupervisor:
                 )
                 action = "renewed"
         lease = runtime.store.get_lease(current.lease_id)
+        renewed_authority_leases = (
+            runtime.renew_authority_leases_for_instance(
+                current.instance_id,
+                principal=self._principal,
+            )
+            if readiness and current.status == "ready"
+            else ()
+        )
         return {
             "enabled": True,
             "ok": True,
@@ -369,6 +378,7 @@ class DistributedServiceMembershipSupervisor:
                 "renew_by": lease.renew_by,
                 "valid_until": lease.valid_until,
             },
+            "renewed_authority_leases": list(renewed_authority_leases),
             "observed_at": utc_now(),
         }
 

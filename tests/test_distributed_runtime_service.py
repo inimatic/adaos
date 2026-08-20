@@ -137,6 +137,7 @@ def _principal() -> DistributedPrincipal:
         "distributed.replica.observe",
         "distributed.route.grant",
         "distributed.authority.handoff",
+        "distributed.authority.renew",
         "distributed.replica.remove",
         "distributed.data.delete",
         "scope:media.read",
@@ -757,6 +758,65 @@ def test_route_explanation_distinguishes_read_and_expired_authority(
     assert expired["eligible"] is True
     assert expired["authority_eligible"] is False
     assert expired["replicas"][0]["authority_reason"] == "authority_lease_inactive"
+
+
+def test_ready_owner_renews_current_authority_until_health_fails(
+    tmp_path: Path,
+) -> None:
+    runtime, clock, release = _runtime(tmp_path)
+    for node_id in ("node-a", "node-b"):
+        runtime.register_instance(
+            _instance(release, node_id),
+            expected_revision=0,
+            lease_seconds=300,
+            principal=_principal(),
+        )
+    _external_topology(runtime)
+    lease = runtime.handoff_authority(
+        "media-files:root-a",
+        "media-agent-node-a",
+        expected_partition_revision=1,
+        expected_epoch=0,
+        operation_id="authority-renewal",
+        lease_seconds=30,
+        principal=_principal(),
+    )
+
+    clock.advance(21)
+    assert runtime.renew_authority_leases_for_instance(
+        "media-agent-node-a",
+        principal=_principal(),
+    ) == (lease.lease_id,)
+    renewed = runtime.store.get_lease(lease.lease_id)
+    assert renewed.valid_until == (clock() + timedelta(seconds=30)).isoformat()
+    runtime.assert_authority(
+        scope_ref="partition:media-files:root-a",
+        instance_id="media-agent-node-a",
+        epoch=lease.epoch,
+    )
+
+    instance = runtime.store.get_instance("media-agent-node-a")
+    runtime.renew_instance(
+        instance.instance_id,
+        expected_revision=instance.revision,
+        readiness=False,
+        status="unavailable",
+        health={"status": "failing"},
+        pressure={},
+        lease_seconds=300,
+        principal=_principal(),
+    )
+    assert runtime.renew_authority_leases_for_instance(
+        "media-agent-node-a",
+        principal=_principal(),
+    ) == ()
+    clock.advance(31)
+    with pytest.raises(StaleAuthorityEpochError):
+        runtime.assert_authority(
+            scope_ref="partition:media-files:root-a",
+            instance_id="media-agent-node-a",
+            epoch=lease.epoch,
+        )
 
 
 class FakeTopologyAdapter:

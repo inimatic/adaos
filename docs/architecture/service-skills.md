@@ -72,7 +72,10 @@ supervisor registers or renews the instance in the subnet authority plane.
 The hub expires stale leases every 30 seconds and exposes local membership
 receipts as `distributed_membership` in service status. Registration remains
 closed until the matching Project release, service definition, and group
-exist.
+exist. When a ready instance owns a current fenced authority lease, the same
+supervisor renews that lease in the authority plane. Renewal stops immediately
+when the instance is unready or unavailable, so failover remains bounded by the
+authority lease instead of a skill-specific heartbeat.
 
 The health response may expose bounded membership observations as
 `distributed.health` and `distributed.pressure`; the service does not call the
