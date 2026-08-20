@@ -1023,6 +1023,30 @@ def _run_migration_sync(
                 )
             except Exception as preserve_exc:
                 entry["preservation_error"] = f"{type(preserve_exc).__name__}: {preserve_exc}"
+        disposer = getattr(mgr, "dispose_runtime_process_resources", None)
+        if callable(disposer):
+            try:
+                entry["worker_dispose"] = disposer(
+                    name,
+                    reason="skill_runtime_migration_worker_candidate_complete",
+                    event_type="skill.runtime.migration_worker_candidate_complete",
+                )
+            except Exception as exc:
+                entry["worker_dispose"] = {
+                    "ok": False,
+                    "skipped": False,
+                    "skill": name,
+                    "hook": "dispose",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+        else:
+            entry["worker_dispose"] = {
+                "ok": True,
+                "skipped": True,
+                "skill": name,
+                "hook": "dispose",
+                "reason_detail": "manager_dispose_unavailable",
+            }
         results.append(entry)
         payload["completed_total"] = len(results)
         payload["failed_total"] = sum(1 for item in results if not bool(item.get("ok")))
@@ -1048,6 +1072,9 @@ def _run_migration_sync(
     final["finished_at"] = _now()
     final["elapsed_s"] = round(final["finished_at"] - started_at, 3)
     final["skills"] = results
+    final["worker_dispose_failed_total"] = sum(
+        1 for item in results if not bool((item.get("worker_dispose") or {}).get("ok", True))
+    )
     quarantine_after = quarantined_runtimes(ctx, mgr)
     failed_candidates_after = failed_candidate_runtimes(ctx, mgr)
     final["quarantined_total"] = len(quarantine_after)
@@ -1142,12 +1169,47 @@ async def _finalize_owner_runtime_migration(
         reload_result = await _reload_owner_skill_handlers(ctx, skill_name)
         item["handler_reload"] = reload_result
         if bool(reload_result.get("ok")):
-            item["stage"] = "live_handler_ready"
-            finalized.append(item)
-            continue
+            item["stage"] = "owner_rehydrate"
+            try:
+                item["owner_rehydrate"] = await asyncio.to_thread(
+                    mgr.rehydrate_active_runtime,
+                    skill_name,
+                    reason="skill_runtime_migration_live_finalize",
+                    event_type="skill.runtime.migration_live_finalize",
+                )
+                if bool(item["owner_rehydrate"].get("ok", True)):
+                    item["stage"] = "live_handler_ready"
+                    finalized.append(item)
+                    continue
+                rehydrate_error = str(
+                    (item["owner_rehydrate"].get("hook_result") or {}).get("error")
+                    or item["owner_rehydrate"].get("reason_detail")
+                    or "owner rehydrate failed"
+                )
+                reload_result = {
+                    **reload_result,
+                    "ok": False,
+                    "reason": "owner_rehydrate_failed",
+                    "error": rehydrate_error,
+                }
+            except Exception as exc:
+                item["owner_rehydrate"] = {
+                    "ok": False,
+                    "skipped": False,
+                    "skill": skill_name,
+                    "hook": "rehydrate",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+                reload_result = {
+                    **reload_result,
+                    "ok": False,
+                    "reason": "owner_rehydrate_failed",
+                    "error": str(exc),
+                }
+            item["handler_reload"] = reload_result
 
         error = RuntimeError(
-            "selected skill runtime handlers failed live reload: "
+            "selected skill runtime failed live finalization: "
             f"{reload_result.get('error') or reload_result.get('reason') or 'unknown failure'}"
         )
         item["ok"] = False
@@ -1240,6 +1302,9 @@ async def _finalize_owner_runtime_migration(
         "completed_total": len(skills),
         "failed_total": len(all_failed),
         "handler_reload_failed_total": len(failed),
+        "owner_rehydrate_failed_total": sum(
+            1 for item in failed if not bool((item.get("owner_rehydrate") or {}).get("ok", True))
+        ),
         "live_finalized_total": len(finalized),
         "materialization_cache": materialization_cache,
         "webspace_rebuild": webspace_rebuild,
