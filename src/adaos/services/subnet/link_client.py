@@ -1462,7 +1462,12 @@ class MemberLinkClient:
                     "subnet.nats.reconnect",
                 }:
                     self._queue_node_snapshot()
-                if self._bus_prefixes is not None and not any(typ.startswith(p) for p in self._bus_prefixes):
+                platform_report = typ == "distributed.service.membership.reported"
+                if (
+                    not platform_report
+                    and self._bus_prefixes is not None
+                    and not any(typ.startswith(p) for p in self._bus_prefixes)
+                ):
                     return
                 payload = getattr(ev, "payload", None) if hasattr(ev, "payload") else (ev.get("payload") if isinstance(ev, dict) else None)
                 payload_dict = payload if isinstance(payload, dict) else {"value": payload}

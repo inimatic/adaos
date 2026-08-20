@@ -63,12 +63,16 @@ service:
 ```
 
 The declaration contains service-facing identity only. Core selects the exact
-active `ComponentActivation` on the local trusted node and derives release,
-runtime generation, topology generation, and a stable node/activation instance
-ID. The supervisor registers that instance, renews it at `renew_by`, expires
-stale leases every 30 seconds, and exposes its receipt as
-`distributed_membership` in service status. Registration remains closed until
-the matching Project release, service definition, and group exist.
+active `ComponentActivation` on the trusted node and derives release, runtime
+generation, topology generation, and a stable node/activation instance ID. A
+member reports bounded health and pressure over its authenticated hub link; it
+does not open or mutate a local topology authority store. `HubLinkManager`
+binds the report to the transport-derived member identity, and the hub
+supervisor registers or renews the instance in the subnet authority plane.
+The hub expires stale leases every 30 seconds and exposes local membership
+receipts as `distributed_membership` in service status. Registration remains
+closed until the matching Project release, service definition, and group
+exist.
 
 The health response may expose bounded membership observations as
 `distributed.health` and `distributed.pressure`; the service does not call the
