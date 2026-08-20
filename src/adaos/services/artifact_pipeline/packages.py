@@ -50,6 +50,7 @@ _EXCLUDED_DIRS = {
     ".builder_current_publication",
     ".builder_previous_automation",
     ".git",
+    ".skill_state",
     ".mypy_cache",
     ".pytest_cache",
     ".ruff_cache",
@@ -137,6 +138,11 @@ def _build_policy_digest() -> str:
                 "normalization": "posix+nfc",
                 "portable_casefold_unique": True,
                 "windows_reserved_names": sorted(_WINDOWS_RESERVED_NAMES),
+            },
+            "content": {
+                "binary": "byte_exact",
+                "text_detection": "valid_utf8_without_nul",
+                "text_line_endings": "lf",
             },
             "exclusions": {
                 "directories": sorted(_EXCLUDED_DIRS),
@@ -246,7 +252,9 @@ def _sensitive_path_reason(name: str) -> str | None:
         return "environment credential file"
     if folded_name in _SENSITIVE_NAMES or path.suffix.casefold() in _SENSITIVE_SUFFIXES:
         return "credential or private-key file"
-    if any(part in {".secrets", "credentials", "secrets"} for part in folded_parts[:-1]):
+    if any(
+        part in {".secrets", "credentials", "secrets"} for part in folded_parts[:-1]
+    ):
         return "credential directory"
     if folded_parts and folded_parts[0] == ".adaos" and name != PACKAGE_MANIFEST_PATH:
         return "AdaOS runtime metadata"
@@ -277,7 +285,10 @@ def _excluded(relative: PurePosixPath) -> bool:
         and tuple(relative.parts[:3]) == ("conversational", "tests", "stories")
         and relative.suffix.lower() in {".yaml", ".yml"}
     )
-    if any(part in _EXCLUDED_DIRS for part in relative.parts) and not is_conversational_story:
+    if (
+        any(part in _EXCLUDED_DIRS for part in relative.parts)
+        and not is_conversational_story
+    ):
         return True
     if relative.name in _EXCLUDED_FILES:
         return True
@@ -296,7 +307,9 @@ def _zip_info(name: str) -> zipfile.ZipInfo:
 def _load_canonical_manifest(root: Path, kind: ArtifactKind) -> tuple[str, str, Path]:
     manifest_path = root / _MANIFEST_BY_KIND[kind]
     if not manifest_path.is_file():
-        raise PackageBuildError(f"required {_MANIFEST_BY_KIND[kind]} is missing at {root}")
+        raise PackageBuildError(
+            f"required {_MANIFEST_BY_KIND[kind]} is missing at {root}"
+        )
     try:
         payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
     except Exception as exc:
@@ -314,21 +327,29 @@ def _load_canonical_manifest(root: Path, kind: ArtifactKind) -> tuple[str, str, 
     return artifact_id, version, manifest_path
 
 
-def _collect_package_files(root: Path, limits: PackageLimits) -> list[tuple[str, bytes]]:
+def _collect_package_files(
+    root: Path, limits: PackageLimits
+) -> list[tuple[str, bytes]]:
     collected: list[tuple[str, bytes]] = []
     total = 0
-    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+    for path in sorted(
+        root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()
+    ):
         relative = PurePosixPath(path.relative_to(root).as_posix())
         if _excluded(relative):
             continue
         if path.is_symlink():
-            raise PackageBuildError(f"symbolic links are not allowed in packages: {relative.as_posix()}")
+            raise PackageBuildError(
+                f"symbolic links are not allowed in packages: {relative.as_posix()}"
+            )
         if path.is_dir():
             continue
         if not path.is_file():
             raise PackageBuildError(f"unsupported package input: {relative.as_posix()}")
-        name = _normalized_member_name(relative.as_posix(), error_type=PackageBuildError)
-        data = path.read_bytes()
+        name = _normalized_member_name(
+            relative.as_posix(), error_type=PackageBuildError
+        )
+        data = _canonical_package_bytes(path.read_bytes())
         _assert_publishable_file(name, data, error_type=PackageBuildError)
         total += len(data)
         if len(collected) + 1 > limits.max_files:
@@ -343,6 +364,18 @@ def _collect_package_files(root: Path, limits: PackageLimits) -> list[tuple[str,
         error_type=PackageBuildError,
     )
     return collected
+
+
+def _canonical_package_bytes(data: bytes) -> bytes:
+    """Remove checkout-specific line endings from unambiguous UTF-8 text."""
+
+    if b"\r" not in data or b"\0" in data:
+        return data
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data
+    return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 
 
 def build_artifact_package(
@@ -360,19 +393,54 @@ def build_artifact_package(
     if kind not in _MANIFEST_BY_KIND:
         raise PackageBuildError("kind must be skill or scenario")
 
-    artifact_id, version, manifest_path = _load_canonical_manifest(root, kind)
-    component_manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
-    try:
-        workflow = load_manifest_bound_workflow(
-            root,
-            manifest_name=_MANIFEST_BY_KIND[kind],
-            allow_legacy_inline=kind == "scenario",
-        )
-    except WorkflowArtifactError as exc:
-        raise PackageBuildError(f"invalid governed workflow: {exc}") from exc
     files = _collect_package_files(root, limits)
     if _MANIFEST_BY_KIND[kind] not in {name for name, _ in files}:
-        raise PackageBuildError(f"required {_MANIFEST_BY_KIND[kind]} was excluded from package")
+        raise PackageBuildError(
+            f"required {_MANIFEST_BY_KIND[kind]} was excluded from package"
+        )
+
+    with tempfile.TemporaryDirectory(prefix="adaos-package-build-") as temp:
+        canonical_root = Path(temp).resolve()
+        for name, data in files:
+            destination = canonical_root / Path(name)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(data)
+
+        artifact_id, version, manifest_path = _load_canonical_manifest(
+            canonical_root, kind
+        )
+        component_manifest = (
+            yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+        )
+        try:
+            workflow = load_manifest_bound_workflow(
+                canonical_root,
+                manifest_name=_MANIFEST_BY_KIND[kind],
+                allow_legacy_inline=kind == "scenario",
+            )
+        except WorkflowArtifactError as exc:
+            raise PackageBuildError(f"invalid governed workflow: {exc}") from exc
+
+        conversational_lock = None
+        if isinstance(component_manifest.get("conversational"), Mapping):
+            conversational = compile_conversational_package(
+                canonical_root,
+                manifest_name=_MANIFEST_BY_KIND[kind],
+                build_static_report=False,
+                require_operation_catalog=False,
+            )
+            if not conversational.valid or conversational.package is None:
+                diagnostics = conversational.validation.report.get("diagnostics") or []
+                detail = "; ".join(
+                    f"{item.get('code')}: {item.get('message')}"
+                    for item in diagnostics[:5]
+                    if isinstance(item, Mapping)
+                )
+                raise PackageBuildError(f"invalid conversational package: {detail}")
+            conversational_lock = ArtifactContractLock(
+                lock_id=f"conversational:{kind}:{artifact_id}@{version}",
+                digest=conversational.package.package_digest,
+            )
 
     file_records = [
         {"path": name, "size": len(data), "digest": sha256_digest(data)}
@@ -397,35 +465,15 @@ def build_artifact_package(
         if workflow is not None
         else None
     )
-    conversational_lock = None
-    if isinstance(component_manifest.get("conversational"), Mapping):
-        conversational = compile_conversational_package(
-            root,
-            manifest_name=_MANIFEST_BY_KIND[kind],
-            build_static_report=False,
-            require_operation_catalog=False,
-        )
-        if not conversational.valid or conversational.package is None:
-            diagnostics = conversational.validation.report.get("diagnostics") or []
-            detail = "; ".join(
-                f"{item.get('code')}: {item.get('message')}"
-                for item in diagnostics[:5]
-                if isinstance(item, Mapping)
-            )
-            raise PackageBuildError(f"invalid conversational package: {detail}")
-        conversational_lock = ArtifactContractLock(
-            lock_id=f"conversational:{kind}:{artifact_id}@{version}",
-            digest=conversational.package.package_digest,
-        )
     workflow_binding = None
     workflow_validation_lock = None
     workflow_adapter_locks: tuple[WorkflowAdapterLock, ...] = ()
     role_policy_digest = None
     if workflow is not None:
         try:
-            workflow_binding = (workflow_registry or platform_workflow_adapter_registry()).bind(
-                workflow.compiled
-            )
+            workflow_binding = (
+                workflow_registry or platform_workflow_adapter_registry()
+            ).bind(workflow.compiled)
         except WorkflowAdapterRegistryError as exc:
             raise PackageBuildError(f"workflow adapter binding failed: {exc}") from exc
         workflow_validation_lock = ArtifactContractLock(
@@ -457,7 +505,9 @@ def build_artifact_package(
     }
     if workflow_lock is not None:
         package_manifest["workflow_lock"] = workflow_lock.to_dict()
-        package_manifest["workflow_validation_lock"] = workflow_validation_lock.to_dict()
+        package_manifest["workflow_validation_lock"] = (
+            workflow_validation_lock.to_dict()
+        )
         package_manifest["workflow_adapter_locks"] = [
             item.to_dict() for item in workflow_adapter_locks
         ]
@@ -477,7 +527,12 @@ def build_artifact_package(
         strict_timestamps=True,
     ) as archive:
         for name, data in files:
-            archive.writestr(_zip_info(name), data, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+            archive.writestr(
+                _zip_info(name),
+                data,
+                compress_type=zipfile.ZIP_DEFLATED,
+                compresslevel=9,
+            )
         archive.writestr(
             _zip_info(PACKAGE_MANIFEST_PATH),
             manifest_bytes,
@@ -486,7 +541,9 @@ def build_artifact_package(
         )
     archive_bytes = buffer.getvalue()
     if len(archive_bytes) > limits.max_archive_bytes:
-        raise PackageBuildError(f"package exceeds archive size limit {limits.max_archive_bytes}")
+        raise PackageBuildError(
+            f"package exceeds archive size limit {limits.max_archive_bytes}"
+        )
     package_digest = sha256_digest(archive_bytes)
     verify_artifact_package(
         archive_bytes,
@@ -518,7 +575,9 @@ def build_artifact_package(
         )
     except ArtifactReleaseContractError as exc:
         raise PackageBuildError(str(exc)) from exc
-    return BuiltArtifactPackage(ref=ref, archive_bytes=archive_bytes, package_manifest=package_manifest)
+    return BuiltArtifactPackage(
+        ref=ref, archive_bytes=archive_bytes, package_manifest=package_manifest
+    )
 
 
 def _entry_is_symlink(entry: zipfile.ZipInfo) -> bool:
@@ -530,11 +589,15 @@ def _read_manifest(archive: zipfile.ZipFile) -> tuple[dict[str, Any], bytes]:
     try:
         raw = archive.read(PACKAGE_MANIFEST_PATH)
     except KeyError as exc:
-        raise PackageVerificationError(f"package is missing {PACKAGE_MANIFEST_PATH}") from exc
+        raise PackageVerificationError(
+            f"package is missing {PACKAGE_MANIFEST_PATH}"
+        ) from exc
     try:
         value = json.loads(raw.decode("utf-8"))
     except Exception as exc:
-        raise PackageVerificationError("package manifest is not valid UTF-8 JSON") from exc
+        raise PackageVerificationError(
+            "package manifest is not valid UTF-8 JSON"
+        ) from exc
     if not isinstance(value, dict):
         raise PackageVerificationError("package manifest must be an object")
     if value.get("schema") != PACKAGE_MANIFEST_SCHEMA:
@@ -581,7 +644,9 @@ def _verify_artifact_package(
 ) -> VerifiedArtifactPackage:
     limits = limits or PackageLimits()
     if len(data) > limits.max_archive_bytes:
-        raise PackageVerificationError(f"package exceeds archive size limit {limits.max_archive_bytes}")
+        raise PackageVerificationError(
+            f"package exceeds archive size limit {limits.max_archive_bytes}"
+        )
     actual_digest = sha256_digest(data)
     if expected_digest and actual_digest != str(expected_digest).strip().lower():
         raise PackageVerificationError(
@@ -594,20 +659,31 @@ def _verify_artifact_package(
         raise PackageVerificationError("package is not a readable ZIP archive") from exc
     with archive:
         entries = archive.infolist()
-        names = [_normalized_member_name(item.filename, error_type=PackageVerificationError) for item in entries]
+        names = [
+            _normalized_member_name(item.filename, error_type=PackageVerificationError)
+            for item in entries
+        ]
         if len(names) != len(set(names)):
             raise PackageVerificationError("package contains duplicate paths")
         _assert_no_portable_collisions(names, error_type=PackageVerificationError)
         if len(entries) > limits.max_files + 1:
-            raise PackageVerificationError(f"package exceeds file limit {limits.max_files}")
+            raise PackageVerificationError(
+                f"package exceeds file limit {limits.max_files}"
+            )
         total = 0
         for entry in entries:
             if entry.flag_bits & 0x1:
-                raise PackageVerificationError(f"encrypted package entry is not allowed: {entry.filename}")
+                raise PackageVerificationError(
+                    f"encrypted package entry is not allowed: {entry.filename}"
+                )
             if _entry_is_symlink(entry):
-                raise PackageVerificationError(f"symbolic link entry is not allowed: {entry.filename}")
+                raise PackageVerificationError(
+                    f"symbolic link entry is not allowed: {entry.filename}"
+                )
             if entry.is_dir():
-                raise PackageVerificationError(f"directory entries are not allowed: {entry.filename}")
+                raise PackageVerificationError(
+                    f"directory entries are not allowed: {entry.filename}"
+                )
             total += int(entry.file_size)
             if total > limits.max_uncompressed_bytes:
                 raise PackageVerificationError(
@@ -621,16 +697,24 @@ def _verify_artifact_package(
         expected_files: dict[str, Mapping[str, Any]] = {}
         for item in raw_files:
             if not isinstance(item, Mapping):
-                raise PackageVerificationError("package manifest file record must be an object")
-            name = _normalized_member_name(str(item.get("path") or ""), error_type=PackageVerificationError)
+                raise PackageVerificationError(
+                    "package manifest file record must be an object"
+                )
+            name = _normalized_member_name(
+                str(item.get("path") or ""), error_type=PackageVerificationError
+            )
             if name == PACKAGE_MANIFEST_PATH or name in expected_files:
-                raise PackageVerificationError(f"duplicate or reserved manifest file path: {name}")
+                raise PackageVerificationError(
+                    f"duplicate or reserved manifest file path: {name}"
+                )
             expected_files[name] = item
         archive_files = set(names) - {PACKAGE_MANIFEST_PATH}
         if archive_files != set(expected_files):
             missing = sorted(set(expected_files) - archive_files)
             extra = sorted(archive_files - set(expected_files))
-            raise PackageVerificationError(f"package file set mismatch: missing={missing} extra={extra}")
+            raise PackageVerificationError(
+                f"package file set mismatch: missing={missing} extra={extra}"
+            )
         verified_file_bytes: dict[str, bytes] = {}
         for name, record in expected_files.items():
             raw = archive.read(name)
@@ -680,12 +764,16 @@ def _verify_artifact_package(
 
         source = package_manifest.get("source_ref")
         if not isinstance(source, Mapping):
-            raise PackageVerificationError("package manifest source_ref must be an object")
+            raise PackageVerificationError(
+                "package manifest source_ref must be an object"
+            )
         raw_schema_locks = package_manifest.get("schema_locks") or []
         raw_conversational_lock = package_manifest.get("conversational_lock")
         raw_workflow_lock = package_manifest.get("workflow_lock")
         raw_workflow_validation_lock = package_manifest.get("workflow_validation_lock")
-        raw_workflow_adapter_locks = package_manifest.get("workflow_adapter_locks") or []
+        raw_workflow_adapter_locks = (
+            package_manifest.get("workflow_adapter_locks") or []
+        )
         raw_workflow_binding_digest = package_manifest.get("workflow_binding_digest")
         raw_workflow_role_policy_digest = package_manifest.get(
             "workflow_role_policy_digest"
@@ -718,14 +806,16 @@ def _verify_artifact_package(
         if not isinstance(raw_workflow_adapter_locks, list) or any(
             not isinstance(item, Mapping) for item in raw_workflow_adapter_locks
         ):
-            raise PackageVerificationError("workflow_adapter_locks must be a list of objects")
+            raise PackageVerificationError(
+                "workflow_adapter_locks must be a list of objects"
+            )
         manifest_name = _MANIFEST_BY_KIND.get(package_manifest.get("kind"))
         if manifest_name is None:
             raise PackageVerificationError("package kind must be skill or scenario")
         try:
-            manifest_payload = yaml.safe_load(
-                verified_file_bytes[manifest_name].decode("utf-8")
-            ) or {}
+            manifest_payload = (
+                yaml.safe_load(verified_file_bytes[manifest_name].decode("utf-8")) or {}
+            )
             if not isinstance(manifest_payload, Mapping):
                 raise WorkflowArtifactError(f"{manifest_name} must contain an object")
             workflow_reference = workflow_manifest_reference(
@@ -749,16 +839,22 @@ def _verify_artifact_package(
                     f"workflow.json exists but {manifest_name} does not reference it"
                 )
         except (KeyError, UnicodeError, yaml.YAMLError, WorkflowArtifactError) as exc:
-            raise PackageVerificationError(f"invalid packaged governed workflow: {exc}") from exc
+            raise PackageVerificationError(
+                f"invalid packaged governed workflow: {exc}"
+            ) from exc
         if raw_workflow_lock != (
-            expected_workflow_lock.to_dict() if expected_workflow_lock is not None else None
+            expected_workflow_lock.to_dict()
+            if expected_workflow_lock is not None
+            else None
         ):
             raise PackageVerificationError(
                 "package workflow_lock does not match packaged workflow definition"
             )
         expected_conversational_lock = None
         if isinstance(manifest_payload.get("conversational"), Mapping):
-            with tempfile.TemporaryDirectory(prefix="adaos-conversational-verify-") as temp:
+            with tempfile.TemporaryDirectory(
+                prefix="adaos-conversational-verify-"
+            ) as temp:
                 verification_root = Path(temp).resolve()
                 for name, raw in verified_file_bytes.items():
                     destination = (verification_root / Path(name)).resolve()
@@ -823,7 +919,10 @@ def _verify_artifact_package(
                 raise PackageVerificationError(
                     f"workflow adapter binding failed: {exc}"
                 ) from exc
-            if raw_workflow_validation_lock != expected_workflow_validation_lock.to_dict():
+            if (
+                raw_workflow_validation_lock
+                != expected_workflow_validation_lock.to_dict()
+            ):
                 raise PackageVerificationError(
                     "workflow_validation_lock does not match the validation report"
                 )
@@ -833,7 +932,10 @@ def _verify_artifact_package(
                 raise PackageVerificationError(
                     "workflow_adapter_locks do not match the active registry"
                 )
-            if raw_workflow_binding_digest != expected_workflow_binding["binding_digest"]:
+            if (
+                raw_workflow_binding_digest
+                != expected_workflow_binding["binding_digest"]
+            ):
                 raise PackageVerificationError(
                     "workflow_binding_digest does not match the resolved adapter registry"
                 )
@@ -879,7 +981,9 @@ def _verify_artifact_package(
             ref=ref,
             package_manifest=package_manifest,
             file_names=tuple(sorted(expected_files)),
-            uncompressed_bytes=sum(int(item.get("size") or 0) for item in expected_files.values()),
+            uncompressed_bytes=sum(
+                int(item.get("size") or 0) for item in expected_files.values()
+            ),
         )
 
 
@@ -905,10 +1009,14 @@ class ContentAddressedPackageStore:
     def _hex_digest(digest: str) -> str:
         value = str(digest or "").strip().lower()
         if not value.startswith("sha256:") or len(value) != 71:
-            raise PackageVerificationError("package digest must be sha256:<64 lowercase hex characters>")
+            raise PackageVerificationError(
+                "package digest must be sha256:<64 lowercase hex characters>"
+            )
         token = value.split(":", 1)[1]
         if any(char not in "0123456789abcdef" for char in token):
-            raise PackageVerificationError("package digest must be sha256:<64 lowercase hex characters>")
+            raise PackageVerificationError(
+                "package digest must be sha256:<64 lowercase hex characters>"
+            )
         return token
 
     def package_path(self, digest: str) -> Path:
@@ -918,8 +1026,12 @@ class ContentAddressedPackageStore:
     def has(self, digest: str) -> bool:
         return self.package_path(digest).is_file()
 
-    def put(self, data: bytes, *, expected_digest: str | None = None) -> VerifiedArtifactPackage:
-        verified = verify_artifact_package(data, expected_digest=expected_digest, limits=self.limits)
+    def put(
+        self, data: bytes, *, expected_digest: str | None = None
+    ) -> VerifiedArtifactPackage:
+        verified = verify_artifact_package(
+            data, expected_digest=expected_digest, limits=self.limits
+        )
         target = self.package_path(verified.ref.digest)
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
@@ -932,7 +1044,9 @@ class ContentAddressedPackageStore:
                 )
             except Exception:
                 self._quarantine_path(target, reason="corrupt-existing")
-        fd, temporary_name = tempfile.mkstemp(prefix=f".{target.name}.", dir=str(target.parent))
+        fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{target.name}.", dir=str(target.parent)
+        )
         temporary = Path(temporary_name)
         try:
             with os.fdopen(fd, "wb") as handle:
@@ -950,7 +1064,9 @@ class ContentAddressedPackageStore:
             raise FileNotFoundError(f"package not found: {digest}")
         data = path.read_bytes()
         try:
-            verified = verify_artifact_package(data, expected_digest=digest, limits=self.limits)
+            verified = verify_artifact_package(
+                data, expected_digest=digest, limits=self.limits
+            )
         except Exception:
             self._quarantine_path(path, reason="verification-failed")
             raise
@@ -993,7 +1109,9 @@ class ContentAddressedPackageStore:
                 shutil.rmtree(staged, ignore_errors=True)
         return verified
 
-    def extract_to_directory(self, digest: str, target: Path) -> VerifiedArtifactPackage:
+    def extract_to_directory(
+        self, digest: str, target: Path
+    ) -> VerifiedArtifactPackage:
         """Verify and extract a package into a new directory without switching it live."""
 
         path = self.package_path(digest)
@@ -1027,10 +1145,15 @@ class ContentAddressedPackageStore:
         return self._quarantine_path(path, reason=reason)
 
     def _quarantine_path(self, path: Path, *, reason: str) -> Path:
-        safe_reason = "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in reason).strip("-")
+        safe_reason = "".join(
+            char if char.isalnum() or char in {"-", "_"} else "-" for char in reason
+        ).strip("-")
         quarantine_root = self.root / "quarantine"
         quarantine_root.mkdir(parents=True, exist_ok=True)
-        target = quarantine_root / f"{path.stem}.{safe_reason or 'quarantine'}.{uuid4().hex}.zip"
+        target = (
+            quarantine_root
+            / f"{path.stem}.{safe_reason or 'quarantine'}.{uuid4().hex}.zip"
+        )
         path.replace(target)
         return target
 

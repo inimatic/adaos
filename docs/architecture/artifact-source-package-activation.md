@@ -207,6 +207,15 @@ Package requirements:
   route;
 - atomic write and verification before visibility.
 
+The package builder derives contract locks and archive bytes from one canonical
+content view. Files that are valid UTF-8 and contain no NUL bytes are text and
+use LF line endings; all other files are binary and remain byte-exact. Runtime
+and development state such as `.skill_state`, caches, tests, and build outputs
+is excluded before that view is formed. These rules are part of
+`build_policy_digest`, so identical source revisions produce identical package
+and ProjectRelease digests across checkout platforms, while a policy change is
+explicit in package provenance.
+
 When a canonical `skill.yaml` or `scenario.yaml` declares
 `workflow.manifest: workflow.json`, the workflow is part of the same component
 package as its code and manifest. It is not a separately installable component.

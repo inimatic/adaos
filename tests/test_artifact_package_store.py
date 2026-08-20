@@ -50,13 +50,19 @@ def _scenario(root: Path) -> Path:
     (scenario / "artifacts" / "part0" / "private-source.md").write_text(
         "private research intake\n", encoding="utf-8"
     )
-    (scenario / "builder.draft.json").write_text('{"private": true}\n', encoding="utf-8")
-    (scenario / "prompt_state.json").write_text('{"workflow": "prototype"}\n', encoding="utf-8")
+    (scenario / "builder.draft.json").write_text(
+        '{"private": true}\n', encoding="utf-8"
+    )
+    (scenario / "prompt_state.json").write_text(
+        '{"workflow": "prototype"}\n', encoding="utf-8"
+    )
     (scenario / "builder_memory.md").write_text("private notes\n", encoding="utf-8")
     (scenario / "tests").mkdir()
-    (scenario / "tests" / "test_contract.py").write_text("assert True\n", encoding="utf-8")
+    (scenario / "tests" / "test_contract.py").write_text(
+        "assert True\n", encoding="utf-8"
+    )
     (scenario / "ui_revisions").mkdir()
-    (scenario / "ui_revisions" / "001.json").write_text('{}\n', encoding="utf-8")
+    (scenario / "ui_revisions" / "001.json").write_text("{}\n", encoding="utf-8")
     (scenario / "__pycache__" / "generated.pyc").write_bytes(b"cache")
     return scenario
 
@@ -65,7 +71,9 @@ def _add_empty_conversational_package(scenario: Path) -> None:
     manifest_path = scenario / "scenario.yaml"
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     manifest["conversational"] = {"manifest": "conversational/manifest.yaml"}
-    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
+    )
     package = scenario / "conversational"
     package.mkdir()
     sources = {
@@ -148,6 +156,10 @@ def _add_empty_conversational_package(scenario: Path) -> None:
 
 def test_package_build_is_deterministic_and_excludes_dev_state(tmp_path: Path) -> None:
     scenario = _scenario(tmp_path)
+    (scenario / ".skill_state").mkdir()
+    (scenario / ".skill_state" / "runtime.json").write_text(
+        '{"local": true}\n', encoding="utf-8"
+    )
 
     first = build_artifact_package(scenario, kind="scenario", source_ref=_source())
     os.utime(scenario / "scenario.yaml", (1_900_000_000, 1_900_000_000))
@@ -155,7 +167,9 @@ def test_package_build_is_deterministic_and_excludes_dev_state(tmp_path: Path) -
 
     assert first.archive_bytes == second.archive_bytes
     assert first.ref.digest == second.ref.digest
-    verified = verify_artifact_package(first.archive_bytes, expected_digest=first.ref.digest)
+    verified = verify_artifact_package(
+        first.archive_bytes, expected_digest=first.ref.digest
+    )
     assert verified.ref == first.ref
     assert "scenario.yaml" in verified.file_names
     assert "builder.draft.json" not in verified.file_names
@@ -165,20 +179,60 @@ def test_package_build_is_deterministic_and_excludes_dev_state(tmp_path: Path) -
     assert not any(item.startswith("tests/") for item in verified.file_names)
     assert not any(item.startswith("ui_revisions/") for item in verified.file_names)
     assert not any("__pycache__" in item for item in verified.file_names)
+    assert not any(".skill_state" in item for item in verified.file_names)
+
+
+def test_package_build_normalizes_text_line_endings_across_checkouts(
+    tmp_path: Path,
+) -> None:
+    lf = _scenario(tmp_path / "lf")
+    crlf = _scenario(tmp_path / "crlf")
+    for lf_path in lf.rglob("*"):
+        if not lf_path.is_file():
+            continue
+        relative = lf_path.relative_to(lf)
+        crlf_path = crlf / relative
+        data = lf_path.read_bytes()
+        if b"\0" in data:
+            continue
+        canonical = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        lf_path.write_bytes(canonical)
+        crlf_path.write_bytes(canonical.replace(b"\n", b"\r\n"))
+
+    lf_package = build_artifact_package(lf, kind="scenario", source_ref=_source())
+    crlf_package = build_artifact_package(crlf, kind="scenario", source_ref=_source())
+
+    assert lf_package.archive_bytes == crlf_package.archive_bytes
+    assert lf_package.ref.digest == crlf_package.ref.digest
+
+
+def test_package_build_preserves_binary_line_ending_bytes(tmp_path: Path) -> None:
+    scenario = _scenario(tmp_path)
+    binary = b"\xffbinary\r\ncontent\r"
+    (scenario / "assets" / "sample.bin").write_bytes(binary)
+
+    built = build_artifact_package(scenario, kind="scenario", source_ref=_source())
+
+    with zipfile.ZipFile(io.BytesIO(built.archive_bytes), mode="r") as archive:
+        assert archive.read("assets/sample.bin") == binary
 
 
 def test_package_digest_changes_with_content(tmp_path: Path) -> None:
     scenario = _scenario(tmp_path)
     first = build_artifact_package(scenario, kind="scenario", source_ref=_source())
 
-    (scenario / "webui.json").write_text('{"ui": {"favorites": true}}\n', encoding="utf-8")
+    (scenario / "webui.json").write_text(
+        '{"ui": {"favorites": true}}\n', encoding="utf-8"
+    )
     second = build_artifact_package(scenario, kind="scenario", source_ref=_source())
 
     assert first.ref.digest != second.ref.digest
     assert first.ref.manifest_digest != second.ref.manifest_digest
 
 
-def test_package_persists_builder_target_and_packaged_schema_identity(tmp_path: Path) -> None:
+def test_package_persists_builder_target_and_packaged_schema_identity(
+    tmp_path: Path,
+) -> None:
     scenario = _scenario(tmp_path)
     schema = scenario / "recipes.schema.json"
     schema.write_text('{"type":"object"}\n', encoding="utf-8")
@@ -206,7 +260,9 @@ def test_package_locks_and_revalidates_conversational_sources(tmp_path: Path) ->
     verified = verify_artifact_package(built.archive_bytes)
 
     assert built.ref.conversational_lock is not None
-    assert built.ref.conversational_lock.lock_id == "conversational:scenario:recipes@1.2.3"
+    assert (
+        built.ref.conversational_lock.lock_id == "conversational:scenario:recipes@1.2.3"
+    )
     assert built.package_manifest["conversational_lock"] == (
         built.ref.conversational_lock.to_dict()
     )
@@ -220,7 +276,9 @@ def test_package_includes_manifest_bound_conversational_stories(tmp_path: Path) 
     manifest_path = package / "manifest.yaml"
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     manifest["files"]["stories"] = ["tests/stories/no-match.yaml"]
-    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
+    )
     repair_path = package / "repair.yaml"
     repair = yaml.safe_load(repair_path.read_text(encoding="utf-8"))
     repair["policies"] = [
@@ -320,7 +378,9 @@ def test_package_includes_manifest_bound_conversational_stories(tmp_path: Path) 
     assert "tests/test_contract.py" not in verified.file_names
 
 
-def test_package_release_reference_locks_exact_governed_workflow(tmp_path: Path) -> None:
+def test_package_release_reference_locks_exact_governed_workflow(
+    tmp_path: Path,
+) -> None:
     scenario = _scenario(tmp_path)
     (scenario / "scenario.yaml").write_text(
         "id: recipes\nversion: 1.2.3\nworkflow:\n  manifest: workflow.json\n",
@@ -527,7 +587,9 @@ def test_package_verifier_rejects_external_secret_like_inputs() -> None:
         verify_artifact_package(archive)
 
 
-def test_content_addressed_store_verifies_and_materializes_atomically(tmp_path: Path) -> None:
+def test_content_addressed_store_verifies_and_materializes_atomically(
+    tmp_path: Path,
+) -> None:
     scenario = _scenario(tmp_path / "source")
     built = build_artifact_package(scenario, kind="scenario", source_ref=_source())
     store = ContentAddressedPackageStore(tmp_path / "packages")
@@ -561,7 +623,9 @@ def test_store_quarantines_corrupt_existing_package(tmp_path: Path) -> None:
         store.read(built.ref.digest)
 
     assert not package_path.exists()
-    assert list((tmp_path / "packages" / "quarantine").glob("*.verification-failed.*.zip"))
+    assert list(
+        (tmp_path / "packages" / "quarantine").glob("*.verification-failed.*.zip")
+    )
 
 
 def test_store_verify_and_extract_each_use_one_verification_pass(
