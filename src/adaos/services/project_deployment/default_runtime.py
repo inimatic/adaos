@@ -66,7 +66,7 @@ def deployment_runtime_inventory_payload(ctx: AgentContext | None = None) -> dic
     base_dir = Path(current.paths.base_dir()).resolve()
     try:
         usage = shutil.disk_usage(base_dir)
-        storage_bytes = int(usage.free)
+        storage_bytes = int(usage.total)
     except OSError:
         storage_bytes = 0
     cpu_count = max(1, int(os.cpu_count() or 1))
@@ -74,7 +74,7 @@ def deployment_runtime_inventory_payload(ctx: AgentContext | None = None) -> dic
     try:
         import psutil
 
-        memory_mb = int(psutil.virtual_memory().available // (1024 * 1024))
+        memory_mb = int(psutil.virtual_memory().total // (1024 * 1024))
     except Exception:
         pass
     capabilities = _tokens(
