@@ -92,6 +92,16 @@ def _reject_transport_corruption(value: Any, *, field: str) -> None:
         )
 
 
+def _brief_digest(value: Any) -> str | None:
+    try:
+        decoded = json.loads(str(value or ""))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(decoded, Mapping):
+        return None
+    return str(decoded.get("digest") or "").strip() or None
+
+
 def _cleanup_dev_skill_runtime(skill_id: str) -> dict[str, Any]:
     """Invoke the core-owned DEV runtime lifecycle without deleting source."""
 
@@ -430,6 +440,92 @@ class BuilderAutomationService:
             "prohibited_actions": list(session["handoff"]["prohibited_actions"]),
         }
         return {**identity, "digest": _canonical_digest(identity)}, attachments
+
+    def _development_instruction(
+        self,
+        session_id: str,
+        *,
+        target_ref: str,
+        kind: str,
+    ) -> tuple[dict[str, Any], Path]:
+        """Load one digest-verified JSON instruction from a Development Session."""
+
+        session, state_path = self._load_development_session(
+            session_id,
+            target_ref=target_ref,
+        )
+        descriptor = next(
+            (
+                dict(item)
+                for item in session.get("instruction_inputs") or []
+                if isinstance(item, Mapping) and str(item.get("kind") or "") == kind
+            ),
+            None,
+        )
+        if descriptor is None:
+            raise ValueError(f"development session is missing the {kind} instruction")
+        instruction_root = (state_path.parent / "instructions").resolve()
+        source = Path(str(descriptor.get("path") or "")).resolve()
+        if source.parent != instruction_root or not source.is_file():
+            raise ValueError(f"development instruction is unavailable: {kind}")
+        try:
+            value = json.loads(source.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"development JSON instruction is invalid: {kind}") from exc
+        if not isinstance(value, Mapping):
+            raise ValueError(f"development JSON instruction must be an object: {kind}")
+        if _canonical_digest(value) != str(descriptor.get("content_digest") or ""):
+            raise ValueError(f"development instruction digest drifted: {kind}")
+        return dict(value), source
+
+    def _rebind_development_session(
+        self,
+        session: dict[str, Any],
+        *,
+        development_session_id: str,
+    ) -> bool:
+        """Adopt a newer exact Development Session before a terminal retry.
+
+        A long-lived Builder Automation projection may outlive the compilation
+        or consumer ABI that created it.  Reusing its old instruction envelope
+        would let Codex implement one contract and make the active consumer
+        validate another.  Rebinding is therefore explicit, target-scoped and
+        digest-verified; it also replaces the cached AutomationBrief with the
+        exact brief owned by the incoming Development Session.
+        """
+
+        incoming = str(development_session_id or "").strip()
+        current = str(session.get("development_session_id") or "").strip()
+        if not incoming or incoming == current:
+            return False
+        kind = str(session.get("object_type") or "").strip()
+        project_id = str(session.get("object_id") or "").strip()
+        target_ref = f"{kind}:{project_id}"
+        brief, brief_path = self._development_instruction(
+            incoming,
+            target_ref=target_ref,
+            kind="automation_brief",
+        )
+        changed_at = _now_iso()
+        session.setdefault("development_session_history", []).append(
+            {
+                "development_session_id": current or None,
+                "automation_brief_digest": _brief_digest(session.get("implementation_brief")),
+                "rebound_at": changed_at,
+            }
+        )
+        session["development_session_history"] = session["development_session_history"][-20:]
+        session["development_session_id"] = incoming
+        session["implementation_brief"] = json.dumps(
+            brief,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        session["brief_path"] = str(brief_path)
+        session["development_session_rebound_at"] = changed_at
+        session["updated_at"] = changed_at
+        return True
 
     @staticmethod
     def _change_id(*, session_id: str, iteration: int, seed: str) -> str:
@@ -912,6 +1008,7 @@ class BuilderAutomationService:
         webspace_id: str | None = None,
         conversation_id: str | None = None,
         workflow_transition: str | None = None,
+        development_session_id: str | None = None,
     ) -> dict[str, Any]:
         instruction = str(text or "").strip()
         if not instruction:
@@ -942,6 +1039,10 @@ class BuilderAutomationService:
                     "session": session,
                     "automation": self.project_session(session),
                 }
+            self._rebind_development_session(
+                session,
+                development_session_id=str(development_session_id or ""),
+            )
             transition_token = str(workflow_transition or "").strip() or None
             if transition_token != "return_to_prototype":
                 workflow_before = self._workflow().describe(

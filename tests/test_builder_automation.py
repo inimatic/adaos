@@ -369,6 +369,121 @@ def test_automation_materializes_governed_development_session_inputs(tmp_path: P
     assert ".adaos_context/dev_recipes_calibration/instructions/reviewed_prose.md" in prompt
 
 
+def test_terminal_followup_rebinds_to_new_digest_verified_development_session(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+
+    def write_session(session_id: str, brief_digest: str) -> None:
+        root = service.state_dir / "builder" / "development_sessions" / session_id
+        instructions = root / "instructions"
+        instructions.mkdir(parents=True)
+        artifact_root = tmp_path / "artifacts" / session_id
+        artifact_root.mkdir(parents=True)
+        artifact_digest = "sha256:" + "3" * 64
+        brief = {
+            "schema": "adaos.research.automation_brief.v1",
+            "digest": brief_digest,
+            "objective": f"Implement {brief_digest}",
+        }
+        brief_path = instructions / "automation_brief.json"
+        brief_path.write_text(json.dumps(brief), encoding="utf-8")
+        content_digest = automation_module._canonical_digest(brief)
+        session = {
+            "schema": "adaos.builder.development_session.v1",
+            "session_id": session_id,
+            "project_ref": "project:recipes",
+            "base_release": None,
+            "focus": {"ref": "scenario:recipes"},
+            "targets": {
+                "primary": [
+                    {
+                        "ref": "scenario:recipes",
+                        "access": "read-write",
+                        "context": "full",
+                        "source_path": str(service.dev_scenarios_root / "recipes"),
+                    }
+                ],
+                "secondary": [],
+            },
+            "context_members": [],
+            "artifact_inputs": [
+                {
+                    "ref": f"artifact://skill/source/{session_id}",
+                    "access": "read-only",
+                    "manifest_digest": artifact_digest,
+                    "root_path": str(artifact_root),
+                }
+            ],
+            "instruction_inputs": [
+                {
+                    "ref": f"instruction://builder/{session_id}/automation_brief",
+                    "kind": "automation_brief",
+                    "access": "read-only",
+                    "media_type": "application/json",
+                    "digest_mode": "canonical-json",
+                    "content_digest": content_digest,
+                    "path": str(brief_path),
+                }
+            ],
+            "scratch": {
+                "owner": "session",
+                "access": "read-write",
+                "path": str(root / "scratch"),
+            },
+            "handoff": {
+                "automation_brief_digest": brief_digest,
+                "research_prototype_digest": "sha256:" + "4" * 64,
+                "artifact_manifest_digests": [artifact_digest],
+                "request": "Implement the exact admitted brief.",
+                "prohibited_actions": [],
+            },
+            "status": "ready",
+            "created_at": "2026-08-20T00:00:00Z",
+            "created_by": "skill:test",
+        }
+        (root / "session.json").write_text(json.dumps(session), encoding="utf-8")
+
+    first_id = "dev_recipes_first"
+    second_id = "dev_recipes_recompiled"
+    first_digest = "sha256:" + "1" * 64
+    second_digest = "sha256:" + "2" * 64
+    write_session(first_id, first_digest)
+    write_session(second_id, second_digest)
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief=json.dumps({"digest": first_digest}),
+        development_session_id=first_id,
+    )
+
+    followed = service.submit_turn(
+        text="Rebase to the newly compiled exact Development Session.",
+        object_type="scenario",
+        object_id="recipes",
+        development_session_id=second_id,
+    )
+
+    session = followed["session"]
+    assert session["development_session_id"] == second_id
+    assert json.loads(session["implementation_brief"])["digest"] == second_digest
+    assert session["development_session_history"][-1]["development_session_id"] == first_id
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == session["current_task_id"]
+    )
+    assert task["realize_request"]["links"]["development_session_id"] == second_id
+    assert (
+        task["realize_request"]["artifacts"]["development_context"]["session_id"]
+        == second_id
+    )
+    assert (
+        json.loads(task["realize_request"]["artifacts"]["implementation_brief"])["digest"]
+        == second_digest
+    )
+
+
 def test_automation_projects_declared_and_observed_execution_budget(tmp_path: Path) -> None:
     run_root = tmp_path / "run"
     runtime_root = run_root / "runtime"
