@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 from typing import Callable, Sequence
@@ -60,6 +61,23 @@ def run(session_id: str) -> int:
     ).strip("._") or "automation"
     worker_root = Path(ctx.paths.state_dir()) / "builder" / "automation_workers" / token
     result_path = worker_root / "result.json"
+    ready_path = worker_root / "ready.json"
+    worker_root.mkdir(parents=True, exist_ok=True)
+    ready_path.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.builder.automation_worker_ready.v1",
+                "session_id": str(session_id),
+                "status": "ready",
+                "pid": os.getpid(),
+                "ready_at": _now_iso(),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     try:
         session = _run_until_settled(service, str(session_id))
         payload = {

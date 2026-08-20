@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -2250,6 +2251,8 @@ class BuilderAutomationService:
         stdout_path = worker_root / "stdout.log"
         stderr_path = worker_root / "stderr.log"
         launch_path = worker_root / "launch.json"
+        ready_path = worker_root / "ready.json"
+        ready_path.unlink(missing_ok=True)
         repo_python = self.repo_root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         executable = repo_python if repo_python.is_file() else Path(sys.executable)
         command = [
@@ -2282,7 +2285,11 @@ class BuilderAutomationService:
                 getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
                 | getattr(subprocess, "DETACHED_PROCESS", 0)
                 | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
                 | priority_creationflags
+            )
+            resource_policy["job_breakaway"] = bool(
+                getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
             )
         else:
             popen_kwargs["start_new_session"] = True
@@ -2297,12 +2304,12 @@ class BuilderAutomationService:
             process_create_time: float | None = float(psutil.Process(process.pid).create_time())
         except (psutil.Error, OSError):
             process_create_time = None
-        launched = {
+        launched: dict[str, Any] = {
             "schema": "adaos.builder.automation_worker_launch.v1",
             "session_id": str(session_id),
             "pid": int(process.pid),
             "create_time": process_create_time,
-            "status": "launched",
+            "status": "starting",
             "repo_root": str(self.repo_root.resolve()),
             "executable": str(executable.resolve()),
             "stdout_path": str(stdout_path),
@@ -2310,6 +2317,70 @@ class BuilderAutomationService:
             "resource_policy": resource_policy,
             "launched_at": _now_iso(),
         }
+        _write_json(launch_path, launched)
+        try:
+            ready_timeout = float(
+                os.getenv("ADAOS_BUILDER_WORKER_READY_TIMEOUT_SECONDS", "15")
+            )
+        except (TypeError, ValueError):
+            ready_timeout = 15.0
+        ready_timeout = min(120.0, max(1.0, ready_timeout))
+        deadline = time.monotonic() + ready_timeout
+        ready: dict[str, Any] | None = None
+        while time.monotonic() < deadline:
+            try:
+                value = json.loads(ready_path.read_text(encoding="utf-8"))
+            except (OSError, TypeError, ValueError):
+                value = None
+            if (
+                isinstance(value, Mapping)
+                and str(value.get("session_id") or "") == str(session_id)
+                and str(value.get("status") or "") == "ready"
+            ):
+                ready = dict(value)
+                break
+            poll = getattr(process, "poll", None)
+            return_code = poll() if callable(poll) else None
+            if return_code is not None:
+                launched.update(
+                    {
+                        "status": "failed",
+                        "error": (
+                            "automation worker exited before readiness handshake "
+                            f"with code {return_code}"
+                        ),
+                        "failed_at": _now_iso(),
+                    }
+                )
+                _write_json(launch_path, launched)
+                raise RuntimeError(str(launched["error"]))
+            time.sleep(0.05)
+        if ready is None:
+            launched.update(
+                {
+                    "status": "failed",
+                    "error": (
+                        "automation worker did not publish a readiness handshake "
+                        f"within {ready_timeout:.1f} seconds"
+                    ),
+                    "failed_at": _now_iso(),
+                }
+            )
+            _write_json(launch_path, launched)
+            terminate = getattr(process, "terminate", None)
+            if callable(terminate):
+                try:
+                    terminate()
+                except OSError:
+                    pass
+            raise RuntimeError(str(launched["error"]))
+        launched.update(
+            {
+                "status": "ready",
+                "worker_pid": ready.get("pid"),
+                "ready_at": ready.get("ready_at") or _now_iso(),
+            }
+        )
         _write_json(launch_path, launched)
         return launched
 

@@ -440,17 +440,37 @@ def test_background_automation_launches_durable_worker_process(tmp_path: Path, m
     service.background = True
     monkeypatch.delenv("ADAOS_BUILDER_AUTOMATION_RESOURCE_PRIORITY", raising=False)
     launched: list[tuple[list[str], dict]] = []
+    worker_root = (
+        service.state_dir
+        / "builder"
+        / "automation_workers"
+        / "automation.scenario.recipes"
+    )
 
     def _popen(command, **kwargs):
         launched.append((list(command), dict(kwargs)))
-        return SimpleNamespace(pid=4242)
+        worker_root.mkdir(parents=True, exist_ok=True)
+        (worker_root / "ready.json").write_text(
+            json.dumps(
+                {
+                    "schema": "adaos.builder.automation_worker_ready.v1",
+                    "session_id": "automation.scenario.recipes",
+                    "status": "ready",
+                    "pid": 4243,
+                    "ready_at": "2026-08-20T00:00:00+00:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(pid=4242, poll=lambda: None)
 
     monkeypatch.setattr(automation_module.subprocess, "Popen", _popen)
 
     result = service._launch_worker_process("automation.scenario.recipes")
 
     assert result["pid"] == 4242
-    assert result["status"] == "launched"
+    assert result["status"] == "ready"
+    assert result["worker_pid"] == 4243
     assert result["repo_root"] == str(service.repo_root.resolve())
     assert result["executable"]
     assert launched[0][0][-2:] == ["--session-id", "automation.scenario.recipes"]
@@ -465,8 +485,44 @@ def test_background_automation_launches_durable_worker_process(tmp_path: Path, m
         ).read_text(encoding="utf-8")
     )
     assert launch["session_id"] == "automation.scenario.recipes"
+    assert launch["status"] == "ready"
     assert launch["resource_policy"]["mode"] == "background"
     assert launch["resource_policy"]["inherited_by_children"] is True
+    if automation_module.os.name == "nt":
+        breakaway = getattr(
+            automation_module.subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0
+        )
+        if breakaway:
+            assert launched[0][1]["creationflags"] & breakaway
+            assert launch["resource_policy"]["job_breakaway"] is True
+
+
+def test_background_automation_rejects_worker_without_ready_handshake(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = _service(tmp_path)
+    service.background = True
+
+    monkeypatch.setattr(
+        automation_module.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: SimpleNamespace(pid=4242, poll=lambda: 7),
+    )
+
+    with pytest.raises(RuntimeError, match="exited before readiness handshake"):
+        service._launch_worker_process("automation.skill.failed")
+
+    launch = json.loads(
+        (
+            service.state_dir
+            / "builder"
+            / "automation_workers"
+            / "automation.skill.failed"
+            / "launch.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert launch["status"] == "failed"
+    assert "code 7" in launch["error"]
 
 
 def test_automation_worker_uses_background_priority_on_windows(monkeypatch) -> None:
