@@ -153,6 +153,55 @@ class SkillToolTopologyAdapter:
         committed["replica"] = saved.to_dict()
         return committed
 
+    def _phase_inputs(self, context: TopologyStepContext) -> dict[str, Any]:
+        get_operation = getattr(self.store, "get_operation", None)
+        if not callable(get_operation):
+            return {}
+        try:
+            operation = get_operation(context.operation_id)
+        except FileNotFoundError:
+            return {}
+        prefix = f"{context.step.step_id}."
+        for result in reversed(operation.phases):
+            if not result.phase.startswith(prefix):
+                continue
+            inline_snapshot = result.receipt.get("inline_snapshot")
+            if isinstance(inline_snapshot, Mapping):
+                return {"source_snapshot": dict(inline_snapshot)}
+        return {}
+
+    @staticmethod
+    def _validate_target_witness(
+        receipt: Mapping[str, Any],
+        *,
+        phase: str,
+        source: Replica | None,
+        selected: ServiceInstance,
+    ) -> None:
+        if phase not in {"catch_up", "verify", "activate_read", "promote"}:
+            return
+        if source is None or source.instance_id == selected.instance_id:
+            return
+
+        raw_replica = receipt.get("replica")
+        observed = dict(raw_replica) if isinstance(raw_replica, Mapping) else dict(receipt)
+        expected_checkpoint = str(source.checkpoint or "").strip()
+        observed_checkpoint = str(
+            observed.get("checkpoint") or observed.get("content_witness") or ""
+        ).strip()
+        expected_items = int(source.item_count or 0)
+        observed_items = int(observed.get("item_count") or 0)
+        observed_state = str(observed.get("content_state") or "").strip().lower()
+
+        if expected_checkpoint and observed_checkpoint != expected_checkpoint:
+            raise TopologyExecutionError("topology_target_content_witness_mismatch")
+        if expected_items > observed_items:
+            raise TopologyExecutionError("topology_target_content_incomplete")
+        if source.content_state == "non_empty" and (
+            observed_items <= 0 or observed_state == "empty"
+        ):
+            raise TopologyExecutionError("topology_target_content_incomplete")
+
     def _call(self, context: TopologyStepContext) -> Mapping[str, Any]:
         step = context.step
         partition = self.store.get_partition(step.partition_id)
@@ -215,6 +264,7 @@ class SkillToolTopologyAdapter:
                 is not None
                 else None
             ),
+            "phase_inputs": self._phase_inputs(context),
         }
         if len(str(payload).encode("utf-8")) > MAX_TOPOLOGY_PHASE_BYTES:
             raise TopologyExecutionError("topology_phase_request_too_large")
@@ -225,6 +275,13 @@ class SkillToolTopologyAdapter:
                 node_id=selected.node_id, payload=payload
             )
         receipt = _bounded_result(result)
+        source_replica = self._replica_for_instance(partition.partition_id, source)
+        self._validate_target_witness(
+            receipt,
+            phase=context.phase,
+            source=source_replica,
+            selected=selected,
+        )
         return self._commit_replica_receipt(
             receipt,
             partition=partition,
@@ -362,6 +419,7 @@ def execute_topology_phase_request(
         "target_instance",
         "source_replica",
         "target_replica",
+        "phase_inputs",
     }
     if set(payload) != fields or payload.get("schema") != TOPOLOGY_PHASE_REQUEST_SCHEMA:
         raise TopologyExecutionError("topology_phase_request_schema_invalid")
