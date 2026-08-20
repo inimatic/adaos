@@ -729,6 +729,45 @@ secrecy may not conceal a capability that the candidate must implement. A new
 v29 series must freeze the corrected evaluator and packets before execution;
 no v28 outcome may be reused in its primary comparison.
 
+v29 was frozen at
+`sha256:b0abe7d33843319d87694deafd5e883b88280119bf6d35647aeb2b2f323e57e2`
+and stopped after its first complete pair under an explicit futility audit. C0
+and C3 were both EVC failures, so the pair was a tie and v29 remains
+`incomplete_no_claim`. C0 drifted at operationalization and failed the runner
+boundary. C3 preserved the accepted protocol, passed six of seven independent
+checks and executed the real paired three-epoch Torch CPU path, but exported
+`implementation_probe` with flat arguments while the public contract declared
+`{"request": ...}`. With only four pairs remaining, even four C3 wins could
+reach only one-sided `p=0.0625`; completing the rail could not meet the frozen
+alpha of 0.05. The partial, recomputable package is retained under package
+digest
+`sha256:8077dedee632295aa1771c7caab58603c36f23c654ef52a935acac8ca0480781`;
+it is diagnostic evidence, not a comparative result.
+
+The v29 failure exposes a general contract lesson rather than a TLP-specific
+prompt tweak: an operation name without its exact input/output schema is not an
+executable ABI. Core `feadd180` now compares generated provider-tool schemas
+with every admitted `adaos.contract.operation_set.v1` before a Builder result
+can commit, ignoring documentation annotations but not validation keywords.
+Evaluator `0.1.37` projects the domain probe as a first-class operation in the
+same operation set, records a non-secret failure class plus diagnostic digest,
+and delegates DEV-runtime release to the runner process so Windows native DLLs
+are not deleted by the process that loaded them. Calibration runner `0.1.14`
+returns the flattened release receipt. The generic Builder gate knows nothing
+about TLP; the evaluator remains the owner of domain semantics and held-out
+values.
+
+Replacement v30 is frozen at
+`sha256:3409c751f6e6cabd89b29440d42348df79ad77a50103e84115a7985cdd1e1bad`
+on clean detached core `781836bc`, skill workspace `6a6d247`, prompt ABI 0.8,
+evaluator `0.1.37`, runner `0.1.14`, manager `0.28.0` and orchestrator `0.48.0`.
+Its five counterbalanced pairs retain the same notebook, accepted scientific
+task, model profile and matched 7M-token downstream budget. All 25 packets were
+materialized before execution; C0 has no instruction inputs and C3 contains
+only Compilation, AutomationBrief and the public operation set. The hidden
+probe numbers and expected outputs remain evaluator-only. No v29 outcome is
+reused in the v30 primary comparison.
+
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and
 content identities. Candidate-authored claims cannot mark a check passed. The

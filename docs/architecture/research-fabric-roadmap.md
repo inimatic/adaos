@@ -1605,8 +1605,21 @@ efficacy result or cross-domain SOTA claim.
   underspecified. v28 is retained as a diagnostic and supports no comparative
   claim. Evaluator `0.1.36` now publishes a digest-bound
   `domain_conformance` contract, asserts hidden/public interface parity at
-  freeze, and keeps only numerical cases and expected values hidden. Freeze
-  and complete fresh v29 pairs; do not reuse any v28 outcome.
+  freeze, and keeps only numerical cases and expected values hidden. v29 froze
+  that interface and completed one counterbalanced pair: C0 failed at
+  operationalization while C3 passed `6/7` gates and failed only because its
+  generated tool flattened the publicly wrapped `implementation_probe` input.
+  Both endpoints were false, so the pair was a tie. The series stopped as
+  `incomplete_no_claim` when the remaining four pairs could reach at best
+  one-sided `p=0.0625`; its partial package digest is
+  `sha256:8077dedee632295aa1771c7caab58603c36f23c654ef52a935acac8ca0480781`.
+  Core `feadd180` now validates exact admitted operation schemas before Builder
+  commit. Evaluator `0.1.37` publishes the probe as a top-level operation-set
+  member and defers native-runtime release to runner `0.1.14`. Fresh v30 is
+  frozen at
+  `sha256:3409c751f6e6cabd89b29440d42348df79ad77a50103e84115a7985cdd1e1bad`
+  on clean core `781836bc` and workspace `6a6d247`; all 25 packets were
+  prematerialized and no v28/v29 outcome is reused.
 - [ ] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and
