@@ -1408,7 +1408,7 @@ def test_invalid_cross_phase_transition_is_rejected(
 def test_unknown_trial_outcome_is_not_projected_as_retryable_before_reconciliation(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
-    service, _root = workflow_project
+    service, root = workflow_project
     service.transition(
         "scenario",
         "recipes",
@@ -1519,6 +1519,30 @@ def test_unknown_trial_outcome_is_not_projected_as_retryable_before_reconciliati
     assert duplicate["workflow"]["project"]["generation"] == before_project_generation
     assert duplicate["workflow"]["delivery"]["status"] == "checkpoint"
     assert duplicate["workflow"]["governed"]["state"] == "trial_ready"
+
+    # A pre-fix process could persist only the compatibility half of that
+    # duplicate transition. Re-admitting an already observed external result
+    # with a distinct reconciliation key repairs the projections without
+    # repeating Trial activation.
+    persisted = json.loads((root / "prompt_state.json").read_text(encoding="utf-8"))
+    persisted["workflow"]["delivery"]["status"] = "activating"
+    (root / "prompt_state.json").write_text(
+        json.dumps(persisted, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    aligned = service.transition(
+        "scenario",
+        "recipes",
+        "candidate_preparation_started",
+        metadata=_confirmed(
+            {
+                "idempotency_key": "trial:stable-release-digest:waiting-reconcile",
+                "reconciliation": "external_trial_result_observed",
+            }
+        ),
+    )["workflow"]
+    assert aligned["delivery"]["status"] == "activating"
+    assert aligned["governed"]["state"] == "trial_waiting"
 
 
 def test_unknown_publication_requires_explicit_evidenced_reconciliation(

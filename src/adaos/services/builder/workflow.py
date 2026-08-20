@@ -5002,7 +5002,13 @@ class BuilderWorkflowService:
             self._require_active(workflow, "automation", action)
             if str(automation.get("status") or "") != "completed":
                 raise BuilderWorkflowError("trial activation requires completed automation")
-            if str(delivery.get("status") or "") != "checkpoint":
+            delivery_status = str(delivery.get("status") or "")
+            reconciles_observed_result = (
+                delivery_status == "activating"
+                and str(metadata.get("reconciliation") or "")
+                == "external_trial_result_observed"
+            )
+            if delivery_status != "checkpoint" and not reconciles_observed_result:
                 raise BuilderWorkflowError("trial activation requires an exact checkpoint")
             delivery.update(
                 {
