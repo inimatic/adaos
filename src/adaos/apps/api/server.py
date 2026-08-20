@@ -115,7 +115,8 @@ _runtime_log = logging.getLogger("adaos.runtime")
 
 
 def _startup_stage_logs_enabled() -> bool:
-    return truthy(os.getenv("ADAOS_STARTUP_STAGE_LOGS"))
+    value = os.getenv("ADAOS_STARTUP_STAGE_LOGS")
+    return True if value is None else truthy(value)
 
 
 class _StartupTimer:
@@ -1180,15 +1181,18 @@ async def _runtime_context(app: FastAPI):
     app.state.runtime_process_activity_task = process_activity_task
 
     # 4) поднимаем наблюдатель и выполняем boot-последовательность
-    await start_observer()
+    with _StartupTimer("start_observer"):
+        await start_observer()
     # Start Yjs websocket server background task
     try:
-        await start_y_server()
+        with _StartupTimer("start_y_server"):
+            await start_y_server()
     except Exception:
         logging.getLogger("adaos.yjs.gateway").warning("failed to start Yjs websocket server", exc_info=True)
     # Start router early so ui.notify/ui.say from boot sequence are routed.
     try:
-        await router_service.start()
+        with _StartupTimer("start_router_service"):
+            await router_service.start()
     except Exception:
         pass
     try:
