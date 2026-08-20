@@ -836,6 +836,19 @@ A clean synthetic launch on Windows reached `ready`, survived launcher exit,
 and was then terminated by exact recorded PID. This is launcher evidence, not
 a calibration outcome; a fresh frozen task must start from zero results.
 
+Fresh v32 is frozen at
+`sha256:e7a98cf51a65562837ad7df19b6f9b6ef3dc4cd08995f7f74cbd324ee84be8df`
+on clean detached core `f3a96cf9` with the same evaluator `0.1.38`, runner
+`0.1.14`, manager `0.28.0`, orchestrator `0.48.0`, workspace `c3bbb625`,
+prompt ABI 0.8, six counterbalanced pairs and matched 8.5M-token budget. All
+30 packets were materialized before execution and lineage contained zero
+results. Its first C3 packet is
+`sha256:8d1b09e2ab8bd364dc0b56c57f0c32ba038c2b4faca414b2d528ac90d12941ab`.
+The unassisted first launch reached `ready` in about nine seconds: launch PID
+4068 handed off to worker PID 13624, both launch and ready receipts name the
+same automation session, and Builder started the candidate. v31 candidate
+sources and outcomes are not inputs to v32.
+
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and
 content identities. Candidate-authored claims cannot mark a check passed. The

@@ -1647,7 +1647,13 @@ efficacy result or cross-domain SOTA claim.
   a durable worker-readiness handshake and core `f3a96cf9` gives that handshake
   a bounded configurable startup interval. A clean Windows launch reached
   `ready` and survived launcher exit; a fresh zero-result calibration is still
-  required.
+  required. Replacement v32 is now frozen at
+  `sha256:e7a98cf51a65562837ad7df19b6f9b6ef3dc4cd08995f7f74cbd324ee84be8df`
+  on clean detached core `f3a96cf9`; all 30 packets were materialized before
+  execution and its lineage started with zero results. The first C3 launch
+  reached the durable ready handshake without operator intervention (launcher
+  PID 4068, worker PID 13624), so its outcome is eligible for the frozen
+  comparison. No v31 candidate or result is reused.
 - [ ] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and
