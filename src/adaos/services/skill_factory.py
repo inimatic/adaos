@@ -1158,8 +1158,10 @@ class SkillFactoryService:
         if not _text(result.get("commit_hash")):
             raise ValueError("result commit_hash is required")
         changed_paths = _string_list(result.get("changed_paths"))
-        if not changed_paths:
-            raise ValueError("result changed_paths must not be empty")
+        if not changed_paths and result.get("no_source_change") is not True:
+            raise ValueError(
+                "result changed_paths must not be empty unless no_source_change is explicitly true"
+            )
         allowed_dirs = _normalize_sparse_paths(_mapping(task.get("forge")).get("sparse_paths"))
         for changed_path in changed_paths:
             _normalize_repo_path(changed_path, directory=False)
@@ -1169,9 +1171,30 @@ class SkillFactoryService:
         if not provenance:
             raise ValueError("result provenance is required")
         expected = _mapping(_mapping(task.get("evidence")).get("expected_paths")) or _expected_evidence_paths(_text(task.get("task_id")))
-        provenance_path = _text(expected.get("provenance"))
-        if provenance_path and provenance_path not in changed_paths:
-            raise ValueError(f"result must include provenance evidence path: {provenance_path}")
+        evidence = _mapping(result.get("evidence"))
+        artifacts = [
+            _mapping(item)
+            for item in _list(evidence.get("artifacts"))
+            if isinstance(item, Mapping)
+        ]
+        by_logical_path = {
+            _text(item.get("logical_path")): item
+            for item in artifacts
+            if _text(item.get("logical_path"))
+        }
+        for kind in ("result", "test_report", "changed_files", "provenance"):
+            logical_path = _text(expected.get(kind))
+            artifact = by_logical_path.get(logical_path)
+            if not logical_path or not artifact:
+                raise ValueError(f"result must include task-owned {kind} evidence: {logical_path}")
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", _text(artifact.get("digest"))):
+                raise ValueError(f"result {kind} evidence digest is invalid")
+            if int(artifact.get("size_bytes") or -1) < 0:
+                raise ValueError(f"result {kind} evidence size is invalid")
+        if any(path.startswith(".adaos/tasks/") for path in changed_paths):
+            raise ValueError(
+                "worker task evidence must not be committed into the candidate source tree"
+            )
 
     def snapshot(self, *, include_tasks: bool = True) -> dict[str, Any]:
         with self._state_lock():
@@ -1252,11 +1275,10 @@ class SkillFactoryService:
             }
 
     def _task_sparse_paths(self, task_id: str, request_paths: list[str]) -> list[str]:
-        paths = list(request_paths)
-        internal = _task_internal_path(task_id)
-        if internal not in paths:
-            paths.append(internal)
-        return paths
+        # Forge paths grant source authority only. Task instructions and
+        # evidence belong to the worker-owned run envelope, never to the
+        # candidate repository.
+        return list(request_paths)
 
     def _initial_state(self) -> dict[str, Any]:
         return {

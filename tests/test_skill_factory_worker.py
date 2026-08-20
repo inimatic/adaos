@@ -199,6 +199,24 @@ def test_local_worker_realizes_scenario_and_companion_skill(tmp_path: Path) -> N
     assert task["status"] == "completed"
     assert task["result"]["commit_hash"]
     assert task["result"]["provenance"]["runner_version"].startswith("adaos-local-codex-worker/")
+    evidence = task["result"]["evidence"]
+    assert evidence["storage"] == "worker_task_envelope"
+    assert {item["kind"] for item in evidence["artifacts"]} == {
+        "result",
+        "test_report",
+        "changed_files",
+        "provenance",
+    }
+    run_root = Path(task["result"]["local_run_dir"])
+    assert (run_root / "evidence" / "provenance.json").is_file()
+    tracked = subprocess.run(
+        ["git", "ls-files"],
+        cwd=run_root / "workspace",
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    assert not any(path.startswith(".adaos/tasks/") for path in tracked)
 
 
 def test_local_worker_does_not_apply_result_after_task_cancellation(tmp_path: Path) -> None:

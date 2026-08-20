@@ -499,6 +499,62 @@ class LocalSkillFactoryWorker:
         self.max_repair_attempts = max(0, int(max_repair_attempts))
         self.factory = SkillFactoryService(state_dir=self.state_dir)
 
+    @staticmethod
+    def _task_evidence_root(output_dir: Path) -> Path:
+        """Return durable task evidence outside the candidate repository."""
+
+        return Path(output_dir).resolve().parent / "evidence"
+
+    @staticmethod
+    def _evidence_manifest(
+        evidence_root: Path,
+        expected_paths: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        artifacts: list[dict[str, Any]] = []
+        for kind, filename in {
+            "result": "result.json",
+            "test_report": "test_report.json",
+            "changed_files": "changed_files.txt",
+            "provenance": "provenance.json",
+        }.items():
+            path = evidence_root / filename
+            if not path.is_file():
+                continue
+            payload = path.read_bytes()
+            artifacts.append(
+                {
+                    "kind": kind,
+                    "logical_path": str(expected_paths.get(kind) or "").replace("\\", "/"),
+                    "digest": "sha256:" + hashlib.sha256(payload).hexdigest(),
+                    "size_bytes": len(payload),
+                    "media_type": (
+                        "application/json" if path.suffix.lower() == ".json" else "text/plain"
+                    ),
+                }
+            )
+        return {
+            "schema": "adaos.skill_factory.task_evidence_manifest.v1",
+            "storage": "worker_task_envelope",
+            "artifacts": artifacts,
+        }
+
+    @staticmethod
+    def _stage_scoped_changes(workspace: Path, assignment: Mapping[str, Any]) -> None:
+        paths = [
+            str(item).replace("\\", "/").strip("/")
+            for item in (assignment.get("forge") or {}).get("sparse_paths") or []
+            if str(item).strip()
+            and not str(item).replace("\\", "/").lstrip("/").startswith(".adaos/tasks/")
+        ]
+        paths = [
+            path
+            for path in paths
+            if (workspace / path).exists() or bool(_git(["ls-files", "--", path], cwd=workspace))
+        ]
+        if not paths:
+            raise ValueError("task has no source paths authorized for commit")
+        _git(["add", "-A", "--", *paths], cwd=workspace)
+
     def ensure_registered(self) -> dict[str, Any]:
         return self.factory.register_dev_node(
             {
@@ -593,10 +649,7 @@ class LocalSkillFactoryWorker:
                 raise ValueError("preserved result does not pass deterministic validation")
 
             evidence_paths = dict((assignment.get("evidence") or {}).get("expected_paths") or {})
-            result_relative = str(
-                evidence_paths.get("result") or f".adaos/tasks/{task_token}/result.json"
-            ).replace("\\", "/")
-            evidence_root = workspace / Path(result_relative).parent
+            evidence_root = self._task_evidence_root(output_dir)
             evidence_root.mkdir(parents=True, exist_ok=True)
             (evidence_root / "changed_files.txt").write_text(
                 "\n".join(changed_paths) + "\n", encoding="utf-8"
@@ -638,8 +691,8 @@ class LocalSkillFactoryWorker:
             (evidence_root / "changed_files.txt").write_text(
                 "\n".join(all_changed_paths) + "\n", encoding="utf-8"
             )
-            _git(["add", "-A"], cwd=workspace)
-            if _git(["status", "--porcelain", "--untracked-files=all"], cwd=workspace):
+            self._stage_scoped_changes(workspace, assignment)
+            if _git(["diff", "--cached", "--name-only"], cwd=workspace):
                 _git(["commit", "-m", f"realize: {task_id}"], cwd=workspace)
             dirty = False
             report_passed = True
@@ -650,10 +703,7 @@ class LocalSkillFactoryWorker:
             raise ValueError("result recovery refuses a modified validated task workspace")
 
         evidence_paths = dict((assignment.get("evidence") or {}).get("expected_paths") or {})
-        result_relative = str(
-            evidence_paths.get("result") or f".adaos/tasks/{task_token}/result.json"
-        ).replace("\\", "/")
-        evidence_root = workspace / Path(result_relative).parent
+        evidence_root = self._task_evidence_root(output_dir)
         result_manifest = _read_json(evidence_root / "result.json")
         provenance = _read_json(evidence_root / "provenance.json")
         if str(result_manifest.get("task_id") or "") != str(task_id or ""):
@@ -662,15 +712,18 @@ class LocalSkillFactoryWorker:
             raise ValueError("validated result evidence is incomplete")
 
         self._sync_artifacts(assignment, workspace)
+        recovered_changed_paths = self._changed_from_baseline(workspace)
         result = {
             "task_id": str(task_id),
             "node_id": self.node_id,
             "status": "completed",
             "commit_hash": _git(["rev-parse", "HEAD"], cwd=workspace),
             "branch": str((assignment.get("forge") or {}).get("branch") or ""),
-            "changed_paths": self._changed_from_baseline(workspace),
+            "changed_paths": recovered_changed_paths,
+            "no_source_change": not bool(recovered_changed_paths),
             "tests": {"status": "passed", "report": str(output_dir / "test_report.json")},
             "provenance": provenance,
+            "evidence": self._evidence_manifest(evidence_root, evidence_paths),
             "summary": str(result_manifest.get("summary") or "").strip(),
             "local_run_dir": str(run_root),
         }
@@ -995,7 +1048,7 @@ class LocalSkillFactoryWorker:
                 raise RuntimeError("Generated project validation failed: " + "; ".join(test_report["errors"]))
 
             evidence_paths = dict((assignment.get("evidence") or {}).get("expected_paths") or {})
-            evidence_root = workspace / str(evidence_paths.get("result") or f".adaos/tasks/{_safe_token(task_id)}/result.json").replace("result.json", "")
+            evidence_root = self._task_evidence_root(output_dir)
             evidence_root.mkdir(parents=True, exist_ok=True)
             (evidence_root / "changed_files.txt").write_text("\n".join(changed_paths) + "\n", encoding="utf-8")
             shutil.copy2(output_dir / "test_report.json", evidence_root / "test_report.json")
@@ -1032,8 +1085,9 @@ class LocalSkillFactoryWorker:
 
             self._progress(task_id, "commit_ready", "Committing validated local result")
             self._ensure_task_active(task_id)
-            _git(["add", "-A"], cwd=workspace)
-            _git(["commit", "-m", f"realize: {task_id}"], cwd=workspace)
+            self._stage_scoped_changes(workspace, assignment)
+            if _git(["diff", "--cached", "--name-only"], cwd=workspace):
+                _git(["commit", "-m", f"realize: {task_id}"], cwd=workspace)
             commit_hash = _git(["rev-parse", "HEAD"], cwd=workspace)
             final_changed_paths = self._changed_from_baseline(workspace)
             self._ensure_task_active(task_id)
@@ -1046,8 +1100,10 @@ class LocalSkillFactoryWorker:
                 "commit_hash": commit_hash,
                 "branch": str((assignment.get("forge") or {}).get("branch") or ""),
                 "changed_paths": final_changed_paths,
+                "no_source_change": not bool(final_changed_paths),
                 "tests": {"status": "passed", "report": str(output_dir / "test_report.json")},
                 "provenance": provenance,
+                "evidence": self._evidence_manifest(evidence_root, evidence_paths),
                 "summary": codex_result.final_message.strip(),
                 "local_run_dir": str(run_root),
             }
