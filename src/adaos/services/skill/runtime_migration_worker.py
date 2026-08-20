@@ -20,7 +20,13 @@ from packaging.version import InvalidVersion, Version
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.build_info import BUILD_INFO
 from adaos.services.agent_context import AgentContext
-from adaos.services.runtime_refresh import RuntimeRefreshError, rebuild_webspace_projection_sync, refresh_skill_runtime
+from adaos.services.eventbus import emit as bus_emit
+from adaos.services.runtime_refresh import (
+    RuntimeRefreshError,
+    rebuild_webspace_projection,
+    rebuild_webspace_projection_sync,
+    refresh_skill_runtime,
+)
 from adaos.services.skill.manager import SkillManager
 from adaos.services.workspace_registry import build_registry_entry, list_workspace_registry_entries
 
@@ -561,6 +567,46 @@ def _runtime_is_behind(workspace_version: str, runtime_version: str) -> bool:
     return workspace_version != runtime_version
 
 
+def _installed_runtime_version_records(
+    ctx: AgentContext,
+    mgr: SkillManager,
+    *,
+    name: str | None = None,
+) -> list[dict[str, Any]]:
+    registry_versions = _registry_versions(ctx)
+    requested_name = str(name or "").strip()
+    names = {requested_name} if requested_name else set(_registered_skill_names(ctx))
+    records: list[dict[str, Any]] = []
+    for skill_name in sorted(names):
+        source = _workspace_skill_source(ctx, skill_name)
+        local_version = _read_local_artifact_version(source) if source.exists() else ""
+        workspace_version = local_version or registry_versions.get(skill_name, "")
+        try:
+            runtime_state = mgr.runtime_status(skill_name)
+        except Exception:
+            runtime_state = {}
+        runtime_version = _clean_text(runtime_state.get("version") if isinstance(runtime_state, dict) else "")
+        deactivation = (
+            runtime_state.get("deactivation")
+            if isinstance(runtime_state, dict) and isinstance(runtime_state.get("deactivation"), dict)
+            else {}
+        )
+        records.append(
+            {
+                "skill": skill_name,
+                "workspace_version": workspace_version,
+                "runtime_version": runtime_version,
+                "source_path": str(source),
+                "source_materialized": bool(local_version),
+                "version_source": "workspace_manifest" if local_version else "workspace_registry",
+                "runtime_behind": _runtime_is_behind(workspace_version, runtime_version),
+                "deactivated": bool(runtime_state.get("deactivated")) if isinstance(runtime_state, dict) else False,
+                "deactivation": deactivation,
+            }
+        )
+    return records
+
+
 def migration_candidates(
     ctx: AgentContext,
     mgr: SkillManager,
@@ -568,23 +614,17 @@ def migration_candidates(
     force: bool = False,
     name: str | None = None,
 ) -> list[dict[str, Any]]:
-    registry_versions = _registry_versions(ctx)
     requested_name = str(name or "").strip()
     core_identity = _core_runtime_identity()
     # Workspace registry entries describe materialized artifacts, not install
     # intent.  Only the installed registry may enroll a skill in an automatic
     # runtime migration; an explicit request may still recover one by name.
-    names = {requested_name} if requested_name else set(_registered_skill_names(ctx))
     candidates: list[dict[str, Any]] = []
-    for name in sorted(names):
-        source = _workspace_skill_source(ctx, name)
-        workspace_version = _read_local_artifact_version(source) if source.exists() else registry_versions.get(name, "")
-        try:
-            runtime_state = mgr.runtime_status(name)
-        except Exception:
-            runtime_state = {}
-        runtime_version = _clean_text(runtime_state.get("version") if isinstance(runtime_state, dict) else "")
-        deactivation = runtime_state.get("deactivation") if isinstance(runtime_state, dict) and isinstance(runtime_state.get("deactivation"), dict) else {}
+    for record in _installed_runtime_version_records(ctx, mgr, name=requested_name or None):
+        name = str(record["skill"])
+        workspace_version = str(record["workspace_version"])
+        runtime_version = str(record["runtime_version"])
+        deactivation = dict(record["deactivation"])
         precommit_migration_failure = (
             str(deactivation.get("reason") or "").strip() == "runtime_migration_failed"
             and not bool(deactivation.get("committed_core_switch"))
@@ -593,10 +633,10 @@ def migration_candidates(
         attempted_core_identity = _clean_text(deactivation.get("attempted_core_identity"))
         reason = "force" if force else ""
         if not force:
-            explicitly_recovering = bool(requested_name and runtime_state.get("deactivated"))
+            explicitly_recovering = bool(requested_name and record["deactivated"])
             if explicitly_recovering:
                 reason = "explicit_quarantine_recovery"
-            elif bool(runtime_state.get("deactivated")):
+            elif bool(record["deactivated"]):
                 candidate_changed = attempted_version != workspace_version
                 core_changed = bool(core_identity and attempted_core_identity != core_identity)
                 if precommit_migration_failure and (candidate_changed or core_changed):
@@ -609,7 +649,7 @@ def migration_candidates(
                 # The active fallback remains live. Do not retry the same
                 # rejected candidate on every background discovery cycle.
                 continue
-            elif not _runtime_is_behind(workspace_version, runtime_version):
+            elif not bool(record["runtime_behind"]):
                 continue
             else:
                 reason = "runtime_version_behind"
@@ -618,9 +658,11 @@ def migration_candidates(
                 "skill": name,
                 "workspace_version": workspace_version,
                 "runtime_version": runtime_version,
-                "source_path": str(source),
+                "source_path": record["source_path"],
+                "source_materialized": bool(record["source_materialized"]),
+                "version_source": record["version_source"],
                 "reason": reason,
-                "deactivated": bool(runtime_state.get("deactivated")) if isinstance(runtime_state, dict) else False,
+                "deactivated": bool(record["deactivated"]),
                 "deactivation": deactivation,
             }
         )
@@ -708,6 +750,28 @@ def _reload_live_skill_handlers_sync(ctx: AgentContext, name: str) -> dict[str, 
         return {"ok": False, "reason": "reload_failed", "error": str(exc)}
 
 
+async def _reload_owner_skill_handlers(ctx: AgentContext, name: str) -> dict[str, Any]:
+    """Reload a selected runtime in the long-lived process that owns the bus."""
+
+    try:
+        from adaos.services.skills_loader_importlib import ImportlibSkillsLoader
+
+        return await ImportlibSkillsLoader().reload_skill_handlers(ctx.paths.skills_dir(), name)
+    except Exception as exc:
+        return {"ok": False, "reason": "reload_failed", "error": str(exc)}
+
+
+def _invalidate_owner_materialization(webspace_id: str, *, operation_id: str) -> dict[str, Any]:
+    from adaos.services.scenario.webspace_runtime import invalidate_webspace_materialization_cache
+
+    return invalidate_webspace_materialization_cache(
+        webspace_id,
+        reason=f"skill_runtime_migration:{operation_id}",
+        action="skill_runtime_migration_live_finalize",
+        source_of_truth="skill_runtime",
+    )
+
+
 def _runtime_selection(status: dict[str, Any] | None) -> tuple[str, str]:
     payload = status if isinstance(status, dict) else {}
     return (
@@ -726,6 +790,7 @@ def _preserve_runtime_after_candidate_failure(
     before: dict[str, Any],
     operation_id: str,
     error: BaseException,
+    reload_fallback_handlers: bool = True,
 ) -> dict[str, Any]:
     before_version, before_slot = _runtime_selection(before)
     try:
@@ -782,7 +847,8 @@ def _preserve_runtime_after_candidate_failure(
         entry["rollback_performed"] = rollback_performed
         entry["fallback_version"] = str(marker.get("fallback_version") or current_version)
         entry["fallback_slot"] = str(marker.get("fallback_slot") or current_slot)
-        entry["handler_reload"] = _reload_live_skill_handlers_sync(ctx, name)
+        if reload_fallback_handlers:
+            entry["worker_fallback_handler_validation"] = _reload_live_skill_handlers_sync(ctx, name)
         return marker
 
     if rollback_error:
@@ -817,6 +883,7 @@ def _run_migration_sync(
     sync_workspace: bool,
 ) -> dict[str, Any]:
     mgr = _manager(ctx)
+    requested_name = str(name or "").strip() or None
     started_at = _now()
     initial: dict[str, Any] = {
         "ok": True,
@@ -910,10 +977,17 @@ def _run_migration_sync(
             if bool(refresh.get("skipped")) or bool(refresh.get("deactivated")):
                 raise RuntimeError("runtime refresh left the skill deactivated")
             entry["tests"] = dict(refresh.get("tests") or {})
+            entry["stage"] = "handler_validation"
+            handler_validation = _reload_live_skill_handlers_sync(ctx, name)
+            entry["worker_handler_validation"] = handler_validation
+            if not bool(handler_validation.get("ok")):
+                raise RuntimeError(
+                    "selected skill runtime handlers failed isolated validation: "
+                    f"{handler_validation.get('error') or handler_validation.get('reason') or 'unknown failure'}"
+                )
             entry["stage"] = "completed"
             entry["ok"] = True
             entry["deactivation_cleared"] = True
-            entry["handler_reload"] = _reload_live_skill_handlers_sync(ctx, name)
         except RuntimeRefreshError as exc:
             entry["stage"] = str(exc.payload.get("failed_stage") or entry.get("stage") or "refresh_runtime")
             entry["ok"] = False
@@ -979,16 +1053,39 @@ def _run_migration_sync(
     final["quarantined_skills"] = quarantine_after
     final["failed_candidate_total"] = len(failed_candidates_after)
     final["failed_candidates"] = failed_candidates_after
-    if not failed and quarantine_after:
+    remaining_runtime_drift = [
+        item
+        for item in _installed_runtime_version_records(ctx, mgr, name=requested_name)
+        if bool(item.get("runtime_behind"))
+    ]
+    final["remaining_runtime_drift_total"] = len(remaining_runtime_drift)
+    final["remaining_runtime_drift"] = remaining_runtime_drift
+    if remaining_runtime_drift:
+        final["ok"] = False
+        final["state"] = "failed"
         final["message"] = (
+            "skill runtime migration left "
+            f"{len(remaining_runtime_drift)} installed runtime(s) behind workspace"
+        )
+    if not failed and quarantine_after:
+        quarantine_message = (
             "skill runtime migration completed; "
             f"{len(quarantine_after)} skill runtime(s) remain quarantined"
         )
+        if not remaining_runtime_drift:
+            final["message"] = quarantine_message
     if not results:
         final["webspace_rebuild"] = {
             "ok": True,
             "skipped": True,
             "reason": "no_runtime_changes",
+            "webspace_id": webspace_id,
+        }
+    elif str(os.getenv("ADAOS_SKILL_MIGRATION_WORKER_PROCESS") or "").strip() == "1":
+        final["webspace_rebuild"] = {
+            "ok": True,
+            "deferred": True,
+            "reason": "owner_live_finalization_required",
             "webspace_id": webspace_id,
         }
     else:
@@ -1004,6 +1101,161 @@ def _run_migration_sync(
                 final["ok"] = False
                 final["state"] = "failed"
                 final["message"] = f"skill runtime migration completed, but webspace rebuild failed: {exc}"
+    return _write_status(ctx, final)
+
+
+async def _finalize_owner_runtime_migration(
+    ctx: AgentContext,
+    status: dict[str, Any],
+    *,
+    operation_id: str,
+    webspace_id: str,
+) -> dict[str, Any]:
+    """Apply subprocess runtime selections to the long-lived handler registry."""
+
+    if str(status.get("operation_id") or "") != operation_id:
+        raise RuntimeError("skill migration worker status belongs to a different operation")
+    skills = [dict(item) for item in status.get("skills") or () if isinstance(item, dict)]
+    successful = [item for item in skills if bool(item.get("ok"))]
+    if not successful:
+        return status
+
+    live_status = {
+        **status,
+        "ok": False,
+        "state": "running",
+        "phase": "live_finalize",
+        "message": "loading migrated skill handlers in the owning runtime",
+        "pending": True,
+        "skills": skills,
+    }
+    _write_status(ctx, live_status)
+    mgr = _manager(ctx)
+    finalized: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    for item in successful:
+        skill_name = str(item.get("skill") or "").strip()
+        if not skill_name:
+            continue
+        item["stage"] = "live_handler_reload"
+        reload_result = await _reload_owner_skill_handlers(ctx, skill_name)
+        item["handler_reload"] = reload_result
+        if bool(reload_result.get("ok")):
+            item["stage"] = "live_handler_ready"
+            finalized.append(item)
+            continue
+
+        error = RuntimeError(
+            "selected skill runtime handlers failed live reload: "
+            f"{reload_result.get('error') or reload_result.get('reason') or 'unknown failure'}"
+        )
+        item["ok"] = False
+        item["error"] = str(error)
+        try:
+            before = {
+                "version": str(item.get("active_version_before") or ""),
+                "active_slot": str(item.get("active_slot_before") or ""),
+            }
+            await asyncio.to_thread(
+                _preserve_runtime_after_candidate_failure,
+                ctx,
+                mgr,
+                name=skill_name,
+                candidate=item,
+                entry=item,
+                before=before,
+                operation_id=operation_id,
+                error=error,
+                reload_fallback_handlers=False,
+            )
+            item["fallback_handler_reload"] = await _reload_owner_skill_handlers(ctx, skill_name)
+        except Exception as exc:
+            item["preservation_error"] = f"{type(exc).__name__}: {exc}"
+        failed.append(item)
+
+    materialization_cache: dict[str, Any] = {
+        "ok": True,
+        "skipped": True,
+        "reason": "no_live_handlers_finalized",
+    }
+    webspace_rebuild: dict[str, Any] = {
+        "ok": True,
+        "skipped": True,
+        "reason": "no_live_handlers_finalized",
+        "webspace_id": webspace_id,
+    }
+    if finalized:
+        materialization_cache = await asyncio.to_thread(
+            _invalidate_owner_materialization,
+            webspace_id,
+            operation_id=operation_id,
+        )
+        if not bool(materialization_cache.get("ok", True)):
+            raise RuntimeError(
+                "webspace materialization invalidation failed after skill migration: "
+                f"{materialization_cache.get('error') or materialization_cache.get('reason') or 'unknown failure'}"
+            )
+        bus = getattr(ctx, "bus", None)
+        if bus is None:
+            raise RuntimeError("skill migration owner event bus is unavailable")
+        for item in finalized:
+            skill_name = str(item.get("skill") or "").strip()
+            bus_emit(
+                bus,
+                "skills.activated",
+                {
+                    "skill_name": skill_name,
+                    "space": "default",
+                    "webspace_id": webspace_id,
+                    "defer_webspace_rebuild": True,
+                    "source": "skill_runtime_migration",
+                    "operation_id": operation_id,
+                },
+                "skill.runtime_migration",
+            )
+            item["activation_emitted"] = True
+            item["stage"] = "completed"
+        webspace_rebuild = await rebuild_webspace_projection(
+            webspace_id=webspace_id,
+            action="skill_runtime_migration_live_finalize",
+            source_of_truth="skill_runtime",
+        )
+
+    remaining_runtime_drift = await asyncio.to_thread(
+        _installed_runtime_version_records,
+        ctx,
+        mgr,
+        name=str(status.get("name") or "").strip() or None,
+    )
+    remaining_runtime_drift = [item for item in remaining_runtime_drift if bool(item.get("runtime_behind"))]
+    all_failed = [item for item in skills if not bool(item.get("ok"))]
+    final = {
+        **status,
+        "ok": not all_failed and not remaining_runtime_drift,
+        "state": "succeeded" if not all_failed and not remaining_runtime_drift else "failed",
+        "phase": "complete",
+        "pending": False,
+        "skills": skills,
+        "completed_total": len(skills),
+        "failed_total": len(all_failed),
+        "handler_reload_failed_total": len(failed),
+        "live_finalized_total": len(finalized),
+        "materialization_cache": materialization_cache,
+        "webspace_rebuild": webspace_rebuild,
+        "remaining_runtime_drift_total": len(remaining_runtime_drift),
+        "remaining_runtime_drift": remaining_runtime_drift,
+        "finished_at": _now(),
+    }
+    if failed:
+        final["message"] = f"skill runtime migration failed live handler reload for {len(failed)} skill(s)"
+    elif remaining_runtime_drift:
+        final["message"] = (
+            "skill runtime migration left "
+            f"{len(remaining_runtime_drift)} installed runtime(s) behind workspace"
+        )
+    else:
+        final["message"] = "skill runtime migration completed and live handlers were reloaded"
+    final["elapsed_s"] = round(float(final["finished_at"]) - float(status.get("started_at") or final["finished_at"]), 3)
     return _write_status(ctx, final)
 
 
@@ -1086,6 +1338,15 @@ async def _run_background(
             else:
                 details = (stderr or stdout or b"").decode("utf-8", errors="replace")[-4000:]
                 raise RuntimeError(f"worker exited rc={int(proc.returncode or 0)}: {details}")
+        else:
+            completed = read_status(ctx)
+            completed.pop("diagnostics", None)
+            await _finalize_owner_runtime_migration(
+                ctx,
+                completed,
+                operation_id=operation_id,
+                webspace_id=webspace_id,
+            )
     except asyncio.CancelledError:
         _CANCELLING = True
         if _PROCESS is not None and _PROCESS.returncode is None:

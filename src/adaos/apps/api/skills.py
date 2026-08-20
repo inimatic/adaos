@@ -39,7 +39,6 @@ from adaos.services.skills_loader_importlib import ImportlibSkillsLoader
 from adaos.services.workspace_registry import build_registry_entry, find_workspace_registry_entry, list_workspace_registry_entries
 from adaos.services.yjs.webspace import default_webspace_id
 
-import yaml
 from packaging.version import Version, InvalidVersion
 
 
@@ -198,6 +197,88 @@ async def _reload_live_skill_handlers(ctx: AgentContext, skill_name: str) -> dic
     except Exception as exc:
         log.debug("live skill handler reload failed skill=%s: %s", skill_name, exc, exc_info=True)
         return {"ok": False, "reason": "reload_failed", "error": str(exc)}
+
+
+def _skill_activation_payload(
+    skill_name: str,
+    *,
+    space: str,
+    webspace_id: str,
+    defer_webspace_rebuild: bool,
+) -> Dict[str, Any]:
+    return {
+        "skill_name": skill_name,
+        "space": space,
+        "webspace_id": webspace_id,
+        "defer_webspace_rebuild": bool(defer_webspace_rebuild),
+    }
+
+
+def _emit_live_skill_activation(
+    ctx: AgentContext,
+    skill_name: str,
+    *,
+    space: str,
+    webspace_id: str,
+    defer_webspace_rebuild: bool,
+) -> None:
+    bus = getattr(ctx, "bus", None)
+    if bus is None:
+        raise HTTPException(status_code=503, detail="skill activation event bus is unavailable")
+    bus_emit(
+        bus,
+        "skills.activated",
+        _skill_activation_payload(
+            skill_name,
+            space=space,
+            webspace_id=webspace_id,
+            defer_webspace_rebuild=defer_webspace_rebuild,
+        ),
+        "api.skills",
+    )
+
+
+async def _finalize_live_skill_activation(
+    ctx: AgentContext,
+    skill_name: str,
+    *,
+    space: str,
+    webspace_id: str,
+    defer_webspace_rebuild: bool,
+    cache_reason: str,
+    cache_action: str,
+    emit_activation: bool = True,
+) -> dict[str, Any]:
+    reload_result = await _reload_live_skill_handlers(ctx, skill_name)
+    if not bool(reload_result.get("ok")):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "skill_handler_reload_failed",
+                "message": f"active runtime handlers did not reload for {skill_name}",
+                "skill_name": skill_name,
+                "handler_reload": reload_result,
+            },
+        )
+    materialization_cache = await asyncio.to_thread(
+        invalidate_webspace_materialization_cache,
+        webspace_id,
+        reason=cache_reason,
+        action=cache_action,
+        source_of_truth="skill_runtime",
+    )
+    if emit_activation:
+        _emit_live_skill_activation(
+            ctx,
+            skill_name,
+            space=space,
+            webspace_id=webspace_id,
+            defer_webspace_rebuild=defer_webspace_rebuild,
+        )
+    return {
+        "handler_reload": reload_result,
+        "materialization_cache": materialization_cache,
+    }
 
 
 def _clean_version_text(value: object | None) -> str | None:
@@ -524,6 +605,7 @@ def _install_skill_sync(body: InstallReq, mgr: SkillManager, webspace_id: str) -
             slot=getattr(prep, "slot", None),
             space="default",
             webspace_id=webspace_id,
+            emit_activation=False,
         )
     except Exception as exc:
         log.exception("runtime activation failed after skill install: %s", skill_name)
@@ -537,12 +619,6 @@ def _install_skill_sync(body: InstallReq, mgr: SkillManager, webspace_id: str) -
         "prepared": getattr(prep, "slot", None),
         "webspace_id": webspace_id,
     }
-    invalidate_webspace_materialization_cache(
-        webspace_id,
-        reason=f"skill_install:{skill_name}",
-        action="skill_install_sync",
-        source_of_truth="skill_runtime",
-    )
     if report is not None:
         if hasattr(report, "to_dict"):
             payload["report"] = report.to_dict()  # type: ignore[call-arg]
@@ -568,7 +644,17 @@ async def install(body: InstallReq, mgr: SkillManager = Depends(_get_manager), c
         }
     payload = await asyncio.to_thread(_install_skill_sync, body, mgr, webspace_id)
     skill_name = str(((payload.get("skill") or {}).get("id")) or body.name)
-    payload["handler_reload"] = await _reload_live_skill_handlers(ctx, skill_name)
+    payload.update(
+        await _finalize_live_skill_activation(
+            ctx,
+            skill_name,
+            space="default",
+            webspace_id=webspace_id,
+            defer_webspace_rebuild=False,
+            cache_reason=f"skill_install:{skill_name}",
+            cache_action="skill_install_sync",
+        )
+    )
     try:
         await rebuild_webspace_projection(
             webspace_id=webspace_id,
@@ -744,24 +830,24 @@ async def runtime_activate(
             slot=body.slot,
             space="default",
             webspace_id=webspace_id,
+            emit_activation=False,
         )
-        reload_result = await _reload_live_skill_handlers(ctx, body.name)
-        materialization_cache = await asyncio.to_thread(
-            invalidate_webspace_materialization_cache,
-            webspace_id,
-            reason=f"skill_activate:{body.name}",
-            action="skill_activation_sync",
-            source_of_truth="skill_runtime",
+        activation = await _finalize_live_skill_activation(
+            ctx,
+            body.name,
+            space="default",
+            webspace_id=webspace_id,
+            defer_webspace_rebuild=False,
+            cache_reason=f"skill_activate:{body.name}",
+            cache_action="skill_activation_sync",
         )
-        return {"ok": True, "slot": slot, "handler_reload": reload_result, "materialization_cache": materialization_cache}
+        return {"ok": True, "slot": slot, **activation}
     except (SkillCoreCompatibilityError, SkillDependencyIsolationError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RuntimeError as exc:
         msg = str(exc).lower()
         if not body.auto_prepare or ("is not prepared" not in msg and "no installed versions" not in msg):
             # expose as 422 Unprocessable if activation cannot proceed
-            from fastapi import HTTPException
-
             raise HTTPException(status_code=422, detail=str(exc))
         # auto-prepare then retry
         pref_slot = body.slot
@@ -779,18 +865,20 @@ async def runtime_activate(
                 slot=prep.slot,
                 space="default",
                 webspace_id=webspace_id,
+                emit_activation=False,
             )
         except (SkillCoreCompatibilityError, SkillDependencyIsolationError) as compat_exc:
             raise HTTPException(status_code=409, detail=str(compat_exc)) from compat_exc
-        reload_result = await _reload_live_skill_handlers(ctx, body.name)
-        materialization_cache = await asyncio.to_thread(
-            invalidate_webspace_materialization_cache,
-            webspace_id,
-            reason=f"skill_activate:{body.name}",
-            action="skill_activation_sync",
-            source_of_truth="skill_runtime",
+        activation = await _finalize_live_skill_activation(
+            ctx,
+            body.name,
+            space="default",
+            webspace_id=webspace_id,
+            defer_webspace_rebuild=False,
+            cache_reason=f"skill_activate:{body.name}",
+            cache_action="skill_activation_sync",
         )
-        return {"ok": True, "slot": slot, "prepared": prep.slot, "handler_reload": reload_result, "materialization_cache": materialization_cache}
+        return {"ok": True, "slot": slot, "prepared": prep.slot, **activation}
 
 
 @router.post("/runtime/notify-activated")
@@ -805,23 +893,17 @@ async def runtime_notify_activated(body: RuntimeNotifyActivatedReq):
         return {"ok": False, "reason": "bus-unavailable"}
     space = (body.space or "default").strip() or "default"
     webspace_id = body.webspace_id or default_webspace_id()
-    payload: Dict[str, Any] = {
-        "skill_name": body.name,
-        "space": space,
-        "webspace_id": webspace_id,
-        "defer_webspace_rebuild": bool(body.defer_webspace_rebuild),
-    }
     invalidate_local_capacity_cache()
-    reload_result = await _reload_live_skill_handlers(ctx, body.name)
-    materialization_cache = await asyncio.to_thread(
-        invalidate_webspace_materialization_cache,
-        webspace_id,
-        reason=f"skills_activated:{body.name}",
-        action="skill_activation_sync",
-        source_of_truth="skill_runtime",
+    activation = await _finalize_live_skill_activation(
+        ctx,
+        body.name,
+        space=space,
+        webspace_id=webspace_id,
+        defer_webspace_rebuild=bool(body.defer_webspace_rebuild),
+        cache_reason=f"skills_activated:{body.name}",
+        cache_action="skill_activation_sync",
     )
-    bus_emit(bus, "skills.activated", payload, "api.skills")
-    return {"ok": True, "handler_reload": reload_result, "materialization_cache": materialization_cache}
+    return {"ok": True, **activation}
 
 
 @router.post("/runtime/rebuild-webspace")
@@ -919,6 +1001,7 @@ async def update_skill(body: UpdateReq, ctx: AgentContext = Depends(get_ctx)):
                 require_active_version=True,
                 disable_during_migration=True,
                 operation_id=f"skill-update:{body.name}",
+                emit_activation=False,
             )
         except RuntimeRefreshError as exc:
             log.exception("runtime refresh failed after skill update: %s", body.name)
@@ -932,14 +1015,18 @@ async def update_skill(body: UpdateReq, ctx: AgentContext = Depends(get_ctx)):
         except Exception as exc:
             log.exception("runtime refresh failed after skill update: %s", body.name)
             raise HTTPException(status_code=409, detail=f"runtime refresh failed after skill update: {exc}") from exc
-        handler_reload = await _reload_live_skill_handlers(ctx, body.name)
-        materialization_cache = await asyncio.to_thread(
-            invalidate_webspace_materialization_cache,
-            webspace_id,
-            reason=f"skill_update:{body.name}",
-            action="skill_update_sync",
-            source_of_truth="skill_runtime",
+        activation = await _finalize_live_skill_activation(
+            ctx,
+            body.name,
+            space="default",
+            webspace_id=webspace_id,
+            defer_webspace_rebuild=bool(body.defer_webspace_rebuild),
+            cache_reason=f"skill_update:{body.name}",
+            cache_action="skill_update_sync",
+            emit_activation=False,
         )
+        handler_reload = activation["handler_reload"]
+        materialization_cache = activation["materialization_cache"]
         bus = getattr(ctx, "bus", None)
         if bus is not None:
             bus_emit(
@@ -952,16 +1039,12 @@ async def update_skill(body: UpdateReq, ctx: AgentContext = Depends(get_ctx)):
                 },
                 "api.skills",
             )
-            bus_emit(
-                bus,
-                "skills.activated",
-                {
-                    "skill_name": body.name,
-                    "space": "default",
-                    "webspace_id": webspace_id,
-                    "defer_webspace_rebuild": bool(body.defer_webspace_rebuild),
-                },
-                "api.skills",
+            _emit_live_skill_activation(
+                ctx,
+                body.name,
+                space="default",
+                webspace_id=webspace_id,
+                defer_webspace_rebuild=bool(body.defer_webspace_rebuild),
             )
         if not body.defer_webspace_rebuild:
             webspace_rebuild = _schedule_webspace_rebuild(

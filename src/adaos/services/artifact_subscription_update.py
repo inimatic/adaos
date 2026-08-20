@@ -314,6 +314,7 @@ class ArtifactSubscriptionUpdateCoordinator:
                     require_active_version=True,
                     disable_during_migration=True,
                     operation_id=f"artifact-subscription:{project_id}:{component.digest[-12:]}",
+                    emit_activation=False,
                 )
                 self._require_success(refresh, "skill runtime refresh")
                 handlers = await_runtime(

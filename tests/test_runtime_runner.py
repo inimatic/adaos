@@ -12,6 +12,7 @@ import pytest
 
 from adaos.skills import runtime_runner as runtime_runner_module
 from adaos.sdk.core import decorators as sdk_decorators
+from adaos.services import skills_loader_importlib as skills_loader_module
 
 
 def _write_skill(root: Path, name: str, marker: str) -> Path:
@@ -99,6 +100,91 @@ def test_execute_tool_isolates_generic_handlers_main_between_skills(tmp_path: Pa
     assert first["skill"] == "alpha_skill"
     assert second["skill"] == "beta_skill"
     assert second["marker"] == "beta"
+
+
+def test_execute_tool_reuses_active_subscription_module_for_lifecycle_state(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "stateful_skill"
+    handler = skill_dir / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text(
+        "STATE = {'active': 0}\n"
+        "def start_worker():\n"
+        "    STATE['active'] += 1\n"
+        "def drain(**_kwargs):\n"
+        "    previous = STATE['active']\n"
+        "    STATE['active'] = 0\n"
+        "    return {'previous': previous, 'active': STATE['active']}\n",
+        encoding="utf-8",
+    )
+    before_sources = dict(skills_loader_module._LOADED_HANDLER_SOURCES)
+    before_modules = dict(sys.modules)
+    before_snapshots = dict(runtime_runner_module._SKILL_SOURCE_SNAPSHOTS)
+    try:
+        loader = object.__new__(skills_loader_module.ImportlibSkillsLoader)
+        loader._load_handler(handler)
+        loaded = skills_loader_module.loaded_handler_module_for_path(handler)
+        assert loaded is not None
+        loaded.start_worker()
+
+        result = runtime_runner_module.execute_tool(
+            skill_dir,
+            module="handlers.main",
+            attr="drain",
+            payload={"reason": "test"},
+        )
+
+        assert result == {"previous": 1, "active": 0}
+        assert loaded.STATE == {"active": 0}
+    finally:
+        runtime_runner_module._SKILL_SOURCE_SNAPSHOTS.clear()
+        runtime_runner_module._SKILL_SOURCE_SNAPSHOTS.update(before_snapshots)
+        skills_loader_module._LOADED_HANDLER_SOURCES.clear()
+        skills_loader_module._LOADED_HANDLER_SOURCES.update(before_sources)
+        for key in list(sys.modules):
+            if key not in before_modules:
+                sys.modules.pop(key, None)
+        sys.modules.update(before_modules)
+
+
+def test_execute_tool_does_not_reuse_active_module_after_source_drift(tmp_path: Path) -> None:
+    skill_dir = _write_skill(tmp_path, "drifting_skill", "loaded")
+    handler = skill_dir / "handlers" / "main.py"
+    before_sources = dict(skills_loader_module._LOADED_HANDLER_SOURCES)
+    before_modules = dict(sys.modules)
+    before_snapshots = dict(runtime_runner_module._SKILL_SOURCE_SNAPSHOTS)
+    try:
+        loader = object.__new__(skills_loader_module.ImportlibSkillsLoader)
+        loader._load_handler(handler)
+        loaded = skills_loader_module.loaded_handler_module_for_path(handler)
+        assert loaded is not None
+        assert loaded.get_snapshot()["marker"] == "loaded"
+
+        handler.write_text(
+            "def get_snapshot(**kwargs):\n"
+            "    return {'skill': 'drifting_skill', 'marker': 'changed', 'kwargs': dict(kwargs)}\n",
+            encoding="utf-8",
+        )
+        future = time.time() + 2
+        os.utime(handler, (future, future))
+
+        result = runtime_runner_module.execute_tool(
+            skill_dir,
+            module="handlers.main",
+            attr="get_snapshot",
+            payload={},
+        )
+
+        assert result["marker"] == "changed"
+        assert skills_loader_module.loaded_handler_module_for_path(handler) is None
+    finally:
+        runtime_runner_module._SKILL_SOURCE_SNAPSHOTS.clear()
+        runtime_runner_module._SKILL_SOURCE_SNAPSHOTS.update(before_snapshots)
+        skills_loader_module._LOADED_HANDLER_SOURCES.clear()
+        skills_loader_module._LOADED_HANDLER_SOURCES.update(before_sources)
+        for key in list(sys.modules):
+            if key not in before_modules:
+                sys.modules.pop(key, None)
+        sys.modules.update(before_modules)
 
 
 def test_execute_tool_isolates_same_named_local_packages_between_skills(tmp_path: Path) -> None:

@@ -187,6 +187,63 @@ def test_post_boot_migration_does_not_mark_rejected_worker_as_started(monkeypatc
     assert api_server.app.state.skill_runtime_migration_starting is False
 
 
+@pytest.mark.parametrize(
+    ("workspace_lock_present", "expected_sync_workspace"),
+    [(False, True), (True, False)],
+)
+def test_post_boot_migration_syncs_legacy_sparse_workspace(
+    monkeypatch,
+    tmp_path,
+    workspace_lock_present: bool,
+    expected_sync_workspace: bool,
+) -> None:
+    import adaos.services.core_slots as core_slots
+    import adaos.services.skill.runtime_migration_worker as migration_worker
+
+    if workspace_lock_present:
+        lock_path = tmp_path / ".adaos" / "workspace.lock.json"
+        lock_path.parent.mkdir(parents=True)
+        lock_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "active")
+    monkeypatch.setenv("ADAOS_TESTING", "1")
+    monkeypatch.setattr(api_server.app.state, "runtime_boot_task", None, raising=False)
+    monkeypatch.setattr(
+        api_server.app.state,
+        "runtime_boot_readiness",
+        {"state": "ready", "ready": True, "started_at": 1.0, "completed_at": 2.0},
+        raising=False,
+    )
+    monkeypatch.setattr(api_server.app.state, "skill_runtime_migration_started", False, raising=False)
+    monkeypatch.setattr(api_server.app.state, "skill_runtime_migration_starting", False, raising=False)
+    monkeypatch.setattr(
+        core_slots,
+        "active_slot_manifest",
+        lambda: {"skill_runtime_migration": {"deferred": True, "background_required": True}},
+    )
+    monkeypatch.setattr(
+        api_server,
+        "get_ctx",
+        lambda: types.SimpleNamespace(paths=types.SimpleNamespace(workspace_dir=lambda: tmp_path)),
+    )
+    calls: list[dict] = []
+
+    async def _accepted(*_args, **kwargs):
+        calls.append(dict(kwargs))
+        return {"ok": True, "accepted": True, "status": {"state": "scheduled"}}
+
+    monkeypatch.setattr(migration_worker, "start_background_migration", _accepted)
+
+    payload = asyncio.run(
+        api_server._start_post_boot_skill_runtime_migration(
+            api_server.app,
+            reason="test.post_boot",
+        )
+    )
+
+    assert payload["started"] is True
+    assert calls[0]["sync_workspace"] is expected_sync_workspace
+
+
 def test_background_boot_defaults_to_supervisor_or_autostart(monkeypatch) -> None:
     monkeypatch.delenv("ADAOS_RUNTIME_BACKGROUND_BOOT", raising=False)
     monkeypatch.delenv("ADAOS_SUPERVISOR_ENABLED", raising=False)

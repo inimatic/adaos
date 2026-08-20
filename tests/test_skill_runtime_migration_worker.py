@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 import os
@@ -133,6 +134,37 @@ def test_migration_candidates_include_only_runtime_behind(monkeypatch, tmp_path)
 
     assert [item["skill"] for item in result] == ["missing_runtime_skill", "old_skill"]
     assert {item["reason"] for item in result} == {"runtime_version_behind"}
+
+
+def test_migration_candidates_use_registry_version_for_sparse_placeholder(monkeypatch, tmp_path):
+    skills_root = tmp_path / "skills"
+    placeholder = skills_root / "weather_skill"
+    (placeholder / "handlers").mkdir(parents=True)
+    ctx = SimpleNamespace(
+        paths=SimpleNamespace(
+            workspace_dir=lambda: tmp_path,
+            skills_workspace_dir=lambda: skills_root,
+        )
+    )
+
+    monkeypatch.setattr(worker, "_registered_skill_names", lambda _ctx: ["weather_skill"])
+    monkeypatch.setattr(worker, "_registry_versions", lambda _ctx: {"weather_skill": "2.6.23"})
+
+    result = worker.migration_candidates(ctx, _FakeManager({"weather_skill": "2.6.12"}))
+
+    assert result == [
+        {
+            "skill": "weather_skill",
+            "workspace_version": "2.6.23",
+            "runtime_version": "2.6.12",
+            "source_path": str(placeholder),
+            "source_materialized": False,
+            "version_source": "workspace_registry",
+            "reason": "runtime_version_behind",
+            "deactivated": False,
+            "deactivation": {},
+        }
+    ]
 
 
 def test_migration_candidates_exclude_uninstalled_workspace_artifacts(monkeypatch, tmp_path):
@@ -413,6 +445,7 @@ def test_explicit_quarantine_recovery_retries_once_and_clears_status(monkeypatch
     quarantine_snapshots = iter([[{"skill": "infrastate_skill"}], []])
     monkeypatch.setattr(worker, "quarantined_runtimes", lambda *_args: next(quarantine_snapshots))
     monkeypatch.setattr(worker, "failed_candidate_runtimes", lambda *_args: [])
+    monkeypatch.setattr(worker, "_installed_runtime_version_records", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(worker, "refresh_skill_runtime", _refresh)
     monkeypatch.setattr(worker, "_reload_live_skill_handlers_sync", lambda *_args: {"ok": True})
     monkeypatch.setattr(worker, "rebuild_webspace_projection_sync", lambda **_kwargs: {"ok": True})
@@ -447,6 +480,8 @@ def test_noop_migration_skips_webspace_rebuild(monkeypatch):
     monkeypatch.setattr(worker, "_manager", lambda _ctx: object())
     monkeypatch.setattr(worker, "migration_candidates", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(worker, "quarantined_runtimes", lambda *_args: [])
+    monkeypatch.setattr(worker, "failed_candidate_runtimes", lambda *_args: [])
+    monkeypatch.setattr(worker, "_installed_runtime_version_records", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(
         worker,
         "rebuild_webspace_projection_sync",
@@ -473,6 +508,174 @@ def test_noop_migration_skips_webspace_rebuild(monkeypatch):
         "webspace_id": "desktop",
     }
     assert rebuild_calls == []
+
+
+def test_noop_migration_fails_when_runtime_drift_remains(monkeypatch):
+    monkeypatch.setattr(worker, "_manager", lambda _ctx: object())
+    monkeypatch.setattr(worker, "migration_candidates", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(worker, "quarantined_runtimes", lambda *_args: [])
+    monkeypatch.setattr(worker, "failed_candidate_runtimes", lambda *_args: [])
+    monkeypatch.setattr(
+        worker,
+        "_installed_runtime_version_records",
+        lambda *_args, **_kwargs: [
+            {
+                "skill": "weather_skill",
+                "workspace_version": "2.6.23",
+                "runtime_version": "2.6.12",
+                "runtime_behind": True,
+            }
+        ],
+    )
+    monkeypatch.setattr(worker, "_write_status", lambda _ctx, payload: dict(payload))
+
+    result = worker._run_migration_sync(
+        SimpleNamespace(),
+        operation_id="skill-migrate-drift",
+        webspace_id="desktop",
+        force=False,
+        run_tests=True,
+        name=None,
+        sync_workspace=False,
+    )
+
+    assert result["ok"] is False
+    assert result["state"] == "failed"
+    assert result["remaining_runtime_drift_total"] == 1
+    assert "left 1 installed runtime" in result["message"]
+
+
+def test_owner_finalization_reloads_handlers_before_activation_and_rebuild(monkeypatch, tmp_path):
+    order: list[str] = []
+    writes: list[dict] = []
+    ctx = SimpleNamespace(
+        paths=SimpleNamespace(skills_dir=lambda: tmp_path / "skills"),
+        bus=object(),
+    )
+
+    async def _reload(_ctx, name: str) -> dict:
+        order.append(f"reload:{name}")
+        return {"ok": True, "skill": name, "handlers": [f"{name}/handlers/main.py"]}
+
+    def _invalidate(_webspace_id: str, *, operation_id: str) -> dict:
+        order.append(f"invalidate:{operation_id}")
+        return {"ok": True}
+
+    async def _rebuild(**_kwargs) -> dict:
+        order.append("rebuild")
+        return {"ok": True}
+
+    monkeypatch.setattr(worker, "_manager", lambda _ctx: object())
+    monkeypatch.setattr(worker, "_reload_owner_skill_handlers", _reload)
+    monkeypatch.setattr(worker, "_invalidate_owner_materialization", _invalidate)
+    monkeypatch.setattr(
+        worker,
+        "bus_emit",
+        lambda _bus, topic, payload, _source: order.append(f"emit:{topic}:{payload['skill_name']}"),
+    )
+    monkeypatch.setattr(worker, "rebuild_webspace_projection", _rebuild)
+    monkeypatch.setattr(worker, "_installed_runtime_version_records", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(worker, "_write_status", lambda _ctx, payload: writes.append(dict(payload)) or dict(payload))
+
+    result = asyncio.run(
+        worker._finalize_owner_runtime_migration(
+            ctx,
+            {
+                "ok": True,
+                "state": "succeeded",
+                "phase": "complete",
+                "pending": False,
+                "operation_id": "op-live",
+                "started_at": worker._now(),
+                "name": None,
+                "skills": [
+                    {
+                        "skill": "weather_skill",
+                        "ok": True,
+                        "active_version_before": "2.6.22",
+                        "active_slot_before": "A",
+                    }
+                ],
+            },
+            operation_id="op-live",
+            webspace_id="desktop",
+        )
+    )
+
+    assert order == [
+        "reload:weather_skill",
+        "invalidate:op-live",
+        "emit:skills.activated:weather_skill",
+        "rebuild",
+    ]
+    assert writes[0]["phase"] == "live_finalize"
+    assert result["ok"] is True
+    assert result["state"] == "succeeded"
+    assert result["live_finalized_total"] == 1
+    assert result["skills"][0]["activation_emitted"] is True
+
+
+def test_owner_finalization_restores_fallback_when_live_reload_fails(monkeypatch, tmp_path):
+    reload_results = iter(
+        [
+            {"ok": False, "reason": "reload_failed", "error": "bad import"},
+            {"ok": True, "handlers": ["fallback/handlers/main.py"]},
+        ]
+    )
+    preservation_calls: list[dict] = []
+    events: list[str] = []
+    ctx = SimpleNamespace(
+        paths=SimpleNamespace(skills_dir=lambda: tmp_path / "skills"),
+        bus=object(),
+    )
+
+    async def _reload(_ctx, _name: str) -> dict:
+        return next(reload_results)
+
+    def _preserve(_ctx, _mgr, **kwargs) -> dict:
+        preservation_calls.append(kwargs)
+        kwargs["entry"]["fallback_preserved"] = True
+        return {"status": "candidate_quarantined", "fallback_version": "2.6.22", "fallback_slot": "A"}
+
+    monkeypatch.setattr(worker, "_manager", lambda _ctx: object())
+    monkeypatch.setattr(worker, "_reload_owner_skill_handlers", _reload)
+    monkeypatch.setattr(worker, "_preserve_runtime_after_candidate_failure", _preserve)
+    monkeypatch.setattr(worker, "_installed_runtime_version_records", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(worker, "bus_emit", lambda *_args, **_kwargs: events.append("emit"))
+    monkeypatch.setattr(worker, "_write_status", lambda _ctx, payload: dict(payload))
+
+    result = asyncio.run(
+        worker._finalize_owner_runtime_migration(
+            ctx,
+            {
+                "ok": True,
+                "state": "succeeded",
+                "phase": "complete",
+                "pending": False,
+                "operation_id": "op-fail",
+                "started_at": worker._now(),
+                "skills": [
+                    {
+                        "skill": "weather_skill",
+                        "workspace_version": "2.6.23",
+                        "ok": True,
+                        "active_version_before": "2.6.22",
+                        "active_slot_before": "A",
+                    }
+                ],
+            },
+            operation_id="op-fail",
+            webspace_id="desktop",
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["state"] == "failed"
+    assert result["handler_reload_failed_total"] == 1
+    assert result["skills"][0]["fallback_preserved"] is True
+    assert result["skills"][0]["fallback_handler_reload"]["ok"] is True
+    assert preservation_calls[0]["reload_fallback_handlers"] is False
+    assert events == []
 
 
 def test_candidate_failure_preserves_only_the_exact_pre_attempt_selection(monkeypatch):

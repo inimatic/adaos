@@ -64,6 +64,26 @@ visible as a design defect and be returned for repair. It should not be hidden
 by runtime magic that makes the browser appear healthy while the skill keeps
 producing unsafe data.
 
+Production declarations have one source authority. The runtime must load
+`skill.yaml`, `webui.json`, resources, receiver contracts, and handler code
+from the same selected immutable runtime version and A/B slot. A workspace or
+repository source is a development/install input, not a production fallback
+after an active runtime exists. Do not repair a missing desktop catalog by
+copying files back into a stale workspace directory; report active
+version/slot/source evidence and fix installation or runtime resolution. Test
+scenario rebuilds with the workspace source removed and only the active slot
+present so persisted Yjs state cannot hide a declaration-authority defect.
+
+A core update is not evidence that installed artifacts converged. After a core
+slot is promoted, the runtime must either apply its authoritative
+`WorkspaceLock`, or, when no lock exists, synchronize the shared workspace
+before selecting migration candidates. A sparse placeholder directory without
+`skill.yaml` or `scenario.yaml` is not materialized source; version comparison
+must fall back to the authoritative registry and report drift. Completion must
+fail while any installed skill reports `runtime-behind`, while a required
+scenario is absent from the shared sparse set, or while the selected scenario
+has not reached a fresh live webspace projection.
+
 ## Required data route plan
 
 Before editing a browser-facing skill, write down the route plan. A concise
@@ -312,6 +332,12 @@ background work, or heavy resources:
   activate, the next tool call and the next subscription callback must use code
   from the active slot. If old behavior remains in memory until API restart,
   treat it as a runtime reload defect and capture it in the repair evidence.
+- Treat `skills.activated` as a post-load event. Slot selection, handler reload
+  in the long-lived bus-owning process, materialization-cache invalidation, and
+  activation publication must occur in that order. Reloading a handler only in
+  a migration subprocess does not update the serving runtime. If live reload
+  fails, restore the exact previous version/slot and report migration failure;
+  do not emit activation for the rejected candidate.
 - Expose a cheap version or fingerprint tool for service/debug skills when the
   deployment path is under active development. It should report skill version,
   active slot when provided by runtime metadata, and the loaded handler source
@@ -645,6 +671,10 @@ scenarios, runtime-required scenarios, and required skill dependencies. Do not
 add unanchored root patterns such as `.gitignore`: in no-cone mode they can
 materialize placeholder files inside unrelated artifact directories and make
 an uninstalled catalog entry look like a broken local installation.
+When validating an update path, exercise both authority modes: an immutable
+release with a valid `WorkspaceLock`, and a legacy/current installation without
+one. The latter must perform shared workspace synchronization rather than
+assuming that existing artifact directories contain manifests.
 
 Declare every heavy/native runtime import as a dependency. The manifest must
 also select an allowed isolation boundary: a service runtime, a vendor/shared
@@ -1071,18 +1101,26 @@ Use these rules for command and subscription handlers:
   nice value and idle/best-effort I/O scheduling where available. Keep actual
   CPU, I/O, RSS, priority, command owner and target skill/scenario in incident
   evidence so throttling does not hide a regression.
-- Assume tools and subscriptions may execute in different processes. A
-  diagnostic tool backed only by module globals can report a healthy zero while
-  the authoritative subscription runtime is overloaded. Put bounded counters
-  and the last compact outcome in skill memory or a runtime-owned status store,
-  update them through the SDK async storage route, and identify the returned
-  status source. A failed diagnostic persistence write must be counted and
-  visible; do not silently return stale persisted counters as current truth.
+- Tools, lifecycle hooks, and subscriptions in one runtime process must execute
+  against the same fully imported module from the exact active skill slot. Do
+  not import a second copy of `handlers/main.py`: its zero-valued globals make
+  diagnostics lie, and its `drain` can clean up a different executor than the
+  one serving events. If execution is intentionally delegated to another
+  process, route lifecycle commands to the owner through explicit IPC.
+- Still assume a diagnostic read may execute in another process. Put bounded
+  counters and the last compact outcome in skill memory or a runtime-owned
+  status store. Persist from an SDK async storage route or an isolated bounded
+  worker, never from EventBus admission. Identify the returned status source,
+  observation time, writer PID, and age. A failed persistence write must be
+  counted and visible; stale persisted `active` work must become unknown rather
+  than silently looking current.
 - Make status and health reads side-effect free. A status call must read a
   bounded in-memory projection populated by lifecycle events or a background
   probe; it must not run process polling, endpoint discovery, remote health
   requests, database migrations, or persistent audit writes in the caller.
-  Expose observation time and source so a stale projection is visible.
+  A separate-process fallback may perform one bounded read from the declared
+  skill-memory/status store when its local projection is uninitialized. Expose
+  observation time and source so a stale projection is visible.
 - Treat an interval worker as a high-frequency read path too. Its normal tick
   must use an API whose contract explicitly guarantees cache-only/local
   projection access; a flag named `sync=false` is not sufficient evidence that
@@ -1118,6 +1156,11 @@ Use these rules for command and subscription handlers:
   Rewriting a growing audit array for every widget/status read is write
   amplification and can starve the runtime channel even when the handler runs
   in a worker thread.
+- Do not create development tickets, pending actions, Yjs state, files, or
+  database rows from EventBus admission or receiver prefilters. A foreign
+  receiver is a normal fan-out rejection, not compatibility debt. Evaluate
+  manifest/subscription compatibility during validate, install, or migrate;
+  keep the runtime prefilter to bounded in-memory counters and sampled logs.
 - Put a single-flight boundary and a declared concurrency limit around cache
   misses. TTL alone is insufficient: after expiration, simultaneous browser
   reads must share one computation instead of parsing the same file or opening
@@ -1341,6 +1384,17 @@ Stream rules:
   They must not call slow discovery, root relay, remote sync, or legacy fallback
   paths during browser state rebuilds; those belong behind explicit refresh,
   repair, or details actions with visible progress and failure.
+- synchronous event subscribers may be adapted through a worker thread and
+  therefore must not use `asyncio.get_running_loop()` as the decision between
+  background and inline execution. Submit expensive snapshot work to an
+  explicitly bounded executor/queue in every call context, coalesce by
+  `(webspace, receiver, node)`, and return from the subscriber immediately.
+  Expose active/peak/capacity, scheduled/coalesced/rejected/failed counts, and
+  last/max duration. Drain/dispose must cancel queued work and suppress results
+  from an obsolete runtime generation. Acceptance must invoke drain through the
+  real lifecycle/tool runner and prove that the subscription module's active
+  count reaches zero; a direct call on the test-imported module does not cover
+module-loader authority.
 
 Stream variables should be demand-aware. A stream receiver that is not
 subscribed should not keep rebuilding full snapshots just in case a browser
@@ -1799,6 +1853,9 @@ editing the skill:
   suppression/throttle counters
 - `runtime.skill_runtime_migration.diagnostics`: current skill/stage, stale
   age, suspected blocker, host disk/PSI hints, and recommended operator checks
+- migration convergence: candidate total, live-finalized total, live handler
+  reload failures, remaining runtime drift, registry/source authority, sparse
+  materialization state, and final webspace rebuild result
 - supervisor public memory status: managed PID, process RSS, child RSS, family
   RSS, top child `skill_runtime` entries, baseline phase, baseline adjustment
   reason, RSS growth, and suspicion state
@@ -1957,6 +2014,11 @@ Before publishing:
 - run skill/scenario workspace synchronization through the shared core API and
   prove the resulting sparse set preserves both artifact kinds plus runtime
   dependency closure
+- after a simulated core promotion, prove `adaos skill status` has no
+  `runtime-behind`, each changed handler executes from the selected slot in the
+  bus-owning runtime, required scenarios have real manifests, and the active
+  scenario/catalog projection is fresh; a worker exit code or `total=0` is not
+  sufficient acceptance
 - verify stream receivers have `initialState`, freshness metadata, and a
   recovery path after resubscribe
 - verify `webui.json` declares shared interaction behavior for first focus,

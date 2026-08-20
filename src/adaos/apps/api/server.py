@@ -515,6 +515,8 @@ async def _start_post_boot_skill_runtime_migration(
     )
     if not (bool(migration.get("background_required")) or bool(migration.get("deferred"))):
         return {"ok": True, "started": False, "reason": "not_required"}
+    workspace_lock_path = Path(get_ctx().paths.workspace_dir()) / ".adaos" / "workspace.lock.json"
+    sync_workspace = not workspace_lock_path.is_file()
     app.state.skill_runtime_migration_starting = True
     try:
         stabilize_sec = _post_boot_skill_migration_stabilize_sec(promoted=allow_promoted_candidate)
@@ -543,10 +545,10 @@ async def _start_post_boot_skill_runtime_migration(
                 webspace_id=default_webspace_id(),
                 force=False,
                 run_tests=True,
-                # A completed core/release cutover has already materialized the
-                # authoritative WorkspaceLock. Re-running the legacy git sync can
-                # mistake release-owned files for local edits.
-                sync_workspace=False,
+                # Package activation owns materialization only when an active
+                # WorkspaceLock exists. Legacy sparse workspaces still need the
+                # install path to materialize every runtime-behind skill.
+                sync_workspace=sync_workspace,
             )
             if bool(result.get("accepted")):
                 app.state.skill_runtime_migration_started = True

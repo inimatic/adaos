@@ -57,6 +57,28 @@ def test_tool_timeout_parser_accepts_timeout_seconds_and_legacy_timeout() -> Non
     assert SkillManager._tool_timeout_seconds({}, 30.0) == 30.0
 
 
+def test_activate_for_space_can_defer_activation_event_until_handlers_reload(monkeypatch) -> None:
+    emitted: list[tuple[str, dict, str]] = []
+    mgr = SkillManager(git=SimpleNamespace(), paths=SimpleNamespace(), caps=_Caps(), bus=object())
+    monkeypatch.setattr(mgr, "activate_runtime", lambda *_args, **_kwargs: "B")
+    monkeypatch.setattr(
+        skill_manager_module,
+        "emit",
+        lambda _bus, event_type, payload, source: emitted.append((event_type, payload, source)),
+    )
+
+    slot = mgr.activate_for_space(
+        "demo_skill",
+        version="1.2.3",
+        slot="B",
+        webspace_id="desktop",
+        emit_activation=False,
+    )
+
+    assert slot == "B"
+    assert emitted == []
+
+
 def test_stage_skill_sources_tolerates_empty_directory_residue(monkeypatch, tmp_path: Path) -> None:
     source = tmp_path / "source" / "residue_skill"
     (source / "handlers").mkdir(parents=True)
