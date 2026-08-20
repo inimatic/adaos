@@ -145,6 +145,40 @@ def test_skill_validator_rejects_invalid_bound_workflow(tmp_path: Path) -> None:
     assert "workflow.invalid" in {issue.code for issue in report.issues}
 
 
+def test_skill_validator_rejects_unregistered_workflow_adapter_before_packaging(
+    tmp_path: Path,
+) -> None:
+    skill = tmp_path / "demo_skill"
+    (skill / "handlers").mkdir(parents=True)
+    _write_manifest(skill, "skill.yaml", bound=True)
+    definition = builder_change_definition()
+    transition = next(
+        item for item in definition["transitions"] if item["effect"].get("activity")
+    )
+    transition["effect"]["activity"] = "demo_skill.prepare_attempt"
+    transition["effect"]["compensation"] = None
+    (skill / "workflow.json").write_text(
+        json.dumps(definition, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (skill / "handlers" / "main.py").write_text(
+        "def prepare_attempt():\n    return {}\n",
+        encoding="utf-8",
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(
+        skill,
+        strict=True,
+        install_mode=True,
+    )
+
+    assert report.ok is False
+    issue = next(
+        item for item in report.issues if item.code == "workflow.adapter_binding.invalid"
+    )
+    assert "not registered" in issue.message
+
+
 def test_scenario_validator_rejects_unbound_workflow(tmp_path: Path) -> None:
     scenario = tmp_path / "demo_scenario"
     scenario.mkdir()
