@@ -132,6 +132,7 @@ BUILDER_INTERACTION_FRAME_SCHEMA = "adaos.builder.interaction_frame.v1"
 BUILDER_WORKFLOW_EVENT = "builder.workflow.changed"
 _LOCK = threading.RLock()
 _MAX_STATE_BYTES = 512 * 1024
+_MAX_PORTFOLIO_RECORD_BYTES = 512 * 1024
 _MAX_HISTORY = 50
 _MAX_CHANGE_ISSUES = 50
 _MAX_CHANGE_RUNS = 100
@@ -1159,6 +1160,99 @@ class BuilderWorkflowService:
     def _state_path(self, object_type: str, object_id: str) -> Path:
         return self.project_root(object_type, object_id) / "prompt_state.json"
 
+    def _portfolio_root(self, object_type: str, object_id: str) -> Path:
+        return (
+            Path(self.state_dir)
+            / "builder"
+            / "change_portfolios"
+            / _kind(object_type)
+            / _project_id(object_id)
+        )
+
+    def _portfolio_record_path(
+        self,
+        object_type: str,
+        object_id: str,
+        change_id: str,
+    ) -> Path:
+        token = str(change_id or "").strip()
+        if not token:
+            raise BuilderWorkflowError("Builder portfolio record requires change_id")
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        return self._portfolio_root(object_type, object_id) / f"{digest}.json"
+
+    def _load_external_portfolio(
+        self,
+        object_type: str,
+        object_id: str,
+        workflow: Mapping[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        external = _mapping(workflow.get("change_portfolio_external"))
+        if external.get("schema") != "adaos.builder.change_portfolio_external.v1":
+            return {}
+        change_ids = [
+            str(item).strip()
+            for item in external.get("change_ids") or []
+            if str(item).strip()
+        ][-100:]
+        records: dict[str, dict[str, Any]] = {}
+        for change_id in change_ids:
+            path = self._portfolio_record_path(object_type, object_id, change_id)
+            try:
+                if path.stat().st_size > _MAX_PORTFOLIO_RECORD_BYTES:
+                    raise BuilderWorkflowError(
+                        f"Builder portfolio record exceeds the bounded size: {change_id}"
+                    )
+                value = json.loads(path.read_text(encoding="utf-8-sig"))
+            except FileNotFoundError as exc:
+                raise BuilderWorkflowError(
+                    f"Builder portfolio record is missing: {change_id}"
+                ) from exc
+            except json.JSONDecodeError as exc:
+                raise BuilderWorkflowError(
+                    f"Builder portfolio record is invalid: {change_id}"
+                ) from exc
+            if not isinstance(value, Mapping) or str(value.get("change_id") or "").strip() != change_id:
+                raise BuilderWorkflowError(
+                    f"Builder portfolio record identity differs from its index: {change_id}"
+                )
+            records[change_id] = dict(value)
+        return records
+
+    def _externalize_portfolio(
+        self,
+        object_type: str,
+        object_id: str,
+        state: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        payload = copy.deepcopy(dict(state))
+        workflow = _mapping(payload.get("workflow"))
+        portfolio = normalize_portfolio(workflow.get("change_portfolio"), workflow)
+        change_ids: list[str] = []
+        for change_id, record in portfolio.items():
+            raw = (json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            if len(raw) > _MAX_PORTFOLIO_RECORD_BYTES:
+                raise BuilderWorkflowError(
+                    f"Builder portfolio record exceeds the bounded size: {change_id}"
+                )
+            path = self._portfolio_record_path(object_type, object_id, change_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name(f".{path.name}.tmp")
+            temporary.write_bytes(raw)
+            _replace_path(temporary, path)
+            change_ids.append(change_id)
+        workflow["change_portfolio"] = {}
+        workflow["change_portfolio_external"] = {
+            "schema": "adaos.builder.change_portfolio_external.v1",
+            "change_ids": change_ids[-100:],
+        }
+        # ``change_set`` is a deterministic compatibility projection rebuilt
+        # from the canonical Change by ``_normalized_workflow``.
+        if isinstance(workflow.get("change"), Mapping):
+            workflow.pop("change_set", None)
+        payload["workflow"] = workflow
+        return payload
+
     def _read_state(self, object_type: str, object_id: str) -> dict[str, Any]:
         path = self._state_path(object_type, object_id)
         if not path.is_file():
@@ -1169,11 +1263,19 @@ class BuilderWorkflowService:
             value = json.loads(path.read_text(encoding="utf-8-sig"))
         except json.JSONDecodeError as exc:
             raise BuilderWorkflowError(f"invalid prompt_state.json: {exc}") from exc
-        return dict(value) if isinstance(value, Mapping) else {}
+        state = dict(value) if isinstance(value, Mapping) else {}
+        workflow = _mapping(state.get("workflow"))
+        external = self._load_external_portfolio(object_type, object_id, workflow)
+        if external:
+            inline = _mapping(workflow.get("change_portfolio"))
+            workflow["change_portfolio"] = {**external, **inline}
+            state["workflow"] = workflow
+        return state
 
     def _write_state(self, object_type: str, object_id: str, state: Mapping[str, Any]) -> None:
         path = self._state_path(object_type, object_id)
-        raw = (json.dumps(dict(state), ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        payload = self._externalize_portfolio(object_type, object_id, state)
+        raw = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         if len(raw) > _MAX_STATE_BYTES:
             raise BuilderWorkflowError("prompt context exceeds the bounded state size")
         temporary = path.with_name(f".{path.name}.tmp")
