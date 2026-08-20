@@ -1980,6 +1980,7 @@ class MemberLinkClient:
             "tools.call",
             "project.deployment.phase",
             "distributed.topology.phase",
+            "distributed.topology.transfer",
             "distributed.service.invoke",
         }
         if method not in allowed_methods:
@@ -2123,6 +2124,12 @@ class MemberLinkClient:
             )
 
             return execute_registered_topology_phase(params)
+        if method == "distributed.topology.transfer":
+            from adaos.services.distributed_runtime.adapters import (
+                execute_registered_topology_transfer,
+            )
+
+            return execute_registered_topology_transfer(params)
         if method == "distributed.service.invoke":
             from adaos.services.distributed_runtime.service_invocation import (
                 execute_registered_service_invocation,

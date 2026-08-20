@@ -20,6 +20,7 @@ from adaos.domain.distributed_runtime import (
 )
 from adaos.sdk.core._ctx import require_ctx
 from adaos.services.distributed_runtime import (
+    AuthenticatedTransferSink,
     AuthenticatedTransferSource,
     BoundedTransferController,
     DistributedInspection,
@@ -305,6 +306,7 @@ OPERATOR_PROJECTION_SCHEMA = "adaos.distributed.operator_projection.v1"
 
 
 __all__ = [
+    "AuthenticatedTransferSink",
     "AuthenticatedTransferSource",
     "BoundedTransferController",
     "Dataset",
