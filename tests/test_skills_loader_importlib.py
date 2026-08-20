@@ -536,6 +536,60 @@ def test_loading_selected_slot_retires_superseded_handler_registries(monkeypatch
         sdk_decorators._restore_registry_snapshot(registry_snapshot)
 
 
+def test_reload_without_handlers_deactivates_and_retires_previous_skill(monkeypatch, tmp_path: Path) -> None:
+    loader = ImportlibSkillsLoader()
+    skill_name = "retired_handler_skill"
+    module_name = "adaos_skill_retired_handler_skill_handlers"
+    handler = tmp_path / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text("VALUE = 1\n", encoding="utf-8")
+
+    def stale_handler(_event) -> None:
+        return None
+
+    stale_handler.__module__ = module_name
+    registry_snapshot = sdk_decorators._registry_snapshot()
+    retired_before = list(skills_loader_module._RETIRED_HANDLER_SOURCES)
+    retired_total_before = skills_loader_module._RETIRED_HANDLER_TOTAL
+    deactivated: list[set[str]] = []
+    monkeypatch.setattr(loader, "_discover_runtime_handlers", lambda _root: [])
+    monkeypatch.setattr(loader, "_discover_workspace_handlers", lambda _root, _loaded: [])
+    monkeypatch.setattr(loader, "_discover_repo_workspace_handlers", lambda _root, _loaded: [])
+    monkeypatch.setattr(
+        sdk_decorators,
+        "deactivate_skill_subscriptions",
+        lambda names: deactivated.append(set(names)) or {"skills": sorted(names), "removed_handlers": 1},
+    )
+    skills_loader_module._LOADED_HANDLER_SOURCES[module_name] = {
+        "module": module_name,
+        "skill": skill_name,
+        "path": str(handler),
+        "loaded_at": 1.0,
+        "loaded_slot": "A",
+        "loaded_digest": "sha256:old",
+    }
+    sys.modules[module_name] = types.ModuleType(module_name)
+    sdk_decorators.subscriptions.append(("test.stale", stale_handler))
+    sdk_decorators.tools_registry[module_name] = {"stale": stale_handler}
+    try:
+        receipt = asyncio.run(loader.reload_skill_handlers(tmp_path, skill_name))
+
+        assert receipt["ok"] is True
+        assert receipt["reason"] == "no_in_process_handlers"
+        assert receipt["retired"]["modules"] == [module_name]
+        assert deactivated == [{skill_name}]
+        assert module_name not in sys.modules
+        assert module_name not in skills_loader_module._LOADED_HANDLER_SOURCES
+        assert module_name not in sdk_decorators.tools_registry
+        assert not any(fn.__module__ == module_name for _topic, fn in sdk_decorators.subscriptions)
+    finally:
+        sys.modules.pop(module_name, None)
+        skills_loader_module._LOADED_HANDLER_SOURCES.pop(module_name, None)
+        skills_loader_module._RETIRED_HANDLER_SOURCES[:] = retired_before
+        skills_loader_module._RETIRED_HANDLER_TOTAL = retired_total_before
+        sdk_decorators._restore_registry_snapshot(registry_snapshot)
+
+
 def test_reloading_same_handler_replaces_registry_and_restores_it_on_import_failure(
     monkeypatch,
     tmp_path: Path,

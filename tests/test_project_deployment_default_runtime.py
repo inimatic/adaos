@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
+
+import pytest
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.distributed_runtime import (
@@ -17,10 +20,70 @@ from adaos.services.project_deployment import (
 )
 from adaos.services.project_deployment import default_runtime
 from adaos.services.project_deployment.default_runtime import (
+    AdaOSComponentLifecycleHooks,
     configure_default_distributed_runtimes,
     deployment_runtime_inventory_payload,
     local_node_inventory_record,
 )
+
+
+def test_async_bridge_runs_when_activation_is_called_from_an_event_loop() -> None:
+    async def invoke() -> str:
+        return default_runtime._run_async_from_sync(asyncio.sleep(0, result="ready"))
+
+    assert asyncio.run(invoke()) == "ready"
+
+
+def test_skill_component_activation_reloads_live_handlers(monkeypatch) -> None:
+    events: list[tuple[str, str]] = []
+
+    class Manager:
+        def activate_runtime(self, component_id: str, *, version: str) -> str:
+            events.append(("slot", f"{component_id}:{version}"))
+            return "B"
+
+    monkeypatch.setattr(AdaOSComponentLifecycleHooks, "_skill_manager", lambda _self: Manager())
+    monkeypatch.setattr(
+        AdaOSComponentLifecycleHooks,
+        "_reload_skill_handlers",
+        lambda _self, component_id: (
+            events.append(("handlers", component_id))
+            or {"ok": True, "handlers": ["handlers/main.py"]}
+        ),
+    )
+
+    receipt = AdaOSComponentLifecycleHooks(SimpleNamespace()).activate(
+        kind="skill",
+        component_id="media_center_skill",
+        version="0.8.23",
+    )
+
+    assert events == [
+        ("slot", "media_center_skill:0.8.23"),
+        ("handlers", "media_center_skill"),
+    ]
+    assert receipt["slot"] == "B"
+    assert receipt["handler_reload"]["ok"] is True
+
+
+def test_skill_component_activation_fails_when_live_handlers_do_not_activate(monkeypatch) -> None:
+    class Manager:
+        def activate_runtime(self, _component_id: str, *, version: str) -> str:
+            return "A"
+
+    monkeypatch.setattr(AdaOSComponentLifecycleHooks, "_skill_manager", lambda _self: Manager())
+    monkeypatch.setattr(
+        AdaOSComponentLifecycleHooks,
+        "_reload_skill_handlers",
+        lambda _self, _component_id: {"ok": False, "reason": "runtime_safety_validation_failed"},
+    )
+
+    with pytest.raises(RuntimeError, match="runtime_safety_validation_failed"):
+        AdaOSComponentLifecycleHooks(SimpleNamespace()).activate(
+            kind="skill",
+            component_id="media_center_skill",
+            version="0.8.23",
+        )
 
 
 def test_default_runtimes_share_durable_store_and_publish_local_inventory(monkeypatch) -> None:

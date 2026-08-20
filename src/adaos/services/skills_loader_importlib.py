@@ -206,6 +206,54 @@ def loaded_handler_module_for_path(path: Path) -> Any | None:
     return None
 
 
+def _retire_loaded_skill_sources(skill_name: str, *, retired_by: str) -> dict[str, Any]:
+    """Retire imported declarations when the selected runtime has no handler."""
+
+    global _RETIRED_HANDLER_TOTAL
+    target = str(skill_name or "").strip()
+    if not target:
+        return {"skill": "", "modules": [], "declarations": {}}
+    with _HANDLER_IMPORT_LOCK:
+        records = [
+            (name, dict(item))
+            for name, item in _LOADED_HANDLER_SOURCES.items()
+            if str(item.get("skill") or "").strip() == target
+        ]
+        module_names = [name for name, _item in records]
+        if not module_names:
+            return {"skill": target, "modules": [], "declarations": {}}
+
+        from adaos.sdk.core.decorators import retire_module_declarations
+
+        declarations = retire_module_declarations(module_names)
+        retired_at = time.time()
+        for name, previous in records:
+            _LOADED_HANDLER_SOURCES.pop(name, None)
+            sys.modules.pop(name, None)
+            _RETIRED_HANDLER_SOURCES.append(
+                {
+                    "module": name,
+                    "skill": target,
+                    "path": previous.get("path"),
+                    "loaded_at": previous.get("loaded_at"),
+                    "loaded_slot": previous.get("loaded_slot"),
+                    "loaded_digest": previous.get("loaded_digest"),
+                    "retired_at": retired_at,
+                    "retired_by": str(retired_by or "runtime_reload"),
+                }
+            )
+        _RETIRED_HANDLER_TOTAL += len(records)
+        del _RETIRED_HANDLER_SOURCES[:-_RETIRED_HANDLER_SOURCES_LIMIT]
+    _LOG.info(
+        "retired skill handlers skill=%s modules=%s declarations=%s reason=%s",
+        target,
+        ",".join(sorted(module_names)),
+        json.dumps(declarations, sort_keys=True, separators=(",", ":")),
+        retired_by,
+    )
+    return {"skill": target, "modules": sorted(module_names), "declarations": declarations}
+
+
 def skill_handler_source_snapshot() -> dict[str, Any]:
     """Compare imported handler bytes and runtime selection with current disk state."""
 
@@ -398,6 +446,9 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         target = str(skill_name or "").strip()
         if not target:
             return {"ok": False, "reason": "skill_name_missing", "handlers": []}
+        from adaos.sdk.core.decorators import deactivate_skill_subscriptions
+
+        subscriptions = deactivate_skill_subscriptions({target})
         deactivation = await asyncio.to_thread(
             SkillRuntimeEnvironment(skills_root=root, skill_name=target).read_deactivation
         )
@@ -408,6 +459,7 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 "reason": "skill_runtime_deactivated",
                 "skill": target,
                 "deactivation": deactivation,
+                "subscriptions": subscriptions,
                 "handlers": [],
             }
         runtime_handlers = await asyncio.to_thread(self._discover_runtime_handlers, root)
@@ -419,6 +471,21 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         if not handlers:
             repo_handlers = await asyncio.to_thread(self._discover_repo_workspace_handlers, root, set())
             handlers = [handler for handler, name in repo_handlers if name == target]
+        if not handlers:
+            retired = await asyncio.to_thread(
+                _retire_loaded_skill_sources,
+                target,
+                retired_by="reload:no_in_process_handlers",
+            )
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "no_in_process_handlers",
+                "skill": target,
+                "subscriptions": subscriptions,
+                "retired": retired,
+                "handlers": [],
+            }
         loaded_declaration_manifests: set[Path] = set()
         loaded_handlers: list[str] = []
         for handler in handlers:
@@ -432,9 +499,6 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                     issues,
                     source="reload",
                 )
-                from adaos.sdk.core.decorators import deactivate_skill_subscriptions
-
-                subscriptions = deactivate_skill_subscriptions({target})
                 await self._emit_runtime_safety_quarantine(target, quarantine)
                 return {
                     "ok": False,
@@ -474,7 +538,12 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             from adaos.sdk.core.decorators import register_subscriptions
 
             await register_subscriptions(skill_names={target}, force=True)
-        return {"ok": bool(loaded_handlers), "skill": target, "handlers": loaded_handlers}
+        return {
+            "ok": bool(loaded_handlers),
+            "skill": target,
+            "subscriptions": subscriptions,
+            "handlers": loaded_handlers,
+        }
 
     def _load_handler(self, handler: Path, *, reload: bool = False) -> None:
         with _HANDLER_IMPORT_LOCK:
