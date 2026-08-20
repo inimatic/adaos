@@ -7,7 +7,7 @@ import threading
 import time
 from collections import deque
 from ipaddress import ip_address
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit
@@ -24,6 +24,7 @@ _ALLOWED_TOPICS = {
 _lock = threading.Lock()
 _skill_tokens: dict[str, str] = {}
 _token_skills: dict[str, str] = {}
+_token_topics: dict[str, frozenset[str]] = {}
 _token_windows: dict[str, deque[float]] = {}
 
 
@@ -34,7 +35,11 @@ class ServiceEventBridgeError(ValueError):
         self.status_code = status_code
 
 
-def service_event_bridge_environment(skill_name: str) -> dict[str, str]:
+def service_event_bridge_environment(
+    skill_name: str,
+    *,
+    publish_topics: Iterable[str] = (),
+) -> dict[str, str]:
     skill = str(skill_name or "").strip()
     if not skill:
         raise ValueError("service_skill_required")
@@ -47,7 +52,9 @@ def service_event_bridge_environment(skill_name: str) -> dict[str, str]:
         "ADAOS_SERVICE_EVENT_BRIDGE_URL": (
             f"http://127.0.0.1:{port}/api/node/internal/service-events"
         ),
-        "ADAOS_SERVICE_EVENT_BRIDGE_TOKEN": _issue_token(skill),
+        "ADAOS_SERVICE_EVENT_BRIDGE_TOKEN": _issue_token(
+            skill, publish_topics=publish_topics
+        ),
     }
 
 
@@ -67,8 +74,9 @@ def publish_service_event(
                 "service_event_token_invalid", status_code=401
             )
         _admit_rate_locked(presented)
+        allowed_topics = _token_topics.get(presented, frozenset())
     event_type = str(topic or "").strip()
-    if event_type not in _ALLOWED_TOPICS:
+    if event_type not in _ALLOWED_TOPICS and event_type not in allowed_topics:
         raise ServiceEventBridgeError(
             "service_event_topic_denied", status_code=403
         )
@@ -111,15 +119,24 @@ def publish_service_event(
     }
 
 
-def _issue_token(skill: str) -> str:
+def _issue_token(skill: str, *, publish_topics: Iterable[str]) -> str:
+    declared = frozenset(
+        topic
+        for topic in (str(item or "").strip() for item in publish_topics)
+        if topic and len(topic) <= 200 and not any(char.isspace() for char in topic)
+    )
+    if len(declared) > 128:
+        raise ValueError("service_event_publish_topics_exceeded")
     token = secrets.token_urlsafe(32)
     with _lock:
         previous = _skill_tokens.get(skill)
         if previous:
             _token_skills.pop(previous, None)
+            _token_topics.pop(previous, None)
             _token_windows.pop(previous, None)
         _skill_tokens[skill] = token
         _token_skills[token] = skill
+        _token_topics[token] = declared
         _token_windows[token] = deque()
     return token
 

@@ -550,8 +550,10 @@ def test_service_supervisor_overrides_foreign_skill_scope(monkeypatch, tmp_path)
         doctor_cooldown_s=300,
         doctor_issue_types=[],
         doctor_include_log_tail_lines=0,
+        publish_topics=("owned_service.changed",),
     )
     captured = {}
+    bridge_scope = {}
 
     class _Proc:
         pid = 9129
@@ -567,6 +569,17 @@ def test_service_supervisor_overrides_foreign_skill_scope(monkeypatch, tmp_path)
     monkeypatch.setenv("ADAOS_SKILL_ENV_PATH", str(tmp_path / "foreign" / "skill_env.json"))
     monkeypatch.setattr(mod, "_service_health_ok", lambda _spec: False)
     monkeypatch.setattr(mod, "_service_listener_snapshot", lambda _spec: {"pid": 0})
+    monkeypatch.setattr(
+        mod,
+        "service_event_bridge_environment",
+        lambda skill, *, publish_topics=(): (
+            bridge_scope.update(skill=skill, publish_topics=tuple(publish_topics))
+            or {
+                "ADAOS_SERVICE_EVENT_BRIDGE_URL": "http://127.0.0.1:8777/internal",
+                "ADAOS_SERVICE_EVENT_BRIDGE_TOKEN": "scoped-token",
+            }
+        ),
+    )
     monkeypatch.setattr(mod.subprocess, "Popen", _popen)
 
     supervisor = mod.ServiceSkillSupervisor()
@@ -581,6 +594,10 @@ def test_service_supervisor_overrides_foreign_skill_scope(monkeypatch, tmp_path)
     assert captured["ADAOS_SKILL_ENV_PATH"] == str(bucket / "data" / "db" / "skill_env.json")
     assert captured["ADAOS_RUNTIME_INSTANCE_ID"] == mod.runtime_instance_id()
     assert captured["ADAOS_SERVICE_OWNER_PID"] == str(os.getpid())
+    assert bridge_scope == {
+        "skill": name,
+        "publish_topics": ("owned_service.changed",),
+    }
 
 
 def test_service_supervisor_adopts_healthy_untracked_endpoint(monkeypatch):

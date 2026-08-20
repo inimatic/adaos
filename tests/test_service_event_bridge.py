@@ -79,6 +79,39 @@ def test_service_event_bridge_rejects_remote_and_arbitrary_topics(monkeypatch) -
     assert topic.value.status_code == 403
 
 
+def test_service_event_bridge_allows_only_exact_declared_domain_topics(
+    monkeypatch,
+) -> None:
+    bus = LocalEventBus()
+    seen = []
+    bus.subscribe("media.agent.changed", lambda event: seen.append(event))
+    monkeypatch.setattr(bridge, "get_ctx", lambda: SimpleNamespace(bus=bus))
+    environment = bridge.service_event_bridge_environment(
+        "media_agent",
+        publish_topics=("media.agent.changed",),
+    )
+    token = environment["ADAOS_SERVICE_EVENT_BRIDGE_TOKEN"]
+
+    result = bridge.publish_service_event(
+        token=token,
+        topic="media.agent.changed",
+        payload={"revision": 4},
+        remote_host="127.0.0.1",
+    )
+    with pytest.raises(bridge.ServiceEventBridgeError) as undeclared:
+        bridge.publish_service_event(
+            token=token,
+            topic="media.agent.changed.extra",
+            payload={},
+            remote_host="127.0.0.1",
+        )
+
+    assert result["ok"] is True
+    assert seen[0].payload["revision"] == 4
+    assert seen[0].payload["_meta"]["owner"] == "skill:media_agent"
+    assert undeclared.value.status_code == 403
+
+
 def test_service_event_bridge_http_endpoint_accepts_loopback_capability(
     monkeypatch,
 ) -> None:

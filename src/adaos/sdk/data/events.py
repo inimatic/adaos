@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
 import time
 from types import SimpleNamespace
 from typing import Any, Mapping
 
 from adaos.domain import enrich_event_payload
 from adaos.sdk.core._ctx import require_ctx
+from adaos.sdk.core._service_event_bridge import publish as publish_service_event
+from adaos.sdk.core.errors import SdkRuntimeNotInitialized
 
 from .bus import BusNotAvailable
 
@@ -24,10 +27,6 @@ def _ensure_bus(ctx: Any):
 
 def publish(topic: str, payload: Mapping[str, Any] | None = None, **meta: Any) -> Any:
     """Publish an event via the runtime event bus."""
-
-    ctx = require_ctx("sdk.events.publish")
-    publish_fn = _ensure_bus(ctx)
-
     data = enrich_event_payload(
         payload,
         event_id=meta.get("event_id"),
@@ -67,6 +66,14 @@ def publish(topic: str, payload: Mapping[str, Any] | None = None, **meta: Any) -
 
     source = str(meta.get("source", ""))
     ts = float(meta.get("ts", time.time()))
+
+    try:
+        ctx = require_ctx("sdk.events.publish")
+    except SdkRuntimeNotInitialized:
+        if os.getenv("ADAOS_SERVICE_EVENT_BRIDGE_URL"):
+            return publish_service_event(topic, data)
+        raise
+    publish_fn = _ensure_bus(ctx)
 
     try:
         sig = inspect.signature(publish_fn)
