@@ -8,6 +8,35 @@ from typer.testing import CliRunner
 from adaos.apps.cli.commands import skill as skill_cmd
 
 
+def test_skill_reconcile_registers_only_manifest_backed_directories(
+    monkeypatch, tmp_path: Path
+) -> None:
+    skills_dir = tmp_path / "skills"
+    for name in ("demo_skill", ".runtime", ".git", "scratch"):
+        (skills_dir / name).mkdir(parents=True)
+    (skills_dir / "demo_skill" / "skill.yaml").write_text(
+        "name: demo_skill\nversion: 1.0.0\n", encoding="utf-8"
+    )
+    registered: list[str] = []
+    manager = SimpleNamespace(
+        reg=SimpleNamespace(register=lambda name: registered.append(name))
+    )
+    monkeypatch.setattr(skill_cmd, "_mgr", lambda: manager)
+    monkeypatch.setattr(
+        skill_cmd,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            paths=SimpleNamespace(skills_dir=lambda: skills_dir)
+        ),
+    )
+
+    result = CliRunner().invoke(skill_cmd.app, ["reconcile-fs-to-db"])
+
+    assert result.exit_code == 0, result.output
+    assert registered == ["demo_skill"]
+    assert ".runtime" not in result.output
+
+
 def test_skill_install_can_prepare_the_current_workspace_tree(monkeypatch, tmp_path: Path) -> None:
     skill_dir = tmp_path / "workspace" / "skills" / "demo_skill"
     skill_dir.mkdir(parents=True)
