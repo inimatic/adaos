@@ -110,6 +110,7 @@ def _change_summary(
     *,
     project_ref: str,
     previous: Mapping[str, Any] | None = None,
+    initial_base_generation: int = 0,
     now: str | None = None,
 ) -> dict[str, Any]:
     change_id = str(change.get("change_id") or change.get("change_set_id") or "").strip()
@@ -120,7 +121,18 @@ def _change_summary(
         "change_ref": f"change:{change_id}",
         "status": str(change.get("status") or "planned"),
         "gate": str(change.get("gate") or "prototype"),
-        "base_generation": max(0, int((previous or {}).get("base_generation") or change.get("base_generation") or 0)),
+        # A newly planned Change is based on the Project artifact generation
+        # visible at planning time.  Persisted summaries retain their original
+        # base so genuinely concurrent Changes still become stale when another
+        # mutation advances the artifact generation.
+        "base_generation": max(
+            0,
+            int(
+                (previous or {}).get("base_generation")
+                if previous is not None
+                else initial_base_generation
+            ),
+        ),
         "affected_refs": affected_refs(change, project_ref),
         "issue_refs": _issue_refs(change),
         "depends_on_change_ids": _change_dependencies(change),
@@ -223,6 +235,7 @@ def normalize_project(
             governed,
             project_ref=project_ref,
             previous=by_id.get(str(current.get("change_id") or current.get("change_set_id") or "")),
+            initial_base_generation=max(0, int(raw.get("artifact_generation") or 0)),
             now=now,
         )
         by_id[summary["change_id"]] = summary

@@ -1104,6 +1104,83 @@ def test_completed_automation_routes_chat_to_next_codex_iteration(tmp_path: Path
     assert workflow["history"][-1]["action"] == "automation_iteration_started"
 
 
+def test_completed_automation_rebinds_to_approved_successor_change(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    first_change_id = "CS-recipes-initial"
+    second_change_id = "CS-recipes-reviewed-repair"
+    service._workflow().transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": first_change_id,
+            "request": "Implement recipe search.",
+            "issues": [
+                {
+                    "issue_id": "recipe-search",
+                    "title": "Implement recipe search",
+                    "lane": "automation",
+                    "acceptance_criteria": ["A recipe can be found by name."],
+                }
+            ],
+        },
+    )
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipe search.",
+        webspace_id="prompt-dev",
+    )
+    service._workflow().transition(
+        "scenario",
+        "recipes",
+        "automation_completed",
+        metadata={"task_id": "task.initial", "version": "0.1.1"},
+    )
+    service._workflow().transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": second_change_id,
+            "supersedes_change_set_id": first_change_id,
+            "request": "Repair the reviewed input policy defect.",
+            "issues": [
+                {
+                    "issue_id": "input-policy",
+                    "title": "Use the governed input policy",
+                    "lane": "automation",
+                    "acceptance_criteria": [
+                        "The runner selects its input solely from profile_conditions.input_policy.source."
+                    ],
+                }
+            ],
+        },
+    )
+
+    followed = service.submit_turn(
+        text="Apply the approved input-policy repair.",
+        object_type="scenario",
+        object_id="recipes",
+        webspace_id="prompt-dev",
+    )
+
+    assert followed["status"] == "automation_queued"
+    assert followed["session"]["change_set_id"] == second_change_id
+    assert followed["session"]["canonical_change_id"] == second_change_id
+    assert followed["session"]["change_set_history"] == [first_change_id]
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == followed["session"]["current_task_id"]
+    )
+    request = task["realize_request"]
+    assert request["links"]["change_set_id"] == second_change_id
+    assert request["links"]["canonical_change_id"] == second_change_id
+    assert request["artifacts"]["context_packet"]["change"]["change_id"] == second_change_id
+    assert request["artifacts"]["change_set"]["issues"][0]["issue_id"] == "input-policy"
+
+
 def test_followup_invalidates_checkpoint_before_queueing_next_iteration(tmp_path: Path) -> None:
     service = _service(tmp_path)
     service.start_from_execute(

@@ -143,6 +143,27 @@ def record_project_placement(
     )
 
 
+def rebase_change(
+    object_type: str,
+    object_id: str,
+    change_id: str,
+    *,
+    expected_project_generation: int,
+    verified_unchanged_refs: list[str] | tuple[str, ...],
+) -> dict[str, Any]:
+    """Rebase one reviewed Change after its affected refs were verified."""
+
+    return dict(
+        _service().rebase_change(
+            object_type,
+            object_id,
+            change_id,
+            expected_project_generation=expected_project_generation,
+            verified_unchanged_refs=verified_unchanged_refs,
+        )
+    )
+
+
 def get_project_placement_navigation(
     object_type: str,
     object_id: str,
@@ -239,6 +260,7 @@ __all__ = [
     "get_state",
     "invoke_command",
     "invoke_interaction_response",
+    "rebase_change",
     "record_project_placement",
     "transition",
     "update_interaction_context",

@@ -1090,6 +1090,48 @@ class BuilderAutomationService:
                     raise ValueError(
                         f"Automation iteration is unavailable from governed state {governed_state}"
                     )
+                active_change_set = (
+                    workflow_before.get("change_set")
+                    if isinstance(workflow_before.get("change_set"), Mapping)
+                    else {}
+                )
+                active_change_set_id = str(
+                    active_change_set.get("change_set_id") or ""
+                ).strip()
+                session_change_set_id = str(session.get("change_set_id") or "").strip()
+                if active_change_set_id and active_change_set_id != session_change_set_id:
+                    # Automation sessions are durable per project, while Builder
+                    # Changes are deliberately short-lived review envelopes.  A
+                    # terminal session may therefore be reused for an approved
+                    # successor Change.  Rebind explicitly before the context
+                    # packet is built and retain the previous binding as lineage;
+                    # _submit still verifies the freshly built packet against the
+                    # new canonical Change, so this does not weaken admission.
+                    if str(active_change_set.get("gate") or "") != "automation":
+                        raise ValueError(
+                            "the active Builder change set must pass its Prototype "
+                            "approval gate before an Automation iteration starts"
+                        )
+                    if str(active_change_set.get("status") or "") in {
+                        "published",
+                        "rejected",
+                        "superseded",
+                    }:
+                        raise ValueError(
+                            "a terminal Builder change set cannot own an Automation iteration"
+                        )
+                    if session_change_set_id:
+                        history = [
+                            str(item).strip()
+                            for item in session.get("change_set_history") or []
+                            if str(item).strip()
+                        ]
+                        if session_change_set_id not in history:
+                            history.append(session_change_set_id)
+                        session["change_set_history"] = history[-50:]
+                    session["change_set_id"] = active_change_set_id
+                    session["canonical_change_id"] = active_change_set_id
+                    session.pop("context_packet_digest", None)
             session["iteration"] = int(session.get("iteration") or 0) + 1
             changed_at = _now_iso()
             previous_change_id = str(session.get("change_id") or "").strip()
