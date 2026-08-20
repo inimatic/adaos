@@ -89,6 +89,26 @@ def _reject_transport_corruption(value: Any, *, field: str) -> None:
         )
 
 
+def _cleanup_dev_skill_runtime(skill_id: str) -> dict[str, Any]:
+    """Invoke the core-owned DEV runtime lifecycle without deleting source."""
+
+    from adaos.adapters.db import SqliteSkillRegistry
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.skill.manager import SkillManager
+
+    ctx = get_ctx()
+    manager = SkillManager(
+        repo=ctx.skills_repo,
+        registry=SqliteSkillRegistry(ctx.sql),
+        git=ctx.git,
+        paths=ctx.paths,
+        bus=getattr(ctx, "bus", None),
+        caps=ctx.caps,
+        settings=ctx.settings,
+    )
+    return dict(manager.cleanup_dev_runtime(skill_id, purge_data=True))
+
+
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     atomic_write_json(path, payload)
 
@@ -1546,6 +1566,63 @@ class BuilderAutomationService:
         except (FileNotFoundError, json.JSONDecodeError):
             return None
         return dict(raw) if isinstance(raw, Mapping) else None
+
+    def release_candidate_runtime(
+        self,
+        *,
+        object_type: str,
+        object_id: str,
+        development_session_id: str,
+    ) -> dict[str, Any]:
+        """Release a terminal candidate's DEV runtime while retaining evidence.
+
+        The exact Development Session binding prevents a caller from using a
+        stale result to release a newer candidate.  Only skill candidates are
+        admitted because scenarios do not own Python runtimes.
+        """
+
+        kind, project_id = self._project_ref(object_type, object_id)
+        if kind != "skill":
+            raise ValueError("candidate runtime release requires object_type=skill")
+        expected_session_id = str(development_session_id or "").strip()
+        if not expected_session_id or not _DEVELOPMENT_SESSION_ID_RE.fullmatch(expected_session_id):
+            raise ValueError("a valid development_session_id is required")
+
+        with _LOCK:
+            session = self.get_session(kind, project_id)
+            if not session:
+                raise ValueError("automation_session_not_found")
+            actual_session_id = str(session.get("development_session_id") or "").strip()
+            if actual_session_id != expected_session_id:
+                raise ValueError("development_session_id does not match the candidate Automation session")
+            status = str(session.get("status") or "").strip().lower()
+            if status not in _TERMINAL_STATUSES:
+                raise ValueError("candidate runtime may be released only after terminal Automation")
+
+            previous = session.get("runtime_release")
+            if isinstance(previous, Mapping):
+                if str(previous.get("development_session_id") or "") != expected_session_id:
+                    raise ValueError("stored runtime release belongs to a different Development Session")
+                return {"ok": True, "idempotent": True, "runtime_release": dict(previous)}
+
+            cleanup = _cleanup_dev_skill_runtime(project_id)
+            receipt = {
+                "schema": "adaos.builder.runtime_release.v1",
+                "object_type": kind,
+                "object_id": project_id,
+                "development_session_id": expected_session_id,
+                "automation_status": status,
+                "released_at": _now_iso(),
+                "runtime_removed": bool(cleanup.get("runtime_removed")),
+                "runtime_existed": bool(cleanup.get("runtime_existed")),
+                "purged_data": bool(cleanup.get("purged_data")),
+            }
+            if not receipt["runtime_removed"]:
+                raise RuntimeError("DEV runtime cleanup did not remove the candidate runtime")
+            session["runtime_release"] = receipt
+            session["updated_at"] = receipt["released_at"]
+            self._save_session(session)
+            return {"ok": True, "idempotent": False, "runtime_release": receipt}
 
     def find_active_session(self, *, webspace_id: str | None = None) -> dict[str, Any] | None:
         candidates: list[dict[str, Any]] = []

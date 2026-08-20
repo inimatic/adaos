@@ -3009,6 +3009,60 @@ class SkillManager:
             except OSError:
                 pass
 
+    def cleanup_dev_runtime(self, name: str, *, purge_data: bool = False) -> Dict[str, Any]:
+        """Release only the prepared DEV runtime for a skill.
+
+        Builder candidates keep their governed source tree and durable session
+        evidence under the DEV workspace.  Their prepared runtime, virtual
+        environment, vendored dependencies, and runtime-owned data are a
+        separate lifecycle concern and may be discarded after a terminal
+        consumer has captured its result.
+        """
+
+        env = self._runtime_env_dev(name)
+        runtime_root = env.runtime_root
+        existed = runtime_root.exists()
+        version = env.resolve_active_version() if existed else None
+        if existed and purge_data:
+            self._remove_tree(runtime_root)
+        elif existed:
+            for child in list(runtime_root.iterdir()):
+                if not child.is_dir() or not env.is_runtime_bucket_name(child.name):
+                    continue
+                for entry in list(child.iterdir()):
+                    if entry.name == "data":
+                        continue
+                    if entry.is_dir():
+                        self._remove_tree(entry)
+                    else:
+                        try:
+                            entry.unlink()
+                        except FileNotFoundError:
+                            pass
+            marker = env.active_version_marker()
+            if marker.exists():
+                marker.unlink()
+            env.clear_runtime_selection()
+            try:
+                runtime_root.rmdir()
+            except OSError:
+                pass
+        try:
+            uninstall_skill_from_capacity(name)
+        except Exception:
+            pass
+        payload = {
+            "name": name,
+            "version": version,
+            "runtime_existed": existed,
+            "runtime_removed": not runtime_root.exists(),
+            "purged_data": bool(purge_data),
+            "dev": True,
+        }
+        if self.bus:
+            emit(self.bus, "skills.dev_runtime_released", dict(payload), "skill.mgr")
+        return payload
+
     def gc_runtime(self, name: str | None = None) -> Dict[str, Iterable[str]]:
         skills_root = self.ctx.paths.skills_dir()
         targets = [name] if name else [p.name for p in (skills_root / ".runtime").glob("*") if p.is_dir()]

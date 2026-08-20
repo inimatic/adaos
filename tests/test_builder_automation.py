@@ -117,6 +117,88 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["local_run"]["events_path"].endswith("codex-live.jsonl")
 
 
+def test_terminal_skill_candidate_runtime_release_is_exact_and_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation_candidate",
+            "object_type": "skill",
+            "object_id": "candidate_skill",
+            "development_session_id": "dev_candidate_01",
+            "status": "completed",
+            "updated_at": "2026-08-20T00:00:00+00:00",
+        }
+    )
+    calls: list[str] = []
+
+    def cleanup(skill_id: str) -> dict[str, object]:
+        calls.append(skill_id)
+        return {
+            "runtime_existed": True,
+            "runtime_removed": True,
+            "purged_data": True,
+        }
+
+    monkeypatch.setattr(automation_module, "_cleanup_dev_skill_runtime", cleanup)
+
+    released = service.release_candidate_runtime(
+        object_type="skill",
+        object_id="candidate_skill",
+        development_session_id="dev_candidate_01",
+    )
+    repeated = service.release_candidate_runtime(
+        object_type="skill",
+        object_id="candidate_skill",
+        development_session_id="dev_candidate_01",
+    )
+
+    assert released["ok"] is True
+    assert released["idempotent"] is False
+    assert repeated["idempotent"] is True
+    assert calls == ["candidate_skill"]
+    persisted = service.get_session("skill", "candidate_skill")
+    assert persisted is not None
+    assert persisted["runtime_release"]["development_session_id"] == "dev_candidate_01"
+
+
+@pytest.mark.parametrize(
+    ("status", "development_session_id", "error"),
+    [
+        ("in_progress", "dev_candidate_01", "only after terminal"),
+        ("completed", "dev_other", "does not match"),
+    ],
+)
+def test_candidate_runtime_release_rejects_unsafe_lifecycle_state(
+    tmp_path: Path,
+    status: str,
+    development_session_id: str,
+    error: str,
+) -> None:
+    service = _service(tmp_path)
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation_candidate",
+            "object_type": "skill",
+            "object_id": "candidate_skill",
+            "development_session_id": "dev_candidate_01",
+            "status": status,
+            "updated_at": "2026-08-20T00:00:00+00:00",
+        }
+    )
+
+    with pytest.raises(ValueError, match=error):
+        service.release_candidate_runtime(
+            object_type="skill",
+            object_id="candidate_skill",
+            development_session_id=development_session_id,
+        )
+
+
 def test_automation_materializes_governed_development_session_inputs(tmp_path: Path) -> None:
     service = _service(tmp_path)
     artifact_root = tmp_path / "admitted-artifacts"
