@@ -341,6 +341,11 @@ background work, or heavy resources:
 - Do not keep large tool or diagnostic responses alive in globals, logs, or
   exception objects. If the browser needs large detail data, use a details tool,
   stream snapshot, or disk evidence route with bounded retention.
+- Declare every operator-facing diagnostic tool with `side_effects: read_only`
+  and verify that declaration in a manifest contract test. A diagnostic
+  callable without a read-only side-effect declaration is not observable in
+  production: the runtime must reject a read-intent API call rather than infer
+  safety from the function name.
 - Log memory-protection actions as normal operational telemetry: cache eviction,
   stale worker cleanup, rejected oversize payloads, disabled stream sections,
   and skipped refreshes under pressure.
