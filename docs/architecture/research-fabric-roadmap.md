@@ -1574,6 +1574,18 @@ efficacy result or cross-domain SOTA claim.
   exercise `Path(working_directory) / expected_outputs[i]`, collection by the
   returned `output_ref`, and declared verification. A fresh task must freeze
   those exact digests before either arm and may not reuse v9-v25 outcomes.
+  v26 froze a clean detached worktree and produced C0 `0/2`, C3 `1/2`; its
+  second C3 passed all six independent gates in one attempt, but the series was
+  stopped when audit proved that the external driver had inverted the frozen
+  within-pair order. These are retained diagnostic results only. Core
+  `12f61cf3`, evaluator `0.1.33`, and calibration runner `0.1.13` now expose a
+  durable Builder start timestamp, reconstruct/order-gate the sequence, and
+  reject a skipped or reordered arm before candidate creation. Replacement
+  v27 is frozen at
+  `sha256:cdd342fac5e41ccb762fad7876e1731bad61e5152fbdf12553631605d8741cd0`
+  with six pairs and a matched 7M-token arm budget; it remains in progress and
+  cannot support a claim until its enforced schedule and recomputable package
+  are complete.
 - [ ] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and

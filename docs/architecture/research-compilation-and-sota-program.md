@@ -631,6 +631,46 @@ production provider command, exact output paths, returned `output_ref`,
 collection, and verification rather than accepting only a schema-shaped helper
 fixture. Neither change modifies v22-v25; a new frozen task is required.
 
+v26, digest
+`sha256:4595fcaf652d8e0c3fb27f49a3f76487e3eff688d74dbf09aca71c13888ec923`,
+was the first series executed from a detached, clean proof worktree, so
+unrelated commits in the primary checkout could not change its frozen core
+identity. It was deliberately stopped after two pairs when an audit found that
+the operator driver had inverted every within-pair arm order relative to the
+immutable `comparison_plan`. The retained diagnostic results are C0 `0/2` and
+C3 `1/2`; they are neither completed probability evidence nor eligible for a
+paired claim. C3 attempt 2 nevertheless passed all six independent gates in
+one Builder/Codex attempt, including the real three-epoch CPU smoke and
+content-addressed evidence, under immutable result
+`sha256:9dce6082470799bd7bc2fcca89eed36e27a925583dcc265cb4149047237ccd98`.
+It used 6,659,311 charged tokens and therefore failed the separately reported
+5M budget endpoint. C3 attempt 1 exposed a runtime-context defect: its packaged
+test predicted a physical data-root layout that differed from the activated
+owner-scoped slot. Core `515b6b26` now injects the exact skill-owned runtime
+bindings into packaged tests and repeats them in the prepared slot, allowing
+the normal automatic repair loop to see that failure before activation.
+
+The order error exposed a more general proof-integrity gap. Core `12f61cf3`
+projects Builder Automation's durable `created_at` start boundary. Evaluator
+`0.1.33` stores it in calibration result v1.2, reconstructs the observed
+sequence, and returns an explicit no-claim state for missing, duplicate, or
+reordered timestamps. Calibration runner `0.1.13` derives the next legal
+`(arm_id, attempt_index)` from the evaluator's durable lineage and rejects an
+out-of-order start before candidate creation. The negative live check against
+the next frozen task rejected `C3_typed_execution:1` with
+`expected C0_raw:1`.
+
+The replacement v27 task is frozen at
+`sha256:cdd342fac5e41ccb762fad7876e1731bad61e5152fbdf12553631605d8741cd0`.
+It binds clean core `12f61cf3`, skill workspace `33f581e`, prompt ABI 0.7,
+runner contract 1.8, evaluator `0.1.33`, runner `0.1.13`, manager `0.27.0`,
+the same accepted formulation and six paired seeds. Its matched per-arm token
+budget is 7M, chosen before execution from the v26 diagnostic runtime rather
+than changed after observing v27 outcomes. The driver reads the order from the
+frozen task, while the runner independently enforces it; v27 remains
+in-progress and supports no claim until all pairs, summary, and recomputable
+package are complete.
+
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and
 content identities. Candidate-authored claims cannot mark a check passed. The
