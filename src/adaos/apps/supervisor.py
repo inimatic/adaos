@@ -8097,7 +8097,7 @@ class SupervisorManager:
         await self._update_state_machine.cancel_task(mode="cancelled")
         self._release_skill_runtime_migration_gate(reason="supervisor_close")
         await self._process_supervisor.stop_monitor()
-        preserve_managed_children = self._service_restart_pending or _autostart_self_restart_supported()
+        preserve_managed_children = self._service_restart_pending
         if preserve_managed_children:
             reaper = self._schedule_managed_handoff_reaper()
             retired_cleanup = self._schedule_retired_runtime_cleanup()

@@ -330,6 +330,17 @@ background work, or heavy resources:
   global `handlers.main` package another test imported first. Run each skill's
   isolated candidate suite and a combined workspace suite; both must pass in a
   single process and with a different collection order.
+- Candidate tests must be location-independent. Resolve fixtures and handlers
+  from `Path(__file__)` inside the skill package; do not search upward for the
+  AdaOS repository, inject its `src` directory into `sys.path`, or assume a
+  fixed number of parents below `.adaos/workspace`. The immutable A/B candidate
+  contains the skill package and an installed SDK, not a source monorepo.
+- For `runtime.kind: service`, decide event ownership explicitly. If the
+  manifest handler must register EventBus subscriptions or lifecycle tools in
+  the core owner, declare `runtime.in_process_events: true`; otherwise keep
+  those handlers in the service boundary. Install-strict validation and an
+  isolated handler-discovery test must assert that every expected handler is
+  actually loaded, not merely present in the source tree.
 - Make reloads idempotent. Runtime-owned bus subscriptions are deduplicated by
   the core, but skill-owned threads, timers, executors, external callbacks, and
   resource handles still need an owner token, stop signal, and cleanup hook.

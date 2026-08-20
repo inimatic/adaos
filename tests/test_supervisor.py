@@ -9148,7 +9148,7 @@ def test_supervisor_self_restart_preserves_ready_children(monkeypatch, tmp_path)
     assert manager._sidecar_proc is not None
 
 
-def test_managed_systemd_restart_preserves_children_without_internal_restart_flag(monkeypatch, tmp_path) -> None:
+def test_managed_systemd_shutdown_stops_children_without_internal_restart_flag(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_AUTOSTART_MANAGED", "1")
     monkeypatch.setattr(supervisor, "_autostart_self_restart_supported", lambda: True)
@@ -9185,8 +9185,8 @@ def test_managed_systemd_restart_preserves_children_without_internal_restart_fla
 
     asyncio.run(manager.close())
 
-    assert stopped == []
-    assert reaper_calls == [True]
+    assert stopped == ["supervisor.shutdown", "supervisor.shutdown.sidecar"]
+    assert reaper_calls == []
     assert manager._proc is not None
     assert manager._sidecar_proc is not None
 
