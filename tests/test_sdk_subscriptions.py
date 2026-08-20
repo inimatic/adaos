@@ -359,6 +359,12 @@ def test_stream_subscription_skips_foreign_declared_receiver(tmp_path: Path, mon
 
     bus = FakeBus()
     calls: list[str] = []
+    ticket_calls: list[dict] = []
+
+    class FakeDevelopmentTicketService:
+        def report_stream_receiver_compatibility_finding(self, **kwargs):
+            ticket_calls.append(dict(kwargs))
+            return {"ok": True, "reported": True}
 
     def handler(evt):
         payload = evt.payload if hasattr(evt, "payload") else evt
@@ -377,6 +383,10 @@ def test_stream_subscription_skips_foreign_declared_receiver(tmp_path: Path, mon
     monkeypatch.setattr(decorators, "_admit_skill_subscription_yjs_work", lambda *_args: {"allowed": True})
     monkeypatch.setattr(decorators, "_maybe_push_skill", lambda *_args: False)
     monkeypatch.setattr(decorators, "_subscription_log_suffix", lambda _skill: "")
+    monkeypatch.setattr(
+        "adaos.services.development_tickets.DevelopmentTicketService",
+        FakeDevelopmentTicketService,
+    )
     monkeypatch.setattr(
         decorators,
         "require_ctx",
@@ -412,11 +422,13 @@ def test_stream_subscription_skips_foreign_declared_receiver(tmp_path: Path, mon
         payload={"webspace_id": "desktop", "receiver": "notebook_skill.explicit"},
     )
 
+    assert wrapped._adaos_event_filter(foreign_evt) is False  # type: ignore[attr-defined]
     asyncio.run(wrapped(foreign_evt))  # type: ignore[misc]
     asyncio.run(wrapped(own_evt))  # type: ignore[misc]
     asyncio.run(wrapped(explicit_evt))  # type: ignore[misc]
 
     assert calls == ["notebook_skill.notes", "notebook_skill.explicit"]
+    assert ticket_calls == []
 
 
 def test_non_stream_subscription_still_uses_yjs_owner_guard(monkeypatch) -> None:

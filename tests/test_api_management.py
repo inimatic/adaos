@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, List, Optional
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -84,8 +85,19 @@ class _FakeSkillManager:
         self.calls.append(f"prepare_runtime:{name}")
         return SimpleNamespace(version="2.0.0", slot="B")
 
-    def activate_for_space(self, name: str, *, version: str | None = None, slot: str | None = None, space: str = "default", webspace_id: str = "default"):
-        self.calls.append(f"activate_for_space:{name}:{version}:{slot}:{webspace_id}")
+    def activate_for_space(
+        self,
+        name: str,
+        *,
+        version: str | None = None,
+        slot: str | None = None,
+        space: str = "default",
+        webspace_id: str = "default",
+        emit_activation: bool = True,
+    ):
+        self.calls.append(
+            f"activate_for_space:{name}:{version}:{slot}:{webspace_id}:emit={int(emit_activation)}"
+        )
         self.active_version = version or self.active_version
         self.active_slot = slot or self.active_slot
         return slot or "B"
@@ -226,7 +238,7 @@ def test_skill_api_exposes_management_routes(monkeypatch) -> None:
 
     assert any(call.startswith("install:") for call in skill_mgr.calls)
     assert "prepare_runtime:demo" in skill_mgr.calls
-    assert any(call.startswith("activate_for_space:demo:") and call.endswith(":desktop") for call in skill_mgr.calls)
+    assert any(call.startswith("activate_for_space:demo:") and ":desktop:emit=0" in call for call in skill_mgr.calls)
     assert any(call.startswith("push:") for call in skill_mgr.calls)
 
 
@@ -715,7 +727,7 @@ def test_skill_update_refreshes_runtime_when_source_version_changed(monkeypatch)
     assert payload["updated"] is True
     assert "runtime_update:demo:workspace" not in skill_mgr.calls
     assert "prepare_runtime:demo" in skill_mgr.calls
-    assert any(call.startswith("activate_for_space:demo:2.0.0:B:default") for call in skill_mgr.calls)
+    assert any(call.startswith("activate_for_space:demo:2.0.0:B:default:emit=0") for call in skill_mgr.calls)
     assert refresh["ok"] is True
     assert refresh["isolated_candidate"] is True
     assert refresh["prepared_version"] == "2.0.0"
@@ -760,8 +772,11 @@ def test_skill_update_fails_when_active_runtime_does_not_converge(monkeypatch) -
         slot: str | None = None,
         space: str = "default",
         webspace_id: str = "default",
+        emit_activation: bool = True,
     ):
-        skill_mgr.calls.append(f"activate_for_space:{name}:{version}:{slot}:{webspace_id}")
+        skill_mgr.calls.append(
+            f"activate_for_space:{name}:{version}:{slot}:{webspace_id}:emit={int(emit_activation)}"
+        )
         return slot or "B"
 
     monkeypatch.setattr(skill_mgr, "activate_for_space", _activate_without_state_change)
@@ -818,6 +833,11 @@ def test_skill_update_can_defer_webspace_rebuild_until_batch_finalize(monkeypatc
     monkeypatch.setattr(skills, "SkillUpdateService", _Service)
     monkeypatch.setattr(skills, "_get_manager", lambda ctx: skill_mgr)
     monkeypatch.setattr(skills, "rebuild_webspace_projection", _rebuild)
+    monkeypatch.setattr(
+        skills,
+        "_reload_live_skill_handlers",
+        lambda *_args, **_kwargs: asyncio.sleep(0, result={"ok": True, "handlers": ["handlers/main.py"]}),
+    )
     monkeypatch.setattr(skills, "bus_emit", lambda bus, typ, payload, source: bus_events.append((typ, payload, source)))
     monkeypatch.setattr(skills, "get_ctx", lambda: SimpleNamespace(bus=object()))
 
@@ -916,6 +936,72 @@ def test_skill_runtime_notify_activated_invalidates_capacity_cache(monkeypatch) 
     ]
 
 
+def test_skill_runtime_activate_emits_only_after_handler_reload(monkeypatch) -> None:
+    skill_mgr = _FakeSkillManager()
+    client = _make_client(skill_mgr, _FakeScenarioManager())
+    order: list[str] = []
+    original_activate = skill_mgr.activate_for_space
+
+    def _activate(*args, **kwargs):
+        order.append(f"select:emit={int(bool(kwargs.get('emit_activation', True)))}")
+        return original_activate(*args, **kwargs)
+
+    async def _reload(_ctx, skill_name: str):
+        order.append(f"reload:{skill_name}")
+        return {"ok": True, "skill": skill_name, "handlers": ["handlers/main.py"]}
+
+    def _invalidate(*_args, **_kwargs):
+        order.append("invalidate")
+        return {"status": "invalidated"}
+
+    monkeypatch.setattr(skill_mgr, "activate_for_space", _activate)
+    monkeypatch.setattr(skills, "_reload_live_skill_handlers", _reload)
+    monkeypatch.setattr(skills, "invalidate_webspace_materialization_cache", _invalidate)
+    monkeypatch.setattr(skills, "bus_emit", lambda *_args, **_kwargs: order.append("emit"))
+
+    response = client.post(
+        "/api/skills/runtime/activate",
+        json={"name": "demo", "version": "2.0.0", "slot": "B", "webspace_id": "desktop"},
+    )
+
+    assert response.status_code == 200
+    assert order == ["select:emit=0", "reload:demo", "invalidate", "emit"]
+
+
+def test_live_skill_activation_fails_closed_when_handler_reload_fails(monkeypatch) -> None:
+    invalidations: list[bool] = []
+    emitted: list[bool] = []
+
+    async def _reload(_ctx, _skill_name: str):
+        return {"ok": False, "reason": "reload_failed", "error": "bad import"}
+
+    monkeypatch.setattr(skills, "_reload_live_skill_handlers", _reload)
+    monkeypatch.setattr(
+        skills,
+        "invalidate_webspace_materialization_cache",
+        lambda *_args, **_kwargs: invalidations.append(True),
+    )
+    monkeypatch.setattr(skills, "bus_emit", lambda *_args, **_kwargs: emitted.append(True))
+
+    with pytest.raises(skills.HTTPException) as raised:
+        asyncio.run(
+            skills._finalize_live_skill_activation(
+                SimpleNamespace(bus=object()),
+                "demo",
+                space="default",
+                webspace_id="desktop",
+                defer_webspace_rebuild=False,
+                cache_reason="test",
+                cache_action="test",
+            )
+        )
+
+    assert raised.value.status_code == 409
+    assert raised.value.detail["code"] == "skill_handler_reload_failed"
+    assert invalidations == []
+    assert emitted == []
+
+
 def test_skill_update_returns_not_found_when_source_skill_missing(monkeypatch) -> None:
     skill_mgr = _FakeSkillManager()
     scenario_mgr = _FakeScenarioManager()
@@ -971,6 +1057,11 @@ def test_skill_update_passes_force_flag_when_requested(monkeypatch) -> None:
     monkeypatch.setattr(skills, "SkillUpdateService", _Service)
     monkeypatch.setattr(skills, "_get_manager", lambda ctx: skill_mgr)
     monkeypatch.setattr(skills, "rebuild_webspace_projection", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        skills,
+        "_reload_live_skill_handlers",
+        lambda *_args, **_kwargs: asyncio.sleep(0, result={"ok": True, "handlers": ["handlers/main.py"]}),
+    )
 
     resp = client.post("/api/skills/update", json={"name": "demo", "force": True})
 

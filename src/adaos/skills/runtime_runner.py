@@ -286,10 +286,10 @@ def _load_skill_module(skill_path: Path, module_name: str):
     skill_pkg = skill_path.name
     candidates: list[str] = []
     if _is_generic_handlers_module(module_name):
-        _purge_generic_skill_modules()
         loaded = _load_module_from_skill_source(skill_path, module_name)
         if loaded is not None:
             return loaded
+        _purge_generic_skill_modules()
         candidates.extend(
             [
                 f"skills.{skill_pkg}.{module_name}",
@@ -318,6 +318,14 @@ def _load_module_from_skill_source(skill_path: Path, module_name: str):
     candidate_file = skill_path.joinpath(*relative.parts).with_suffix(".py")
     if not candidate_file.exists():
         return None
+    try:
+        from adaos.services.skills_loader_importlib import loaded_handler_module_for_path
+
+        loaded_handler = loaded_handler_module_for_path(candidate_file)
+    except Exception:
+        loaded_handler = None
+    if loaded_handler is not None:
+        return loaded_handler
     path_key = hashlib.sha256(str(skill_path.resolve()).encode("utf-8")).hexdigest()[:12]
     synthetic_name = f"_adaos_runtime.{skill_path.name}.{path_key}.{module_name}"
     existing = sys.modules.get(synthetic_name)

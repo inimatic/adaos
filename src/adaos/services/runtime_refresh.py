@@ -166,6 +166,7 @@ def refresh_skill_runtime(
     retry_deactivated: bool = False,
     defer_webspace_rebuild: bool = False,
     run_candidate_tests: bool = False,
+    emit_activation: bool = True,
 ) -> dict[str, Any]:
     target_webspace = str(webspace_id or "").strip() or _default_webspace_id()
     expected_version = str(source_version or "").strip()
@@ -338,6 +339,8 @@ def refresh_skill_runtime(
             }
             if defer_webspace_rebuild:
                 activation_kwargs["defer_webspace_rebuild"] = True
+            if not emit_activation:
+                activation_kwargs["emit_activation"] = False
             active_slot = mgr.activate_for_space(skill_name, **activation_kwargs)
         except Exception as exc:
             message = f"runtime activation failed after skill update: {exc}"
