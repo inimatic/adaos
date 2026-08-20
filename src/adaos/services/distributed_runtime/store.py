@@ -690,7 +690,6 @@ class DistributedRuntimeStore:
                     "kind",
                     "target_ref",
                     "expected_revision",
-                    "authority_epoch",
                     "idempotency_key",
                     "created_at",
                 )
