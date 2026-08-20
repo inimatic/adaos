@@ -320,5 +320,6 @@ def test_service_supervisor_resolves_membership_declaration(tmp_path) -> None:
 
     assert spec is not None
     assert spec.health_timeout_ms == 3000
+    assert spec.startup_ready_timeout_s == 300.0
     assert spec.distributed_membership is not None
     assert spec.distributed_membership.group_id == "media-library-home"

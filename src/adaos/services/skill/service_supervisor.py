@@ -116,6 +116,7 @@ class ServiceSpec:
     resource_budget: Mapping[str, Any] | None = None
     publish_topics: tuple[str, ...] = ()
     distributed_membership: ServiceMembershipSpec | None = None
+    startup_ready_timeout_s: float = 10.0
 
     @property
     def base_url(self) -> str:
@@ -254,6 +255,22 @@ def _resolve_service_spec(skill_name: str, skill_root: Path, manifest: Mapping[s
         health = {}
     health_path = str(health.get("path") or "/health")
     health_timeout_ms = int(health.get("timeout_ms") or 3000)
+    startup_timeout_ms = health.get("startup_timeout_ms")
+    if startup_timeout_ms is None:
+        startup_ready_timeout_s = _bounded_env_seconds(
+            "ADAOS_SERVICE_STARTUP_READY_TIMEOUT_SECONDS",
+            default=300.0,
+            minimum=5.0,
+            maximum=900.0,
+        )
+    else:
+        try:
+            startup_ready_timeout_s = float(startup_timeout_ms) / 1000.0
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "service.healthcheck.startup_timeout_ms must be numeric"
+            ) from exc
+        startup_ready_timeout_s = max(5.0, min(startup_ready_timeout_s, 900.0))
     distributed_membership = ServiceMembershipSpec.from_mapping(
         skill_name,
         service.get("membership"),
@@ -417,6 +434,7 @@ def _resolve_service_spec(skill_name: str, skill_root: Path, manifest: Mapping[s
         resource_budget=resource_budget,
         publish_topics=publish_topics,
         distributed_membership=distributed_membership,
+        startup_ready_timeout_s=startup_ready_timeout_s,
     )
 
 
@@ -1621,7 +1639,11 @@ class ServiceSkillSupervisor:
         }
         emit(self._ctx.bus, "skill.service.started", {"skill": name, "pid": proc.pid}, source="skill.service")
 
-        await self._wait_ready(spec)
+        try:
+            await self._wait_ready(spec)
+        except Exception:
+            await self._stop_owned(name, timeout_s=3.0)
+            raise
         proc_code = await asyncio.to_thread(proc.poll)
         if proc_code is not None and await asyncio.to_thread(_service_health_ok, spec):
             listener = await asyncio.to_thread(_service_listener_snapshot, spec)
@@ -2085,7 +2107,8 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
         return [str(python), *argv]
 
     async def _wait_ready(self, spec: ServiceSpec) -> None:
-        deadline = time.time() + 10.0
+        timeout_s = max(0.01, float(spec.startup_ready_timeout_s))
+        deadline = time.time() + timeout_s
         url = spec.base_url + spec.health_path
         while time.time() < deadline:
             try:
@@ -2104,12 +2127,20 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
                     return
             except Exception:
                 await asyncio.sleep(0.25)
-        _log.warning("service skill=%s did not become ready in time (%s)", spec.skill, url)
+        _log.warning(
+            "service skill=%s did not become ready within %.1fs (%s)",
+            spec.skill,
+            timeout_s,
+            url,
+        )
         self._health_states[spec.skill] = {
             "ok": False,
             "observed_at": time.time(),
             "source": "startup_readiness_timeout",
         }
+        raise TimeoutError(
+            f"service '{spec.skill}' did not become ready within {timeout_s:.1f} seconds"
+        )
 
     def _record_resource_sample(
         self,

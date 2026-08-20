@@ -41,6 +41,10 @@ Also, when a skill gets (re)activated or rolled back, AdaOS restarts the service
 For each service skill, the supervisor can perform HTTP health checks:
 - `service.healthcheck.path` (default `/health`)
 - `service.healthcheck.timeout_ms` (default `3000`)
+- `service.healthcheck.startup_timeout_ms` (default `300000`, bounded to
+  `5000..900000`); this is the total startup-readiness budget and is separate
+  from the timeout of one health request. Operators may set the generic default
+  with `ADAOS_SERVICE_STARTUP_READY_TIMEOUT_SECONDS`.
 
 ### Distributed membership
 

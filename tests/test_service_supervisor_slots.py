@@ -36,6 +36,44 @@ def _write_service_skill(root: Path, *, port: int) -> None:
     (root / "handlers" / "main.py").write_text("def handle(payload=None):\n    return {'ok': True}\n", encoding="utf-8")
 
 
+def test_service_startup_readiness_timeout_is_explicit(monkeypatch, tmp_path):
+    from adaos.services.skill import service_supervisor as mod
+
+    skill_root = tmp_path / "slow_service"
+    skill_root.mkdir()
+    spec = mod._resolve_service_spec(
+        "slow_service",
+        skill_root,
+        {
+            "runtime": {"kind": "service"},
+            "service": {
+                "port": 18199,
+                "command": ["-m", "handlers.service"],
+                "healthcheck": {
+                    "path": "/health",
+                    "timeout_ms": 50,
+                    "startup_timeout_ms": 5000,
+                },
+            },
+        },
+    )
+    assert spec is not None
+    spec.startup_ready_timeout_s = 0.02
+    monkeypatch.setattr(
+        mod,
+        "_http_get",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ConnectionError()),
+    )
+    supervisor = mod.ServiceSkillSupervisor()
+
+    with pytest.raises(TimeoutError, match="did not become ready"):
+        asyncio.run(supervisor._wait_ready(spec))
+
+    assert supervisor._health_states["slow_service"]["source"] == (
+        "startup_readiness_timeout"
+    )
+
+
 def test_service_supervisor_discovers_active_runtime_slot_instead_of_workspace_source():
     from adaos.services.agent_context import get_ctx
     from adaos.services.skill.service_supervisor import ServiceSkillSupervisor
