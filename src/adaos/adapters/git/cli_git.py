@@ -713,10 +713,15 @@ class CliGitClient(GitClient):
                             cwd=str(d),
                         )
                     try:
-                        _run_git(
-                            ["fetch", "origin", branch],
-                            cwd=str(d),
-                        )
+                        tracked_ref = f"refs/remotes/{remote_ref}"
+                        if not _safe_git(
+                            d,
+                            ["rev-parse", "--verify", tracked_ref],
+                        ):
+                            _run_git(
+                                ["fetch", "origin", branch],
+                                cwd=str(d),
+                            )
                         _run_git(
                             ["branch", "--set-upstream-to", remote_ref, branch],
                             cwd=str(d),
