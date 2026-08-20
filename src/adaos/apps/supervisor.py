@@ -8257,8 +8257,19 @@ class SupervisorManager:
                             break
                         await asyncio.sleep(0.1)
                 if proc.poll() is None:
-                    raise RuntimeError(f"runtime process did not exit after forced stop: {reason}")
-                self._last_error = f"forced runtime stop after shutdown timeout: {reason}"
+                    self._last_error = (
+                        f"runtime exit pending after forced stop: {reason}"
+                    )
+                    self._persist_runtime_state()
+                    return {
+                        "ok": False,
+                        "forced": True,
+                        "pending_exit": True,
+                        "reason": reason,
+                    }
+                self._last_error = (
+                    f"forced runtime stop after shutdown timeout: {reason}"
+                )
                 self._persist_runtime_state()
         return {"ok": True, "forced": forced, "reason": reason}
 

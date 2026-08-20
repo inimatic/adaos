@@ -105,6 +105,7 @@ class SupervisorUpdateExecution:
                 reason=reason,
             )
             if shutdown_request_error or bool(stop_result.get("forced")):
+                pending_exit = bool(stop_result.get("pending_exit"))
                 operations.write_core_update_status(
                     {
                         "state": "restarting",
@@ -116,6 +117,9 @@ class SupervisorUpdateExecution:
                         "drain_timeout_sec": drain_timeout_sec,
                         "signal_delay_sec": signal_delay_sec,
                         "message": (
+                            "runtime remains in kernel shutdown; durable update plan retained until process exit"
+                            if pending_exit
+                            else
                             "runtime shutdown API was unavailable; supervisor continued with direct process stop"
                             if shutdown_request_error and bool(stop_result.get("forced"))
                             else "runtime shutdown API response was unavailable; runtime still stopped during grace window"
@@ -123,6 +127,7 @@ class SupervisorUpdateExecution:
                             else "runtime shutdown exceeded grace period; supervisor forced process stop"
                         ),
                         "forced_shutdown": bool(stop_result.get("forced")),
+                        "runtime_exit_pending": pending_exit,
                         "shutdown_request_error_type": (
                             type(shutdown_request_error).__name__ if shutdown_request_error is not None else None
                         ),

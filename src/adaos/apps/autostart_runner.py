@@ -1332,6 +1332,9 @@ def main() -> None:
                     result = execute_pending_update(plan)
                     if conf is not None:
                         _upload_update_report(result, conf)
+                    if str(result.get("state") or "") == "rolled_back":
+                        clear_plan()
+                        raise SystemExit(0)
                     if str(result.get("state") or "") != "succeeded":
                         clear_plan()
                         raise SystemExit(int(result.get("returncode") or 1) or 1)

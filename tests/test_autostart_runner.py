@@ -565,6 +565,55 @@ def test_autostart_runner_preserves_plan_during_successful_apply_until_validatio
     assert launch_calls[-1][1]["validate"] is True
 
 
+def test_autostart_runner_commits_rollback_and_exits_old_slot_cleanly(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(
+        autostart_runner,
+        "_parse_args",
+        lambda: type(
+            "Args", (), {"host": "127.0.0.1", "port": 8778, "token": None}
+        )(),
+    )
+    monkeypatch.setattr(autostart_runner, "init_ctx", lambda: None)
+    monkeypatch.setattr(
+        autostart_runner,
+        "read_plan",
+        lambda: {"state": "pending_restart", "action": "rollback"},
+    )
+    monkeypatch.setattr(autostart_runner, "read_status", lambda: {})
+    monkeypatch.setattr(autostart_runner, "load_config", lambda: None)
+    monkeypatch.setattr(
+        autostart_runner,
+        "execute_pending_update",
+        lambda plan: {
+            "state": "rolled_back",
+            "phase": "rollback",
+            "restored_slot": "A",
+        },
+    )
+    monkeypatch.setattr(
+        autostart_runner, "clear_plan", lambda: calls.append("clear_plan")
+    )
+    monkeypatch.setattr(
+        autostart_runner,
+        "_launch_active_slot_if_needed",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("old slot must exit after rollback")
+        ),
+    )
+
+    try:
+        autostart_runner.main()
+    except SystemExit as exc:
+        assert exc.code == 0
+    else:
+        raise AssertionError("expected old slot to exit after rollback")
+
+    assert calls == ["clear_plan"]
+
+
 def test_autostart_runner_does_not_reapply_update_when_transition_already_reached_launch(monkeypatch, tmp_path: Path) -> None:
     calls: list[object] = []
 
