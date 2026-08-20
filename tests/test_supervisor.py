@@ -4196,6 +4196,9 @@ def test_supervisor_start_update_deduplicates_same_target_subsequent_transition(
             "target_version": "671903ec01044b16865a366c81bf27f758823595",
             "reason": "test.active",
             "scheduled_for": 630.0,
+            "subsequent_transition": True,
+            "subsequent_transition_requested_at": 590.0,
+            "subsequent_transition_target_version": "44967c16264665cd97bec7056894a65a05cf7961",
         }
     )
     supervisor._write_update_attempt(
@@ -4207,6 +4210,15 @@ def test_supervisor_start_update_deduplicates_same_target_subsequent_transition(
             "reason": "test.active",
             "scheduled_for": 630.0,
             "updated_at": 600.0,
+            "subsequent_transition": True,
+            "subsequent_transition_requested_at": 590.0,
+            "subsequent_transition_request": {
+                "action": "update",
+                "target_rev": "rev2026",
+                "target_version": "44967c16264665cd97bec7056894a65a05cf7961",
+                "reason": "test.stale-subsequent",
+                "requested_at": 590.0,
+            },
         }
     )
 
@@ -4228,7 +4240,10 @@ def test_supervisor_start_update_deduplicates_same_target_subsequent_transition(
     attempt = supervisor._read_update_attempt()
     assert isinstance(attempt, dict)
     assert attempt.get("subsequent_transition") is not True
+    assert not attempt.get("subsequent_transition_request")
     status = read_status()
+    assert status["subsequent_transition"] is False
+    assert "subsequent_transition_target_version" not in status
     assert status["same_target_subsequent_deduped_reason"] == "active_transition_same_target"
 
 
