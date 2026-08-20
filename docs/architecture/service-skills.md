@@ -40,7 +40,41 @@ Also, when a skill gets (re)activated or rolled back, AdaOS restarts the service
 
 For each service skill, the supervisor can perform HTTP health checks:
 - `service.healthcheck.path` (default `/health`)
-- `service.healthcheck.timeout_ms` (default `1000`)
+- `service.healthcheck.timeout_ms` (default `3000`)
+
+### Distributed membership
+
+A Project-deployed service may opt into core-managed distributed membership:
+
+```yaml
+service:
+  membership:
+    enabled: true
+    group_id: media-library-home
+    lease_seconds: 600
+    protocol_version: '1'
+    capabilities: [media.catalog]
+    endpoints:
+    - endpoint_id: catalog
+      protocol: adaos.skill.v1
+      address_ref: skill://{node_id}/{skill}/catalog
+      scopes: [media.read]
+      metadata: {}
+```
+
+The declaration contains service-facing identity only. Core selects the exact
+active `ComponentActivation` on the local trusted node and derives release,
+runtime generation, topology generation, and a stable node/activation instance
+ID. The supervisor registers that instance, renews it at `renew_by`, expires
+stale leases every 30 seconds, and exposes its receipt as
+`distributed_membership` in service status. Registration remains closed until
+the matching Project release, service definition, and group exist.
+
+The health response may expose bounded membership observations as
+`distributed.health` and `distributed.pressure`; the service does not call the
+distributed SDK or run a private heartbeat. An explicitly draining instance is
+not revived. A still-active exact activation is re-registered after accidental
+lease expiry, including across a core restart.
 
 ---
 

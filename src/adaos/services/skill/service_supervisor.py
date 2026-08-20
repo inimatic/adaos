@@ -25,6 +25,10 @@ import yaml
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit
 from adaos.services.runtime_identity import runtime_instance_id, runtime_transition_role
+from adaos.services.distributed_runtime.membership_supervisor import (
+    DistributedServiceMembershipSupervisor,
+    ServiceMembershipSpec,
+)
 from adaos.services.skill.dependency_disk_guard import ensure_dependency_disk_budget
 from adaos.services.skill.dependency_requirements import resolve_skill_dependency_args
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
@@ -111,6 +115,7 @@ class ServiceSpec:
     storage_blob: Mapping[str, Any] | None = None
     resource_budget: Mapping[str, Any] | None = None
     publish_topics: tuple[str, ...] = ()
+    distributed_membership: ServiceMembershipSpec | None = None
 
     @property
     def base_url(self) -> str:
@@ -248,7 +253,11 @@ def _resolve_service_spec(skill_name: str, skill_root: Path, manifest: Mapping[s
     if not isinstance(health, Mapping):
         health = {}
     health_path = str(health.get("path") or "/health")
-    health_timeout_ms = int(health.get("timeout_ms") or 1000)
+    health_timeout_ms = int(health.get("timeout_ms") or 3000)
+    distributed_membership = ServiceMembershipSpec.from_mapping(
+        skill_name,
+        service.get("membership"),
+    )
 
     self_managed = service.get("self_managed") or {}
     if not isinstance(self_managed, Mapping):
@@ -407,6 +416,7 @@ def _resolve_service_spec(skill_name: str, skill_root: Path, manifest: Mapping[s
         storage_blob=storage_blob,
         resource_budget=resource_budget,
         publish_topics=publish_topics,
+        distributed_membership=distributed_membership,
     )
 
 
@@ -797,6 +807,7 @@ class ServiceSkillSupervisor:
         self._specs: dict[str, ServiceSpec] = {}
         self._task: asyncio.Task | None = None
         self._health_task: asyncio.Task | None = None
+        self._membership = DistributedServiceMembershipSupervisor(self._ctx)
 
         self._issues_cache: dict[str, list[dict[str, Any]]] = {}
         self._crash_history: dict[str, deque[float]] = {}
@@ -1147,6 +1158,7 @@ class ServiceSkillSupervisor:
                 "basis": "tracked_process" if running else "verified_listener" if external_ready else None,
             },
             "resource_activity": resource_activity,
+            "distributed_membership": self._membership.status(name),
         }
 
         if check_health:
@@ -2275,6 +2287,7 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
                 return
             now = time.time()
             await self.refresh_discovered()
+            await asyncio.to_thread(self._membership.expire_stale)
             process_states = await asyncio.to_thread(
                 _poll_service_processes,
                 list(self._procs.items()),
@@ -2340,11 +2353,22 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
                         "observed_at": time.time(),
                         "source": "process_not_running",
                     }
+                    if spec.distributed_membership is not None:
+                        await asyncio.to_thread(
+                            self._membership.reconcile,
+                            name,
+                            spec.distributed_membership,
+                            readiness=False,
+                            health={"status": "process_not_running", "ready": False},
+                            pressure={"state": "unavailable"},
+                        )
                     continue
 
                 ok = False
+                status_code = 0
+                body = ""
                 try:
-                    status_code, _ = await asyncio.to_thread(
+                    status_code, body = await asyncio.to_thread(
                         _http_get, spec.base_url + spec.health_path, timeout_ms=spec.health_timeout_ms
                     )
                     ok = 200 <= status_code < 300
@@ -2355,6 +2379,47 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
                     "observed_at": time.time(),
                     "source": "background_probe",
                 }
+                if spec.distributed_membership is not None:
+                    try:
+                        service_health = json.loads(body) if body else {}
+                    except (TypeError, ValueError):
+                        service_health = {}
+                    distributed = (
+                        service_health.get("distributed")
+                        if isinstance(service_health, Mapping)
+                        else None
+                    )
+                    declared_health = (
+                        distributed.get("health")
+                        if isinstance(distributed, Mapping)
+                        else None
+                    )
+                    declared_pressure = (
+                        distributed.get("pressure")
+                        if isinstance(distributed, Mapping)
+                        else None
+                    )
+                    membership_health = (
+                        dict(declared_health)
+                        if isinstance(declared_health, Mapping)
+                        else {"status": "passing" if ok else "failing", "ready": ok}
+                    )
+                    membership_health.update(
+                        {"ready": ok, "http_status": int(status_code or 0)}
+                    )
+                    membership_pressure = (
+                        dict(declared_pressure)
+                        if isinstance(declared_pressure, Mapping)
+                        else {"state": "normal" if ok else "unavailable"}
+                    )
+                    await asyncio.to_thread(
+                        self._membership.reconcile,
+                        name,
+                        spec.distributed_membership,
+                        readiness=ok,
+                        health=membership_health,
+                        pressure=membership_pressure,
+                    )
 
                 if ok:
                     self._health_failures[name] = 0
