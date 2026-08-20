@@ -1049,6 +1049,7 @@ def test_sparse_sync_keeps_runtime_scenarios_and_materializes_required_skills(tm
     )
     monkeypatch.setattr(workspace_sync_module, "SparseWorkspace", _Sparse)
     monkeypatch.setattr(workspace_sync_module, "runtime_required_scenario_refs", lambda: ["web_desktop"])
+    monkeypatch.setattr(workspace_sync_module, "selected_runtime_skill_names", lambda _ctx: ["weather_skill"])
     monkeypatch.setattr(
         workspace_sync_module,
         "reconcile_workspace_db_to_materialized",
@@ -1070,12 +1071,14 @@ def test_sparse_sync_keeps_runtime_scenarios_and_materializes_required_skills(tm
         "voice_chat_skill",
         "web_desktop_skill",
     ]
+    assert result["selected_runtime_skills"] == ["weather_skill"]
     assert result["unresolved_runtime_scenarios"] == []
     assert result["patterns"] == [
         "registry.json",
         "skills/media_center_skill",
         "skills/mediaserver",
         "skills/voice_chat_skill",
+        "skills/weather_skill",
         "skills/web_desktop_skill",
         "scenarios/media_center",
         "scenarios/web_desktop",
@@ -1204,6 +1207,24 @@ def test_reconcile_workspace_db_to_materialized_updates_sqlite(tmp_path: Path):
     assert skill_rows["weather_skill"].active_version == "1.2.3"
     assert list(scenario_rows) == ["greet_on_boot"]
     assert scenario_rows["greet_on_boot"].active_version == "0.4.0"
+
+
+def test_reconcile_preserves_sqlite_install_with_selected_runtime(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    current = workspace / "skills" / ".runtime" / "weather_skill" / "current_runtime.json"
+    current.parent.mkdir(parents=True)
+    current.write_text(json.dumps({"version": "2.6.12", "slot": "B"}), encoding="utf-8")
+    sql = _Sql(tmp_path / "adaos.db")
+    registry = SqliteSkillRegistry(sql)
+    registry.register("weather_skill", active_version="2.6.12")
+    ctx = SimpleNamespace(paths=SimpleNamespace(workspace_dir=lambda: workspace), sql=sql)
+
+    result = reconcile_workspace_db_to_materialized(ctx)
+
+    assert result["skills"] == []
+    assert result["skills_removed"] == []
+    assert result["skills_preserved_by_runtime"] == ["weather_skill"]
+    assert [row.name for row in registry.list()] == ["weather_skill"]
 
 
 def test_reconcile_workspace_db_preserves_git_authoritative_catalog(tmp_path: Path, monkeypatch):

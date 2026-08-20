@@ -83,6 +83,11 @@ must fall back to the authoritative registry and report drift. Completion must
 fail while any installed skill reports `runtime-behind`, while a required
 scenario is absent from the shared sparse set, or while the selected scenario
 has not reached a fresh live webspace projection.
+Do not treat SQLite as the only install-intent authority during repair: an
+existing valid `.runtime/<skill>/current_runtime.json` selection must remain in
+the shared sparse set and drift audit even when an earlier reconcile lost its
+registry row. Remove that selection only through the explicit uninstall
+lifecycle.
 
 ## Required data route plan
 

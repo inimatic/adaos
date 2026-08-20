@@ -273,6 +273,7 @@ def reconcile_workspace_db_to_materialized(ctx) -> dict[str, Any]:
         for row in scenario_registry.list()
         if str(getattr(row, "name", "") or "").strip()
     }
+    selected_runtime_skills = set(selected_runtime_skill_names(ctx))
 
     materialized_skills: dict[str, dict[str, Any]] = {}
     for entry in skill_entries:
@@ -292,7 +293,8 @@ def reconcile_workspace_db_to_materialized(ctx) -> dict[str, Any]:
 
     for name, entry in materialized_skills.items():
         skill_registry.register(name, active_version=str(entry.get("version") or "").strip() or None)
-    for name in sorted(set(current_skills) - set(materialized_skills)):
+    removed_skills = set(current_skills) - set(materialized_skills) - selected_runtime_skills
+    for name in sorted(removed_skills):
         skill_registry.unregister(name)
 
     for name, entry in materialized_scenarios.items():
@@ -328,7 +330,10 @@ def reconcile_workspace_db_to_materialized(ctx) -> dict[str, Any]:
         "ok": True,
         "skills": sorted(materialized_skills),
         "scenarios": sorted(materialized_scenarios),
-        "skills_removed": sorted(set(current_skills) - set(materialized_skills)),
+        "skills_removed": sorted(removed_skills),
+        "skills_preserved_by_runtime": sorted(
+            (set(current_skills) - set(materialized_skills)) & selected_runtime_skills
+        ),
         "scenarios_removed": sorted(set(current_scenarios) - set(materialized_scenarios)),
         "registry_updated_at": payload.get("updated_at"),
         "registry_persisted": not registry_is_authoritative,
@@ -348,8 +353,10 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
     scenario_rows = SqliteScenarioRegistry(ctx.sql).list()
     registry_skills = installed_names(skill_rows)
     registry_scenarios = installed_names(scenario_rows)
+    selected_runtime_skills = selected_runtime_skill_names(ctx)
     skills, skills_fallback = effective_registry_names(ctx, registry_skills, workspace_root, "skills")
     scenarios, scenarios_fallback = effective_registry_names(ctx, registry_scenarios, workspace_root, "scenarios")
+    skills = sorted(set(skills) | set(selected_runtime_skills))
     runtime_scenario_refs = runtime_required_scenario_refs()
 
     try:
@@ -361,6 +368,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
             "scenarios": scenarios,
             "registry_skills": registry_skills,
             "registry_scenarios": registry_scenarios,
+            "selected_runtime_skills": selected_runtime_skills,
             "runtime_scenario_refs": runtime_scenario_refs,
             "error": f"workspace registry unavailable: {exc}",
         }
@@ -409,6 +417,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
             "scenarios": scenarios,
             "registry_skills": registry_skills,
             "registry_scenarios": registry_scenarios,
+            "selected_runtime_skills": selected_runtime_skills,
             "runtime_scenario_refs": runtime_scenario_refs,
             "scenario_required_skills": scenario_required_skills,
             "unresolved_runtime_scenarios": unresolved_runtime_scenarios,
@@ -433,6 +442,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
             "scenarios": scenarios,
             "registry_skills": registry_skills,
             "registry_scenarios": registry_scenarios,
+            "selected_runtime_skills": selected_runtime_skills,
             "runtime_scenario_refs": runtime_scenario_refs,
             "scenario_required_skills": scenario_required_skills,
             "unresolved_runtime_scenarios": unresolved_runtime_scenarios,
@@ -468,6 +478,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
             "scenarios": scenarios,
             "registry_skills": registry_skills,
             "registry_scenarios": registry_scenarios,
+            "selected_runtime_skills": selected_runtime_skills,
             "runtime_scenario_refs": runtime_scenario_refs,
             "scenario_required_skills": scenario_required_skills,
             "unresolved_runtime_scenarios": unresolved_runtime_scenarios,
@@ -485,6 +496,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
             "scenarios": scenarios,
             "registry_skills": registry_skills,
             "registry_scenarios": registry_scenarios,
+            "selected_runtime_skills": selected_runtime_skills,
             "runtime_scenario_refs": runtime_scenario_refs,
             "scenario_required_skills": scenario_required_skills,
             "unresolved_runtime_scenarios": unresolved_runtime_scenarios,
@@ -499,6 +511,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
         "scenarios": scenarios,
         "registry_skills": registry_skills,
         "registry_scenarios": registry_scenarios,
+        "selected_runtime_skills": selected_runtime_skills,
         "runtime_scenario_refs": runtime_scenario_refs,
         "scenario_required_skills": scenario_required_skills,
         "unresolved_runtime_scenarios": unresolved_runtime_scenarios,
@@ -515,6 +528,7 @@ __all__ = [
     "reconcile_workspace_db_to_materialized",
     "resolve_scenario_requirements",
     "runtime_required_scenario_refs",
+    "selected_runtime_skill_names",
     "sync_workspace_sparse_to_registry",
     "workspace_kind_names",
 ]

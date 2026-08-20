@@ -28,6 +28,7 @@ from adaos.services.runtime_refresh import (
     refresh_skill_runtime,
 )
 from adaos.services.skill.manager import SkillManager
+from adaos.services.workspace_sync import selected_runtime_skill_names
 from adaos.services.workspace_registry import build_registry_entry, list_workspace_registry_entries
 
 
@@ -542,7 +543,7 @@ def _registry_versions(ctx: AgentContext) -> dict[str, str]:
 
 
 def _registered_skill_names(ctx: AgentContext) -> list[str]:
-    names: set[str] = set()
+    names: set[str] = set(selected_runtime_skill_names(ctx))
     try:
         for row in SqliteSkillRegistry(ctx.sql).list():
             if not bool(getattr(row, "installed", True)):
