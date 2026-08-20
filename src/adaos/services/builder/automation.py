@@ -3036,7 +3036,11 @@ class BuilderAutomationService:
             caps=ctx.caps,
             settings=ctx.settings,
         )
-        prepared = manager.prepare_dev_runtime(skill_id, run_tests=False)
+        # Repeat packaged tests in the exact prepared-slot environment before
+        # activation. Worker-side source tests are an early repair rail, but
+        # they cannot prove that owner-scoped paths, dependency resolution,
+        # and slot metadata behave identically after ProjectRelease.
+        prepared = manager.prepare_dev_runtime(skill_id, run_tests=True)
         binding = BuilderWorkbenchService(state_dir=self.state_dir).get_workspace_binding(webspace_id)
         preview_webspace_id = str(
             binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or ""

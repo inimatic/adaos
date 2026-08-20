@@ -2037,6 +2037,64 @@ def test_finalize_records_live_readiness_failure_without_success_chat(tmp_path: 
     assert notified == []
 
 
+def test_prepare_dev_runtime_runs_slot_shaped_tests_before_activation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    calls: list[tuple] = []
+
+    class FakeManager:
+        def __init__(self, **kwargs):  # noqa: ARG002
+            pass
+
+        def prepare_dev_runtime(self, skill_id, *, run_tests):
+            calls.append(("prepare", skill_id, run_tests))
+            return SimpleNamespace(
+                version="0.1.0",
+                slot="B",
+                resolved_manifest=tmp_path / "resolved.manifest.json",
+            )
+
+        def activate_for_space(self, skill_id, **kwargs):
+            calls.append(("activate", skill_id, kwargs["slot"]))
+            return kwargs["slot"]
+
+        def dev_runtime_status(self, skill_id):
+            calls.append(("status", skill_id))
+            return {"ready": True, "active": True}
+
+    class FakeWorkbench:
+        def __init__(self, **kwargs):  # noqa: ARG002
+            pass
+
+        def get_workspace_binding(self, webspace_id):  # noqa: ARG002
+            return {"preview_webspace_id": "desktop-dev"}
+
+    fake_ctx = SimpleNamespace(
+        skills_repo=object(),
+        sql=object(),
+        git=object(),
+        paths=object(),
+        bus=None,
+        caps=object(),
+        settings=object(),
+    )
+    monkeypatch.setattr("adaos.services.agent_context.get_ctx", lambda: fake_ctx)
+    monkeypatch.setattr("adaos.adapters.db.SqliteSkillRegistry", lambda sql: object())
+    monkeypatch.setattr("adaos.services.skill.manager.SkillManager", FakeManager)
+    monkeypatch.setattr("adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench)
+
+    result = service._prepare_and_activate_dev_skill("research_skill", webspace_id="builder")
+
+    assert result["ok"] is True
+    assert calls == [
+        ("prepare", "research_skill", True),
+        ("activate", "research_skill", "B"),
+        ("status", "research_skill"),
+    ]
+
+
 def test_finalize_stops_before_checkpoint_when_consumer_acceptance_fails(
     tmp_path: Path,
     monkeypatch,

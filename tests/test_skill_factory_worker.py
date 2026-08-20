@@ -1109,9 +1109,14 @@ def test_generated_tests_receive_task_owned_runtime_outside_candidate(tmp_path: 
         "from pathlib import Path\n\n"
         "def test_runtime_boundary():\n"
         "    runtime = Path(os.environ['ADAOS_BASE_DIR']).resolve()\n"
+        "    internal = Path(os.environ['ADAOS_SKILL_INTERNAL_DATA_ROOT']).resolve()\n"
         "    workspace = Path.cwd().resolve()\n"
         "    assert runtime != workspace\n"
         "    assert workspace not in runtime.parents\n"
+        "    assert os.environ['ADAOS_SKILL_NAME'] == 'candidate'\n"
+        "    assert internal == runtime / 'skill-data' / 'candidate'\n"
+        "    (internal / 'installed-context-marker.txt').parent.mkdir(parents=True, exist_ok=True)\n"
+        "    (internal / 'installed-context-marker.txt').write_text('ok', encoding='utf-8')\n"
         "    (runtime / 'validation-marker.txt').parent.mkdir(parents=True, exist_ok=True)\n"
         "    (runtime / 'validation-marker.txt').write_text('ok', encoding='utf-8')\n",
         encoding="utf-8",
@@ -1131,6 +1136,13 @@ def test_generated_tests_receive_task_owned_runtime_outside_candidate(tmp_path: 
     assert errors == []
     assert checks[0]["ok"] is True
     assert (workspace.parent / "adaos-runtime-packaged" / "validation-marker.txt").is_file()
+    assert (
+        workspace.parent
+        / "adaos-runtime-packaged"
+        / "skill-data"
+        / "candidate"
+        / "installed-context-marker.txt"
+    ).is_file()
     assert not (workspace.parent / "package-validation").exists()
     assert not (workspace / "skills" / ".runtime").exists()
 

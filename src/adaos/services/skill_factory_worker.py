@@ -2355,6 +2355,29 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             )._execution_environment(
                 runtime_base_dir=workspace.parent / "adaos-runtime-packaged"
             )
+            skill_id = tests_dir.parent.name
+            internal_data_root = (
+                workspace.parent
+                / "adaos-runtime-packaged"
+                / "skill-data"
+                / skill_id
+            ).resolve()
+            internal_data_root.mkdir(parents=True, exist_ok=True)
+            environment.update(
+                {
+                    # Source-only tests must observe the same owner-scoped
+                    # storage authority as the prepared DEV slot. Otherwise a
+                    # test can pass by falling back to ADAOS_TASK_RUNTIME_DIR
+                    # and fail only after ProjectRelease activates the skill.
+                    "ADAOS_SKILL_NAME": skill_id,
+                    "ADAOS_CURRENT_SKILL": skill_id,
+                    "ADAOS_SKILL_ROOT": str(packaged_tests.parent.resolve()),
+                    "ADAOS_SKILL_INTERNAL_DATA_ROOT": str(internal_data_root),
+                    "ADAOS_SKILL_ENV_PATH": str(
+                        internal_data_root / "db" / "skill_env.json"
+                    ),
+                }
+            )
             result = _run(
                 [
                     sys.executable,
