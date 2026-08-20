@@ -2838,7 +2838,7 @@ def test_warm_switch_candidate_readiness_defaults_cover_slow_startup(monkeypatch
     monkeypatch.delenv("ADAOS_SUPERVISOR_CANDIDATE_READY_TIMEOUT_SEC", raising=False)
     monkeypatch.delenv("ADAOS_SUPERVISOR_WARM_SWITCH_MAX_DEFERRALS", raising=False)
 
-    assert supervisor._warm_switch_candidate_ready_timeout_sec() == 60.0
+    assert supervisor._warm_switch_candidate_ready_timeout_sec() == 300.0
     assert supervisor._warm_switch_max_deferrals() == 1
 
 

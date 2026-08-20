@@ -66,6 +66,7 @@ In service mode the authoritative update surface is the supervisor, not the tran
 - a SHA-shaped `--target-version` is an immutable rollout pin; preparation must fail if that exact commit cannot be checked out and must never replace it with the current branch head
 - `update-status` may also include the compact Phase 1 supervisor memory summary so operators can see profiling intent/session state during the same rollout window
 - `prepare` has its own deadline (`ADAOS_SUPERVISOR_PREPARE_TIMEOUT_SEC`, default 900s) because slot build/pip work is heavier than restart/apply; if prepare times out or is cancelled, update status should include prepare lease revocation evidence so a late worker cannot replace an A/B slot after rollback
+- passive candidate readiness has a separate five-minute deadline (`ADAOS_SUPERVISOR_CANDIDATE_READY_TIMEOUT_SEC`, default 300s). This covers cold imports and startup audits on slower user storage without weakening readiness; a live but incomplete candidate is never promoted when the deadline expires
 - core preparation and post-boot skill migration share one cross-process admission lease. `update-start` returns retryable `skill_runtime_migration_active` while a migration owns it; retry after the reported worker completes instead of forcing concurrent `pip`/tests and slot preparation
 
 Current autostart-managed flow for bootstrap/self-update:

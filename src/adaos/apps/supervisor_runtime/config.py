@@ -147,7 +147,7 @@ class SupervisorRuntimeConfig:
 
     def warm_switch_candidate_ready_timeout_sec(self) -> float:
         return self._float(
-            "ADAOS_SUPERVISOR_CANDIDATE_READY_TIMEOUT_SEC", 60.0, minimum=0.0
+            "ADAOS_SUPERVISOR_CANDIDATE_READY_TIMEOUT_SEC", 300.0, minimum=0.0
         )
 
     def warm_switch_strict_cutover_enabled(self) -> bool:
