@@ -221,6 +221,15 @@ def save_plan(plan: TopologyPlan) -> TopologyPlan:
     )
 
 
+def get_plan(plan_digest: str) -> TopologyPlan:
+    """Read one immutable reviewed topology plan by content digest."""
+
+    return get_distributed_runtime().get_topology_plan(
+        plan_digest,
+        principal=_principal(("distributed.topology.inspect",)),
+    )
+
+
 def plan_rebalance(
     dataset_id: str,
     *,
@@ -323,6 +332,7 @@ __all__ = [
     "define_service",
     "drain",
     "explain_route",
+    "get_plan",
     "handoff_authority",
     "inspect",
     "invoke",

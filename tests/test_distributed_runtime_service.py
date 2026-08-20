@@ -642,6 +642,9 @@ def test_reviewed_handoff_plan_commits_epoch_before_domain_promotion(
         replica_role="authority",
         principal=_principal(),
     )
+    assert runtime.get_topology_plan(
+        str(plan.plan_digest), principal=_principal()
+    ) == plan
     operation = runtime.apply_topology_plan(
         str(plan.plan_digest),
         idempotency_key="reviewed-handoff-a-to-b",

@@ -171,6 +171,12 @@ class DistributedRuntime:
         )
         return result
 
+    def get_topology_plan(
+        self, plan_digest: str, *, principal: DistributedPrincipal
+    ) -> TopologyPlan:
+        principal.require("distributed.topology.inspect")
+        return self.store.get_plan(str(plan_digest))
+
     def plan_replica_change(
         self,
         partition_id: str,
