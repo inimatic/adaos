@@ -77,3 +77,33 @@ def test_stream_variable_publish_wraps_replace_mode_envelope(monkeypatch) -> Non
         json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     assert data["fingerprint"] == expected_fingerprint
+
+
+def test_stream_publish_uses_service_bridge_without_agent_context(monkeypatch) -> None:
+    seen = []
+
+    def missing_context():
+        raise RuntimeError("AgentContext is not initialized")
+
+    monkeypatch.setattr(out, "get_ctx", missing_context)
+    monkeypatch.setattr(out, "load_config", lambda: SimpleNamespace(node_id="member-01"))
+    monkeypatch.setattr(
+        out,
+        "_publish_via_service_bridge",
+        lambda topic, payload: seen.append((topic, payload)),
+    )
+    monkeypatch.setenv(
+        "ADAOS_SERVICE_EVENT_BRIDGE_URL",
+        "http://127.0.0.1:8777/api/node/internal/service-events",
+    )
+
+    result = out.stream_publish(
+        "media.progress",
+        {"processed": 7},
+        _meta={"webspace_id": "desktop"},
+    )
+
+    assert result == {"ok": True}
+    assert seen[0][0] == "io.out.stream.publish"
+    assert seen[0][1]["receiver"] == "media.progress"
+    assert seen[0][1]["data"] == {"processed": 7}

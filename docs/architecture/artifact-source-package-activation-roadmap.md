@@ -189,7 +189,7 @@ proof is not silently promoted to stand or production acceptance.
 | AP5 | 7/10 | validated-stand + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend admission and atomic channel CAS, durable post-CAS continuation, and successful external package/release/channel round-trip across a backend redeploy | metadata rebase policy and later merge-queue support |
 | AP6 | 12/14 | validated-local + recovered-live (bounded) | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, Builder review/apply UI, digest-reviewed remote-to-local reconciliation, attested recovery of missing remote immutable state, one fail-closed package/legacy route contract, and explicit no-op planning for an up-to-date subscription | production deployment/observation of the route contract and later evidence-based retirement of the compatibility route |
 | AP7 | 15/17 | validated-stand + second-machine-core-recovered + local workflow proof (bounded), route-fix pending | source-faithful representative LLM/Codex scenario+skill proof, bounded resilience regressions, live Builder publication, external-backend clean required-mode activation, package/release/channel survival across redeploy, exact-build local A/B recovery, generation-bound second-machine core convergence, and manifest-bound workflow authoring/package/role/migration/rollback proof | candidate-before-health proxy admission, frontend/WebSocket continuity, offline browser-draft merge, plus broad production and marketplace acceptance remain open/deferred |
-| AP8 | 0/13 | specified | ProjectDeployment boundary and first Media Center consumer are specified | schemas, planner, SDK, per-node activation, staged rollout, drain/remove and stand proof are open |
+| AP8 | 11/13 | validated-local plus bounded one-node stand | fail-closed deployment schemas, planner/executor, SDK, exact activation, staged reconciliation, drain/remove, projections and one-node Media Center policy | two-node TV/controller proof and recommendation admission remain open |
 
 ## Milestone AP0: Contracts And Compatibility Boundary
 
@@ -873,40 +873,40 @@ and two worker components on selected nodes, exposes independent webspace
 placements, survives partial failure and staged update, and drains/removes one
 worker without deleting retained domain data.
 
-- [ ] `[must]` `AP8-01` Define `ProjectDeployment`, `DeploymentRevision`,
+- [x] `[must]` `AP8-01` Define `ProjectDeployment`, `DeploymentRevision`,
   immutable `DeploymentPlan`, per-node `ComponentActivation`, and journaled
   `DeploymentOperation` boundaries without changing `ProjectPlacement` into a
   node deployment record.
-- [ ] `[must]` `AP8-02` Add fail-closed versioned schemas and typed models for
+- [x] `[must]` `AP8-02` Add fail-closed versioned schemas and typed models for
   desired component placement, exact release/package refs, node targets,
   compatibility, rollout, retention, operation phases, and observed evidence.
-- [ ] `[must]` `AP8-03` Resolve `singleton`, `selected_nodes`, `all_matching`,
+- [x] `[must]` `AP8-03` Resolve `singleton`, `selected_nodes`, `all_matching`,
   `per_endpoint`, and `co_located_with` policies against trusted node
   inventory, capabilities, labels, architecture, capacity and current
   activations; keep webspace exposure in `ProjectPlacement`.
-- [ ] `[must]` `AP8-04` Produce an immutable compare-and-switch deployment plan
+- [x] `[must]` `AP8-04` Produce an immutable compare-and-switch deployment plan
   that explains installs, updates, no-ops, drains, removals, compatibility
   blocks, approvals, expected availability impact, and rollback limits before
   mutation.
-- [ ] `[must]` `AP8-05` Execute package fetch, verification, staging,
+- [x] `[must]` `AP8-05` Execute package fetch, verification, staging,
   activation, health evidence and commit through one idempotent operation per
   node; record partial subnet success instead of claiming cross-node atomicity.
-- [ ] `[must]` `AP8-06` Reconcile desired and observed generations with bounded
+- [x] `[must]` `AP8-06` Reconcile desired and observed generations with bounded
   retries, explicit uncertain outcomes, compatible version-skew policy, staged
   batches, stop conditions and per-node rollback.
-- [ ] `[must]` `AP8-07` Implement generic cordon/drain/deactivate/remove phases
+- [x] `[must]` `AP8-07` Implement generic cordon/drain/deactivate/remove phases
   and keep package removal, runtime-data retention, derived-data retention and
   external-data ownership as separate reviewed decisions.
-- [ ] `[must]` `AP8-08` Publish cursor-backed deployment inventory and bounded
+- [x] `[must]` `AP8-08` Publish cursor-backed deployment inventory and bounded
   desired/observed/operation projections suitable for skills, Builder and
   operator UI.
-- [ ] `[must]` `AP8-09` Expose planning, apply, inspect, drain, remove and
+- [x] `[must]` `AP8-09` Expose planning, apply, inspect, drain, remove and
   reconcile through a public SDK/control-plane boundary; skills must not import
   package store, Workspace, supervisor or node-inventory internals.
-- [ ] `[must]` `AP8-10` Enforce trusted node identity, exact release admission,
+- [x] `[must]` `AP8-10` Enforce trusted node identity, exact release admission,
   remote-install permission, retention confirmation, audit and secret-safe
   diagnostics.
-- [ ] `[must]` `AP8-11` Preserve a one-node deployment as an ordinary policy and
+- [x] `[must]` `AP8-11` Preserve a one-node deployment as an ordinary policy and
   migrate current scenario-driven companion-skill installation without a
   second compatibility installer.
 - [ ] `[should]` `AP8-12` Validate the representative Media Center Project on
@@ -915,6 +915,17 @@ worker without deleting retained domain data.
 - [ ] `[could]` `AP8-13` Add planner recommendations and unattended
   capability-based placement only after manual selected-node plans are
   validated on stand.
+
+Checked local implementation evidence: [Distributed Deployment And Topology
+Conformance - 2026-08-20](distributed-runtime-conformance-2026-08-20.md).
+`AP8-12` remains open until the exact release is exercised on two physical
+nodes; the implemented recommendation API does not waive that admission gate
+for `AP8-13`.
+
+The 2026-08-20 stand audit found one ready Windows hub in `sn_6acf0c01` and the
+Media Center stand in `sn_92ffc943`. Reassigning the parallel-work hub would
+mutate an unrelated live environment, so those machines are not claimed as a
+two-node ProjectDeployment proof.
 
 Live service membership, authority leases, partition/replica topology,
 freshness and data movement begin after component activation and are owned by

@@ -9,6 +9,12 @@ migration plans are admitted before the lock switch, and an unknown
 state-changing outcome is reconciled explicitly rather than replayed. See
 [Artifact Source, Package, and Activation Architecture](architecture/artifact-source-package-activation.md).
 
+Skills obtain path-free runtime and placement identity through
+`adaos.sdk.core.runtime_identity()`. Its `node` projection contains only the
+canonical `node_id`, `subnet_id`, and role; skills must use that identity for
+node-owned records instead of guessing from process-local defaults or importing
+node configuration services.
+
 ## Directory layout
 
 Every skill lives under `skills/<name>` in the workspace. Runtime artefacts are stored separately:
@@ -278,6 +284,13 @@ rule during a skill-owned publish is available in
 `/api/node/projection-diagnostics`; direct calls to write-capable core Yjs APIs
 also produce `projection.direct_yjs_write` validation warnings.
 
+For `runtime.kind: service`, the active manifest's exact `events.publish`
+topics also scope the child process's rotating service-event capability.
+`adaos.sdk.io` and `adaos.sdk.data.events.publish()` transparently use that
+loopback bridge when no in-process `AgentContext` exists. The bridge remains
+bounded and output-only; declaring a service does not grant arbitrary bus or
+root-runtime access.
+
 ### Runtime lifecycle hooks
 
 AdaOS now supports optional lifecycle hooks in the resolved skill manifest.
@@ -351,6 +364,11 @@ adaos secrets import dump.json --skill weather_skill
 ## Observability
 
 Every install/test/activate/run operation logs under `slots/<slot>/logs/`. `adaos skill status --json` surfaces runtime state (active version/slot/readiness/tests). For progress checks:
+
+An unpartitioned runtime pytest suite has a 180-second default budget, bounded
+to 60-900 seconds by `ADAOS_SKILL_PYTEST_TIMEOUT_SECONDS`. Named smoke,
+contract, and dry-run suites retain their shorter fixed budgets. The timeout
+terminates only the owned test subprocess and fails slot preparation.
 
 - Workspace: `adaos skill status <NAME>` compares `skills/<NAME>` against the workspace registry remote (`adaos-registry.git` main) and best-effort refreshes that remote-tracking ref before computing path divergence.
 - Workspace with operator diagnostics: `adaos skill status <NAME> --fetch --diff` additionally prints fetch warnings and renders the exact path diff.

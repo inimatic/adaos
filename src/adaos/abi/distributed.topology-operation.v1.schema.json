@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "distributed.topology-operation.v1.schema.json",
+  "title": "AdaOS Distributed Topology Operation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "operation_id", "kind", "target_ref", "state", "expected_revision", "authority_epoch", "idempotency_key", "phases", "created_at", "updated_at"],
+  "properties": {
+    "schema": { "const": "adaos.distributed.topology_operation.v1" }, "operation_id": { "$ref": "#/$defs/token" }, "kind": { "enum": ["reconcile", "replicate", "handoff", "drain", "remove", "repair"] }, "target_ref": { "$ref": "#/$defs/token" }, "state": { "enum": ["pending", "running", "succeeded", "failed", "uncertain"] }, "expected_revision": { "type": "integer", "minimum": 0 }, "authority_epoch": { "type": "integer", "minimum": 0 }, "idempotency_key": { "$ref": "#/$defs/token" }, "phases": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/phase" } }, "created_at": { "type": "string", "format": "date-time" }, "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "token": { "type": "string", "minLength": 1, "maxLength": 500 }, "nullableToken": { "type": ["string", "null"], "minLength": 1, "maxLength": 500 },
+    "phase": { "type": "object", "additionalProperties": false, "required": ["phase", "state", "attempt", "idempotency_key", "receipt", "started_at", "finished_at", "error_code"], "properties": { "phase": { "$ref": "#/$defs/token" }, "state": { "enum": ["pending", "running", "succeeded", "failed", "uncertain", "skipped"] }, "attempt": { "type": "integer", "minimum": 1 }, "idempotency_key": { "$ref": "#/$defs/token" }, "receipt": { "type": "object" }, "started_at": { "type": "string", "format": "date-time" }, "finished_at": { "type": ["string", "null"], "format": "date-time" }, "error_code": { "$ref": "#/$defs/nullableToken" } } }
+  }
+}

@@ -8,7 +8,7 @@ import sys
 import traceback
 from dataclasses import asdict
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 import requests
@@ -1222,10 +1222,11 @@ def reconcile_fs_to_db():
         raise typer.Exit(1)
     found = []
     for name in os.listdir(root):
-        if name == ".git":
+        if name.startswith("."):
+            mgr.reg.unregister(name)
             continue
         p = root / name
-        if p.is_dir():
+        if p.is_dir() and (p / "skill.yaml").is_file():
             mgr.reg.register(name)  # installed=1
             found.append(name)
     typer.echo(

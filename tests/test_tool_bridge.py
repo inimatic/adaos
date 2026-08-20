@@ -1500,6 +1500,14 @@ def test_canonical_local_target_does_not_proxy_from_hub() -> None:
     )
 
 
+@pytest.mark.parametrize("alias", ["local", "self", "current", "current_node"])
+def test_local_target_alias_resolves_to_runtime_node(alias: str) -> None:
+    assert tool_bridge_module._resolve_target_node_id(
+        {"target_node_id": alias},
+        local_node_id="hub-1",
+    ) == "hub-1"
+
+
 def test_call_tool_blocks_cross_node_mutation_without_approval(monkeypatch) -> None:
     published = _patch_runtime_approval_pending_actions(monkeypatch)
 

@@ -65,6 +65,21 @@ def _current_skill_identity(ctx: Any) -> dict[str, str] | None:
     }
 
 
+def _current_node_identity(ctx: Any) -> dict[str, str]:
+    config = getattr(ctx, "config", None)
+    node_id = str(
+        getattr(config, "node_id_value", "") or getattr(config, "node_id", "") or ""
+    ).strip()
+    subnet_id = str(
+        getattr(config, "subnet_id_value", "")
+        or getattr(config, "subnet_id", "")
+        or getattr(getattr(ctx, "settings", None), "subnet_id", "")
+        or ""
+    ).strip()
+    role = str(getattr(config, "role", "") or "").strip().lower()
+    return {"node_id": node_id, "subnet_id": subnet_id, "role": role}
+
+
 def runtime_identity() -> dict[str, Any]:
     """Return stable runtime facts without exposing host filesystem locations."""
 
@@ -80,6 +95,7 @@ def runtime_identity() -> dict[str, Any]:
         "python_version": platform.python_version(),
         "platform": platform.platform(),
         "implementation": sys.implementation.name,
+        "node": _current_node_identity(ctx),
         "current_skill": _current_skill_identity(ctx),
     }
 

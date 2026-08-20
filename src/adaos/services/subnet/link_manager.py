@@ -7,6 +7,7 @@ import logging
 import os
 import time
 import uuid
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
@@ -167,6 +168,11 @@ def _snapshot_fingerprint(snapshot: dict[str, Any]) -> str:
         },
         "slots": _normalize_snapshot_material(slots),
         "capacity": _compact_snapshot_catalog(capacity, ("io", "skills", "scenarios")),
+        "deployment": _normalize_snapshot_material(
+            snapshot.get("deployment")
+            if isinstance(snapshot.get("deployment"), dict)
+            else {}
+        ),
         # Catalog identifiers alone are not enough: a skill can keep the same
         # modal id while adding routes, implemented views, actions, or receiver
         # contracts.  Those changes must invalidate the hub-side projection.
@@ -1208,6 +1214,7 @@ class HubLinkManager:
         self._last_member_infrastate_projection_node_id = ""
         self._last_member_infrastate_projection_webspace_id = ""
         self._member_node_state_fingerprints: dict[tuple[str, str], str] = {}
+        self._owner_loop: asyncio.AbstractEventLoop | None = None
 
     async def _push_node_display_assignment(self, node_id: str) -> None:
         link = await self._get_link(node_id)
@@ -1321,6 +1328,7 @@ class HubLinkManager:
         roles: list[str] | None,
         node_names: list[str] | None = None,
     ) -> HubMemberLink:
+        self._owner_loop = asyncio.get_running_loop()
         link = HubMemberLink(
             node_id=node_id,
             websocket=ws,
@@ -1921,6 +1929,27 @@ class HubLinkManager:
         dev: bool,
         intent: str | None = None,
     ) -> Any:
+        return await self.rpc_call(
+            node_id,
+            method="tools.call",
+            params={
+                "tool": tool,
+                "arguments": arguments or {},
+                "timeout": timeout,
+                "dev": bool(dev),
+                "intent": str(intent or "").strip() or None,
+            },
+            timeout=timeout,
+        )
+
+    async def rpc_call(
+        self,
+        node_id: str,
+        *,
+        method: str,
+        params: dict[str, Any],
+        timeout: float | None,
+    ) -> Any:
         link = await self._get_link(node_id)
         if not link:
             raise ConnectionError("member_not_connected")
@@ -1932,14 +1961,8 @@ class HubLinkManager:
             {
                 "t": "rpc.req",
                 "id": rid,
-                "method": "tools.call",
-                "params": {
-                    "tool": tool,
-                    "arguments": arguments or {},
-                    "timeout": timeout,
-                    "dev": bool(dev),
-                    "intent": str(intent or "").strip() or None,
-                },
+                "method": str(method or "").strip(),
+                "params": dict(params or {}),
             }
         )
         try:
@@ -1948,6 +1971,39 @@ class HubLinkManager:
             return await asyncio.wait_for(fut, timeout=float(timeout) + 5.0)
         finally:
             link.pending_rpc.pop(rid, None)
+
+    def rpc_call_sync(
+        self,
+        node_id: str,
+        *,
+        method: str,
+        params: dict[str, Any],
+        timeout: float | None,
+    ) -> Any:
+        loop = self._owner_loop
+        if loop is None or not loop.is_running():
+            raise ConnectionError("member_link_owner_loop_unavailable")
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is loop:
+            raise RuntimeError("member_link_sync_rpc_on_owner_loop")
+        future = asyncio.run_coroutine_threadsafe(
+            self.rpc_call(
+                node_id,
+                method=method,
+                params=params,
+                timeout=timeout,
+            ),
+            loop,
+        )
+        wait_seconds = 35.0 if timeout is None else max(5.0, float(timeout) + 10.0)
+        try:
+            return future.result(timeout=wait_seconds)
+        except FutureTimeoutError as exc:
+            future.cancel()
+            raise TimeoutError("member_link_rpc_ack_timeout") from exc
 
     def _note_yjs_broadcast_suppressed(
         self,

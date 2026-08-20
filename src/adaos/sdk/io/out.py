@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from adaos.sdk.core.decorators import tool
+from adaos.sdk.core._service_event_bridge import publish as _publish_service_event
 from adaos.sdk.data.context import get_current_skill
 from adaos.sdk.io.context import get_current_meta
 from adaos.services.agent_context import get_ctx
@@ -30,11 +31,21 @@ __all__ = ["chat_append", "say", "media_route", "telegram_photo", "stream_publis
 
 
 def _publish(topic: str, payload: dict, *, source: str) -> None:
-    ctx = get_ctx()
-    bus = getattr(ctx, "bus", None)
-    if bus is None:
-        raise RuntimeError("AgentContext.bus is not initialized")
+    try:
+        ctx = get_ctx()
+        bus = getattr(ctx, "bus", None)
+        if bus is None:
+            raise RuntimeError("AgentContext.bus is not initialized")
+    except RuntimeError:
+        if os.getenv("ADAOS_SERVICE_EVENT_BRIDGE_URL"):
+            _publish_via_service_bridge(topic, payload)
+            return
+        raise
     _emit(bus, topic, payload, source)
+
+
+def _publish_via_service_bridge(topic: str, payload: Mapping[str, Any]) -> None:
+    _publish_service_event(topic, payload)
 
 
 def _normalize_meta(meta: Mapping[str, Any]) -> dict[str, Any]:

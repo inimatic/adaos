@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "distributed.route.v1.schema.json",
+  "title": "AdaOS Distributed Route v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "route_id", "dataset_id", "partition_ids", "endpoints", "consistency_profile", "topology_generation", "topology_revision", "partial", "unavailable_partitions", "fallback", "auth_scope", "created_at", "expires_at", "revision"],
+  "properties": {
+    "schema": { "const": "adaos.distributed.route.v1" }, "route_id": { "$ref": "#/$defs/token" }, "dataset_id": { "$ref": "#/$defs/token" }, "partition_ids": { "type": "array", "minItems": 1, "maxItems": 200, "uniqueItems": true, "items": { "$ref": "#/$defs/token" } },
+    "endpoints": { "type": "array", "maxItems": 500, "items": { "$ref": "#/$defs/endpoint" } }, "consistency_profile": { "enum": ["single_authority", "multi_writer_crdt", "derived_projection", "read_through_cache", "external_authority", "domain_managed"] },
+    "topology_generation": { "type": "integer", "minimum": 1 }, "topology_revision": { "type": "integer", "minimum": 1 }, "partial": { "type": "boolean" }, "unavailable_partitions": { "type": "array", "maxItems": 200, "uniqueItems": true, "items": { "$ref": "#/$defs/token" } }, "fallback": { "enum": ["none", "stale", "coordinator", "external_source"] }, "auth_scope": { "$ref": "#/$defs/token" }, "created_at": { "type": "string", "format": "date-time" }, "expires_at": { "type": "string", "format": "date-time" }, "revision": { "type": "integer", "minimum": 1 }
+  },
+  "$defs": {
+    "token": { "type": "string", "minLength": 1, "maxLength": 500 }, "nullableToken": { "type": ["string", "null"], "minLength": 1, "maxLength": 500 },
+    "endpoint": { "type": "object", "additionalProperties": false, "required": ["endpoint_ref", "replica_id", "partition_id", "role", "priority", "authority_epoch", "checkpoint", "freshness_seconds", "observed_at"], "properties": { "endpoint_ref": { "$ref": "#/$defs/token" }, "replica_id": { "$ref": "#/$defs/token" }, "partition_id": { "$ref": "#/$defs/token" }, "role": { "enum": ["authority", "follower", "derived", "cache"] }, "priority": { "type": "integer", "minimum": 0 }, "authority_epoch": { "type": "integer", "minimum": 0 }, "checkpoint": { "$ref": "#/$defs/nullableToken" }, "freshness_seconds": { "type": ["number", "null"], "minimum": 0 }, "observed_at": { "type": "string", "format": "date-time" } } }
+  }
+}

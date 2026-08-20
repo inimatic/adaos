@@ -239,6 +239,13 @@ bounded retry, and rollback evidence truthfully. Stateful component removal
 cordons and drains the runtime before package removal. Runtime/derived-data
 retention remains an independent declared decision.
 
+Trusted members publish explicit bounded deployment capabilities in their node
+snapshot. The ordinary hub control plane may route reviewed component phases
+over the authenticated member link, so Project deployment does not require a
+skill-owned installer or a LAN-exposed runtime endpoint. Package frames remain
+bounded; oversized packages require a declared chunked/direct transport and
+fail before remote mutation.
+
 An active package does not by itself prove a ready distributed service or a
 fresh replica. `ComponentActivation` feeds the generic
 [Distributed Service And Data Topology](distributed-service-and-data-topology.md),

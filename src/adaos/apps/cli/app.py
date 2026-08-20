@@ -428,7 +428,7 @@ from adaos.apps.bootstrap import init_ctx, reload_ctx
 from adaos.apps.cli.i18n import _, supported_language_codes
 from adaos.services.agent_context import get_ctx
 from adaos.services.runtime_paths import current_base_dir
-from adaos.apps.cli.commands import monitor, skill, runtime, llm, tests as tests_cmd, api, scenario, sdk_export as _sdk_export, repo, dev, node, hub, realtime
+from adaos.apps.cli.commands import monitor, skill, runtime, llm, tests as tests_cmd, api, scenario, sdk_export as _sdk_export, repo, dev, node, hub, realtime, project
 from adaos.apps.cli.commands import builder as builder_cmd
 from adaos.apps.cli.commands import diag360
 from adaos.apps.cli.commands import git as git_cmd
@@ -622,6 +622,7 @@ app.add_typer(hub.app, name="hub", help=_("cli.help_hub"))
 app.add_typer(maintenance.app, name="maintenance", help=_("cli.help_maintenance"))
 app.add_typer(monitor.app, name="monitor", help=_("cli.help_monitor"))
 app.add_typer(repo.app, name="repo", help=_("cli.repo.help"))
+app.add_typer(project.app, name="project", help="Immutable Project releases.")
 app.add_typer(git_cmd.app, name="git", help=_("cli.help_git"))
 app.add_typer(scenario.app, name="scenario", help=_("cli.help_scenario"))
 app.add_typer(setup_cmd.autostart_app, name="autostart", help=_("cli.help_autostart"))

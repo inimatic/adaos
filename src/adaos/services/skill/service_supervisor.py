@@ -28,6 +28,7 @@ from adaos.services.runtime_identity import runtime_instance_id, runtime_transit
 from adaos.services.skill.dependency_disk_guard import ensure_dependency_disk_budget
 from adaos.services.skill.dependency_requirements import resolve_skill_dependency_args
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+from adaos.services.skill.service_event_bridge import service_event_bridge_environment
 from adaos.domain.blob_storage import BlobStorageRequirements
 from adaos.domain.relational_storage import RelationalStorageRequirements
 from adaos.services.storage.blob import get_blob_storage_broker
@@ -109,6 +110,7 @@ class ServiceSpec:
     storage_relational: Mapping[str, Any] | None = None
     storage_blob: Mapping[str, Any] | None = None
     resource_budget: Mapping[str, Any] | None = None
+    publish_topics: tuple[str, ...] = ()
 
     @property
     def base_url(self) -> str:
@@ -354,6 +356,18 @@ def _resolve_service_spec(skill_name: str, skill_root: Path, manifest: Mapping[s
     resource_budget = dict(process_budget)
     if memory_budget.get("expected_rss_mb") is not None:
         resource_budget["expected_rss_mb"] = memory_budget.get("expected_rss_mb")
+    events = manifest.get("events") or {}
+    if not isinstance(events, Mapping):
+        events = {}
+    publish_topics = tuple(
+        sorted(
+            {
+                str(item).strip()
+                for item in (events.get("publish") or [])
+                if isinstance(item, str) and str(item).strip()
+            }
+        )
+    )
 
     return ServiceSpec(
         skill=skill_name,
@@ -392,6 +406,7 @@ def _resolve_service_spec(skill_name: str, skill_root: Path, manifest: Mapping[s
         storage_relational=storage_relational,
         storage_blob=storage_blob,
         resource_budget=resource_budget,
+        publish_topics=publish_topics,
     )
 
 
@@ -997,6 +1012,11 @@ class ServiceSkillSupervisor:
         env["ADAOS_SERVICE_ROOT"] = str(spec.skill_root)
         env["ADAOS_SERVICE_WORKDIR"] = str(spec.workdir)
         env["ADAOS_SERVICE_OWNER_PID"] = str(os.getpid())
+        env.update(
+            service_event_bridge_environment(
+                name, publish_topics=spec.publish_topics
+            )
+        )
         env["ADAOS_RUNTIME_INSTANCE_ID"] = runtime_instance_id()
         env["ADAOS_RUNTIME_TRANSITION_ROLE"] = runtime_transition_role()
         bucket_root = _infer_runtime_bucket_root(spec.skill_root, name)

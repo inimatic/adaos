@@ -207,6 +207,15 @@ Package requirements:
   route;
 - atomic write and verification before visibility.
 
+The package builder derives contract locks and archive bytes from one canonical
+content view. Files that are valid UTF-8 and contain no NUL bytes are text and
+use LF line endings; all other files are binary and remain byte-exact. Runtime
+and development state such as `.skill_state`, caches, tests, and build outputs
+is excluded before that view is formed. These rules are part of
+`build_policy_digest`, so identical source revisions produce identical package
+and ProjectRelease digests across checkout platforms, while a policy change is
+explicit in package provenance.
+
 When a canonical `skill.yaml` or `scenario.yaml` declares
 `workflow.manifest: workflow.json`, the workflow is part of the same component
 package as its code and manifest. It is not a separately installable component.
@@ -528,6 +537,24 @@ validation evidence references are recomputed from canonical payload bytes at
 every local and registry admission boundary. Raw evidence remains available
 for explanation, while the digest references make replacement or omission
 detectable without trusting labels.
+
+### Workspace Project Release Build
+
+`adaos project release-build <project-id> --repository <repo> --revision
+<immutable-revision>` is the operator boundary for composing an existing
+Workspace Project into the local artifact pipeline. It validates and
+normalizes `projects/<id>/project.yaml`, builds every owned component and
+recursive manifest dependency as a deterministic package, resolves one exact
+closure, writes package bytes to the content-addressed store, then commits the
+immutable `ReleasePlan` to the release cache. `release-inspect` reads that exact
+digest back through the same repository contract.
+
+The command requires an immutable source revision. A missing mandatory source,
+component identity mismatch, unresolved dependency, changed mapping for an
+existing Project version, malformed composition, or Project-to-Project
+dependency without an exact lock fails before the release record is written.
+This build does not activate components or choose nodes; Workspace activation
+and `ProjectDeployment` remain separate reviewed operations.
 
 ## Transactional Activation
 

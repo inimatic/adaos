@@ -255,6 +255,12 @@ media byte.
 Agents do not decide household favorites, global canonical identity, or which
 TV should play a request.
 
+In production, one persistent `media_library_agent` service process is the
+exclusive owner of scan/rendition workers. Root-runtime tools only enqueue,
+cancel or update durable policy in the shared agent database. This prevents
+two processes from claiming/recovering the same queue while preserving a
+standalone embedded worker as an explicit development mode.
+
 ### Generic topology mapping
 
 The runtime topology is represented through the common core layer:
@@ -303,6 +309,13 @@ Several sources may realize the same variant; several variants may realize the
 same work. A playlist reuses ordered membership mechanics but remains a
 user-owned collection with different edit, authorization, and lifecycle rules
 from a detected series or album.
+
+File names alone are not safe semantic identity. In particular, numbered audio
+files use normalized folder/collection context plus track/chapter title for
+their provisional work identity. Matching contextual identities on different
+agents may become variants; different books containing `0.mp3` must remain
+different works until reviewed fingerprint/provider/user evidence merges them.
+Physical source identity remains stable when a work is regrouped.
 
 Stable opaque ids, aliases, and merge/split records are required. A metadata
 provider changing its title must not silently change favorites, history, deep

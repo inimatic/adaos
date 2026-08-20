@@ -1058,15 +1058,23 @@ def _resolve_tool_webspace_id(payload: Dict[str, Any]) -> str:
     return token or default_webspace_id()
 
 
-def _resolve_target_node_id(payload: Dict[str, Any]) -> str:
+def _resolve_target_node_id(
+    payload: Dict[str, Any],
+    *,
+    local_node_id: str = "",
+) -> str:
     meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
-    return node_identity_token(
+    target_node_id = node_identity_token(
         payload.get("target_node_id")
         or payload.get("node_id")
         or meta.get("target_node_id")
         or meta.get("node_target_id")
         or ""
     )
+    local_token = node_identity_token(local_node_id)
+    if local_token and target_node_id.lower() in {"local", "self", "current", "current_node"}:
+        return local_token
+    return target_node_id
 
 
 def _is_loopback_base_url(base_url: str | None) -> bool:
@@ -1659,9 +1667,9 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
         meta.setdefault("request_id", body.request_id)
     payload["_meta"] = meta
     webspace_id = _resolve_tool_webspace_id(payload)
-    target_node_id = _resolve_target_node_id(payload)
     conf = getattr(ctx, "config", None)
     local_node_id = node_identity_token(getattr(conf, "node_id", ""))
+    target_node_id = _resolve_target_node_id(payload, local_node_id=local_node_id)
     gate_started_at = time.perf_counter()
     action_risk = await _enforce_runtime_action_gate(
         body=body,

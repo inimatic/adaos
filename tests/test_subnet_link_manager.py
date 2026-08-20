@@ -198,6 +198,44 @@ def test_register_closes_replaced_member_session(monkeypatch) -> None:
     assert previous_ws.closed == [(4001, "link_replaced")]
 
 
+def test_generic_member_rpc_preserves_method_and_payload() -> None:
+    async def _run() -> tuple[dict, dict]:
+        manager = mod.HubLinkManager()
+        websocket = _FakeWebSocket()
+        manager._links["member-1"] = mod.HubMemberLink(
+            node_id="member-1", websocket=websocket
+        )
+        task = asyncio.create_task(
+            manager.rpc_call(
+                "member-1",
+                method="project.deployment.phase",
+                params={"schema": "adaos.project.remote_component_phase.v1"},
+                timeout=5.0,
+            )
+        )
+        for _ in range(20):
+            if websocket.messages:
+                break
+            await asyncio.sleep(0)
+        request = websocket.messages[-1]
+        await manager.handle_rpc_response(
+            "member-1",
+            {
+                "t": "rpc.res",
+                "id": request["id"],
+                "ok": True,
+                "result": {"schema": "result.v1"},
+            },
+        )
+        return request, await task
+
+    request, result = asyncio.run(_run())
+
+    assert request["method"] == "project.deployment.phase"
+    assert request["params"]["schema"] == "adaos.project.remote_component_phase.v1"
+    assert result == {"schema": "result.v1"}
+
+
 async def _noop_push(*_args, **_kwargs) -> None:
     return None
 

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "node.inventory.v1.schema.json",
+  "title": "AdaOS Node Inventory Record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "node_id", "subnet_id", "trust_state", "online",
+    "architecture", "runtime_version", "capabilities", "protocols", "labels", "capacity",
+    "endpoints", "observed_at", "revision"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.node.inventory.v1" },
+    "node_id": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "subnet_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "trust_state": { "enum": ["trusted", "pending", "revoked", "untrusted"] },
+    "online": { "type": "boolean" },
+    "architecture": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "runtime_version": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "capabilities": { "$ref": "#/$defs/stringSet" },
+    "protocols": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "labels": { "$ref": "#/$defs/labels" },
+    "capacity": { "$ref": "#/$defs/capacity" },
+    "endpoints": {
+      "type": "array",
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/endpoint" }
+    },
+    "observed_at": { "type": "string", "format": "date-time" },
+    "revision": { "type": "integer", "minimum": 1 }
+  },
+  "$defs": {
+    "stringSet": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+    },
+    "labels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "capacity": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["endpoint_id", "role", "available", "capabilities", "labels", "capacity"],
+      "properties": {
+        "endpoint_id": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "role": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "available": { "type": "boolean" },
+        "capabilities": { "$ref": "#/$defs/stringSet" },
+        "labels": { "$ref": "#/$defs/labels" },
+        "capacity": { "$ref": "#/$defs/capacity" }
+      }
+    }
+  }
+}

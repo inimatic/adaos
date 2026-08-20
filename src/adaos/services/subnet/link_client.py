@@ -45,6 +45,18 @@ from adaos.services.yjs.store import add_ystore_write_listener, get_ystore_for_w
 _log = logging.getLogger("adaos.subnet.client")
 
 
+def _deployment_inventory_payload() -> dict[str, Any]:
+    try:
+        from adaos.services.project_deployment.default_runtime import (
+            deployment_runtime_inventory_payload,
+        )
+
+        value = deployment_runtime_inventory_payload()
+    except Exception:
+        return {}
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def _rpc_error_code(exc: BaseException) -> str:
     token = str(exc).split(":", 1)[0].strip()
     if token and len(token) <= 80 and all(char.isalnum() or char in "._-" for char in token):
@@ -917,6 +929,7 @@ class MemberLinkClient:
                 },
             },
             "services": {"voice_listening": voice_listening},
+            "deployment": _deployment_inventory_payload(),
             "build": {
                 "version": str(BUILD_INFO.version or ""),
                 "build_date": str(BUILD_INFO.build_date or ""),
@@ -1958,7 +1971,13 @@ class MemberLinkClient:
         params = msg.get("params") or {}
         if not isinstance(rid, str) or not rid:
             return
-        if method != "tools.call":
+        allowed_methods = {
+            "tools.call",
+            "project.deployment.phase",
+            "distributed.topology.phase",
+            "distributed.service.invoke",
+        }
+        if method not in allowed_methods:
             await self._send_ws_message(
                 ws,
                 {"t": "rpc.res", "id": rid, "ok": False, "error": "unknown_method"},
@@ -1971,7 +1990,7 @@ class MemberLinkClient:
         timeout = (params or {}).get("timeout")
         dev = bool((params or {}).get("dev", False))
         intent = str((params or {}).get("intent") or "").strip().lower()
-        if not isinstance(tool, str) or ":" not in tool:
+        if method == "tools.call" and (not isinstance(tool, str) or ":" not in tool):
             await self._send_ws_message(
                 ws,
                 {"t": "rpc.res", "id": rid, "ok": False, "error": "invalid_tool"},
@@ -1979,14 +1998,23 @@ class MemberLinkClient:
             )
             return
 
+        rpc_name = str(tool or method)
         started_at = time.time()
         self._rpc_started_total += 1
         try:
-            result = await asyncio.to_thread(self._run_tool, tool, arguments, timeout, dev, intent)
+            result = await asyncio.to_thread(
+                self._run_rpc,
+                method,
+                dict(params),
+                timeout,
+                dev,
+                intent,
+            )
             duration_s = max(0.0, time.time() - started_at)
             self._rpc_completed_total += 1
             self._rpc_last_result = {
-                "tool": tool,
+                "tool": rpc_name,
+                "method": method,
                 "ok": True,
                 "duration_s": round(duration_s, 6),
                 "finished_at": time.time(),
@@ -1994,7 +2022,7 @@ class MemberLinkClient:
             if duration_s >= 1.0:
                 _log.warning(
                     "member rpc tool slow tool=%s duration_s=%.3f argument_keys=%s",
-                    tool,
+                    rpc_name,
                     duration_s,
                     sorted(str(key) for key in arguments.keys()) if isinstance(arguments, dict) else [],
                 )
@@ -2008,7 +2036,8 @@ class MemberLinkClient:
             error_code = _rpc_error_code(exc)
             self._rpc_failed_total += 1
             self._rpc_last_result = {
-                "tool": tool,
+                "tool": rpc_name,
+                "method": method,
                 "ok": False,
                 "duration_s": round(duration_s, 6),
                 "error_type": type(exc).__name__,
@@ -2017,7 +2046,7 @@ class MemberLinkClient:
             }
             _log.warning(
                 "member rpc tool failed tool=%s duration_s=%.3f error_type=%s error_code=%s argument_keys=%s",
-                tool,
+                rpc_name,
                 duration_s,
                 type(exc).__name__,
                 error_code,
@@ -2055,10 +2084,47 @@ class MemberLinkClient:
                 self._rpc_max_concurrency(),
             )
             return
-        tool = str(((msg.get("params") or {}) if isinstance(msg.get("params"), dict) else {}).get("tool") or "unknown")
-        task = asyncio.create_task(self._on_rpc(ws, msg), name=f"subnet-rpc:{tool[:80]}")
+        params = (msg.get("params") or {}) if isinstance(msg.get("params"), dict) else {}
+        rpc_name = str(params.get("tool") or msg.get("method") or "unknown")
+        task = asyncio.create_task(self._on_rpc(ws, msg), name=f"subnet-rpc:{rpc_name[:80]}")
         self._rpc_tasks.add(task)
         task.add_done_callback(self._rpc_tasks.discard)
+
+    def _run_rpc(
+        self,
+        method: str,
+        params: dict[str, Any],
+        timeout: Any,
+        dev: bool,
+        intent: str = "",
+    ) -> Any:
+        if method == "tools.call":
+            return self._run_tool(
+                str(params.get("tool") or ""),
+                dict(params.get("arguments") or {}),
+                timeout,
+                dev,
+                intent,
+            )
+        if method == "project.deployment.phase":
+            from adaos.services.project_deployment.transport import (
+                execute_remote_component_phase,
+            )
+
+            return execute_remote_component_phase(params)
+        if method == "distributed.topology.phase":
+            from adaos.services.distributed_runtime.adapters import (
+                execute_registered_topology_phase,
+            )
+
+            return execute_registered_topology_phase(params)
+        if method == "distributed.service.invoke":
+            from adaos.services.distributed_runtime.service_invocation import (
+                execute_registered_service_invocation,
+            )
+
+            return execute_registered_service_invocation(params)
+        raise PermissionError("member_rpc_method_not_allowed")
 
     @staticmethod
     def _run_tool(

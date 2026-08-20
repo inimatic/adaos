@@ -6,6 +6,8 @@ import sys
 import types
 from types import SimpleNamespace
 
+import pytest
+
 y_py_module = sys.modules.get("y_py")
 if y_py_module is None:
     y_py_module = types.SimpleNamespace()
@@ -291,6 +293,17 @@ def test_member_snapshot_heartbeat_carries_core_build_version(monkeypatch) -> No
         lambda: {"state": "succeeded", "phase": "validate", "target_slot": "A"},
     )
     monkeypatch.setattr(mod, "read_core_update_last_result", lambda: {})
+    monkeypatch.setattr(
+        mod,
+        "_deployment_inventory_payload",
+        lambda: {
+            "runtime_version": "0.1.0+1.6ae4ddb",
+            "capabilities": ["project.activate", "media.catalog"],
+            "protocols": {"project_activation": "1"},
+            "capacity": {"cpu_millicores": 4000},
+            "endpoints": [],
+        },
+    )
 
     snapshot = client._local_node_snapshot_heartbeat()
 
@@ -303,6 +316,31 @@ def test_member_snapshot_heartbeat_carries_core_build_version(monkeypatch) -> No
     assert snapshot["environment"]["voice"]["stt"] == "endpoint_audio"
     assert snapshot["environment"]["voice"]["tts"] == "native_or_browser"
     assert snapshot["services"]["voice_listening"] == voice_projection
+    assert snapshot["deployment"]["capabilities"] == [
+        "project.activate",
+        "media.catalog",
+    ]
+
+
+def test_member_rpc_dispatches_fail_closed_core_methods(monkeypatch) -> None:
+    client = mod.MemberLinkClient()
+    payload = {"schema": "adaos.project.remote_component_phase.v1"}
+    observed: list[dict] = []
+
+    import adaos.services.project_deployment.transport as deployment_transport
+
+    monkeypatch.setattr(
+        deployment_transport,
+        "execute_remote_component_phase",
+        lambda value: observed.append(dict(value)) or {"ok": True},
+    )
+
+    assert client._run_rpc(
+        "project.deployment.phase", payload, None, False
+    ) == {"ok": True}
+    assert observed == [payload]
+    with pytest.raises(PermissionError, match="member_rpc_method_not_allowed"):
+        client._run_rpc("system.shell", {}, None, False)
 
 
 def test_member_snapshot_heartbeat_repairs_stale_default_manifest_version(monkeypatch) -> None:

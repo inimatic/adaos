@@ -80,6 +80,7 @@ Current target-state control-plane extensions are documented in:
 - [Media Center MVP](media-center-mvp.md): production-oriented MVP boundary for the media-center skill and scenario on top of shared media resources
 - [Distributed Media Center Target Architecture](media-center-target-architecture.md): target Project composition, distributed agents/catalog, domain model, playback/control, personalization, UI profiles, security, and acceptance invariants
 - [Distributed Media Center Roadmap](media-center-roadmap.md): prioritized milestones and proof gates from exact baseline through distributed household production acceptance
+- [Distributed Media Center Baseline - 2026-08-19](distributed-media-center-baseline-2026-08-19.md): exact core/client/registry/stand audit and implementation delta for MC0, DS0, and AP8
 - [Roadmap Inventory and Authority Map](roadmap-inventory.md): ownership rules and index for cross-domain, MVP, domain, and execution planning
 - [Model Runtime and Registry](model-runtime-and-registry.md): target model execution, artifact registry, local/remote backend, session, and job architecture for neural and external model-backed skills
 - [Model Runtime Roadmap](model-runtime-roadmap.md): implementation checklist for landing core model infrastructure first, then migrating Neural NLU and face vision pilots

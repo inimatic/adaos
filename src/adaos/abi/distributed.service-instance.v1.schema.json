@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "distributed.service-instance.v1.schema.json",
+  "title": "AdaOS Distributed Service Instance v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "instance_id", "group_id", "node_id", "activation_id", "release_digest", "component_ref", "runtime_generation", "protocol_version", "topology_generation", "lease_id", "status", "readiness", "health", "pressure", "capabilities", "endpoints", "observed_at", "revision"],
+  "properties": {
+    "schema": { "const": "adaos.distributed.service_instance.v1" },
+    "instance_id": { "$ref": "#/$defs/token" }, "group_id": { "$ref": "#/$defs/token" }, "node_id": { "$ref": "#/$defs/token" }, "activation_id": { "$ref": "#/$defs/token" },
+    "release_digest": { "$ref": "#/$defs/digest" }, "component_ref": { "type": "string", "pattern": "^(skill|scenario):" },
+    "runtime_generation": { "type": "integer", "minimum": 1 }, "protocol_version": { "$ref": "#/$defs/token" }, "topology_generation": { "type": "integer", "minimum": 1 }, "lease_id": { "$ref": "#/$defs/token" },
+    "status": { "enum": ["registering", "ready", "draining", "unavailable", "failed", "expired"] }, "readiness": { "type": "boolean" }, "health": { "type": "object" }, "pressure": { "type": "object" }, "capabilities": { "$ref": "#/$defs/stringSet" },
+    "endpoints": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/endpoint" } }, "observed_at": { "type": "string", "format": "date-time" }, "revision": { "type": "integer", "minimum": 1 }
+  },
+  "$defs": {
+    "token": { "type": "string", "minLength": 1, "maxLength": 500 }, "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "stringSet": { "type": "array", "maxItems": 200, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 300 } },
+    "endpoint": { "type": "object", "additionalProperties": false, "required": ["endpoint_id", "protocol", "address_ref", "scopes", "metadata"], "properties": { "endpoint_id": { "$ref": "#/$defs/token" }, "protocol": { "$ref": "#/$defs/token" }, "address_ref": { "$ref": "#/$defs/token" }, "scopes": { "$ref": "#/$defs/stringSet" }, "metadata": { "type": "object" } } }
+  }
+}

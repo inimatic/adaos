@@ -1,10 +1,18 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from adaos.sdk.core.environment import runtime_identity
 
 
-def test_runtime_identity_is_path_free_and_identifies_current_skill(_autocontext) -> None:
+def test_runtime_identity_is_path_free_and_identifies_current_skill(
+    _autocontext,
+) -> None:
     ctx = _autocontext
+    ctx.config = SimpleNamespace(
+        node_id_value="node-a",
+        subnet_id_value="subnet-home",
+        role="member",
+    )
     root = Path(ctx.paths.skills_dir()) / "identity_skill"
     root.mkdir(parents=True, exist_ok=True)
     (root / "skill.yaml").write_text(
@@ -18,6 +26,11 @@ def test_runtime_identity_is_path_free_and_identifies_current_skill(_autocontext
     assert identity["schema"] == "adaos.runtime.identity.v1"
     assert identity["python_version"]
     assert identity["platform"]
+    assert identity["node"] == {
+        "node_id": "node-a",
+        "subnet_id": "subnet-home",
+        "role": "member",
+    }
     assert identity["core"]["source_tree"]["kind"] in {"git", "installed"}
     assert identity["core"]["source_tree"]["clean"] in {True, False, None}
     assert identity["current_skill"]["name"] == "identity_skill"

@@ -273,6 +273,25 @@ class BootstrapBootCoordinator:
         _prepare_started = _startup_stage_mark("bootstrap_prepare_environment")
         service._prepare_environment()
         _startup_stage_mark("bootstrap_prepare_environment", started=_prepare_started)
+        _distributed_started = _startup_stage_mark("bootstrap_distributed_runtimes")
+        try:
+            from adaos.services.project_deployment.default_runtime import (
+                configure_default_distributed_runtimes,
+            )
+
+            configure_default_distributed_runtimes(service.ctx)
+            _startup_stage_mark(
+                "bootstrap_distributed_runtimes", started=_distributed_started
+            )
+        except Exception as exc:
+            _startup_stage_mark(
+                "bootstrap_distributed_runtimes",
+                started=_distributed_started,
+                failed=exc,
+            )
+            startup_log.warning(
+                "failed to configure distributed runtimes", exc_info=True
+            )
         # local adapter over LocalEventBus
         _io_bus_started = _startup_stage_mark("bootstrap_connect_io_bus")
         core_bus = service.ctx.bus if isinstance(service.ctx.bus, operations.local_event_bus_type) else operations.local_event_bus_type()
@@ -306,13 +325,11 @@ class BootstrapBootCoordinator:
         # External service skills must not hold the API listener closed. Their
         # health and recovery are supervised independently after core channel
         # setup, unless an installation explicitly opts into legacy blocking.
-        defer_service_skill_startup = False
         if candidate_runtime_mode:
             service._log.info("skipping service skill startup for candidate runtime prewarm")
         elif _service_skills_block_boot():
             await _start_service_skills("bootstrap_start_service_skills")
         else:
-            defer_service_skill_startup = True
             service._log.info("deferring service skill startup until core channel setup completes")
         _subscriptions_started = _startup_stage_mark("bootstrap_register_subscriptions")
         await operations.register_subscriptions()

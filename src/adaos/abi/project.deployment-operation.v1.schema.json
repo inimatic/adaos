@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "project.deployment-operation.v1.schema.json",
+  "title": "AdaOS Project Deployment Operation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "operation_id", "deployment_id", "plan_digest", "kind", "state",
+    "expected_revision", "idempotency_key", "node_results", "error", "uncertain",
+    "created_at", "updated_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.project.deployment_operation.v1" },
+    "operation_id": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "deployment_id": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "plan_digest": { "$ref": "#/$defs/digest" },
+    "kind": { "enum": ["apply", "reconcile", "drain", "remove", "rollback"] },
+    "state": { "enum": ["accepted", "running", "succeeded", "partial", "failed", "uncertain", "rolled_back", "cancelled"] },
+    "expected_revision": { "type": "integer", "minimum": 1 },
+    "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "node_results": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": { "$ref": "#/$defs/nodeResult" }
+    },
+    "error": { "type": "object" },
+    "uncertain": { "type": "boolean" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "phaseResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase", "state", "attempt", "idempotency_key", "receipt", "error", "started_at", "finished_at"],
+      "properties": {
+        "phase": { "enum": ["fetch", "verify", "stage", "activate", "health", "commit", "cordon", "drain", "deactivate", "remove", "rollback"] },
+        "state": { "enum": ["pending", "running", "succeeded", "failed", "uncertain", "skipped"] },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "receipt": { "type": "object" },
+        "error": { "type": "object" },
+        "started_at": { "type": "string", "format": "date-time" },
+        "finished_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "componentResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component_ref", "action", "state", "phases", "activation_ref", "error", "uncertain"],
+      "properties": {
+        "component_ref": { "type": "string", "pattern": "^(skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$" },
+        "action": { "enum": ["install", "update", "noop", "cordon", "drain", "deactivate", "remove"] },
+        "state": { "enum": ["accepted", "running", "succeeded", "partial", "failed", "uncertain", "rolled_back", "cancelled"] },
+        "phases": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/phaseResult" } },
+        "activation_ref": { "type": ["string", "null"], "maxLength": 500 },
+        "error": { "type": "object" },
+        "uncertain": { "type": "boolean" }
+      }
+    },
+    "nodeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_id", "state", "components", "error", "uncertain"],
+      "properties": {
+        "node_id": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "state": { "enum": ["accepted", "running", "succeeded", "partial", "failed", "uncertain", "rolled_back", "cancelled"] },
+        "components": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/componentResult" } },
+        "error": { "type": "object" },
+        "uncertain": { "type": "boolean" }
+      }
+    }
+  }
+}
