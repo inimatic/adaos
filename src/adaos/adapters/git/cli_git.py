@@ -690,10 +690,40 @@ class CliGitClient(GitClient):
             if branch:
                 current_branch = _safe_git(d, ["rev-parse", "--abbrev-ref", "HEAD"])
                 if current_branch == branch:
+                    remote_ref = f"origin/{branch}"
+                    branch_refspec = (
+                        f"+refs/heads/{branch}:refs/remotes/{remote_ref}"
+                    )
+                    fetch_specs = {
+                        item.strip()
+                        for item in _safe_git(
+                            d,
+                            ["config", "--get-all", "remote.origin.fetch"],
+                        ).splitlines()
+                        if item.strip()
+                    }
+                    if branch_refspec not in fetch_specs:
+                        _run_git(
+                            [
+                                "config",
+                                "--add",
+                                "remote.origin.fetch",
+                                branch_refspec,
+                            ],
+                            cwd=str(d),
+                        )
                     try:
-                        _run_git(["branch", "--set-upstream-to", f"origin/{branch}", branch], cwd=str(d))
+                        _run_git(
+                            ["fetch", "origin", branch],
+                            cwd=str(d),
+                        )
+                        _run_git(
+                            ["branch", "--set-upstream-to", remote_ref, branch],
+                            cwd=str(d),
+                        )
                     except GitError:
-                        # The remote-tracking ref may not exist until the next pull/fetch.
+                        # Keep an existing local checkout usable while its remote
+                        # branch is temporarily unavailable.
                         pass
 
     def pull(self, dir: StrOrPath) -> None:
