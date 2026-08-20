@@ -347,7 +347,16 @@ def test_admin_lifecycle_exposes_delayed_verification_worker(monkeypatch) -> Non
 
 
 def test_node_status_exposes_runtime_environment(monkeypatch) -> None:
-    monkeypatch.setenv("ENV_TYPE", "dev")
+    monkeypatch.setattr(
+        system_model_service,
+        "runtime_environment_payload",
+        lambda: {
+            "envType": "dev",
+            "mode": "dev",
+            "debug": True,
+            "source": "settings.env_type",
+        },
+    )
 
     payload = node_api._node_status_payload()
 
