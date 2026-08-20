@@ -1517,7 +1517,9 @@ def _operation_contract_assignment(
         "properties": {
             "request": {
                 "type": "object",
-                "required": ["schema", "value"],
+                # JSON Schema object-required order is not semantic and an
+                # autonomous author need not reproduce source formatting.
+                "required": ["value", "schema"],
                 "properties": {
                     "schema": {"const": "example.probe.v1"},
                     "value": {"type": "number"},

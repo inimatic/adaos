@@ -2496,15 +2496,35 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             "writeOnly",
         }
 
-        def semantic_schema(value: Any) -> Any:
+        unordered_array_keywords = {
+            "allOf",
+            "anyOf",
+            "enum",
+            "oneOf",
+            "required",
+            "type",
+        }
+
+        def semantic_schema(value: Any, *, keyword: str | None = None) -> Any:
             if isinstance(value, Mapping):
                 return {
-                    str(key): semantic_schema(item)
+                    str(key): semantic_schema(item, keyword=str(key))
                     for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
                     if str(key) not in annotations
                 }
             if isinstance(value, list):
-                return [semantic_schema(item) for item in value]
+                normalized = [semantic_schema(item) for item in value]
+                if keyword in unordered_array_keywords:
+                    return sorted(
+                        normalized,
+                        key=lambda item: json.dumps(
+                            item,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                    )
+                return normalized
             return value
 
         def first_difference(expected: Any, actual: Any, pointer: str = "") -> str | None:
