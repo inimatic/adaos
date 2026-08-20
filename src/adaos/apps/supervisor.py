@@ -8097,7 +8097,7 @@ class SupervisorManager:
         await self._update_state_machine.cancel_task(mode="cancelled")
         self._release_skill_runtime_migration_gate(reason="supervisor_close")
         await self._process_supervisor.stop_monitor()
-        preserve_managed_children = self._service_restart_pending or _autostart_self_restart_supported()
+        preserve_managed_children = self._service_restart_pending
         if preserve_managed_children:
             reaper = self._schedule_managed_handoff_reaper()
             retired_cleanup = self._schedule_retired_runtime_cleanup()
@@ -8257,8 +8257,19 @@ class SupervisorManager:
                             break
                         await asyncio.sleep(0.1)
                 if proc.poll() is None:
-                    raise RuntimeError(f"runtime process did not exit after forced stop: {reason}")
-                self._last_error = f"forced runtime stop after shutdown timeout: {reason}"
+                    self._last_error = (
+                        f"runtime exit pending after forced stop: {reason}"
+                    )
+                    self._persist_runtime_state()
+                    return {
+                        "ok": False,
+                        "forced": True,
+                        "pending_exit": True,
+                        "reason": reason,
+                    }
+                self._last_error = (
+                    f"forced runtime stop after shutdown timeout: {reason}"
+                )
                 self._persist_runtime_state()
         return {"ok": True, "forced": forced, "reason": reason}
 

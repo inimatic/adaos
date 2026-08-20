@@ -575,6 +575,280 @@ change so far was learned on TLP, even a positive v13 can support only a local
 post-hardening claim; an unbiased generalization claim requires the later
 held-out multi-task benchmark.
 
+#### Six-pair executable-rail iterations through v25
+
+Later retained rail iterations culminated in the first complete amended
+six-pair C0/C3 task, `tlp-structured-formalization-paired-v22`, digest
+`sha256:b45fb44bb68f610e574f111c06f2109ba232146d3bcb10354df371c1d0d4c546`.
+C0 completed `0/6` evidence-valid attempts and C3 completed `1/6`. The exact
+one-sided paired sign test is `p=0.5`, so v22 does not support the primary
+superiority claim. Its immutable summary digest is
+`sha256:409830ce888829fd2a9e14c7dbfaf1d3977c75d890796d6534c8092d5042af90`;
+the exported recomputation package is
+`sha256:70e071821d9e1973df86a530dc103032ee56881a51f56c10c8de0a2a276a78c3`.
+The useful secondary observation was that C3 preserved the accepted protocol
+more reliably but still failed the exact downstream evidence-consumer ABI.
+
+v23, digest
+`sha256:73eda7f19931f270d28e63c1bfc6e3468bcb7cd60ffcc93cb4d141a99df93f64`,
+and v24, digest
+`sha256:3496af7bcb84865dd2338e7dc5731703260674cab48e436831dc970561932590`,
+are retained incomplete tasks. Their shared-checkout environment changed
+between paired arms, and the frozen environment gate stopped execution before
+another Codex attempt. A post-score audit of v24 found that its C3 candidate
+had produced the complete exact document set under the task-owned
+`ADAOS_TASK_RUNTIME_DIR`; the trusted Builder validator had instead inspected
+its private worker-state envelope. Core fix `817a2ae2` makes normal validation
+and recovery derive the same exported task runtime. Revalidation recovered and
+activated the already generated candidate without another Codex call. This is
+post-hoc platform diagnosis, not a rewrite of the immutable v24 failure.
+
+v25, digest
+`sha256:90ca9b48c4ad5e3853e28051a68e6ca4de345476eff0890d1c954e160d382d8a`,
+started on a clean merged core and completed one C3 realization in one model
+attempt, 3,514,719 charged tokens and 880 seconds. Builder completed, the
+candidate stayed within the fixed-downstream budget, and the independent
+evaluator passed context isolation, protocol fidelity, and native skill
+validation. It failed runner conformance, CPU smoke, and evidence identity,
+so immutable result
+`sha256:39751895342c7bcfe65f84f2992530fc4cc9e855e72b8fee366dacd542459ec4`
+remains `evidence_valid_completion=false`. The production command exited zero
+but wrote documents below an implicit `outputs/` child while
+`ExecutionSpec.expected_outputs` resolves each item directly against
+`working_directory`. The executor therefore correctly reported all six
+declared outputs missing. Parallel core work changed the frozen commit before
+the paired C0 arm, so v25 is incomplete and cannot support a paired claim.
+
+This failure exposed a genuinely ambiguous consumer boundary rather than a
+TLP algorithm requirement. Runner ABI 1.8, digest
+`sha256:4fa3356581a97531626277b18a7c213c4f0fcb4ec036e18fa74c0ae70c30f7cf`,
+now declares the exact resolution
+`Path(working_directory) / expected_outputs[i]` and rejects undeclared implicit
+subdirectories. `research_manager_skill 0.27.0` publishes that contract.
+Builder prompt ABI 0.7 (introduced by core commit `4ebb69c2` and versioned in
+the following provenance commit) also makes the generic one-shot rail exercise the
+production provider command, exact output paths, returned `output_ref`,
+collection, and verification rather than accepting only a schema-shaped helper
+fixture. Neither change modifies v22-v25; a new frozen task is required.
+
+v26, digest
+`sha256:4595fcaf652d8e0c3fb27f49a3f76487e3eff688d74dbf09aca71c13888ec923`,
+was the first series executed from a detached, clean proof worktree, so
+unrelated commits in the primary checkout could not change its frozen core
+identity. It was deliberately stopped after two pairs when an audit found that
+the operator driver had inverted every within-pair arm order relative to the
+immutable `comparison_plan`. The retained diagnostic results are C0 `0/2` and
+C3 `1/2`; they are neither completed probability evidence nor eligible for a
+paired claim. C3 attempt 2 nevertheless passed all six independent gates in
+one Builder/Codex attempt, including the real three-epoch CPU smoke and
+content-addressed evidence, under immutable result
+`sha256:9dce6082470799bd7bc2fcca89eed36e27a925583dcc265cb4149047237ccd98`.
+It used 6,659,311 charged tokens and therefore failed the separately reported
+5M budget endpoint. C3 attempt 1 exposed a runtime-context defect: its packaged
+test predicted a physical data-root layout that differed from the activated
+owner-scoped slot. Core `515b6b26` now injects the exact skill-owned runtime
+bindings into packaged tests and repeats them in the prepared slot, allowing
+the normal automatic repair loop to see that failure before activation.
+
+The order error exposed a more general proof-integrity gap. Core `12f61cf3`
+projects Builder Automation's durable `created_at` start boundary. Evaluator
+`0.1.33` stores it in calibration result v1.2, reconstructs the observed
+sequence, and returns an explicit no-claim state for missing, duplicate, or
+reordered timestamps. Calibration runner `0.1.13` derives the next legal
+`(arm_id, attempt_index)` from the evaluator's durable lineage and rejects an
+out-of-order start before candidate creation. The negative live check against
+the next frozen task rejected `C3_typed_execution:1` with
+`expected C0_raw:1`.
+
+The replacement v27 task is frozen at
+`sha256:cdd342fac5e41ccb762fad7876e1731bad61e5152fbdf12553631605d8741cd0`.
+It binds clean core `12f61cf3`, skill workspace `33f581e`, prompt ABI 0.7,
+runner contract 1.8, evaluator `0.1.33`, runner `0.1.13`, manager `0.27.0`,
+the same accepted formulation and six paired seeds. Its matched per-arm token
+budget is 7M, chosen before execution from the v26 diagnostic runtime rather
+than changed after observing v27 outcomes. The driver reads the order from the
+frozen task, while the runner independently enforces it. v27 was intentionally
+stopped after its first C0 result (`0/1` evidence-valid, `2/6` mandatory gates,
+result `sha256:74e9ed3f840c426e3eeb8c06e17d012333e31bfe1262766039278531e7cc2966`).
+A source-level audit of the earlier v26 C3 success showed that it implemented
+an 8x8, four-feature, standard-library logistic surrogate rather than the
+accepted 3x96x96 Torch convolutional system with MaxPool2d and centred TLP.
+The then-current evaluator had proved the runner/evidence envelope, not the
+scientific implementation. Continuing v27 would therefore have measured a
+known-invalid endpoint. v27 is retained as a stopped diagnostic and supports
+no paired claim.
+
+The replacement rail closes that semantic false-positive class without
+prescribing one TLP implementation. Core `400ef646` exposes capability-gated,
+bounded DEV-source inspection and prompt ABI 0.8 requires fidelity to the
+scientific subject, not merely schema-shaped outputs. Research Manager
+`0.28.0` publishes runner ABI 1.9: both arms must execute through one declared,
+digest-bound implementation path and emit an implementation observation.
+Evaluator `0.1.34` independently verifies declared source digests/callables and
+runs a hidden numerical MaxPool/centred-TLP probe over a candidate-provided
+operation. Orchestrator `0.48.0` carries the exact system specification into
+ExperimentPlan and keeps mutable ResearchTask identity out of the reusable
+Project declaration; the exact task remains frozen in DevelopmentSession.
+
+v28 was frozen at
+`sha256:eb1918b3285fd30091ed7097b23d4c46ec7286bd7f4b20270d4dbbe4a9d0db66`
+from accepted `research-task:tlp_structured_proof_02.task-005`, Compilation
+`sha256:55b24afd93b7e8878f3d7e01a8be30c1472feb8cdf39b1d0082d07bafa1d54f1`
+and AutomationBrief
+`sha256:913866f507a3d36b9b3035a623d7a1e448014f550b38bf57dcb38e8d89852641`.
+It binds clean detached core `e8f59272`, skill workspace `4a107af`, prompt ABI
+0.8, evaluator `0.1.34`, runner `0.1.13`, manager `0.28.0`, orchestrator
+`0.48.0`, five preregistered paired seeds, a 7M matched per-arm token ceiling,
+and the runner-validated counterbalanced order. C0 receives only the admitted
+notebook; C3 receives the same notebook plus compact Compilation,
+AutomationBrief and consumer ABI. `initial-review.md`, the legacy TLP skill and
+the hidden probe remained unavailable to Codex.
+
+v28 was stopped before its second C0 arm and is not claim-eligible. Its first
+complete pair produced C0 `1/7` (context only) and C3 `6/7`; the already-started
+second C3 replicate produced `3/7`. C3 candidates exercised the real
+three-epoch CPU workflow, but
+implemented a pure-Python surrogate rather than the accepted Torch CNN/TLP
+system. Audit found that the C3 packet exposed only the generic Research
+Manager runner ABI. The evaluator required exact domain callables and an
+`implementation_probe`, but that public interoperability surface was absent
+from the Builder packet. The hidden numerical values were legitimate held-out
+evidence; the hidden required interface was not. Continuing would have
+measured an impossible or underspecified task rather than the benefit of
+structured formalization.
+
+Evaluator `0.1.36` closes this measurement defect. Its public TLP fixture now
+projects a digest-bound `domain_conformance` contract into the C3 packet:
+framework and architectural invariants, exact callable keys, tensor and
+parameter shapes, pairing/equivalence requirements, and the public
+`implementation_probe` operation. Freeze rejects any hidden-profile interface
+requirement that is absent from that public contract. Hidden numerical inputs
+and expected outputs remain evaluator-only. This establishes the general
+rule: challenge secrecy may protect held-out values and cases; interface
+secrecy may not conceal a capability that the candidate must implement. A new
+v29 series must freeze the corrected evaluator and packets before execution;
+no v28 outcome may be reused in its primary comparison.
+
+v29 was frozen at
+`sha256:b0abe7d33843319d87694deafd5e883b88280119bf6d35647aeb2b2f323e57e2`
+and stopped after its first complete pair under an explicit futility audit. C0
+and C3 were both EVC failures, so the pair was a tie and v29 remains
+`incomplete_no_claim`. C0 drifted at operationalization and failed the runner
+boundary. C3 preserved the accepted protocol, passed six of seven independent
+checks and executed the real paired three-epoch Torch CPU path, but exported
+`implementation_probe` with flat arguments while the public contract declared
+`{"request": ...}`. With only four pairs remaining, even four C3 wins could
+reach only one-sided `p=0.0625`; completing the rail could not meet the frozen
+alpha of 0.05. The partial, recomputable package is retained under package
+digest
+`sha256:8077dedee632295aa1771c7caab58603c36f23c654ef52a935acac8ca0480781`;
+it is diagnostic evidence, not a comparative result.
+
+The v29 failure exposes a general contract lesson rather than a TLP-specific
+prompt tweak: an operation name without its exact input/output schema is not an
+executable ABI. Core `feadd180` now compares generated provider-tool schemas
+with every admitted `adaos.contract.operation_set.v1` before a Builder result
+can commit, ignoring documentation annotations but not validation keywords.
+Evaluator `0.1.37` projects the domain probe as a first-class operation in the
+same operation set, records a non-secret failure class plus diagnostic digest,
+and delegates DEV-runtime release to the runner process so Windows native DLLs
+are not deleted by the process that loaded them. Calibration runner `0.1.14`
+returns the flattened release receipt. The generic Builder gate knows nothing
+about TLP; the evaluator remains the owner of domain semantics and held-out
+values.
+
+Replacement v30 is frozen at
+`sha256:3409c751f6e6cabd89b29440d42348df79ad77a50103e84115a7985cdd1e1bad`
+on clean detached core `781836bc`, skill workspace `6a6d247`, prompt ABI 0.8,
+evaluator `0.1.37`, runner `0.1.14`, manager `0.28.0` and orchestrator `0.48.0`.
+Its five counterbalanced pairs retain the same notebook, accepted scientific
+task, model profile and matched 7M-token downstream budget. All 25 packets were
+materialized before execution; C0 has no instruction inputs and C3 contains
+only Compilation, AutomationBrief and the public operation set. The hidden
+probe numbers and expected outputs remain evaluator-only. No v29 outcome is
+reused in the v30 primary comparison.
+
+v30 was stopped after its first C3 attempt and is
+`incomplete_no_claim`. The candidate completed in two autonomous attempts,
+ran the real three-epoch Torch CPU workflow, and passed all seven independent
+scientific and engineering gates. It consumed 7,815,505 model tokens, however,
+so it failed the separate frozen 7M-token budget endpoint. More importantly,
+the repair instruction exposed an infrastructure defect: evaluator `0.1.37`
+had placed the generic four-operation runner ABI and the domain-specific TLP
+probe under the single contract identity `adaos.research.runner.v1`. Builder
+therefore correctly told Codex to add the domain probe to the generic runner
+provider declaration. That repair can demonstrate executable realization of
+the supplied packet, but not validity of the intended independent ABIs. No C0
+attempt was started. The diagnostic summary is
+`sha256:c5d165b37bb1f0acf0aa23962d7ec75d009fc99ba1d6516f35a1028dc2f897b6`
+and the partial package is
+`sha256:6430f047c79109cd5994e04da095e611b7a966904ba3f8622ec290ddce199aed`;
+neither supports a treatment claim.
+
+Core `cf78bc4e` generalizes the repair without knowing TLP. An admitted
+operation set may declare `candidate_role: provider`; Builder then requires an
+exact contract-and-capability provider declaration and exact tool schemas.
+Independent operation sets remain independent provider declarations, while a
+context-only operation set need not be implemented by the candidate. Evaluator
+`0.1.38` projects the generic runner and `adaos.research.tlp_probe.v1` as two
+separate, digest-bound operation sets. Its `0.1.37 -> 0.1.38` A/B activation
+also verified that evaluator data stayed in the shared `v0.1/data` bucket;
+candidate outputs remain owner-data, while Builder traces remain session-owned
+logs rather than inherited master/slave storage.
+
+Fresh v31 is frozen at
+`sha256:f99082c6ba4794ac3c507f9618698a2ee8c747fde44b8e138b2e14098fbbd025`
+on clean detached core `cf78bc4e`, skill workspace `c3bbb625`, evaluator
+`0.1.38`, runner `0.1.14`, manager `0.28.0`, orchestrator `0.48.0`, and prompt
+ABI 0.8. It preregisters six counterbalanced pairs so five discordant C3 wins
+can still reach one-sided `p=0.03125` if one pair ties. The matched downstream
+budget is 8.5M model tokens, chosen before execution from the v30 pilot
+observation. All 30 arm packets were materialized before execution. C0 sees no
+instruction input; C3 sees Compilation, AutomationBrief, an exact generic
+runner operation set, and an exact public TLP-probe operation set. Its first
+C3 packet is
+`sha256:9b349055403e4447f71192ae9e986683757abaf26115df7358420d56938b7621`.
+No earlier outcome is reused.
+
+v31 was stopped after that first C3 attempt and remains
+`incomplete_no_claim`. The autonomous candidate completed within the frozen
+8.5M-token budget (5,084,979 model tokens), passed native packaging, exact
+provider-contract admission and its seven packaged tests, and executed the
+real three-epoch CPU baseline path. The independent consumer trial then caught
+a candidate-owned path-identity defect while building `artifacts_index.json`:
+the subprocess wrote outputs to the `working_directory` from its ExecutionSpec
+but `_content_ref` recomputed a different `skill_data_root()`-relative path.
+The process exited nonzero after producing five of six outputs, so runner,
+scientific, smoke and evidence gates correctly failed. Summary
+`sha256:b59631e0374f685ee6c12a5cec0d6f59c2170b444edb5ed1b697a63723aa00d0`
+and partial package
+`sha256:eb4439c28b5ededd3f71612b8d25fb139eba4a26ce5e118c4952d523a192b4e2`
+retain the failure as diagnostic evidence.
+
+The attempt is excluded from a replacement primary comparison because the
+original background worker did not become ready and an operator had to start
+the same standard worker manually. Core `4532a21d` replaces launch-and-forget
+with a durable `starting -> ready|failed` handshake and an explicit
+`ready.json` written after worker initialization. Core `f3a96cf9` permits a
+bounded 5--180 second readiness interval (60 seconds by default), because a
+real Windows worker required more than 15 seconds to import and initialize.
+A clean synthetic launch on Windows reached `ready`, survived launcher exit,
+and was then terminated by exact recorded PID. This is launcher evidence, not
+a calibration outcome; a fresh frozen task must start from zero results.
+
+Fresh v32 is frozen at
+`sha256:e7a98cf51a65562837ad7df19b6f9b6ef3dc4cd08995f7f74cbd324ee84be8df`
+on clean detached core `f3a96cf9` with the same evaluator `0.1.38`, runner
+`0.1.14`, manager `0.28.0`, orchestrator `0.48.0`, workspace `c3bbb625`,
+prompt ABI 0.8, six counterbalanced pairs and matched 8.5M-token budget. All
+30 packets were materialized before execution and lineage contained zero
+results. Its first C3 packet is
+`sha256:8d1b09e2ab8bd364dc0b56c57f0c32ba038c2b4faca414b2d528ac90d12941ab`.
+The unassisted first launch reached `ready` in about nine seconds: launch PID
+4068 handed off to worker PID 13624, both launch and ready receipts name the
+same automation session, and Builder started the candidate. v31 candidate
+sources and outcomes are not inputs to v32.
+
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and
 content identities. Candidate-authored claims cannot mark a check passed. The

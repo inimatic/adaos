@@ -73,6 +73,11 @@ The research-domain workflow remains owned by
 15. Scenarios do not own skills. A scenario may consume a capability or present
     a binding; Project composition is the authority for jointly shipped/removed
     components and exact dependency locks.
+16. A managed/project-only component relation is a distribution and lifecycle
+    relation, not inherited data authority. Runtime data, execution telemetry,
+    orchestration state, and published artifacts have independently named
+    owners. Cross-component access requires an explicit capability,
+    `ArtifactRef`, or logical-view projection.
 
 ## Vocabulary
 
@@ -89,6 +94,8 @@ The research-domain workflow remains owned by
 | Context member | Read-only or filtered dependency visible to an agent | Implicit write authority |
 | Artifact group | Manifested local source material intended for human/LLM/Codex context | Mutable experiment/runtime data |
 | Runtime data | Skill-owned operational state under its activated runtime bucket | Project source or intake material |
+| Execution telemetry | Logs, traces, test diagnostics, and lifecycle receipts owned by the executing service/session | A child skill's primary data or an implicit parent database |
+| Managed component | Project member whose discovery/install/remove lifecycle is governed by the Project | A component whose data or credentials are inherited by another member |
 | Profile | Stable machine-readable semantic role such as `adaos.research.implementation.v1` | Localized catalog category |
 | Category | User-facing discovery facet such as `research` or `media` | Capability or deployment contract |
 | Domain aggregate | Live user-owned state such as a ResearchDirection | Installable Project or Builder session |
@@ -164,6 +171,33 @@ Owned members have orthogonal metadata:
 digests, signatures, dependency locks, and direct diagnostic addressing. They
 are omitted from normal Catalog/Desktop discovery and are not independently
 installed or removed. Hiding a component is never a security boundary.
+
+### Data, telemetry, and managed-component ownership
+
+Project composition does not create a parent-to-child storage namespace. The
+core resolves four orthogonal identities for every material effect:
+
+| Plane | Canonical owner | Permitted sharing |
+| --- | --- | --- |
+| Runtime data | the producing skill and its compatibility bucket | typed provider capability, `ArtifactRef`, or governed logical view |
+| Execution telemetry | the execution/Automation/DevelopmentSession journal | read projection governed by session and participant policy |
+| Orchestration state | the workflow or domain aggregate that authorized the work | command/query contract; never direct database lending |
+| Published result | the aggregate/release named by its evidence manifest | immutable content reference plus provenance and policy |
+
+Consequently, a `project_only` implementation skill may be installed and
+removed with its Project without becoming a private subdirectory or database
+of the primary member. The primary member cannot read the managed member's
+`data` merely because both appear in `components.owned`. If it needs a result,
+the managed member publishes a typed artifact or view and the consuming
+contract records both producer and consumer identities.
+
+Skill runtime `data` survives ordinary A/B activation and compatible patch
+increments under the existing bucket migration policy. It is appropriate for
+the skill's operational state and primary outputs. Builder candidate logs and
+packaged-test diagnostics instead belong to Builder Automation evidence. They
+must be atomically copied, bounded, and digested into the terminal session
+receipt before an ephemeral candidate runtime is purged. This keeps diagnostic
+provenance durable without turning skill data into a generic log store.
 
 Joint development is a practical consequence of Project ownership, but the
 Project manifest does not record a transient current editing task. Publication

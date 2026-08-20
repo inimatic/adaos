@@ -2,7 +2,7 @@
 
 Status: target architecture.
 
-Last reviewed: 2026-08-18.
+Last reviewed: 2026-08-20.
 
 This document defines the AdaOS boundary for user, runtime, review, and
 conversation feedback that may drive software evolution. It sits between raw
@@ -16,10 +16,14 @@ AdaOS needs a natural way for people and deterministic runtime checks to say
 "something should change" without turning every utterance, screenshot, or
 exception into an immediate development task.
 
-A Development Signal is an immutable, scoped observation that may later become
-a user preference, NLU correction, Builder repair, AdaOS Issue, deferred idea,
-or rejected duplicate. It preserves the original evidence and artifact version
-before triage chooses the appropriate lifecycle.
+A Development Signal is an immutable, scoped observation that may later feed a
+user preference, NLU correction, Dev Ticket, Builder repair, AdaOS Issue,
+deferred idea, or rejected duplicate. It preserves the original evidence and
+artifact version before triage chooses the appropriate lifecycle.
+
+A Dev Ticket is the human- and Codex-visible backlog object built from one or
+more Development Signals. People, Codex, and Builder should work with Dev
+Tickets; Development Signals remain the lower evidence records.
 
 The model follows established human-AI interaction practice:
 
@@ -57,6 +61,7 @@ The target flow is:
 human, runtime, review, or conversation observation
   -> contextual intake
   -> Development Signal
+  -> Dev Ticket when action or tracking is needed
   -> triage and deduplication
   -> user adaptation | NLU Teacher correction | Builder repair/task |
      AdaOS Issue | deferred idea | rejection
@@ -64,12 +69,79 @@ human, runtime, review, or conversation observation
 ```
 
 Development Signals are evidence and routing records. They are not commands,
-Issues, chat history, or approvals.
+Tickets, Issues, chat history, or approvals.
+
+Dev Tickets are the first managed work objects for evolution feedback before
+the future AdaOS Issue aggregate is admitted. A ticket may aggregate duplicate
+signals, carry human-readable state, accept Codex-authored deferred work,
+publish Pending Actions, and hand off to Builder. It is still narrower than an
+AdaOS Issue: it does not own support SLAs, cross-user collaboration, public
+upstream negotiation, or final release authority.
 
 An AdaOS Issue remains the durable work source of truth once support or
 development accepts a problem for tracked execution. Until that Issue layer is
 implemented, workspace-scoped Development Signals may bridge to the existing
 Builder repair and task records.
+
+## Dev Tickets
+
+Dev Ticket is the user and Codex control surface over Development Signals.
+It exists so that development debt is not stored as documentation TODOs,
+unstructured chat, or scattered review remarks.
+
+Target commands should follow the existing `adaos dev` surface instead of
+creating a separate `dev-signal` noun:
+
+```text
+adaos dev ticket new
+adaos dev ticket list
+adaos dev ticket show <id>
+adaos dev ticket defer <id>
+adaos dev ticket handoff <id> --mode autonomous|interactive
+adaos dev ticket resolve <id> --evidence <ref> --version <artifact-version>
+adaos dev ticket close <id> --reason duplicate|stale|refused|not-design-time-fixable
+```
+
+`resolve` means the ticket was closed by validation evidence, usually tied to
+a version, overlay, or Builder repair result. `close` means the ticket reached
+a terminal state without an implemented fix.
+
+The first UI should expose tickets before broad CLI ergonomics:
+
+- a scenario-header entry point for tickets scoped to the current scenario;
+- a modal or panel entry point for tickets scoped to that surface;
+- a context-filtered ticket list;
+- a ticket detail view showing summary, scope, status, target version,
+  evidence refs, screenshots, related signals, and available actions;
+- actions for postpone, open Builder, start autonomous repair, close, and
+  preview evidence.
+
+Development Signals remain the immutable evidence underneath. Dev Tickets own
+human-readable queue state, dedup grouping, and user/Codex workflow affordance.
+
+## Codex Producer Boundary
+
+Codex may create or update Dev Tickets while developing AdaOS core, skills, or
+scenarios. This is the preferred path for deferred debt discovered during
+implementation or review. Codex should not use documentation TODOs as the
+managed backlog when a ticket can be created.
+
+A Codex-created ticket must include:
+
+- source: `codex_review`, `core_change`, `skill_review`,
+  `scenario_review`, `compatibility_scan`, or `runtime_guard`;
+- target: core, runtime component, skill, scenario, WebUI surface, or
+  component;
+- affected version, digest, file, contract, or runtime ref when known;
+- reason why the work is not fixed in the current change;
+- evidence refs such as test, log, file, contract, trace, or screenshot;
+- dedup key;
+- proposed action;
+- acceptance hint or validation expectation.
+
+Machine-created tickets should start as `captured` or `proposed` unless policy
+or deterministic runtime evidence marks them as accepted blockers. A person or
+policy gate can later accept, defer, refuse, or route them to Builder.
 
 ## Core Record
 
@@ -340,7 +412,7 @@ recorded, but runtime incompatibility must be reproducible from evidence.
 ## Pending Actions
 
 Pending Actions carry durable human decisions about a signal. They are not
-the signal source of truth.
+the signal or ticket source of truth.
 
 Typical evolution actions:
 
@@ -361,6 +433,66 @@ High-risk choices require explicit approval according to policy:
 - destructive migration;
 - broad receiver or data-route expansion;
 - public promotion of private feedback or NLU examples.
+
+## External Issue Trackers
+
+AdaOS should support GitHub Issues and similar systems as optional external
+projections, not as the primary backlog.
+
+The internal relationship is:
+
+```text
+Development Signal -> Dev Ticket -> Builder Change
+                         |
+                         +-> optional external issue or upstream proposal
+```
+
+Create external issues only when policy and ownership make them useful:
+
+- the target skill, scenario, or core component is backed by a GitHub
+  repository;
+- the work must be sent upstream to a maintainer;
+- a team already uses a private repository backlog;
+- a public bug report or feature request is explicitly approved;
+- a release, pull request, commit, or upstream discussion needs a stable
+  external link.
+
+Default behavior is local and private. AdaOS must not automatically publish
+user feedback, screenshots, logs, NLU examples, DOM state, local paths, device
+names, or runtime traces to a public issue tracker.
+
+Target integration modes:
+
+- `none`: only the internal Dev Ticket exists.
+- `link_only`: the ticket links to an existing external issue.
+- `draft_export`: AdaOS prepares a redacted issue draft for human approval.
+- `private_repo_issue`: create an issue in a private repository or
+  organization.
+- `public_upstream_issue`: create a public upstream issue only after redaction
+  and explicit approval.
+- `mirror_status`: synchronize status and stable links without copying private
+  evidence or comments wholesale.
+
+External issue payloads contain sanitized summaries, affected public versions,
+expected and observed behavior, and safe reproduction steps. The internal Dev
+Ticket retains the full evidence bundle and privacy policy.
+
+Example external reference:
+
+```json
+{
+  "external_refs": [
+    {
+      "provider": "github",
+      "repo": "org/media-indexer-skill",
+      "issue": 123,
+      "path": "skills/media_indexer",
+      "privacy": "private",
+      "sync": "link_only"
+    }
+  ]
+}
+```
 
 ## Privacy And Retention
 
@@ -405,9 +537,11 @@ runtime contracts, and user education.
 | Contract | Owner |
 | --- | --- |
 | Development Signal schema, lifecycle, storage, and projections | This document and the Development Signals Roadmap |
+| Dev Ticket schema, lifecycle, UI, CLI, and internal backlog state | This document and the Development Signals Roadmap |
 | Human choice and deferred response | Pending Actions |
 | NLU understanding corrections | NLU Teacher |
 | Builder planning, implementation, validation, and release evidence | Builder |
+| Optional GitHub or external issue projection | Development Signals Roadmap plus plugin/integration owner |
 | Durable accepted work and support lifecycle | Future AdaOS Issue architecture |
 | Runtime guard, incident, and operational evidence | Runtime Guarding, Incident Registry, Operational Event Model |
 | Artifact versions, release lineage, and activation | Artifact/source/activation architecture |
@@ -420,16 +554,31 @@ feedback, Builder handoff schemas, review anchors, Pending Actions, NLU
 Teacher candidates, conversation stories, runtime incidents, projection
 diagnostics, artifact refs, and skill runtime declaration checks.
 
-Missing target pieces include:
+Implemented first slice, 2026-08-20:
 
-- a first-class `adaos.development_signal.v1` schema;
-- workspace evolution inbox and artifact-local signal projection;
+- first-class `adaos.development_signal.v1` and `adaos.dev_ticket.v1` ABI
+  schemas;
+- local/private workspace inbox at runtime state
+  `development_tickets/state.json`;
+- signal and ticket dedup by stable keys with occurrence counts;
+- runtime receiver compatibility producer for
+  `compat.stream_receiver_policy_missing` and
+  `compat.stream_receiver_not_declared`;
+- Pending Action creation and response handling for preview, postpone, open
+  Builder, autonomous repair, and refuse;
+- Builder repair task handoff with Dev Ticket and Development Signal source
+  refs;
+- resolution only through explicit validation evidence refs;
+- `adaos dev ticket` CLI for Codex and developer workflows.
+
+Remaining target pieces include:
+
+- artifact-local signal projection;
+- a client ticket list/detail surface in scenario headers and modal contexts;
 - Feedback Skill UI/voice intake with screenshot capture;
 - conversational disambiguation before feedback/Teacher/Builder routing;
 - NLU Teacher and Feedback Signal refs in both directions;
-- runtime compatibility-finding producer for missing receiver/data-route
-  contracts;
-- Pending Action producers and response handlers for autonomous versus
-  interactive Builder handoff;
-- closure by artifact version, overlay, acceptance evidence, or stale
-  revalidation.
+- broader compatibility producers for validation, route pressure, projection
+  rule misses, and invalid data-route contracts;
+- optional redacted GitHub issue draft/link/export integration;
+- stale revalidation and not-design-time-fixable closure automation.

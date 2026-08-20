@@ -34,7 +34,7 @@ from adaos.services.workflow_artifacts import (
 )
 
 
-RUNNER_VERSION = "adaos-local-codex-worker/0.3.1"
+RUNNER_VERSION = "adaos-local-codex-worker/0.5.0"
 GENERATED_TEST_TIMEOUT_SECONDS = 60
 PACKET_SCHEMA = "adaos.skill_factory.codex_packet.v1"
 LOCAL_SESSION_SCHEMA = "adaos.skill_factory.local_run.v1"
@@ -499,6 +499,62 @@ class LocalSkillFactoryWorker:
         self.max_repair_attempts = max(0, int(max_repair_attempts))
         self.factory = SkillFactoryService(state_dir=self.state_dir)
 
+    @staticmethod
+    def _task_evidence_root(output_dir: Path) -> Path:
+        """Return durable task evidence outside the candidate repository."""
+
+        return Path(output_dir).resolve().parent / "evidence"
+
+    @staticmethod
+    def _evidence_manifest(
+        evidence_root: Path,
+        expected_paths: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        artifacts: list[dict[str, Any]] = []
+        for kind, filename in {
+            "result": "result.json",
+            "test_report": "test_report.json",
+            "changed_files": "changed_files.txt",
+            "provenance": "provenance.json",
+        }.items():
+            path = evidence_root / filename
+            if not path.is_file():
+                continue
+            payload = path.read_bytes()
+            artifacts.append(
+                {
+                    "kind": kind,
+                    "logical_path": str(expected_paths.get(kind) or "").replace("\\", "/"),
+                    "digest": "sha256:" + hashlib.sha256(payload).hexdigest(),
+                    "size_bytes": len(payload),
+                    "media_type": (
+                        "application/json" if path.suffix.lower() == ".json" else "text/plain"
+                    ),
+                }
+            )
+        return {
+            "schema": "adaos.skill_factory.task_evidence_manifest.v1",
+            "storage": "worker_task_envelope",
+            "artifacts": artifacts,
+        }
+
+    @staticmethod
+    def _stage_scoped_changes(workspace: Path, assignment: Mapping[str, Any]) -> None:
+        paths = [
+            str(item).replace("\\", "/").strip("/")
+            for item in (assignment.get("forge") or {}).get("sparse_paths") or []
+            if str(item).strip()
+            and not str(item).replace("\\", "/").lstrip("/").startswith(".adaos/tasks/")
+        ]
+        paths = [
+            path
+            for path in paths
+            if (workspace / path).exists() or bool(_git(["ls-files", "--", path], cwd=workspace))
+        ]
+        if not paths:
+            raise ValueError("task has no source paths authorized for commit")
+        _git(["add", "-A", "--", *paths], cwd=workspace)
+
     def ensure_registered(self) -> dict[str, Any]:
         return self.factory.register_dev_node(
             {
@@ -587,16 +643,16 @@ class LocalSkillFactoryWorker:
             # uncommitted task changes receive the same bounded validation.
             changed_paths = self._changed_from_baseline(workspace)
             self._validate_changed_paths(assignment, changed_paths)
-            test_report = self._validate_workspace(assignment, workspace)
+            test_report = self._validate_workspace(
+                assignment,
+                workspace,
+            )
             _write_json(output_dir / "test_report.json", test_report)
             if not bool(test_report.get("ok")) or str(test_report.get("status") or "") != "passed":
                 raise ValueError("preserved result does not pass deterministic validation")
 
             evidence_paths = dict((assignment.get("evidence") or {}).get("expected_paths") or {})
-            result_relative = str(
-                evidence_paths.get("result") or f".adaos/tasks/{task_token}/result.json"
-            ).replace("\\", "/")
-            evidence_root = workspace / Path(result_relative).parent
+            evidence_root = self._task_evidence_root(output_dir)
             evidence_root.mkdir(parents=True, exist_ok=True)
             (evidence_root / "changed_files.txt").write_text(
                 "\n".join(changed_paths) + "\n", encoding="utf-8"
@@ -638,8 +694,8 @@ class LocalSkillFactoryWorker:
             (evidence_root / "changed_files.txt").write_text(
                 "\n".join(all_changed_paths) + "\n", encoding="utf-8"
             )
-            _git(["add", "-A"], cwd=workspace)
-            if _git(["status", "--porcelain", "--untracked-files=all"], cwd=workspace):
+            self._stage_scoped_changes(workspace, assignment)
+            if _git(["diff", "--cached", "--name-only"], cwd=workspace):
                 _git(["commit", "-m", f"realize: {task_id}"], cwd=workspace)
             dirty = False
             report_passed = True
@@ -650,10 +706,7 @@ class LocalSkillFactoryWorker:
             raise ValueError("result recovery refuses a modified validated task workspace")
 
         evidence_paths = dict((assignment.get("evidence") or {}).get("expected_paths") or {})
-        result_relative = str(
-            evidence_paths.get("result") or f".adaos/tasks/{task_token}/result.json"
-        ).replace("\\", "/")
-        evidence_root = workspace / Path(result_relative).parent
+        evidence_root = self._task_evidence_root(output_dir)
         result_manifest = _read_json(evidence_root / "result.json")
         provenance = _read_json(evidence_root / "provenance.json")
         if str(result_manifest.get("task_id") or "") != str(task_id or ""):
@@ -662,15 +715,18 @@ class LocalSkillFactoryWorker:
             raise ValueError("validated result evidence is incomplete")
 
         self._sync_artifacts(assignment, workspace)
+        recovered_changed_paths = self._changed_from_baseline(workspace)
         result = {
             "task_id": str(task_id),
             "node_id": self.node_id,
             "status": "completed",
             "commit_hash": _git(["rev-parse", "HEAD"], cwd=workspace),
             "branch": str((assignment.get("forge") or {}).get("branch") or ""),
-            "changed_paths": self._changed_from_baseline(workspace),
+            "changed_paths": recovered_changed_paths,
+            "no_source_change": not bool(recovered_changed_paths),
             "tests": {"status": "passed", "report": str(output_dir / "test_report.json")},
             "provenance": provenance,
+            "evidence": self._evidence_manifest(evidence_root, evidence_paths),
             "summary": str(result_manifest.get("summary") or "").strip(),
             "local_run_dir": str(run_root),
         }
@@ -942,7 +998,10 @@ class LocalSkillFactoryWorker:
                         "errors": [str(exc)],
                     }
                 else:
-                    test_report = self._validate_workspace(assignment, workspace)
+                    test_report = self._validate_workspace(
+                        assignment,
+                        workspace,
+                    )
                     # Generated tests are untrusted code and may create files
                     # after the pre-test scope check.  Re-establish the source
                     # boundary before accepting the report so a side effect
@@ -995,7 +1054,7 @@ class LocalSkillFactoryWorker:
                 raise RuntimeError("Generated project validation failed: " + "; ".join(test_report["errors"]))
 
             evidence_paths = dict((assignment.get("evidence") or {}).get("expected_paths") or {})
-            evidence_root = workspace / str(evidence_paths.get("result") or f".adaos/tasks/{_safe_token(task_id)}/result.json").replace("result.json", "")
+            evidence_root = self._task_evidence_root(output_dir)
             evidence_root.mkdir(parents=True, exist_ok=True)
             (evidence_root / "changed_files.txt").write_text("\n".join(changed_paths) + "\n", encoding="utf-8")
             shutil.copy2(output_dir / "test_report.json", evidence_root / "test_report.json")
@@ -1032,8 +1091,9 @@ class LocalSkillFactoryWorker:
 
             self._progress(task_id, "commit_ready", "Committing validated local result")
             self._ensure_task_active(task_id)
-            _git(["add", "-A"], cwd=workspace)
-            _git(["commit", "-m", f"realize: {task_id}"], cwd=workspace)
+            self._stage_scoped_changes(workspace, assignment)
+            if _git(["diff", "--cached", "--name-only"], cwd=workspace):
+                _git(["commit", "-m", f"realize: {task_id}"], cwd=workspace)
             commit_hash = _git(["rev-parse", "HEAD"], cwd=workspace)
             final_changed_paths = self._changed_from_baseline(workspace)
             self._ensure_task_active(task_id)
@@ -1046,8 +1106,10 @@ class LocalSkillFactoryWorker:
                 "commit_hash": commit_hash,
                 "branch": str((assignment.get("forge") or {}).get("branch") or ""),
                 "changed_paths": final_changed_paths,
+                "no_source_change": not bool(final_changed_paths),
                 "tests": {"status": "passed", "report": str(output_dir / "test_report.json")},
                 "provenance": provenance,
+                "evidence": self._evidence_manifest(evidence_root, evidence_paths),
                 "summary": codex_result.final_message.strip(),
                 "local_run_dir": str(run_root),
             }
@@ -1307,7 +1369,7 @@ When `scenarios/{target_id}/.builder_current_publication` exists, treat it as th
 7. Do not edit anything outside these task paths: {allowed_paths}.
 8. Do not access secrets, production data, other AdaOS runtime state, or external APIs.
 9. Preserve manifest `version` and `updated_at`; the transactional Forge checkpoint owns both fields. Tests must validate their shape or semantics and must not assert an exact value for either field, because checkpointing changes them after your checks.
-10. Keep UTF-8 source and payload text intact. Prefer `apply_patch` for source edits; do not route non-ASCII source text through a PowerShell string pipeline. Treat console mojibake as a display defect and verify file content as UTF-8 before rewriting it.
+10. Keep UTF-8 source and payload text intact. Prefer `apply_patch` for source edits; do not route non-ASCII source text through a PowerShell string pipeline. On Windows PowerShell 5.1, every textual `Get-Content` read of source, JSON, YAML, Markdown, or instruction files MUST include `-Encoding UTF8`; never rely on its ANSI default. Treat console mojibake as a display defect and verify file content as UTF-8 before rewriting it.
 11. Do not edit `.builder_current_publication`; it is immutable implementation input.
 12. When a manifest references `workflow.json`, treat that file as the only workflow-definition authority. Preserve the complete TransitionDescriptor contract, validate the definition structurally, and do not recreate workflow transitions as an independent Python or UI table.
 13. Treat every governed acceptance criterion as an implementation obligation. Do not mark a criterion complete merely because a self-authored fixture or schema-shaped record exists; exercise the real requested code path and retain machine-checkable evidence, unless that criterion explicitly asks for a mock or fixture.
@@ -1319,7 +1381,13 @@ When `scenarios/{target_id}/.builder_current_publication` exists, treat it as th
 19. Before adding or importing a third-party Python package, inspect the authoritative manifest schema at `${{ADAOS_REPO_ROOT}}/src/adaos/services/skill/skill_schema.json` and the dependency-isolation policy in `${{ADAOS_REPO_ROOT}}/docs/skill_runtime.md`. Declare every imported dependency. Heavy/native dependencies require a service boundary or the explicit documented transitional `allow_heavy_dependencies` allowance. Run install-strict `SkillValidationService.validate_path(...)` so manifest schema, imports, exported tools, and dependency isolation fail in one bounded pass before concluding.
 20. This checkout is an isolated candidate, not the canonical AdaOS workspace. Run source-tree validation and bounded tests here, but do not copy into or mutate the canonical workspace/runtime and do not publish, install, or activate the candidate yourself. The trusted worker finalizer owns package, install, activation, and rollback receipts after your turn."""
         required_result += """
-21. Keep every mutable test/runtime file outside the candidate source tree. Use `ADAOS_BASE_DIR` for the default task-owned AdaOS runtime. If a test needs multiple isolated bases, create child directories below `ADAOS_TASK_RUNTIME_DIR` (or an OS temporary directory outside this checkout), and clean them normally; never create repository-relative `.adaos*` runtime directories."""
+21. Keep every mutable test/runtime file outside the candidate source tree. Use `ADAOS_BASE_DIR` for the default task-owned AdaOS runtime. If a test needs multiple isolated bases, create child directories below `ADAOS_TASK_RUNTIME_DIR` (or an OS temporary directory outside this checkout), and clean them normally; never create repository-relative `.adaos*` runtime directories.
+22. Packaged tests must be hermetic. They cannot read `.adaos_context`, Builder Development-session instruction/artifact paths, session IDs, or other authoring-only files that Forge omits. Copy only a bounded non-secret fixture that remains necessary into the skill's own tests/fixtures, or leave admitted-context verification to consumer acceptance.
+23. Never reconstruct a skill's `.runtime`/slot path from `ADAOS_BASE_DIR`. Resolve mutable owner-scoped files with `adaos.sdk.skill_env.skill_data_root()` (or the equivalent typed SDK capability). Core supplies the exact DEV or installed data root through current skill context and execution bindings."""
+        required_result += """
+24. Treat every admitted `adaos.contract.operation_set.v1` instruction as executable consumer authority. Read its exact contract, capability, operation schemas and `conformance_fixtures`; honor every `required`, `const`, enum, and `additionalProperties` boundary. An operation set with `candidate_role: provider` requires the target skill to declare a matching `provider_contracts` entry with that exact contract and capability; keep independent contracts (for example a generic runner and a domain probe) as independent provider declarations rather than merging their operations. Exercise the production provider itself with a bounded fixture below `ADAOS_TASK_RUNTIME_DIR`, including the declared operation sequence rather than only a helper that resembles it, so the trusted worker can validate the newest complete document set. If the SDK normally resolves provider output through `skill_data_root()`, bind `ADAOS_SKILL_INTERNAL_DATA_ROOT` to a dedicated child of `ADAOS_TASK_RUNTIME_DIR` for this conformance execution; an OS-temporary or other owner-data root is not visible to trusted task validation. When a provider returns `working_directory` and `expected_outputs`, execute its returned command in that exact directory and require every output at the exact relative path `Path(working_directory) / expected_outputs[i]`; an undeclared implicit subdirectory is a missing output. Exercise collection through the returned `output_ref` and verification through the provider's declared operation. Do not replace consumer schemas with a permissive local look-alike."""
+        required_result += """
+25. For a governed scientific handoff, treat the accepted `experiment_plan.system` object and its digest as executable subject authority. Realize the declared system, component settings, arm semantics, intervention boundary, and locked invariants on the production runner path. A bounded fixture may reduce sample counts or runtime only where the accepted execution profile permits it; it must not substitute another model family, operator, input geometry, output space, or scientific subject. Emit the required implementation-observation document from that same path so an independent consumer can detect semantic substitution."""
         required_result = required_result.format(
             target_id=target_id,
             companion=companion,
@@ -1473,7 +1541,11 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 f"{immutable_publication}"
             )
 
-    def _validate_workspace(self, assignment: Mapping[str, Any], workspace: Path) -> dict[str, Any]:
+    def _validate_workspace(
+        self,
+        assignment: Mapping[str, Any],
+        workspace: Path,
+    ) -> dict[str, Any]:
         errors: list[str] = []
         checks: list[dict[str, Any]] = []
         request = dict(assignment.get("realize_request") or {})
@@ -1487,9 +1559,16 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             errors,
             changed_paths=changed_paths,
         )
+        self._validate_tests_do_not_depend_on_development_context(
+            workspace,
+            checks,
+            errors,
+            changed_paths=changed_paths,
+        )
         self._validate_skill_data_routes(workspace, checks, errors)
         self._validate_skill_dependency_isolation(workspace, checks, errors)
         self._validate_brief_contract_requirements(assignment, workspace, checks, errors)
+        self._validate_admitted_operation_schemas(assignment, workspace, checks, errors)
         for path in sorted(workspace.rglob("*.json")):
             if ".git" in path.parts:
                 continue
@@ -1647,7 +1726,221 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             errors,
             skip_frozen_skills=workflow_transition == "return_to_prototype",
         )
+        self._validate_admitted_contract_documents(
+            assignment,
+            workspace,
+            # This must be the same task-owned root exported to Codex as
+            # ADAOS_TASK_RUNTIME_DIR. ``run_root/runtime`` is the worker's
+            # private session envelope (state.json, event logs), not
+            # candidate output. Derive the root from the workspace/output
+            # invariant so recovery and the normal path cannot diverge.
+            runtime_dir=SubprocessCodexExecutor._task_runtime_root(
+                workspace.resolve().parent / "output"
+            ),
+            checks=checks,
+            errors=errors,
+        )
         return {"ok": not errors, "status": "passed" if not errors else "failed", "checks": checks, "errors": errors}
+
+    @staticmethod
+    def _validate_admitted_contract_documents(
+        assignment: Mapping[str, Any],
+        workspace: Path,
+        *,
+        runtime_dir: Path | None,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        """Validate consumer-owned document fixtures over task runtime output.
+
+        Typed provider contracts become useful autonomous-development rails
+        only when their exact machine boundary participates in trusted worker
+        validation. Consumer-owned operation-set instructions may expose
+        generic ``document_set`` fixtures. Candidate code writes bounded
+        fixture output below ``ADAOS_TASK_RUNTIME_DIR``; this worker selects
+        the newest complete set and returns exact schema errors to the normal
+        bounded Codex repair loop.
+
+        Builder does not know the domain meaning of the documents. The
+        admitted consumer owns the schemas and still owns semantic/runtime
+        acceptance after DEV activation.
+        """
+
+        if runtime_dir is None:
+            return
+        runtime_root = runtime_dir.resolve()
+        if not runtime_root.is_dir():
+            return
+        request = (
+            assignment.get("realize_request")
+            if isinstance(assignment.get("realize_request"), Mapping)
+            else {}
+        )
+        artifacts = (
+            request.get("artifacts")
+            if isinstance(request.get("artifacts"), Mapping)
+            else {}
+        )
+        development = (
+            artifacts.get("development_context")
+            if isinstance(artifacts.get("development_context"), Mapping)
+            else {}
+        )
+        fixtures: list[tuple[str, dict[str, Any]]] = []
+        workspace_root = workspace.resolve()
+        for descriptor in development.get("instruction_inputs") or []:
+            if not isinstance(descriptor, Mapping):
+                continue
+            if str(descriptor.get("media_type") or "").lower() != "application/json":
+                continue
+            relative = Path(str(descriptor.get("path") or ""))
+            if relative.is_absolute() or ".." in relative.parts:
+                continue
+            source = (workspace_root / relative).resolve()
+            try:
+                source.relative_to(workspace_root)
+            except ValueError:
+                continue
+            try:
+                contract = _read_json(source)
+            except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+                continue
+            if contract.get("schema") != "adaos.contract.operation_set.v1":
+                continue
+            contract_label = str(contract.get("contract") or descriptor.get("kind") or "contract")
+            for fixture in contract.get("conformance_fixtures") or []:
+                if isinstance(fixture, Mapping) and str(fixture.get("kind") or "") == "document_set":
+                    fixtures.append((contract_label, dict(fixture)))
+
+        if not fixtures:
+            return
+        try:
+            from jsonschema import Draft202012Validator
+        except Exception as exc:
+            errors.append(
+                "admitted contract document validation setup failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            return
+
+        for contract_label, fixture in fixtures[:20]:
+            fixture_id = str(fixture.get("id") or "document_set")
+            documents = (
+                dict(fixture.get("documents"))
+                if isinstance(fixture.get("documents"), Mapping)
+                else {}
+            )
+            required_documents = [
+                str(item)
+                for item in fixture.get("required_documents") or documents.keys()
+                if str(item).strip()
+            ][:50]
+            label = f"{contract_label}:{fixture_id}"
+            if not documents or not required_documents:
+                errors.append(f"admitted contract fixture {label} has no document schemas")
+                continue
+            invalid_names = [
+                name
+                for name in required_documents
+                if Path(name).name != name or name not in documents
+            ]
+            if invalid_names:
+                errors.append(
+                    f"admitted contract fixture {label} has invalid required documents: "
+                    + ", ".join(invalid_names)
+                )
+                continue
+            schema_invalid = False
+            for name in required_documents:
+                schema = documents.get(name)
+                if not isinstance(schema, Mapping):
+                    errors.append(f"admitted contract fixture {label} schema for {name} is not an object")
+                    schema_invalid = True
+                    continue
+                try:
+                    Draft202012Validator.check_schema(dict(schema))
+                except Exception as exc:
+                    errors.append(
+                        f"admitted contract fixture {label} schema for {name} is invalid: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    schema_invalid = True
+            if schema_invalid:
+                continue
+
+            candidates: dict[Path, set[str]] = {}
+            for name in required_documents:
+                for path in list(runtime_root.rglob(name))[:200]:
+                    try:
+                        path.resolve().relative_to(runtime_root)
+                    except (OSError, ValueError):
+                        continue
+                    if path.is_file():
+                        candidates.setdefault(path.parent.resolve(), set()).add(name)
+            required_set = set(required_documents)
+            complete_roots = [
+                root
+                for root, names in candidates.items()
+                if required_set.issubset(names)
+            ]
+            if not complete_roots:
+                if bool(fixture.get("required", True)):
+                    found = [
+                        f"{root.relative_to(runtime_root).as_posix() or '.'}="
+                        + ",".join(sorted(names))
+                        for root, names in sorted(
+                            candidates.items(),
+                            key=lambda item: item[0].as_posix(),
+                        )[:20]
+                    ]
+                    found_detail = "; ".join(found) if found else "none"
+                    errors.append(
+                        f"admitted contract fixture {label} produced no complete runtime document set; "
+                        f"required: {', '.join(required_documents)}; "
+                        f"trusted task runtime root: {runtime_root}; "
+                        f"incomplete sets found: {found_detail}. "
+                        "Conformance outputs written to an OS-temporary or owner-data root "
+                        "outside ADAOS_TASK_RUNTIME_DIR are not admissible."
+                    )
+                continue
+            selected = max(
+                complete_roots,
+                key=lambda root: max((root / name).stat().st_mtime_ns for name in required_documents),
+            )
+            fixture_errors = 0
+            for name in required_documents:
+                path = selected / name
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8-sig"))
+                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                    errors.append(
+                        f"admitted contract fixture {label} {name} is invalid JSON: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    fixture_errors += 1
+                    continue
+                validator = Draft202012Validator(dict(documents[name]))
+                validation_errors = sorted(
+                    validator.iter_errors(payload),
+                    key=lambda item: list(item.absolute_path),
+                )
+                for item in validation_errors[:20]:
+                    pointer = "/" + "/".join(str(part) for part in item.absolute_path)
+                    errors.append(
+                        f"admitted contract fixture {label} {name} at {pointer or '/'}: {item.message}"
+                    )
+                    fixture_errors += 1
+            if fixture_errors == 0:
+                checks.append(
+                    {
+                        "kind": "admitted_contract.document_set",
+                        "contract": contract_label,
+                        "fixture_id": fixture_id,
+                        "runtime_path": selected.relative_to(runtime_root).as_posix() or ".",
+                        "documents": required_documents,
+                        "ok": True,
+                    }
+                )
 
     @staticmethod
     def _validate_tests_do_not_pin_checkpoint_metadata(
@@ -1706,6 +1999,51 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 )
             else:
                 checks.append({"kind": "checkpoint_test_contract", "path": relative, "ok": True})
+
+    @staticmethod
+    def _validate_tests_do_not_depend_on_development_context(
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+        *,
+        changed_paths: set[str] | None = None,
+    ) -> None:
+        """Keep generated package tests independent from one Builder session.
+
+        Development inputs are immutable authoring evidence, not release
+        payload. A test that reaches back into ``.adaos_context`` may pass in
+        the isolated Codex checkout and then fail from the exact packaged
+        source that Forge installs. Reject that dependency before commit.
+        """
+
+        forbidden = (
+            ".adaos_context",
+            "builder/development_sessions",
+            "builder\\development_sessions",
+        )
+        for path in sorted(workspace.glob("skills/*/tests/test_*.py")):
+            relative = path.relative_to(workspace).as_posix()
+            if changed_paths is not None and relative not in changed_paths:
+                continue
+            try:
+                source = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                continue
+            matched = next((token for token in forbidden if token in source), None)
+            if matched:
+                errors.append(
+                    f"{relative}: generated package test depends on Development-session "
+                    f"context ({matched}); copy a bounded non-secret fixture into the skill "
+                    "or exercise the admitted context through consumer acceptance"
+                )
+            else:
+                checks.append(
+                    {
+                        "kind": "package_test_context_independence",
+                        "path": relative,
+                        "ok": True,
+                    }
+                )
 
     @staticmethod
     def _validate_skill_data_routes(
@@ -1991,6 +2329,23 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         *,
         skip_frozen_skills: bool = False,
     ) -> None:
+        validation_root = workspace.parent / "package-validation"
+        if validation_root.exists():
+            shutil.rmtree(validation_root)
+        source_skills = workspace / "skills"
+        packaged_skills = validation_root / "skills"
+        if source_skills.is_dir():
+            shutil.copytree(
+                source_skills,
+                packaged_skills,
+                ignore=shutil.ignore_patterns(
+                    ".runtime",
+                    ".adaos_context",
+                    "__pycache__",
+                    ".pytest_cache",
+                    "*.pyc",
+                ),
+            )
         for tests_dir in sorted(path for path in workspace.glob("skills/*/tests") if path.is_dir()):
             test_files = list(tests_dir.glob("test_*.py"))
             if not test_files:
@@ -2007,31 +2362,303 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     }
                 )
                 continue
-            # Deterministic validation has the same mutable-state boundary as
-            # the Codex turn.  Without a task-owned ADAOS_BASE_DIR an otherwise
-            # correct SDK fallback can write ``skills/.runtime`` into the
-            # disposable source checkout after the pre-test boundary check.
+            packaged_tests = validation_root / tests_dir.relative_to(workspace)
+            # Validate the exact package-shaped source projection, without
+            # authoring-only ``.adaos_context``. This closes the gap between
+            # Codex workspace tests and Forge/native installed validation.
             environment = SubprocessCodexExecutor(
                 repo_root=self.repo_root
             )._execution_environment(
-                runtime_base_dir=workspace.parent / "adaos-runtime"
+                runtime_base_dir=workspace.parent / "adaos-runtime-packaged"
+            )
+            skill_id = tests_dir.parent.name
+            internal_data_root = (
+                workspace.parent
+                / "adaos-runtime-packaged"
+                / "skill-data"
+                / skill_id
+            ).resolve()
+            internal_data_root.mkdir(parents=True, exist_ok=True)
+            environment.update(
+                {
+                    # Source-only tests must observe the same owner-scoped
+                    # storage authority as the prepared DEV slot. Otherwise a
+                    # test can pass by falling back to ADAOS_TASK_RUNTIME_DIR
+                    # and fail only after ProjectRelease activates the skill.
+                    "ADAOS_SKILL_NAME": skill_id,
+                    "ADAOS_CURRENT_SKILL": skill_id,
+                    "ADAOS_SKILL_ROOT": str(packaged_tests.parent.resolve()),
+                    "ADAOS_SKILL_INTERNAL_DATA_ROOT": str(internal_data_root),
+                    "ADAOS_SKILL_ENV_PATH": str(
+                        internal_data_root / "db" / "skill_env.json"
+                    ),
+                }
             )
             result = _run(
-                [sys.executable, "-m", "pytest", "-q", str(tests_dir), "-p", "no:cacheprovider"],
-                cwd=workspace,
+                [
+                    sys.executable,
+                    "-m",
+                    "pytest",
+                    "-q",
+                    str(packaged_tests),
+                    "-p",
+                    "no:cacheprovider",
+                ],
+                cwd=validation_root,
                 timeout=float(GENERATED_TEST_TIMEOUT_SECONDS),
                 env=environment,
             )
             checks.append(
                 {
-                    "kind": "pytest",
+                    "kind": "pytest.packaged",
                     "path": relative,
                     "ok": result.returncode == 0,
                     "output": (result.stdout + result.stderr)[-4000:],
                 }
             )
             if result.returncode:
-                errors.append(f"{relative}: pytest failed: {(result.stdout + result.stderr)[-2000:]}")
+                errors.append(
+                    f"{relative}: packaged pytest failed: "
+                    f"{(result.stdout + result.stderr)[-2000:]}"
+                )
+        if validation_root.exists():
+            shutil.rmtree(validation_root)
+
+    @staticmethod
+    def _validate_admitted_operation_schemas(
+        assignment: Mapping[str, Any],
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        """Bind provider tool schemas to admitted consumer-owned operation sets.
+
+        A tool name alone is not an ABI.  In particular, accepting a flat
+        object where the consumer sends ``{"request": ...}`` makes an
+        otherwise valid provider fail only after activation.  Operation-set
+        instructions are immutable Development-session inputs, so the trusted
+        worker can compare their machine boundary with the generated manifest
+        before committing the candidate.
+
+        JSON Schema annotation keywords do not change the accepted instance
+        set and are ignored.  All validation keywords remain exact.  This
+        deliberately favours an explicit version bump over silently widening
+        or narrowing a consumer boundary.
+        """
+
+        request = (
+            assignment.get("realize_request")
+            if isinstance(assignment.get("realize_request"), Mapping)
+            else {}
+        )
+        artifacts = (
+            request.get("artifacts")
+            if isinstance(request.get("artifacts"), Mapping)
+            else {}
+        )
+        development = (
+            artifacts.get("development_context")
+            if isinstance(artifacts.get("development_context"), Mapping)
+            else {}
+        )
+        workspace_root = workspace.resolve()
+        contracts: list[tuple[str, dict[str, Any]]] = []
+        for descriptor in development.get("instruction_inputs") or []:
+            if not isinstance(descriptor, Mapping):
+                continue
+            if str(descriptor.get("media_type") or "").lower() != "application/json":
+                continue
+            relative = Path(str(descriptor.get("path") or ""))
+            if relative.is_absolute() or ".." in relative.parts:
+                continue
+            source = (workspace_root / relative).resolve()
+            try:
+                source.relative_to(workspace_root)
+                contract = _read_json(source)
+            except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+                continue
+            if contract.get("schema") != "adaos.contract.operation_set.v1":
+                continue
+            operations = contract.get("operations")
+            if not isinstance(operations, Mapping) or not operations:
+                continue
+            label = str(contract.get("contract") or descriptor.get("kind") or "contract")
+            contracts.append((label, dict(contract)))
+
+        if not contracts:
+            return
+
+        manifests: list[tuple[str, Mapping[str, Any]]] = []
+        for path in sorted(workspace.glob("skills/*/skill.yaml")):
+            relative = path.relative_to(workspace).as_posix()
+            try:
+                value = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except Exception:
+                continue
+            if isinstance(value, Mapping):
+                manifests.append((relative, value))
+
+        annotations = {
+            "$comment",
+            "default",
+            "deprecated",
+            "description",
+            "examples",
+            "readOnly",
+            "title",
+            "writeOnly",
+        }
+
+        unordered_array_keywords = {
+            "allOf",
+            "anyOf",
+            "enum",
+            "oneOf",
+            "required",
+            "type",
+        }
+
+        def semantic_schema(value: Any, *, keyword: str | None = None) -> Any:
+            if isinstance(value, Mapping):
+                return {
+                    str(key): semantic_schema(item, keyword=str(key))
+                    for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+                    if str(key) not in annotations
+                }
+            if isinstance(value, list):
+                normalized = [semantic_schema(item) for item in value]
+                if keyword in unordered_array_keywords:
+                    return sorted(
+                        normalized,
+                        key=lambda item: json.dumps(
+                            item,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                    )
+                return normalized
+            return value
+
+        def first_difference(expected: Any, actual: Any, pointer: str = "") -> str | None:
+            if isinstance(expected, Mapping) and isinstance(actual, Mapping):
+                expected_keys = set(expected)
+                actual_keys = set(actual)
+                missing = sorted(expected_keys - actual_keys)
+                if missing:
+                    return f"{pointer or '/'} missing keys {missing}"
+                unexpected = sorted(actual_keys - expected_keys)
+                if unexpected:
+                    return f"{pointer or '/'} has unexpected keys {unexpected}"
+                for key in sorted(expected_keys):
+                    escaped = str(key).replace("~", "~0").replace("/", "~1")
+                    difference = first_difference(
+                        expected[key], actual[key], f"{pointer}/{escaped}"
+                    )
+                    if difference:
+                        return difference
+                return None
+            if isinstance(expected, list) and isinstance(actual, list):
+                if expected != actual:
+                    return f"{pointer or '/'} expected {expected!r}, got {actual!r}"
+                return None
+            if expected != actual:
+                return f"{pointer or '/'} expected {expected!r}, got {actual!r}"
+            return None
+
+        for contract_label, contract in contracts:
+            operations = dict(contract.get("operations") or {})
+            contract_capability = str(contract.get("capability") or "").strip()
+            candidate_role = str(contract.get("candidate_role") or "").strip()
+            providers: list[tuple[str, Mapping[str, Any], set[str]]] = []
+            for relative, manifest in manifests:
+                for declaration in manifest.get("provider_contracts") or []:
+                    if not isinstance(declaration, Mapping):
+                        continue
+                    if str(declaration.get("contract") or "").strip() != contract_label:
+                        continue
+                    if (
+                        contract_capability
+                        and str(declaration.get("capability") or "").strip()
+                        != contract_capability
+                    ):
+                        continue
+                    declared = {
+                        str(item).strip()
+                        for item in declaration.get("operations") or []
+                        if str(item).strip()
+                    }
+                    providers.append((relative, manifest, declared))
+            if not providers:
+                if candidate_role == "provider":
+                    capability_suffix = (
+                        f" with capability {contract_capability}"
+                        if contract_capability
+                        else ""
+                    )
+                    errors.append(
+                        "admitted operation set requires the candidate to provide "
+                        f"contract {contract_label}{capability_suffix}, but no matching "
+                        "skill provider_contracts declaration exists"
+                    )
+                # A context-only operation set need not be implemented by this
+                # candidate.  The AutomationBrief validator separately
+                # requires provider declarations for provider-role contracts.
+                continue
+
+            for relative, manifest, declared in providers:
+                tools = {
+                    str(item.get("name") or "").strip(): item
+                    for item in manifest.get("tools") or []
+                    if isinstance(item, Mapping) and str(item.get("name") or "").strip()
+                }
+                for operation_name, operation_contract in sorted(operations.items()):
+                    if not isinstance(operation_contract, Mapping):
+                        errors.append(
+                            f"admitted operation contract {contract_label}.{operation_name} is not an object"
+                        )
+                        continue
+                    if operation_name not in declared:
+                        errors.append(
+                            f"{relative}: provider contract {contract_label} does not declare admitted operation {operation_name}"
+                        )
+                        continue
+                    tool = tools.get(str(operation_name))
+                    if tool is None:
+                        errors.append(
+                            f"{relative}: provider contract {contract_label} declares {operation_name} but exports no matching tool"
+                        )
+                        continue
+                    operation_ok = True
+                    for schema_key in ("input_schema", "output_schema"):
+                        expected_schema = operation_contract.get(schema_key)
+                        if not isinstance(expected_schema, Mapping):
+                            continue
+                        actual_schema = tool.get(schema_key)
+                        if not isinstance(actual_schema, Mapping):
+                            errors.append(
+                                f"{relative}: {contract_label}.{operation_name} has no declared {schema_key}"
+                            )
+                            operation_ok = False
+                            continue
+                        difference = first_difference(
+                            semantic_schema(expected_schema), semantic_schema(actual_schema)
+                        )
+                        if difference:
+                            errors.append(
+                                f"{relative}: {contract_label}.{operation_name} {schema_key} differs from the admitted consumer ABI at {difference}"
+                            )
+                            operation_ok = False
+                    if operation_ok:
+                        checks.append(
+                            {
+                                "kind": "admitted_contract.operation_schema",
+                                "contract": contract_label,
+                                "operation": str(operation_name),
+                                "path": relative,
+                                "ok": True,
+                            }
+                        )
 
     @staticmethod
     def _cleanup_generated_files(root: Path) -> None:

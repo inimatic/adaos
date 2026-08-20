@@ -36,7 +36,7 @@ replayable and auditable.
   descriptor or capability is missing.
 - [Development Signals And Evolution Feedback](development-signals.md):
   boundary between feedback intake, NLU correction, user adaptation, and
-  Builder handoff.
+  Dev Ticket / Builder handoff.
 - [Conversational Control Interface](conversational-interface.md):
   shared input/output contract, NLU data lifecycle, Builder promotion boundary,
   and conversation-story tests.
@@ -486,9 +486,10 @@ Acceptance checklist:
   with owner, missing surface, source utterance, and replay expectation.
 - [ ] `[must]` Completed Builder descriptor fixes link back to the originating
   Teacher request and rerun the phrase.
-- [ ] `[should]` Descriptor-gap candidates link to a Development Signal when
-  the issue was discovered through Feedback Skill, runtime diagnostics, or a
-  repeated conversational failure rather than a single Teacher miss.
+- [ ] `[should]` Descriptor-gap candidates link to a Development Signal and,
+  when trackable work is needed, a Dev Ticket if the gap was discovered
+  through Feedback Skill, runtime diagnostics, or a repeated conversational
+  failure rather than a single Teacher miss.
 
 ## Gate 9: Missing Capability to Builder Draft
 
@@ -514,8 +515,8 @@ Acceptance checklist:
 - [ ] `[should]` Duplicate missing-capability requests dedupe into one Builder
   task with multiple evidence examples.
 - [ ] `[should]` Missing-capability candidates create or link a Development
-  Signal so the request can be postponed, opened in Builder, or sent to
-  autonomous Builder repair without keeping chat history as work state.
+  Signal and Dev Ticket so the request can be postponed, opened in Builder, or
+  sent to autonomous Builder repair without keeping chat history as work state.
 
 ## Gate 10: Promotion, Publication, and Release Channels
 
@@ -677,7 +678,7 @@ The recommended delivery order is:
    UX. Keep the first slice bounded to ReDevice push-to-talk/VAD, member-side
    STT, and normal Voice/NLU dispatch.
 6. Add Gate 8 and Gate 9 to route descriptor and capability gaps into Builder,
-   linking Development Signals when the gap originates from feedback or
+   linking Development Signals and Dev Tickets when the gap originates from feedback or
    repeated conversational failures.
 7. Add Gate 10 and Gate 11 before broad promotion or public reuse.
 8. Add static conversation-story and workflow/statechart reports before

@@ -45,6 +45,7 @@ from adaos.services.scenario import workflow_runtime as _scenario_workflow_runti
 from adaos.services import nlu as _nlu_services  # ensure NLU dispatcher subscriptions
 from adaos.services import named_entity_projection as _named_entity_projection  # ensure named-entity projection subscriptions
 from adaos.services import pending_actions as _pending_actions  # ensure Pending Actions subscriptions
+from adaos.services import development_tickets as _development_tickets  # ensure Development Ticket response subscriptions
 from adaos.services.bootstrap_runtime import (
     BootstrapBootCoordinator,
     BootstrapBootOperations,

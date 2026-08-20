@@ -5126,6 +5126,57 @@ def test_ensure_runtime_stopped_for_update_forces_hung_process(monkeypatch, tmp_
     assert proc.poll() == 0
 
 
+def test_ensure_runtime_stopped_retains_plan_while_kernel_exit_is_pending(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(
+        runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token"
+    )
+    timeline = {"now": 0.0}
+
+    class _Proc:
+        def __init__(self) -> None:
+            self.terminate_calls = 0
+            self.kill_calls = 0
+
+        @staticmethod
+        def poll():
+            return None
+
+        def terminate(self) -> None:
+            self.terminate_calls += 1
+
+        def kill(self) -> None:
+            self.kill_calls += 1
+
+    proc = _Proc()
+    manager._proc = proc
+
+    async def _fake_sleep(value: float) -> None:
+        timeline["now"] += max(0.5, float(value))
+
+    monkeypatch.setattr(supervisor.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(supervisor.time, "time", lambda: timeline["now"])
+
+    result = asyncio.run(
+        manager._ensure_runtime_stopped_for_update(
+            drain_timeout_sec=1.0,
+            signal_delay_sec=0.1,
+            reason="test.kernel_io_wait",
+        )
+    )
+
+    assert result == {
+        "ok": False,
+        "forced": True,
+        "pending_exit": True,
+        "reason": "test.kernel_io_wait",
+    }
+    assert proc.terminate_calls >= 1
+    assert proc.kill_calls == 1
+
+
 def test_terminate_proc_locked_waits_after_process_group_kill(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
@@ -9097,7 +9148,7 @@ def test_supervisor_self_restart_preserves_ready_children(monkeypatch, tmp_path)
     assert manager._sidecar_proc is not None
 
 
-def test_managed_systemd_restart_preserves_children_without_internal_restart_flag(monkeypatch, tmp_path) -> None:
+def test_managed_systemd_shutdown_stops_children_without_internal_restart_flag(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_AUTOSTART_MANAGED", "1")
     monkeypatch.setattr(supervisor, "_autostart_self_restart_supported", lambda: True)
@@ -9134,8 +9185,8 @@ def test_managed_systemd_restart_preserves_children_without_internal_restart_fla
 
     asyncio.run(manager.close())
 
-    assert stopped == []
-    assert reaper_calls == [True]
+    assert stopped == ["supervisor.shutdown", "supervisor.shutdown.sidecar"]
+    assert reaper_calls == []
     assert manager._proc is not None
     assert manager._sidecar_proc is not None
 

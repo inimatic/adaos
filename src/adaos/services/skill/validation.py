@@ -22,6 +22,10 @@ from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.conversational_pipeline import compile_conversational_package
 from adaos.services.webui_contract import validate_webui_contract
 from adaos.services.workflow_artifacts import WorkflowArtifactError, load_manifest_bound_workflow
+from adaos.services.workflow_registry import (
+    WorkflowAdapterRegistryError,
+    platform_workflow_adapter_registry,
+)
 from adaos.services.skill.dependency_disk_guard import heavy_dependency_names, heavy_import_dependency_names
 
 SCHEMA_PATH = Path(__file__).with_name("skill_schema.json")
@@ -279,13 +283,26 @@ def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
     # cross-link the public skill interface with modal routes/actions.
     issues.extend(validate_webui_file_contract(skill_dir, skill_name=str(data.get("name") or "")))
     try:
-        load_manifest_bound_workflow(
+        workflow = load_manifest_bound_workflow(
             skill_dir,
             manifest_name="skill.yaml",
             allow_legacy_inline=False,
         )
     except WorkflowArtifactError as exc:
         issues.append(Issue("error", "workflow.invalid", str(exc), "workflow.json"))
+    else:
+        if workflow is not None:
+            try:
+                platform_workflow_adapter_registry().bind(workflow.compiled)
+            except WorkflowAdapterRegistryError as exc:
+                issues.append(
+                    Issue(
+                        "error",
+                        "workflow.adapter_binding.invalid",
+                        str(exc),
+                        "workflow.json",
+                    )
+                )
     if isinstance(data.get("conversational"), dict):
         conversational = compile_conversational_package(
             skill_dir,
@@ -1237,6 +1254,7 @@ if spec is None or spec.loader is None:
     print(json.dumps({{"ok": False, "error": "spec/load failure"}}))
     raise SystemExit(0)
 module = importlib.util.module_from_spec(spec)
+sys.modules[mod_name] = module
 spec.loader.exec_module(module)
 
 # попытка получить новые публичные реестры (с fallback на старые)

@@ -11,6 +11,8 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,7 +31,8 @@ from adaos.services.skill_factory_worker import LocalSkillFactoryWorker
 
 
 AUTOMATION_SESSION_SCHEMA = "adaos.builder.automation_session.v1"
-STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.3.1"
+STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.8.0"
+FINALIZATION_HEARTBEAT_SECONDS = 10.0
 AUTOMATION_PROJECTION_SCHEMA = "adaos.builder.automation_projection.v1"
 _LOCK = threading.RLock()
 _WORKER_LOCK = threading.Lock()
@@ -66,6 +69,8 @@ _AUTOMATION_STEPS = (
     ("result", "builder.automation.step.result", 4),
 )
 _DEVELOPMENT_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
+_RUNTIME_DIAGNOSTIC_MAX_FILES = 4096
+_RUNTIME_DIAGNOSTIC_MAX_BYTES = 128 * 1024 * 1024
 
 
 def _now_iso() -> str:
@@ -85,6 +90,26 @@ def _reject_transport_corruption(value: Any, *, field: str) -> None:
         raise ValueError(
             f"{field} appears transport-corrupted; submit the original text as UTF-8"
         )
+
+
+def _cleanup_dev_skill_runtime(skill_id: str) -> dict[str, Any]:
+    """Invoke the core-owned DEV runtime lifecycle without deleting source."""
+
+    from adaos.adapters.db import SqliteSkillRegistry
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.skill.manager import SkillManager
+
+    ctx = get_ctx()
+    manager = SkillManager(
+        repo=ctx.skills_repo,
+        registry=SqliteSkillRegistry(ctx.sql),
+        git=ctx.git,
+        paths=ctx.paths,
+        bus=getattr(ctx, "bus", None),
+        caps=ctx.caps,
+        settings=ctx.settings,
+    )
+    return dict(manager.cleanup_dev_runtime(skill_id, purge_data=True))
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -1328,6 +1353,7 @@ class BuilderAutomationService:
             "iteration": 0,
             "task_id": None,
             "steps": BuilderAutomationService._step_projection("idle"),
+            "created_at": None,
             "updated_at": None,
         }
 
@@ -1391,6 +1417,11 @@ class BuilderAutomationService:
             }
             if local_run
             else None,
+            # ``created_at`` is the durable Automation-start boundary.  It is
+            # intentionally projected alongside ``updated_at`` so independent
+            # schedulers and evaluators can prove a preregistered execution
+            # order without reading Builder's private session file.
+            "created_at": session.get("created_at"),
             "updated_at": session.get("updated_at"),
         }
 
@@ -1544,6 +1575,162 @@ class BuilderAutomationService:
         except (FileNotFoundError, json.JSONDecodeError):
             return None
         return dict(raw) if isinstance(raw, Mapping) else None
+
+    def release_candidate_runtime(
+        self,
+        *,
+        object_type: str,
+        object_id: str,
+        development_session_id: str,
+    ) -> dict[str, Any]:
+        """Release a terminal candidate's DEV runtime while retaining evidence.
+
+        The exact Development Session binding prevents a caller from using a
+        stale result to release a newer candidate.  Only skill candidates are
+        admitted because scenarios do not own Python runtimes.
+        """
+
+        kind, project_id = self._project_ref(object_type, object_id)
+        if kind != "skill":
+            raise ValueError("candidate runtime release requires object_type=skill")
+        expected_session_id = str(development_session_id or "").strip()
+        if not expected_session_id or not _DEVELOPMENT_SESSION_ID_RE.fullmatch(expected_session_id):
+            raise ValueError("a valid development_session_id is required")
+
+        with _LOCK:
+            session = self.get_session(kind, project_id)
+            if not session:
+                raise ValueError("automation_session_not_found")
+            actual_session_id = str(session.get("development_session_id") or "").strip()
+            if actual_session_id != expected_session_id:
+                raise ValueError("development_session_id does not match the candidate Automation session")
+            status = str(session.get("status") or "").strip().lower()
+            if status not in _TERMINAL_STATUSES:
+                raise ValueError("candidate runtime may be released only after terminal Automation")
+
+            previous = session.get("runtime_release")
+            if isinstance(previous, Mapping):
+                if str(previous.get("development_session_id") or "") != expected_session_id:
+                    raise ValueError("stored runtime release belongs to a different Development Session")
+                return {"ok": True, "idempotent": True, "runtime_release": dict(previous)}
+
+            diagnostics = self._archive_candidate_runtime_diagnostics(
+                project_id=project_id,
+                development_session_id=expected_session_id,
+            )
+            cleanup = _cleanup_dev_skill_runtime(project_id)
+            receipt = {
+                "schema": "adaos.builder.runtime_release.v1",
+                "object_type": kind,
+                "object_id": project_id,
+                "development_session_id": expected_session_id,
+                "automation_status": status,
+                "released_at": _now_iso(),
+                "runtime_removed": bool(cleanup.get("runtime_removed")),
+                "runtime_existed": bool(cleanup.get("runtime_existed")),
+                "purged_data": bool(cleanup.get("purged_data")),
+            }
+            if diagnostics is not None:
+                receipt["diagnostics"] = diagnostics
+            if not receipt["runtime_removed"]:
+                raise RuntimeError("DEV runtime cleanup did not remove the candidate runtime")
+            session["runtime_release"] = receipt
+            session["updated_at"] = receipt["released_at"]
+            self._save_session(session)
+            return {"ok": True, "idempotent": False, "runtime_release": receipt}
+
+    def _archive_candidate_runtime_diagnostics(
+        self,
+        *,
+        project_id: str,
+        development_session_id: str,
+    ) -> dict[str, Any] | None:
+        """Move runtime diagnostics into Builder-owned durable evidence.
+
+        Candidate ``data`` belongs to the candidate skill and is captured by
+        its scientific consumer.  Build and packaged-test diagnostics belong
+        to the Automation session instead.  Preserve the latter before the
+        ephemeral candidate runtime (including its vendored dependencies and
+        data) is purged.
+        """
+
+        source = (self.dev_skills_root / ".runtime" / project_id / "diagnostics").resolve()
+        runtime_root = (self.dev_skills_root / ".runtime" / project_id).resolve()
+        if source.parent != runtime_root or not source.is_dir():
+            return None
+
+        evidence_root = (
+            self.state_dir
+            / "builder"
+            / "automation-evidence"
+            / "runtime-diagnostics"
+            / _safe_token(project_id)
+        ).resolve()
+        destination = (evidence_root / _safe_token(development_session_id)).resolve()
+        if destination.parent != evidence_root:
+            raise ValueError("candidate diagnostic destination escaped its evidence root")
+
+        def manifest_for(root: Path) -> tuple[list[dict[str, Any]], int]:
+            entries: list[dict[str, Any]] = []
+            total_bytes = 0
+            for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+                if path.is_symlink():
+                    raise RuntimeError("candidate runtime diagnostics must not contain symlinks")
+                if not path.is_file():
+                    continue
+                resolved = path.resolve()
+                if root not in resolved.parents:
+                    raise RuntimeError("candidate runtime diagnostic escaped its evidence root")
+                size = int(path.stat().st_size)
+                total_bytes += size
+                if len(entries) >= _RUNTIME_DIAGNOSTIC_MAX_FILES:
+                    raise RuntimeError("candidate runtime diagnostics exceed the file-count limit")
+                if total_bytes > _RUNTIME_DIAGNOSTIC_MAX_BYTES:
+                    raise RuntimeError("candidate runtime diagnostics exceed the byte limit")
+                entries.append(
+                    {
+                        "path": path.relative_to(root).as_posix(),
+                        "bytes": size,
+                        "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
+                    }
+                )
+            return entries, total_bytes
+
+        if destination.is_dir():
+            entries, total_bytes = manifest_for(destination)
+        else:
+            entries, total_bytes = manifest_for(source)
+            evidence_root.mkdir(parents=True, exist_ok=True)
+            staging = evidence_root / f".staging-{_safe_token(development_session_id)}"
+            if staging.exists():
+                shutil.rmtree(staging)
+            staging.mkdir(parents=True)
+            try:
+                for entry in entries:
+                    relative = Path(str(entry["path"]))
+                    target = staging / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source / relative, target)
+                staging.replace(destination)
+                entries, total_bytes = manifest_for(destination)
+            except Exception:
+                shutil.rmtree(staging, ignore_errors=True)
+                raise
+
+        manifest = {
+            "schema": "adaos.builder.runtime_diagnostics.v1",
+            "object_type": "skill",
+            "object_id": project_id,
+            "development_session_id": development_session_id,
+            "files": entries,
+            "file_count": len(entries),
+            "bytes": total_bytes,
+        }
+        return {
+            **manifest,
+            "root": str(destination),
+            "digest": _canonical_digest(manifest),
+        }
 
     def find_active_session(self, *, webspace_id: str | None = None) -> dict[str, Any] | None:
         candidates: list[dict[str, Any]] = []
@@ -2064,6 +2251,8 @@ class BuilderAutomationService:
         stdout_path = worker_root / "stdout.log"
         stderr_path = worker_root / "stderr.log"
         launch_path = worker_root / "launch.json"
+        ready_path = worker_root / "ready.json"
+        ready_path.unlink(missing_ok=True)
         repo_python = self.repo_root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         executable = repo_python if repo_python.is_file() else Path(sys.executable)
         command = [
@@ -2096,7 +2285,11 @@ class BuilderAutomationService:
                 getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
                 | getattr(subprocess, "DETACHED_PROCESS", 0)
                 | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
                 | priority_creationflags
+            )
+            resource_policy["job_breakaway"] = bool(
+                getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
             )
         else:
             popen_kwargs["start_new_session"] = True
@@ -2111,12 +2304,12 @@ class BuilderAutomationService:
             process_create_time: float | None = float(psutil.Process(process.pid).create_time())
         except (psutil.Error, OSError):
             process_create_time = None
-        launched = {
+        launched: dict[str, Any] = {
             "schema": "adaos.builder.automation_worker_launch.v1",
             "session_id": str(session_id),
             "pid": int(process.pid),
             "create_time": process_create_time,
-            "status": "launched",
+            "status": "starting",
             "repo_root": str(self.repo_root.resolve()),
             "executable": str(executable.resolve()),
             "stdout_path": str(stdout_path),
@@ -2124,6 +2317,70 @@ class BuilderAutomationService:
             "resource_policy": resource_policy,
             "launched_at": _now_iso(),
         }
+        _write_json(launch_path, launched)
+        try:
+            ready_timeout = float(
+                os.getenv("ADAOS_BUILDER_WORKER_READY_TIMEOUT_SECONDS", "60")
+            )
+        except (TypeError, ValueError):
+            ready_timeout = 60.0
+        ready_timeout = min(180.0, max(5.0, ready_timeout))
+        deadline = time.monotonic() + ready_timeout
+        ready: dict[str, Any] | None = None
+        while time.monotonic() < deadline:
+            try:
+                value = json.loads(ready_path.read_text(encoding="utf-8"))
+            except (OSError, TypeError, ValueError):
+                value = None
+            if (
+                isinstance(value, Mapping)
+                and str(value.get("session_id") or "") == str(session_id)
+                and str(value.get("status") or "") == "ready"
+            ):
+                ready = dict(value)
+                break
+            poll = getattr(process, "poll", None)
+            return_code = poll() if callable(poll) else None
+            if return_code is not None:
+                launched.update(
+                    {
+                        "status": "failed",
+                        "error": (
+                            "automation worker exited before readiness handshake "
+                            f"with code {return_code}"
+                        ),
+                        "failed_at": _now_iso(),
+                    }
+                )
+                _write_json(launch_path, launched)
+                raise RuntimeError(str(launched["error"]))
+            time.sleep(0.05)
+        if ready is None:
+            launched.update(
+                {
+                    "status": "failed",
+                    "error": (
+                        "automation worker did not publish a readiness handshake "
+                        f"within {ready_timeout:.1f} seconds"
+                    ),
+                    "failed_at": _now_iso(),
+                }
+            )
+            _write_json(launch_path, launched)
+            terminate = getattr(process, "terminate", None)
+            if callable(terminate):
+                try:
+                    terminate()
+                except OSError:
+                    pass
+            raise RuntimeError(str(launched["error"]))
+        launched.update(
+            {
+                "status": "ready",
+                "worker_pid": ready.get("pid"),
+                "ready_at": ready.get("ready_at") or _now_iso(),
+            }
+        )
         _write_json(launch_path, launched)
         return launched
 
@@ -2335,6 +2592,87 @@ class BuilderAutomationService:
         self._save_session(current)
         return current
 
+    def _record_finalization_progress(
+        self,
+        current: dict[str, Any],
+        readiness: dict[str, Any],
+        stage: str,
+        message: str,
+        *,
+        heartbeat: int = 0,
+    ) -> None:
+        now = _now_iso()
+        started_at = str(
+            current.get("finalization_started_at")
+            or readiness.get("started_at")
+            or now
+        )
+        current["finalization_started_at"] = started_at
+        readiness.update(
+            {
+                "stage": stage,
+                "stage_message": message,
+                "started_at": started_at,
+                "heartbeat": max(0, int(heartbeat)),
+                "updated_at": now,
+            }
+        )
+        current["completion_readiness"] = copy.deepcopy(readiness)
+        current["status"] = "commit_ready"
+        current["progress"] = {
+            "task_id": current.get("current_task_id"),
+            "status": "commit_ready",
+            "stage": stage,
+            "message": message,
+            "heartbeat": max(0, int(heartbeat)),
+            "started_at": started_at,
+            "updated_at": now,
+        }
+        current["updated_at"] = now
+        self._save_session(current)
+
+    @contextmanager
+    def _finalization_stage(
+        self,
+        current: dict[str, Any],
+        readiness: dict[str, Any],
+        stage: str,
+        message: str,
+    ):
+        """Project one durable finalization substage with a live heartbeat."""
+
+        self._record_finalization_progress(current, readiness, stage, message)
+        stopped = threading.Event()
+
+        def heartbeat() -> None:
+            sequence = 0
+            while not stopped.wait(max(0.05, float(FINALIZATION_HEARTBEAT_SECONDS))):
+                sequence += 1
+                snapshot = copy.deepcopy(current)
+                snapshot_readiness = copy.deepcopy(readiness)
+                try:
+                    self._record_finalization_progress(
+                        snapshot,
+                        snapshot_readiness,
+                        stage,
+                        message,
+                        heartbeat=sequence,
+                    )
+                except Exception as exc:
+                    _log.debug("Builder finalization heartbeat failed: %s", exc)
+
+        heartbeat_thread = threading.Thread(
+            target=heartbeat,
+            name=f"builder-finalization-{_safe_token(stage)}",
+            daemon=True,
+        )
+        heartbeat_thread.start()
+        try:
+            yield
+        finally:
+            stopped.set()
+            heartbeat_thread.join(timeout=1.0)
+
     def _finalize_completed_session(self, session: Mapping[str, Any]) -> None:
         """Prepare the DEV runtime, refresh the paired UI, then notify chat."""
         reconciled = self._reconcile_completed_workflow(session)
@@ -2360,35 +2698,53 @@ class BuilderAutomationService:
         preview_target: Mapping[str, Any] | None = None
         try:
             pending_transition = str(current.get("pending_workflow_transition") or "").strip()
-            if pending_transition == "return_to_prototype":
-                readiness["workflow_transition"] = self._workflow().snapshot_current_prototype(
-                    object_type,
-                    object_id,
-                    source_task_id=str(current.get("current_task_id") or "").strip() or None,
-                    request_text="Safe prototype derived by the built-in LLM from the Automation result",
-                )
-            else:
-                readiness["automation_snapshot"] = self._workflow().snapshot_current_automation(
-                    object_type,
-                    object_id,
-                    task_id=str(current.get("current_task_id") or "").strip() or None,
-                )
+            with self._finalization_stage(
+                current,
+                readiness,
+                "snapshot",
+                "Recording the validated Automation source snapshot",
+            ):
+                if pending_transition == "return_to_prototype":
+                    readiness["workflow_transition"] = self._workflow().snapshot_current_prototype(
+                        object_type,
+                        object_id,
+                        source_task_id=str(current.get("current_task_id") or "").strip() or None,
+                        request_text="Safe prototype derived by the built-in LLM from the Automation result",
+                    )
+                else:
+                    readiness["automation_snapshot"] = self._workflow().snapshot_current_automation(
+                        object_type,
+                        object_id,
+                        task_id=str(current.get("current_task_id") or "").strip() or None,
+                    )
             companion_skill_ids = self._session_companion_skill_ids(session)
             if companion_skill_ids:
-                readiness["skills"] = [
-                    self._prepare_and_activate_dev_skill(
-                        skill_id,
-                        webspace_id=webspace_id,
-                    )
-                    for skill_id in companion_skill_ids
-                ]
+                with self._finalization_stage(
+                    current,
+                    readiness,
+                    "activation",
+                    "Packaging, validating and activating the DEV skill runtime",
+                ):
+                    readiness["skills"] = [
+                        self._prepare_and_activate_dev_skill(
+                            skill_id,
+                            webspace_id=webspace_id,
+                        )
+                        for skill_id in companion_skill_ids
+                    ]
                 readiness["skill"] = readiness["skills"][0]
 
             if pending_transition != "return_to_prototype":
-                readiness["acceptance"] = self._run_development_acceptance(
-                    session,
-                    activations=list(readiness.get("skills") or []),
-                )
+                with self._finalization_stage(
+                    current,
+                    readiness,
+                    "consumer_acceptance",
+                    "Running admitted consumer-owned acceptance checks",
+                ):
+                    readiness["acceptance"] = self._run_development_acceptance(
+                        session,
+                        activations=list(readiness.get("skills") or []),
+                    )
                 if not bool(readiness["acceptance"].get("ok")):
                     acceptance_failed = True
                     raise RuntimeError(
@@ -2414,7 +2770,13 @@ class BuilderAutomationService:
             if bool(current.get("reuse_confirmed_checkpoints")) and confirmed_checkpoints:
                 readiness["vcs_checkpoints"] = confirmed_checkpoints
             else:
-                readiness["vcs_checkpoints"] = self._checkpoint_completed_artifacts(session)
+                with self._finalization_stage(
+                    current,
+                    readiness,
+                    "forge_checkpoint",
+                    "Creating transactional Forge checkpoints",
+                ):
+                    readiness["vcs_checkpoints"] = self._checkpoint_completed_artifacts(session)
             failed_checkpoints = [
                 item
                 for item in readiness["vcs_checkpoints"]
@@ -2852,7 +3214,11 @@ class BuilderAutomationService:
             caps=ctx.caps,
             settings=ctx.settings,
         )
-        prepared = manager.prepare_dev_runtime(skill_id, run_tests=False)
+        # Repeat packaged tests in the exact prepared-slot environment before
+        # activation. Worker-side source tests are an early repair rail, but
+        # they cannot prove that owner-scoped paths, dependency resolution,
+        # and slot metadata behave identically after ProjectRelease.
+        prepared = manager.prepare_dev_runtime(skill_id, run_tests=True)
         binding = BuilderWorkbenchService(state_dir=self.state_dir).get_workspace_binding(webspace_id)
         preview_webspace_id = str(
             binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or ""

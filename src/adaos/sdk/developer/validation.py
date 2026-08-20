@@ -28,6 +28,16 @@ def validate_skill(
     )
 
 
+def inspect_skill_source(project_id: str) -> dict[str, Any]:
+    """Inspect one bounded DEV source snapshot through the validation capability."""
+
+    ctx = require_ctx("sdk.developer.validation.inspect_skill_source")
+    require_skill_capability(ctx, "builder.project_validation")
+    from adaos.services.developer_project_validation import inspect_dev_skill_source
+
+    return inspect_dev_skill_source(ctx, project_id)
+
+
 def activate_skill(project_id: str) -> dict[str, Any]:
     ctx = require_ctx("sdk.developer.validation.activate_skill")
     require_skill_capability(ctx, "builder.project_validation")
@@ -76,4 +86,10 @@ def execute_spec(
     )
 
 
-__all__ = ["activate_skill", "execute_spec", "invoke_skill", "validate_skill"]
+__all__ = [
+    "activate_skill",
+    "execute_spec",
+    "inspect_skill_source",
+    "invoke_skill",
+    "validate_skill",
+]

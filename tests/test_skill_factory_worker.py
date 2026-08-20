@@ -199,6 +199,24 @@ def test_local_worker_realizes_scenario_and_companion_skill(tmp_path: Path) -> N
     assert task["status"] == "completed"
     assert task["result"]["commit_hash"]
     assert task["result"]["provenance"]["runner_version"].startswith("adaos-local-codex-worker/")
+    evidence = task["result"]["evidence"]
+    assert evidence["storage"] == "worker_task_envelope"
+    assert {item["kind"] for item in evidence["artifacts"]} == {
+        "result",
+        "test_report",
+        "changed_files",
+        "provenance",
+    }
+    run_root = Path(task["result"]["local_run_dir"])
+    assert (run_root / "evidence" / "provenance.json").is_file()
+    tracked = subprocess.run(
+        ["git", "ls-files"],
+        cwd=run_root / "workspace",
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    assert not any(path.startswith(".adaos/tasks/") for path in tracked)
 
 
 def test_local_worker_does_not_apply_result_after_task_cancellation(tmp_path: Path) -> None:
@@ -1091,9 +1109,14 @@ def test_generated_tests_receive_task_owned_runtime_outside_candidate(tmp_path: 
         "from pathlib import Path\n\n"
         "def test_runtime_boundary():\n"
         "    runtime = Path(os.environ['ADAOS_BASE_DIR']).resolve()\n"
+        "    internal = Path(os.environ['ADAOS_SKILL_INTERNAL_DATA_ROOT']).resolve()\n"
         "    workspace = Path.cwd().resolve()\n"
         "    assert runtime != workspace\n"
         "    assert workspace not in runtime.parents\n"
+        "    assert os.environ['ADAOS_SKILL_NAME'] == 'candidate'\n"
+        "    assert internal == runtime / 'skill-data' / 'candidate'\n"
+        "    (internal / 'installed-context-marker.txt').parent.mkdir(parents=True, exist_ok=True)\n"
+        "    (internal / 'installed-context-marker.txt').write_text('ok', encoding='utf-8')\n"
         "    (runtime / 'validation-marker.txt').parent.mkdir(parents=True, exist_ok=True)\n"
         "    (runtime / 'validation-marker.txt').write_text('ok', encoding='utf-8')\n",
         encoding="utf-8",
@@ -1112,7 +1135,15 @@ def test_generated_tests_receive_task_owned_runtime_outside_candidate(tmp_path: 
 
     assert errors == []
     assert checks[0]["ok"] is True
-    assert (workspace.parent / "adaos-runtime" / "validation-marker.txt").is_file()
+    assert (workspace.parent / "adaos-runtime-packaged" / "validation-marker.txt").is_file()
+    assert (
+        workspace.parent
+        / "adaos-runtime-packaged"
+        / "skill-data"
+        / "candidate"
+        / "installed-context-marker.txt"
+    ).is_file()
+    assert not (workspace.parent / "package-validation").exists()
     assert not (workspace / "skills" / ".runtime").exists()
 
 
@@ -1227,6 +1258,8 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(tmp_path: P
     assert "ADAOS_PYTHON" in prompt
     assert "authoritative SDK" in prompt
     assert "PowerShell string pipeline" in prompt
+    assert "every textual `Get-Content`" in prompt
+    assert "`-Encoding UTF8`" in prompt
     assert "UTF-8" in prompt
     assert "Governed Change context" in prompt
     assert "change.demo" in prompt
@@ -1240,9 +1273,14 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(tmp_path: P
     assert "exact declared name" in prompt
     assert "skill_schema.json" in prompt
     assert "allow_heavy_dependencies" in prompt
+    assert "experiment_plan.system" in prompt
+    assert "must not substitute another model family" in prompt
     assert "install-strict" in prompt
     assert "trusted worker finalizer owns package" in prompt
     assert "ADAOS_TASK_RUNTIME_DIR" in prompt
+    assert "bind `ADAOS_SKILL_INTERNAL_DATA_ROOT` to a dedicated child" in prompt
+    assert "Path(working_directory) / expected_outputs[i]" in prompt
+    assert "collection through the returned `output_ref`" in prompt
     assert "never create repository-relative `.adaos*` runtime directories" in prompt
     assert "do not copy into or mutate the canonical workspace/runtime" in prompt
     assert "workflow.json" in prompt
@@ -1403,6 +1441,482 @@ def test_worker_enforces_structured_brief_provider_contract(tmp_path: Path) -> N
     assert checks == []
 
 
+def _document_contract_assignment(workspace: Path) -> dict:
+    instruction = workspace / ".adaos_context" / "dev-1" / "instructions" / "contract.json"
+    instruction.parent.mkdir(parents=True)
+    instruction.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.contract.operation_set.v1",
+                "contract": "example.runner.v1",
+                "conformance_fixtures": [
+                    {
+                        "id": "bounded-output",
+                        "kind": "document_set",
+                        "required": True,
+                        "required_documents": ["run_log.json", "index.json"],
+                        "documents": {
+                            "run_log.json": {
+                                "type": "object",
+                                "required": ["network"],
+                                "properties": {
+                                    "network": {
+                                        "type": "object",
+                                        "required": ["mode", "accessed"],
+                                        "properties": {
+                                            "mode": {"const": "offline"},
+                                            "accessed": {"const": False},
+                                        },
+                                        "additionalProperties": False,
+                                    }
+                                },
+                                "additionalProperties": False,
+                            },
+                            "index.json": {
+                                "type": "object",
+                                "required": ["files"],
+                                "properties": {"files": {"type": "array"}},
+                                "additionalProperties": False,
+                            },
+                        },
+                    }
+                ],
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return {
+        "realize_request": {
+            "artifacts": {
+                "development_context": {
+                    "instruction_inputs": [
+                        {
+                            "kind": "consumer_contract",
+                            "media_type": "application/json",
+                            "path": instruction.relative_to(workspace).as_posix(),
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+
+def _operation_contract_assignment(
+    workspace: Path,
+    *,
+    candidate_input_schema: dict,
+    declared_operations: list[str] | None = None,
+    candidate_role: str | None = None,
+    candidate_capability: str = "example.probe",
+) -> dict:
+    instruction = workspace / ".adaos_context" / "dev-ops" / "instructions" / "contract.json"
+    instruction.parent.mkdir(parents=True)
+    contract_input = {
+        "type": "object",
+        "required": ["request"],
+        "properties": {
+            "request": {
+                "type": "object",
+                # JSON Schema object-required order is not semantic and an
+                # autonomous author need not reproduce source formatting.
+                "required": ["value", "schema"],
+                "properties": {
+                    "schema": {"const": "example.probe.v1"},
+                    "value": {"type": "number"},
+                },
+                "additionalProperties": False,
+            }
+        },
+        "additionalProperties": False,
+    }
+    contract_output = {
+        "type": "object",
+        "required": ["schema", "value"],
+        "properties": {
+            "schema": {"const": "example.probe_result.v1"},
+            "value": {"type": "number"},
+        },
+        "additionalProperties": False,
+    }
+    operation_set = {
+        "schema": "adaos.contract.operation_set.v1",
+        "contract": "example.probe_provider.v1",
+        "capability": "example.probe",
+        "operations": {
+            "implementation_probe": {
+                "input_schema": contract_input,
+                "output_schema": contract_output,
+            }
+        },
+    }
+    if candidate_role is not None:
+        operation_set["candidate_role"] = candidate_role
+    instruction.write_text(
+        json.dumps(
+            operation_set,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    skill = workspace / "skills" / "example_skill"
+    skill.mkdir(parents=True)
+    candidate_output = dict(contract_output)
+    candidate_output["description"] = "Annotation differences are not ABI differences."
+    (skill / "skill.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "example_skill",
+                "version": "0.1.0",
+                "provider_contracts": [
+                    {
+                        "contract": "example.probe_provider.v1",
+                        "capability": candidate_capability,
+                        "operations": declared_operations
+                        if declared_operations is not None
+                        else ["implementation_probe"],
+                    }
+                ],
+                "tools": [
+                    {
+                        "name": "implementation_probe",
+                        "entry": "handlers.main:implementation_probe",
+                        "input_schema": candidate_input_schema,
+                        "output_schema": candidate_output,
+                    }
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "realize_request": {
+            "artifacts": {
+                "development_context": {
+                    "instruction_inputs": [
+                        {
+                            "kind": "consumer_contract",
+                            "media_type": "application/json",
+                            "path": instruction.relative_to(workspace).as_posix(),
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+
+def test_worker_binds_provider_tool_schema_to_admitted_operation_contract(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    exact_input = {
+        "type": "object",
+        "required": ["request"],
+        "properties": {
+            "request": {
+                "type": "object",
+                "required": ["schema", "value"],
+                "properties": {
+                    "schema": {"const": "example.probe.v1"},
+                    "value": {"type": "number"},
+                },
+                "additionalProperties": False,
+            }
+        },
+        "additionalProperties": False,
+        "description": "This annotation may differ from the consumer contract.",
+    }
+    assignment = _operation_contract_assignment(
+        workspace, candidate_input_schema=exact_input
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_admitted_operation_schemas(
+        assignment, workspace, checks, errors
+    )
+
+    assert errors == []
+    assert checks == [
+        {
+            "kind": "admitted_contract.operation_schema",
+            "contract": "example.probe_provider.v1",
+            "operation": "implementation_probe",
+            "path": "skills/example_skill/skill.yaml",
+            "ok": True,
+        }
+    ]
+
+
+def test_worker_rejects_flat_tool_input_for_wrapped_consumer_operation(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _operation_contract_assignment(
+        workspace,
+        candidate_input_schema={
+            "type": "object",
+            "required": ["schema", "value"],
+            "properties": {
+                "schema": {"const": "example.probe.v1"},
+                "value": {"type": "number"},
+            },
+            "additionalProperties": False,
+        },
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_admitted_operation_schemas(
+        assignment, workspace, checks, errors
+    )
+
+    assert checks == []
+    assert len(errors) == 1
+    assert "implementation_probe input_schema differs" in errors[0]
+    assert "/properties missing keys ['request']" in errors[0]
+
+
+def test_worker_requires_every_admitted_operation_in_provider_declaration(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _operation_contract_assignment(
+        workspace,
+        candidate_input_schema={"type": "object"},
+        declared_operations=[],
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_admitted_operation_schemas(
+        assignment, workspace, checks, errors
+    )
+
+    assert checks == []
+    assert errors == [
+        "skills/example_skill/skill.yaml: provider contract example.probe_provider.v1 "
+        "does not declare admitted operation implementation_probe"
+    ]
+
+
+def test_worker_requires_provider_for_provider_role_operation_set(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _operation_contract_assignment(
+        workspace,
+        candidate_input_schema={"type": "object"},
+        candidate_role="provider",
+        candidate_capability="example.other",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_admitted_operation_schemas(
+        assignment, workspace, checks, errors
+    )
+
+    assert checks == []
+    assert errors == [
+        "admitted operation set requires the candidate to provide contract "
+        "example.probe_provider.v1 with capability example.probe, but no matching "
+        "skill provider_contracts declaration exists"
+    ]
+
+
+def test_worker_allows_context_operation_set_without_provider(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _operation_contract_assignment(
+        workspace,
+        candidate_input_schema={"type": "object"},
+        candidate_role="context",
+        candidate_capability="example.other",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_admitted_operation_schemas(
+        assignment, workspace, checks, errors
+    )
+
+    assert errors == []
+    assert checks == []
+
+
+def test_worker_validates_admitted_contract_runtime_documents(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _document_contract_assignment(workspace)
+    attempt = tmp_path / "runtime" / "attempt-1"
+    attempt.mkdir(parents=True)
+    (attempt / "run_log.json").write_text(
+        json.dumps(
+            {
+                "network": {
+                    "mode": "offline",
+                    "accessed": False,
+                    "blocked_calls": [],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (attempt / "index.json").write_text('{"files": []}\n', encoding="utf-8")
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_admitted_contract_documents(
+        assignment,
+        workspace,
+        runtime_dir=tmp_path / "runtime",
+        checks=checks,
+        errors=errors,
+    )
+
+    assert checks == []
+    assert len(errors) == 1
+    assert "run_log.json at /network" in errors[0]
+    assert "blocked_calls" in errors[0]
+
+
+def test_worker_selects_newest_complete_contract_document_set(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _document_contract_assignment(workspace)
+    runtime = tmp_path / "runtime"
+    old = runtime / "attempt-old"
+    old.mkdir(parents=True)
+    (old / "run_log.json").write_text(
+        '{"network": {"mode": "offline", "accessed": false, "blocked_calls": []}}\n',
+        encoding="utf-8",
+    )
+    (old / "index.json").write_text('{"files": []}\n', encoding="utf-8")
+    valid = runtime / "attempt-repair"
+    valid.mkdir(parents=True)
+    (valid / "run_log.json").write_text(
+        '{"network": {"mode": "offline", "accessed": false}}\n',
+        encoding="utf-8",
+    )
+    (valid / "index.json").write_text('{"files": []}\n', encoding="utf-8")
+    newer = max(path.stat().st_mtime_ns for path in old.iterdir()) + 10_000_000
+    for path in valid.iterdir():
+        os.utime(path, ns=(newer, newer))
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_admitted_contract_documents(
+        assignment,
+        workspace,
+        runtime_dir=runtime,
+        checks=checks,
+        errors=errors,
+    )
+
+    assert errors == []
+    assert checks == [
+        {
+            "kind": "admitted_contract.document_set",
+            "contract": "example.runner.v1",
+            "fixture_id": "bounded-output",
+            "runtime_path": "attempt-repair",
+            "documents": ["run_log.json", "index.json"],
+            "ok": True,
+        }
+    ]
+
+
+def test_worker_requires_admitted_contract_document_set(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _document_contract_assignment(workspace)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_admitted_contract_documents(
+        assignment,
+        workspace,
+        runtime_dir=runtime,
+        checks=checks,
+        errors=errors,
+    )
+
+    assert checks == []
+    assert len(errors) == 1
+    assert errors[0].startswith(
+        "admitted contract fixture example.runner.v1:bounded-output produced no complete "
+        "runtime document set; required: run_log.json, index.json; trusted task runtime root: "
+    )
+    assert str(runtime.resolve()) in errors[0]
+    assert "incomplete sets found: none" in errors[0]
+    assert "outside ADAOS_TASK_RUNTIME_DIR are not admissible" in errors[0]
+
+
+def test_worker_reports_incomplete_contract_document_roots(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _document_contract_assignment(workspace)
+    runtime = tmp_path / "runtime"
+    partial = runtime / "candidate-self-check" / "attempt-1"
+    partial.mkdir(parents=True)
+    (partial / "run_log.json").write_text(
+        '{"network": {"mode": "offline", "accessed": false}}\n',
+        encoding="utf-8",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_admitted_contract_documents(
+        assignment,
+        workspace,
+        runtime_dir=runtime,
+        checks=checks,
+        errors=errors,
+    )
+
+    assert checks == []
+    assert len(errors) == 1
+    assert "incomplete sets found: candidate-self-check/attempt-1=run_log.json" in errors[0]
+
+
+def test_workspace_validates_contract_output_from_codex_task_runtime(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    run_root = tmp_path / "run"
+    workspace = run_root / "workspace"
+    workspace.mkdir(parents=True)
+    _core_created_skill_fixture(repo_root, workspace / "skills", "demo")
+    assignment = _document_contract_assignment(workspace)
+    assignment["target"] = {"type": "skill", "id": "demo"}
+    attempt = run_root / "adaos-runtime" / "self-check" / "attempt-1"
+    attempt.mkdir(parents=True)
+    (attempt / "run_log.json").write_text(
+        '{"network": {"mode": "offline", "accessed": false}}\n',
+        encoding="utf-8",
+    )
+    (attempt / "index.json").write_text('{"files": []}\n', encoding="utf-8")
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo_root,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+
+    report = worker._validate_workspace(assignment, workspace)
+
+    assert report["ok"] is True, report["errors"]
+    contract_check = next(
+        item
+        for item in report["checks"]
+        if item.get("kind") == "admitted_contract.document_set"
+    )
+    assert contract_check["runtime_path"] == "self-check/attempt-1"
+
+
 def test_worker_rejects_tests_that_pin_checkpoint_owned_versions(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     tests_dir = workspace / "skills" / "demo" / "tests"
@@ -1447,6 +1961,65 @@ def test_worker_allows_semantic_manifest_version_checks(tmp_path: Path) -> None:
             "ok": True,
         }
     ]
+
+
+def test_worker_rejects_package_tests_bound_to_development_context(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    test_path = workspace / "skills" / "demo" / "tests" / "test_context.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(
+        "from pathlib import Path\n\n"
+        "def test_fixture():\n"
+        "    assert (Path.cwd() / '.adaos_context' / 'devcal-001' / 'fixture.json').exists()\n",
+        encoding="utf-8",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_tests_do_not_depend_on_development_context(
+        workspace,
+        checks,
+        errors,
+        changed_paths={"skills/demo/tests/test_context.py"},
+    )
+
+    assert checks == []
+    assert len(errors) == 1
+    assert "authoring-only" not in errors[0]
+    assert ".adaos_context" in errors[0]
+
+
+def test_worker_runs_generated_tests_from_package_shaped_projection(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = tmp_path / "run" / "workspace"
+    tests_dir = workspace / "skills" / "demo" / "tests"
+    tests_dir.mkdir(parents=True)
+    (workspace / ".adaos_context" / "session").mkdir(parents=True)
+    (workspace / ".adaos_context" / "session" / "fixture.txt").write_text(
+        "authoring-only",
+        encoding="utf-8",
+    )
+    (tests_dir / "test_context.py").write_text(
+        "from pathlib import Path\n\n"
+        "def test_fixture():\n"
+        "    assert (Path.cwd() / '.adaos_context' / 'session' / 'fixture.txt').exists()\n",
+        encoding="utf-8",
+    )
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo_root,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    worker._run_generated_tests(workspace, checks, errors)
+
+    assert checks[0]["kind"] == "pytest.packaged"
+    assert checks[0]["ok"] is False
+    assert any("packaged pytest failed" in error for error in errors)
 
 
 def test_worker_ignores_unchanged_baseline_version_pins(tmp_path: Path) -> None:
@@ -1647,7 +2220,7 @@ def test_worker_reasks_codex_to_repair_source_boundary_violation(tmp_path: Path)
     assert "outside the task scope" in calls[1]
 
 
-def test_worker_rechecks_source_boundary_after_generated_tests(tmp_path: Path) -> None:
+def test_worker_isolates_generated_test_side_effects_from_candidate_source(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"
     dev_skills = tmp_path / "dev" / "skills"
@@ -1693,9 +2266,9 @@ def test_worker_rechecks_source_boundary_after_generated_tests(tmp_path: Path) -
     result = worker.run_once()
 
     assert result["ok"] is True, result
-    assert len(calls) == 2
-    assert "Deterministic validation repair" in calls[1]
-    assert "outside the task scope" in calls[1]
+    assert len(calls) == 1
+    assert not (Path(result["result"]["local_run_dir"]) / "workspace" / "escaped-validation.txt").exists()
+    assert not (Path(result["result"]["local_run_dir"]) / "package-validation").exists()
 
 
 def test_worker_reports_progress_to_automation_callback(tmp_path: Path) -> None:

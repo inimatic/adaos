@@ -39,8 +39,8 @@ is described.
    implementation. [Registry and Operations Roadmap](registry-marketplace-operations-roadmap.md)
    owns distribution, installation, publication, and registry operations.
 6. [Development Signals Roadmap](development-signals-roadmap.md) owns the
-   feedback-intake, scoped-signal, conversational-disambiguation, and
-   signal-to-Builder handoff sequence before full Issue-first support is
+   feedback-intake, scoped-signal, Dev Ticket, conversational-disambiguation,
+   and ticket-to-Builder handoff sequence before full Issue-first support is
    admitted.
 7. [Incident Registry](incident-registry.md), [Operational Event Model](operational-event-model.md),
    and [Post-Deploy E2E Testing](post-deploy-e2e-testing.md) own runtime feedback
@@ -106,7 +106,7 @@ work and evidence.
 | GE0 | A governed runtime can install, activate, observe, and recover a capability. | `validated-stand` bounded artifact slice; default rollout and broader runtime acceptance open | now |
 | GE1 | AdaOS can be delivered and supported as a managed deployment. | `implemented`; exit proof open | now / next |
 | GE2 | One user can take a request to a validated, reversible release through a Personal Builder. | `validated-stand` bounded artifact slice; autonomous Builder-from-empty acceptance open | next |
-| GE3 | Development Signals and Issues, rather than chat transcripts, become durable support and repair work. | `hypothesis`; Development Signal slice now specified, full Issue aggregate not admitted | later |
+| GE3 | Development Signals, Dev Tickets, and Issues, rather than chat transcripts, become durable support and repair work. | `hypothesis`; Development Signal and Dev Ticket slice now specified, full Issue aggregate not admitted | later |
 | GE4 | Independent Builders collaborate without sharing a writable DEV workspace. | `hypothesis`; not admitted | later |
 | GE5 | A verified capability can be reused across deployments with provenance and evidence. | `hypothesis`; not admitted | long-term |
 
@@ -232,13 +232,13 @@ separate acceptance decision.
 - [ ] `[deferred]` `GE2-06` Defer large-module decomposition unless a touched
   seam blocks the acceptance flow; track it as a dedicated later refactoring
   preparation effort. Owner: [Builder Roadmap](builder-roadmap.md).
-- [ ] `[should]` `GE2-07` Accept a scoped Development Signal as Builder input
+- [ ] `[should]` `GE2-07` Accept a scoped Dev Ticket as Builder input
   through the same typed context whether the user chooses autonomous repair or
   opens an interactive Builder session. Owner:
   [Development Signals Roadmap](development-signals-roadmap.md),
   [Builder Roadmap](builder-roadmap.md).
 - [ ] `[should]` `GE2-08` Materialize Builder work for installed, catalog,
-  remote, or read-only artifacts from a workspace signal without requiring a
+  remote, or read-only artifacts from a workspace ticket without requiring a
   pre-existing DEV checkout. Owner:
   [Development Signals Roadmap](development-signals-roadmap.md),
   [Skill Factory](skill-factory.md).
@@ -282,9 +282,9 @@ the Issue only against release and verification evidence.
   Agent roadmap.
 - [ ] `[deferred]` `GE3-06` Defer issue exchange across trust groups until GE4
   defines visibility and proposal boundaries. Owner: GE4.
-- [ ] `[must]` `GE3-07` Promote workspace- and artifact-scoped Development
-  Signals into accepted Issues only after triage establishes problem scope,
-  authority, acceptance criteria, and owning lifecycle. Owner:
+- [ ] `[must]` `GE3-07` Promote workspace- and artifact-scoped Dev Tickets into
+  accepted Issues only after triage establishes problem scope, authority,
+  acceptance criteria, and owning lifecycle. Owner:
   [Development Signals Roadmap](development-signals-roadmap.md), future Issue
   architecture.
 - [ ] `[must]` `GE3-08` Preserve the boundary between Feedback Skill intake, NLU
@@ -295,8 +295,8 @@ the Issue only against release and verification evidence.
   [Builder Roadmap](builder-roadmap.md).
 - [ ] `[must]` `GE3-09` Prove one runtime compatibility finding, such as a
   legacy receiver declaration gap, moving from deterministic evidence to
-  Development Signal, Pending Action, Builder repair, validation, and closure
-  by version or explicit deferral. Owner:
+  Development Signal, Dev Ticket, Pending Action, Builder repair, validation,
+  and closure by version or explicit deferral. Owner:
   [Development Signals Roadmap](development-signals-roadmap.md),
   [Runtime Guarding](runtime-guarding.md).
 

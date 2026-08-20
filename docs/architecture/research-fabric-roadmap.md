@@ -1562,8 +1562,98 @@ efficacy result or cross-domain SOTA claim.
   stopped after its first 0/0 EVC tie made the frozen significance threshold
   unreachable. v13 is the frozen post-measurement-fix rail pilot, invalidated by
   the unbounded-workload and timeout-containment defects above; it does not
-  replace any earlier result. The amended six-pair task must be frozen before
-  executing either arm and may not reuse v9-v13 outcomes.
+  replace any earlier result. Complete v22 produced C0 `0/6`, C3 `1/6`, and
+  exact one-sided paired `p=0.5`; it is a valid negative/inconclusive result,
+  not support for superiority. v23-v24 were stopped by immutable-environment
+  drift; v24 additionally exposed and retained a trusted-worker task-runtime
+  lookup false negative. v25 completed one budget-compliant C3 as `3/6` gates,
+  then stopped before paired C0 when the core commit changed. Its zero-exit
+  production command placed files under an undeclared `outputs/` prefix, so
+  the independent executor correctly marked exact expected paths missing.
+  Runner ABI 1.8 and Builder's generic provider-lifecycle rail now specify and
+  exercise `Path(working_directory) / expected_outputs[i]`, collection by the
+  returned `output_ref`, and declared verification. A fresh task must freeze
+  those exact digests before either arm and may not reuse v9-v25 outcomes.
+  v26 froze a clean detached worktree and produced C0 `0/2`, C3 `1/2`; its
+  second C3 passed all six independent gates in one attempt, but the series was
+  stopped when audit proved that the external driver had inverted the frozen
+  within-pair order. These are retained diagnostic results only. Core
+  `12f61cf3`, evaluator `0.1.33`, and calibration runner `0.1.13` now expose a
+  durable Builder start timestamp, reconstruct/order-gate the sequence, and
+  reject a skipped or reordered arm before candidate creation. Replacement
+  v27 is frozen at
+  `sha256:cdd342fac5e41ccb762fad7876e1731bad61e5152fbdf12553631605d8741cd0`
+  with six pairs and a matched 7M-token arm budget. It stopped after one C0
+  diagnostic (`0/1`, `2/6` gates) when source audit proved the preceding v26 C3
+  success was a schema-conformant 8x8 logistic surrogate rather than the
+  accepted Torch CNN/TLP system. The result is retained, but v27 is neither
+  complete nor claim-eligible. Core `400ef646`, Manager `0.28.0`/runner ABI
+  1.9, Evaluator `0.1.34`, prompt ABI 0.8 and Orchestrator `0.48.0` now bind
+  source identity, a common execution path, exact scientific-system semantics
+  and a hidden numerical operator probe. Replacement v28 is frozen at
+  `sha256:eb1918b3285fd30091ed7097b23d4c46ec7286bd7f4b20270d4dbbe4a9d0db66`
+  from accepted `tlp_structured_proof_02.task-005` with five counterbalanced
+  pairs and a matched 7M-token arm budget. C0 sees only the notebook; C3 sees
+  the same notebook plus compact typed contracts. Review prose, legacy code and
+  hidden evaluator material are excluded. v28 was stopped after one complete
+  pair plus an already-started second C3 replicate. C0 passed `1/7` checks; the
+  two C3 realizations passed `6/7` and `3/7`, but both used a pure-Python
+  surrogate rather than the accepted Torch CNN/TLP system. Audit proved that
+  the C3 packet omitted the evaluator-required domain callable and
+  `implementation_probe` interface. Hidden numerical values were valid
+  held-out evidence; a hidden required interface made the task
+  underspecified. v28 is retained as a diagnostic and supports no comparative
+  claim. Evaluator `0.1.36` now publishes a digest-bound
+  `domain_conformance` contract, asserts hidden/public interface parity at
+  freeze, and keeps only numerical cases and expected values hidden. v29 froze
+  that interface and completed one counterbalanced pair: C0 failed at
+  operationalization while C3 passed `6/7` gates and failed only because its
+  generated tool flattened the publicly wrapped `implementation_probe` input.
+  Both endpoints were false, so the pair was a tie. The series stopped as
+  `incomplete_no_claim` when the remaining four pairs could reach at best
+  one-sided `p=0.0625`; its partial package digest is
+  `sha256:8077dedee632295aa1771c7caab58603c36f23c654ef52a935acac8ca0480781`.
+  Core `feadd180` now validates exact admitted operation schemas before Builder
+  commit. Evaluator `0.1.37` publishes the probe as a top-level operation-set
+  member and defers native-runtime release to runner `0.1.14`. Fresh v30 is
+  frozen at
+  `sha256:3409c751f6e6cabd89b29440d42348df79ad77a50103e84115a7985cdd1e1bad`
+  on clean core `781836bc` and workspace `6a6d247`; all 25 packets were
+  prematerialized and no v28/v29 outcome is reused.
+  v30 stopped after one C3 attempt as `incomplete_no_claim`: the candidate
+  passed all seven independent gates and the real CPU smoke, but used 7,815,505
+  model tokens against the 7M budget and followed an invalid repair rail that
+  had merged the generic runner and TLP probe under one contract identity. Its
+  diagnostic summary/package digests are respectively
+  `sha256:c5d165b37bb1f0acf0aa23962d7ec75d009fc99ba1d6516f35a1028dc2f897b6`
+  and
+  `sha256:6430f047c79109cd5994e04da095e611b7a966904ba3f8622ec290ddce199aed`.
+  Core `cf78bc4e` now enforces explicit provider-role operation sets with exact
+  contract and capability identity. Evaluator `0.1.38` separates the generic
+  runner and `adaos.research.tlp_probe.v1`. Fresh v31 is frozen at
+  `sha256:f99082c6ba4794ac3c507f9618698a2ee8c747fde44b8e138b2e14098fbbd025`
+  with six counterbalanced pairs, a matched 8.5M-token budget and all 30 packets
+  prematerialized; no prior outcome is reused. v31 stopped after its first C3
+  attempt and remains `incomplete_no_claim`. The candidate stayed within budget
+  and passed package/ABI tests, but the independent CPU trial exposed a
+  candidate-owned mismatch between its returned ExecutionSpec working directory
+  and a recomputed `skill_data_root()` content path; artifact indexing exited
+  nonzero. The diagnostic summary/package digests are respectively
+  `sha256:b59631e0374f685ee6c12a5cec0d6f59c2170b444edb5ed1b697a63723aa00d0`
+  and
+  `sha256:eb4439c28b5ededd3f71612b8d25fb139eba4a26ce5e118c4952d523a192b4e2`.
+  Its result is not reusable because the standard worker required manual
+  startup after the background launcher silently exited. Core `4532a21d` adds
+  a durable worker-readiness handshake and core `f3a96cf9` gives that handshake
+  a bounded configurable startup interval. A clean Windows launch reached
+  `ready` and survived launcher exit; a fresh zero-result calibration is still
+  required. Replacement v32 is now frozen at
+  `sha256:e7a98cf51a65562837ad7df19b6f9b6ef3dc4cd08995f7f74cbd324ee84be8df`
+  on clean detached core `f3a96cf9`; all 30 packets were materialized before
+  execution and its lineage started with zero results. The first C3 launch
+  reached the durable ready handshake without operator intervention (launcher
+  PID 4068, worker PID 13624), so its outcome is eligible for the frozen
+  comparison. No v31 candidate or result is reused.
 - [ ] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and
@@ -1751,6 +1841,23 @@ a top-level direction or ordinary Desktop application.
   multi-task agenda with dependent and parallel tasks and compare explicit
   project-to-task planning with a direct project-sized prompt under matched
   models, tools, budgets, and expert evaluation.
+- [ ] `[must]` `ARF7.4-32` Formalize managed/project-only components as
+  lifecycle and distribution relations, never inherited data authority. Bind
+  runtime data, execution telemetry, orchestration state, and published
+  artifacts to independent owner refs; require an explicit capability,
+  `ArtifactRef`, or logical-view projection for every cross-component handoff.
+- [x] `[must]` `ARF7.4-33` Preserve terminal Builder candidate diagnostics as
+  bounded, symlink-safe, content-digested Automation evidence before purging
+  the ephemeral runtime. Keep primary skill outputs in owner-scoped runtime
+  `data`; do not use another skill's data bucket as a generic log store.
+- [ ] `[should]` `ARF7.4-34` Add retention/GC policy and Workbench/Builder read
+  projections for session-owned logs and traces, with producer, executor,
+  orchestrator, consumer, release, and access-policy refs. Prove that managed
+  components remain independently isolated across A/B and patch migrations.
+  Evaluator activation `0.1.37 -> 0.1.38` locally preserved the shared
+  `v0.1/data` bucket across slots A/B while Builder traces remained
+  session-owned. This is supporting migration evidence, not yet the required
+  retention/GC and joined-projection acceptance proof.
 
 #### ARF7.4 implementation checkpoint (2026-08-18)
 

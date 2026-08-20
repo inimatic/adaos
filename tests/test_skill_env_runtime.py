@@ -20,7 +20,7 @@ from adaos.sdk.data.skill_memory import (
     get as skill_memory_get,
     set as skill_memory_set,
 )
-from adaos.sdk.skill_env import get_env, read_env, set_env, skill_env_path
+from adaos.sdk.skill_env import get_env, read_env, set_env, skill_data_root, skill_env_path
 from adaos.services.agent_context import get_ctx
 from adaos.services.skill import manager as skill_manager_module
 from adaos.services.skill.manager import SkillManager
@@ -651,6 +651,37 @@ def test_skill_env_prefers_ctx_runtime_path_over_env_var(monkeypatch) -> None:
     assert ctx.skill_ctx.set("ctx_pref_skill", staged_skill_root)
     try:
         assert skill_env_path() == env.skill_env_store_path()
+    finally:
+        if previous is None:
+            ctx.skill_ctx.clear()
+        else:
+            ctx.skill_ctx.set(previous.name, previous.path)
+
+
+def test_skill_data_root_prefers_explicit_owner_scoped_execution_root(
+    monkeypatch, tmp_path: Path
+) -> None:
+    explicit = tmp_path / "dev-slot" / "data"
+    monkeypatch.setenv("ADAOS_SKILL_INTERNAL_DATA_ROOT", str(explicit))
+
+    assert skill_data_root() == explicit.resolve()
+    assert explicit.is_dir()
+
+
+def test_skill_data_root_follows_ctx_runtime_bucket(monkeypatch) -> None:
+    ctx = get_ctx()
+    skills_root = Path(ctx.paths.skills_dir())
+    env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name="data_root_skill")
+    env.prepare_version("4.2.0")
+    slot = env.build_slot_paths("4.2.0", "A")
+    staged_skill_root = slot.src_dir / "skills" / "data_root_skill"
+    staged_skill_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.delenv("ADAOS_SKILL_INTERNAL_DATA_ROOT", raising=False)
+
+    previous = ctx.skill_ctx.get()
+    assert ctx.skill_ctx.set("data_root_skill", staged_skill_root)
+    try:
+        assert skill_data_root() == env.data_root("4.2.0")
     finally:
         if previous is None:
             ctx.skill_ctx.clear()

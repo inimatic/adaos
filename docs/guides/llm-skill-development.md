@@ -330,6 +330,17 @@ background work, or heavy resources:
   global `handlers.main` package another test imported first. Run each skill's
   isolated candidate suite and a combined workspace suite; both must pass in a
   single process and with a different collection order.
+- Candidate tests must be location-independent. Resolve fixtures and handlers
+  from `Path(__file__)` inside the skill package; do not search upward for the
+  AdaOS repository, inject its `src` directory into `sys.path`, or assume a
+  fixed number of parents below `.adaos/workspace`. The immutable A/B candidate
+  contains the skill package and an installed SDK, not a source monorepo.
+- For `runtime.kind: service`, decide event ownership explicitly. If the
+  manifest handler must register EventBus subscriptions or lifecycle tools in
+  the core owner, declare `runtime.in_process_events: true`; otherwise keep
+  those handlers in the service boundary. Install-strict validation and an
+  isolated handler-discovery test must assert that every expected handler is
+  actually loaded, not merely present in the source tree.
 - Make reloads idempotent. Runtime-owned bus subscriptions are deduplicated by
   the core, but skill-owned threads, timers, executors, external callbacks, and
   resource handles still need an owner token, stop signal, and cleanup hook.
@@ -362,6 +373,11 @@ background work, or heavy resources:
 - Do not keep large tool or diagnostic responses alive in globals, logs, or
   exception objects. If the browser needs large detail data, use a details tool,
   stream snapshot, or disk evidence route with bounded retention.
+- Declare every operator-facing diagnostic tool with `side_effects: read_only`
+  and verify that declaration in a manifest contract test. A diagnostic
+  callable without a read-only side-effect declaration is not observable in
+  production: the runtime must reject a read-intent API call rather than infer
+  safety from the function name.
 - Log memory-protection actions as normal operational telemetry: cache eviction,
   stale worker cleanup, rejected oversize payloads, disabled stream sections,
   and skipped refreshes under pressure.
@@ -1399,7 +1415,7 @@ Stream rules:
   from an obsolete runtime generation. Acceptance must invoke drain through the
   real lifecycle/tool runner and prove that the subscription module's active
   count reaches zero; a direct call on the test-imported module does not cover
-module-loader authority.
+  module-loader authority.
 
 Stream variables should be demand-aware. A stream receiver that is not
 subscribed should not keep rebuilding full snapshots just in case a browser
@@ -1990,6 +2006,11 @@ Before publishing:
   repair path `adaos skill install NAME --source workspace --local --recover
   --test --silent`; recovery without tests is rejected, and the quarantine must
   remain effective until candidate activation succeeds.
+- remove or rename the workspace source after activation, leave the selected
+  slot intact, switch to another scenario and back, and verify the catalog,
+  resources, receivers, and tools still materialize from that exact active
+  version/slot. Assert source-authority evidence rather than accepting a
+  populated catalog that may have survived in persisted Yjs state.
 - verify `data_routes` exists for browser-facing Yjs, stream, details, or
   diagnostic surfaces
 - verify every tool-backed surface names its exact tool and has a causal
@@ -2048,6 +2069,9 @@ Before publishing:
 - verify collection routes keep Yjs summaries constant-size under synthetic
   large-row tests
 - verify hot events have debounce/budget tests
+- verify a synchronous snapshot subscriber returns promptly when its builder is
+  deliberately blocked, repeated requests coalesce, queue capacity is bounded,
+  and lifecycle drain prevents the stale worker from publishing
 - verify SDK projection diagnostics show the expected `by_event` pressure
   counters for dirty refresh paths before optimizing a noisy event source
 - verify stream request bursts cannot rebuild every skill section by default

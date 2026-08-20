@@ -196,6 +196,36 @@ class _PathsStub:
         return self._repo_root
 
 
+def _write_active_skill_runtime(
+    skills_root: Path,
+    skill_name: str,
+    *,
+    webui: dict[str, object] | None,
+    version: str = "1.2.3",
+    slot: str = "B",
+) -> Path:
+    environment = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=skill_name)
+    environment.ensure_base()
+    environment.ensure_bucket_dirs(version)
+    slot_paths = environment.build_slot_paths(version, slot)
+    skill_root = slot_paths.src_dir / "skills" / skill_name
+    skill_root.mkdir(parents=True, exist_ok=True)
+    (skill_root / "skill.yaml").write_text(
+        f"name: {skill_name}\nversion: {version}\n",
+        encoding="utf-8",
+    )
+    if webui is not None:
+        (skill_root / "webui.json").write_text(json.dumps(webui), encoding="utf-8")
+    slot_paths.resolved_manifest.write_text(
+        json.dumps({"name": skill_name, "version": version}),
+        encoding="utf-8",
+    )
+    environment.active_version_marker().write_text(version, encoding="utf-8")
+    environment.set_active_slot(version, slot)
+    environment.record_active_selection(version, slot)
+    return skill_root
+
+
 def test_scenario_loader_falls_back_to_repo_workspace(monkeypatch, tmp_path: Path) -> None:
     runtime_base = tmp_path / "runtime"
     repo_root = tmp_path / "repo"
@@ -294,6 +324,95 @@ def test_webspace_runtime_load_webui_falls_back_to_repo_workspace(tmp_path: Path
     assert payload["apps"][0]["scenario_id"] == "prompt_engineer_scenario"
     assert payload["node_id"] == "node-1"
     assert "prompt_ide_modal" in payload["registry"]["modals"]
+
+
+def test_webspace_runtime_load_webui_prefers_active_runtime_slot_over_stale_workspace(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime_base = tmp_path / "runtime"
+    repo_root = tmp_path / "repo"
+    skills_root = runtime_base / "workspace" / "skills"
+    stale_workspace = skills_root / "weather_skill"
+    (stale_workspace / "handlers" / "__pycache__").mkdir(parents=True)
+    active_root = _write_active_skill_runtime(
+        skills_root,
+        "weather_skill",
+        webui={
+            "widgets": [{"id": "weather.current", "type": "visual.metricTile"}],
+            "ydoc_defaults": {"data/weather/current": {"city": "Moscow"}},
+        },
+    )
+
+    fake_ctx = SimpleNamespace(paths=_PathsStub(base_dir=runtime_base, repo_root=repo_root))
+    runtime = WebspaceScenarioRuntime(fake_ctx)
+    monkeypatch.setattr(webspace_runtime_module, "_local_node_id", lambda: "node-1")
+
+    payload = runtime._load_webui("weather_skill", "default")
+
+    assert payload["widgets"][0]["id"] == "weather.current"
+    assert payload["source_path"] == str(active_root.resolve())
+    assert payload["source_authority"] == "active_runtime_slot"
+    assert payload["runtime_version"] == "1.2.3"
+    assert payload["runtime_slot"] == "B"
+
+
+def test_active_runtime_without_webui_does_not_expose_undeployed_workspace_ui(tmp_path: Path) -> None:
+    runtime_base = tmp_path / "runtime"
+    repo_root = tmp_path / "repo"
+    skills_root = runtime_base / "workspace" / "skills"
+    workspace_skill = skills_root / "service_doctor_skill"
+    workspace_skill.mkdir(parents=True)
+    (workspace_skill / "webui.json").write_text(
+        json.dumps({"widgets": [{"id": "stale.workspace.widget"}]}),
+        encoding="utf-8",
+    )
+    _write_active_skill_runtime(
+        skills_root,
+        "service_doctor_skill",
+        webui=None,
+    )
+
+    fake_ctx = SimpleNamespace(paths=_PathsStub(base_dir=runtime_base, repo_root=repo_root))
+    runtime = WebspaceScenarioRuntime(fake_ctx)
+
+    assert runtime._load_webui("service_doctor_skill", "default") == {}
+
+
+def test_collect_skill_decls_materializes_catalog_from_active_runtime_slot(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime_base = tmp_path / "runtime"
+    repo_root = tmp_path / "repo"
+    skills_root = runtime_base / "workspace" / "skills"
+    (skills_root / "infrastate_skill" / "handlers" / "__pycache__").mkdir(parents=True)
+    _write_active_skill_runtime(
+        skills_root,
+        "infrastate_skill",
+        webui={
+            "apps": [{"id": "infrastate", "title": "Infra State"}],
+            "widgets": [{"id": "infrastate.summary", "type": "visual.metricTile"}],
+        },
+        version="0.75.60",
+        slot="A",
+    )
+
+    fake_ctx = SimpleNamespace(paths=_PathsStub(base_dir=runtime_base, repo_root=repo_root))
+    runtime = WebspaceScenarioRuntime(fake_ctx)
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "get_local_capacity",
+        lambda: {"skills": [{"name": "infrastate_skill", "active": True}]},
+    )
+    webspace_runtime_module._RUNTIME.cache.clear_skill_declarations()
+
+    decls = runtime._collect_skill_decls(mode="workspace", include_remote=False)
+
+    assert len(decls) == 1
+    assert decls[0]["apps"][0]["id"] == "infrastate"
+    assert decls[0]["widgets"][0]["id"] == "infrastate.summary"
+    assert decls[0]["source_authority"] == "active_runtime_slot"
 
 
 def test_webspace_runtime_load_webui_reads_shared_ui_owner_from_skill_manifest(tmp_path: Path, monkeypatch) -> None:

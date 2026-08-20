@@ -3,7 +3,7 @@ from __future__ import annotations
 import json, os, shutil, subprocess, sys, traceback
 import functools
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 from dataclasses import asdict
 
 import typer
@@ -56,11 +56,13 @@ root_app = typer.Typer(help="Bootstrap and authenticate against the Root service
 mcp_app = typer.Typer(help="Root MCP bridge and Codex / VS Code integration utilities.")
 skill_app = typer.Typer(help="Manage owner skills in the local Forge workspace.")
 scenario_app = typer.Typer(help="Manage owner scenarios in the local Forge workspace.")
+ticket_app = typer.Typer(help="Manage local development tickets.")
 
 app.add_typer(root_app, name="root")
 root_app.add_typer(mcp_app, name="mcp")
 app.add_typer(skill_app, name="skill")
 app.add_typer(scenario_app, name="scenario")
+app.add_typer(ticket_app, name="ticket")
 
 
 def _run_safe(func):
@@ -131,6 +133,72 @@ def _parse_metadata(pairs: List[str]) -> Dict[str, str]:
             raise typer.BadParameter("Metadata key must not be empty")
         result[key] = value
     return result
+
+
+def _ticket_service(state_dir: Optional[Path] = None):
+    from adaos.services.development_tickets import DevelopmentTicketService
+
+    return DevelopmentTicketService(state_dir=state_dir)
+
+
+def _ticket_signal_kind(ticket_kind: str) -> str:
+    mapping = {
+        "feedback": "feedback_note",
+        "development_request": "development_request",
+        "runtime_compatibility_debt": "compatibility_finding",
+        "runtime_failure": "runtime_failure",
+        "review_debt": "review_comment",
+        "nlu_repair": "nlu_failure",
+        "user_adaptation": "user_adaptation_request",
+    }
+    return mapping.get(str(ticket_kind or "").strip(), "development_request")
+
+
+def _ticket_target_scope(
+    *,
+    target_type: str,
+    target_id: str,
+    target_version: str = "",
+    target_digest: str = "",
+    target_source: str = "",
+) -> dict[str, Any]:
+    target = {
+        "type": str(target_type or "unknown").strip() or "unknown",
+    }
+    if str(target_id or "").strip():
+        target["id"] = str(target_id).strip()
+    if str(target_version or "").strip():
+        target["version"] = str(target_version).strip()
+    if str(target_digest or "").strip():
+        target["digest"] = str(target_digest).strip()
+    if str(target_source or "").strip():
+        target["source"] = str(target_source).strip()
+    return target
+
+
+def _ticket_evidence_refs(values: List[str]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    for raw in values or []:
+        token = str(raw or "").strip()
+        if not token:
+            continue
+        if ":" in token:
+            ref_type, ref_id = token.split(":", 1)
+            refs.append({"type": ref_type.strip() or "ref", "id": ref_id.strip() or token})
+        else:
+            refs.append({"type": "ref", "id": token})
+    return refs
+
+
+def _print_ticket_summary(ticket: Mapping[str, Any]) -> None:
+    target = ticket.get("target_scope") if isinstance(ticket.get("target_scope"), dict) else {}
+    target_type = target.get("type") or "unknown"
+    target_id = target.get("id") or target.get("name") or ""
+    target_text = f"{target_type}:{target_id}" if target_id else str(target_type)
+    typer.echo(
+        f"{ticket.get('ticket_id')} {ticket.get('status')} {ticket.get('kind')} "
+        f"{target_text} - {ticket.get('summary')}"
+    )
 
 
 def _echo_artifact_list(items: List[ArtifactListItem], json_output: bool) -> None:
@@ -223,6 +291,185 @@ def _echo_update_result(kind_label: str, result: ArtifactUpdateResult, json_outp
         typer.echo(f"Commit: {result.commit}")
     if result.recovery and result.recovery.get("messages_recovered"):
         typer.echo(f"Recovered Builder messages: {result.recovery['messages_recovered']}")
+
+
+@ticket_app.command("new")
+@_run_safe
+def dev_ticket_new(
+    summary: str = typer.Argument(..., help="ticket summary"),
+    kind: str = typer.Option("development_request", "--kind", help="ticket kind"),
+    target_type: str = typer.Option("unknown", "--target-type", help="target type: skill, scenario, core, runtime, webui"),
+    target_id: str = typer.Option("", "--target-id", help="target id/name"),
+    target_version: str = typer.Option("", "--target-version", help="target version"),
+    target_digest: str = typer.Option("", "--target-digest", help="target digest"),
+    target_source: str = typer.Option("", "--target-source", help="target source: dev, workspace, installed, catalog, remote"),
+    source: str = typer.Option("codex_review", "--source", help="producer source"),
+    severity: str = typer.Option("medium", "--severity", help="info, low, medium, high, critical"),
+    blocking: bool = typer.Option(False, "--blocking/--non-blocking", help="mark as blocking"),
+    status: str = typer.Option("proposed", "--status", help="initial ticket status"),
+    evidence: List[str] = typer.Option([], "--evidence", help="evidence ref, optionally type:id"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    service = _ticket_service(state_dir)
+    target = _ticket_target_scope(
+        target_type=target_type,
+        target_id=target_id,
+        target_version=target_version,
+        target_digest=target_digest,
+        target_source=target_source,
+    )
+    signal_result = service.capture_signal(
+        kind=_ticket_signal_kind(kind),
+        summary=summary,
+        owner_scope={"type": "workspace", "id": "local"},
+        origin_scope={"type": "codex", "surface": "cli"},
+        target_scope=target,
+        severity=severity,
+        blocking=blocking,
+        source=source,
+        evidence_refs=_ticket_evidence_refs(evidence),
+        metadata={"ticket_cli": True},
+    )
+    ticket_result = service.ensure_ticket_for_signal(
+        signal_result["signal"],
+        kind=kind,
+        status=status,
+        source=source,
+    )
+    payload = {
+        "ok": True,
+        "signal": signal_result["signal"],
+        "ticket": ticket_result["ticket"],
+        "signal_duplicate": bool(signal_result.get("duplicate")),
+        "ticket_duplicate": bool(ticket_result.get("duplicate")),
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    _print_ticket_summary(ticket_result["ticket"])
+
+
+@ticket_app.command("list")
+@_run_safe
+def dev_ticket_list(
+    status: str = typer.Option("", "--status", help="filter by status"),
+    target_id: str = typer.Option("", "--target-id", help="filter by target id"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    tickets = _ticket_service(state_dir).list_tickets(status=status or None, target_id=target_id or None)
+    if json_output:
+        typer.echo(json.dumps({"ok": True, "tickets": tickets}, ensure_ascii=False, indent=2))
+        return
+    if not tickets:
+        typer.echo("No development tickets found.")
+        return
+    for ticket in tickets:
+        _print_ticket_summary(ticket)
+
+
+@ticket_app.command("show")
+@_run_safe
+def dev_ticket_show(
+    ticket_id: str = typer.Argument(..., help="ticket id"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+) -> None:
+    ticket = _ticket_service(state_dir).get_ticket(ticket_id)
+    if not ticket:
+        typer.secho(f"ticket not found: {ticket_id}", fg=typer.colors.RED)
+        raise typer.Exit(1)
+    typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
+
+
+@ticket_app.command("defer")
+@_run_safe
+def dev_ticket_defer(
+    ticket_id: str = typer.Argument(..., help="ticket id"),
+    reason: str = typer.Option("", "--reason", help="defer reason"),
+    actor: str = typer.Option("cli", "--actor", help="actor id"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    ticket = _ticket_service(state_dir).defer_ticket(ticket_id, actor=actor, reason=reason)
+    if json_output:
+        typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
+        return
+    _print_ticket_summary(ticket)
+
+
+@ticket_app.command("handoff")
+@_run_safe
+def dev_ticket_handoff(
+    ticket_id: str = typer.Argument(..., help="ticket id"),
+    mode: str = typer.Option("interactive", "--mode", help="interactive or autonomous"),
+    actor: str = typer.Option("cli", "--actor", help="actor id"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    from adaos.services.builder.repair import BuilderRepairService
+
+    service = _ticket_service(state_dir)
+    result = service.handoff_ticket(
+        ticket_id,
+        mode=mode,
+        repair_service=BuilderRepairService(state_dir=state_dir),
+        actor=actor,
+    )
+    if json_output:
+        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    _print_ticket_summary(result["ticket"])
+    typer.echo(f"repair: {result['repair'].get('repair_id')}")
+
+
+@ticket_app.command("resolve")
+@_run_safe
+def dev_ticket_resolve(
+    ticket_id: str = typer.Argument(..., help="ticket id"),
+    evidence: List[str] = typer.Option(..., "--evidence", help="required evidence ref, optionally type:id"),
+    version: str = typer.Option("", "--version", help="resolved artifact version"),
+    overlay: str = typer.Option("", "--overlay", help="resolved overlay id"),
+    actor: str = typer.Option("cli", "--actor", help="actor id"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    from adaos.services.builder.repair import BuilderRepairService
+
+    result = _ticket_service(state_dir).record_resolution(
+        ticket_id,
+        evidence_refs=_ticket_evidence_refs(evidence),
+        actor=actor,
+        resolved_by_version=version,
+        resolved_by_overlay=overlay,
+        repair_service=BuilderRepairService(state_dir=state_dir),
+    )
+    if json_output:
+        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    _print_ticket_summary(result["ticket"])
+
+
+@ticket_app.command("close")
+@_run_safe
+def dev_ticket_close(
+    ticket_id: str = typer.Argument(..., help="ticket id"),
+    reason: str = typer.Option(..., "--reason", help="duplicate, stale, refused, or not-design-time-fixable"),
+    actor: str = typer.Option("cli", "--actor", help="actor id"),
+    evidence: List[str] = typer.Option([], "--evidence", help="evidence ref, optionally type:id"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    ticket = _ticket_service(state_dir).close_ticket(
+        ticket_id,
+        reason=reason,
+        actor=actor,
+        evidence_refs=_ticket_evidence_refs(evidence),
+    )
+    if json_output:
+        typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
+        return
+    _print_ticket_summary(ticket)
 
 
 @root_app.command("init")

@@ -50,3 +50,44 @@ def execution_readiness(**_: Any) -> dict[str, Any]:
     missing = list(implementation.get("missing") or [])
     ready = implementation.get("state") == "ready" and not missing
     return {"ok": True, "ready": ready, "state": implementation.get("state") or "pre_codex", "missing": missing}
+
+
+def _runner_not_implemented(operation: str) -> RuntimeError:
+    return RuntimeError(
+        f"{operation} is a pre-Codex research-runner stub; implement the accepted "
+        "scientific contract and pass ResearchManager consumer conformance"
+    )
+
+
+@tool(summary="Prepare an experimental attempt package.", side_effects="local_write")
+def prepare_attempt(request: Mapping[str, Any], **_: Any) -> dict[str, Any]:
+    del request
+    raise _runner_not_implemented("prepare_attempt")
+
+
+@tool(summary="Collect normalized attempt evidence.", side_effects="none")
+def collect_attempt(output_ref: str, **_: Any) -> dict[str, Any]:
+    del output_ref
+    raise _runner_not_implemented("collect_attempt")
+
+
+@tool(summary="Verify one direction-owned content identity.", side_effects="none")
+def verify_artifact(uri: str, digest: str, **_: Any) -> dict[str, Any]:
+    del uri, digest
+    raise _runner_not_implemented("verify_artifact")
+
+
+@tool(summary="Report immutable dataset split readiness.", side_effects="none")
+def dataset_status(**_: Any) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "ready": False,
+        "execution_ready_without_network": False,
+        "error": "runner_not_implemented",
+        "missing": [
+            "validation split binding",
+            "robustness split binding",
+            "sealed test split binding",
+            "domain experiment implementation",
+        ],
+    }

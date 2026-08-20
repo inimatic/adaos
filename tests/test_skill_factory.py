@@ -51,22 +51,37 @@ def _dev_result(
     dependency_changes: list[dict] | None = None,
 ) -> dict:
     evidence_paths = assignment["evidence"]["expected_paths"]
-    paths = list(changed_paths)
-    if evidence_paths["provenance"] not in paths:
-        paths.append(evidence_paths["provenance"])
+    evidence_artifacts = [
+        {
+            "kind": kind,
+            "logical_path": evidence_paths[kind],
+            "digest": "sha256:" + token * 64,
+            "size_bytes": 1,
+            "media_type": "application/json" if kind != "changed_files" else "text/plain",
+        }
+        for kind, token in zip(
+            ("result", "test_report", "changed_files", "provenance"),
+            ("1", "2", "3", "4"),
+        )
+    ]
     return {
         "task_id": task_id,
         "node_id": node_id,
         "status": "completed",
         "commit_hash": commit_hash,
         "branch": assignment["forge"]["branch"],
-        "changed_paths": paths,
+        "changed_paths": list(changed_paths),
         "tests": {"status": "passed", "command": "pytest"},
         "provenance": {
             "runner_version": "pytest-runner/1.0",
             "image_digest": "sha256:test-image",
             "instruction_packet_hash": "sha256:test-instructions",
             "dependency_changes": dependency_changes or [],
+        },
+        "evidence": {
+            "schema": "adaos.skill_factory.task_evidence_manifest.v1",
+            "storage": "worker_task_envelope",
+            "artifacts": evidence_artifacts,
         },
     }
 
@@ -85,6 +100,7 @@ def test_skill_factory_queue_assigns_and_accepts_valid_result(tmp_path: Path) ->
     assert task["forge"]["branch"].startswith("realize/")
     assert "skills/shopping_list/" in task["forge"]["sparse_paths"]
     assert "docs/requirements/shopping_list/" in task["forge"]["sparse_paths"]
+    assert not any(path.startswith(".adaos/tasks/") for path in task["forge"]["sparse_paths"])
 
     registered = service.register_dev_node({"node_id": "devnode.test"})
     assert registered["registration"]["status"] == "registered_waiting"
@@ -103,7 +119,6 @@ def test_skill_factory_queue_assigns_and_accepts_valid_result(tmp_path: Path) ->
             node_id="devnode.test",
             changed_paths=[
                 "skills/shopping_list/skill.yaml",
-                assignment["evidence"]["expected_paths"]["result"],
             ],
         )
     )

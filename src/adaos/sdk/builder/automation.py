@@ -215,8 +215,27 @@ def recover_validated_result(*, object_type: str, object_id: str) -> dict[str, A
     )
 
 
+def release_candidate_runtime(
+    *,
+    object_type: str,
+    object_id: str,
+    development_session_id: str,
+) -> dict[str, Any]:
+    """Release a terminal Builder candidate runtime and retain its evidence."""
+
+    return dict(
+        _service().release_candidate_runtime(
+            object_type=object_type,
+            object_id=object_id,
+            development_session_id=development_session_id,
+        )
+        or {}
+    )
+
+
 __all__ = [
     "get_state",
+    "release_candidate_runtime",
     "reconcile_checkpoint",
     "recover_validated_result",
     "return_to_prototype",

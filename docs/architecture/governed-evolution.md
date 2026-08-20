@@ -20,6 +20,8 @@ artifact; it is not sufficient evidence that the requested capability works.
 Before an observation becomes an Issue, AdaOS may preserve it as a scoped
 Development Signal: a versioned, immutable feedback or diagnostic record that
 keeps the original evidence, artifact identity, and routing context intact.
+When that evidence needs human/Codex tracking before the full Issue layer is
+involved, AdaOS exposes it as a Dev Ticket.
 
 This direction is deliberately broader than the current Builder implementation.
 It gives existing architecture tracks a common destination without claiming
@@ -59,6 +61,7 @@ The target system connects existing AdaOS planes through typed records:
 Human or machine signal
   -> contextual intake
   -> scoped Development Signal
+  -> Dev Ticket when action or tracking is needed
   -> NLU / Support triage
   -> durable AdaOS Issue
   -> Builder task
@@ -113,6 +116,12 @@ version. It is stored in the workspace evolution inbox by default so that
 feedback can be captured even when the affected artifact has no DEV checkout.
 When writable source exists, the signal may be projected into the local
 artifact evolution log without becoming a second source of truth.
+
+Dev Ticket is the user- and Codex-facing backlog object over one or more
+Development Signals. It carries visible state, dedup grouping, Pending Actions,
+Builder refs, closure evidence, and optional external issue links. It lets
+people and Codex manage deferred work inside AdaOS instead of relying on
+documentation TODOs or unstructured chat.
 
 Feedback intake may ask short clarifying questions and offer immediate choices
 such as record, postpone, open Builder, or request autonomous Builder repair.
@@ -175,6 +184,11 @@ autonomously, by accepting a bounded repair task and reporting delayed results.
 Both paths use the same typed handoff and preserve the signal, evidence, and
 version lineage.
 
+For human and Codex workflows Builder normally receives a Dev Ticket whose
+linked Development Signals provide the evidence bundle. Builder must not treat
+a GitHub issue, documentation note, or chat fragment as more authoritative than
+the internal ticket and its typed refs.
+
 ### Deterministic Runtime And Policy
 
 AdaOS owns validation, permission checks, publication and activation gates,
@@ -206,6 +220,11 @@ compatibility findings, voice misunderstandings, screenshots, deferred ideas,
 review remarks, and runtime diagnostics whose final owner is not yet known. An
 Issue is created only after triage accepts a problem or capability request as
 tracked work with scope, authority, and acceptance criteria.
+
+Dev Tickets are the first managed backlog layer above Development Signals.
+They may be resolved, deferred, superseded, closed, handed to Builder, or
+promoted to Issues. A Dev Ticket is narrower than an AdaOS Issue and does not
+replace the future Issue aggregate.
 
 The minimum conceptual record is:
 
@@ -323,16 +342,18 @@ artifact. The target sequence is:
 2. contextual intake stores a Development Signal in the workspace evolution
    inbox and links artifact refs, screenshots, conversations, NLU traces, and
    diagnostics by policy;
-3. Support intake creates or links an Issue in a registry independent of DEV
+3. a Dev Ticket is created when a person, Codex, policy, or deterministic
+   compatibility check needs trackable work before Issue promotion;
+4. Support intake creates or links an Issue in a registry independent of DEV
    filesystem presence when the signal becomes accepted work;
-4. ownership policy selects an existing DEV space, creates a new fork from the
+5. ownership policy selects an existing DEV space, creates a new fork from the
    deployed/public version, or queues the Issue without realization;
-5. Builder receives only the authorized context and evidence needed for the
+6. Builder receives only the authorized context and evidence needed for the
    task;
-6. a release links back to the Issue and the deployment evidence that motivated
+7. a release links back to the Issue and the deployment evidence that motivated
    it;
-7. post-activation checks append results and may resolve or reopen the Issue or
-   linked Development Signals.
+8. post-activation checks append results and may resolve or reopen the Issue,
+   Dev Ticket, or linked Development Signals.
 
 Setup and migration validation can use an observation window. A deterministic
 post-install report records the applied version, migration checkpoints,
@@ -395,7 +416,7 @@ benefit and operational cost.
 - skills and scenarios as governed artifacts;
 - Builder terminology and a working local development pipeline;
 - Builder repair tasks, development feedback records, review anchors, and
-  Pending Actions as partial Development Signal foundations;
+  Pending Actions as partial Development Signal and Dev Ticket foundations;
 - separate SDK, service, runtime, projection, and policy boundaries;
 - DEV-space creation, static validation, Git checkpoints, and publication
   paths in varying stages of integration;
@@ -411,13 +432,14 @@ readiness.
 ### Near-term architecture work
 
 - complete the repeatable single-user Issue-to-release Builder loop;
-- specify and implement the Development Signal schema, workspace evolution
-  inbox, Feedback Skill intake, and signal-to-Builder handoff;
+- specify and implement the Development Signal schema, Dev Ticket schema,
+  workspace evolution inbox, Feedback Skill intake, and ticket-to-Builder
+  handoff;
 - add conversational disambiguation between action execution, NLU correction,
   feedback note, user adaptation, and development request;
 - route deterministic runtime compatibility findings, including missing
-  receiver declarations, into Development Signals, Pending Actions, and Builder
-  repair evidence;
+  receiver declarations, into Development Signals, Dev Tickets, Pending
+  Actions, and Builder repair evidence;
 - formalize setup, migration, post-install verification, and failure evidence;
 - define the AdaOS Issue contract and its relationship to existing
   `development_task`, incident, task, operation, and release records;

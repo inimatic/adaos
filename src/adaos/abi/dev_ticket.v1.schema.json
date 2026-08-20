@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/dev_ticket.v1.schema.json",
+  "title": "AdaOS Dev Ticket v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "ticket_id",
+    "kind",
+    "status",
+    "summary",
+    "signal_ids",
+    "target_scope",
+    "dedup_key",
+    "occurrence_count",
+    "source",
+    "evidence_refs",
+    "pending_action_refs",
+    "builder_refs",
+    "external_refs",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.dev_ticket.v1" },
+    "ticket_id": { "type": "string", "minLength": 1 },
+    "kind": {
+      "enum": [
+        "feedback",
+        "development_request",
+        "runtime_compatibility_debt",
+        "runtime_failure",
+        "review_debt",
+        "nlu_repair",
+        "user_adaptation"
+      ]
+    },
+    "status": {
+      "enum": [
+        "captured",
+        "proposed",
+        "accepted",
+        "deferred",
+        "waiting_for_user",
+        "ready_for_builder",
+        "in_builder",
+        "resolved",
+        "closed",
+        "superseded",
+        "stale"
+      ]
+    },
+    "summary": { "type": "string", "minLength": 1 },
+    "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
+    "blocking": { "type": "boolean" },
+    "target_scope": { "type": "object" },
+    "owner_scope": { "type": "object" },
+    "origin_scope": { "type": "object" },
+    "signal_ids": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "dedup_key": { "type": "string", "minLength": 1 },
+    "occurrence_count": { "type": "integer", "minimum": 1 },
+    "source": { "type": "string", "minLength": 1 },
+    "evidence_refs": { "type": "array", "items": { "type": "object" } },
+    "pending_action_refs": { "type": "array", "items": { "type": "object" } },
+    "builder_refs": { "type": "array", "items": { "type": "object" } },
+    "external_refs": { "type": "array", "items": { "type": "object" } },
+    "policy": { "type": "object" },
+    "metadata": { "type": "object" },
+    "closure": { "type": "object" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}

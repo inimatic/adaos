@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -99,7 +100,7 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["status"] == "completed"
     assert status["session"]["source_prototype_version"] == "0.1.0"
     assert status["automation"]["source_prototype_version"] == "0.1.0"
-    assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.3.1"
+    assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.8.0"
     assert status["session"]["created_artifacts"][0]["kind"] == "skill"
     assert status["session"]["created_artifacts"][0]["name"] == "recipes_skill"
     task = next(
@@ -114,6 +115,139 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
         encoding="utf-8"
     )
     assert status["session"]["local_run"]["events_path"].endswith("codex-live.jsonl")
+
+
+def test_terminal_skill_candidate_runtime_release_is_exact_and_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation_candidate",
+            "object_type": "skill",
+            "object_id": "candidate_skill",
+            "development_session_id": "dev_candidate_01",
+            "status": "completed",
+            "updated_at": "2026-08-20T00:00:00+00:00",
+        }
+    )
+    calls: list[str] = []
+
+    def cleanup(skill_id: str) -> dict[str, object]:
+        calls.append(skill_id)
+        return {
+            "runtime_existed": True,
+            "runtime_removed": True,
+            "purged_data": True,
+        }
+
+    monkeypatch.setattr(automation_module, "_cleanup_dev_skill_runtime", cleanup)
+
+    released = service.release_candidate_runtime(
+        object_type="skill",
+        object_id="candidate_skill",
+        development_session_id="dev_candidate_01",
+    )
+    repeated = service.release_candidate_runtime(
+        object_type="skill",
+        object_id="candidate_skill",
+        development_session_id="dev_candidate_01",
+    )
+
+    assert released["ok"] is True
+    assert released["idempotent"] is False
+    assert repeated["idempotent"] is True
+    assert calls == ["candidate_skill"]
+    persisted = service.get_session("skill", "candidate_skill")
+    assert persisted is not None
+    assert persisted["runtime_release"]["development_session_id"] == "dev_candidate_01"
+
+
+def test_terminal_candidate_release_preserves_runtime_diagnostics_as_builder_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation_candidate",
+            "object_type": "skill",
+            "object_id": "candidate_skill",
+            "development_session_id": "dev_candidate_01",
+            "status": "failed",
+            "updated_at": "2026-08-20T00:00:00+00:00",
+        }
+    )
+    runtime_root = service.dev_skills_root / ".runtime" / "candidate_skill"
+    diagnostic = runtime_root / "diagnostics" / "candidate-tests" / "pytest.log"
+    diagnostic.parent.mkdir(parents=True)
+    diagnostic.write_text("one failed\n", encoding="utf-8")
+
+    def cleanup(skill_id: str) -> dict[str, object]:
+        assert skill_id == "candidate_skill"
+        shutil.rmtree(runtime_root)
+        return {
+            "runtime_existed": True,
+            "runtime_removed": True,
+            "purged_data": True,
+        }
+
+    monkeypatch.setattr(automation_module, "_cleanup_dev_skill_runtime", cleanup)
+
+    released = service.release_candidate_runtime(
+        object_type="skill",
+        object_id="candidate_skill",
+        development_session_id="dev_candidate_01",
+    )
+
+    receipt = released["runtime_release"]
+    evidence = receipt["diagnostics"]
+    archived = Path(evidence["root"]) / "candidate-tests" / "pytest.log"
+    assert runtime_root.exists() is False
+    assert archived.read_text(encoding="utf-8") == "one failed\n"
+    assert evidence["schema"] == "adaos.builder.runtime_diagnostics.v1"
+    assert evidence["file_count"] == 1
+    assert evidence["bytes"] == archived.stat().st_size
+    assert evidence["files"][0]["path"] == "candidate-tests/pytest.log"
+    assert evidence["files"][0]["digest"].startswith("sha256:")
+    assert evidence["digest"].startswith("sha256:")
+
+
+@pytest.mark.parametrize(
+    ("status", "development_session_id", "error"),
+    [
+        ("in_progress", "dev_candidate_01", "only after terminal"),
+        ("completed", "dev_other", "does not match"),
+    ],
+)
+def test_candidate_runtime_release_rejects_unsafe_lifecycle_state(
+    tmp_path: Path,
+    status: str,
+    development_session_id: str,
+    error: str,
+) -> None:
+    service = _service(tmp_path)
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation_candidate",
+            "object_type": "skill",
+            "object_id": "candidate_skill",
+            "development_session_id": "dev_candidate_01",
+            "status": status,
+            "updated_at": "2026-08-20T00:00:00+00:00",
+        }
+    )
+
+    with pytest.raises(ValueError, match=error):
+        service.release_candidate_runtime(
+            object_type="skill",
+            object_id="candidate_skill",
+            development_session_id=development_session_id,
+        )
 
 
 def test_automation_materializes_governed_development_session_inputs(tmp_path: Path) -> None:
@@ -270,6 +404,7 @@ def test_automation_projects_declared_and_observed_execution_budget(tmp_path: Pa
     )
     session = {
         "status": "completed",
+        "created_at": "2026-08-18T00:00:00Z",
         "task": {
             "created_at": "2026-08-18T00:00:00Z",
             "assigned_at": "2026-08-18T00:00:10Z",
@@ -297,6 +432,7 @@ def test_automation_projects_declared_and_observed_execution_budget(tmp_path: Pa
     assert projected["budget_usage"]["observed"]["attempts"] == 2
     assert projected["budget_usage"]["observed"]["wall_seconds"] == 60.0
     assert projected["budget_usage"]["observed"]["terminal"] is True
+    assert projected["created_at"] == "2026-08-18T00:00:00Z"
 
 
 def test_background_automation_launches_durable_worker_process(tmp_path: Path, monkeypatch) -> None:
@@ -304,17 +440,37 @@ def test_background_automation_launches_durable_worker_process(tmp_path: Path, m
     service.background = True
     monkeypatch.delenv("ADAOS_BUILDER_AUTOMATION_RESOURCE_PRIORITY", raising=False)
     launched: list[tuple[list[str], dict]] = []
+    worker_root = (
+        service.state_dir
+        / "builder"
+        / "automation_workers"
+        / "automation.scenario.recipes"
+    )
 
     def _popen(command, **kwargs):
         launched.append((list(command), dict(kwargs)))
-        return SimpleNamespace(pid=4242)
+        worker_root.mkdir(parents=True, exist_ok=True)
+        (worker_root / "ready.json").write_text(
+            json.dumps(
+                {
+                    "schema": "adaos.builder.automation_worker_ready.v1",
+                    "session_id": "automation.scenario.recipes",
+                    "status": "ready",
+                    "pid": 4243,
+                    "ready_at": "2026-08-20T00:00:00+00:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(pid=4242, poll=lambda: None)
 
     monkeypatch.setattr(automation_module.subprocess, "Popen", _popen)
 
     result = service._launch_worker_process("automation.scenario.recipes")
 
     assert result["pid"] == 4242
-    assert result["status"] == "launched"
+    assert result["status"] == "ready"
+    assert result["worker_pid"] == 4243
     assert result["repo_root"] == str(service.repo_root.resolve())
     assert result["executable"]
     assert launched[0][0][-2:] == ["--session-id", "automation.scenario.recipes"]
@@ -329,8 +485,44 @@ def test_background_automation_launches_durable_worker_process(tmp_path: Path, m
         ).read_text(encoding="utf-8")
     )
     assert launch["session_id"] == "automation.scenario.recipes"
+    assert launch["status"] == "ready"
     assert launch["resource_policy"]["mode"] == "background"
     assert launch["resource_policy"]["inherited_by_children"] is True
+    if automation_module.os.name == "nt":
+        breakaway = getattr(
+            automation_module.subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0
+        )
+        if breakaway:
+            assert launched[0][1]["creationflags"] & breakaway
+            assert launch["resource_policy"]["job_breakaway"] is True
+
+
+def test_background_automation_rejects_worker_without_ready_handshake(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = _service(tmp_path)
+    service.background = True
+
+    monkeypatch.setattr(
+        automation_module.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: SimpleNamespace(pid=4242, poll=lambda: 7),
+    )
+
+    with pytest.raises(RuntimeError, match="exited before readiness handshake"):
+        service._launch_worker_process("automation.skill.failed")
+
+    launch = json.loads(
+        (
+            service.state_dir
+            / "builder"
+            / "automation_workers"
+            / "automation.skill.failed"
+            / "launch.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert launch["status"] == "failed"
+    assert "code 7" in launch["error"]
 
 
 def test_automation_worker_uses_background_priority_on_windows(monkeypatch) -> None:
@@ -1316,8 +1508,17 @@ def test_projection_backfills_missing_conversation_before_notification(tmp_path:
     assert service.get_session("scenario", "recipes")["conversation_id"] == "conv.builder.recipes"
 
 
-def test_refresh_preserves_finalization_progress_after_worker_completion(tmp_path: Path) -> None:
+def test_refresh_preserves_finalization_progress_after_worker_completion(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     service = _service(tmp_path)
+    service.materialize_on_completion = True
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_detached_worker_is_active",
+        lambda _service, _session_id: True,
+    )
     service.factory = SimpleNamespace(
         snapshot=lambda **_kwargs: {
             "tasks": [
@@ -1344,6 +1545,41 @@ def test_refresh_preserves_finalization_progress_after_worker_completion(tmp_pat
 
     assert refreshed["status"] == "commit_ready"
     assert refreshed["progress"]["message"] == "Forge finalization"
+
+
+def test_finalization_stage_projects_durable_substage_and_heartbeat(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    monkeypatch.setattr(automation_module, "FINALIZATION_HEARTBEAT_SECONDS", 0.01)
+    events: list[dict] = []
+    service.event_sink = lambda payload: events.append(dict(payload))
+    current = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.skill.direction",
+        "object_type": "skill",
+        "object_id": "direction",
+        "current_task_id": "task.1",
+        "finalizing_task_id": "task.1",
+        "status": "commit_ready",
+    }
+    readiness = {"ok": False, "task_id": "task.1"}
+
+    with service._finalization_stage(
+        current,
+        readiness,
+        "activation",
+        "Activating exact package",
+    ):
+        time.sleep(0.12)
+
+    persisted = service.get_session("skill", "direction")
+    assert persisted is not None
+    assert persisted["progress"]["stage"] == "activation"
+    assert persisted["progress"]["heartbeat"] >= 1
+    assert persisted["completion_readiness"]["stage"] == "activation"
+    assert any((event.get("progress") or {}).get("heartbeat", 0) >= 1 for event in events)
 
 
 def test_refresh_preserves_terminal_orchestration_progress_after_worker_completion(
@@ -1908,6 +2144,64 @@ def test_finalize_records_live_readiness_failure_without_success_chat(tmp_path: 
     assert saved[-1]["last_failure"]["stage"] == "live_readiness"
     assert saved[-1]["progress"]["status"] == "failed"
     assert notified == []
+
+
+def test_prepare_dev_runtime_runs_slot_shaped_tests_before_activation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    calls: list[tuple] = []
+
+    class FakeManager:
+        def __init__(self, **kwargs):  # noqa: ARG002
+            pass
+
+        def prepare_dev_runtime(self, skill_id, *, run_tests):
+            calls.append(("prepare", skill_id, run_tests))
+            return SimpleNamespace(
+                version="0.1.0",
+                slot="B",
+                resolved_manifest=tmp_path / "resolved.manifest.json",
+            )
+
+        def activate_for_space(self, skill_id, **kwargs):
+            calls.append(("activate", skill_id, kwargs["slot"]))
+            return kwargs["slot"]
+
+        def dev_runtime_status(self, skill_id):
+            calls.append(("status", skill_id))
+            return {"ready": True, "active": True}
+
+    class FakeWorkbench:
+        def __init__(self, **kwargs):  # noqa: ARG002
+            pass
+
+        def get_workspace_binding(self, webspace_id):  # noqa: ARG002
+            return {"preview_webspace_id": "desktop-dev"}
+
+    fake_ctx = SimpleNamespace(
+        skills_repo=object(),
+        sql=object(),
+        git=object(),
+        paths=object(),
+        bus=None,
+        caps=object(),
+        settings=object(),
+    )
+    monkeypatch.setattr("adaos.services.agent_context.get_ctx", lambda: fake_ctx)
+    monkeypatch.setattr("adaos.adapters.db.SqliteSkillRegistry", lambda sql: object())
+    monkeypatch.setattr("adaos.services.skill.manager.SkillManager", FakeManager)
+    monkeypatch.setattr("adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench)
+
+    result = service._prepare_and_activate_dev_skill("research_skill", webspace_id="builder")
+
+    assert result["ok"] is True
+    assert calls == [
+        ("prepare", "research_skill", True),
+        ("activate", "research_skill", "B"),
+        ("status", "research_skill"),
+    ]
 
 
 def test_finalize_stops_before_checkpoint_when_consumer_acceptance_fails(

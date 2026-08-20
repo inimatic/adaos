@@ -960,6 +960,17 @@ model does not receive the entire workspace merely because compatibility is
 project-scoped. A successful run yields a candidate ProjectRelease plus
 project-wide conformance evidence; it does not mutate the accepted task.
 
+The mutable DEV Project declaration is direction/distribution scoped and must
+not carry the currently selected `ResearchTask` as an entrypoint binding. A
+direction can reuse that Project across task branches and ImplementationTracks;
+placing a task ref in the Project leaves it advertising whichever task happened
+to create it first. Exact task identity instead belongs to immutable
+`DevelopmentSession.subject_refs` and its digest-bound Compilation and
+AutomationBrief inputs. Project entrypoints may bind the stable direction and
+presentation. This separation lets Builder retain full compatibility context
+without turning a distributable composition into a second workflow-state
+authority.
+
 Opening Builder durably binds the Development Session, opens a reusable named
 browser window, and emits `builder.context.selected` through the API host in
 the same UI action chain. The host process projects the canonical Project

@@ -18,6 +18,7 @@ from adaos.apps.cli.commands.api import (
     _probe_api_bind_availability,
     _process_matches_bind,
     _run_api_pre_stop_preflight,
+    _runtime_import_preflight_timeout_sec,
     _resolve_stop_bind,
     _resolve_bind,
     _resolve_implicit_api_port_fallback,
@@ -100,6 +101,20 @@ def test_runtime_preflight_requires_redevice_sdk(tmp_path):
 
     assert "src/adaos/sdk/redevice.py" in missing
     assert "src/adaos/apps/api/server.py" in missing
+
+
+def test_runtime_import_preflight_timeout_allows_slow_user_nodes(monkeypatch):
+    monkeypatch.delenv("ADAOS_API_RUNTIME_IMPORT_PREFLIGHT_TIMEOUT_SEC", raising=False)
+    assert _runtime_import_preflight_timeout_sec() == 300.0
+
+    monkeypatch.setenv("ADAOS_API_RUNTIME_IMPORT_PREFLIGHT_TIMEOUT_SEC", "10")
+    assert _runtime_import_preflight_timeout_sec() == 45.0
+
+    monkeypatch.setenv("ADAOS_API_RUNTIME_IMPORT_PREFLIGHT_TIMEOUT_SEC", "1200")
+    assert _runtime_import_preflight_timeout_sec() == 900.0
+
+    monkeypatch.setenv("ADAOS_API_RUNTIME_IMPORT_PREFLIGHT_TIMEOUT_SEC", "invalid")
+    assert _runtime_import_preflight_timeout_sec() == 300.0
 
 
 def test_parse_windows_tcp_excluded_ranges():
