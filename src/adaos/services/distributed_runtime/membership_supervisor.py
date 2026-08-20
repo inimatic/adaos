@@ -10,12 +10,16 @@ from typing import Any, Mapping
 
 from adaos.domain.distributed_runtime import ServiceEndpoint, ServiceInstance, utc_now
 from adaos.services.agent_context import AgentContext
+from adaos.services.eventbus import emit
 
 from .authorization import DistributedPrincipal
 from .runtime import get_distributed_runtime
 
 
 _LOG = logging.getLogger("adaos.distributed.membership")
+MEMBERSHIP_REPORT_EVENT = "distributed.service.membership.reported"
+_AUTHORITY_SUPERVISOR: DistributedServiceMembershipSupervisor | None = None
+_AUTHORITY_SUPERVISOR_LOCK = threading.RLock()
 
 
 def _utc(value: str) -> datetime:
@@ -98,6 +102,16 @@ class ServiceMembershipSpec:
             endpoints=tuple(endpoints),
         )
 
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            "enabled": True,
+            "group_id": self.group_id,
+            "lease_seconds": self.lease_seconds,
+            "protocol_version": self.protocol_version,
+            "capabilities": list(self.capabilities),
+            "endpoints": [dict(item) for item in self.endpoints],
+        }
+
 
 class DistributedServiceMembershipSupervisor:
     """Reconcile service process health with exact Project-backed membership."""
@@ -115,12 +129,18 @@ class DistributedServiceMembershipSupervisor:
                 "distributed.service.reconcile",
             },
         )
+        if not self._is_member_node():
+            global _AUTHORITY_SUPERVISOR
+            with _AUTHORITY_SUPERVISOR_LOCK:
+                _AUTHORITY_SUPERVISOR = self
 
     def status(self, skill_name: str) -> dict[str, Any]:
         with self._lock:
             return dict(self._states.get(str(skill_name)) or {"enabled": False})
 
     def expire_stale(self) -> tuple[str, ...]:
+        if self._is_member_node():
+            return ()
         now = time.monotonic()
         if now < self._next_expiry_reconcile_at:
             return ()
@@ -142,16 +162,28 @@ class DistributedServiceMembershipSupervisor:
         readiness: bool,
         health: Mapping[str, Any],
         pressure: Mapping[str, Any],
+        node_id: str | None = None,
     ) -> dict[str, Any]:
         skill = str(skill_name or "").strip()
+        effective_node_id = str(node_id or self.ctx.config.node_id).strip()
         try:
-            receipt = self._reconcile(
-                skill,
-                spec,
-                readiness=bool(readiness),
-                health=dict(health),
-                pressure=dict(pressure),
-            )
+            if node_id is None and self._is_member_node():
+                receipt = self._report_to_authority(
+                    skill,
+                    spec,
+                    readiness=bool(readiness),
+                    health=dict(health),
+                    pressure=dict(pressure),
+                )
+            else:
+                receipt = self._reconcile(
+                    skill,
+                    spec,
+                    node_id=effective_node_id,
+                    readiness=bool(readiness),
+                    health=dict(health),
+                    pressure=dict(pressure),
+                )
         except Exception as exc:
             receipt = {
                 "enabled": True,
@@ -167,11 +199,16 @@ class DistributedServiceMembershipSupervisor:
                 spec.group_id,
                 receipt["error"],
             )
+        state_key = skill if effective_node_id == str(self.ctx.config.node_id) else f"{skill}@{effective_node_id}"
         with self._lock:
-            self._states[skill] = dict(receipt)
+            self._states[state_key] = dict(receipt)
         return receipt
 
-    def _reconcile(
+    def _is_member_node(self) -> bool:
+        role = getattr(self.ctx.config, "role", "")
+        return str(getattr(role, "value", role) or "").strip().lower() == "member"
+
+    def _report_to_authority(
         self,
         skill_name: str,
         spec: ServiceMembershipSpec,
@@ -180,8 +217,40 @@ class DistributedServiceMembershipSupervisor:
         health: Mapping[str, Any],
         pressure: Mapping[str, Any],
     ) -> dict[str, Any]:
+        emit(
+            self.ctx.bus,
+            MEMBERSHIP_REPORT_EVENT,
+            {
+                "schema": "adaos.distributed.service_membership_report.v1",
+                "skill": skill_name,
+                "membership": spec.to_mapping(),
+                "readiness": readiness,
+                "health": dict(health),
+                "pressure": dict(pressure),
+                "observed_at": utc_now(),
+            },
+            source="core.service_membership_supervisor",
+        )
+        return {
+            "enabled": True,
+            "ok": True,
+            "state": "reported",
+            "group_id": spec.group_id,
+            "authority": "hub",
+            "observed_at": utc_now(),
+        }
+
+    def _reconcile(
+        self,
+        skill_name: str,
+        spec: ServiceMembershipSpec,
+        *,
+        node_id: str,
+        readiness: bool,
+        health: Mapping[str, Any],
+        pressure: Mapping[str, Any],
+    ) -> dict[str, Any]:
         runtime = get_distributed_runtime()
-        node_id = str(self.ctx.config.node_id)
         component_ref = f"skill:{skill_name}"
         activation = self._selected_activation(
             runtime.deployment_store,
@@ -354,7 +423,41 @@ class DistributedServiceMembershipSupervisor:
         return tuple(values)
 
 
+def ingest_remote_membership_report(
+    *,
+    node_id: str,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Apply one member report using the authenticated member-link identity."""
+
+    with _AUTHORITY_SUPERVISOR_LOCK:
+        supervisor = _AUTHORITY_SUPERVISOR
+    if supervisor is None:
+        return {"ok": False, "state": "waiting", "reason": "membership_authority_unavailable"}
+    skill_name = str(payload.get("skill") or "").strip()
+    spec = ServiceMembershipSpec.from_mapping(
+        skill_name,
+        payload.get("membership"),
+    )
+    if not skill_name or spec is None:
+        raise ValueError("distributed membership report is incomplete")
+    health = payload.get("health")
+    pressure = payload.get("pressure")
+    if not isinstance(health, Mapping) or not isinstance(pressure, Mapping):
+        raise ValueError("distributed membership report health is invalid")
+    return supervisor.reconcile(
+        skill_name,
+        spec,
+        readiness=bool(payload.get("readiness")),
+        health=health,
+        pressure=pressure,
+        node_id=str(node_id or "").strip(),
+    )
+
+
 __all__ = [
     "DistributedServiceMembershipSupervisor",
+    "MEMBERSHIP_REPORT_EVENT",
     "ServiceMembershipSpec",
+    "ingest_remote_membership_report",
 ]

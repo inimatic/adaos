@@ -459,6 +459,36 @@ def test_member_link_client_forwards_node_qualified_webio_streams(monkeypatch) -
     assert queued["event"]["type"] == "webio.stream.homepoint.nodes.member-1.browsers.devices"
 
 
+def test_member_link_client_always_forwards_core_membership_reports(monkeypatch) -> None:
+    class _FakeBus:
+        def __init__(self) -> None:
+            self.subscriber = None
+
+        def subscribe(self, prefix, handler) -> None:
+            assert prefix == "*"
+            self.subscriber = handler
+
+    fake_bus = _FakeBus()
+    fake_ctx = SimpleNamespace(bus=fake_bus, config=SimpleNamespace(node_id="member-1"))
+    monkeypatch.setattr(mod, "get_ctx", lambda: fake_ctx)
+    client = mod.MemberLinkClient()
+    client._connected.set()
+    client._bus_prefixes = ()
+    client._ensure_bus_subscription()
+
+    fake_bus.subscriber(
+        SimpleNamespace(
+            type="distributed.service.membership.reported",
+            payload={"skill": "demo", "membership": {}},
+            source="core.service_membership_supervisor",
+            ts=123.0,
+        )
+    )
+
+    queued = client._out_q.get_nowait()
+    assert queued["event"]["type"] == "distributed.service.membership.reported"
+
+
 def test_member_link_client_skips_hub_follow_when_node_config_disables_updates(monkeypatch) -> None:
     client = mod.MemberLinkClient()
     monkeypatch.delenv("ADAOS_MEMBER_FOLLOW_HUB_UPDATE", raising=False)

@@ -80,6 +80,14 @@ class _DeploymentStore:
                     generation=9,
                     status="active",
                 ),
+                SimpleNamespace(
+                    activation_id="activation.media-agent-b",
+                    component_ref="skill:media_library_agent",
+                    node_id="node-b",
+                    release_digest="sha256:" + "a" * 64,
+                    generation=9,
+                    status="active",
+                ),
             ),
             None,
         )
@@ -204,6 +212,63 @@ def test_membership_supervisor_reconciles_expired_leases_periodically(monkeypatc
     assert supervisor.expire_stale() == ("old-membership",)
     assert supervisor.expire_stale() == ()
     assert runtime.expire_calls == 1
+
+
+def test_member_reports_membership_without_mutating_a_local_authority(monkeypatch) -> None:
+    published = []
+
+    class _Bus:
+        def publish(self, event) -> None:
+            published.append(event)
+
+    monkeypatch.setattr(
+        membership_module,
+        "get_distributed_runtime",
+        lambda: (_ for _ in ()).throw(AssertionError("member must not open authority runtime")),
+    )
+    supervisor = DistributedServiceMembershipSupervisor(
+        SimpleNamespace(
+            config=SimpleNamespace(node_id="node-b", role="member"),
+            bus=_Bus(),
+        )
+    )
+
+    result = supervisor.reconcile(
+        "media_library_agent",
+        _spec(),
+        readiness=True,
+        health={"status": "passing"},
+        pressure={"state": "normal"},
+    )
+
+    assert result["state"] == "reported"
+    assert supervisor.expire_stale() == ()
+    assert published[0].type == membership_module.MEMBERSHIP_REPORT_EVENT
+    assert published[0].payload["membership"]["group_id"] == "media-library-home"
+
+
+def test_authority_ingests_member_report_with_transport_node_identity(monkeypatch) -> None:
+    runtime = _Runtime()
+    monkeypatch.setattr(membership_module, "get_distributed_runtime", lambda: runtime)
+    DistributedServiceMembershipSupervisor(
+        SimpleNamespace(config=SimpleNamespace(node_id="node-a", role="hub"))
+    )
+
+    result = membership_module.ingest_remote_membership_report(
+        node_id="node-b",
+        payload={
+            "skill": "media_library_agent",
+            "membership": _spec().to_mapping(),
+            "readiness": True,
+            "health": {"status": "passing"},
+            "pressure": {"state": "normal"},
+            "node_id": "spoofed-node",
+        },
+    )
+
+    assert result["action"] == "registered"
+    assert runtime.store.instance.node_id == "node-b"
+    assert runtime.store.instance.activation_id == "activation.media-agent-b"
 
 
 def test_membership_manifest_rejects_implicit_or_unbounded_endpoints() -> None:

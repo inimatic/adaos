@@ -9,7 +9,7 @@ import time
 import uuid
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from fastapi import WebSocket
 from packaging.version import InvalidVersion, Version
@@ -2214,6 +2214,16 @@ class HubLinkManager:
                 return
             if not isinstance(payload, dict):
                 payload = {"value": payload}
+            if typ == "distributed.service.membership.reported":
+                from adaos.services.distributed_runtime.membership_supervisor import (
+                    ingest_remote_membership_report,
+                )
+
+                await asyncio.to_thread(
+                    ingest_remote_membership_report,
+                    node_id=node_id,
+                    payload=payload,
+                )
             meta = payload.get("_meta") if isinstance(payload, dict) else None
             if not isinstance(meta, dict):
                 meta = {}

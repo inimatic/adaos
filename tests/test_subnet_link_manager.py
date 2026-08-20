@@ -4,6 +4,8 @@ import asyncio
 import sys
 import types
 
+from adaos.services.distributed_runtime import membership_supervisor as membership_module
+
 y_py_module = sys.modules.get("y_py")
 if y_py_module is None:
     y_py_module = types.SimpleNamespace()
@@ -30,7 +32,7 @@ if "ypy_websocket" not in sys.modules:
     pkg.ystore = sys.modules["ypy_websocket.ystore"]
     sys.modules["ypy_websocket"] = pkg
 
-from adaos.services.subnet import link_manager as mod
+from adaos.services.subnet import link_manager as mod  # noqa: E402
 
 
 class _FakeBus:
@@ -44,6 +46,42 @@ class _FakeBus:
 class _FailingBus:
     def publish(self, _event) -> None:
         raise RuntimeError("bus publish failed")
+
+
+def test_member_membership_report_uses_authenticated_link_identity(monkeypatch) -> None:
+    bus = _FakeBus()
+    calls = []
+    monkeypatch.setattr(mod, "get_ctx", lambda: _FakeCtx(bus))
+    monkeypatch.setattr(
+        membership_module,
+        "ingest_remote_membership_report",
+        lambda **kwargs: calls.append(kwargs) or {"ok": True},
+    )
+
+    asyncio.run(
+        mod.HubLinkManager.ingest_member_bus_event(
+            object(),
+            node_id="authenticated-node",
+            event={
+                "type": "distributed.service.membership.reported",
+                "payload": {"node_id": "spoofed-node", "skill": "demo"},
+                "source": "member",
+                "ts": 123.0,
+            },
+        )
+    )
+
+    assert calls == [
+        {
+            "node_id": "authenticated-node",
+            "payload": {
+                "node_id": "spoofed-node",
+                "skill": "demo",
+                "_meta": {"subnet_origin_node_id": "authenticated-node"},
+            },
+        }
+    ]
+    assert bus.events[0].payload["_meta"]["subnet_origin_node_id"] == "authenticated-node"
 
 
 class _FakeCtx:
