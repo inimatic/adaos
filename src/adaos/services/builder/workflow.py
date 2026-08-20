@@ -5142,10 +5142,16 @@ class BuilderWorkflowService:
                     raise BuilderWorkflowError(
                         "Verification reconciliation requires an unknown Trial result"
                     )
-                delivery["status"] = "checkpoint"
+                # The canonical reconciliation transition returns to
+                # ``verification``.  Do not project that state as
+                # ``trial_ready`` by restoring the compatibility checkpoint
+                # prematurely.  The exact retained package/source identities
+                # can be accepted again through ``checkpoint_recorded``, which
+                # is the canonical ``accept_verification`` transition.
+                delivery["status"] = "idle"
                 delivery["activation_error"] = None
                 delivery["reconciled_at"] = changed_at
-                update_change_set(status="checkpointed", gate="trial")
+                update_change_set(status="implemented", gate="trial")
                 return
             if str(automation.get("status") or "") not in {"failed", "working"}:
                 raise BuilderWorkflowError(

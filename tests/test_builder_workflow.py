@@ -1474,8 +1474,26 @@ def test_unknown_trial_outcome_is_not_projected_as_retryable_before_reconciliati
         metadata={"evidence_refs": ["diagnostic:remote-read-no-write"]},
     )["workflow"]
 
-    assert recovered["delivery"]["status"] == "checkpoint"
-    assert recovered["capabilities"]["can_prepare_candidate"] is True
+    assert recovered["delivery"]["status"] == "idle"
+    assert recovered["governed"]["state"] == "verification"
+    assert recovered["capabilities"]["can_prepare_candidate"] is False
+
+    readmitted = service.transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata=_confirmed(
+            {
+                "change_id": "checkpoint-trial-recovery",
+                "package_digest": "sha256:" + "a" * 64,
+                "source_revision": "a" * 40,
+            }
+        ),
+    )["workflow"]
+
+    assert readmitted["delivery"]["status"] == "checkpoint"
+    assert readmitted["governed"]["state"] == "trial_ready"
+    assert readmitted["capabilities"]["can_prepare_candidate"] is True
 
 
 def test_unknown_publication_requires_explicit_evidenced_reconciliation(
