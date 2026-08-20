@@ -9,6 +9,7 @@ import sqlite3
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Final
 
@@ -150,13 +151,66 @@ class _WriteGate:
     def __init__(self, database_path: Path) -> None:
         self._thread_lock = threading.RLock()
         self._lock_path = database_path.with_name(f"{database_path.name}.write.lock")
+        self._waiter_dir = database_path.with_name(f"{database_path.name}.write.waiters")
         self._owner_thread_id: int | None = None
         self._depth = 0
         self._handle: Any | None = None
 
+    @staticmethod
+    def _process_is_alive(pid: int) -> bool:
+        if pid <= 0:
+            return False
+        if pid == os.getpid():
+            return True
+        if os.name == "nt":
+            import ctypes
+
+            process_query_limited_information = 0x1000
+            handle = ctypes.windll.kernel32.OpenProcess(
+                process_query_limited_information,
+                False,
+                pid,
+            )
+            if not handle:
+                return False
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except (PermissionError, OSError):
+            return True
+        return True
+
+    def _waiter_path(self) -> Path:
+        self._waiter_dir.mkdir(parents=True, exist_ok=True)
+        return self._waiter_dir / (
+            f"{time.time_ns():020d}-{os.getpid():010d}-{uuid.uuid4().hex}.waiter"
+        )
+
+    def _first_live_waiter(self) -> Path | None:
+        try:
+            waiters = sorted(self._waiter_dir.glob("*.waiter"), key=lambda item: item.name)
+        except OSError:
+            return None
+        for waiter in waiters:
+            try:
+                pid = int(waiter.name.split("-", 2)[1])
+            except (IndexError, ValueError):
+                pid = 0
+            if self._process_is_alive(pid):
+                return waiter
+            try:
+                waiter.unlink()
+            except OSError:
+                pass
+        return None
+
     def acquire(self) -> None:
         self._thread_lock.acquire()
         handle = None
+        waiter_path = None
         try:
             thread_id = threading.get_ident()
             if self._owner_thread_id == thread_id:
@@ -170,23 +224,43 @@ class _WriteGate:
                 handle.write(b"0")
                 handle.flush()
 
+            # flock does not promise fair wakeups. A busy runtime can otherwise
+            # release and immediately reacquire the database lock forever while
+            # a migration process starves. The ordered waiter files establish a
+            # cross-process FIFO before contenders enter the kernel lock.
+            waiter_path = self._waiter_path()
+            waiter_path.touch(exist_ok=False)
             timeout_s = _sqlite_process_write_gate_timeout_s()
             deadline = time.monotonic() + timeout_s
             while True:
-                try:
-                    _try_lock_file(handle)
-                    self._owner_thread_id = thread_id
-                    self._depth = 1
-                    self._handle = handle
-                    return
-                except (BlockingIOError, OSError) as exc:
-                    if time.monotonic() >= deadline:
-                        raise sqlite3.OperationalError(
-                            "database is locked: timed out waiting for the AdaOS process write gate "
-                            f"after {timeout_s:.1f} seconds"
-                        ) from exc
-                    time.sleep(0.025)
+                first_waiter = self._first_live_waiter()
+                if first_waiter == waiter_path:
+                    try:
+                        _try_lock_file(handle)
+                    except (BlockingIOError, OSError):
+                        pass
+                    else:
+                        try:
+                            waiter_path.unlink()
+                        except OSError:
+                            pass
+                        waiter_path = None
+                        self._owner_thread_id = thread_id
+                        self._depth = 1
+                        self._handle = handle
+                        return
+                if time.monotonic() >= deadline:
+                    raise sqlite3.OperationalError(
+                        "database is locked: timed out waiting for the AdaOS process write gate "
+                        f"after {timeout_s:.1f} seconds"
+                    )
+                time.sleep(0.025)
         except BaseException:
+            if waiter_path is not None:
+                try:
+                    waiter_path.unlink()
+                except OSError:
+                    pass
             if handle is not None:
                 handle.close()
             self._thread_lock.release()
