@@ -1633,7 +1633,21 @@ efficacy result or cross-domain SOTA claim.
   runner and `adaos.research.tlp_probe.v1`. Fresh v31 is frozen at
   `sha256:f99082c6ba4794ac3c507f9618698a2ee8c747fde44b8e138b2e14098fbbd025`
   with six counterbalanced pairs, a matched 8.5M-token budget and all 30 packets
-  prematerialized; no prior outcome is reused.
+  prematerialized; no prior outcome is reused. v31 stopped after its first C3
+  attempt and remains `incomplete_no_claim`. The candidate stayed within budget
+  and passed package/ABI tests, but the independent CPU trial exposed a
+  candidate-owned mismatch between its returned ExecutionSpec working directory
+  and a recomputed `skill_data_root()` content path; artifact indexing exited
+  nonzero. The diagnostic summary/package digests are respectively
+  `sha256:b59631e0374f685ee6c12a5cec0d6f59c2170b444edb5ed1b697a63723aa00d0`
+  and
+  `sha256:eb4439c28b5ededd3f71612b8d25fb139eba4a26ce5e118c4952d523a192b4e2`.
+  Its result is not reusable because the standard worker required manual
+  startup after the background launcher silently exited. Core `4532a21d` adds
+  a durable worker-readiness handshake and core `f3a96cf9` gives that handshake
+  a bounded configurable startup interval. A clean Windows launch reached
+  `ready` and survived launcher exit; a fresh zero-result calibration is still
+  required.
 - [ ] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and

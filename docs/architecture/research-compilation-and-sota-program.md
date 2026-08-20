@@ -810,6 +810,32 @@ C3 packet is
 `sha256:9b349055403e4447f71192ae9e986683757abaf26115df7358420d56938b7621`.
 No earlier outcome is reused.
 
+v31 was stopped after that first C3 attempt and remains
+`incomplete_no_claim`. The autonomous candidate completed within the frozen
+8.5M-token budget (5,084,979 model tokens), passed native packaging, exact
+provider-contract admission and its seven packaged tests, and executed the
+real three-epoch CPU baseline path. The independent consumer trial then caught
+a candidate-owned path-identity defect while building `artifacts_index.json`:
+the subprocess wrote outputs to the `working_directory` from its ExecutionSpec
+but `_content_ref` recomputed a different `skill_data_root()`-relative path.
+The process exited nonzero after producing five of six outputs, so runner,
+scientific, smoke and evidence gates correctly failed. Summary
+`sha256:b59631e0374f685ee6c12a5cec0d6f59c2170b444edb5ed1b697a63723aa00d0`
+and partial package
+`sha256:eb4439c28b5ededd3f71612b8d25fb139eba4a26ce5e118c4952d523a192b4e2`
+retain the failure as diagnostic evidence.
+
+The attempt is excluded from a replacement primary comparison because the
+original background worker did not become ready and an operator had to start
+the same standard worker manually. Core `4532a21d` replaces launch-and-forget
+with a durable `starting -> ready|failed` handshake and an explicit
+`ready.json` written after worker initialization. Core `f3a96cf9` permits a
+bounded 5--180 second readiness interval (60 seconds by default), because a
+real Windows worker required more than 15 seconds to import and initialize.
+A clean synthetic launch on Windows reached `ready`, survived launcher exit,
+and was then terminated by exact recorded PID. This is launcher evidence, not
+a calibration outcome; a fresh frozen task must start from zero results.
+
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and
 content identities. Candidate-authored claims cannot mark a check passed. The
