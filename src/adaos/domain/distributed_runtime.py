@@ -1540,7 +1540,7 @@ class TransferRecord:
         object.__setattr__(
             self,
             "authority_epoch",
-            _integer(self.authority_epoch, "authority_epoch", minimum=1),
+            _integer(self.authority_epoch, "authority_epoch", minimum=0),
         )
         state = _token(self.state, "state", max_length=30).lower()
         if state not in {

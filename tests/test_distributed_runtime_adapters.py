@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 from dataclasses import dataclass, field, replace
 from types import SimpleNamespace
 from typing import Any, Mapping
@@ -13,12 +15,14 @@ from adaos.domain.distributed_runtime import (
     Partition,
     Replica,
     ServiceInstance,
+    TransferRecord,
 )
 from adaos.services.distributed_runtime.adapters import (
     HttpTopologyPhaseTransport,
     MemberLinkTopologyPhaseTransport,
     SkillToolTopologyAdapter,
     execute_topology_phase_request,
+    execute_topology_transfer_request,
 )
 from adaos.services.distributed_runtime.operations import (
     TopologyExecutionError,
@@ -92,7 +96,7 @@ def _step() -> TopologyPlanStep:
         source_instance_id="documents-node-a",
         target_instance_id="documents-node-b",
         replica_role="derived",
-        phases=("snapshot", "verify"),
+        phases=("snapshot", "catch_up", "verify"),
         retention="rebuild",
     )
 
@@ -113,6 +117,7 @@ def _plan() -> TopologyPlan:
 @dataclass
 class _Store:
     replicas: dict[str, Replica] = field(default_factory=dict)
+    transfers: dict[str, TransferRecord] = field(default_factory=dict)
 
     def get_partition(self, _partition_id: str) -> Partition:
         return _partition()
@@ -152,6 +157,16 @@ class _Store:
             None,
         )
 
+    def get_transfer(self, transfer_id: str) -> TransferRecord:
+        try:
+            return self.transfers[transfer_id]
+        except KeyError as exc:
+            raise FileNotFoundError(transfer_id) from exc
+
+    def put_transfer(self, transfer: TransferRecord) -> TransferRecord:
+        self.transfers[transfer.transfer_id] = transfer
+        return transfer
+
 
 class _Remote:
     def __init__(self) -> None:
@@ -165,6 +180,16 @@ class _Remote:
             "schema": "adaos.distributed.topology_phase_result.v1",
             "ok": True,
             "receipt": {"remote": True},
+        }
+
+    def execute_transfer(
+        self, *, node_id: str, payload: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        self.calls.append((node_id, payload))
+        return {
+            "schema": "adaos.distributed.topology_transfer_result.v1",
+            "ok": True,
+            "receipt": {},
         }
 
 
@@ -243,6 +268,176 @@ def test_skill_adapter_carries_bounded_snapshot_to_later_target_phase() -> None:
     )
 
     assert captured[0]["phase_inputs"] == {"source_snapshot": inline_snapshot}
+
+
+def test_skill_adapter_relays_large_snapshot_in_bounded_resumable_chunks() -> None:
+    payload_bytes = b"catalog-row\n" * 25000
+    payload_digest = "sha256:" + hashlib.sha256(payload_bytes).hexdigest()
+    manifest = {
+        "schema": "adaos.distributed.transfer_manifest.v1",
+        "artifact_id": "catalog-artifact",
+        "encoding": "zlib+ndjson",
+        "payload_digest": payload_digest,
+        "payload_bytes": len(payload_bytes),
+        "item_count": 25000,
+        "byte_count": 1000000,
+        "checkpoint": "offset:25000",
+        "content_witness": _DIGEST,
+    }
+    store = _Store()
+    store.get_operation = lambda _operation_id: SimpleNamespace(  # type: ignore[attr-defined]
+        phases=(
+            SimpleNamespace(
+                phase="move-documents.snapshot",
+                receipt={"transfer_manifest": manifest},
+            ),
+        )
+    )
+    source_replica = Replica(
+        replica_id="replica-documents-node-a",
+        partition_id="documents:a-f",
+        instance_id="documents-node-a",
+        node_id="node-a",
+        role="derived",
+        lifecycle="ready",
+        content_state="non_empty",
+        authority_epoch=0,
+        checkpoint="offset:25000",
+        source_ref=None,
+        freshness_seconds=0,
+        item_count=25000,
+        byte_count=1000000,
+        observed_at="2026-08-19T00:00:00+00:00",
+    )
+    store.replicas[source_replica.replica_id] = source_replica
+    received = bytearray()
+    phase_inputs: list[Mapping[str, Any]] = []
+
+    class Remote(_Remote):
+        def execute_transfer(
+            self, *, node_id: str, payload: Mapping[str, Any]
+        ) -> Mapping[str, Any]:
+            assert node_id == "node-a"
+            offset = int(str(payload.get("checkpoint") or "offset:0").split(":")[1])
+            limit = int(payload["max_bytes"])
+            chunk = payload_bytes[offset : offset + limit]
+            next_offset = offset + len(chunk)
+            eof = next_offset == len(payload_bytes)
+            return {
+                "schema": "adaos.distributed.topology_transfer_result.v1",
+                "ok": True,
+                "receipt": {
+                    "payload_base64": base64.b64encode(chunk).decode("ascii"),
+                    "checkpoint": f"offset:{next_offset}",
+                    "eof": eof,
+                    "content_witness": payload_digest if eof else None,
+                },
+            }
+
+    def local(
+        _skill_id: str, tool: str, request: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        if tool == "distributed_topology_transfer":
+            chunk = request["chunk"]
+            raw = base64.b64decode(chunk["payload_base64"])
+            previous = int(str(request.get("checkpoint") or "offset:0").split(":")[1])
+            assert previous == len(received)
+            received.extend(raw)
+            return {
+                "ok": True,
+                "receipt": {
+                    "checkpoint": chunk["checkpoint"],
+                    "content_witness": payload_digest if chunk["eof"] else None,
+                },
+            }
+        phase_inputs.append(request["phase_inputs"])
+        return {
+            "ok": True,
+            "receipt": {
+                "checkpoint": "offset:25000",
+                "content_witness": "offset:25000",
+                "item_count": 25000,
+                "byte_count": 1000000,
+                "content_state": "non_empty",
+            },
+        }
+
+    adapter = SkillToolTopologyAdapter(
+        store=store,  # type: ignore[arg-type]
+        local_node_id="node-b",
+        local_executor=local,
+        remote=Remote(),
+    )
+    receipt = adapter.catch_up(
+        TopologyStepContext(
+            operation_id="operation-1",
+            plan_digest=str(_plan().plan_digest),
+            step=_step(),
+            phase="catch_up",
+            authority_epoch=0,
+            idempotency_key="phase-catch-up",
+            attempt=1,
+        )
+    )
+
+    assert bytes(received) == payload_bytes
+    assert receipt["item_count"] == 25000
+    assert phase_inputs[0]["transfer_receipt"]["state"] == "complete"
+    transfer = next(iter(store.transfers.values()))
+    assert transfer.byte_count == len(payload_bytes)
+    assert transfer.item_count == 25000
+
+
+def test_transfer_receiver_rejects_unreviewed_participant() -> None:
+    source = _instance("documents-node-a", "node-a")
+    target = _instance("documents-node-b", "node-b")
+    payload = {
+        "schema": "adaos.distributed.topology_transfer_request.v1",
+        "requesting_node_id": "node-a",
+        "target_node_id": "node-a",
+        "selected_instance_id": source.instance_id,
+        "skill_id": "document_index_agent",
+        "transfer_tool": "distributed_topology_transfer",
+        "direction": "read",
+        "operation_id": "operation-1",
+        "plan_digest": str(_plan().plan_digest),
+        "plan": _plan().to_dict(),
+        "step": _step().to_dict(),
+        "dataset": _dataset().to_dict(),
+        "partition": _partition().to_dict(),
+        "source_instance": source.to_dict(),
+        "target_instance": target.to_dict(),
+        "authority_epoch": 0,
+        "idempotency_key": "transfer-read-1",
+        "transfer_id": "transfer-1",
+        "manifest": {
+            "schema": "adaos.distributed.transfer_manifest.v1",
+            "payload_digest": _DIGEST,
+        },
+        "checkpoint": None,
+        "max_bytes": 1024,
+        "chunk": None,
+    }
+    result = execute_topology_transfer_request(
+        payload,
+        local_node_id="node-a",
+        executor=lambda *_args: {
+            "ok": True,
+            "receipt": {
+                "payload_base64": "",
+                "checkpoint": "offset:0",
+                "eof": True,
+                "content_witness": _DIGEST,
+            },
+        },
+    )
+    assert result["schema"] == "adaos.distributed.topology_transfer_result.v1"
+    with pytest.raises(TopologyExecutionError, match="participant_mismatch"):
+        execute_topology_transfer_request(
+            payload | {"selected_instance_id": target.instance_id},
+            local_node_id="node-a",
+            executor=lambda *_args: {"ok": True, "receipt": {}},
+        )
 
 
 def test_skill_adapter_commits_remote_replica_receipt_to_authority_store() -> None:

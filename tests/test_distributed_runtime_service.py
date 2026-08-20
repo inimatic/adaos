@@ -806,10 +806,13 @@ def test_ready_owner_renews_current_authority_until_health_fails(
         lease_seconds=300,
         principal=_principal(),
     )
-    assert runtime.renew_authority_leases_for_instance(
-        "media-agent-node-a",
-        principal=_principal(),
-    ) == ()
+    assert (
+        runtime.renew_authority_leases_for_instance(
+            "media-agent-node-a",
+            principal=_principal(),
+        )
+        == ()
+    )
     clock.advance(31)
     with pytest.raises(StaleAuthorityEpochError):
         runtime.assert_authority(
@@ -991,6 +994,26 @@ class ChunkSource:
         )
 
 
+class ChunkSink:
+    def __init__(self, digest: str) -> None:
+        self.digest = digest
+        self.payload = bytearray()
+
+    def authorize(self, *, auth_scope: str, operation_id: str) -> bool:
+        return auth_scope == "replica.transfer" and bool(operation_id)
+
+    def write(
+        self,
+        *,
+        previous_checkpoint: str | None,
+        chunk: TransferChunk,
+        cancelled: Callable[[], bool],
+    ) -> str | None:
+        assert not cancelled()
+        self.payload.extend(chunk.payload)
+        return self.digest if chunk.eof else None
+
+
 def test_bounded_transfer_resumes_and_requires_content_witness(tmp_path: Path) -> None:
     store = DistributedRuntimeStore(state_dir=tmp_path)
     transfer = TransferRecord(
@@ -1012,9 +1035,11 @@ def test_bounded_transfer_resumes_and_requires_content_witness(tmp_path: Path) -
     store.put_transfer(transfer)
     controller = BoundedTransferController(store=store, max_chunk_bytes=1024)
     source = ChunkSource(_DIGEST)
+    sink = ChunkSink(_DIGEST)
     paused = controller.pump(
         transfer.transfer_id,
         source=source,
+        sink=sink,
         auth_scope="replica.transfer",
         max_chunks=1,
     )
@@ -1023,11 +1048,13 @@ def test_bounded_transfer_resumes_and_requires_content_witness(tmp_path: Path) -
     complete = controller.pump(
         transfer.transfer_id,
         source=source,
+        sink=sink,
         auth_scope="replica.transfer",
         max_chunks=1,
     )
     assert complete.state == "complete"
     assert complete.byte_count == 6
+    assert sink.payload == b"abcabc"
 
 
 def test_non_media_document_fixture_uses_same_opaque_partition_contract() -> None:

@@ -4,7 +4,9 @@ from .adapters import (
     MemberLinkTopologyPhaseTransport,
     SkillToolTopologyAdapter,
     execute_registered_topology_phase,
+    execute_registered_topology_transfer,
     execute_topology_phase_request,
+    execute_topology_transfer_request,
     register_topology_phase_receiver,
 )
 from .bootstrap import configure_distributed_runtime
@@ -42,6 +44,7 @@ from .store import (
     DistributedStoreError,
 )
 from .transfer import (
+    AuthenticatedTransferSink,
     AuthenticatedTransferSource,
     BoundedTransferController,
     TransferChunk,
@@ -49,6 +52,7 @@ from .transfer import (
 )
 
 __all__ = [
+    "AuthenticatedTransferSink",
     "AuthenticatedTransferSource",
     "BoundedTransferController",
     "DistributedAuthorizationError",
@@ -80,9 +84,11 @@ __all__ = [
     "build_distributed_projection",
     "configure_distributed_runtime",
     "execute_registered_topology_phase",
+    "execute_registered_topology_transfer",
     "execute_registered_service_invocation",
     "execute_service_invocation_request",
     "execute_topology_phase_request",
+    "execute_topology_transfer_request",
     "get_distributed_runtime",
     "register_distributed_runtime",
     "register_service_invocation_receiver",

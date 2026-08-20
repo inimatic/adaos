@@ -102,6 +102,15 @@ member-link package limit require an explicit chunked artifact transport or a
 direct package endpoint; they are rejected before dispatch and are never
 silently inserted into Yjs or split by ad hoc skill code.
 
+Topology snapshots use a separate `distributed.topology.transfer` RPC and
+HTTP endpoint. The authority plane relays at most 96 KiB of opaque adapter
+payload per chunk, journals the transfer checkpoint and byte/item counts, and
+requires matching source and sink SHA-256 witnesses before completion. The
+receiver revalidates the immutable reviewed plan, participant activation,
+dataset owner, adapter tool, partition, epoch, direction, and request size for
+every chunk. Interrupted known-outcome transfers resume from the durable
+checkpoint; a lost acknowledgement remains `uncertain`.
+
 ## Core Identities
 
 ### ServiceDefinition
@@ -264,6 +273,11 @@ pretend it can roll back domain bytes after an unknown side effect.
 
 Snapshot and delta payloads travel through bounded, authenticated transport.
 Large payloads are not inserted into Yjs, command envelopes, or status records.
+The SDK's `BoundedTransferController` connects an
+`AuthenticatedTransferSource` to an `AuthenticatedTransferSink`; adapters own
+serialization and staging, while core owns authorization, limits, progress,
+resume state, pressure pause, and final witness validation. Authority epoch
+zero is valid for derived replicas that have no writer authority.
 
 ## Placement And Rebalance
 
@@ -320,6 +334,8 @@ ports for:
 - publishing health, pressure, checkpoints and replica state;
 - resolving service/partition routes;
 - implementing adapter callbacks and operation receipts;
+- implementing authenticated bounded transfer sources and sinks without
+  importing subnet or runtime transport internals;
 - subscribing to bounded desired/observed projections.
 
 The SDK does not expose internal package stores, supervisor processes, Hub

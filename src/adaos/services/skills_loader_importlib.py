@@ -158,54 +158,6 @@ def _record_loaded_handler_source(module_name: str, path: Path) -> dict[str, Any
     return record
 
 
-def loaded_handler_module_for_path(path: Path) -> Any | None:
-    """Return the fully imported handler module for an unchanged source file.
-
-    Tool and lifecycle execution must act on the same module instance that owns
-    subscription workers and caches.  The source registry is updated only after
-    ``exec_module`` succeeds, so a matching record is also the import-complete
-    marker.  A changed source intentionally falls back to the isolated runtime
-    loader until the subscriptions loader performs an explicit reload.
-    """
-
-    try:
-        resolved = Path(path).resolve()
-        stat = resolved.stat()
-    except OSError:
-        return None
-    path_key = os.path.normcase(str(resolved))
-    with _HANDLER_IMPORT_LOCK:
-        records = sorted(
-            (dict(item) for item in _LOADED_HANDLER_SOURCES.values()),
-            key=lambda item: float(item.get("loaded_at") or 0.0),
-            reverse=True,
-        )
-        for record in records:
-            try:
-                record_path = Path(str(record.get("path") or "")).resolve()
-            except OSError:
-                continue
-            if os.path.normcase(str(record_path)) != path_key:
-                continue
-            fingerprint_matches = (
-                int(record.get("loaded_size", -1)) == int(stat.st_size)
-                and int(record.get("loaded_mtime_ns", -1)) == int(stat.st_mtime_ns)
-                and int(record.get("loaded_ctime_ns", -1)) == int(stat.st_ctime_ns)
-                and int(record.get("loaded_inode", -1)) == int(stat.st_ino)
-            )
-            if not fingerprint_matches:
-                return None
-            module = sys.modules.get(str(record.get("module") or ""))
-            if module is None:
-                return None
-            try:
-                module_path = Path(str(getattr(module, "__file__", "") or "")).resolve()
-            except OSError:
-                return None
-            return module if os.path.normcase(str(module_path)) == path_key else None
-    return None
-
-
 def _retire_loaded_skill_sources(skill_name: str, *, retired_by: str) -> dict[str, Any]:
     """Retire imported declarations when the selected runtime has no handler."""
 
@@ -252,6 +204,54 @@ def _retire_loaded_skill_sources(skill_name: str, *, retired_by: str) -> dict[st
         retired_by,
     )
     return {"skill": target, "modules": sorted(module_names), "declarations": declarations}
+
+
+def loaded_handler_module_for_path(path: Path) -> Any | None:
+    """Return the fully imported handler module for an unchanged source file.
+
+    Tool and lifecycle execution must act on the same module instance that owns
+    subscription workers and caches.  The source registry is updated only after
+    ``exec_module`` succeeds, so a matching record is also the import-complete
+    marker.  A changed source intentionally falls back to the isolated runtime
+    loader until the subscriptions loader performs an explicit reload.
+    """
+
+    try:
+        resolved = Path(path).resolve()
+        stat = resolved.stat()
+    except OSError:
+        return None
+    path_key = os.path.normcase(str(resolved))
+    with _HANDLER_IMPORT_LOCK:
+        records = sorted(
+            (dict(item) for item in _LOADED_HANDLER_SOURCES.values()),
+            key=lambda item: float(item.get("loaded_at") or 0.0),
+            reverse=True,
+        )
+        for record in records:
+            try:
+                record_path = Path(str(record.get("path") or "")).resolve()
+            except OSError:
+                continue
+            if os.path.normcase(str(record_path)) != path_key:
+                continue
+            fingerprint_matches = (
+                int(record.get("loaded_size", -1)) == int(stat.st_size)
+                and int(record.get("loaded_mtime_ns", -1)) == int(stat.st_mtime_ns)
+                and int(record.get("loaded_ctime_ns", -1)) == int(stat.st_ctime_ns)
+                and int(record.get("loaded_inode", -1)) == int(stat.st_ino)
+            )
+            if not fingerprint_matches:
+                return None
+            module = sys.modules.get(str(record.get("module") or ""))
+            if module is None:
+                return None
+            try:
+                module_path = Path(str(getattr(module, "__file__", "") or "")).resolve()
+            except OSError:
+                return None
+            return module if os.path.normcase(str(module_path)) == path_key else None
+    return None
 
 
 def skill_handler_source_snapshot() -> dict[str, Any]:
