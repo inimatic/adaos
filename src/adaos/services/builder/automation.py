@@ -3462,10 +3462,26 @@ class BuilderAutomationService:
             operation = str(requirement["operation"])
             required = bool(requirement["required"])
             try:
+                parameters = requirement.get("parameters") or {}
+                if not isinstance(parameters, Mapping):
+                    raise ValueError("acceptance requirement parameters must be an object")
+                protected = set(request) | {"profile"}
+                collisions = sorted(protected.intersection(str(key) for key in parameters))
+                if collisions:
+                    raise ValueError(
+                        "acceptance requirement parameters cannot override the "
+                        "digest-bound candidate envelope: " + ", ".join(collisions)
+                    )
                 raw = manager.run_tool(
                     provider_id,
                     operation,
-                    {"request": {**request, "profile": profile}},
+                    {
+                        "request": {
+                            **request,
+                            "profile": profile,
+                            **{str(key): value for key, value in parameters.items()},
+                        }
+                    },
                     timeout=float(requirement.get("timeout_seconds") or 300),
                 )
                 if not isinstance(raw, Mapping):

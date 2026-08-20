@@ -2382,6 +2382,82 @@ def test_finalize_stops_before_checkpoint_when_consumer_acceptance_fails(
     assert saved[-1]["completion_readiness"]["acceptance"]["ok"] is False
 
 
+def test_consumer_acceptance_passes_declared_parameters_without_overriding_envelope(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    calls: list[dict] = []
+    policy = {
+        "project_ref": "project:research",
+        "acceptance_profiles": ["research.consumer-contracts"],
+        "acceptance_requirements": [
+            {
+                "id": "research.consumer-contracts",
+                "profile": "research.consumer-contracts",
+                "provider_ref": "skill:research_manager_skill",
+                "operation": "validate_development_candidate",
+                "required": True,
+                "parameters": {"execute_workflow_smoke": True},
+            }
+        ],
+        "context_members": [
+            {
+                "ref": "skill:research_manager_skill",
+                "relation": "contract-consumer",
+            }
+        ],
+        "instruction_inputs": [],
+        "subject_refs": [],
+        "contract_inputs": [],
+    }
+
+    from adaos.sdk.builder import development_sessions
+
+    monkeypatch.setattr(development_sessions, "get", lambda _session_id: policy)
+
+    class FakeManager:
+        def __init__(self, **_kwargs):
+            pass
+
+        def run_tool(self, _provider_id, _operation, payload, **_kwargs):
+            calls.append(dict(payload["request"]))
+            return {
+                "schema": "adaos.builder.acceptance_receipt.v1",
+                "profile": "research.consumer-contracts",
+                "ok": True,
+                "checks": [],
+                "errors": [],
+            }
+
+    fake_ctx = SimpleNamespace(
+        skills_repo=object(),
+        sql=object(),
+        git=object(),
+        paths=object(),
+        bus=None,
+        caps=object(),
+        settings=object(),
+    )
+    monkeypatch.setattr("adaos.services.agent_context.get_ctx", lambda: fake_ctx)
+    monkeypatch.setattr("adaos.adapters.db.SqliteSkillRegistry", lambda _sql: object())
+    monkeypatch.setattr("adaos.services.skill.manager.SkillManager", FakeManager)
+
+    result = service._run_development_acceptance(
+        {
+            "development_session_id": "dev-research",
+            "object_type": "skill",
+            "object_id": "research_candidate",
+        },
+        activations=[{"id": "research_candidate", "version": "0.1.0"}],
+    )
+
+    assert result["ok"] is True
+    assert calls[0]["candidate_ref"] == "skill:research_candidate"
+    assert calls[0]["profile"] == "research.consumer-contracts"
+    assert calls[0]["execute_workflow_smoke"] is True
+
+
 def test_finalize_compensates_failed_follow_active_preview_after_workflow_completion(
     tmp_path: Path,
     monkeypatch,
