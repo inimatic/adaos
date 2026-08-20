@@ -359,6 +359,7 @@ def configure_default_distributed_runtimes(
             deployment_store=deployment.store,
             projection_publisher=_publisher(ctx=current, topic="distributed.topology.projection"),
         )
+        deployment.recover_incomplete()
 
         def execute_topology_tool(
             skill_id: str,

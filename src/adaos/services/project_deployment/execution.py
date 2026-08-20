@@ -140,8 +140,41 @@ class ProjectDeploymentExecutor:
         idempotency_key: str,
         kind: str = "apply",
     ) -> DeploymentOperation:
+        inventory_records = tuple(inventory)
+        operation = self.accept(
+            plan,
+            desired=desired,
+            release_plan=release_plan,
+            inventory=inventory_records,
+            principal=principal,
+            idempotency_key=idempotency_key,
+            kind=kind,
+        )
+        if operation.state != "accepted":
+            return operation
+        return self.resume(
+            operation.operation_id,
+            desired=desired,
+            release_plan=release_plan,
+            inventory=inventory_records,
+            principal=principal,
+        )
+
+    def accept(
+        self,
+        plan: DeploymentPlan,
+        *,
+        desired: ProjectDeployment,
+        release_plan: ReleasePlan,
+        inventory: Iterable[NodeInventoryRecord],
+        principal: DeploymentPrincipal,
+        idempotency_key: str,
+        kind: str = "apply",
+    ) -> DeploymentOperation:
+        """Authorize and durably accept work without executing component phases."""
+
         self._authorize(plan, principal)
-        nodes = self._validate_preconditions(
+        self._validate_preconditions(
             plan,
             desired=desired,
             release_plan=release_plan,
@@ -162,6 +195,16 @@ class ProjectDeploymentExecutor:
                 updated_at=now,
             )
         )
+        self.store.put_operation_authorization(
+            operation.operation_id,
+            {
+                "schema": "adaos.project.deployment_operation_authorization.v1",
+                "operation_id": operation.operation_id,
+                "actor_ref": principal.actor_ref,
+                "permissions": sorted(principal.permissions),
+                "approvals": sorted(principal.approvals),
+            },
+        )
         if operation.state != "accepted":
             return operation
         self.store.append_audit(
@@ -172,17 +215,7 @@ class ProjectDeploymentExecutor:
             policy_decision="allow",
             approvals=sorted(principal.approvals),
         )
-        operation = self.store.update_operation(
-            replace(operation, state="running", updated_at=utc_now()),
-            expected_state="accepted",
-        )
-        return self._run(
-            operation,
-            plan=plan,
-            desired=desired,
-            release_plan=release_plan,
-            nodes=nodes,
-        )
+        return operation
 
     def resume(
         self,
@@ -194,7 +227,8 @@ class ProjectDeploymentExecutor:
         principal: DeploymentPrincipal,
     ) -> DeploymentOperation:
         operation = self.store.get_operation(operation_id)
-        principal.require("project.deployment.reconcile")
+        if operation.kind == "reconcile":
+            principal.require("project.deployment.reconcile")
         plan = self.store.get_plan(operation.plan_digest)
         self._authorize(plan, principal)
         nodes = self._validate_preconditions(
@@ -203,10 +237,10 @@ class ProjectDeploymentExecutor:
             release_plan=release_plan,
             inventory=inventory,
         )
-        if operation.state == "partial":
+        if operation.state in {"accepted", "partial"}:
             operation = self.store.update_operation(
                 replace(operation, state="running", updated_at=utc_now()),
-                expected_state="partial",
+                expected_state=operation.state,
             )
         elif operation.state != "running":
             return operation

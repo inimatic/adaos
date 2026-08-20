@@ -389,6 +389,55 @@ class ProjectDeploymentStore:
             )
         return operation
 
+    def put_operation_authorization(
+        self,
+        operation_id: str,
+        authorization: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        root = self._operation_root(operation_id)
+        payload = dict(authorization)
+        if payload.get("operation_id") != operation_id:
+            raise ProjectDeploymentStoreError(
+                "deployment operation authorization identity mismatch"
+            )
+        path = root / "authorization.json"
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            if path.is_file():
+                existing = _read_mapping(path)
+                if existing != payload:
+                    raise ProjectDeploymentStoreError(
+                        "deployment operation authorization is immutable"
+                    )
+                return existing
+            atomic_write_json(path, payload)
+        return payload
+
+    def get_operation_authorization(self, operation_id: str) -> dict[str, Any]:
+        path = self._operation_root(operation_id) / "authorization.json"
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"deployment operation authorization not found: {operation_id}"
+            )
+        payload = _read_mapping(path)
+        if payload.get("operation_id") != operation_id:
+            raise ProjectDeploymentStoreError(
+                "deployment operation authorization identity mismatch"
+            )
+        return payload
+
+    def list_incomplete_operations(
+        self, *, limit: int = 100
+    ) -> tuple[DeploymentOperation, ...]:
+        records: list[DeploymentOperation] = []
+        root = self.root / "operations"
+        if root.is_dir():
+            for path in root.glob("*/current.json"):
+                record = DeploymentOperation.from_mapping(_read_mapping(path))
+                if record.state in {"accepted", "running"}:
+                    records.append(record)
+        records.sort(key=lambda item: (item.updated_at, item.operation_id))
+        return tuple(records[: max(1, min(int(limit), 1000))])
+
     def update_operation(
         self,
         operation: DeploymentOperation,

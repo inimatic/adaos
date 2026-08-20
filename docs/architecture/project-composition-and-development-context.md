@@ -284,6 +284,15 @@ bounded retry, and rollback evidence truthfully. Stateful component removal
 cordons and drains the runtime before package removal. Runtime/derived-data
 retention remains an independent declared decision.
 
+Distributed rollout duration is independent from the command/RPC lifetime.
+Skills submit reviewed plans through `adaos.sdk.deployment.submit`, receive a
+durable `DeploymentOperation`, and observe it through `get_operation` or the
+bounded deployment inspection projection. Accepted and running operations keep
+their immutable authorization record and are resumed by the serialized runtime
+worker after process restart. The synchronous `apply` entry point remains for
+local compatibility and tests, but must not be used by an interactive workflow
+whose rollout can span multiple nodes or slow storage.
+
 Trusted members publish explicit bounded deployment capabilities in their node
 snapshot. The ordinary hub control plane may route reviewed component phases
 over the authenticated member link, so Project deployment does not require a

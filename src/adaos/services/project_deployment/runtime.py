@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass, field, replace
+from threading import RLock
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
 from adaos.domain.artifact_release import canonical_payload_digest
@@ -12,6 +14,7 @@ from adaos.domain.project_deployment import (
     NodeInventoryRecord,
     ProjectDeployment,
     inventory_revision,
+    utc_now,
 )
 from adaos.services.artifact_pipeline.releases import ReleasePlan
 
@@ -57,6 +60,17 @@ class ProjectDeploymentRuntime:
     adapter: ComponentDeploymentAdapter
     local_node_id: str | None = None
     projection_publisher: Callable[[Mapping[str, Any]], Any] | None = None
+    _worker: ThreadPoolExecutor = field(init=False, repr=False)
+    _worker_lock: RLock = field(init=False, repr=False)
+    _futures: dict[str, Future[DeploymentOperation]] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._worker = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="adaos-project-deployment",
+        )
+        self._worker_lock = RLock()
+        self._futures = {}
 
     def define(
         self,
@@ -117,6 +131,121 @@ class ProjectDeploymentRuntime:
         )
         self._publish_projection()
         return operation
+
+    def submit(
+        self,
+        plan_digest: str,
+        *,
+        principal: DeploymentPrincipal,
+        idempotency_key: str,
+    ) -> DeploymentOperation:
+        """Durably accept a reviewed plan and execute it outside the caller RPC."""
+
+        plan = self.store.get_plan(plan_digest)
+        desired = self.store.get_deployment(plan.deployment_id)
+        operation = ProjectDeploymentExecutor(
+            store=self.store, adapter=self.adapter
+        ).accept(
+            plan,
+            desired=desired,
+            release_plan=self._release(desired),
+            inventory=tuple(self.inventory.list_nodes(desired.subnet_id)),
+            principal=principal,
+            idempotency_key=idempotency_key,
+            kind="apply",
+        )
+        if operation.state in {"accepted", "running"}:
+            self._schedule(operation.operation_id)
+        self._publish_projection()
+        return self.store.get_operation(operation.operation_id)
+
+    def get_operation(
+        self,
+        operation_id: str,
+        *,
+        principal: DeploymentPrincipal,
+    ) -> DeploymentOperation:
+        principal.require("project.deployment.inspect")
+        return self.store.get_operation(operation_id)
+
+    def recover_incomplete(self, *, limit: int = 100) -> tuple[str, ...]:
+        scheduled: list[str] = []
+        for operation in self.store.list_incomplete_operations(limit=limit):
+            try:
+                self.store.get_operation_authorization(operation.operation_id)
+            except FileNotFoundError:
+                self.store.append_audit(
+                    "deployment.operation.recovery.skipped",
+                    operation_id=operation.operation_id,
+                    reason="authorization_record_missing",
+                )
+                continue
+            self._schedule(operation.operation_id)
+            scheduled.append(operation.operation_id)
+        return tuple(scheduled)
+
+    def shutdown(self, *, wait: bool = False) -> None:
+        self._worker.shutdown(wait=wait, cancel_futures=False)
+
+    def _schedule(self, operation_id: str) -> None:
+        with self._worker_lock:
+            previous = self._futures.get(operation_id)
+            if previous is not None and not previous.done():
+                return
+            future = self._worker.submit(self._resume_submitted, operation_id)
+            self._futures[operation_id] = future
+            future.add_done_callback(
+                lambda completed, key=operation_id: self._submitted_done(key, completed)
+            )
+
+    def _resume_submitted(self, operation_id: str) -> DeploymentOperation:
+        operation = self.store.get_operation(operation_id)
+        authorization = self.store.get_operation_authorization(operation_id)
+        principal = DeploymentPrincipal.create(
+            actor_ref=str(authorization.get("actor_ref") or ""),
+            permissions=tuple(authorization.get("permissions") or ()),
+            approvals=tuple(authorization.get("approvals") or ()),
+        )
+        desired = self.store.get_deployment(operation.deployment_id)
+        try:
+            result = ProjectDeploymentExecutor(
+                store=self.store, adapter=self.adapter
+            ).resume(
+                operation_id,
+                desired=desired,
+                release_plan=self._release(desired),
+                inventory=tuple(self.inventory.list_nodes(desired.subnet_id)),
+                principal=principal,
+            )
+        except Exception as exc:
+            current = self.store.get_operation(operation_id)
+            if current.state in {"accepted", "running"}:
+                result = self.store.update_operation(
+                    replace(
+                        current,
+                        state="failed",
+                        error={
+                            "code": "deployment_worker_failed",
+                            "type": type(exc).__name__,
+                            "message": str(exc)[:1000],
+                        },
+                        updated_at=utc_now(),
+                    ),
+                    expected_state=current.state,
+                )
+            else:
+                result = current
+        self._publish_projection()
+        return result
+
+    def _submitted_done(
+        self,
+        operation_id: str,
+        future: Future[DeploymentOperation],
+    ) -> None:
+        del future
+        with self._worker_lock:
+            self._futures.pop(operation_id, None)
 
     def reconcile(
         self,

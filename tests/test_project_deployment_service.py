@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
 from typing import Any, Mapping
 
 import pytest
@@ -226,6 +228,19 @@ class FakeDeploymentAdapter:
         if phase == "health":
             return {"ready": True, "credential_token": "must-not-leak"}
         return {"witness": f"{phase}:ok"}
+
+
+class BlockingDeploymentAdapter(FakeDeploymentAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = Event()
+        self.release = Event()
+
+    def execute_phase(self, **kwargs: Any) -> Mapping[str, Any]:
+        self.started.set()
+        if not self.release.wait(timeout=5):
+            raise TimeoutError("test deployment adapter was not released")
+        return super().execute_phase(**kwargs)
 
 
 class StaticReleaseProvider:
@@ -678,6 +693,153 @@ def test_runtime_exposes_plan_apply_inspect_drain_and_remove(tmp_path: Path) -> 
     assert store.get_activation(activation.activation_id).status == "removed"
     assert published[-1]["schema"] == "adaos.project.deployment_projection.v1"
     assert published[-1]["items"][0]["observed"]["operation_total"] == 3
+
+
+def test_runtime_submit_returns_before_background_component_phases(
+    tmp_path: Path,
+) -> None:
+    release_plan = _release((("skill", "media_center_coordinator", "a"),))
+    desired = ProjectDeployment(
+        deployment_id="media-center-home",
+        project_ref="project:media_center",
+        release_digest=str(release_plan.release.release_digest),
+        subnet_id="home",
+        revision=1,
+        placements=(
+            ComponentPlacementPolicy(
+                component_ref="skill:media_center_coordinator",
+                mode="singleton",
+            ),
+        ),
+        compatibility=DeploymentCompatibilityPolicy(
+            required_protocols={"project_activation": "1"}
+        ),
+        status="planned",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    inventory = (_node("node-a"),)
+    store = ProjectDeploymentStore(state_dir=tmp_path)
+    adapter = BlockingDeploymentAdapter()
+    runtime = ProjectDeploymentRuntime(
+        store=store,
+        releases=StaticReleaseProvider(release_plan),
+        inventory=StaticInventoryProvider(inventory),
+        adapter=adapter,
+        local_node_id="node-a",
+    )
+    principal = DeploymentPrincipal.create(
+        actor_ref="skill:deployment_test",
+        permissions=(
+            "project.deployment.manage",
+            "project.deployment.inspect",
+            "project.deployment.apply",
+        ),
+    )
+    runtime.define(
+        desired,
+        expected_revision=0,
+        principal=principal,
+        reason="async fixture",
+    )
+    plan = runtime.plan(desired.deployment_id, principal=principal)
+
+    started_at = time.monotonic()
+    submitted = runtime.submit(
+        str(plan.plan_digest),
+        principal=principal,
+        idempotency_key="runtime:submit:1",
+    )
+    elapsed = time.monotonic() - started_at
+
+    assert elapsed < 1
+    assert submitted.state in {"accepted", "running"}
+    assert adapter.started.wait(timeout=2)
+    authorization = store.get_operation_authorization(submitted.operation_id)
+    assert authorization["actor_ref"] == principal.actor_ref
+    adapter.release.set()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        completed = runtime.get_operation(
+            submitted.operation_id,
+            principal=principal,
+        )
+        if completed.state == "succeeded":
+            break
+        time.sleep(0.02)
+    else:
+        pytest.fail("submitted deployment did not complete")
+    runtime.shutdown(wait=True)
+
+
+def test_runtime_recovers_durably_accepted_operation(tmp_path: Path) -> None:
+    release_plan = _release((("skill", "media_center_coordinator", "a"),))
+    desired = ProjectDeployment(
+        deployment_id="media-center-home",
+        project_ref="project:media_center",
+        release_digest=str(release_plan.release.release_digest),
+        subnet_id="home",
+        revision=1,
+        placements=(
+            ComponentPlacementPolicy(
+                component_ref="skill:media_center_coordinator",
+                mode="singleton",
+            ),
+        ),
+        compatibility=DeploymentCompatibilityPolicy(
+            required_protocols={"project_activation": "1"}
+        ),
+        status="planned",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    inventory = (_node("node-a"),)
+    store = ProjectDeploymentStore(state_dir=tmp_path)
+    store.save_deployment(
+        desired,
+        expected_revision=0,
+        actor_ref="skill:deployment_test",
+        reason="recovery fixture",
+    )
+    plan = ProjectDeploymentPlanner().plan(
+        desired,
+        release_plan=release_plan,
+        inventory=inventory,
+        local_node_id="node-a",
+    )
+    principal = DeploymentPrincipal.create(
+        actor_ref="skill:deployment_test",
+        permissions=("project.deployment.inspect", "project.deployment.apply"),
+    )
+    accepted = ProjectDeploymentExecutor(
+        store=store,
+        adapter=FakeDeploymentAdapter(),
+    ).accept(
+        plan,
+        desired=desired,
+        release_plan=release_plan,
+        inventory=inventory,
+        principal=principal,
+        idempotency_key="runtime:recover:1",
+    )
+    runtime = ProjectDeploymentRuntime(
+        store=store,
+        releases=StaticReleaseProvider(release_plan),
+        inventory=StaticInventoryProvider(inventory),
+        adapter=FakeDeploymentAdapter(),
+        local_node_id="node-a",
+    )
+
+    assert runtime.recover_incomplete() == (accepted.operation_id,)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        completed = runtime.get_operation(accepted.operation_id, principal=principal)
+        if completed.state == "succeeded":
+            break
+        time.sleep(0.02)
+    else:
+        pytest.fail("accepted deployment was not recovered")
+    runtime.shutdown(wait=True)
 
 
 def test_subnet_snapshot_inventory_requires_explicit_deployment_capabilities() -> None:

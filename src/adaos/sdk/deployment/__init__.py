@@ -103,6 +103,30 @@ def apply(
     )
 
 
+def submit(
+    plan_digest: str,
+    *,
+    idempotency_key: str,
+    approvals: Iterable[str] = (),
+) -> DeploymentOperation:
+    """Accept a reviewed plan and run it as a durable background operation."""
+
+    return get_project_deployment_runtime().submit(
+        plan_digest,
+        idempotency_key=idempotency_key,
+        principal=_principal(("project.deployment.apply",), approvals=approvals),
+    )
+
+
+def get_operation(operation_id: str) -> DeploymentOperation:
+    """Read one deployment operation without scanning deployment history."""
+
+    return get_project_deployment_runtime().get_operation(
+        operation_id,
+        principal=_principal(("project.deployment.inspect",)),
+    )
+
+
 def reconcile(
     deployment_id: str,
     *,
@@ -216,6 +240,7 @@ __all__ = [
     "ProjectDeployment",
     "RolloutPolicy",
     "apply",
+    "get_operation",
     "define",
     "drain",
     "inspect",
@@ -224,4 +249,5 @@ __all__ = [
     "recommend_nodes",
     "reconcile",
     "remove",
+    "submit",
 ]

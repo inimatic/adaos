@@ -53,6 +53,8 @@ supervisor, Hub, Yjs, subnet transport or node-inventory internals.
 | Reviewed deployment sees changed inventory | compare-and-switch rejection before adapter mutation | `test_executor_rejects_inventory_drift_after_review` |
 | Known transient component failure | bounded retry under the reviewed operation id | `test_executor_journals_multi_component_nodes_retries_and_is_idempotent` |
 | Lost remote acknowledgement | terminal `uncertain`, no automatic retry or rollback claim | deployment adapter lost-ack tests and `test_executor_does_not_retry_or_rollback_uncertain_state` |
+| Rollout exceeds caller RPC lifetime | short durable acceptance, background progress, direct operation inspection | `test_runtime_submit_returns_before_background_component_phases` |
+| Runtime exits after durable acceptance | accepted/running operation resumes with its immutable authorization record | `test_runtime_recovers_durably_accepted_operation` |
 | Service process is healthy but lease expires | instance becomes ineligible independently from its last health report | `test_membership_expiry_is_independent_from_last_health` |
 | Old authority continues writing | receiver rejects its stale fencing epoch | `test_fenced_handoff_rejects_old_owner_and_routes_partial_topology` |
 | Partition is missing or replica is stale | bounded partial route names unavailable partitions and fallback reason | contract and handoff route tests |
@@ -78,6 +80,8 @@ and replica-data removal are independent confirmations.
 
 - Planning is read-only and immutable; application checks the reviewed plan,
   desired generation and inventory revision again.
+- Long-running plans are submitted to one serialized durable worker; command
+  timeout is not used as deployment cancellation or failure evidence.
 - Remote execution revalidates target node identity, exact component/package
   identity and digest at the receiver.
 - SDK calls require capability grants; authority handoff, topology change,
@@ -98,11 +102,12 @@ From the core repository with its `src` directory on `PYTHONPATH`:
 python -m pytest tests/test_project_deployment_contracts.py tests/test_project_deployment_service.py tests/test_project_deployment_default_runtime.py tests/test_project_deployment_adapter.py tests/test_distributed_runtime_contracts.py tests/test_distributed_runtime_service.py tests/test_distributed_runtime_adapters.py -q
 ```
 
-The accepted run passed `59/59`. It covers strict schema round trips,
+The accepted run passed `69/69`. It covers strict schema round trips,
 placement modes, immutable plans, idempotent execution, inventory drift,
 uncertain remote outcomes, leases, protocol/capacity admission, fencing,
 routes, operations, transfer resume/content witnesses, rebalance planning and
-the non-media document fixture.
+the non-media document fixture. It also covers short asynchronous deployment
+submission and restart recovery from the durable operation authorization.
 
 ## Open Acceptance Gates
 

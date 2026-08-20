@@ -195,6 +195,13 @@ membership, topology status, routing and at least one topology operation.
 - [x] `[should]` `DS4-07` Add topology explain and dry-run tools suitable for
   Builder and Infrascope consumption.
 
+Project rollout admission is also decoupled from caller RPC lifetime: the
+public deployment SDK accepts reviewed work into a durable serialized worker,
+publishes an operation id immediately, and resumes accepted/running operations
+from their immutable authorization record after runtime restart. This prevents
+slow disks or multi-node activation from turning a healthy rollout into a
+command timeout.
+
 ## Milestone DS5: Replicated Authority And Production Acceptance
 
 **Outcome:** at least one stateful service can fail over authority without
