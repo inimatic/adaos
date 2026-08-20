@@ -1264,6 +1264,8 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(tmp_path: P
     assert "install-strict" in prompt
     assert "trusted worker finalizer owns package" in prompt
     assert "ADAOS_TASK_RUNTIME_DIR" in prompt
+    assert "Path(working_directory) / expected_outputs[i]" in prompt
+    assert "collection through the returned `output_ref`" in prompt
     assert "never create repository-relative `.adaos*` runtime directories" in prompt
     assert "do not copy into or mutate the canonical workspace/runtime" in prompt
     assert "workflow.json" in prompt
