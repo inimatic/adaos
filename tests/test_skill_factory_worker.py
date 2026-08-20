@@ -1508,6 +1508,8 @@ def _operation_contract_assignment(
     *,
     candidate_input_schema: dict,
     declared_operations: list[str] | None = None,
+    candidate_role: str | None = None,
+    candidate_capability: str = "example.probe",
 ) -> dict:
     instruction = workspace / ".adaos_context" / "dev-ops" / "instructions" / "contract.json"
     instruction.parent.mkdir(parents=True)
@@ -1538,18 +1540,22 @@ def _operation_contract_assignment(
         },
         "additionalProperties": False,
     }
+    operation_set = {
+        "schema": "adaos.contract.operation_set.v1",
+        "contract": "example.probe_provider.v1",
+        "capability": "example.probe",
+        "operations": {
+            "implementation_probe": {
+                "input_schema": contract_input,
+                "output_schema": contract_output,
+            }
+        },
+    }
+    if candidate_role is not None:
+        operation_set["candidate_role"] = candidate_role
     instruction.write_text(
         json.dumps(
-            {
-                "schema": "adaos.contract.operation_set.v1",
-                "contract": "example.probe_provider.v1",
-                "operations": {
-                    "implementation_probe": {
-                        "input_schema": contract_input,
-                        "output_schema": contract_output,
-                    }
-                },
-            },
+            operation_set,
             indent=2,
         )
         + "\n",
@@ -1567,7 +1573,7 @@ def _operation_contract_assignment(
                 "provider_contracts": [
                     {
                         "contract": "example.probe_provider.v1",
-                        "capability": "example.probe",
+                        "capability": candidate_capability,
                         "operations": declared_operations
                         if declared_operations is not None
                         else ["implementation_probe"],
@@ -1693,6 +1699,50 @@ def test_worker_requires_every_admitted_operation_in_provider_declaration(tmp_pa
         "skills/example_skill/skill.yaml: provider contract example.probe_provider.v1 "
         "does not declare admitted operation implementation_probe"
     ]
+
+
+def test_worker_requires_provider_for_provider_role_operation_set(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _operation_contract_assignment(
+        workspace,
+        candidate_input_schema={"type": "object"},
+        candidate_role="provider",
+        candidate_capability="example.other",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_admitted_operation_schemas(
+        assignment, workspace, checks, errors
+    )
+
+    assert checks == []
+    assert errors == [
+        "admitted operation set requires the candidate to provide contract "
+        "example.probe_provider.v1 with capability example.probe, but no matching "
+        "skill provider_contracts declaration exists"
+    ]
+
+
+def test_worker_allows_context_operation_set_without_provider(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _operation_contract_assignment(
+        workspace,
+        candidate_input_schema={"type": "object"},
+        candidate_role="context",
+        candidate_capability="example.other",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_admitted_operation_schemas(
+        assignment, workspace, checks, errors
+    )
+
+    assert errors == []
+    assert checks == []
 
 
 def test_worker_validates_admitted_contract_runtime_documents(tmp_path: Path) -> None:
