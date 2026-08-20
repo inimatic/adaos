@@ -153,6 +153,38 @@ class SkillToolTopologyAdapter:
         committed["replica"] = saved.to_dict()
         return committed
 
+    @staticmethod
+    def _validate_target_witness(
+        receipt: Mapping[str, Any],
+        *,
+        phase: str,
+        source: Replica | None,
+        selected: ServiceInstance,
+    ) -> None:
+        if phase not in {"catch_up", "verify", "activate_read", "promote"}:
+            return
+        if source is None or source.instance_id == selected.instance_id:
+            return
+
+        raw_replica = receipt.get("replica")
+        observed = dict(raw_replica) if isinstance(raw_replica, Mapping) else dict(receipt)
+        expected_checkpoint = str(source.checkpoint or "").strip()
+        observed_checkpoint = str(
+            observed.get("content_witness") or observed.get("checkpoint") or ""
+        ).strip()
+        expected_items = int(source.item_count or 0)
+        observed_items = int(observed.get("item_count") or 0)
+        observed_state = str(observed.get("content_state") or "").strip().lower()
+
+        if expected_checkpoint and observed_checkpoint != expected_checkpoint:
+            raise TopologyExecutionError("topology_target_content_witness_mismatch")
+        if expected_items > observed_items:
+            raise TopologyExecutionError("topology_target_content_incomplete")
+        if source.content_state == "non_empty" and (
+            observed_items <= 0 or observed_state == "empty"
+        ):
+            raise TopologyExecutionError("topology_target_content_incomplete")
+
     def _call(self, context: TopologyStepContext) -> Mapping[str, Any]:
         step = context.step
         partition = self.store.get_partition(step.partition_id)
@@ -225,6 +257,13 @@ class SkillToolTopologyAdapter:
                 node_id=selected.node_id, payload=payload
             )
         receipt = _bounded_result(result)
+        source_replica = self._replica_for_instance(partition.partition_id, source)
+        self._validate_target_witness(
+            receipt,
+            phase=context.phase,
+            source=source_replica,
+            selected=selected,
+        )
         return self._commit_replica_receipt(
             receipt,
             partition=partition,

@@ -264,6 +264,52 @@ def test_skill_adapter_commits_remote_replica_receipt_to_authority_store() -> No
         )
 
 
+def test_skill_adapter_rejects_empty_target_before_read_activation() -> None:
+    source = Replica(
+        replica_id="replica-documents-node-a",
+        partition_id="documents:a-f",
+        instance_id="documents-node-a",
+        node_id="node-a",
+        role="derived",
+        lifecycle="ready",
+        content_state="non_empty",
+        authority_epoch=0,
+        checkpoint="offset:10",
+        source_ref=None,
+        freshness_seconds=0,
+        item_count=10,
+        byte_count=100,
+        observed_at="2026-08-19T00:00:00+00:00",
+    )
+    store = _Store(replicas={source.replica_id: source})
+    adapter = SkillToolTopologyAdapter(
+        store=store,  # type: ignore[arg-type]
+        local_node_id="node-b",
+        local_executor=lambda *_args: {
+            "ok": True,
+            "receipt": {
+                "content_witness": None,
+                "checkpoint": None,
+                "item_count": 0,
+            },
+        },
+        remote=_Remote(),
+    )
+
+    with pytest.raises(TopologyExecutionError, match="content_witness_mismatch"):
+        adapter.verify(
+            TopologyStepContext(
+                operation_id="operation-1",
+                plan_digest=str(_plan().plan_digest),
+                step=_step(),
+                phase="verify",
+                authority_epoch=0,
+                idempotency_key="phase-1",
+                attempt=1,
+            )
+        )
+
+
 def test_receiver_validates_target_identity_and_reviewed_phase() -> None:
     source = _instance("documents-node-a", "node-a")
     target = _instance("documents-node-b", "node-b")
