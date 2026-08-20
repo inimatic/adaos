@@ -1455,7 +1455,12 @@ def test_unknown_trial_outcome_is_not_projected_as_retryable_before_reconciliati
         "scenario",
         "recipes",
         "candidate_preparation_started",
-        metadata=_confirmed({"activity_attempt_id": "trial-attempt:unknown"}),
+        metadata=_confirmed(
+            {
+                "activity_attempt_id": "trial-attempt:unknown",
+                "idempotency_key": "trial:stable-release-digest",
+            }
+        ),
     )
     unknown = service.transition(
         "scenario",
@@ -1494,6 +1499,26 @@ def test_unknown_trial_outcome_is_not_projected_as_retryable_before_reconciliati
     assert readmitted["delivery"]["status"] == "checkpoint"
     assert readmitted["governed"]["state"] == "trial_ready"
     assert readmitted["capabilities"]["can_prepare_candidate"] is True
+
+    before_generation = readmitted["generation"]
+    before_project_generation = readmitted["project"]["generation"]
+    duplicate = service.transition(
+        "scenario",
+        "recipes",
+        "candidate_preparation_started",
+        metadata=_confirmed(
+            {
+                "activity_attempt_id": "trial-attempt:retried-after-reconciliation",
+                "idempotency_key": "trial:stable-release-digest",
+            }
+        ),
+    )
+
+    assert duplicate["duplicate"] is True
+    assert duplicate["workflow"]["generation"] == before_generation
+    assert duplicate["workflow"]["project"]["generation"] == before_project_generation
+    assert duplicate["workflow"]["delivery"]["status"] == "checkpoint"
+    assert duplicate["workflow"]["governed"]["state"] == "trial_ready"
 
 
 def test_unknown_publication_requires_explicit_evidenced_reconciliation(

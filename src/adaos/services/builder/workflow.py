@@ -3320,6 +3320,25 @@ class BuilderWorkflowService:
                         "canonical Builder transition rejected: "
                         f"{governed_decision.get('reason_code') or 'transition_not_allowed'}"
                     )
+                if (
+                    governed_decision is not None
+                    and str(governed_decision.get("status") or "") == "duplicate"
+                ):
+                    # The canonical ledger is authoritative for idempotency.
+                    # Applying the compatibility mutation again can move the
+                    # two projections to different states after an explicit
+                    # reconciliation cycle. A duplicate therefore remains a
+                    # strict no-op across the entire compound transaction.
+                    projection = self.describe(kind, project_id)
+                    return {
+                        "ok": True,
+                        "action": action_token,
+                        "duplicate": True,
+                        "updated_change_id": originating_change_id
+                        or mutation_change_id
+                        or None,
+                        "workflow": projection,
+                    }
             self._apply_transition(
                 workflow,
                 action_token,
