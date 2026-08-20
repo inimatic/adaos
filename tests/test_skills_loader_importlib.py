@@ -590,6 +590,29 @@ def test_reload_without_handlers_deactivates_and_retires_previous_skill(monkeypa
         sdk_decorators._restore_registry_snapshot(registry_snapshot)
 
 
+def test_reload_rejects_runtime_selection_different_from_activation_receipt(tmp_path: Path) -> None:
+    skill_name = "media_center_skill"
+    runtime_root = tmp_path / ".runtime" / skill_name
+    bucket_root = runtime_root / "v0.8"
+    bucket_root.mkdir(parents=True)
+    (runtime_root / "current_version").write_text("0.8.28", encoding="utf-8")
+    (bucket_root / "active").write_text("A", encoding="utf-8")
+
+    receipt = asyncio.run(
+        ImportlibSkillsLoader().reload_skill_handlers(
+            tmp_path,
+            skill_name,
+            expected_version="0.8.29",
+            expected_slot="B",
+        )
+    )
+
+    assert receipt["ok"] is False
+    assert receipt["reason"] == "runtime_selection_mismatch"
+    assert receipt["expected_selection"] == {"version": "0.8.29", "slot": "B"}
+    assert receipt["selection"] == {"version": "0.8.28", "slot": "A"}
+
+
 def test_reloading_same_handler_replaces_registry_and_restores_it_on_import_failure(
     monkeypatch,
     tmp_path: Path,

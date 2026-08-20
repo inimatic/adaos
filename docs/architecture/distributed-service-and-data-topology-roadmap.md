@@ -202,6 +202,13 @@ from their immutable authorization record after runtime restart. This prevents
 slow disks or multi-node activation from turning a healthy rollout into a
 command timeout.
 
+The serialized deployment worker does not replace component-level runtime
+serialization. Project activation and post-boot skill migration share one
+cross-process mutation lease, and handler reload validates the exact active
+version/slot from the activation receipt. This prevents a migration fallback
+from replacing a project-managed patch release while its lifecycle hook is
+still running.
+
 ## Milestone DS5: Replicated Authority And Production Acceptance
 
 **Outcome:** at least one stateful service can fail over authority without

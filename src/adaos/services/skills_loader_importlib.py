@@ -441,7 +441,14 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             json.dumps(slowest_imports, sort_keys=True, separators=(",", ":")),
         )
 
-    async def reload_skill_handlers(self, skills_root: Any, skill_name: str) -> dict[str, Any]:
+    async def reload_skill_handlers(
+        self,
+        skills_root: Any,
+        skill_name: str,
+        *,
+        expected_version: str | None = None,
+        expected_slot: str | None = None,
+    ) -> dict[str, Any]:
         root = Path(skills_root() if callable(skills_root) else skills_root)
         target = str(skill_name or "").strip()
         if not target:
@@ -449,9 +456,8 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         from adaos.sdk.core.decorators import deactivate_skill_subscriptions
 
         subscriptions = deactivate_skill_subscriptions({target})
-        deactivation = await asyncio.to_thread(
-            SkillRuntimeEnvironment(skills_root=root, skill_name=target).read_deactivation
-        )
+        environment = SkillRuntimeEnvironment(skills_root=root, skill_name=target)
+        deactivation = await asyncio.to_thread(environment.read_deactivation)
         if bool(deactivation.get("deactivated")):
             return {
                 "ok": False,
@@ -459,6 +465,27 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 "reason": "skill_runtime_deactivated",
                 "skill": target,
                 "deactivation": deactivation,
+                "subscriptions": subscriptions,
+                "handlers": [],
+            }
+        active_version = str(await asyncio.to_thread(environment.resolve_active_version) or "").strip()
+        active_slot = (
+            str(await asyncio.to_thread(environment.read_active_slot, active_version) or "").strip().upper()
+            if active_version
+            else ""
+        )
+        selection = {"version": active_version, "slot": active_slot}
+        required_version = str(expected_version or "").strip()
+        required_slot = str(expected_slot or "").strip().upper()
+        if (required_version and active_version != required_version) or (
+            required_slot and active_slot != required_slot
+        ):
+            return {
+                "ok": False,
+                "reason": "runtime_selection_mismatch",
+                "skill": target,
+                "expected_selection": {"version": required_version, "slot": required_slot},
+                "selection": selection,
                 "subscriptions": subscriptions,
                 "handlers": [],
             }
@@ -541,6 +568,7 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         return {
             "ok": bool(loaded_handlers),
             "skill": target,
+            "selection": selection,
             "subscriptions": subscriptions,
             "handlers": loaded_handlers,
         }

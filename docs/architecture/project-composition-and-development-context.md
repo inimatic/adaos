@@ -293,6 +293,14 @@ worker after process restart. The synchronous `apply` entry point remains for
 local compatibility and tests, but must not be used by an interactive workflow
 whose rollout can span multiple nodes or slow storage.
 
+Project activation and automatic skill runtime migration are mutually exclusive
+runtime mutations. They use the same cross-process lease for the complete
+activate-and-reload boundary. A live handler reload is accepted only when the
+active full semantic version and A/B slot still match the activation receipt;
+selection drift fails closed before new subscriptions are published. This is
+required because compatible patch releases intentionally share one minor-version
+runtime bucket and therefore the same A/B markers.
+
 Trusted members publish explicit bounded deployment capabilities in their node
 snapshot. The ordinary hub control plane may route reviewed component phases
 over the authenticated member link, so Project deployment does not require a

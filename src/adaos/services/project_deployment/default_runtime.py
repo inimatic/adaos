@@ -43,6 +43,7 @@ from adaos.services.project_deployment.transport import (
 )
 from adaos.services.skill.manager import SkillManager
 from adaos.services.skill.runtime import resolve_active_version
+from adaos.services.skill.runtime_migration_worker import runtime_mutation_lease
 
 
 def _tokens(value: str) -> tuple[str, ...]:
@@ -193,26 +194,44 @@ class AdaOSComponentLifecycleHooks:
             settings=self.ctx.settings,
         )
 
-    def _reload_skill_handlers(self, component_id: str) -> dict[str, Any]:
+    def _reload_skill_handlers(
+        self,
+        component_id: str,
+        *,
+        version: str,
+        slot: str,
+    ) -> dict[str, Any]:
         from adaos.services.skills_loader_importlib import ImportlibSkillsLoader
 
         receipt = _run_async_from_sync(
             ImportlibSkillsLoader().reload_skill_handlers(
                 self.ctx.paths.skills_dir(),
                 component_id,
+                expected_version=version,
+                expected_slot=slot,
             )
         )
         return dict(receipt or {})
 
     def activate(self, *, kind: str, component_id: str, version: str) -> Mapping[str, Any]:
         if kind == "skill":
-            slot = self._skill_manager().activate_runtime(component_id, version=version)
-            handler_reload = self._reload_skill_handlers(component_id)
-            if handler_reload.get("ok") is not True:
-                reason = str(handler_reload.get("reason") or "unknown")
-                raise RuntimeError(
-                    f"live handler activation failed for skill '{component_id}': {reason}"
+            operation_id = f"project-deployment:{component_id}:{version}"
+            with runtime_mutation_lease(
+                self.ctx,
+                operation_id=operation_id,
+                timeout_s=900.0,
+            ):
+                slot = self._skill_manager().activate_runtime(component_id, version=version)
+                handler_reload = self._reload_skill_handlers(
+                    component_id,
+                    version=version,
+                    slot=slot,
                 )
+                if handler_reload.get("ok") is not True:
+                    reason = str(handler_reload.get("reason") or "unknown")
+                    raise RuntimeError(
+                        f"live handler activation failed for skill '{component_id}': {reason}"
+                    )
             return {
                 "activated": True,
                 "version": version,

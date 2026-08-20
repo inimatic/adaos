@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -43,10 +44,11 @@ def test_skill_component_activation_reloads_live_handlers(monkeypatch) -> None:
             return "B"
 
     monkeypatch.setattr(AdaOSComponentLifecycleHooks, "_skill_manager", lambda _self: Manager())
+    monkeypatch.setattr(default_runtime, "runtime_mutation_lease", lambda *_args, **_kwargs: nullcontext())
     monkeypatch.setattr(
         AdaOSComponentLifecycleHooks,
         "_reload_skill_handlers",
-        lambda _self, component_id: (
+        lambda _self, component_id, **_kwargs: (
             events.append(("handlers", component_id))
             or {"ok": True, "handlers": ["handlers/main.py"]}
         ),
@@ -72,10 +74,14 @@ def test_skill_component_activation_fails_when_live_handlers_do_not_activate(mon
             return "A"
 
     monkeypatch.setattr(AdaOSComponentLifecycleHooks, "_skill_manager", lambda _self: Manager())
+    monkeypatch.setattr(default_runtime, "runtime_mutation_lease", lambda *_args, **_kwargs: nullcontext())
     monkeypatch.setattr(
         AdaOSComponentLifecycleHooks,
         "_reload_skill_handlers",
-        lambda _self, _component_id: {"ok": False, "reason": "runtime_safety_validation_failed"},
+        lambda _self, _component_id, **_kwargs: {
+            "ok": False,
+            "reason": "runtime_safety_validation_failed",
+        },
     )
 
     with pytest.raises(RuntimeError, match="runtime_safety_validation_failed"):

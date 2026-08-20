@@ -93,6 +93,10 @@ and replica-data removal are independent confirmations.
   pressure can pause operations without reporting success.
 - Large payloads use bounded adapter transport with checkpoint, cancellation,
   backpressure and content witnesses, not Yjs or command envelopes.
+- Project activation and automatic skill migration share one cross-process
+  runtime mutation lease. Handler reload fails closed unless the active full
+  version and A/B slot match the activation receipt, including patch versions
+  that share a minor-version runtime bucket.
 
 ## Reproduction
 

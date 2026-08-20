@@ -120,6 +120,32 @@ def _release_global_lease(handle: Any | None) -> None:
         handle.close()
 
 
+@contextlib.contextmanager
+def runtime_mutation_lease(
+    ctx: AgentContext,
+    *,
+    operation_id: str,
+    timeout_s: float = 900.0,
+):
+    """Serialize managed runtime mutations with the migration worker."""
+
+    timeout = max(0.0, float(timeout_s))
+    deadline = time.monotonic() + timeout
+    handle = _try_acquire_global_lease(ctx, operation_id=operation_id)
+    while handle is None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            raise TimeoutError(
+                f"timed out waiting for skill runtime mutation lease after {timeout:.1f} seconds"
+            )
+        time.sleep(min(0.1, remaining))
+        handle = _try_acquire_global_lease(ctx, operation_id=operation_id)
+    try:
+        yield
+    finally:
+        _release_global_lease(handle)
+
+
 def _now() -> float:
     return time.time()
 

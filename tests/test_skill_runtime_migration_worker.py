@@ -6,6 +6,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
 from types import SimpleNamespace
 
 worker = importlib.import_module("adaos.services.skill.runtime_migration_worker")
@@ -55,6 +57,27 @@ def test_global_migration_lease_serializes_runtime_processes(tmp_path) -> None:
     third = worker._try_acquire_global_lease(ctx, operation_id="third")
     assert third is not None
     worker._release_global_lease(third)
+
+
+def test_runtime_mutation_lease_waits_for_migration_owner(tmp_path) -> None:
+    ctx = SimpleNamespace(paths=SimpleNamespace(base_dir=lambda: tmp_path))
+    first = worker._try_acquire_global_lease(ctx, operation_id="migration")
+    assert first is not None
+    acquired = threading.Event()
+
+    def contender() -> None:
+        with worker.runtime_mutation_lease(ctx, operation_id="project", timeout_s=2.0):
+            acquired.set()
+
+    thread = threading.Thread(target=contender)
+    thread.start()
+    time.sleep(0.15)
+    assert acquired.is_set() is False
+    worker._release_global_lease(first)
+    thread.join(timeout=2.0)
+
+    assert acquired.is_set() is True
+    assert thread.is_alive() is False
 
 
 def test_status_diagnostics_reports_worker_process_tree(tmp_path) -> None:
