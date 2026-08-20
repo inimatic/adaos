@@ -529,6 +529,24 @@ every local and registry admission boundary. Raw evidence remains available
 for explanation, while the digest references make replacement or omission
 detectable without trusting labels.
 
+### Workspace Project Release Build
+
+`adaos project release-build <project-id> --repository <repo> --revision
+<immutable-revision>` is the operator boundary for composing an existing
+Workspace Project into the local artifact pipeline. It validates and
+normalizes `projects/<id>/project.yaml`, builds every owned component and
+recursive manifest dependency as a deterministic package, resolves one exact
+closure, writes package bytes to the content-addressed store, then commits the
+immutable `ReleasePlan` to the release cache. `release-inspect` reads that exact
+digest back through the same repository contract.
+
+The command requires an immutable source revision. A missing mandatory source,
+component identity mismatch, unresolved dependency, changed mapping for an
+existing Project version, malformed composition, or Project-to-Project
+dependency without an exact lock fails before the release record is written.
+This build does not activate components or choose nodes; Workspace activation
+and `ProjectDeployment` remain separate reviewed operations.
+
 ## Transactional Activation
 
 Activation is a durable operation with an idempotency key and explicit phases:
