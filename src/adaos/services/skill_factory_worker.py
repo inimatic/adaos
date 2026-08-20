@@ -646,7 +646,6 @@ class LocalSkillFactoryWorker:
             test_report = self._validate_workspace(
                 assignment,
                 workspace,
-                runtime_dir=runtime_dir,
             )
             _write_json(output_dir / "test_report.json", test_report)
             if not bool(test_report.get("ok")) or str(test_report.get("status") or "") != "passed":
@@ -1002,7 +1001,6 @@ class LocalSkillFactoryWorker:
                     test_report = self._validate_workspace(
                         assignment,
                         workspace,
-                        runtime_dir=runtime_dir,
                     )
                     # Generated tests are untrusted code and may create files
                     # after the pre-test scope check.  Re-establish the source
@@ -1545,8 +1543,6 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         self,
         assignment: Mapping[str, Any],
         workspace: Path,
-        *,
-        runtime_dir: Path | None = None,
     ) -> dict[str, Any]:
         errors: list[str] = []
         checks: list[dict[str, Any]] = []
@@ -1730,7 +1726,14 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         self._validate_admitted_contract_documents(
             assignment,
             workspace,
-            runtime_dir=runtime_dir,
+            # This must be the same task-owned root exported to Codex as
+            # ADAOS_TASK_RUNTIME_DIR. ``run_root/runtime`` is the worker's
+            # private session envelope (state.json, event logs), not
+            # candidate output. Derive the root from the workspace/output
+            # invariant so recovery and the normal path cannot diverge.
+            runtime_dir=SubprocessCodexExecutor._task_runtime_root(
+                workspace.resolve().parent / "output"
+            ),
             checks=checks,
             errors=errors,
         )

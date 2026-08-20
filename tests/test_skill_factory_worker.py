@@ -1593,6 +1593,40 @@ def test_worker_requires_admitted_contract_document_set(tmp_path: Path) -> None:
     ]
 
 
+def test_workspace_validates_contract_output_from_codex_task_runtime(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    run_root = tmp_path / "run"
+    workspace = run_root / "workspace"
+    workspace.mkdir(parents=True)
+    _core_created_skill_fixture(repo_root, workspace / "skills", "demo")
+    assignment = _document_contract_assignment(workspace)
+    assignment["target"] = {"type": "skill", "id": "demo"}
+    attempt = run_root / "adaos-runtime" / "self-check" / "attempt-1"
+    attempt.mkdir(parents=True)
+    (attempt / "run_log.json").write_text(
+        '{"network": {"mode": "offline", "accessed": false}}\n',
+        encoding="utf-8",
+    )
+    (attempt / "index.json").write_text('{"files": []}\n', encoding="utf-8")
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo_root,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+
+    report = worker._validate_workspace(assignment, workspace)
+
+    assert report["ok"] is True, report["errors"]
+    contract_check = next(
+        item
+        for item in report["checks"]
+        if item.get("kind") == "admitted_contract.document_set"
+    )
+    assert contract_check["runtime_path"] == "self-check/attempt-1"
+
+
 def test_worker_rejects_tests_that_pin_checkpoint_owned_versions(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     tests_dir = workspace / "skills" / "demo" / "tests"
