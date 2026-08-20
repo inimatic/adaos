@@ -1424,6 +1424,175 @@ def test_worker_enforces_structured_brief_provider_contract(tmp_path: Path) -> N
     assert checks == []
 
 
+def _document_contract_assignment(workspace: Path) -> dict:
+    instruction = workspace / ".adaos_context" / "dev-1" / "instructions" / "contract.json"
+    instruction.parent.mkdir(parents=True)
+    instruction.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.contract.operation_set.v1",
+                "contract": "example.runner.v1",
+                "conformance_fixtures": [
+                    {
+                        "id": "bounded-output",
+                        "kind": "document_set",
+                        "required": True,
+                        "required_documents": ["run_log.json", "index.json"],
+                        "documents": {
+                            "run_log.json": {
+                                "type": "object",
+                                "required": ["network"],
+                                "properties": {
+                                    "network": {
+                                        "type": "object",
+                                        "required": ["mode", "accessed"],
+                                        "properties": {
+                                            "mode": {"const": "offline"},
+                                            "accessed": {"const": False},
+                                        },
+                                        "additionalProperties": False,
+                                    }
+                                },
+                                "additionalProperties": False,
+                            },
+                            "index.json": {
+                                "type": "object",
+                                "required": ["files"],
+                                "properties": {"files": {"type": "array"}},
+                                "additionalProperties": False,
+                            },
+                        },
+                    }
+                ],
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return {
+        "realize_request": {
+            "artifacts": {
+                "development_context": {
+                    "instruction_inputs": [
+                        {
+                            "kind": "consumer_contract",
+                            "media_type": "application/json",
+                            "path": instruction.relative_to(workspace).as_posix(),
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+
+def test_worker_validates_admitted_contract_runtime_documents(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _document_contract_assignment(workspace)
+    attempt = tmp_path / "runtime" / "attempt-1"
+    attempt.mkdir(parents=True)
+    (attempt / "run_log.json").write_text(
+        json.dumps(
+            {
+                "network": {
+                    "mode": "offline",
+                    "accessed": False,
+                    "blocked_calls": [],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (attempt / "index.json").write_text('{"files": []}\n', encoding="utf-8")
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_admitted_contract_documents(
+        assignment,
+        workspace,
+        runtime_dir=tmp_path / "runtime",
+        checks=checks,
+        errors=errors,
+    )
+
+    assert checks == []
+    assert len(errors) == 1
+    assert "run_log.json at /network" in errors[0]
+    assert "blocked_calls" in errors[0]
+
+
+def test_worker_selects_newest_complete_contract_document_set(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _document_contract_assignment(workspace)
+    runtime = tmp_path / "runtime"
+    old = runtime / "attempt-old"
+    old.mkdir(parents=True)
+    (old / "run_log.json").write_text(
+        '{"network": {"mode": "offline", "accessed": false, "blocked_calls": []}}\n',
+        encoding="utf-8",
+    )
+    (old / "index.json").write_text('{"files": []}\n', encoding="utf-8")
+    valid = runtime / "attempt-repair"
+    valid.mkdir(parents=True)
+    (valid / "run_log.json").write_text(
+        '{"network": {"mode": "offline", "accessed": false}}\n',
+        encoding="utf-8",
+    )
+    (valid / "index.json").write_text('{"files": []}\n', encoding="utf-8")
+    newer = max(path.stat().st_mtime_ns for path in old.iterdir()) + 10_000_000
+    for path in valid.iterdir():
+        os.utime(path, ns=(newer, newer))
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_admitted_contract_documents(
+        assignment,
+        workspace,
+        runtime_dir=runtime,
+        checks=checks,
+        errors=errors,
+    )
+
+    assert errors == []
+    assert checks == [
+        {
+            "kind": "admitted_contract.document_set",
+            "contract": "example.runner.v1",
+            "fixture_id": "bounded-output",
+            "runtime_path": "attempt-repair",
+            "documents": ["run_log.json", "index.json"],
+            "ok": True,
+        }
+    ]
+
+
+def test_worker_requires_admitted_contract_document_set(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _document_contract_assignment(workspace)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_admitted_contract_documents(
+        assignment,
+        workspace,
+        runtime_dir=runtime,
+        checks=checks,
+        errors=errors,
+    )
+
+    assert checks == []
+    assert errors == [
+        "admitted contract fixture example.runner.v1:bounded-output produced no complete "
+        "runtime document set; required: run_log.json, index.json"
+    ]
+
+
 def test_worker_rejects_tests_that_pin_checkpoint_owned_versions(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     tests_dir = workspace / "skills" / "demo" / "tests"

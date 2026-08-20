@@ -34,7 +34,7 @@ from adaos.services.workflow_artifacts import (
 )
 
 
-RUNNER_VERSION = "adaos-local-codex-worker/0.4.0"
+RUNNER_VERSION = "adaos-local-codex-worker/0.5.0"
 GENERATED_TEST_TIMEOUT_SECONDS = 60
 PACKET_SCHEMA = "adaos.skill_factory.codex_packet.v1"
 LOCAL_SESSION_SCHEMA = "adaos.skill_factory.local_run.v1"
@@ -643,7 +643,11 @@ class LocalSkillFactoryWorker:
             # uncommitted task changes receive the same bounded validation.
             changed_paths = self._changed_from_baseline(workspace)
             self._validate_changed_paths(assignment, changed_paths)
-            test_report = self._validate_workspace(assignment, workspace)
+            test_report = self._validate_workspace(
+                assignment,
+                workspace,
+                runtime_dir=runtime_dir,
+            )
             _write_json(output_dir / "test_report.json", test_report)
             if not bool(test_report.get("ok")) or str(test_report.get("status") or "") != "passed":
                 raise ValueError("preserved result does not pass deterministic validation")
@@ -995,7 +999,11 @@ class LocalSkillFactoryWorker:
                         "errors": [str(exc)],
                     }
                 else:
-                    test_report = self._validate_workspace(assignment, workspace)
+                    test_report = self._validate_workspace(
+                        assignment,
+                        workspace,
+                        runtime_dir=runtime_dir,
+                    )
                     # Generated tests are untrusted code and may create files
                     # after the pre-test scope check.  Re-establish the source
                     # boundary before accepting the report so a side effect
@@ -1378,6 +1386,8 @@ When `scenarios/{target_id}/.builder_current_publication` exists, treat it as th
 21. Keep every mutable test/runtime file outside the candidate source tree. Use `ADAOS_BASE_DIR` for the default task-owned AdaOS runtime. If a test needs multiple isolated bases, create child directories below `ADAOS_TASK_RUNTIME_DIR` (or an OS temporary directory outside this checkout), and clean them normally; never create repository-relative `.adaos*` runtime directories.
 22. Packaged tests must be hermetic. They cannot read `.adaos_context`, Builder Development-session instruction/artifact paths, session IDs, or other authoring-only files that Forge omits. Copy only a bounded non-secret fixture that remains necessary into the skill's own tests/fixtures, or leave admitted-context verification to consumer acceptance.
 23. Never reconstruct a skill's `.runtime`/slot path from `ADAOS_BASE_DIR`. Resolve mutable owner-scoped files with `adaos.sdk.skill_env.skill_data_root()` (or the equivalent typed SDK capability). Core supplies the exact DEV or installed data root through current skill context and execution bindings."""
+        required_result += """
+24. Treat every admitted `adaos.contract.operation_set.v1` instruction as executable consumer authority. Read its exact operation schemas and `conformance_fixtures`; honor every `required`, `const`, enum, and `additionalProperties` boundary. Exercise the production provider with a bounded fixture below `ADAOS_TASK_RUNTIME_DIR` so the trusted worker can validate the newest complete document set. Do not replace consumer schemas with a permissive local look-alike."""
         required_result = required_result.format(
             target_id=target_id,
             companion=companion,
@@ -1531,7 +1541,13 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 f"{immutable_publication}"
             )
 
-    def _validate_workspace(self, assignment: Mapping[str, Any], workspace: Path) -> dict[str, Any]:
+    def _validate_workspace(
+        self,
+        assignment: Mapping[str, Any],
+        workspace: Path,
+        *,
+        runtime_dir: Path | None = None,
+    ) -> dict[str, Any]:
         errors: list[str] = []
         checks: list[dict[str, Any]] = []
         request = dict(assignment.get("realize_request") or {})
@@ -1711,7 +1727,201 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             errors,
             skip_frozen_skills=workflow_transition == "return_to_prototype",
         )
+        self._validate_admitted_contract_documents(
+            assignment,
+            workspace,
+            runtime_dir=runtime_dir,
+            checks=checks,
+            errors=errors,
+        )
         return {"ok": not errors, "status": "passed" if not errors else "failed", "checks": checks, "errors": errors}
+
+    @staticmethod
+    def _validate_admitted_contract_documents(
+        assignment: Mapping[str, Any],
+        workspace: Path,
+        *,
+        runtime_dir: Path | None,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        """Validate consumer-owned document fixtures over task runtime output.
+
+        Typed provider contracts become useful autonomous-development rails
+        only when their exact machine boundary participates in trusted worker
+        validation. Consumer-owned operation-set instructions may expose
+        generic ``document_set`` fixtures. Candidate code writes bounded
+        fixture output below ``ADAOS_TASK_RUNTIME_DIR``; this worker selects
+        the newest complete set and returns exact schema errors to the normal
+        bounded Codex repair loop.
+
+        Builder does not know the domain meaning of the documents. The
+        admitted consumer owns the schemas and still owns semantic/runtime
+        acceptance after DEV activation.
+        """
+
+        if runtime_dir is None:
+            return
+        runtime_root = runtime_dir.resolve()
+        if not runtime_root.is_dir():
+            return
+        request = (
+            assignment.get("realize_request")
+            if isinstance(assignment.get("realize_request"), Mapping)
+            else {}
+        )
+        artifacts = (
+            request.get("artifacts")
+            if isinstance(request.get("artifacts"), Mapping)
+            else {}
+        )
+        development = (
+            artifacts.get("development_context")
+            if isinstance(artifacts.get("development_context"), Mapping)
+            else {}
+        )
+        fixtures: list[tuple[str, dict[str, Any]]] = []
+        workspace_root = workspace.resolve()
+        for descriptor in development.get("instruction_inputs") or []:
+            if not isinstance(descriptor, Mapping):
+                continue
+            if str(descriptor.get("media_type") or "").lower() != "application/json":
+                continue
+            relative = Path(str(descriptor.get("path") or ""))
+            if relative.is_absolute() or ".." in relative.parts:
+                continue
+            source = (workspace_root / relative).resolve()
+            try:
+                source.relative_to(workspace_root)
+            except ValueError:
+                continue
+            try:
+                contract = _read_json(source)
+            except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+                continue
+            if contract.get("schema") != "adaos.contract.operation_set.v1":
+                continue
+            contract_label = str(contract.get("contract") or descriptor.get("kind") or "contract")
+            for fixture in contract.get("conformance_fixtures") or []:
+                if isinstance(fixture, Mapping) and str(fixture.get("kind") or "") == "document_set":
+                    fixtures.append((contract_label, dict(fixture)))
+
+        if not fixtures:
+            return
+        try:
+            from jsonschema import Draft202012Validator
+        except Exception as exc:
+            errors.append(
+                "admitted contract document validation setup failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            return
+
+        for contract_label, fixture in fixtures[:20]:
+            fixture_id = str(fixture.get("id") or "document_set")
+            documents = (
+                dict(fixture.get("documents"))
+                if isinstance(fixture.get("documents"), Mapping)
+                else {}
+            )
+            required_documents = [
+                str(item)
+                for item in fixture.get("required_documents") or documents.keys()
+                if str(item).strip()
+            ][:50]
+            label = f"{contract_label}:{fixture_id}"
+            if not documents or not required_documents:
+                errors.append(f"admitted contract fixture {label} has no document schemas")
+                continue
+            invalid_names = [
+                name
+                for name in required_documents
+                if Path(name).name != name or name not in documents
+            ]
+            if invalid_names:
+                errors.append(
+                    f"admitted contract fixture {label} has invalid required documents: "
+                    + ", ".join(invalid_names)
+                )
+                continue
+            schema_invalid = False
+            for name in required_documents:
+                schema = documents.get(name)
+                if not isinstance(schema, Mapping):
+                    errors.append(f"admitted contract fixture {label} schema for {name} is not an object")
+                    schema_invalid = True
+                    continue
+                try:
+                    Draft202012Validator.check_schema(dict(schema))
+                except Exception as exc:
+                    errors.append(
+                        f"admitted contract fixture {label} schema for {name} is invalid: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    schema_invalid = True
+            if schema_invalid:
+                continue
+
+            candidates: dict[Path, set[str]] = {}
+            for name in required_documents:
+                for path in list(runtime_root.rglob(name))[:200]:
+                    try:
+                        path.resolve().relative_to(runtime_root)
+                    except (OSError, ValueError):
+                        continue
+                    if path.is_file():
+                        candidates.setdefault(path.parent.resolve(), set()).add(name)
+            required_set = set(required_documents)
+            complete_roots = [
+                root
+                for root, names in candidates.items()
+                if required_set.issubset(names)
+            ]
+            if not complete_roots:
+                if bool(fixture.get("required", True)):
+                    errors.append(
+                        f"admitted contract fixture {label} produced no complete runtime document set; "
+                        f"required: {', '.join(required_documents)}"
+                    )
+                continue
+            selected = max(
+                complete_roots,
+                key=lambda root: max((root / name).stat().st_mtime_ns for name in required_documents),
+            )
+            fixture_errors = 0
+            for name in required_documents:
+                path = selected / name
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8-sig"))
+                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                    errors.append(
+                        f"admitted contract fixture {label} {name} is invalid JSON: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    fixture_errors += 1
+                    continue
+                validator = Draft202012Validator(dict(documents[name]))
+                validation_errors = sorted(
+                    validator.iter_errors(payload),
+                    key=lambda item: list(item.absolute_path),
+                )
+                for item in validation_errors[:20]:
+                    pointer = "/" + "/".join(str(part) for part in item.absolute_path)
+                    errors.append(
+                        f"admitted contract fixture {label} {name} at {pointer or '/'}: {item.message}"
+                    )
+                    fixture_errors += 1
+            if fixture_errors == 0:
+                checks.append(
+                    {
+                        "kind": "admitted_contract.document_set",
+                        "contract": contract_label,
+                        "fixture_id": fixture_id,
+                        "runtime_path": selected.relative_to(runtime_root).as_posix() or ".",
+                        "documents": required_documents,
+                        "ok": True,
+                    }
+                )
 
     @staticmethod
     def _validate_tests_do_not_pin_checkpoint_metadata(
