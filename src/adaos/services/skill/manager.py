@@ -949,7 +949,6 @@ class SkillManager:
         files and extends ``resolved.manifest.json`` with tools defined in
         ``skill.yaml`` that are missing from the active slot manifest.
         """
-        ctx = self.ctx
         space_normalized = (space or "workspace").strip().lower()
         if space_normalized not in ("workspace", "dev"):
             raise ValueError("space must be 'workspace' or 'dev'")
@@ -2300,6 +2299,14 @@ class SkillManager:
             artifact_root=slot_source_root,
         )
         self._smoke_import(env=env, name=name, version=target_version, slot=target_slot)
+        lifecycle["previous_dispose"] = self._invoke_dispose_before_switch(
+            env=env,
+            name=name,
+            target_version=target_version,
+            target_slot=target_slot,
+            previous_active_version=previous_active_version,
+            previous_active_slot=previous_active_slot,
+        )
         env.set_active_slot(target_version, target_slot)
         env.active_version_marker().write_text(target_version, encoding="utf-8")
         env.record_active_selection(
@@ -2361,11 +2368,12 @@ class SkillManager:
                 },
             )
             lifecycle.update(shutdown_results)
-            lifecycle["rollback"] = self._restore_runtime_selection(
+            lifecycle["rollback"] = self._restore_and_rehydrate_runtime_selection(
                 env=env,
                 previous_active_version=previous_active_version,
                 previous_active_slot=previous_active_slot,
                 previous_deactivation=previous_deactivation,
+                reason="activation_rehydrate_failed",
             )
             metadata.setdefault("slots", {}).setdefault(target_slot, {})["lifecycle"] = dict(lifecycle)
             history = metadata.setdefault("history", {})
@@ -4386,6 +4394,58 @@ class SkillManager:
             },
         )
 
+    def _invoke_dispose_before_switch(
+        self,
+        *,
+        env: SkillRuntimeEnvironment,
+        name: str,
+        target_version: str,
+        target_slot: str,
+        previous_active_version: str | None,
+        previous_active_slot: str | None,
+    ) -> dict[str, Any]:
+        previous_version = str(previous_active_version or "").strip()
+        previous_slot = str(previous_active_slot or "").strip().upper()
+        if not previous_version or previous_slot not in {"A", "B"}:
+            return {"ok": True, "skipped": True, "hook": "dispose", "reason": "no_previous_runtime"}
+        if (previous_version, previous_slot) == (
+            str(target_version or "").strip(),
+            str(target_slot or "").strip().upper(),
+        ):
+            return {
+                "ok": True,
+                "skipped": True,
+                "hook": "dispose",
+                "reason": "runtime_selection_unchanged",
+            }
+        previous_paths = env.build_slot_paths(previous_version, previous_slot)
+        previous_manifest = self._read_json_dict(previous_paths.resolved_manifest)
+        if not previous_manifest:
+            return {
+                "ok": True,
+                "skipped": True,
+                "hook": "dispose",
+                "reason": "previous_runtime_manifest_unavailable",
+                "skill": name,
+                "version": previous_version,
+                "slot": previous_slot,
+            }
+        return self._invoke_slot_lifecycle_hook(
+            env=env,
+            slot=previous_paths,
+            resolved_manifest=previous_manifest,
+            hook_key="dispose",
+            payload={
+                "skill": name,
+                "version": previous_version,
+                "slot": previous_slot,
+                "target_version": str(target_version or "").strip(),
+                "target_slot": str(target_slot or "").strip().upper(),
+                "reason": "runtime_slot_switch",
+                "state": "disposing",
+            },
+        )
+
     def _invoke_shutdown_hooks(
         self,
         *,
@@ -4555,6 +4615,56 @@ class SkillManager:
         except Exception as exc:
             result["ok"] = False
             result["error"] = str(exc)
+        return result
+
+    def _restore_and_rehydrate_runtime_selection(
+        self,
+        *,
+        env: SkillRuntimeEnvironment,
+        previous_active_version: str | None,
+        previous_active_slot: str | None,
+        previous_deactivation: Mapping[str, Any] | None,
+        reason: str,
+    ) -> dict[str, Any]:
+        result = self._restore_runtime_selection(
+            env=env,
+            previous_active_version=previous_active_version,
+            previous_active_slot=previous_active_slot,
+            previous_deactivation=previous_deactivation,
+        )
+        if not result.get("ok") or not previous_active_version or not previous_active_slot:
+            result["rehydrate"] = {
+                "ok": bool(result.get("ok")),
+                "skipped": True,
+                "hook": "rehydrate",
+                "reason": "runtime_selection_not_restored",
+            }
+            return result
+        previous_paths = env.build_slot_paths(str(previous_active_version), str(previous_active_slot))
+        previous_manifest = self._read_json_dict(previous_paths.resolved_manifest)
+        try:
+            result["rehydrate"] = self._invoke_slot_lifecycle_hook(
+                env=env,
+                slot=previous_paths,
+                resolved_manifest=previous_manifest,
+                hook_key="rehydrate",
+                payload={
+                    "skill": env.skill_name,
+                    "version": str(previous_active_version),
+                    "slot": str(previous_active_slot).upper(),
+                    "reason": str(reason or "activation_rollback"),
+                    "state": "active",
+                    "rollback": True,
+                },
+            )
+        except Exception as exc:
+            result["ok"] = False
+            result["rehydrate"] = {
+                "ok": False,
+                "skipped": False,
+                "hook": "rehydrate",
+                "error": str(exc),
+            }
         return result
 
     def _runtime_selection_evidence(
@@ -5359,6 +5469,14 @@ class SkillManager:
         previous_active_version = env.resolve_active_version()
         previous_active_slot = env.read_active_slot(previous_active_version) if previous_active_version else None
         previous_deactivation = env.read_deactivation()
+        lifecycle["previous_dispose"] = self._invoke_dispose_before_switch(
+            env=env,
+            name=name,
+            target_version=target_version,
+            target_slot=target_slot,
+            previous_active_version=previous_active_version,
+            previous_active_slot=previous_active_slot,
+        )
         env.set_active_slot(target_version, target_slot)
         env.active_version_marker().write_text(target_version, encoding="utf-8")
         env.record_active_selection(
@@ -5406,11 +5524,12 @@ class SkillManager:
                     },
                 )
             )
-            lifecycle["rollback"] = self._restore_runtime_selection(
+            lifecycle["rollback"] = self._restore_and_rehydrate_runtime_selection(
                 env=env,
                 previous_active_version=previous_active_version,
                 previous_active_slot=previous_active_slot,
                 previous_deactivation=previous_deactivation,
+                reason="activation_rehydrate_failed",
             )
             metadata.setdefault("slots", {}).setdefault(target_slot, {})["lifecycle"] = dict(lifecycle)
             env.write_version_metadata(target_version, metadata)
