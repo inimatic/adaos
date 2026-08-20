@@ -1583,9 +1583,21 @@ efficacy result or cross-domain SOTA claim.
   reject a skipped or reordered arm before candidate creation. Replacement
   v27 is frozen at
   `sha256:cdd342fac5e41ccb762fad7876e1731bad61e5152fbdf12553631605d8741cd0`
-  with six pairs and a matched 7M-token arm budget; it remains in progress and
-  cannot support a claim until its enforced schedule and recomputable package
-  are complete.
+  with six pairs and a matched 7M-token arm budget. It stopped after one C0
+  diagnostic (`0/1`, `2/6` gates) when source audit proved the preceding v26 C3
+  success was a schema-conformant 8x8 logistic surrogate rather than the
+  accepted Torch CNN/TLP system. The result is retained, but v27 is neither
+  complete nor claim-eligible. Core `400ef646`, Manager `0.28.0`/runner ABI
+  1.9, Evaluator `0.1.34`, prompt ABI 0.8 and Orchestrator `0.48.0` now bind
+  source identity, a common execution path, exact scientific-system semantics
+  and a hidden numerical operator probe. Replacement v28 is frozen at
+  `sha256:eb1918b3285fd30091ed7097b23d4c46ec7286bd7f4b20270d4dbbe4a9d0db66`
+  from accepted `tlp_structured_proof_02.task-005` with five counterbalanced
+  pairs and a matched 7M-token arm budget. C0 sees only the notebook; C3 sees
+  the same notebook plus compact typed contracts. Review prose, legacy code and
+  hidden evaluator material are excluded. v28 is in progress and cannot
+  support a claim until its enforced schedule and recomputable package are
+  complete.
 - [ ] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and

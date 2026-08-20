@@ -667,9 +667,44 @@ runner contract 1.8, evaluator `0.1.33`, runner `0.1.13`, manager `0.27.0`,
 the same accepted formulation and six paired seeds. Its matched per-arm token
 budget is 7M, chosen before execution from the v26 diagnostic runtime rather
 than changed after observing v27 outcomes. The driver reads the order from the
-frozen task, while the runner independently enforces it; v27 remains
-in-progress and supports no claim until all pairs, summary, and recomputable
-package are complete.
+frozen task, while the runner independently enforces it. v27 was intentionally
+stopped after its first C0 result (`0/1` evidence-valid, `2/6` mandatory gates,
+result `sha256:74e9ed3f840c426e3eeb8c06e17d012333e31bfe1262766039278531e7cc2966`).
+A source-level audit of the earlier v26 C3 success showed that it implemented
+an 8x8, four-feature, standard-library logistic surrogate rather than the
+accepted 3x96x96 Torch convolutional system with MaxPool2d and centred TLP.
+The then-current evaluator had proved the runner/evidence envelope, not the
+scientific implementation. Continuing v27 would therefore have measured a
+known-invalid endpoint. v27 is retained as a stopped diagnostic and supports
+no paired claim.
+
+The replacement rail closes that semantic false-positive class without
+prescribing one TLP implementation. Core `400ef646` exposes capability-gated,
+bounded DEV-source inspection and prompt ABI 0.8 requires fidelity to the
+scientific subject, not merely schema-shaped outputs. Research Manager
+`0.28.0` publishes runner ABI 1.9: both arms must execute through one declared,
+digest-bound implementation path and emit an implementation observation.
+Evaluator `0.1.34` independently verifies declared source digests/callables and
+runs a hidden numerical MaxPool/centred-TLP probe over a candidate-provided
+operation. Orchestrator `0.48.0` carries the exact system specification into
+ExperimentPlan and keeps mutable ResearchTask identity out of the reusable
+Project declaration; the exact task remains frozen in DevelopmentSession.
+
+v28 is frozen at
+`sha256:eb1918b3285fd30091ed7097b23d4c46ec7286bd7f4b20270d4dbbe4a9d0db66`
+from accepted `research-task:tlp_structured_proof_02.task-005`, Compilation
+`sha256:55b24afd93b7e8878f3d7e01a8be30c1472feb8cdf39b1d0082d07bafa1d54f1`
+and AutomationBrief
+`sha256:913866f507a3d36b9b3035a623d7a1e448014f550b38bf57dcb38e8d89852641`.
+It binds clean detached core `e8f59272`, skill workspace `4a107af`, prompt ABI
+0.8, evaluator `0.1.34`, runner `0.1.13`, manager `0.28.0`, orchestrator
+`0.48.0`, five preregistered paired seeds, a 7M matched per-arm token ceiling,
+and the runner-validated counterbalanced order. C0 receives only the admitted
+notebook; C3 receives the same notebook plus compact Compilation,
+AutomationBrief and consumer ABI. `initial-review.md`, the legacy TLP skill and
+the hidden probe remain unavailable to Codex. Execution is in progress; no
+comparative result is claimed until every pair, ordered timestamps, summary and
+recomputable package are complete.
 
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and
