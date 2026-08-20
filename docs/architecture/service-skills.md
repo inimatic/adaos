@@ -2,7 +2,7 @@
 
 Status: current runtime and lifecycle contract.
 
-Last reviewed: 2026-08-07.
+Last reviewed: 2026-08-20.
 
 AdaOS supports **service skills**: skills that run as **external long-running processes** managed by the hub (instead of in-process Python handlers).
 
@@ -133,6 +133,26 @@ Self-management:
 ---
 
 ## 6) Events (service supervisor)
+
+### Service-to-runtime event capability
+
+A persistent service has no in-process `AgentContext`. The supervisor issues a
+rotating, per-service capability for a loopback-only event bridge and injects
+its URL/token into the child process. `adaos.sdk.io` uses the bridge for the
+fixed `io.out.*` output topics. `adaos.sdk.data.events.publish()` may also use
+it, but only for exact topics declared by that skill under
+`skill.yaml.events.publish`.
+
+The bridge stamps `skill_name`, `owner=skill:<name>`, source authority and a
+`service_bridge` marker. It rejects remote callers, stale tokens, undeclared
+topics, payloads above 256 KiB and rates above 50 events/s. Skills must use the
+SDK; the internal HTTP endpoint and token are not a product API.
+
+The capability is output-only. Queue/control input remains an explicit service
+API or a durable store owned by the skill; it is not smuggled through event
+publication.
+
+### Supervisor events
 
 Emitted by the platform:
 

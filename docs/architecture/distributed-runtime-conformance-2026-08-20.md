@@ -16,9 +16,9 @@ two-physical-node stand proof.
 | Surface | Revision | Accepted boundary |
 | --- | --- | --- |
 | AdaOS core contracts and planning | `cc223008`, `93c4b1b4`, `b9186442`, `bc3077b4` | fail-closed deployment and distributed-runtime ABI, planners, durable stores, projections and public SDKs |
-| AdaOS core execution | `0758d74f`, `239e5552`, `78fb4709`, `cae7939a`, `b63fe0c6` | exact component activation, remote receiver/transport, topology adapters, fenced handoff and routed service invocation |
+| AdaOS core execution | `0758d74f`, `239e5552`, `78fb4709`, `cae7939a`, `b63fe0c6` through `598bc015` | exact component activation, remote receiver/transport, topology adapters, fenced handoff, routed service invocation and bounded service event delivery |
 | Planner and operations extensions | `7763169b` | bounded placement recommendations and costed rebalance dry runs |
-| Media Center consumer | registry commits `35129f6` through `ad663a0` | Project deployment, service membership, opaque root/catalog partitions, agent operations and operator projections through public SDKs |
+| Media Center consumer | registry commits `35129f6` through `4e9f7d1` | Project deployment, service membership, opaque root/catalog partitions, agent operations and operator projections through public SDKs |
 | Non-media fixture | core test `test_non_media_document_fixture_uses_same_opaque_partition_contract` | document-shard descriptor proves that core owns topology, not media semantics |
 
 ## Contract Boundary
@@ -98,7 +98,7 @@ From the core repository with its `src` directory on `PYTHONPATH`:
 python -m pytest tests/test_project_deployment_contracts.py tests/test_project_deployment_service.py tests/test_project_deployment_default_runtime.py tests/test_project_deployment_adapter.py tests/test_distributed_runtime_contracts.py tests/test_distributed_runtime_service.py tests/test_distributed_runtime_adapters.py -q
 ```
 
-The accepted run passed `49/49`. It covers strict schema round trips,
+The accepted run passed `59/59`. It covers strict schema round trips,
 placement modes, immutable plans, idempotent execution, inventory drift,
 uncertain remote outcomes, leases, protocol/capacity admission, fencing,
 routes, operations, transfer resume/content witnesses, rebalance planning and

@@ -1,16 +1,16 @@
 # Media Center Local Validation - 2026-08-20
 
-Status: feature implementation is validated locally. Sustained resource/browser
-evidence, physical-node stand deployment, and explicit pilot/production
-acceptance are still open.
+Status: feature implementation is validated locally and the single-node
+library/agent path has bounded stand evidence. Sustained browser/playback
+evidence and distributed production acceptance remain open.
 
 ## Exact Revisions
 
 | Repository | Revision | Scope |
 | --- | --- | --- |
-| AdaOS core | `67ec6a93` | distributed deployment/topology SDK/runtime and pinned client |
+| AdaOS core | `598bc015` | distributed deployment/topology SDK/runtime, service-event bridge, production test budgets and pinned client |
 | AdaOS client | `8f116252f3f57941a85d4f3fa0624d77667ecb89` | app-shell playback, cursor collections, spatial focus and presentation profiles |
-| AdaOS registry | `a44f830a7ffc4f041d2391782ea6cc7f967b1d95` | Project/scenario, coordinator, library agent and control skill |
+| AdaOS registry | `4e9f7d182405442df0695eed29ceeb3969c3005a` | Project/scenario, coordinator, library agent, control skill and contextual audio migration |
 
 The core gitlink and `src/adaos/integrations/adaos-client.sha` both name the
 exact client revision above.
@@ -19,8 +19,8 @@ exact client revision above.
 
 | Gate | Result |
 | --- | --- |
-| Generic AP8/DS conformance | `49 passed` |
-| Media scenario/agent/coordinator/control suite | `83 passed` after the decoder allowlist and reversible split changes |
+| Generic AP8/DS/service-event conformance | `59 passed` |
+| Media scenario/agent/coordinator/control suite | `97 passed` |
 | Strict skill validation | `media_library_agent`, `media_center_skill`, `media_control_skill`: passed |
 | Scenario validation | `media_center`: valid |
 | Client Chrome Headless | `1111/1111 SUCCESS` |
@@ -45,18 +45,23 @@ on the Windows development node:
 
 | Metric | p50 | p95 | max/bound |
 | --- | ---: | ---: | ---: |
-| Coordinator FTS | 18.629 ms | 29.730 ms | 30.996 ms / 150 ms p95 |
-| Cursor catalog page | 14.060 ms | 28.492 ms | 46.864 ms / 100 ms p95 |
-| Local fuzzy/semantic discovery | 325.063 ms | 397.705 ms | 410.366 ms / 500 ms p95 |
-| Encoded 30-row page | - | - | 40,728 bytes / 524,288 bytes |
-| Process RSS after run | - | - | 47.629 MiB |
+| Coordinator FTS | 23.280 ms | 65.884 ms | 123.621 ms / 150 ms p95 |
+| Cursor catalog page | 16.461 ms | 33.322 ms | 57.481 ms / 100 ms p95 |
+| Local fuzzy/semantic discovery | 309.262 ms | 368.821 ms | 373.798 ms / 500 ms p95 |
+| Encoded 30-row page | - | - | 50,298 bytes / 524,288 bytes |
+| Contextual identity migration | - | - | 5,818.833 ms / 60,000 ms |
+| Process RSS after run | - | - | 55.477 MiB |
 
-One-time FTS/trigram backfill was 4,167.633 ms. The local discovery index
-admitted at most 5,000 candidates and scored 600. Two earlier failed runs are
+One-time FTS/trigram backfill was 4,845.279 ms. The identity fixture migrated
+20,000 audio rows, removed 20,000 legacy works and collections, and rebuilt
+20,000 distinct works and memberships. The local discovery index admitted at
+most 5,000 candidates and scored 600. Earlier failed runs are
 retained as engineering evidence: repeated read-side index maintenance caused
 FTS/page p95 up to 352/495 ms and an unindexed 5,000-row Python scan caused
-discovery p95 above 3 s. Moving maintenance to the write boundary produced the
-accepted result without relaxing budgets.
+discovery p95 above 3 s; a formally passing run with zero FTS results exposed a
+missing correctness assertion; and a one-work migration fixture failed to
+expose quadratic cleanup on real collections. The accepted gate checks result
+counts and cleanup cardinality without relaxing budgets.
 
 ## Local Failure Evidence
 
@@ -64,7 +69,7 @@ accepted result without relaxing budgets.
 | --- | --- |
 | deployment inventory drift/lost acknowledgement | generic deployment conformance rejects or records terminal uncertain |
 | coordinator/agent loss and stale shard | catalog keeps identity and reports bounded partial participation |
-| interrupted scan/restart/cancel | durable job recovery, checkpoint and terminal cancellation tests |
+| interrupted scan/restart/cancel | durable job recovery, single service owner, shared pressure state, checkpoint and terminal cancellation tests |
 | blocked/unmounted filesystem and root overlap | root failure/overlap tests preserve external files |
 | source changes during rendition | output is invalidated, cleaned and never advertised |
 | unsupported codec | endpoint plan selects exact-source rendition or explicit incompatibility |
@@ -94,13 +99,18 @@ accepted result without relaxing budgets.
   governed-workflow requests requiring confirmation; they are not directly
   executed by the speech handler.
 
+## Stand Evidence
+
+The physical-node receipt is recorded in
+[Media Center Stand Validation - 2026-08-20](media-center-stand-validation-2026-08-20.md).
+It includes an in-place 15,803-source/93.27 GB library, folder-name search,
+cursor paging, public-path redaction, staged skill activation, bounded worker
+resources and terminal progress delivery through the service bridge.
+
 ## Open Stand Gates
 
-1. Install exact releases through normal channels on `.30` and record package
-   digests, deployment generation, activations, shard/catalog revisions and
-   routes.
-2. Capture desktop, TV-like and mobile-control screenshots and input traces.
-3. Exercise real source playback, seek, modal close/mini-player, route fallback,
+1. Capture desktop, TV-like and mobile-control screenshots and input traces.
+2. Exercise sustained real source playback, seek, modal close/mini-player, route fallback,
    node interruption, scan-under-playback and restart recovery.
-4. Record CPU/RSS/I/O and browser long-task evidence during a sustained run.
-5. Make an explicit bounded-pilot, production-accept, or rejection decision.
+3. Record browser CPU/RSS and long-task evidence during a sustained run.
+4. Execute a two-physical-node handoff and compatible rolling adapter upgrade.

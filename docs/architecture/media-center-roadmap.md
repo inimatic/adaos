@@ -81,23 +81,23 @@ The current bounded implementation already provides useful seams:
 - ProjectDefinition, ProjectRelease, ProjectInstallation, and webspace-oriented
   ProjectPlacement contracts.
 
-Before implementation resumes, `MC0-03` must re-audit exact current revisions,
-tests, schemas, and stand behavior because the core, client, and skill
-repositories may have changed independently. This baseline is not a production
-or distributed-readiness claim.
+`MC0-03` was re-audited against the exact revisions in the local and stand
+receipts. Parallel repository changes remain outside that accepted set. The
+baseline and bounded one-node stand proof are not distributed-production
+claims.
 
 ## Delivery Snapshot
 
 | Milestone | State | Target maturity | Main dependency |
 | --- | --- | --- | --- |
 | MC0 Architecture and baseline | validated local | specified | current repositories |
-| MC1 Project and agent deployment | validated local | validated-stand | core `AP8`, `DS1` |
-| MC2 Distributed roots and indexing | validated local | validated-stand | MC1, `DS2`, `DS3` |
-| MC3 Catalog, search, folders, and collections | validated local | validated-stand | MC2 |
-| MC4 Playback sessions and control surfaces | validated local | validated-stand | MC1, MC3 |
+| MC1 Project and agent deployment | validated local; one-node stand slice | validated-stand | core `AP8`, `DS1` |
+| MC2 Distributed roots and indexing | validated local; one-node stand slice | validated-stand | MC1, `DS2`, `DS3` |
+| MC3 Catalog, search, folders, and collections | validated local; one-node stand slice | validated-stand | MC2 |
+| MC4 Playback sessions and control surfaces | validated local; one-node playback slice | validated-stand | MC1, MC3 |
 | MC5 Adaptive UI and settings | validated local | validated-stand | MC3, MC4 |
 | MC6 Personalization, access, and voice | validated local | validated-stand | identity roadmap, MC4, MC5 |
-| MC7 Enrichment, variants, and production operations | in progress | production-accepted | MC2-MC6 |
+| MC7 Enrichment, variants, and production operations | bounded pilot; production rejected | production-accepted | MC2-MC6 |
 
 ## Dependency Order
 
@@ -441,16 +441,23 @@ injection, resource budgets, and a reviewed production decision.
   fallback, unsupported codec, browser reconnect, and conflicting controllers.
 - [ ] `[must]` `MC7-07` Run local large-library, long-duration, CPU/memory,
   Yjs-pressure, browser-render, and playback-under-indexing tests against the
-  declared budgets.
+  declared budgets. Large-library budgets, a 45-second worker sample and
+  concurrent playback reads passed; long-duration browser/playback soak is
+  still open.
 - [ ] `[must]` `MC7-08` Deploy the exact ProjectRelease through normal channels
   to the designated stand, execute TV plus controller E2E, and record package
   digests, deployment generation, node activations, catalog/shard revisions,
-  routes, test output and screenshots.
+  routes, test output and screenshots. Exact skills/scenario and a one-node
+  source route are validated on `.30`; a second same-subnet node and separate
+  TV/controller browser evidence are unavailable and remain open.
 - [x] `[must]` `MC7-09` Perform security/privacy review for remote deployment,
   root containment, route grants, provider egress, shared-screen state, voice,
   logs, derived data and uninstall retention.
-- [ ] `[must]` `MC7-10` Record an explicit production acceptance, bounded pilot,
+- [x] `[must]` `MC7-10` Record an explicit production acceptance, bounded pilot,
   or rejection decision; do not infer acceptance from a successful stand run.
+  Decision: bounded single-node trusted-subnet pilot accepted; distributed and
+  production acceptance rejected pending MC7-07/08 evidence. See the
+  [stand receipt](media-center-stand-validation-2026-08-20.md).
 - [x] `[should]` `MC7-11` Add automatic repair recommendations and reviewed
   reconcile plans for missing agents, stale shards, failed providers and
   incompatible variants.

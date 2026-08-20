@@ -1,13 +1,13 @@
 # Media Center Security And Privacy Review - 2026-08-20
 
-Status: locally reviewed for a bounded one-subnet pilot. Stand deployment and
-pilot acceptance remain separate gates.
+Status: reviewed and accepted for a bounded single-node, one-subnet stand
+pilot. Distributed and production acceptance remain separate gates.
 
 ## Reviewed Revisions
 
-- Core deployment/topology: `5a4df7aa` through `67ec6a93`.
+- Core deployment/topology and service bridge: `5a4df7aa` through `598bc015`.
 - Client app shell and UI-as-data: `6cadad5` through `8f11625`.
-- Media Project, scenario and skills: `35129f6` through `a44f830` on the
+- Media Project, scenario and skills: `35129f6` through `4e9f7d1` on the
   registry feature branch.
 
 ## Trust Boundaries
@@ -20,6 +20,7 @@ pilot acceptance remain separate gates.
 | Source bytes | root-bound `register_media_file`, direct endpoint route grant, ranged read, exact source revision/fingerprint | controller and coordinator never relay or copy original media |
 | Derived bytes | one bounded worker, managed namespace, exact-source witness before/after publish, atomic partial file, quota and explicit retention | no partial advertise; source media is never deleted |
 | Decoder/probe | subprocess without shell, `file,pipe` protocol allowlist, one thread by default, timeout/output/RSS limits, playback pressure pause | media containers cannot initiate HTTP/RTSP/UDP egress through ffmpeg |
+| Persistent service output | rotating per-process capability, loopback-only HTTP, 256 KiB envelope, 50 events/s, fixed UI topics plus exact `events.publish` manifest allowlist | service processes can publish progress/domain events without receiving an ambient root event bus |
 | Provider egress | built-in provider is local-only; provider id, claims, confidence, locale/job status and retry are persisted | no external metadata or embedding provider is enabled implicitly |
 | Personal state | actor/profile key, query/playback policy, shared-surface history suppression, revision-safe mutation | favorites/history/resume do not use browser identity and are not leaked by shared-TV Home |
 | Voice/control | actor/profile/target context, policy-filtered candidates, ambiguity clarification, target lease and command revision | voice has the same authority as direct tools |
@@ -57,6 +58,9 @@ pilot acceptance remain separate gates.
 - Node-local paths are operational secrets. They are available to the owning
   agent/operator tools but are removed from normal catalog projections and
   diagnostic export.
+- Stand catalog/search responses were checked for `/mnt`, `source_path`,
+  `content_ref`, direct URL candidates and embedded credentials; only
+  browser-safe core media routes remained.
 
 ## Residual Risks
 
@@ -74,7 +78,8 @@ pilot acceptance remain separate gates.
 
 ## Decision
 
-The implementation is acceptable for exact-revision local validation and a
-bounded trusted-subnet stand pilot. It is not yet production-accepted: stand
-route grants, shared-screen behavior, node loss, decoder package versions,
-resource soak and uninstall retention must be recorded first.
+The implementation is accepted for exact-revision local validation and a
+bounded single-node trusted-subnet stand pilot. It is not production-accepted:
+shared-screen browser evidence, sustained playback/resource soak, physical
+node loss/handoff, rolling adapter upgrade, decoder package review and
+uninstall retention must be recorded first.

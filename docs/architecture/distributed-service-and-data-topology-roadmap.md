@@ -219,6 +219,13 @@ failover or a product relies on replicated authoritative state.
 - [ ] `[deferred]` `DS5-07` Add a general multi-writer profile beyond explicit
   CRDT adapters before conflict, compaction and partition-healing proofs exist.
 
+The 2026-08-20 one-node Media Center stand validates agent participation,
+external-reference retention, cursor catch-up and direct ranged playback, but
+does not close DS5. The only other physical development hub observed during
+the audit belongs to a different live subnet. DS5-02/04/05 therefore remain
+open for a second trusted node, handoff/loss, compatible rolling upgrade and a
+sustained operator/resource soak.
+
 ## Evidence Policy
 
 - Every implementation checkbox links exact core/client/consumer revisions and
