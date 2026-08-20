@@ -184,6 +184,66 @@ def _verify_prepare_lease(path: str | os.PathLike[str] = "", token: str = "") ->
         raise RuntimeError(f"core update prepare lease revoked: {reason}")
 
 
+def _terminate_subprocess_tree(process: subprocess.Popen[str]) -> None:
+    try:
+        import psutil
+
+        parent = psutil.Process(process.pid)
+        children = parent.children(recursive=True)
+        for child in children:
+            child.terminate()
+        parent.terminate()
+        _gone, alive = psutil.wait_procs([*children, parent], timeout=3.0)
+        for item in alive:
+            item.kill()
+        psutil.wait_procs(alive, timeout=2.0)
+        return
+    except Exception:
+        pass
+    try:
+        process.terminate()
+        process.wait(timeout=3.0)
+    except Exception:
+        try:
+            process.kill()
+            process.wait(timeout=2.0)
+        except Exception:
+            pass
+
+
+def _run_prepare_subprocess(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    prepare_lease_path: str | os.PathLike[str],
+    prepare_lease_token: str,
+) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(
+        command,
+        cwd=str(cwd),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    while True:
+        try:
+            stdout, stderr = process.communicate(timeout=0.5)
+            return subprocess.CompletedProcess(
+                command,
+                process.returncode,
+                stdout,
+                stderr,
+            )
+        except subprocess.TimeoutExpired:
+            try:
+                _verify_prepare_lease(prepare_lease_path, prepare_lease_token)
+            except BaseException:
+                _terminate_subprocess_tree(process)
+                raise
+
+
 def _git_worktree_has_changes(repo_dir: Path) -> bool:
     git = shutil.which("git")
     if not git or not repo_dir.exists():
@@ -710,6 +770,8 @@ def _install_slot_project(
     checkout_dir: Path,
     venv_dir: Path,
     seed: dict[str, object],
+    prepare_lease_path: str | os.PathLike[str] = "",
+    prepare_lease_token: str = "",
 ) -> dict[str, object]:
     started_at = time.time()
     uv = shutil.which("uv") if _uv_install_enabled() else None
@@ -724,13 +786,22 @@ def _install_slot_project(
         if _uv_locked_enabled():
             cmd.insert(2, "--locked")
         run_cmd = _low_priority_io_command(cmd)
-        completed = subprocess.run(
-            run_cmd,
-            cwd=str(checkout_dir),
-            env=env,
-            capture_output=True,
-            text=True,
-        )
+        if str(prepare_lease_path or "").strip():
+            completed = _run_prepare_subprocess(
+                run_cmd,
+                cwd=checkout_dir,
+                env=env,
+                prepare_lease_path=prepare_lease_path,
+                prepare_lease_token=prepare_lease_token,
+            )
+        else:
+            completed = subprocess.run(
+                run_cmd,
+                cwd=str(checkout_dir),
+                env=env,
+                capture_output=True,
+                text=True,
+            )
         attempts.append(
             {
                 "installer": "uv",
@@ -1573,6 +1644,8 @@ def prepare_slot(
             checkout_dir=checkout_tmp,
             venv_dir=venv_tmp,
             seed=venv_seed,
+            prepare_lease_path=prepare_lease_path,
+            prepare_lease_token=prepare_lease_token,
         )
 
         final_repo_dir = slot_dir / "repo"

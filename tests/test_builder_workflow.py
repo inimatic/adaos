@@ -1333,7 +1333,7 @@ def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
     )["workflow"]
     assert completed["automation"]["status"] == "completed"
     assert completed["automation"]["snapshot_task_id"] == "task.1"
-    assert completed["capabilities"]["can_prepare_candidate"] is True
+    assert completed["capabilities"]["can_prepare_candidate"] is False
     assert completed["capabilities"]["can_publish"] is False
 
     trial = _prepare_candidate(
@@ -1403,6 +1403,146 @@ def test_invalid_cross_phase_transition_is_rejected(
 
     with pytest.raises(BuilderWorkflowError, match="requires active automation"):
         service.transition("scenario", "recipes", "publish", metadata={"version": "0.1.1"})
+
+
+def test_unknown_trial_outcome_is_not_projected_as_retryable_before_reconciliation(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CS-trial-recovery",
+            "request": "Prepare the exact implementation for an isolated Trial.",
+            "issues": [
+                {
+                    "issue_id": "I-trial-recovery",
+                    "title": "Prepare the exact Trial candidate",
+                    "lane": "automation",
+                    "status": "resolved",
+                    "acceptance_criteria": ["The checkpoint enters an isolated Trial."],
+                }
+            ],
+        },
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata=_confirmed({"task_id": "task.trial-recovery"}),
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_completed",
+        metadata={"task_id": "task.trial-recovery", "version": "0.1.1"},
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata=_confirmed(
+            {
+                "change_id": "checkpoint-trial-recovery",
+                "package_digest": "sha256:" + "a" * 64,
+                "source_revision": "a" * 40,
+            }
+        ),
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "candidate_preparation_started",
+        metadata=_confirmed(
+            {
+                "activity_attempt_id": "trial-attempt:unknown",
+                "idempotency_key": "trial:stable-release-digest",
+            }
+        ),
+    )
+    unknown = service.transition(
+        "scenario",
+        "recipes",
+        "candidate_preparation_unknown",
+        metadata={"error": "remote read rejected before activation"},
+    )["workflow"]
+
+    assert unknown["delivery"]["status"] == "unknown"
+    assert unknown["capabilities"]["can_prepare_candidate"] is False
+
+    recovered = service.transition(
+        "scenario",
+        "recipes",
+        "reconcile_verification",
+        metadata={"evidence_refs": ["diagnostic:remote-read-no-write"]},
+    )["workflow"]
+
+    assert recovered["delivery"]["status"] == "idle"
+    assert recovered["governed"]["state"] == "verification"
+    assert recovered["capabilities"]["can_prepare_candidate"] is False
+
+    readmitted = service.transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata=_confirmed(
+            {
+                "change_id": "checkpoint-trial-recovery",
+                "package_digest": "sha256:" + "a" * 64,
+                "source_revision": "a" * 40,
+            }
+        ),
+    )["workflow"]
+
+    assert readmitted["delivery"]["status"] == "checkpoint"
+    assert readmitted["governed"]["state"] == "trial_ready"
+    assert readmitted["capabilities"]["can_prepare_candidate"] is True
+
+    before_generation = readmitted["generation"]
+    before_project_generation = readmitted["project"]["generation"]
+    duplicate = service.transition(
+        "scenario",
+        "recipes",
+        "candidate_preparation_started",
+        metadata=_confirmed(
+            {
+                "activity_attempt_id": "trial-attempt:retried-after-reconciliation",
+                "idempotency_key": "trial:stable-release-digest",
+            }
+        ),
+    )
+
+    assert duplicate["duplicate"] is True
+    assert duplicate["workflow"]["generation"] == before_generation
+    assert duplicate["workflow"]["project"]["generation"] == before_project_generation
+    assert duplicate["workflow"]["delivery"]["status"] == "checkpoint"
+    assert duplicate["workflow"]["governed"]["state"] == "trial_ready"
+
+    # A pre-fix process could persist only the compatibility half of that
+    # duplicate transition. Re-admitting an already observed external result
+    # with a distinct reconciliation key repairs the projections without
+    # repeating Trial activation.
+    persisted = json.loads((root / "prompt_state.json").read_text(encoding="utf-8"))
+    persisted["workflow"]["delivery"]["status"] = "activating"
+    (root / "prompt_state.json").write_text(
+        json.dumps(persisted, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    aligned = service.transition(
+        "scenario",
+        "recipes",
+        "candidate_preparation_started",
+        metadata=_confirmed(
+            {
+                "idempotency_key": "trial:stable-release-digest:waiting-reconcile",
+                "reconciliation": "external_trial_result_observed",
+            }
+        ),
+    )["workflow"]
+    assert aligned["delivery"]["status"] == "activating"
+    assert aligned["governed"]["state"] == "trial_waiting"
 
 
 def test_unknown_publication_requires_explicit_evidenced_reconciliation(
@@ -1640,7 +1780,7 @@ def test_failed_prototype_adaptation_restores_completed_automation(
     assert recovered["automation"]["status"] == "completed"
     assert recovered["automation"]["adaptation_error"] == "unsafe binding remained"
     assert recovered["pending_transition"] is None
-    assert recovered["capabilities"]["can_prepare_candidate"] is True
+    assert recovered["capabilities"]["can_prepare_candidate"] is False
     assert recovered["capabilities"]["can_publish"] is False
     assert recovered["capabilities"]["can_return_to_prototype"] is True
 

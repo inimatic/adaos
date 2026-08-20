@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import multiprocessing
 import sqlite3
 import threading
 import time
@@ -16,6 +17,40 @@ class _FakePaths:
 
     def state_dir(self) -> Path:
         return self._root
+
+
+def _hold_core_sqlite_writer(state_dir: str, ready_path: str, release_path: str) -> None:
+    sql = SQLite(_FakePaths(Path(state_dir)))
+    with sql.connect() as con:
+        con.execute("INSERT INTO process_gate_probe(owner) VALUES ('child')")
+        Path(ready_path).touch()
+        deadline = time.monotonic() + 10.0
+        while not Path(release_path).exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        con.commit()
+
+
+def _churn_core_sqlite_writer(
+    state_dir: str,
+    ready_path: str,
+    release_path: str,
+    writes: int,
+) -> None:
+    sql = SQLite(_FakePaths(Path(state_dir)))
+    with sql.connect() as con:
+        con.execute("INSERT INTO process_gate_probe(owner) VALUES ('child-initial')")
+        Path(ready_path).touch()
+        deadline = time.monotonic() + 10.0
+        while not Path(release_path).exists() and time.monotonic() < deadline:
+            time.sleep(0.005)
+        con.commit()
+    for index in range(writes):
+        with sql.connect() as con:
+            con.execute(
+                "INSERT INTO process_gate_probe(owner) VALUES (?)",
+                (f"child-{index}",),
+            )
+            con.commit()
 
 
 def test_sqlite_init_tolerates_locked_wal_probe(tmp_path: Path, monkeypatch) -> None:
@@ -231,3 +266,94 @@ def test_sqlite_process_write_gate_serializes_runtime_writers(tmp_path: Path, mo
     snapshot = sqlite_connection_diagnostics_snapshot()
     assert snapshot["write_gate_slow_wait_total"] >= baseline + 1
     assert snapshot["last_write_gate_wait"]["thread_name"] == "sqlite-write-gate-contender"
+
+
+def test_sqlite_process_write_gate_serializes_separate_processes(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_SQLITE_TIMEOUT_S", "0.05")
+    monkeypatch.setenv("ADAOS_SQLITE_PROCESS_WRITE_GATE_TIMEOUT_S", "2.0")
+    sql = SQLite(_FakePaths(tmp_path))
+    with sql.connect() as con:
+        con.execute("CREATE TABLE process_gate_probe(id INTEGER PRIMARY KEY, owner TEXT NOT NULL)")
+        con.commit()
+
+    ready_path = tmp_path / "writer.ready"
+    release_path = tmp_path / "writer.release"
+    process = multiprocessing.get_context("spawn").Process(
+        target=_hold_core_sqlite_writer,
+        args=(str(tmp_path), str(ready_path), str(release_path)),
+    )
+    process.start()
+    try:
+        deadline = time.monotonic() + 5.0
+        while not ready_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready_path.exists()
+
+        release_timer = threading.Timer(0.2, release_path.touch)
+        release_timer.start()
+        started = time.monotonic()
+        with sql.connect() as con:
+            con.execute("INSERT INTO process_gate_probe(owner) VALUES ('parent')")
+            con.commit()
+        elapsed_s = time.monotonic() - started
+        release_timer.join(timeout=1.0)
+
+        assert elapsed_s >= 0.15
+        with sql.connect() as con:
+            assert con.execute(
+                "SELECT owner FROM process_gate_probe ORDER BY id"
+            ).fetchall() == [("child",), ("parent",)]
+    finally:
+        release_path.touch(exist_ok=True)
+        process.join(timeout=5.0)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=2.0)
+    assert process.exitcode == 0
+
+
+def test_sqlite_process_write_gate_does_not_starve_waiting_process(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ADAOS_SQLITE_TIMEOUT_S", "0.05")
+    monkeypatch.setenv("ADAOS_SQLITE_PROCESS_WRITE_GATE_TIMEOUT_S", "5.0")
+    sql = SQLite(_FakePaths(tmp_path))
+    with sql.connect() as con:
+        con.execute(
+            "CREATE TABLE process_gate_probe(id INTEGER PRIMARY KEY, owner TEXT NOT NULL)"
+        )
+        con.commit()
+
+    ready_path = tmp_path / "churn.ready"
+    release_path = tmp_path / "churn.release"
+    process = multiprocessing.get_context("spawn").Process(
+        target=_churn_core_sqlite_writer,
+        args=(str(tmp_path), str(ready_path), str(release_path), 40),
+    )
+    process.start()
+    try:
+        deadline = time.monotonic() + 5.0
+        while not ready_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready_path.exists()
+
+        release_timer = threading.Timer(0.1, release_path.touch)
+        release_timer.start()
+        with sql.connect() as con:
+            con.execute("INSERT INTO process_gate_probe(owner) VALUES ('parent-waiter')")
+            con.commit()
+        release_timer.join(timeout=1.0)
+    finally:
+        release_path.touch(exist_ok=True)
+        process.join(timeout=10.0)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=2.0)
+
+    assert process.exitcode == 0
+    with sql.connect() as con:
+        owners = [row[0] for row in con.execute(
+            "SELECT owner FROM process_gate_probe ORDER BY id"
+        ).fetchall()]
+    assert owners[:2] == ["child-initial", "parent-waiter"]

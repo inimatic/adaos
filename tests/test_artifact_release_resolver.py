@@ -62,6 +62,38 @@ runtime:
     assert requirements[2].optional is True
 
 
+def test_parse_skill_requirements_keeps_python_dependencies_out_of_project_graph() -> None:
+    manifest = yaml.safe_load(
+        """
+dependencies:
+  - torch>=1.13
+  - torchvision>=0.14
+depends:
+  - research_manager_skill
+runtime:
+  skills:
+    required:
+      - id: mlflow_tracker_skill
+        version: ^0.2.0
+"""
+    )
+
+    requirements = parse_artifact_requirements(manifest, kind="skill")
+
+    assert [item.key for item in requirements] == [
+        "skill:mlflow_tracker_skill",
+        "skill:research_manager_skill",
+    ]
+
+
+def test_dependency_requirement_rejects_python_requirement_as_artifact_id() -> None:
+    with pytest.raises(
+        DependencyResolutionError,
+        match="not a canonical AdaOS artifact id",
+    ):
+        DependencyRequirement("skill", "torch>=1.13")
+
+
 def test_release_resolves_exact_dependency_and_reverse_consumers() -> None:
     scenario = _package("scenario", "recipes", "1.2.3", "a")
     shopping_old = _package("skill", "shopping_list", "1.5.0", "b")

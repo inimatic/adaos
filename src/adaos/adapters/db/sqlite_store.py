@@ -9,8 +9,9 @@ import sqlite3
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
-from typing import Any, Final, Optional
+from typing import Any, Final
 
 from adaos.ports import KV, SQL
 from adaos.ports.paths import PathProvider
@@ -19,7 +20,7 @@ _DB_FILE = "adaos.db"
 _log = logging.getLogger("adaos.sqlite")
 _SQLITE_DIAGNOSTICS_LOCK = threading.RLock()
 _SQLITE_WRITE_GATES_LOCK = threading.RLock()
-_SQLITE_WRITE_GATES: dict[str, threading.RLock] = {}
+_SQLITE_WRITE_GATES: dict[str, "_WriteGate"] = {}
 _ACTIVE_CONNECTIONS: dict[int, dict[str, Any]] = {}
 _SQLITE_DIAGNOSTICS: dict[str, Any] = {
     "connections_opened_total": 0,
@@ -110,22 +111,197 @@ def _sqlite_write_gate_warn_s() -> float:
         return 0.1
 
 
-def _write_gate_for_path(path: Path) -> threading.RLock:
+def _sqlite_process_write_gate_timeout_s() -> float:
+    try:
+        timeout_s = float(
+            os.getenv("ADAOS_SQLITE_PROCESS_WRITE_GATE_TIMEOUT_S", "120.0") or "120.0"
+        )
+    except Exception:
+        timeout_s = 120.0
+    return max(1.0, min(900.0, timeout_s))
+
+
+def _try_lock_file(handle: Any) -> None:
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_file(handle: Any) -> None:
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+class _WriteGate:
+    def __init__(self, database_path: Path) -> None:
+        self._thread_lock = threading.RLock()
+        self._lock_path = database_path.with_name(f"{database_path.name}.write.lock")
+        self._waiter_dir = database_path.with_name(f"{database_path.name}.write.waiters")
+        self._owner_thread_id: int | None = None
+        self._depth = 0
+        self._handle: Any | None = None
+
+    @staticmethod
+    def _process_is_alive(pid: int) -> bool:
+        if pid <= 0:
+            return False
+        if pid == os.getpid():
+            return True
+        if os.name == "nt":
+            import ctypes
+
+            process_query_limited_information = 0x1000
+            handle = ctypes.windll.kernel32.OpenProcess(
+                process_query_limited_information,
+                False,
+                pid,
+            )
+            if not handle:
+                return False
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except (PermissionError, OSError):
+            return True
+        return True
+
+    def _waiter_path(self) -> Path:
+        self._waiter_dir.mkdir(parents=True, exist_ok=True)
+        return self._waiter_dir / (
+            f"{time.time_ns():020d}-{os.getpid():010d}-{uuid.uuid4().hex}.waiter"
+        )
+
+    def _first_live_waiter(self) -> Path | None:
+        try:
+            waiters = sorted(self._waiter_dir.glob("*.waiter"), key=lambda item: item.name)
+        except OSError:
+            return None
+        for waiter in waiters:
+            try:
+                pid = int(waiter.name.split("-", 2)[1])
+            except (IndexError, ValueError):
+                pid = 0
+            if self._process_is_alive(pid):
+                return waiter
+            try:
+                waiter.unlink()
+            except OSError:
+                pass
+        return None
+
+    def acquire(self) -> None:
+        self._thread_lock.acquire()
+        handle = None
+        waiter_path = None
+        try:
+            thread_id = threading.get_ident()
+            if self._owner_thread_id == thread_id:
+                self._depth += 1
+                return
+
+            self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+            handle = self._lock_path.open("a+b")
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"0")
+                handle.flush()
+
+            # flock does not promise fair wakeups. A busy runtime can otherwise
+            # release and immediately reacquire the database lock forever while
+            # a migration process starves. The ordered waiter files establish a
+            # cross-process FIFO before contenders enter the kernel lock.
+            waiter_path = self._waiter_path()
+            waiter_path.touch(exist_ok=False)
+            timeout_s = _sqlite_process_write_gate_timeout_s()
+            deadline = time.monotonic() + timeout_s
+            while True:
+                first_waiter = self._first_live_waiter()
+                if first_waiter == waiter_path:
+                    try:
+                        _try_lock_file(handle)
+                    except (BlockingIOError, OSError):
+                        pass
+                    else:
+                        try:
+                            waiter_path.unlink()
+                        except OSError:
+                            pass
+                        waiter_path = None
+                        self._owner_thread_id = thread_id
+                        self._depth = 1
+                        self._handle = handle
+                        return
+                if time.monotonic() >= deadline:
+                    raise sqlite3.OperationalError(
+                        "database is locked: timed out waiting for the AdaOS process write gate "
+                        f"after {timeout_s:.1f} seconds"
+                    )
+                time.sleep(0.025)
+        except BaseException:
+            if waiter_path is not None:
+                try:
+                    waiter_path.unlink()
+                except OSError:
+                    pass
+            if handle is not None:
+                handle.close()
+            self._thread_lock.release()
+            raise
+
+    def release(self) -> None:
+        try:
+            if self._owner_thread_id != threading.get_ident() or self._depth <= 0:
+                raise RuntimeError("SQLite write gate released by a non-owner thread")
+            self._depth -= 1
+            if self._depth == 0:
+                handle = self._handle
+                self._handle = None
+                self._owner_thread_id = None
+                if handle is not None:
+                    try:
+                        _unlock_file(handle)
+                    finally:
+                        handle.close()
+        finally:
+            self._thread_lock.release()
+
+
+def _write_gate_for_path(path: Path) -> _WriteGate:
     key = str(path.resolve())
     with _SQLITE_WRITE_GATES_LOCK:
         gate = _SQLITE_WRITE_GATES.get(key)
         if gate is None:
-            gate = threading.RLock()
+            gate = _WriteGate(path.resolve())
             _SQLITE_WRITE_GATES[key] = gate
         return gate
 
 
 def _record_write_gate_wait_start(con: sqlite3.Connection, *, kind: str) -> None:
+    now = time.time()
     with _SQLITE_DIAGNOSTICS_LOCK:
         row = _ACTIVE_CONNECTIONS.get(id(con))
         if row is not None:
             row["current_statement_kind"] = kind
-            row["write_gate_wait_started_at"] = time.time()
+            row["current_statement_started_at"] = now
+            row["write_gate_wait_started_at"] = now
 
 
 def _record_write_gate_acquired(
@@ -325,7 +501,7 @@ def sqlite_connection_diagnostics_snapshot() -> dict[str, Any]:
 
 
 class _ClosingConnection(sqlite3.Connection):
-    _adaos_write_gate: threading.RLock | None = None
+    _adaos_write_gate: _WriteGate | None = None
     _adaos_write_gate_acquired = False
 
     def _acquire_write_gate(self, statement: Any) -> None:
@@ -335,7 +511,11 @@ class _ClosingConnection(sqlite3.Connection):
             return
         _record_write_gate_wait_start(self, kind=kind)
         started_at = time.monotonic()
-        gate.acquire()
+        try:
+            gate.acquire()
+        except BaseException as exc:
+            _record_statement_finish(self, statement, error=exc)
+            raise
         waited_s = max(0.0, time.monotonic() - started_at)
         self._adaos_write_gate_acquired = True
         _record_write_gate_acquired(self, kind=kind, waited_s=waited_s)

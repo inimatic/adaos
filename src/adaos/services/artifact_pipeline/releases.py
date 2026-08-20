@@ -8,6 +8,7 @@ from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
 
 from adaos.domain.artifact_release import (
+    ArtifactReleaseContractError,
     ArtifactKind,
     ArtifactPackageRef,
     ArtifactSourceRef,
@@ -16,6 +17,7 @@ from adaos.domain.artifact_release import (
     ProjectDependencyLock,
     ProjectMemberLock,
     ProjectRelease,
+    ProjectRef,
     ResolvedDependency,
     canonical_payload_digest,
 )
@@ -38,6 +40,12 @@ class DependencyRequirement:
         artifact_id = str(self.artifact_id or "").strip()
         if not artifact_id:
             raise DependencyResolutionError("dependency id must not be empty")
+        try:
+            artifact_id = ProjectRef(artifact_id).project_id
+        except ArtifactReleaseContractError as exc:
+            raise DependencyResolutionError(
+                f"dependency id is not a canonical AdaOS artifact id: {artifact_id!r}"
+            ) from exc
         object.__setattr__(self, "artifact_id", artifact_id)
         object.__setattr__(self, "version_spec", normalize_version_spec(self.version_spec))
 
@@ -284,10 +292,18 @@ def parse_artifact_requirements(
         for value in legacy:
             append(value, default_kind="skill")
 
-    dependencies = manifest.get("dependencies")
-    if isinstance(dependencies, (list, tuple)):
-        for value in dependencies:
-            append(value, default_kind="skill")
+    # ``skill.yaml:dependencies`` is the Python runtime dependency surface
+    # consumed by SkillManager (PEP 508 requirement strings).  Scenario
+    # manifests historically used the same field for skill composition, so
+    # preserve that compatibility only for scenarios.  Treating a skill's
+    # ``requests>=...`` or ``torch>=...`` entry as an AdaOS Project reference
+    # makes publication query a nonsensical release channel and hides the
+    # namespace error behind a remote ``invalid_project_id`` response.
+    if kind == "scenario":
+        dependencies = manifest.get("dependencies")
+        if isinstance(dependencies, (list, tuple)):
+            for value in dependencies:
+                append(value, default_kind="skill")
 
     runtime = manifest.get("runtime")
     if isinstance(runtime, Mapping):

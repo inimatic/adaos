@@ -67,6 +67,73 @@ def test_pull_works_without_upstream(tmp_path):
 
 
 @pytest.mark.skipif(not _git_available(), reason="git is not available")
+def test_ensure_repo_tracks_configured_branch_outside_narrow_fetchspec(tmp_path):
+    remote = tmp_path / "remote.git"
+    seed = tmp_path / "seed"
+    dest = tmp_path / "dest"
+
+    _run(["git", "init", "--bare", str(remote)], cwd=tmp_path)
+    _run(["git", "clone", str(remote), str(seed)], cwd=tmp_path)
+
+    env = dict(**__import__("os").environ)
+    env.setdefault("GIT_AUTHOR_NAME", "adaos")
+    env.setdefault("GIT_AUTHOR_EMAIL", "adaos@example.local")
+    env.setdefault("GIT_COMMITTER_NAME", env["GIT_AUTHOR_NAME"])
+    env.setdefault("GIT_COMMITTER_EMAIL", env["GIT_AUTHOR_EMAIL"])
+
+    (seed / "registry.json").write_text('{"version": 1}\n', encoding="utf-8")
+    _run(["git", "add", "."], cwd=seed, env=env)
+    _run(["git", "commit", "-m", "init"], cwd=seed, env=env)
+    _run(["git", "branch", "-M", "main"], cwd=seed, env=env)
+    _run(["git", "push", "-u", "origin", "main"], cwd=seed, env=env)
+    _run(["git", "checkout", "-b", "release/media-center"], cwd=seed, env=env)
+    _run(["git", "push", "-u", "origin", "release/media-center"], cwd=seed, env=env)
+    _run(["git", "symbolic-ref", "HEAD", "refs/heads/main"], cwd=remote, env=env)
+
+    _run(
+        [
+            "git",
+            "clone",
+            "--single-branch",
+            "--branch",
+            "main",
+            str(remote),
+            str(dest),
+        ],
+        cwd=tmp_path,
+        env=env,
+    )
+    _run(["git", "fetch", "origin", "release/media-center"], cwd=dest, env=env)
+    _run(["git", "checkout", "-b", "release/media-center", "FETCH_HEAD"], cwd=dest, env=env)
+
+    git = CliGitClient(depth=0)
+    git.ensure_repo(dest, str(remote), branch="release/media-center")
+
+    fetch_specs = _run(
+        ["git", "config", "--get-all", "remote.origin.fetch"],
+        cwd=dest,
+        env=env,
+    ).splitlines()
+    assert (
+        "+refs/heads/release/media-center:refs/remotes/origin/release/media-center"
+        in fetch_specs
+    )
+    assert _run(
+        ["git", "rev-parse", "--abbrev-ref", "@{upstream}"],
+        cwd=dest,
+        env=env,
+    ) == "origin/release/media-center"
+
+    (seed / "registry.json").write_text('{"version": 2}\n', encoding="utf-8")
+    _run(["git", "add", "."], cwd=seed, env=env)
+    _run(["git", "commit", "-m", "release update"], cwd=seed, env=env)
+    _run(["git", "push"], cwd=seed, env=env)
+
+    git.pull(dest)
+    assert (dest / "registry.json").read_text(encoding="utf-8") == '{"version": 2}\n'
+
+
+@pytest.mark.skipif(not _git_available(), reason="git is not available")
 def test_pull_reports_divergence_hint(tmp_path):
     git = CliGitClient(depth=0)
     remote = tmp_path / "remote.git"

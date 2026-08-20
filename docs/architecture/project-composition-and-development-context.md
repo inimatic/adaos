@@ -199,6 +199,17 @@ must be atomically copied, bounded, and digested into the terminal session
 receipt before an ephemeral candidate runtime is purged. This keeps diagnostic
 provenance durable without turning skill data into a generic log store.
 
+For coordinator/managed-component workflows, this separation is intentional.
+The coordinator does not inherit the managed component's durable bucket, and a
+managed component does not write its execution trace into the coordinator's
+bucket. The portable handoff is a typed, content-addressed output or governed
+logical view with producer, consumer, session, release, retention, and
+idempotency identities. Core may later provide an SDK convenience for this
+handoff, but it must compile to those existing ownership and capability rules;
+it must not create a shared parent/child filesystem namespace. This lets a
+managed implementation be upgraded, removed, retried, or federated without
+silently transferring its database or logs to the Project's primary member.
+
 Joint development is a practical consequence of Project ownership, but the
 Project manifest does not record a transient current editing task. Publication
 turns the Project definition plus exact component packages into an immutable

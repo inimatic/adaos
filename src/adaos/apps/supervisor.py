@@ -8613,12 +8613,20 @@ class SupervisorManager:
             }
         previous = _subsequent_transition_request(attempt)
         if _transition_request_same_target(queued, attempt) or _transition_request_same_target(queued, current_status):
-            status = dict(current_status or read_core_update_status() or {})
-            status["same_target_subsequent_deduped_at"] = now
-            status["same_target_subsequent_deduped_reason"] = "active_transition_same_target"
-            status["same_target_subsequent_target_version"] = str(queued.get("target_version") or "")
-            status["updated_at"] = now
-            status = write_core_update_status(status)
+            if previous is not None:
+                status = _clear_same_target_subsequent_transition(
+                    status=current_status,
+                    attempt=attempt,
+                    queued=queued,
+                    reason="active_transition_same_target",
+                )
+            else:
+                status = dict(current_status or read_core_update_status() or {})
+                status["same_target_subsequent_deduped_at"] = now
+                status["same_target_subsequent_deduped_reason"] = "active_transition_same_target"
+                status["same_target_subsequent_target_version"] = str(queued.get("target_version") or "")
+                status["updated_at"] = now
+                status = write_core_update_status(status)
             return {
                 "ok": True,
                 "accepted": True,

@@ -132,6 +132,7 @@ BUILDER_INTERACTION_FRAME_SCHEMA = "adaos.builder.interaction_frame.v1"
 BUILDER_WORKFLOW_EVENT = "builder.workflow.changed"
 _LOCK = threading.RLock()
 _MAX_STATE_BYTES = 512 * 1024
+_MAX_PORTFOLIO_RECORD_BYTES = 512 * 1024
 _MAX_HISTORY = 50
 _MAX_CHANGE_ISSUES = 50
 _MAX_CHANGE_RUNS = 100
@@ -1159,6 +1160,99 @@ class BuilderWorkflowService:
     def _state_path(self, object_type: str, object_id: str) -> Path:
         return self.project_root(object_type, object_id) / "prompt_state.json"
 
+    def _portfolio_root(self, object_type: str, object_id: str) -> Path:
+        return (
+            Path(self.state_dir)
+            / "builder"
+            / "change_portfolios"
+            / _kind(object_type)
+            / _project_id(object_id)
+        )
+
+    def _portfolio_record_path(
+        self,
+        object_type: str,
+        object_id: str,
+        change_id: str,
+    ) -> Path:
+        token = str(change_id or "").strip()
+        if not token:
+            raise BuilderWorkflowError("Builder portfolio record requires change_id")
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        return self._portfolio_root(object_type, object_id) / f"{digest}.json"
+
+    def _load_external_portfolio(
+        self,
+        object_type: str,
+        object_id: str,
+        workflow: Mapping[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        external = _mapping(workflow.get("change_portfolio_external"))
+        if external.get("schema") != "adaos.builder.change_portfolio_external.v1":
+            return {}
+        change_ids = [
+            str(item).strip()
+            for item in external.get("change_ids") or []
+            if str(item).strip()
+        ][-100:]
+        records: dict[str, dict[str, Any]] = {}
+        for change_id in change_ids:
+            path = self._portfolio_record_path(object_type, object_id, change_id)
+            try:
+                if path.stat().st_size > _MAX_PORTFOLIO_RECORD_BYTES:
+                    raise BuilderWorkflowError(
+                        f"Builder portfolio record exceeds the bounded size: {change_id}"
+                    )
+                value = json.loads(path.read_text(encoding="utf-8-sig"))
+            except FileNotFoundError as exc:
+                raise BuilderWorkflowError(
+                    f"Builder portfolio record is missing: {change_id}"
+                ) from exc
+            except json.JSONDecodeError as exc:
+                raise BuilderWorkflowError(
+                    f"Builder portfolio record is invalid: {change_id}"
+                ) from exc
+            if not isinstance(value, Mapping) or str(value.get("change_id") or "").strip() != change_id:
+                raise BuilderWorkflowError(
+                    f"Builder portfolio record identity differs from its index: {change_id}"
+                )
+            records[change_id] = dict(value)
+        return records
+
+    def _externalize_portfolio(
+        self,
+        object_type: str,
+        object_id: str,
+        state: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        payload = copy.deepcopy(dict(state))
+        workflow = _mapping(payload.get("workflow"))
+        portfolio = normalize_portfolio(workflow.get("change_portfolio"), workflow)
+        change_ids: list[str] = []
+        for change_id, record in portfolio.items():
+            raw = (json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            if len(raw) > _MAX_PORTFOLIO_RECORD_BYTES:
+                raise BuilderWorkflowError(
+                    f"Builder portfolio record exceeds the bounded size: {change_id}"
+                )
+            path = self._portfolio_record_path(object_type, object_id, change_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name(f".{path.name}.tmp")
+            temporary.write_bytes(raw)
+            _replace_path(temporary, path)
+            change_ids.append(change_id)
+        workflow["change_portfolio"] = {}
+        workflow["change_portfolio_external"] = {
+            "schema": "adaos.builder.change_portfolio_external.v1",
+            "change_ids": change_ids[-100:],
+        }
+        # ``change_set`` is a deterministic compatibility projection rebuilt
+        # from the canonical Change by ``_normalized_workflow``.
+        if isinstance(workflow.get("change"), Mapping):
+            workflow.pop("change_set", None)
+        payload["workflow"] = workflow
+        return payload
+
     def _read_state(self, object_type: str, object_id: str) -> dict[str, Any]:
         path = self._state_path(object_type, object_id)
         if not path.is_file():
@@ -1169,11 +1263,19 @@ class BuilderWorkflowService:
             value = json.loads(path.read_text(encoding="utf-8-sig"))
         except json.JSONDecodeError as exc:
             raise BuilderWorkflowError(f"invalid prompt_state.json: {exc}") from exc
-        return dict(value) if isinstance(value, Mapping) else {}
+        state = dict(value) if isinstance(value, Mapping) else {}
+        workflow = _mapping(state.get("workflow"))
+        external = self._load_external_portfolio(object_type, object_id, workflow)
+        if external:
+            inline = _mapping(workflow.get("change_portfolio"))
+            workflow["change_portfolio"] = {**external, **inline}
+            state["workflow"] = workflow
+        return state
 
     def _write_state(self, object_type: str, object_id: str, state: Mapping[str, Any]) -> None:
         path = self._state_path(object_type, object_id)
-        raw = (json.dumps(dict(state), ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        payload = self._externalize_portfolio(object_type, object_id, state)
+        raw = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         if len(raw) > _MAX_STATE_BYTES:
             raise BuilderWorkflowError("prompt context exceeds the bounded state size")
         temporary = path.with_name(f".{path.name}.tmp")
@@ -1578,7 +1680,7 @@ class BuilderWorkflowService:
             "can_prepare_candidate": mutable
             and active == "automation"
             and automation_status == "completed"
-            and delivery_status not in {"trial", "accepted"},
+            and delivery_status == "checkpoint",
             "can_decide_candidate": mutable and delivery_status == "trial",
             "can_publish": mutable
             and active == "automation"
@@ -3218,6 +3320,25 @@ class BuilderWorkflowService:
                         "canonical Builder transition rejected: "
                         f"{governed_decision.get('reason_code') or 'transition_not_allowed'}"
                     )
+                if (
+                    governed_decision is not None
+                    and str(governed_decision.get("status") or "") == "duplicate"
+                ):
+                    # The canonical ledger is authoritative for idempotency.
+                    # Applying the compatibility mutation again can move the
+                    # two projections to different states after an explicit
+                    # reconciliation cycle. A duplicate therefore remains a
+                    # strict no-op across the entire compound transaction.
+                    projection = self.describe(kind, project_id)
+                    return {
+                        "ok": True,
+                        "action": action_token,
+                        "duplicate": True,
+                        "updated_change_id": originating_change_id
+                        or mutation_change_id
+                        or None,
+                        "workflow": projection,
+                    }
             self._apply_transition(
                 workflow,
                 action_token,
@@ -4881,7 +5002,13 @@ class BuilderWorkflowService:
             self._require_active(workflow, "automation", action)
             if str(automation.get("status") or "") != "completed":
                 raise BuilderWorkflowError("trial activation requires completed automation")
-            if str(delivery.get("status") or "") != "checkpoint":
+            delivery_status = str(delivery.get("status") or "")
+            reconciles_observed_result = (
+                delivery_status == "activating"
+                and str(metadata.get("reconciliation") or "")
+                == "external_trial_result_observed"
+            )
+            if delivery_status != "checkpoint" and not reconciles_observed_result:
                 raise BuilderWorkflowError("trial activation requires an exact checkpoint")
             delivery.update(
                 {
@@ -5142,10 +5269,16 @@ class BuilderWorkflowService:
                     raise BuilderWorkflowError(
                         "Verification reconciliation requires an unknown Trial result"
                     )
-                delivery["status"] = "checkpoint"
+                # The canonical reconciliation transition returns to
+                # ``verification``.  Do not project that state as
+                # ``trial_ready`` by restoring the compatibility checkpoint
+                # prematurely.  The exact retained package/source identities
+                # can be accepted again through ``checkpoint_recorded``, which
+                # is the canonical ``accept_verification`` transition.
+                delivery["status"] = "idle"
                 delivery["activation_error"] = None
                 delivery["reconciled_at"] = changed_at
-                update_change_set(status="checkpointed", gate="trial")
+                update_change_set(status="implemented", gate="trial")
                 return
             if str(automation.get("status") or "") not in {"failed", "working"}:
                 raise BuilderWorkflowError(

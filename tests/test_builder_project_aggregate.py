@@ -116,6 +116,39 @@ def test_parallel_changes_are_preserved_and_focus_is_not_a_business_transition(
     assert switched["project"]["view_generation"] == second["project"]["view_generation"] + 1
 
 
+def test_change_portfolio_is_externalized_from_bounded_prompt_state(
+    service: BuilderWorkflowService,
+) -> None:
+    _plan(service, "CH-favorites", "widget:favorites")
+    _plan(service, "CH-search", "widget:search", parallel=True)
+
+    raw_state = json.loads(
+        service._state_path("scenario", "recipes").read_text(encoding="utf-8")
+    )
+    raw_workflow = raw_state["workflow"]
+    external = raw_workflow["change_portfolio_external"]
+    assert raw_workflow["change_portfolio"] == {}
+    assert "change_set" not in raw_workflow
+    assert external == {
+        "schema": "adaos.builder.change_portfolio_external.v1",
+        "change_ids": ["CH-favorites", "CH-search"],
+    }
+    for change_id in external["change_ids"]:
+        assert service._portfolio_record_path("scenario", "recipes", change_id).is_file()
+
+    # The persistence split is transparent to callers and survives a new
+    # service instance. Prompt context remains bounded while the complete
+    # project portfolio remains available to Builder workflow operations.
+    restarted = BuilderWorkflowService(
+        service.dev_skills_root,
+        service.dev_scenarios_root,
+        service.state_dir,
+    )
+    restored = restarted.describe("scenario", "recipes")
+    assert set(restored["change_portfolio"]) == {"CH-favorites", "CH-search"}
+    assert restored["change"]["change_id"] == "CH-search"
+
+
 def test_conflict_index_and_mutation_admission_fail_closed(service: BuilderWorkflowService) -> None:
     _plan(service, "CH-label", "widget:recipe-title")
     second = _plan(service, "CH-layout", "widget:recipe-title", parallel=True)
