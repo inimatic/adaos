@@ -530,7 +530,14 @@ def test_executor_rejects_inventory_drift_after_review(tmp_path: Path) -> None:
         inventory=inventory,
         local_node_id="node-a",
     )
-    changed_inventory = (replace(inventory[0], revision=2), inventory[1])
+    changed_inventory = (
+        replace(
+            inventory[0],
+            capabilities=(*inventory[0].capabilities, "media.transcode"),
+            revision=2,
+        ),
+        inventory[1],
+    )
 
     with pytest.raises(ProjectDeploymentExecutionError, match="inventory changed"):
         ProjectDeploymentExecutor(
@@ -544,6 +551,48 @@ def test_executor_rejects_inventory_drift_after_review(tmp_path: Path) -> None:
             principal=_principal(plan.required_approvals),
             idempotency_key="apply:stale-inventory:1",
         )
+
+
+def test_executor_accepts_heartbeat_after_review(tmp_path: Path) -> None:
+    release_plan = _release()
+    desired = _deployment(release_plan)
+    inventory = (_node("node-a", endpoint=True), _node("node-b"))
+    store = ProjectDeploymentStore(state_dir=tmp_path)
+    store.save_deployment(
+        desired,
+        expected_revision=0,
+        actor_ref="user:owner",
+        reason="initial topology",
+    )
+    plan = ProjectDeploymentPlanner().plan(
+        desired,
+        release_plan=release_plan,
+        inventory=inventory,
+        local_node_id="node-a",
+    )
+    heartbeat_inventory = (
+        replace(
+            inventory[0],
+            observed_at="2026-08-20T12:00:00+00:00",
+            revision=2,
+        ),
+        inventory[1],
+    )
+
+    operation = ProjectDeploymentExecutor(
+        store=store,
+        adapter=FakeDeploymentAdapter(),
+    ).execute(
+        plan,
+        desired=desired,
+        release_plan=release_plan,
+        inventory=heartbeat_inventory,
+        principal=_principal(plan.required_approvals),
+        idempotency_key="apply:heartbeat-inventory:1",
+    )
+
+    assert operation.state == "succeeded"
+    assert operation.uncertain is False
 
 
 def test_runtime_exposes_plan_apply_inspect_drain_and_remove(tmp_path: Path) -> None:

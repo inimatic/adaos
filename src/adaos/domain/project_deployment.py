@@ -1804,9 +1804,13 @@ class DeploymentOperation:
 
 
 def inventory_revision(records: Iterable[NodeInventoryRecord]) -> str:
-    payload = [
-        item.to_dict() for item in sorted(records, key=lambda item: item.node_id)
-    ]
+    payload: list[dict[str, Any]] = []
+    for item in sorted(records, key=lambda item: item.node_id):
+        record = item.to_dict()
+        # Heartbeats preserve freshness evidence but do not affect placement.
+        record.pop("observed_at", None)
+        record.pop("revision", None)
+        payload.append(record)
     return canonical_payload_digest(payload)
 
 

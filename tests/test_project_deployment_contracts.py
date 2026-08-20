@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -345,6 +346,23 @@ def test_node_inventory_revision_is_order_independent_and_strict() -> None:
     node_b = _node("node-b", endpoint=False)
 
     assert inventory_revision((node_a, node_b)) == inventory_revision((node_b, node_a))
+    heartbeat = replace(
+        node_a,
+        observed_at="2026-08-20T12:00:00+00:00",
+        revision=node_a.revision + 1,
+    )
+    changed_capabilities = replace(
+        heartbeat,
+        capabilities=(*heartbeat.capabilities, "media.transcode"),
+    )
+
+    assert inventory_revision((node_a,)) == inventory_revision((heartbeat,))
+    assert inventory_revision((node_a,)) != inventory_revision(
+        (changed_capabilities,)
+    )
+    assert inventory_revision((node_a,)) != inventory_revision(
+        (replace(heartbeat, online=False),)
+    )
 
     with pytest.raises(
         ProjectDeploymentContractError, match="online must be a boolean"
