@@ -363,7 +363,7 @@ class LocalEventBus(EventBus):
         self,
         event_type: str,
         event: Event,
-    ) -> tuple[str, str, str, str, str, str] | None:
+    ) -> tuple[str, str, str, str, str, str, str, str] | None:
         payload = getattr(event, "payload", None)
         if not isinstance(payload, dict):
             return None
@@ -392,7 +392,19 @@ class LocalEventBus(EventBus):
         receiver = str(payload.get("receiver") or "").strip()
         source = str(getattr(event, "source", "") or payload.get("source") or meta.get("source") or "").strip()
         semantics = str(meta.get("stream_semantics") or payload.get("stream_semantics") or "").strip()
-        return (event_type, webspace_id, node_id, receiver, source, semantics)
+        params = meta.get("params") if isinstance(meta.get("params"), dict) else payload.get("params")
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        variable_id = str(data.get("id") or "").strip() if semantics == "replace_variable" else ""
+        return (
+            event_type,
+            webspace_id,
+            node_id,
+            receiver,
+            source,
+            semantics,
+            _stable_mapping_key(params),
+            variable_id,
+        )
 
     def _prune_webio_stream_control_stats_locked(self, *, limit: int = 500) -> None:
         if len(self._webio_stream_control_stats) <= limit:
