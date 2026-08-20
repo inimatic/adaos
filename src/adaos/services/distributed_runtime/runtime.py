@@ -1245,7 +1245,7 @@ class DistributedRuntime:
         node: NodeInventoryRecord,
     ) -> None:
         existing = _all_pages(self.store.list_instances, group_id=group.group_id)
-        active = [item for item in existing if item.status not in {"expired", "failed"}]
+        active = [item for item in existing if self._occupies_capacity(item)]
         if not any(item.instance_id == candidate.instance_id for item in active):
             if len(active) >= group.desired_instances:
                 raise DistributedRuntimeError("service_group_capacity_exhausted")
@@ -1283,6 +1283,20 @@ class DistributedRuntime:
                     raise DistributedRuntimeError(
                         "service_group_anti_affinity_conflict"
                     )
+
+    def _occupies_capacity(self, instance: ServiceInstance) -> bool:
+        if instance.status in {"draining", "expired", "failed"}:
+            return False
+        try:
+            lease = self.store.get_lease(instance.lease_id)
+        except FileNotFoundError:
+            return False
+        return (
+            lease.kind == "membership"
+            and lease.owner_instance_id == instance.instance_id
+            and lease.status == "active"
+            and _utc(lease.valid_until) > self.clock()
+        )
 
     def _publish_projection(self) -> None:
         if self.projection_publisher is None:

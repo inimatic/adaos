@@ -413,6 +413,57 @@ def test_membership_expiry_is_independent_from_last_health(
     assert observed.health["status"] == "passing"
 
 
+def test_draining_instance_releases_placement_capacity_for_replacement(
+    tmp_path: Path,
+) -> None:
+    runtime, _, release = _runtime(tmp_path)
+    _register_both(runtime, release)
+    current = runtime.store.get_instance("media-agent-node-a")
+    runtime.drain_instance(
+        current.instance_id,
+        expected_revision=current.revision,
+        principal=_principal(),
+    )
+
+    replacement = runtime.register_instance(
+        replace(
+            _instance(release, "node-a"),
+            instance_id="media-agent-node-a-replacement",
+        ),
+        expected_revision=0,
+        principal=_principal(),
+    )
+
+    assert replacement.status == "ready"
+    assert replacement.node_id == "node-a"
+
+
+def test_expired_membership_releases_capacity_before_status_reconciliation(
+    tmp_path: Path,
+) -> None:
+    runtime, clock, release = _runtime(tmp_path)
+    for node_id in ("node-a", "node-b"):
+        runtime.register_instance(
+            _instance(release, node_id),
+            expected_revision=0,
+            lease_seconds=30,
+            principal=_principal(),
+        )
+    clock.advance(31)
+
+    replacement = runtime.register_instance(
+        replace(
+            _instance(release, "node-a"),
+            instance_id="media-agent-node-a-replacement",
+        ),
+        expected_revision=0,
+        principal=_principal(),
+    )
+
+    assert replacement.status == "ready"
+    assert runtime.store.get_instance("media-agent-node-a").status == "ready"
+
+
 class FakeServiceInvoker:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
