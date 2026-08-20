@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 import httpx
@@ -204,6 +205,46 @@ def test_skill_adapter_routes_source_and_target_phases_to_owning_nodes() -> None
     )
 
 
+def test_skill_adapter_carries_bounded_snapshot_to_later_target_phase() -> None:
+    captured: list[Mapping[str, Any]] = []
+    store = _Store()
+    inline_snapshot = {
+        "schema": "adaos.distributed.inline_snapshot.v1",
+        "payload_digest": _DIGEST,
+        "payload": "bounded",
+    }
+    store.get_operation = lambda _operation_id: SimpleNamespace(  # type: ignore[attr-defined]
+        phases=(
+            SimpleNamespace(
+                phase="move-documents.snapshot",
+                receipt={"inline_snapshot": inline_snapshot},
+            ),
+        )
+    )
+    adapter = SkillToolTopologyAdapter(
+        store=store,  # type: ignore[arg-type]
+        local_node_id="node-b",
+        local_executor=lambda _skill, _tool, payload: (
+            captured.append(payload) or {"ok": True, "receipt": {}}
+        ),
+        remote=_Remote(),
+    )
+
+    adapter.verify(
+        TopologyStepContext(
+            operation_id="operation-1",
+            plan_digest=str(_plan().plan_digest),
+            step=_step(),
+            phase="verify",
+            authority_epoch=0,
+            idempotency_key="phase-1",
+            attempt=1,
+        )
+    )
+
+    assert captured[0]["phase_inputs"] == {"source_snapshot": inline_snapshot}
+
+
 def test_skill_adapter_commits_remote_replica_receipt_to_authority_store() -> None:
     store = _Store()
     replica = Replica(
@@ -334,6 +375,7 @@ def test_receiver_validates_target_identity_and_reviewed_phase() -> None:
         "target_instance": target.to_dict(),
         "source_replica": None,
         "target_replica": None,
+        "phase_inputs": {},
     }
     result = execute_topology_phase_request(
         payload,
