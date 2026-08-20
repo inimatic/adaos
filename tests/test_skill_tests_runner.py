@@ -101,4 +101,4 @@ def test_runtime_fallback_pytest_uses_bounded_production_budget(
     monkeypatch.setenv("ADAOS_SKILL_PYTEST_TIMEOUT_SECONDS", "5000")
     mod.run_tests(skill_root, log_path=tmp_path / "bounded.log")
 
-    assert captured == [180, 900]
+    assert captured == [600, 900]

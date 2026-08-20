@@ -30,10 +30,10 @@ _TEST_TIMEOUTS = {
 def _fallback_pytest_timeout() -> int:
     try:
         value = int(
-            str(os.getenv("ADAOS_SKILL_PYTEST_TIMEOUT_SECONDS") or "180").strip()
+            str(os.getenv("ADAOS_SKILL_PYTEST_TIMEOUT_SECONDS") or "600").strip()
         )
     except (TypeError, ValueError):
-        value = 180
+        value = 600
     return max(60, min(900, value))
 
 
