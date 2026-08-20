@@ -77,6 +77,19 @@ _APPROVAL_PERMISSIONS = {
 _SECRET_WORDS = {"authorization", "cookie", "password", "secret", "token"}
 
 
+def _adapter_error_code(exc: Exception, phase: str) -> str:
+    candidate = str(exc).strip().lower()
+    if (
+        candidate
+        and len(candidate) <= 160
+        and all(
+            char.isascii() and (char.isalnum() or char in "._:-") for char in candidate
+        )
+    ):
+        return candidate
+    return f"adapter_phase_failed:{phase}"
+
+
 def _redact(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {
@@ -95,9 +108,10 @@ class TopologyExecutor:
     store: DistributedRuntimeStore
     adapter: TopologyAdapter
     pressure_probe: Callable[[TopologyPlanStep], float] | None = None
-    authority_handoff: Callable[
-        [TopologyPlanStep, TopologyOperation, DistributedPrincipal, int], int
-    ] | None = None
+    authority_handoff: (
+        Callable[[TopologyPlanStep, TopologyOperation, DistributedPrincipal, int], int]
+        | None
+    ) = None
     sleep: Callable[[float], None] = time.sleep
     max_attempts: int = 2
     pressure_limit: float = 0.9
@@ -233,9 +247,7 @@ class TopologyExecutor:
                 step=step,
                 phase=phase,
                 authority_epoch=(
-                    plan.authority_epoch
-                    if authority_epoch is None
-                    else authority_epoch
+                    plan.authority_epoch if authority_epoch is None else authority_epoch
                 ),
                 idempotency_key=phase_key,
                 attempt=attempt,
@@ -292,6 +304,7 @@ class TopologyExecutor:
                 )
                 raise TopologyExecutionError(str(exc) or "retry_exhausted") from exc
             except Exception as exc:
+                error_code = _adapter_error_code(exc, phase)
                 self._append_terminal_phase(
                     operation,
                     TopologyPhaseResult(
@@ -302,10 +315,10 @@ class TopologyExecutor:
                         receipt={},
                         started_at=started_at,
                         finished_at=utc_now(),
-                        error_code=f"adapter_phase_failed:{phase}",
+                        error_code=error_code,
                     ),
                 )
-                raise TopologyExecutionError(f"adapter_phase_failed:{phase}") from exc
+                raise TopologyExecutionError(error_code) from exc
         raise TopologyExecutionError("adapter_phase_retry_exhausted")
 
     def _append_terminal_phase(

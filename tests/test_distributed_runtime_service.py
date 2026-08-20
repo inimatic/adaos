@@ -642,9 +642,9 @@ def test_reviewed_handoff_plan_commits_epoch_before_domain_promotion(
         replica_role="authority",
         principal=_principal(),
     )
-    assert runtime.get_topology_plan(
-        str(plan.plan_digest), principal=_principal()
-    ) == plan
+    assert (
+        runtime.get_topology_plan(str(plan.plan_digest), principal=_principal()) == plan
+    )
     operation = runtime.apply_topology_plan(
         str(plan.plan_digest),
         idempotency_key="reviewed-handoff-a-to-b",
@@ -672,16 +672,23 @@ def test_reviewed_handoff_plan_commits_epoch_before_domain_promotion(
 
 class FakeTopologyAdapter:
     def __init__(
-        self, *, retry: str | None = None, uncertain: str | None = None
+        self,
+        *,
+        retry: str | None = None,
+        uncertain: str | None = None,
+        failure: str | None = None,
     ) -> None:
         self.retry = retry
         self.uncertain = uncertain
+        self.failure = failure
         self.calls: list[tuple[str, int, str]] = []
 
     def _call(self, context) -> Mapping[str, Any]:
         self.calls.append((context.phase, context.attempt, context.idempotency_key))
         if context.phase == self.uncertain:
             raise UncertainTopologyPhaseError("dispatch_outcome_unknown")
+        if context.phase == self.failure:
+            raise RuntimeError("service_invocation_activation_missing")
         if context.phase == self.retry and context.attempt == 1:
             raise RetryableTopologyPhaseError("temporary_pressure")
         return {
@@ -781,6 +788,32 @@ def test_uncertain_topology_phase_is_not_retried(tmp_path: Path) -> None:
     assert operation.state == "uncertain"
     assert len([item for item in adapter.calls if item[0] == "verify"]) == 1
     assert operation.phases[-1].state == "uncertain"
+
+
+def test_topology_operation_preserves_bounded_machine_adapter_error(
+    tmp_path: Path,
+) -> None:
+    runtime, _, _ = _runtime(tmp_path)
+    _derived_topology(runtime)
+    runtime.topology_adapter = FakeTopologyAdapter(failure="inspect")
+    plan = runtime.plan_replica_change(
+        "media-catalog:root-a",
+        action="repair",
+        source_instance_id="media-agent-node-a",
+        target_instance_id="media-agent-node-b",
+        replica_role="derived",
+        principal=_principal(),
+    )
+
+    operation = runtime.apply_topology_plan(
+        str(plan.plan_digest),
+        idempotency_key="repair-catalog-machine-error",
+        principal=_principal(),
+    )
+
+    assert operation.state == "failed"
+    failed = next(phase for phase in operation.phases if phase.state == "failed")
+    assert failed.error_code == "service_invocation_activation_missing"
 
 
 class ChunkSource:

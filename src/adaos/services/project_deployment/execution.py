@@ -41,6 +41,25 @@ class UncertainDeploymentPhaseError(ProjectDeploymentExecutionError):
         self.details = dict(details or {})
 
 
+def component_activation_id(
+    desired: ProjectDeployment,
+    change: DeploymentPlanChange,
+    package: ArtifactPackageRef,
+) -> str:
+    """Return the activation identity shared by coordinator and target node."""
+
+    activation_seed = canonical_payload_digest(
+        {
+            "deployment_id": desired.deployment_id,
+            "component_ref": change.component_ref,
+            "node_id": change.node_id,
+            "generation": desired.revision,
+            "package_digest": package.digest,
+        }
+    ).split(":", 1)[1][:32]
+    return f"activation.{activation_seed}"
+
+
 class ComponentDeploymentAdapter(Protocol):
     def execute_phase(
         self,
@@ -571,19 +590,10 @@ class ProjectDeploymentExecutor:
             self.store.put_activation(
                 replace(current, status="inactive", updated_at=now)
             )
-        activation_seed = canonical_payload_digest(
-            {
-                "deployment_id": desired.deployment_id,
-                "component_ref": change.component_ref,
-                "node_id": change.node_id,
-                "generation": desired.revision,
-                "package_digest": package.digest,
-            }
-        ).split(":", 1)[1][:32]
         receipts = {item.phase: dict(item.receipt) for item in phases if item.receipt}
         health = dict(receipts.get("health") or {})
         activation = ComponentActivation(
-            activation_id=f"activation.{activation_seed}",
+            activation_id=component_activation_id(desired, change, package),
             deployment_id=desired.deployment_id,
             component_ref=change.component_ref,
             node_id=change.node_id,
@@ -669,4 +679,5 @@ __all__ = [
     "ProjectDeploymentExecutor",
     "RetryableDeploymentPhaseError",
     "UncertainDeploymentPhaseError",
+    "component_activation_id",
 ]

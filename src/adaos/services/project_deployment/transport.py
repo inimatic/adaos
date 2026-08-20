@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from threading import RLock
 from typing import Any, Callable, Mapping
 
@@ -13,6 +13,7 @@ from adaos.domain.project_deployment import (
     DeploymentPlanChange,
     NodeInventoryRecord,
     ProjectDeployment,
+    utc_now,
 )
 from adaos.services.artifact_pipeline.releases import ReleasePlan
 
@@ -21,7 +22,9 @@ from .execution import (
     ProjectDeploymentExecutionError,
     RetryableDeploymentPhaseError,
     UncertainDeploymentPhaseError,
+    component_activation_id,
 )
+from .store import ProjectDeploymentStore
 
 
 REMOTE_PHASE_SCHEMA = "adaos.project.remote_component_phase.v1"
@@ -41,7 +44,10 @@ def _safe_receipt(value: Any, *, depth: int = 0) -> Any:
         result: dict[str, Any] = {}
         for key, item in list(value.items())[:100]:
             token = str(key)
-            if any(secret in token.lower() for secret in ("token", "secret", "password", "credential")):
+            if any(
+                secret in token.lower()
+                for secret in ("token", "secret", "password", "credential")
+            ):
                 result[token] = "<redacted>"
             else:
                 result[token] = _safe_receipt(item, depth=depth + 1)
@@ -78,7 +84,9 @@ def _remote_phase_payload(
         "source_node_id": source_node_id,
         "target_node_id": node_id,
         "phase": kwargs["phase"],
-        "node": kwargs.get("node").to_dict() if kwargs.get("node") is not None else None,
+        "node": kwargs.get("node").to_dict()
+        if kwargs.get("node") is not None
+        else None,
         "change": kwargs["change"].to_dict(),
         "desired": kwargs["desired"].to_dict(),
         "release_plan": _release_mapping(kwargs["release_plan"]),
@@ -95,7 +103,10 @@ def _remote_phase_payload(
 
 
 def _remote_phase_receipt(body: Any) -> dict[str, Any]:
-    if not isinstance(body, Mapping) or body.get("schema") != REMOTE_PHASE_RESULT_SCHEMA:
+    if (
+        not isinstance(body, Mapping)
+        or body.get("schema") != REMOTE_PHASE_RESULT_SCHEMA
+    ):
         raise ProjectDeploymentExecutionError("remote_node_response_contract_invalid")
     receipt = body.get("receipt")
     if not isinstance(receipt, Mapping):
@@ -112,7 +123,9 @@ class HttpNodeDeploymentTransport:
     connect_timeout_seconds: float = 10.0
     operation_timeout_seconds: float = 600.0
 
-    def execute_component_phase(self, *, node_id: str, **kwargs: Any) -> Mapping[str, Any]:
+    def execute_component_phase(
+        self, *, node_id: str, **kwargs: Any
+    ) -> Mapping[str, Any]:
         endpoint = str(self.endpoint_resolver(node_id) or "").strip().rstrip("/")
         if not endpoint.startswith(("http://", "https://")):
             raise RetryableDeploymentPhaseError("remote_node_endpoint_unavailable")
@@ -151,9 +164,13 @@ class HttpNodeDeploymentTransport:
         try:
             body = response.json()
         except ValueError as exc:
-            raise ProjectDeploymentExecutionError("remote_node_response_invalid") from exc
+            raise ProjectDeploymentExecutionError(
+                "remote_node_response_invalid"
+            ) from exc
         if response.status_code in {429, 502, 503, 504}:
-            raise RetryableDeploymentPhaseError(str(body.get("detail") or "remote_node_busy"))
+            raise RetryableDeploymentPhaseError(
+                str(body.get("detail") or "remote_node_busy")
+            )
         if response.status_code >= 400:
             raise ProjectDeploymentExecutionError(
                 str(body.get("detail") or f"remote_node_http_{response.status_code}")
@@ -168,7 +185,9 @@ class MemberLinkNodeDeploymentTransport:
     source_node_id: str
     operation_timeout_seconds: float = 600.0
 
-    def execute_component_phase(self, *, node_id: str, **kwargs: Any) -> Mapping[str, Any]:
+    def execute_component_phase(
+        self, *, node_id: str, **kwargs: Any
+    ) -> Mapping[str, Any]:
         payload = _remote_phase_payload(
             node_id=node_id,
             source_node_id=self.source_node_id,
@@ -189,10 +208,19 @@ class MemberLinkNodeDeploymentTransport:
                 details={"node_id": node_id, "phase": kwargs.get("phase")},
             ) from exc
         except ConnectionError as exc:
-            raise RetryableDeploymentPhaseError("remote_member_link_unavailable") from exc
+            raise RetryableDeploymentPhaseError(
+                "remote_member_link_unavailable"
+            ) from exc
         except RuntimeError as exc:
             reason = str(exc)
-            if any(token in reason for token in ("member_not_connected", "member_rpc_busy", "link_replaced")):
+            if any(
+                token in reason
+                for token in (
+                    "member_not_connected",
+                    "member_rpc_busy",
+                    "link_replaced",
+                )
+            ):
                 raise RetryableDeploymentPhaseError(reason) from exc
             raise ProjectDeploymentExecutionError(reason) from exc
         return _remote_phase_receipt(body)
@@ -200,6 +228,7 @@ class MemberLinkNodeDeploymentTransport:
 
 _receiver_lock = RLock()
 _receiver_adapter: LocalComponentDeploymentAdapter | None = None
+_receiver_store: ProjectDeploymentStore | None = None
 _receiver_node_id = ""
 
 
@@ -208,18 +237,107 @@ def register_local_deployment_receiver(
     *,
     node_id: str = "",
 ) -> None:
-    global _receiver_adapter, _receiver_node_id
+    global _receiver_adapter, _receiver_store, _receiver_node_id
     with _receiver_lock:
         _receiver_adapter = adapter
+        _receiver_store = (
+            ProjectDeploymentStore(state_dir=adapter.state_root)
+            if adapter is not None
+            else None
+        )
         _receiver_node_id = str(node_id or "").strip()
+
+
+def _persist_remote_activation(
+    store: ProjectDeploymentStore,
+    *,
+    desired: ProjectDeployment,
+    change: DeploymentPlanChange,
+    package: ArtifactPackageRef,
+    current_activation: ComponentActivation | None,
+    idempotency_key: str,
+) -> tuple[ComponentActivation, ComponentActivation | None]:
+    now = utc_now()
+    previous_local = None
+    if current_activation is not None:
+        try:
+            previous_local = store.get_activation(current_activation.activation_id)
+        except FileNotFoundError:
+            previous_local = None
+        if previous_local is not None and previous_local.status != "inactive":
+            store.put_activation(
+                replace(previous_local, status="inactive", updated_at=now)
+            )
+
+    activation_id = component_activation_id(desired, change, package)
+    try:
+        existing = store.get_activation(activation_id)
+    except FileNotFoundError:
+        existing = None
+    if existing is not None:
+        active = replace(existing, status="active", updated_at=now)
+    else:
+        active = ComponentActivation(
+            activation_id=activation_id,
+            deployment_id=desired.deployment_id,
+            component_ref=change.component_ref,
+            node_id=change.node_id,
+            release_digest=desired.release_digest,
+            package_digest=package.digest,
+            generation=desired.revision,
+            status="active",
+            health={"ready": True, "source": "remote_commit"},
+            evidence={
+                "source": "remote_component_commit",
+                "idempotency_key": idempotency_key,
+            },
+            created_at=now,
+            updated_at=now,
+        )
+    return store.put_activation(active), previous_local
+
+
+def _restore_remote_activation(
+    store: ProjectDeploymentStore,
+    activation: ComponentActivation,
+    previous: ComponentActivation | None,
+) -> None:
+    now = utc_now()
+    store.put_activation(replace(activation, status="inactive", updated_at=now))
+    if previous is not None:
+        store.put_activation(replace(previous, status="active", updated_at=now))
+
+
+def _persist_remote_lifecycle(
+    store: ProjectDeploymentStore,
+    *,
+    phase: str,
+    current_activation: ComponentActivation | None,
+) -> None:
+    status = {
+        "cordon": "draining",
+        "drain": "draining",
+        "deactivate": "inactive",
+        "remove": "removed",
+    }.get(phase)
+    if status is None or current_activation is None:
+        return
+    try:
+        local = store.get_activation(current_activation.activation_id)
+    except FileNotFoundError:
+        return
+    store.put_activation(replace(local, status=status, updated_at=utc_now()))
 
 
 def execute_remote_component_phase(payload: Mapping[str, Any]) -> dict[str, Any]:
     with _receiver_lock:
         adapter = _receiver_adapter
+        store = _receiver_store
         local_node_id = _receiver_node_id
-    if adapter is None or not local_node_id:
-        raise ProjectDeploymentExecutionError("local_deployment_receiver_not_configured")
+    if adapter is None or store is None or not local_node_id:
+        raise ProjectDeploymentExecutionError(
+            "local_deployment_receiver_not_configured"
+        )
     if payload.get("schema") != REMOTE_PHASE_SCHEMA:
         raise ProjectDeploymentExecutionError("remote_phase_schema_invalid")
     target_node_id = str(payload.get("target_node_id") or "").strip()
@@ -229,14 +347,21 @@ def execute_remote_component_phase(payload: Mapping[str, Any]) -> dict[str, Any]
     raw_change = payload.get("change")
     raw_desired = payload.get("desired")
     raw_release = payload.get("release_plan")
-    if not all(isinstance(item, Mapping) for item in (raw_node, raw_change, raw_desired, raw_release)):
+    if not all(
+        isinstance(item, Mapping)
+        for item in (raw_node, raw_change, raw_desired, raw_release)
+    ):
         raise ProjectDeploymentExecutionError("remote_phase_contract_missing")
     node = NodeInventoryRecord.from_mapping(raw_node)
     change = DeploymentPlanChange.from_mapping(raw_change)
     desired = ProjectDeployment.from_mapping(raw_desired)
     release_plan = ReleasePlan.from_mapping(raw_release)
     raw_package = payload.get("package")
-    package = ArtifactPackageRef.from_mapping(raw_package) if isinstance(raw_package, Mapping) else None
+    package = (
+        ArtifactPackageRef.from_mapping(raw_package)
+        if isinstance(raw_package, Mapping)
+        else None
+    )
     raw_activation = payload.get("current_activation")
     current_activation = (
         ComponentActivation.from_mapping(raw_activation)
@@ -245,37 +370,76 @@ def execute_remote_component_phase(payload: Mapping[str, Any]) -> dict[str, Any]
     )
     if node.node_id != local_node_id:
         raise ProjectDeploymentExecutionError("remote_phase_node_contract_mismatch")
-    release_digest = release_plan.release.release_digest or release_plan.release.computed_digest()
+    release_digest = (
+        release_plan.release.release_digest or release_plan.release.computed_digest()
+    )
     if release_digest != desired.release_digest:
         raise ProjectDeploymentExecutionError("remote_phase_release_digest_mismatch")
     if package is not None and package.digest != change.target_package_digest:
         raise ProjectDeploymentExecutionError("remote_phase_package_digest_mismatch")
     encoded = payload.get("package_archive_b64")
     if encoded is not None:
-        if payload.get("phase") != "fetch" or package is None or not isinstance(encoded, str):
-            raise ProjectDeploymentExecutionError("remote_phase_package_payload_invalid")
+        if (
+            payload.get("phase") != "fetch"
+            or package is None
+            or not isinstance(encoded, str)
+        ):
+            raise ProjectDeploymentExecutionError(
+                "remote_phase_package_payload_invalid"
+            )
         try:
             archive = base64.b64decode(encoded, validate=True)
         except ValueError as exc:
-            raise ProjectDeploymentExecutionError("remote_phase_package_encoding_invalid") from exc
+            raise ProjectDeploymentExecutionError(
+                "remote_phase_package_encoding_invalid"
+            ) from exc
         if len(archive) > MAX_REMOTE_PACKAGE_BYTES:
-            raise ProjectDeploymentExecutionError("remote_package_exceeds_transport_limit")
+            raise ProjectDeploymentExecutionError(
+                "remote_package_exceeds_transport_limit"
+            )
         adapter.package_store.put(archive, expected_digest=package.digest)
-    receipt = adapter.execute_phase(
-        phase=str(payload.get("phase") or ""),
-        node=node,
-        change=change,
-        desired=desired,
-        release_plan=release_plan,
-        package=package,
+    phase = str(payload.get("phase") or "")
+    idempotency_key = str(payload.get("idempotency_key") or "")
+    committed_activation = None
+    previous_local = None
+    if phase == "commit":
+        if package is None or change.action not in {"install", "update"}:
+            raise ProjectDeploymentExecutionError(
+                "remote_commit_activation_contract_missing"
+            )
+        committed_activation, previous_local = _persist_remote_activation(
+            store,
+            desired=desired,
+            change=change,
+            package=package,
+            current_activation=current_activation,
+            idempotency_key=idempotency_key,
+        )
+    try:
+        receipt = adapter.execute_phase(
+            phase=phase,
+            node=node,
+            change=change,
+            desired=desired,
+            release_plan=release_plan,
+            package=package,
+            current_activation=current_activation,
+            idempotency_key=idempotency_key,
+            attempt=int(payload.get("attempt") or 0),
+        )
+    except Exception:
+        if committed_activation is not None:
+            _restore_remote_activation(store, committed_activation, previous_local)
+        raise
+    _persist_remote_lifecycle(
+        store,
+        phase=phase,
         current_activation=current_activation,
-        idempotency_key=str(payload.get("idempotency_key") or ""),
-        attempt=int(payload.get("attempt") or 0),
     )
     return {
         "schema": REMOTE_PHASE_RESULT_SCHEMA,
         "target_node_id": local_node_id,
-        "phase": str(payload.get("phase") or ""),
+        "phase": phase,
         "receipt": _safe_receipt(receipt),
     }
 

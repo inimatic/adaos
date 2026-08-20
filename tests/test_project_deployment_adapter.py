@@ -29,6 +29,8 @@ from adaos.services.project_deployment import (
     execute_remote_component_phase,
     register_local_deployment_receiver,
 )
+from adaos.services.project_deployment.execution import component_activation_id
+from adaos.services.project_deployment.store import ProjectDeploymentStore
 
 
 _NOW = "2026-08-19T18:00:00+00:00"
@@ -212,7 +214,9 @@ def replace_node(change: DeploymentPlanChange, node_id: str) -> DeploymentPlanCh
     return replace(change, node_id=node_id)
 
 
-def test_remote_receiver_revalidates_identity_and_package_digest(tmp_path: Path) -> None:
+def test_remote_receiver_revalidates_identity_and_package_digest(
+    tmp_path: Path,
+) -> None:
     package = _package(tmp_path)
     release = _release(package)
     store = ContentAddressedPackageStore(tmp_path / "remote-packages")
@@ -250,7 +254,29 @@ def test_remote_receiver_revalidates_identity_and_package_digest(tmp_path: Path)
     assert result["schema"] == "adaos.project.remote_component_phase_result.v1"
     assert result["target_node_id"] == "node-b"
     assert store.verify(package.ref.digest).ref == package.ref
-    with pytest.raises(ProjectDeploymentExecutionError, match="target_identity_mismatch"):
+
+    committed = execute_remote_component_phase(
+        {
+            **payload,
+            "phase": "commit",
+            "idempotency_key": "remote:test-worker:commit",
+            "package_archive_b64": None,
+        }
+    )
+    activation_store = ProjectDeploymentStore(state_dir=tmp_path / "remote-state")
+    desired = _desired(release)
+    activation = activation_store.get_activation(
+        component_activation_id(desired, change, package.ref)
+    )
+
+    assert committed["receipt"]["committed"] is True
+    assert activation.status == "active"
+    assert activation.node_id == "node-b"
+    assert activation.release_digest == desired.release_digest
+    assert activation.generation == desired.revision
+    with pytest.raises(
+        ProjectDeploymentExecutionError, match="target_identity_mismatch"
+    ):
         execute_remote_component_phase({**payload, "target_node_id": "node-c"})
     register_local_deployment_receiver(None)
 
