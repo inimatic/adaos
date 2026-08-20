@@ -97,7 +97,7 @@ adaos dev ticket new
 adaos dev ticket list
 adaos dev ticket show <id>
 adaos dev ticket defer <id>
-adaos dev ticket handoff <id> --builder --mode autonomous|interactive
+adaos dev ticket handoff <id> --mode autonomous|interactive
 adaos dev ticket resolve <id> --evidence <ref> --version <artifact-version>
 adaos dev ticket close <id> --reason duplicate|stale|refused|not-design-time-fixable
 ```
@@ -554,20 +554,31 @@ feedback, Builder handoff schemas, review anchors, Pending Actions, NLU
 Teacher candidates, conversation stories, runtime incidents, projection
 diagnostics, artifact refs, and skill runtime declaration checks.
 
-Missing target pieces include:
+Implemented first slice, 2026-08-20:
 
-- a first-class `adaos.development_signal.v1` schema;
-- a `adaos.dev_ticket.v1` schema and workspace ticket store;
-- workspace evolution inbox and artifact-local signal projection;
+- first-class `adaos.development_signal.v1` and `adaos.dev_ticket.v1` ABI
+  schemas;
+- local/private workspace inbox at runtime state
+  `development_tickets/state.json`;
+- signal and ticket dedup by stable keys with occurrence counts;
+- runtime receiver compatibility producer for
+  `compat.stream_receiver_policy_missing` and
+  `compat.stream_receiver_not_declared`;
+- Pending Action creation and response handling for preview, postpone, open
+  Builder, autonomous repair, and refuse;
+- Builder repair task handoff with Dev Ticket and Development Signal source
+  refs;
+- resolution only through explicit validation evidence refs;
+- `adaos dev ticket` CLI for Codex and developer workflows.
+
+Remaining target pieces include:
+
+- artifact-local signal projection;
 - a client ticket list/detail surface in scenario headers and modal contexts;
-- `adaos dev ticket` CLI commands for Codex and developer workflows;
 - Feedback Skill UI/voice intake with screenshot capture;
 - conversational disambiguation before feedback/Teacher/Builder routing;
 - NLU Teacher and Feedback Signal refs in both directions;
-- runtime compatibility-finding producer for missing receiver/data-route
-  contracts;
-- Pending Action producers and response handlers for autonomous versus
-  interactive Builder handoff;
+- broader compatibility producers for validation, route pressure, projection
+  rule misses, and invalid data-route contracts;
 - optional redacted GitHub issue draft/link/export integration;
-- closure by artifact version, overlay, acceptance evidence, or stale
-  revalidation.
+- stale revalidation and not-design-time-fixable closure automation.

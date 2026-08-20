@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/development_signal.v1.schema.json",
+  "title": "AdaOS Development Signal v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "signal_id",
+    "kind",
+    "status",
+    "summary",
+    "owner_scope",
+    "origin_scope",
+    "target_scope",
+    "dedup_key",
+    "occurrence_count",
+    "source",
+    "artifact_refs",
+    "evidence_refs",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.development_signal.v1" },
+    "signal_id": { "type": "string", "minLength": 1 },
+    "kind": {
+      "enum": [
+        "feedback_note",
+        "development_request",
+        "compatibility_finding",
+        "runtime_failure",
+        "review_comment",
+        "nlu_failure",
+        "user_adaptation_request"
+      ]
+    },
+    "status": {
+      "enum": [
+        "captured",
+        "classified",
+        "needs_clarification",
+        "triaged",
+        "duplicate",
+        "rejected",
+        "deferred",
+        "adaptation_applied",
+        "teacher_candidate",
+        "repair_created",
+        "issue_created",
+        "in_progress",
+        "resolved_by_version",
+        "resolved_by_overlay",
+        "not_design_time_fixable",
+        "stale",
+        "superseded"
+      ]
+    },
+    "summary": { "type": "string", "minLength": 1 },
+    "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
+    "blocking": { "type": "boolean" },
+    "classification_confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+    "owner_scope": { "type": "object" },
+    "origin_scope": { "type": "object" },
+    "target_scope": { "type": "object" },
+    "dedup_key": { "type": "string", "minLength": 1 },
+    "occurrence_count": { "type": "integer", "minimum": 1 },
+    "source": { "type": "string", "minLength": 1 },
+    "artifact_refs": { "type": "array", "items": { "type": "object" } },
+    "evidence_refs": { "type": "array", "items": { "type": "object" } },
+    "conversation_ref": { "type": "object" },
+    "nlu_teacher_ref": { "type": "object" },
+    "builder_ref": { "type": "object" },
+    "issue_ref": { "type": "object" },
+    "policy": { "type": "object" },
+    "metadata": { "type": "object" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}

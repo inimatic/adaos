@@ -34,11 +34,11 @@ miss are all captured as Development Signals with scope, artifact identity,
 evidence refs, dedup metadata, and terminal or deferred state; at least one
 signal becomes a Dev Ticket visible to a person and consumable by Codex.
 
-- [ ] `[must]` `DS0-01` Specify `adaos.development_signal.v1` with `owner_scope`,
+- [x] `[must]` `DS0-01` Specify `adaos.development_signal.v1` with `owner_scope`,
   `origin_scope`, `target_scope`, `artifact_refs`, conversation refs, Teacher
   refs, Builder refs, Issue refs, lifecycle state, severity, blocking,
   confidence, policy, and provenance.
-- [ ] `[must]` `DS0-02` Implement a workspace evolution inbox that can store
+- [x] `[must]` `DS0-02` Implement a workspace evolution inbox that can store
   signals for installed, catalog, remote, read-only, and not-yet-materialized
   artifacts.
 - [ ] `[must]` `DS0-03` Add artifact-local signal projection for skills,
@@ -57,19 +57,27 @@ signal becomes a Dev Ticket visible to a person and consumable by Codex.
 - [ ] `[could]` `DS0-08` Provide import/migration from current
   `builder.development_feedback.v1`, Builder repair tasks, review anchors, and
   NLU Teacher promotion candidates.
-- [ ] `[must]` `DS0-09` Specify `adaos.dev_ticket.v1` as the user/Codex-visible
+- [x] `[must]` `DS0-09` Specify `adaos.dev_ticket.v1` as the user/Codex-visible
   backlog object over one or more Development Signals, with status, target,
   severity, owner, dedup group, pending action refs, Builder refs, external
   refs, and closure evidence.
-- [ ] `[must]` `DS0-10` Implement a workspace ticket store that keeps Dev
+- [x] `[must]` `DS0-10` Implement a workspace ticket store that keeps Dev
   Tickets local/private by default and links each ticket to its source signals.
-- [ ] `[must]` `DS0-11` Define ticket lifecycle states:
+- [x] `[must]` `DS0-11` Define ticket lifecycle states:
   `captured`, `proposed`, `accepted`, `deferred`, `waiting_for_user`,
   `ready_for_builder`, `in_builder`, `resolved`, `closed`, `superseded`, and
   `stale`.
 - [ ] `[should]` `DS0-12` Add ticket projection indexes by current scenario,
   skill, modal/surface, status, blocker flag, source, and target artifact
   version.
+
+Implementation note, 2026-08-20: the first store lives in runtime state under
+`development_tickets/state.json` and is intentionally local/private. It stores
+`adaos.development_signal.v1` records and `adaos.dev_ticket.v1` tickets with
+generic target scopes, so installed, catalog, remote, read-only, and
+not-yet-materialized artifacts can be referenced before source is available.
+Artifact-local projections, rich artifact blob storage, and global UI indexes
+remain open.
 
 ## DS1. Feedback Skill Intake
 
@@ -184,13 +192,13 @@ interactive Builder options.
 - [ ] `[must]` `DS4-02` Convert activation, validation, stream-admission, route
   pressure, and projection-rule-miss evidence into Development Signals and
   Builder repair tasks when design-time fixable.
-- [ ] `[must]` `DS4-09` Convert user-visible or blocking compatibility signals
+- [x] `[must]` `DS4-09` Convert user-visible or blocking compatibility signals
   into Dev Tickets before creating Pending Actions, so people and Codex inspect
   one backlog object rather than raw diagnostic records.
-- [ ] `[must]` `DS4-03` Add computed blocker fields:
+- [x] `[must]` `DS4-03` Add computed blocker fields:
   `blocking`, `run_policy`, `design_time_fixable`, and
   `autonomous_repair_eligible`.
-- [ ] `[must]` `DS4-04` Publish a Pending Action for user-visible or blocking
+- [x] `[must]` `DS4-04` Publish a Pending Action for user-visible or blocking
   compatibility findings with actions `preview_evidence`,
   `start_autonomous_repair`, `open_builder`, `postpone`, and where policy
   permits `run_once_with_compatibility` or `disable_until_fixed`.
@@ -205,6 +213,13 @@ interactive Builder options.
   affected skill.
 - [ ] `[could]` `DS4-08` Add batch triage for low-risk descriptor debt.
 
+Implementation note, 2026-08-20: the first runtime producer is the
+stream/Yjs receiver admission guard. It reports
+`compat.stream_receiver_policy_missing` and
+`compat.stream_receiver_not_declared` into the ticket store, deduplicates by
+skill/reason/receiver, and publishes a Pending Action for user-visible review.
+Broader validation, projection-rule, and route-pressure producers remain open.
+
 ## DS5. Builder Handoff And Closure
 
 Goal: a Dev Ticket can become autonomous or interactive Builder work without
@@ -216,7 +231,7 @@ Ticket and signals, and closes only with evidence.
 
 - [ ] `[must]` `DS5-01` Define the handoff packet from Development Signal to
   `builder.task.v1`, `builder.repair_task.v1`, or `builder.realize_request.v1`.
-- [ ] `[must]` `DS5-02` Add Pending Action response handlers for
+- [x] `[must]` `DS5-02` Add Pending Action response handlers for
   `start_autonomous_repair` and `open_builder`.
 - [ ] `[must]` `DS5-03` Materialize a development context for installed,
   catalog, remote, or read-only artifacts through existing DEV source,
@@ -236,18 +251,24 @@ Ticket and signals, and closes only with evidence.
   version, still blocked, or cannot be fixed locally.
 - [ ] `[could]` `DS5-08` Add comparison/evaluation hooks for multiple repair
   strategies when a signal is eligible for more than one adaptation method.
-- [ ] `[must]` `DS5-09` Add `adaos dev ticket` commands for
+- [x] `[must]` `DS5-09` Add `adaos dev ticket` commands for
   `new`, `list`, `show`, `defer`, `handoff`, `resolve`, and `close` as the
   Codex/developer CLI over the same ticket service used by the client UI.
-- [ ] `[must]` `DS5-10` Allow Codex to create proposed tickets during core,
+- [x] `[must]` `DS5-10` Allow Codex to create proposed tickets during core,
   skill, scenario, or review work with source, target, reason, evidence refs,
   dedup key, proposed action, and acceptance hint.
-- [ ] `[must]` `DS5-11` Keep Codex-created tickets in `captured` or `proposed`
+- [x] `[must]` `DS5-11` Keep Codex-created tickets in `captured` or `proposed`
   unless deterministic policy accepts them as blockers; human or policy
   triage moves them to accepted/deferred/refused.
 - [ ] `[should]` `DS5-12` Add Builder context filters that surface active Dev
   Tickets for the current artifact without flooding Builder with unrelated
   workspace debt.
+
+Implementation note, 2026-08-20: `adaos dev ticket` now covers create, list,
+show, defer, handoff, resolve, and close. Pending Action responses can choose
+postpone, open Builder, or autonomous repair; Builder repair tasks link back to
+the Dev Ticket and source Development Signals. Resolution requires evidence
+refs. Client ticket UI and delayed completion notifications remain open.
 
 ## DS6. Analytics, Campaigns, And Policy Hardening
 

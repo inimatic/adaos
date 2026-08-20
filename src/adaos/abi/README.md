@@ -50,6 +50,10 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   against stable declarative UI refs
 - `builder.review_anchor.v1.schema.json` - durable target model for Review
   feedback; current browser-local storage remains a compatibility draft
+- `development_signal.v1.schema.json` - immutable scoped feedback,
+  compatibility, runtime, review, or NLU evidence before triage
+- `dev_ticket.v1.schema.json` - user/Codex-visible development backlog item
+  aggregating Development Signals before Builder, Issue, or external handoff
 - `artifact.attestation.v1.schema.json` - detached Ed25519 package/release
   provenance statement bound to immutable subject and predicate digests
 - `artifact.release-attestation-set.v1.schema.json` - immutable exact

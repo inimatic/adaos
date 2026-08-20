@@ -185,7 +185,13 @@ def stream_receiver_event_admission(
 
     patterns = tuple(_clean_receiver(item) for item in receiver_patterns or () if _clean_receiver(item))
     if not patterns:
-        return {"allowed": True, "governed": False, "reason": "stream_receiver_policy_missing"}
+        return {
+            "allowed": True,
+            "governed": False,
+            "reason": "stream_receiver_policy_missing",
+            "receiver": receiver,
+            "receiver_patterns": [],
+        }
 
     for pattern in patterns:
         if _receiver_pattern_matches(pattern, receiver):

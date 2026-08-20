@@ -279,3 +279,52 @@ def test_stream_receiver_event_admission_rejects_foreign_receiver() -> None:
     assert denied["reason"] == "stream_receiver_not_declared"
     assert admitted["allowed"] is True
     assert admitted["matched_pattern"] == "demo.details.*"
+
+
+def test_stream_receiver_policy_missing_reports_development_ticket(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from adaos.sdk.core import decorators as decorators_module
+    import adaos.services.development_tickets as ticket_module
+
+    calls: list[dict] = []
+
+    class FakeDevelopmentTicketService:
+        def report_stream_receiver_compatibility_finding(self, **kwargs):
+            calls.append(dict(kwargs))
+            return {"ok": True, "reported": True}
+
+    def _missing_ctx(_feature=None):
+        raise RuntimeError("ctx missing in unit test")
+
+    monkeypatch.setattr(decorators_module, "_stream_receiver_compatibility_reporting_enabled", lambda: True)
+    monkeypatch.setattr(decorators_module, "require_ctx", _missing_ctx)
+    monkeypatch.setattr(ticket_module, "DevelopmentTicketService", FakeDevelopmentTicketService)
+    decorators_module._SUBSCRIPTION_COMPATIBILITY_REPORT_AT.clear()
+
+    evt = SimpleNamespace(
+        type="webio.stream.subscription.changed",
+        payload={"receiver": "legacy.panel", "webspace_id": "desktop"},
+    )
+    admission = stream_receiver_event_admission((), evt, "webio.stream.subscription.changed")
+
+    decorators_module._report_subscription_receiver_compatibility(
+        "legacy_skill",
+        "webio.stream.subscription.changed",
+        evt,
+        admission,
+    )
+
+    assert admission["reason"] == "stream_receiver_policy_missing"
+    assert admission["receiver"] == "legacy.panel"
+    assert calls == [
+        {
+            "skill_id": "legacy_skill",
+            "admission": admission,
+            "topic": "webio.stream.subscription.changed",
+            "event_type": "webio.stream.subscription.changed",
+            "publish_pending_action": True,
+            "ctx": None,
+            "webspace_id": "desktop",
+        }
+    ]
