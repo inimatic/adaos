@@ -100,7 +100,7 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["status"] == "completed"
     assert status["session"]["source_prototype_version"] == "0.1.0"
     assert status["automation"]["source_prototype_version"] == "0.1.0"
-    assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.4.0"
+    assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.5.0"
     assert status["session"]["created_artifacts"][0]["kind"] == "skill"
     assert status["session"]["created_artifacts"][0]["name"] == "recipes_skill"
     task = next(

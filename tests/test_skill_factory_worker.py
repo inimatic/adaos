@@ -1228,6 +1228,8 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(tmp_path: P
     assert "ADAOS_PYTHON" in prompt
     assert "authoritative SDK" in prompt
     assert "PowerShell string pipeline" in prompt
+    assert "every textual `Get-Content`" in prompt
+    assert "`-Encoding UTF8`" in prompt
     assert "UTF-8" in prompt
     assert "Governed Change context" in prompt
     assert "change.demo" in prompt
