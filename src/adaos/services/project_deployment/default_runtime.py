@@ -8,7 +8,7 @@ import platform
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from threading import RLock
+from threading import RLock, Thread
 from typing import Any, Mapping
 
 import yaml
@@ -58,6 +58,28 @@ def _labels() -> dict[str, str]:
     except ValueError:
         return {}
     return {str(key): str(item) for key, item in value.items()} if isinstance(value, Mapping) else {}
+
+
+def _run_async_from_sync(coro: Any) -> Any:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    box: dict[str, Any] = {}
+
+    def _runner() -> None:
+        try:
+            box["result"] = asyncio.run(coro)
+        except BaseException as exc:  # pragma: no cover - re-raised in caller thread
+            box["error"] = exc
+
+    thread = Thread(target=_runner, name="project-skill-handler-reload", daemon=True)
+    thread.start()
+    thread.join()
+    if "error" in box:
+        raise box["error"]
+    return box.get("result")
 
 
 def deployment_runtime_inventory_payload(ctx: AgentContext | None = None) -> dict[str, Any]:
@@ -171,10 +193,32 @@ class AdaOSComponentLifecycleHooks:
             settings=self.ctx.settings,
         )
 
+    def _reload_skill_handlers(self, component_id: str) -> dict[str, Any]:
+        from adaos.services.skills_loader_importlib import ImportlibSkillsLoader
+
+        receipt = _run_async_from_sync(
+            ImportlibSkillsLoader().reload_skill_handlers(
+                self.ctx.paths.skills_dir(),
+                component_id,
+            )
+        )
+        return dict(receipt or {})
+
     def activate(self, *, kind: str, component_id: str, version: str) -> Mapping[str, Any]:
         if kind == "skill":
             slot = self._skill_manager().activate_runtime(component_id, version=version)
-            return {"activated": True, "version": version, "slot": slot}
+            handler_reload = self._reload_skill_handlers(component_id)
+            if handler_reload.get("ok") is not True:
+                reason = str(handler_reload.get("reason") or "unknown")
+                raise RuntimeError(
+                    f"live handler activation failed for skill '{component_id}': {reason}"
+                )
+            return {
+                "activated": True,
+                "version": version,
+                "slot": slot,
+                "handler_reload": handler_reload,
+            }
         if kind == "scenario":
             return {"activated": True, "version": version, "mode": "source_available"}
         raise RuntimeError(f"unsupported component kind: {kind}")
