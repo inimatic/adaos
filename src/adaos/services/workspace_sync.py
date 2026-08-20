@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import re
 from pathlib import Path
@@ -9,6 +8,7 @@ from typing import Any
 from adaos.adapters.db import SqliteScenarioRegistry, SqliteSkillRegistry
 from adaos.adapters.git.workspace import SparseWorkspace
 from adaos.services.git.workspace_guard import ensure_clean
+from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 from adaos.services.workspace_registry import (
     load_workspace_registry,
     rebuild_workspace_registry,
@@ -185,19 +185,32 @@ def selected_runtime_skill_names(ctx) -> list[str]:
     if not runtime_root.is_dir():
         return []
     names: set[str] = set()
-    for current_path in runtime_root.glob("*/current_runtime.json"):
-        name = current_path.parent.name
+    for skill_root in runtime_root.iterdir():
+        if not skill_root.is_dir():
+            continue
+        name = skill_root.name
         if not _ARTIFACT_NAME_RE.fullmatch(name):
             continue
+        env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=name)
+        payload = env.read_runtime_selection()
+        version = str(payload.get("version") or "").strip() if payload else ""
+        slot = str(payload.get("slot") or payload.get("active_slot") or "").strip().upper() if payload else ""
+        if version and slot in {"A", "B"}:
+            names.add(name)
+            continue
+
+        # Legacy runtimes selected their immutable version and slot with two
+        # text markers before current_runtime.json was introduced.
+        version_marker = env.active_version_marker()
+        if not version_marker.is_file():
+            continue
         try:
-            payload = json.loads(current_path.read_text(encoding="utf-8"))
+            legacy_version = str(version_marker.read_text(encoding="utf-8") or "").strip()
+            active_marker = env.active_marker(legacy_version)
+            legacy_slot = str(active_marker.read_text(encoding="utf-8") or "").strip().upper()
         except Exception:
             continue
-        if not isinstance(payload, dict):
-            continue
-        version = str(payload.get("version") or "").strip()
-        slot = str(payload.get("slot") or payload.get("active_slot") or "").strip().upper()
-        if version and slot in {"A", "B"}:
+        if legacy_version and legacy_slot in {"A", "B"}:
             names.add(name)
     return sorted(names)
 
