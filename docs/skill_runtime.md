@@ -9,6 +9,12 @@ migration plans are admitted before the lock switch, and an unknown
 state-changing outcome is reconciled explicitly rather than replayed. See
 [Artifact Source, Package, and Activation Architecture](architecture/artifact-source-package-activation.md).
 
+Skills obtain path-free runtime and placement identity through
+`adaos.sdk.core.runtime_identity()`. Its `node` projection contains only the
+canonical `node_id`, `subnet_id`, and role; skills must use that identity for
+node-owned records instead of guessing from process-local defaults or importing
+node configuration services.
+
 ## Directory layout
 
 Every skill lives under `skills/<name>` in the workspace. Runtime artefacts are stored separately:
