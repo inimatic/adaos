@@ -1525,8 +1525,6 @@ def test_deactivate_runtime_blocks_execution_until_reactivated(monkeypatch) -> N
     (skill_dir / "handlers" / "main.py").write_text("def handle(payload=None):\n    return payload or {}\n", encoding="utf-8")
     (skill_dir / "skill.yaml").write_text("name: deactivate_skill\nversion: '1.0.0'\n", encoding="utf-8")
 
-    env = SkillRuntimeEnvironment(skills_root=Path(ctx.paths.skills_dir()), skill_name=skill_name)
-
     monkeypatch.setattr(mgr, "_prepare_runtime_environment", lambda **kwargs: (Path("python"), []))
     monkeypatch.setattr(
         mgr,
@@ -1691,11 +1689,13 @@ def test_activate_runtime_runs_lifecycle_hooks_and_publishes_status(monkeypatch)
             },
             "tools": {
                 "persist_state": {"module": "skills.lifecycle_skill.handlers.main", "callable": "persist_state"},
+                "dispose_tool": {"module": "skills.lifecycle_skill.handlers.main", "callable": "dispose_tool"},
                 "after_activate_tool": {"module": "skills.lifecycle_skill.handlers.main", "callable": "after_activate_tool"},
                 "rehydrate_tool": {"module": "skills.lifecycle_skill.handlers.main", "callable": "rehydrate_tool"},
             },
             "lifecycle": {
                 "persist_before_switch": "persist_state",
+                "dispose": "dispose_tool",
                 "after_activate": "after_activate_tool",
                 "rehydrate": "rehydrate_tool",
             },
@@ -1721,7 +1721,14 @@ def test_activate_runtime_runs_lifecycle_hooks_and_publishes_status(monkeypatch)
 
     status = mgr.runtime_status(skill_name)
 
-    assert [name for name, _payload in calls] == ["persist_state", "after_activate_tool", "rehydrate_tool"]
+    assert [name for name, _payload in calls] == [
+        "persist_state",
+        "dispose_tool",
+        "after_activate_tool",
+        "rehydrate_tool",
+    ]
+    assert calls[1][1]["reason"] == "runtime_slot_switch"
+    assert calls[1][1]["target_slot"] == "B"
     assert status["lifecycle"]["persist"]["ok"] is True
     assert status["lifecycle"]["persist"]["skipped"] is False
     assert status["lifecycle"]["after_activate"]["tool"] == "after_activate_tool"
@@ -1908,7 +1915,7 @@ def test_failed_rehydrate_restores_previous_active_version(monkeypatch) -> None:
 
     def _fake_execute_tool(skill_dir_arg, *, module=None, attr=None, payload=None, extra_paths=None):
         calls.append(attr)
-        if attr == "rehydrate_tool":
+        if attr == "rehydrate_tool" and payload.get("version") == "2.0.0":
             raise RuntimeError("rehydrate exploded")
         return {"ok": True, "attr": attr}
 
@@ -1934,7 +1941,15 @@ def test_failed_rehydrate_restores_previous_active_version(monkeypatch) -> None:
     assert failed_lifecycle["healthcheck"]["ok"] is False
     assert failed_lifecycle["rollback"]["ok"] is True
     assert failed_lifecycle["rollback"]["restored_active_version"] == "1.0.0"
-    assert calls == ["rehydrate_tool", "drain_tool", "dispose_tool", "before_deactivate_tool"]
+    assert failed_lifecycle["rollback"]["rehydrate"]["ok"] is True
+    assert calls == [
+        "dispose_tool",
+        "rehydrate_tool",
+        "drain_tool",
+        "dispose_tool",
+        "before_deactivate_tool",
+        "rehydrate_tool",
+    ]
 
 
 def test_shutdown_active_runtimes_runs_requested_hook_subset(monkeypatch) -> None:
