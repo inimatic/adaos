@@ -353,6 +353,7 @@ def test_automation_projects_declared_and_observed_execution_budget(tmp_path: Pa
     )
     session = {
         "status": "completed",
+        "created_at": "2026-08-18T00:00:00Z",
         "task": {
             "created_at": "2026-08-18T00:00:00Z",
             "assigned_at": "2026-08-18T00:00:10Z",
@@ -380,6 +381,7 @@ def test_automation_projects_declared_and_observed_execution_budget(tmp_path: Pa
     assert projected["budget_usage"]["observed"]["attempts"] == 2
     assert projected["budget_usage"]["observed"]["wall_seconds"] == 60.0
     assert projected["budget_usage"]["observed"]["terminal"] is True
+    assert projected["created_at"] == "2026-08-18T00:00:00Z"
 
 
 def test_background_automation_launches_durable_worker_process(tmp_path: Path, monkeypatch) -> None:

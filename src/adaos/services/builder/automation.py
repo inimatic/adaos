@@ -1350,6 +1350,7 @@ class BuilderAutomationService:
             "iteration": 0,
             "task_id": None,
             "steps": BuilderAutomationService._step_projection("idle"),
+            "created_at": None,
             "updated_at": None,
         }
 
@@ -1413,6 +1414,11 @@ class BuilderAutomationService:
             }
             if local_run
             else None,
+            # ``created_at`` is the durable Automation-start boundary.  It is
+            # intentionally projected alongside ``updated_at`` so independent
+            # schedulers and evaluators can prove a preregistered execution
+            # order without reading Builder's private session file.
+            "created_at": session.get("created_at"),
             "updated_at": session.get("updated_at"),
         }
 
