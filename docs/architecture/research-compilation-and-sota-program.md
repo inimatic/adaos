@@ -768,6 +768,48 @@ only Compilation, AutomationBrief and the public operation set. The hidden
 probe numbers and expected outputs remain evaluator-only. No v29 outcome is
 reused in the v30 primary comparison.
 
+v30 was stopped after its first C3 attempt and is
+`incomplete_no_claim`. The candidate completed in two autonomous attempts,
+ran the real three-epoch Torch CPU workflow, and passed all seven independent
+scientific and engineering gates. It consumed 7,815,505 model tokens, however,
+so it failed the separate frozen 7M-token budget endpoint. More importantly,
+the repair instruction exposed an infrastructure defect: evaluator `0.1.37`
+had placed the generic four-operation runner ABI and the domain-specific TLP
+probe under the single contract identity `adaos.research.runner.v1`. Builder
+therefore correctly told Codex to add the domain probe to the generic runner
+provider declaration. That repair can demonstrate executable realization of
+the supplied packet, but not validity of the intended independent ABIs. No C0
+attempt was started. The diagnostic summary is
+`sha256:c5d165b37bb1f0acf0aa23962d7ec75d009fc99ba1d6516f35a1028dc2f897b6`
+and the partial package is
+`sha256:6430f047c79109cd5994e04da095e611b7a966904ba3f8622ec290ddce199aed`;
+neither supports a treatment claim.
+
+Core `cf78bc4e` generalizes the repair without knowing TLP. An admitted
+operation set may declare `candidate_role: provider`; Builder then requires an
+exact contract-and-capability provider declaration and exact tool schemas.
+Independent operation sets remain independent provider declarations, while a
+context-only operation set need not be implemented by the candidate. Evaluator
+`0.1.38` projects the generic runner and `adaos.research.tlp_probe.v1` as two
+separate, digest-bound operation sets. Its `0.1.37 -> 0.1.38` A/B activation
+also verified that evaluator data stayed in the shared `v0.1/data` bucket;
+candidate outputs remain owner-data, while Builder traces remain session-owned
+logs rather than inherited master/slave storage.
+
+Fresh v31 is frozen at
+`sha256:f99082c6ba4794ac3c507f9618698a2ee8c747fde44b8e138b2e14098fbbd025`
+on clean detached core `cf78bc4e`, skill workspace `c3bbb625`, evaluator
+`0.1.38`, runner `0.1.14`, manager `0.28.0`, orchestrator `0.48.0`, and prompt
+ABI 0.8. It preregisters six counterbalanced pairs so five discordant C3 wins
+can still reach one-sided `p=0.03125` if one pair ties. The matched downstream
+budget is 8.5M model tokens, chosen before execution from the v30 pilot
+observation. All 30 arm packets were materialized before execution. C0 sees no
+instruction input; C3 sees Compilation, AutomationBrief, an exact generic
+runner operation set, and an exact public TLP-probe operation set. Its first
+C3 packet is
+`sha256:9b349055403e4447f71192ae9e986683757abaf26115df7358420d56938b7621`.
+No earlier outcome is reused.
+
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and
 content identities. Candidate-authored claims cannot mark a check passed. The

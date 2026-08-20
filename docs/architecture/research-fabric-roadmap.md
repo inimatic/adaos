@@ -1620,6 +1620,20 @@ efficacy result or cross-domain SOTA claim.
   `sha256:3409c751f6e6cabd89b29440d42348df79ad77a50103e84115a7985cdd1e1bad`
   on clean core `781836bc` and workspace `6a6d247`; all 25 packets were
   prematerialized and no v28/v29 outcome is reused.
+  v30 stopped after one C3 attempt as `incomplete_no_claim`: the candidate
+  passed all seven independent gates and the real CPU smoke, but used 7,815,505
+  model tokens against the 7M budget and followed an invalid repair rail that
+  had merged the generic runner and TLP probe under one contract identity. Its
+  diagnostic summary/package digests are respectively
+  `sha256:c5d165b37bb1f0acf0aa23962d7ec75d009fc99ba1d6516f35a1028dc2f897b6`
+  and
+  `sha256:6430f047c79109cd5994e04da095e611b7a966904ba3f8622ec290ddce199aed`.
+  Core `cf78bc4e` now enforces explicit provider-role operation sets with exact
+  contract and capability identity. Evaluator `0.1.38` separates the generic
+  runner and `adaos.research.tlp_probe.v1`. Fresh v31 is frozen at
+  `sha256:f99082c6ba4794ac3c507f9618698a2ee8c747fde44b8e138b2e14098fbbd025`
+  with six counterbalanced pairs, a matched 8.5M-token budget and all 30 packets
+  prematerialized; no prior outcome is reused.
 - [ ] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and
@@ -1820,6 +1834,10 @@ a top-level direction or ordinary Desktop application.
   projections for session-owned logs and traces, with producer, executor,
   orchestrator, consumer, release, and access-policy refs. Prove that managed
   components remain independently isolated across A/B and patch migrations.
+  Evaluator activation `0.1.37 -> 0.1.38` locally preserved the shared
+  `v0.1/data` bucket across slots A/B while Builder traces remained
+  session-owned. This is supporting migration evidence, not yet the required
+  retention/GC and joined-projection acceptance proof.
 
 #### ARF7.4 implementation checkpoint (2026-08-18)
 
