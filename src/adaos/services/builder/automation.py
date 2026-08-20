@@ -68,6 +68,8 @@ _AUTOMATION_STEPS = (
     ("result", "builder.automation.step.result", 4),
 )
 _DEVELOPMENT_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
+_RUNTIME_DIAGNOSTIC_MAX_FILES = 4096
+_RUNTIME_DIAGNOSTIC_MAX_BYTES = 128 * 1024 * 1024
 
 
 def _now_iso() -> str:
@@ -1611,6 +1613,10 @@ class BuilderAutomationService:
                     raise ValueError("stored runtime release belongs to a different Development Session")
                 return {"ok": True, "idempotent": True, "runtime_release": dict(previous)}
 
+            diagnostics = self._archive_candidate_runtime_diagnostics(
+                project_id=project_id,
+                development_session_id=expected_session_id,
+            )
             cleanup = _cleanup_dev_skill_runtime(project_id)
             receipt = {
                 "schema": "adaos.builder.runtime_release.v1",
@@ -1623,12 +1629,107 @@ class BuilderAutomationService:
                 "runtime_existed": bool(cleanup.get("runtime_existed")),
                 "purged_data": bool(cleanup.get("purged_data")),
             }
+            if diagnostics is not None:
+                receipt["diagnostics"] = diagnostics
             if not receipt["runtime_removed"]:
                 raise RuntimeError("DEV runtime cleanup did not remove the candidate runtime")
             session["runtime_release"] = receipt
             session["updated_at"] = receipt["released_at"]
             self._save_session(session)
             return {"ok": True, "idempotent": False, "runtime_release": receipt}
+
+    def _archive_candidate_runtime_diagnostics(
+        self,
+        *,
+        project_id: str,
+        development_session_id: str,
+    ) -> dict[str, Any] | None:
+        """Move runtime diagnostics into Builder-owned durable evidence.
+
+        Candidate ``data`` belongs to the candidate skill and is captured by
+        its scientific consumer.  Build and packaged-test diagnostics belong
+        to the Automation session instead.  Preserve the latter before the
+        ephemeral candidate runtime (including its vendored dependencies and
+        data) is purged.
+        """
+
+        source = (self.dev_skills_root / ".runtime" / project_id / "diagnostics").resolve()
+        runtime_root = (self.dev_skills_root / ".runtime" / project_id).resolve()
+        if source.parent != runtime_root or not source.is_dir():
+            return None
+
+        evidence_root = (
+            self.state_dir
+            / "builder"
+            / "automation-evidence"
+            / "runtime-diagnostics"
+            / _safe_token(project_id)
+        ).resolve()
+        destination = (evidence_root / _safe_token(development_session_id)).resolve()
+        if destination.parent != evidence_root:
+            raise ValueError("candidate diagnostic destination escaped its evidence root")
+
+        def manifest_for(root: Path) -> tuple[list[dict[str, Any]], int]:
+            entries: list[dict[str, Any]] = []
+            total_bytes = 0
+            for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+                if path.is_symlink():
+                    raise RuntimeError("candidate runtime diagnostics must not contain symlinks")
+                if not path.is_file():
+                    continue
+                resolved = path.resolve()
+                if root not in resolved.parents:
+                    raise RuntimeError("candidate runtime diagnostic escaped its evidence root")
+                size = int(path.stat().st_size)
+                total_bytes += size
+                if len(entries) >= _RUNTIME_DIAGNOSTIC_MAX_FILES:
+                    raise RuntimeError("candidate runtime diagnostics exceed the file-count limit")
+                if total_bytes > _RUNTIME_DIAGNOSTIC_MAX_BYTES:
+                    raise RuntimeError("candidate runtime diagnostics exceed the byte limit")
+                entries.append(
+                    {
+                        "path": path.relative_to(root).as_posix(),
+                        "bytes": size,
+                        "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
+                    }
+                )
+            return entries, total_bytes
+
+        if destination.is_dir():
+            entries, total_bytes = manifest_for(destination)
+        else:
+            entries, total_bytes = manifest_for(source)
+            evidence_root.mkdir(parents=True, exist_ok=True)
+            staging = evidence_root / f".staging-{_safe_token(development_session_id)}"
+            if staging.exists():
+                shutil.rmtree(staging)
+            staging.mkdir(parents=True)
+            try:
+                for entry in entries:
+                    relative = Path(str(entry["path"]))
+                    target = staging / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source / relative, target)
+                staging.replace(destination)
+                entries, total_bytes = manifest_for(destination)
+            except Exception:
+                shutil.rmtree(staging, ignore_errors=True)
+                raise
+
+        manifest = {
+            "schema": "adaos.builder.runtime_diagnostics.v1",
+            "object_type": "skill",
+            "object_id": project_id,
+            "development_session_id": development_session_id,
+            "files": entries,
+            "file_count": len(entries),
+            "bytes": total_bytes,
+        }
+        return {
+            **manifest,
+            "root": str(destination),
+            "digest": _canonical_digest(manifest),
+        }
 
     def find_active_session(self, *, webspace_id: str | None = None) -> dict[str, Any] | None:
         candidates: list[dict[str, Any]] = []

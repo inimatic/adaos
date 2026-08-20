@@ -1785,6 +1785,19 @@ a top-level direction or ordinary Desktop application.
   multi-task agenda with dependent and parallel tasks and compare explicit
   project-to-task planning with a direct project-sized prompt under matched
   models, tools, budgets, and expert evaluation.
+- [ ] `[must]` `ARF7.4-32` Formalize managed/project-only components as
+  lifecycle and distribution relations, never inherited data authority. Bind
+  runtime data, execution telemetry, orchestration state, and published
+  artifacts to independent owner refs; require an explicit capability,
+  `ArtifactRef`, or logical-view projection for every cross-component handoff.
+- [x] `[must]` `ARF7.4-33` Preserve terminal Builder candidate diagnostics as
+  bounded, symlink-safe, content-digested Automation evidence before purging
+  the ephemeral runtime. Keep primary skill outputs in owner-scoped runtime
+  `data`; do not use another skill's data bucket as a generic log store.
+- [ ] `[should]` `ARF7.4-34` Add retention/GC policy and Workbench/Builder read
+  projections for session-owned logs and traces, with producer, executor,
+  orchestrator, consumer, release, and access-policy refs. Prove that managed
+  components remain independently isolated across A/B and patch migrations.
 
 #### ARF7.4 implementation checkpoint (2026-08-18)
 

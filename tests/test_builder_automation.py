@@ -165,6 +165,57 @@ def test_terminal_skill_candidate_runtime_release_is_exact_and_idempotent(
     assert persisted["runtime_release"]["development_session_id"] == "dev_candidate_01"
 
 
+def test_terminal_candidate_release_preserves_runtime_diagnostics_as_builder_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation_candidate",
+            "object_type": "skill",
+            "object_id": "candidate_skill",
+            "development_session_id": "dev_candidate_01",
+            "status": "failed",
+            "updated_at": "2026-08-20T00:00:00+00:00",
+        }
+    )
+    runtime_root = service.dev_skills_root / ".runtime" / "candidate_skill"
+    diagnostic = runtime_root / "diagnostics" / "candidate-tests" / "pytest.log"
+    diagnostic.parent.mkdir(parents=True)
+    diagnostic.write_text("one failed\n", encoding="utf-8")
+
+    def cleanup(skill_id: str) -> dict[str, object]:
+        assert skill_id == "candidate_skill"
+        shutil.rmtree(runtime_root)
+        return {
+            "runtime_existed": True,
+            "runtime_removed": True,
+            "purged_data": True,
+        }
+
+    monkeypatch.setattr(automation_module, "_cleanup_dev_skill_runtime", cleanup)
+
+    released = service.release_candidate_runtime(
+        object_type="skill",
+        object_id="candidate_skill",
+        development_session_id="dev_candidate_01",
+    )
+
+    receipt = released["runtime_release"]
+    evidence = receipt["diagnostics"]
+    archived = Path(evidence["root"]) / "candidate-tests" / "pytest.log"
+    assert runtime_root.exists() is False
+    assert archived.read_text(encoding="utf-8") == "one failed\n"
+    assert evidence["schema"] == "adaos.builder.runtime_diagnostics.v1"
+    assert evidence["file_count"] == 1
+    assert evidence["bytes"] == archived.stat().st_size
+    assert evidence["files"][0]["path"] == "candidate-tests/pytest.log"
+    assert evidence["files"][0]["digest"].startswith("sha256:")
+    assert evidence["digest"].startswith("sha256:")
+
+
 @pytest.mark.parametrize(
     ("status", "development_session_id", "error"),
     [
