@@ -625,7 +625,8 @@ TLP algorithm requirement. Runner ABI 1.8, digest
 now declares the exact resolution
 `Path(working_directory) / expected_outputs[i]` and rejects undeclared implicit
 subdirectories. `research_manager_skill 0.27.0` publishes that contract.
-Builder commit `4ebb69c2` also makes the generic one-shot rail exercise the
+Builder prompt ABI 0.7 (introduced by core commit `4ebb69c2` and versioned in
+the following provenance commit) also makes the generic one-shot rail exercise the
 production provider command, exact output paths, returned `output_ref`,
 collection, and verification rather than accepting only a schema-shaped helper
 fixture. Neither change modifies v22-v25; a new frozen task is required.
