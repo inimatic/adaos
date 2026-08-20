@@ -536,3 +536,49 @@ def test_local_event_bus_coalesces_io_out_stream_publish_by_receiver():
         ]
 
     asyncio.run(_run())
+
+
+def test_local_event_bus_keeps_parameterized_stream_variables_independent():
+    async def _run() -> None:
+        bus = LocalEventBus()
+        seen: list[tuple[str, str, int]] = []
+
+        async def handler(event: Event):
+            meta = dict(event.payload.get("_meta") or {})
+            data = dict(event.payload.get("data") or {})
+            seen.append((str(meta.get("params", {}).get("profile_id") or ""), str(data.get("id") or ""), int(data.get("seq") or 0)))
+
+        bus.subscribe("io.out.stream.publish", handler)
+        publications = (
+            ("personal", "library-state", 1),
+            ("personal", "library-state", 2),
+            ("household", "library-state", 3),
+            ("personal", "playback-state", 4),
+        )
+        for profile_id, variable_id, seq in publications:
+            bus.publish(
+                Event(
+                    type="io.out.stream.publish",
+                    payload={
+                        "receiver": "media_center.library_state",
+                        "data": {"id": variable_id, "value": {"seq": seq}, "seq": seq},
+                        "_meta": {
+                            "webspace_id": "desktop",
+                            "stream_semantics": "replace_variable",
+                            "params": {"profile_id": profile_id},
+                        },
+                    },
+                    source="test",
+                    ts=0.0,
+                )
+            )
+
+        assert bus.backlog_snapshot()["bounded_queue_total"] <= 3
+        assert await bus.wait_for_idle(timeout=1.0) is True
+        assert set(seen) == {
+            ("personal", "library-state", 2),
+            ("household", "library-state", 3),
+            ("personal", "playback-state", 4),
+        }
+
+    asyncio.run(_run())
