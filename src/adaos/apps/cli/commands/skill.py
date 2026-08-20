@@ -1223,6 +1223,7 @@ def reconcile_fs_to_db():
     found = []
     for name in os.listdir(root):
         if name.startswith("."):
+            mgr.reg.unregister(name)
             continue
         p = root / name
         if p.is_dir() and (p / "skill.yaml").is_file():

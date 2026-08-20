@@ -18,8 +18,12 @@ def test_skill_reconcile_registers_only_manifest_backed_directories(
         "name: demo_skill\nversion: 1.0.0\n", encoding="utf-8"
     )
     registered: list[str] = []
+    unregistered: list[str] = []
     manager = SimpleNamespace(
-        reg=SimpleNamespace(register=lambda name: registered.append(name))
+        reg=SimpleNamespace(
+            register=lambda name: registered.append(name),
+            unregister=lambda name: unregistered.append(name),
+        )
     )
     monkeypatch.setattr(skill_cmd, "_mgr", lambda: manager)
     monkeypatch.setattr(
@@ -34,6 +38,7 @@ def test_skill_reconcile_registers_only_manifest_backed_directories(
 
     assert result.exit_code == 0, result.output
     assert registered == ["demo_skill"]
+    assert set(unregistered) == {".runtime", ".git"}
     assert ".runtime" not in result.output
 
 
