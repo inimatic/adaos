@@ -1443,7 +1443,7 @@ _PREPARED_SLOT_IMPORT_MODULES: tuple[str, ...] = (
     "adaos.apps.cli.commands.skill",
 )
 _PREPARED_SLOT_IMPORT_TIMEOUT_ENV = "ADAOS_CORE_UPDATE_IMPORT_VALIDATE_TIMEOUT_SEC"
-_PREPARED_SLOT_IMPORT_TIMEOUT_DEFAULT_SEC = 90.0
+_PREPARED_SLOT_IMPORT_TIMEOUT_DEFAULT_SEC = 300.0
 
 
 def _prepared_slot_import_timeout_sec() -> float:
@@ -1451,6 +1451,7 @@ def _prepared_slot_import_timeout_sec() -> float:
         _PREPARED_SLOT_IMPORT_TIMEOUT_ENV,
         _PREPARED_SLOT_IMPORT_TIMEOUT_DEFAULT_SEC,
         minimum=10.0,
+        maximum=900.0,
     )
 
 
