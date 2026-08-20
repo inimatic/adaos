@@ -1273,6 +1273,8 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(tmp_path: P
     assert "exact declared name" in prompt
     assert "skill_schema.json" in prompt
     assert "allow_heavy_dependencies" in prompt
+    assert "experiment_plan.system" in prompt
+    assert "must not substitute another model family" in prompt
     assert "install-strict" in prompt
     assert "trusted worker finalizer owns package" in prompt
     assert "ADAOS_TASK_RUNTIME_DIR" in prompt

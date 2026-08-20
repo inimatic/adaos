@@ -41,6 +41,47 @@ def test_developer_validation_requires_narrow_capability_and_calls_service(monke
     assert calls == [(ctx, "candidate", True, True, False)]
 
 
+def test_developer_source_inspection_is_bounded_and_capability_gated(
+    monkeypatch, tmp_path: Path
+) -> None:
+    dev_skills = tmp_path / "dev" / "skills"
+    source = dev_skills / "candidate"
+    source.mkdir(parents=True)
+    (source / "skill.yaml").write_text("name: candidate\n", encoding="utf-8")
+    (source / "handlers.py").write_text("VALUE = 'real path'\n", encoding="utf-8")
+    (source / "weights.bin").write_bytes(b"not source text")
+    (source / "__pycache__").mkdir()
+    (source / "__pycache__" / "handlers.pyc").write_bytes(b"ignored")
+    ctx = SimpleNamespace(paths=SimpleNamespace(dev_skills_dir=lambda: dev_skills))
+    admitted: list[str] = []
+    monkeypatch.setattr(validation, "require_ctx", lambda _operation: ctx)
+    monkeypatch.setattr(
+        validation,
+        "require_skill_capability",
+        lambda _ctx, capability: admitted.append(capability),
+    )
+
+    snapshot = validation.inspect_skill_source("candidate")
+
+    assert admitted == ["builder.project_validation"]
+    assert snapshot["schema"] == "adaos.developer.source_snapshot.v1"
+    assert snapshot["project_ref"] == "skill:candidate"
+    assert [item["path"] for item in snapshot["files"]] == [
+        "handlers.py",
+        "skill.yaml",
+    ]
+    assert snapshot["files"][0]["text"].splitlines() == ["VALUE = 'real path'"]
+    assert snapshot["omitted"] == [
+        {
+            "path": "weights.bin",
+            "size_bytes": len(b"not source text"),
+            "digest": snapshot["omitted"][0]["digest"],
+            "reason": "non_text",
+        }
+    ]
+    assert snapshot["digest"].startswith("sha256:")
+
+
 def test_developer_invocation_reuses_the_same_narrow_capability(monkeypatch) -> None:
     ctx = SimpleNamespace()
     admitted: list[str] = []

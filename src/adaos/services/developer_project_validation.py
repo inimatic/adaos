@@ -36,6 +36,17 @@ _IGNORED_PARTS = {
     "__pycache__",
 }
 _IGNORED_SUFFIXES = {".pyc", ".pyo"}
+_INSPECTABLE_TEXT_SUFFIXES = {
+    ".json",
+    ".md",
+    ".py",
+    ".toml",
+    ".txt",
+    ".yaml",
+    ".yml",
+}
+_MAX_INSPECTION_FILE_BYTES = 512 * 1024
+_MAX_INSPECTION_TOTAL_BYTES = 4 * 1024 * 1024
 
 
 def _canonical(value: Any) -> bytes:
@@ -142,6 +153,60 @@ def validate_dev_skill(
         },
     }
     return {**identity, "ok": bool(validation.ok) and (tests_ok or not run_packaged_tests), "digest": _digest(identity)}
+
+
+def inspect_dev_skill_source(ctx: Any, project_id: str) -> dict[str, Any]:
+    """Return a bounded, content-addressed source snapshot for a trusted judge.
+
+    The developer capability already authorizes deterministic validation of a
+    disposable candidate.  Correctness judges also need to distinguish a real
+    implementation from schema-shaped or self-reported evidence.  This API
+    exposes only inspectable source text, never runtime data, parent folders,
+    caches, or host paths, and binds every returned file to the same inventory
+    digest used by native validation.
+    """
+
+    root = _root(ctx, project_id)
+    inventory, source_digest = _source_inventory(root)
+    by_path = {str(item["path"]): dict(item) for item in inventory}
+    files: list[dict[str, Any]] = []
+    total_bytes = 0
+    omitted: list[dict[str, Any]] = []
+    for relative, item in by_path.items():
+        path = (root / relative).resolve()
+        suffix = path.suffix.lower()
+        size_bytes = int(item["size_bytes"])
+        reason = None
+        if suffix not in _INSPECTABLE_TEXT_SUFFIXES:
+            reason = "non_text"
+        elif size_bytes > _MAX_INSPECTION_FILE_BYTES:
+            reason = "file_limit"
+        elif total_bytes + size_bytes > _MAX_INSPECTION_TOTAL_BYTES:
+            reason = "snapshot_limit"
+        if reason:
+            omitted.append({**item, "reason": reason})
+            continue
+        raw = path.read_bytes()
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            omitted.append({**item, "reason": "invalid_utf8"})
+            continue
+        total_bytes += len(raw)
+        files.append({**item, "text": text})
+    identity = {
+        "schema": "adaos.developer.source_snapshot.v1",
+        "project_ref": f"skill:{project_id}",
+        "source_digest": source_digest,
+        "files": files,
+        "omitted": omitted,
+        "limits": {
+            "max_file_bytes": _MAX_INSPECTION_FILE_BYTES,
+            "max_total_bytes": _MAX_INSPECTION_TOTAL_BYTES,
+            "observed_text_bytes": total_bytes,
+        },
+    }
+    return {**identity, "digest": _digest(identity)}
 
 
 def _manager(ctx: Any):
@@ -462,6 +527,7 @@ def _under(path: Path, root: Path) -> bool:
 __all__ = [
     "activate_dev_skill",
     "execute_dev_spec",
+    "inspect_dev_skill_source",
     "invoke_dev_skill",
     "validate_dev_skill",
 ]
