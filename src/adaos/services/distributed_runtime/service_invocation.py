@@ -55,7 +55,7 @@ class RoutingServiceInvocationAdapter:
     local_executor: Callable[
         [ServiceInstance, str, Mapping[str, Any], float], Any
     ]
-    remote: "HttpServiceInvocationTransport"
+    remote: ServiceInvocationAdapter
 
     def invoke(
         self,
@@ -159,6 +159,54 @@ class HttpServiceInvocationTransport:
         return _bounded_json(body.get("result"), reason="service_invocation_result")
 
 
+@dataclass(slots=True)
+class MemberLinkServiceInvocationTransport:
+    rpc_call: Callable[..., Any]
+    source_node_id: str
+
+    def invoke(
+        self,
+        *,
+        instance: ServiceInstance,
+        operation_id: str,
+        arguments: Mapping[str, Any],
+        request_id: str,
+        timeout_seconds: float,
+        actor_ref: str,
+    ) -> Any:
+        payload = {
+            "schema": SERVICE_INVOCATION_SCHEMA,
+            "requesting_node_id": self.source_node_id,
+            "target_node_id": instance.node_id,
+            "actor_ref": actor_ref,
+            "request_id": request_id,
+            "instance": instance.to_dict(),
+            "operation_id": operation_id,
+            "arguments": dict(arguments),
+            "timeout_seconds": timeout_seconds,
+        }
+        _bounded_json(payload, reason="service_invocation_request")
+        try:
+            body = self.rpc_call(
+                instance.node_id,
+                method="distributed.service.invoke",
+                params=payload,
+                timeout=max(5.0, min(float(timeout_seconds) + 5.0, 605.0)),
+            )
+        except TimeoutError as exc:
+            raise UncertainTopologyPhaseError("remote_service_ack_timeout") from exc
+        except ConnectionError as exc:
+            raise RetryableTopologyPhaseError("remote_service_member_link_unavailable") from exc
+        except RuntimeError as exc:
+            reason = str(exc)
+            if any(token in reason for token in ("member_not_connected", "member_rpc_busy", "link_replaced")):
+                raise RetryableTopologyPhaseError(reason) from exc
+            raise TopologyExecutionError(reason) from exc
+        if not isinstance(body, Mapping) or body.get("schema") != SERVICE_INVOCATION_RESULT_SCHEMA:
+            raise TopologyExecutionError("remote_service_response_schema_invalid")
+        return _bounded_json(body.get("result"), reason="service_invocation_result")
+
+
 def execute_service_invocation_request(
     payload: Mapping[str, Any],
     *,
@@ -237,6 +285,7 @@ def execute_registered_service_invocation(payload: Mapping[str, Any]) -> dict[st
 
 __all__ = [
     "HttpServiceInvocationTransport",
+    "MemberLinkServiceInvocationTransport",
     "MAX_SERVICE_INVOCATION_BYTES",
     "RoutingServiceInvocationAdapter",
     "SERVICE_INVOCATION_RESULT_SCHEMA",

@@ -27,6 +27,7 @@ from .execution import (
 REMOTE_PHASE_SCHEMA = "adaos.project.remote_component_phase.v1"
 REMOTE_PHASE_RESULT_SCHEMA = "adaos.project.remote_component_phase_result.v1"
 MAX_REMOTE_PACKAGE_BYTES = 64 * 1024 * 1024
+MAX_MEMBER_LINK_PACKAGE_BYTES = 1024 * 1024
 
 
 def _release_mapping(value: ReleasePlan) -> dict[str, Any]:
@@ -52,6 +53,56 @@ def _safe_receipt(value: Any, *, depth: int = 0) -> Any:
     return str(value)[:500]
 
 
+def _remote_phase_payload(
+    *,
+    node_id: str,
+    source_node_id: str,
+    package_reader: Callable[[str], bytes],
+    package_limit: int,
+    kwargs: Mapping[str, Any],
+) -> dict[str, Any]:
+    package: ArtifactPackageRef | None = kwargs.get("package")
+    archive_b64: str | None = None
+    if kwargs.get("phase") == "fetch" and package is not None:
+        archive = package_reader(package.digest)
+        if len(archive) > package_limit:
+            reason = (
+                "remote_package_exceeds_member_link_limit"
+                if package_limit == MAX_MEMBER_LINK_PACKAGE_BYTES
+                else "remote_package_exceeds_transport_limit"
+            )
+            raise ProjectDeploymentExecutionError(reason)
+        archive_b64 = base64.b64encode(archive).decode("ascii")
+    return {
+        "schema": REMOTE_PHASE_SCHEMA,
+        "source_node_id": source_node_id,
+        "target_node_id": node_id,
+        "phase": kwargs["phase"],
+        "node": kwargs.get("node").to_dict() if kwargs.get("node") is not None else None,
+        "change": kwargs["change"].to_dict(),
+        "desired": kwargs["desired"].to_dict(),
+        "release_plan": _release_mapping(kwargs["release_plan"]),
+        "package": package.to_dict() if package is not None else None,
+        "current_activation": (
+            kwargs["current_activation"].to_dict()
+            if kwargs.get("current_activation") is not None
+            else None
+        ),
+        "idempotency_key": str(kwargs["idempotency_key"]),
+        "attempt": int(kwargs["attempt"]),
+        "package_archive_b64": archive_b64,
+    }
+
+
+def _remote_phase_receipt(body: Any) -> dict[str, Any]:
+    if not isinstance(body, Mapping) or body.get("schema") != REMOTE_PHASE_RESULT_SCHEMA:
+        raise ProjectDeploymentExecutionError("remote_node_response_contract_invalid")
+    receipt = body.get("receipt")
+    if not isinstance(receipt, Mapping):
+        raise ProjectDeploymentExecutionError("remote_node_receipt_missing")
+    return dict(receipt)
+
+
 @dataclass(slots=True)
 class HttpNodeDeploymentTransport:
     endpoint_resolver: Callable[[str], str]
@@ -65,32 +116,13 @@ class HttpNodeDeploymentTransport:
         endpoint = str(self.endpoint_resolver(node_id) or "").strip().rstrip("/")
         if not endpoint.startswith(("http://", "https://")):
             raise RetryableDeploymentPhaseError("remote_node_endpoint_unavailable")
-        package: ArtifactPackageRef | None = kwargs.get("package")
-        archive_b64: str | None = None
-        if kwargs.get("phase") == "fetch" and package is not None:
-            archive = self.package_reader(package.digest)
-            if len(archive) > MAX_REMOTE_PACKAGE_BYTES:
-                raise ProjectDeploymentExecutionError("remote_package_exceeds_transport_limit")
-            archive_b64 = base64.b64encode(archive).decode("ascii")
-        payload = {
-            "schema": REMOTE_PHASE_SCHEMA,
-            "source_node_id": self.source_node_id,
-            "target_node_id": node_id,
-            "phase": kwargs["phase"],
-            "node": kwargs.get("node").to_dict() if kwargs.get("node") is not None else None,
-            "change": kwargs["change"].to_dict(),
-            "desired": kwargs["desired"].to_dict(),
-            "release_plan": _release_mapping(kwargs["release_plan"]),
-            "package": package.to_dict() if package is not None else None,
-            "current_activation": (
-                kwargs["current_activation"].to_dict()
-                if kwargs.get("current_activation") is not None
-                else None
-            ),
-            "idempotency_key": str(kwargs["idempotency_key"]),
-            "attempt": int(kwargs["attempt"]),
-            "package_archive_b64": archive_b64,
-        }
+        payload = _remote_phase_payload(
+            node_id=node_id,
+            source_node_id=self.source_node_id,
+            package_reader=self.package_reader,
+            package_limit=MAX_REMOTE_PACKAGE_BYTES,
+            kwargs=kwargs,
+        )
         headers = {
             "X-AdaOS-Token": str(self.token_provider() or ""),
             "X-AdaOS-Source-Node": self.source_node_id,
@@ -126,12 +158,44 @@ class HttpNodeDeploymentTransport:
             raise ProjectDeploymentExecutionError(
                 str(body.get("detail") or f"remote_node_http_{response.status_code}")
             )
-        if not isinstance(body, Mapping) or body.get("schema") != REMOTE_PHASE_RESULT_SCHEMA:
-            raise ProjectDeploymentExecutionError("remote_node_response_contract_invalid")
-        receipt = body.get("receipt")
-        if not isinstance(receipt, Mapping):
-            raise ProjectDeploymentExecutionError("remote_node_receipt_missing")
-        return dict(receipt)
+        return _remote_phase_receipt(body)
+
+
+@dataclass(slots=True)
+class MemberLinkNodeDeploymentTransport:
+    rpc_call: Callable[..., Any]
+    package_reader: Callable[[str], bytes]
+    source_node_id: str
+    operation_timeout_seconds: float = 600.0
+
+    def execute_component_phase(self, *, node_id: str, **kwargs: Any) -> Mapping[str, Any]:
+        payload = _remote_phase_payload(
+            node_id=node_id,
+            source_node_id=self.source_node_id,
+            package_reader=self.package_reader,
+            package_limit=MAX_MEMBER_LINK_PACKAGE_BYTES,
+            kwargs=kwargs,
+        )
+        try:
+            body = self.rpc_call(
+                node_id,
+                method="project.deployment.phase",
+                params=payload,
+                timeout=max(30.0, float(self.operation_timeout_seconds)),
+            )
+        except TimeoutError as exc:
+            raise UncertainDeploymentPhaseError(
+                "remote component phase timed out after dispatch",
+                details={"node_id": node_id, "phase": kwargs.get("phase")},
+            ) from exc
+        except ConnectionError as exc:
+            raise RetryableDeploymentPhaseError("remote_member_link_unavailable") from exc
+        except RuntimeError as exc:
+            reason = str(exc)
+            if any(token in reason for token in ("member_not_connected", "member_rpc_busy", "link_replaced")):
+                raise RetryableDeploymentPhaseError(reason) from exc
+            raise ProjectDeploymentExecutionError(reason) from exc
+        return _remote_phase_receipt(body)
 
 
 _receiver_lock = RLock()
@@ -218,6 +282,8 @@ def execute_remote_component_phase(payload: Mapping[str, Any]) -> dict[str, Any]
 
 __all__ = [
     "HttpNodeDeploymentTransport",
+    "MemberLinkNodeDeploymentTransport",
+    "MAX_MEMBER_LINK_PACKAGE_BYTES",
     "MAX_REMOTE_PACKAGE_BYTES",
     "REMOTE_PHASE_RESULT_SCHEMA",
     "REMOTE_PHASE_SCHEMA",

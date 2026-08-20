@@ -1,6 +1,7 @@
 from .authorization import DistributedAuthorizationError, DistributedPrincipal
 from .adapters import (
     HttpTopologyPhaseTransport,
+    MemberLinkTopologyPhaseTransport,
     SkillToolTopologyAdapter,
     execute_registered_topology_phase,
     execute_topology_phase_request,
@@ -18,6 +19,7 @@ from .operations import (
 from .projections import build_distributed_projection
 from .service_invocation import (
     HttpServiceInvocationTransport,
+    MemberLinkServiceInvocationTransport,
     RoutingServiceInvocationAdapter,
     ServiceInvocationAdapter,
     execute_registered_service_invocation,
@@ -61,6 +63,8 @@ __all__ = [
     "DistributedStoreError",
     "HttpServiceInvocationTransport",
     "HttpTopologyPhaseTransport",
+    "MemberLinkServiceInvocationTransport",
+    "MemberLinkTopologyPhaseTransport",
     "RetryableTopologyPhaseError",
     "RoutingServiceInvocationAdapter",
     "ServiceInvocationAdapter",

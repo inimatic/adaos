@@ -2,7 +2,7 @@
 
 Status: target core architecture.
 
-Last reviewed: 2026-08-19.
+Last reviewed: 2026-08-20.
 
 ## Purpose
 
@@ -78,6 +78,29 @@ instances.
 
 `ProjectPlacement` is not part of this chain. It binds a Project result to a
 presentation/webspace and remains independent from runtime service placement.
+
+### Trusted Member-Link Transport
+
+A connected member publishes a bounded deployment-inventory projection in its
+authenticated node snapshot: architecture, runtime version, capabilities,
+protocols, labels, integer capacity, and optional endpoints. It does not put
+package bytes, domain records, filesystem paths, credentials, or replica
+payloads into lifecycle state. The hub-side inventory adapter admits a remote
+node only from this explicit projection and current trusted/ready link state.
+
+The control plane can execute exact component phases, topology-adapter phases,
+and service invocations over distinct fail-closed member-link RPC methods. Each
+receiver revalidates target node, activation/release identity, reviewed plan or
+operation identity, and schema before local mutation. A lost acknowledgement
+is `uncertain`; a missing/replaced link is retryable; an unknown method or
+identity mismatch is terminal. Direct authenticated HTTP remains a supported
+adapter transport, but a node does not need to expose its runtime API on the
+LAN merely to participate through its existing member link.
+
+The member link has a bounded frame budget. Component packages above the
+member-link package limit require an explicit chunked artifact transport or a
+direct package endpoint; they are rejected before dispatch and are never
+silently inserted into Yjs or split by ad hoc skill code.
 
 ## Core Identities
 

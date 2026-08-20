@@ -21,6 +21,7 @@ from adaos.services.artifact_pipeline.releases import ReleasePlan
 from adaos.services.project_deployment import (
     LocalComponentDeploymentAdapter,
     HttpNodeDeploymentTransport,
+    MemberLinkNodeDeploymentTransport,
     NoopComponentLifecycleHooks,
     ProjectDeploymentExecutionError,
     RoutingComponentDeploymentAdapter,
@@ -316,5 +317,64 @@ def test_http_transport_sends_exact_contract_and_marks_lost_ack_uncertain(
             package=package.ref,
             current_activation=None,
             idempotency_key="remote:test-worker:fetch-uncertain",
+            attempt=1,
+        )
+
+
+def test_member_link_transport_sends_exact_contract_and_marks_lost_ack_uncertain(
+    tmp_path: Path,
+) -> None:
+    package = _package(tmp_path)
+    release = _release(package)
+    change = replace_node(_change("install", package), "node-b")
+    calls: list[dict[str, Any]] = []
+
+    def rpc_call(node_id: str, **kwargs: Any) -> Mapping[str, Any]:
+        calls.append({"node_id": node_id, **kwargs})
+        return {
+            "schema": "adaos.project.remote_component_phase_result.v1",
+            "target_node_id": "node-b",
+            "phase": "fetch",
+            "receipt": {"package_digest": package.ref.digest},
+        }
+
+    transport = MemberLinkNodeDeploymentTransport(
+        rpc_call=rpc_call,
+        package_reader=lambda _digest: package.archive_bytes,
+        source_node_id="node-a",
+    )
+    receipt = transport.execute_component_phase(
+        node_id="node-b",
+        phase="fetch",
+        node=_node("node-b"),
+        change=change,
+        desired=_desired(release),
+        release_plan=release,
+        package=package.ref,
+        current_activation=None,
+        idempotency_key="member:test-worker:fetch",
+        attempt=1,
+    )
+
+    assert receipt["package_digest"] == package.ref.digest
+    assert calls[0]["method"] == "project.deployment.phase"
+    assert calls[0]["params"]["target_node_id"] == "node-b"
+    assert calls[0]["params"]["package_archive_b64"]
+
+    def lost_ack(*_args: Any, **_kwargs: Any) -> Mapping[str, Any]:
+        raise TimeoutError("lost ack")
+
+    transport.rpc_call = lost_ack
+    with pytest.raises(UncertainDeploymentPhaseError, match="timed out after dispatch"):
+        transport.execute_component_phase(
+            node_id="node-b",
+            phase="health",
+            node=_node("node-b"),
+            change=change,
+            desired=_desired(release),
+            release_plan=release,
+            package=package.ref,
+            current_activation=None,
+            idempotency_key="member:test-worker:health",
             attempt=1,
         )

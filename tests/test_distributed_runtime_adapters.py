@@ -10,6 +10,7 @@ from adaos.domain.distributed_operations import TopologyPlan, TopologyPlanStep
 from adaos.domain.distributed_runtime import Dataset, Partition, ServiceInstance
 from adaos.services.distributed_runtime.adapters import (
     HttpTopologyPhaseTransport,
+    MemberLinkTopologyPhaseTransport,
     SkillToolTopologyAdapter,
     execute_topology_phase_request,
 )
@@ -20,6 +21,7 @@ from adaos.services.distributed_runtime.operations import (
 )
 from adaos.services.distributed_runtime.service_invocation import (
     HttpServiceInvocationTransport,
+    MemberLinkServiceInvocationTransport,
     execute_service_invocation_request,
 )
 
@@ -278,3 +280,44 @@ def test_http_service_invocation_marks_lost_ack_uncertain(monkeypatch) -> None:
             timeout_seconds=20,
             actor_ref="skill:document_coordinator",
         )
+
+
+def test_member_link_transports_use_distinct_core_methods() -> None:
+    calls: list[dict[str, Any]] = []
+
+    def rpc_call(node_id: str, **kwargs: Any) -> Mapping[str, Any]:
+        calls.append({"node_id": node_id, **kwargs})
+        if kwargs["method"] == "distributed.topology.phase":
+            return {
+                "schema": "adaos.distributed.topology_phase_result.v1",
+                "ok": True,
+                "receipt": {"verified": True},
+            }
+        return {
+            "schema": "adaos.distributed.service_invocation_result.v1",
+            "request_id": "pull-1",
+            "result": {"items": []},
+        }
+
+    topology = MemberLinkTopologyPhaseTransport(rpc_call=rpc_call)
+    result = topology.execute_phase(
+        node_id="node-b", payload={"idempotency_key": "phase-1"}
+    )
+    service = MemberLinkServiceInvocationTransport(
+        rpc_call=rpc_call, source_node_id="node-a"
+    )
+    invoked = service.invoke(
+        instance=_instance("documents-node-b", "node-b"),
+        operation_id="pull_deltas",
+        arguments={"limit": 100},
+        request_id="pull-1",
+        timeout_seconds=20,
+        actor_ref="skill:document_coordinator",
+    )
+
+    assert result["receipt"]["verified"] is True
+    assert invoked == {"items": []}
+    assert [item["method"] for item in calls] == [
+        "distributed.topology.phase",
+        "distributed.service.invoke",
+    ]

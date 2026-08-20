@@ -33,6 +33,7 @@ from .store import (
 )
 from .transport import (
     HttpNodeDeploymentTransport,
+    MemberLinkNodeDeploymentTransport,
     execute_remote_component_phase,
     register_local_deployment_receiver,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "NodeInventoryProvider",
     "NodeDeploymentTransport",
     "HttpNodeDeploymentTransport",
+    "MemberLinkNodeDeploymentTransport",
     "NoopComponentLifecycleHooks",
     "LocalComponentDeploymentAdapter",
     "RoutingComponentDeploymentAdapter",

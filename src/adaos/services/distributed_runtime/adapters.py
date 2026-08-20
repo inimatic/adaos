@@ -207,6 +207,37 @@ class HttpTopologyPhaseTransport:
         return body
 
 
+@dataclass(slots=True)
+class MemberLinkTopologyPhaseTransport:
+    rpc_call: Callable[..., Any]
+    operation_timeout_seconds: float = 600.0
+
+    def execute_phase(
+        self, *, node_id: str, payload: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        try:
+            body = self.rpc_call(
+                node_id,
+                method="distributed.topology.phase",
+                params=dict(payload),
+                timeout=max(30.0, float(self.operation_timeout_seconds)),
+            )
+        except TimeoutError as exc:
+            raise UncertainTopologyPhaseError("remote_topology_ack_timeout") from exc
+        except ConnectionError as exc:
+            raise RetryableTopologyPhaseError("remote_topology_member_link_unavailable") from exc
+        except RuntimeError as exc:
+            reason = str(exc)
+            if any(token in reason for token in ("member_not_connected", "member_rpc_busy", "link_replaced")):
+                raise RetryableTopologyPhaseError(reason) from exc
+            raise TopologyExecutionError(reason) from exc
+        if not isinstance(body, Mapping):
+            raise TopologyExecutionError("remote_topology_response_invalid")
+        if body.get("schema") != TOPOLOGY_PHASE_RESULT_SCHEMA:
+            raise TopologyExecutionError("remote_topology_response_schema_invalid")
+        return dict(body)
+
+
 def execute_topology_phase_request(
     payload: Mapping[str, Any],
     *,
@@ -319,6 +350,7 @@ def execute_registered_topology_phase(payload: Mapping[str, Any]) -> dict[str, A
 __all__ = [
     "DEFAULT_TOPOLOGY_ADAPTER_TOOL",
     "HttpTopologyPhaseTransport",
+    "MemberLinkTopologyPhaseTransport",
     "MAX_TOPOLOGY_PHASE_BYTES",
     "RemoteTopologyPhaseTransport",
     "SkillToolTopologyAdapter",

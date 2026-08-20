@@ -22,8 +22,8 @@ from adaos.services.artifact_pipeline.packages import ContentAddressedPackageSto
 from adaos.services.artifact_pipeline.releases import ReleasePlan
 from adaos.services.distributed_runtime.bootstrap import configure_distributed_runtime
 from adaos.services.distributed_runtime import (
-    HttpServiceInvocationTransport,
-    HttpTopologyPhaseTransport,
+    MemberLinkServiceInvocationTransport,
+    MemberLinkTopologyPhaseTransport,
     RoutingServiceInvocationAdapter,
     SkillToolTopologyAdapter,
     TopologyExecutionError,
@@ -38,7 +38,7 @@ from adaos.services.project_deployment.adapters import (
 from adaos.services.project_deployment.bootstrap import configure_project_deployment_runtime
 from adaos.services.project_deployment.inventory import SnapshotNodeInventoryProvider
 from adaos.services.project_deployment.transport import (
-    HttpNodeDeploymentTransport,
+    MemberLinkNodeDeploymentTransport,
     register_local_deployment_receiver,
 )
 from adaos.services.skill.manager import SkillManager
@@ -275,21 +275,24 @@ def configure_default_distributed_runtimes(
             hooks=AdaOSComponentLifecycleHooks(current),
         )
 
-        def endpoint(node_id: str) -> str:
-            for node in inventory.list_nodes(str(conf.subnet_id)):
-                if node.node_id != node_id:
-                    continue
-                for item in node.endpoints:
-                    if item.role != "deployment" or not item.available:
-                        continue
-                    value = str(item.labels.get("base_url") or item.endpoint_id).strip()
-                    if value.startswith(("http://", "https://")):
-                        return value
-            return ""
+        def member_rpc(
+            node_id: str,
+            *,
+            method: str,
+            params: dict[str, Any],
+            timeout: float | None,
+        ) -> Any:
+            from adaos.services.subnet.link_manager import get_hub_link_manager
 
-        remote = HttpNodeDeploymentTransport(
-            endpoint_resolver=endpoint,
-            token_provider=lambda: str(conf.token or ""),
+            return get_hub_link_manager().rpc_call_sync(
+                node_id,
+                method=method,
+                params=params,
+                timeout=timeout,
+            )
+
+        remote = MemberLinkNodeDeploymentTransport(
+            rpc_call=member_rpc,
             package_reader=package_store.read,
             source_node_id=str(conf.node_id),
         )
@@ -377,10 +380,8 @@ def configure_default_distributed_runtimes(
             store=distributed.store,
             local_node_id=str(conf.node_id),
             local_executor=execute_topology_tool,
-            remote=HttpTopologyPhaseTransport(
-                endpoint_resolver=endpoint,
-                token_provider=lambda: str(conf.token or ""),
-                source_node_id=str(conf.node_id),
+            remote=MemberLinkTopologyPhaseTransport(
+                rpc_call=member_rpc,
             ),
         )
 
@@ -426,9 +427,8 @@ def configure_default_distributed_runtimes(
         distributed.service_invoker = RoutingServiceInvocationAdapter(
             local_node_id=str(conf.node_id),
             local_executor=execute_service_tool,
-            remote=HttpServiceInvocationTransport(
-                endpoint_resolver=endpoint,
-                token_provider=lambda: str(conf.token or ""),
+            remote=MemberLinkServiceInvocationTransport(
+                rpc_call=member_rpc,
                 source_node_id=str(conf.node_id),
             ),
         )
