@@ -5,6 +5,9 @@ import json
 import os
 import shutil
 import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -106,6 +109,39 @@ def test_prepare_lease_accepts_active_token(tmp_path: Path) -> None:
     lease.write_text(json.dumps({"token": "abc", "state": "active"}), encoding="utf-8")
 
     mod._verify_prepare_lease(lease, "abc")
+
+
+def test_prepare_subprocess_stops_when_lease_is_revoked(tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    lease = tmp_path / "prepare-lease.json"
+    lease.write_text(
+        json.dumps({"token": "abc", "state": "active"}),
+        encoding="utf-8",
+    )
+
+    def revoke() -> None:
+        lease.write_text(
+            json.dumps({"token": "abc", "state": "revoked", "reason": "test.cancel"}),
+            encoding="utf-8",
+        )
+
+    timer = threading.Timer(0.2, revoke)
+    timer.start()
+    started_at = time.monotonic()
+    try:
+        with pytest.raises(RuntimeError, match="lease revoked"):
+            mod._run_prepare_subprocess(
+                [sys.executable, "-c", "import time; time.sleep(30)"],
+                cwd=tmp_path,
+                env=dict(os.environ),
+                prepare_lease_path=lease,
+                prepare_lease_token="abc",
+            )
+    finally:
+        timer.join(timeout=2.0)
+
+    assert time.monotonic() - started_at < 5.0
 
 
 def test_repair_moved_venv_rewrites_script_paths(tmp_path: Path) -> None:
