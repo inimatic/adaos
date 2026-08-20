@@ -690,7 +690,7 @@ operation. Orchestrator `0.48.0` carries the exact system specification into
 ExperimentPlan and keeps mutable ResearchTask identity out of the reusable
 Project declaration; the exact task remains frozen in DevelopmentSession.
 
-v28 is frozen at
+v28 was frozen at
 `sha256:eb1918b3285fd30091ed7097b23d4c46ec7286bd7f4b20270d4dbbe4a9d0db66`
 from accepted `research-task:tlp_structured_proof_02.task-005`, Compilation
 `sha256:55b24afd93b7e8878f3d7e01a8be30c1472feb8cdf39b1d0082d07bafa1d54f1`
@@ -702,9 +702,32 @@ It binds clean detached core `e8f59272`, skill workspace `4a107af`, prompt ABI
 and the runner-validated counterbalanced order. C0 receives only the admitted
 notebook; C3 receives the same notebook plus compact Compilation,
 AutomationBrief and consumer ABI. `initial-review.md`, the legacy TLP skill and
-the hidden probe remain unavailable to Codex. Execution is in progress; no
-comparative result is claimed until every pair, ordered timestamps, summary and
-recomputable package are complete.
+the hidden probe remained unavailable to Codex.
+
+v28 was stopped before its second C0 arm and is not claim-eligible. Its first
+complete pair produced C0 `1/7` (context only) and C3 `6/7`; the already-started
+second C3 replicate produced `3/7`. C3 candidates exercised the real
+three-epoch CPU workflow, but
+implemented a pure-Python surrogate rather than the accepted Torch CNN/TLP
+system. Audit found that the C3 packet exposed only the generic Research
+Manager runner ABI. The evaluator required exact domain callables and an
+`implementation_probe`, but that public interoperability surface was absent
+from the Builder packet. The hidden numerical values were legitimate held-out
+evidence; the hidden required interface was not. Continuing would have
+measured an impossible or underspecified task rather than the benefit of
+structured formalization.
+
+Evaluator `0.1.36` closes this measurement defect. Its public TLP fixture now
+projects a digest-bound `domain_conformance` contract into the C3 packet:
+framework and architectural invariants, exact callable keys, tensor and
+parameter shapes, pairing/equivalence requirements, and the public
+`implementation_probe` operation. Freeze rejects any hidden-profile interface
+requirement that is absent from that public contract. Hidden numerical inputs
+and expected outputs remain evaluator-only. This establishes the general
+rule: challenge secrecy may protect held-out values and cases; interface
+secrecy may not conceal a capability that the candidate must implement. A new
+v29 series must freeze the corrected evaluator and packets before execution;
+no v28 outcome may be reused in its primary comparison.
 
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and

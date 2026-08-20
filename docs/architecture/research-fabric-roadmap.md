@@ -1595,9 +1595,18 @@ efficacy result or cross-domain SOTA claim.
   from accepted `tlp_structured_proof_02.task-005` with five counterbalanced
   pairs and a matched 7M-token arm budget. C0 sees only the notebook; C3 sees
   the same notebook plus compact typed contracts. Review prose, legacy code and
-  hidden evaluator material are excluded. v28 is in progress and cannot
-  support a claim until its enforced schedule and recomputable package are
-  complete.
+  hidden evaluator material are excluded. v28 was stopped after one complete
+  pair plus an already-started second C3 replicate. C0 passed `1/7` checks; the
+  two C3 realizations passed `6/7` and `3/7`, but both used a pure-Python
+  surrogate rather than the accepted Torch CNN/TLP system. Audit proved that
+  the C3 packet omitted the evaluator-required domain callable and
+  `implementation_probe` interface. Hidden numerical values were valid
+  held-out evidence; a hidden required interface made the task
+  underspecified. v28 is retained as a diagnostic and supports no comparative
+  claim. Evaluator `0.1.36` now publishes a digest-bound
+  `domain_conformance` contract, asserts hidden/public interface parity at
+  freeze, and keeps only numerical cases and expected values hidden. Freeze
+  and complete fresh v29 pairs; do not reuse any v28 outcome.
 - [ ] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and
