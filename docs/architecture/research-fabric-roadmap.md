@@ -1562,8 +1562,18 @@ efficacy result or cross-domain SOTA claim.
   stopped after its first 0/0 EVC tie made the frozen significance threshold
   unreachable. v13 is the frozen post-measurement-fix rail pilot, invalidated by
   the unbounded-workload and timeout-containment defects above; it does not
-  replace any earlier result. The amended six-pair task must be frozen before
-  executing either arm and may not reuse v9-v13 outcomes.
+  replace any earlier result. Complete v22 produced C0 `0/6`, C3 `1/6`, and
+  exact one-sided paired `p=0.5`; it is a valid negative/inconclusive result,
+  not support for superiority. v23-v24 were stopped by immutable-environment
+  drift; v24 additionally exposed and retained a trusted-worker task-runtime
+  lookup false negative. v25 completed one budget-compliant C3 as `3/6` gates,
+  then stopped before paired C0 when the core commit changed. Its zero-exit
+  production command placed files under an undeclared `outputs/` prefix, so
+  the independent executor correctly marked exact expected paths missing.
+  Runner ABI 1.8 and Builder's generic provider-lifecycle rail now specify and
+  exercise `Path(working_directory) / expected_outputs[i]`, collection by the
+  returned `output_ref`, and declared verification. A fresh task must freeze
+  those exact digests before either arm and may not reuse v9-v25 outcomes.
 - [ ] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and

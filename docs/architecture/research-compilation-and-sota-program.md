@@ -575,6 +575,61 @@ change so far was learned on TLP, even a positive v13 can support only a local
 post-hardening claim; an unbiased generalization claim requires the later
 held-out multi-task benchmark.
 
+#### Six-pair executable-rail iterations through v25
+
+Later retained rail iterations culminated in the first complete amended
+six-pair C0/C3 task, `tlp-structured-formalization-paired-v22`, digest
+`sha256:b45fb44bb68f610e574f111c06f2109ba232146d3bcb10354df371c1d0d4c546`.
+C0 completed `0/6` evidence-valid attempts and C3 completed `1/6`. The exact
+one-sided paired sign test is `p=0.5`, so v22 does not support the primary
+superiority claim. Its immutable summary digest is
+`sha256:409830ce888829fd2a9e14c7dbfaf1d3977c75d890796d6534c8092d5042af90`;
+the exported recomputation package is
+`sha256:70e071821d9e1973df86a530dc103032ee56881a51f56c10c8de0a2a276a78c3`.
+The useful secondary observation was that C3 preserved the accepted protocol
+more reliably but still failed the exact downstream evidence-consumer ABI.
+
+v23, digest
+`sha256:73eda7f19931f270d28e63c1bfc6e3468bcb7cd60ffcc93cb4d141a99df93f64`,
+and v24, digest
+`sha256:3496af7bcb84865dd2338e7dc5731703260674cab48e436831dc970561932590`,
+are retained incomplete tasks. Their shared-checkout environment changed
+between paired arms, and the frozen environment gate stopped execution before
+another Codex attempt. A post-score audit of v24 found that its C3 candidate
+had produced the complete exact document set under the task-owned
+`ADAOS_TASK_RUNTIME_DIR`; the trusted Builder validator had instead inspected
+its private worker-state envelope. Core fix `817a2ae2` makes normal validation
+and recovery derive the same exported task runtime. Revalidation recovered and
+activated the already generated candidate without another Codex call. This is
+post-hoc platform diagnosis, not a rewrite of the immutable v24 failure.
+
+v25, digest
+`sha256:90ca9b48c4ad5e3853e28051a68e6ca4de345476eff0890d1c954e160d382d8a`,
+started on a clean merged core and completed one C3 realization in one model
+attempt, 3,514,719 charged tokens and 880 seconds. Builder completed, the
+candidate stayed within the fixed-downstream budget, and the independent
+evaluator passed context isolation, protocol fidelity, and native skill
+validation. It failed runner conformance, CPU smoke, and evidence identity,
+so immutable result
+`sha256:39751895342c7bcfe65f84f2992530fc4cc9e855e72b8fee366dacd542459ec4`
+remains `evidence_valid_completion=false`. The production command exited zero
+but wrote documents below an implicit `outputs/` child while
+`ExecutionSpec.expected_outputs` resolves each item directly against
+`working_directory`. The executor therefore correctly reported all six
+declared outputs missing. Parallel core work changed the frozen commit before
+the paired C0 arm, so v25 is incomplete and cannot support a paired claim.
+
+This failure exposed a genuinely ambiguous consumer boundary rather than a
+TLP algorithm requirement. Runner ABI 1.8, digest
+`sha256:4fa3356581a97531626277b18a7c213c4f0fcb4ec036e18fa74c0ae70c30f7cf`,
+now declares the exact resolution
+`Path(working_directory) / expected_outputs[i]` and rejects undeclared implicit
+subdirectories. `research_manager_skill 0.27.0` publishes that contract.
+Builder commit `4ebb69c2` also makes the generic one-shot rail exercise the
+production provider command, exact output paths, returned `output_ref`,
+collection, and verification rather than accepting only a schema-shaped helper
+fixture. Neither change modifies v22-v25; a new frozen task is required.
+
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and
 content identities. Candidate-authored claims cannot mark a check passed. The
