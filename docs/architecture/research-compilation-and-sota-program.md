@@ -849,6 +849,39 @@ The unassisted first launch reached `ready` in about nine seconds: launch PID
 same automation session, and Builder started the candidate. v31 candidate
 sources and outcomes are not inputs to v32.
 
+v32 then completed two counterbalanced pairs without operator intervention and
+stopped before pair three under the preregistered futility rule. Both pairs
+were `0/0` evidence-valid ties. The observed execution order matched the frozen
+schedule, but even four remaining C3 wins could reach only one-sided exact
+`p=0.0625`; continuing would therefore spend compute without making the
+superiority claim attainable. C0 failed twice at operationalization after
+inventing protocol/runner identities that were not the admitted experiment.
+C3 produced substantially more faithful Torch/TLP implementations and used the
+exact provider ABIs after an automatic repair, but both attempts failed the
+trusted engineering-compilation gate: their candidate-authored tests emitted
+the required evidence documents in an OS/pytest temporary root rather than the
+worker-owned `ADAOS_TASK_RUNTIME_DIR`. Local tests and self-validation were not
+allowed to substitute for a consumer-visible document set.
+
+The retained summary is
+`sha256:d2029e11f81f009aaa81d41f7117ac21d614f64aea1447246d6158e3b8c75d61`;
+the machine-recomputable partial package is
+`sha256:c16117690a28cc65e27986dc83008f0aad738b76759660453638c963ca053969`.
+Its claim status is `incomplete_no_claim`. This is negative primary-endpoint
+evidence: v32 does not show that structured formulation raises EVC probability.
+It does show a narrower diagnostic effect--typed inputs constrained scientific
+identity and enabled exact ABI repair--while exposing that a post-hoc
+`document_set` fixture still leaves the model to infer how and where the
+consumer sequence must execute.
+
+Core `91129b77`, committed only after v32 was frozen, improves the generic
+diagnostic and prompt by naming the trusted runtime root and the required
+`skill_data_root()` binding. It is not part of the v32 treatment. The next
+eligible comparison must go further: an admitted operation-set fixture should
+carry an executable, bounded invocation sequence that the trusted worker runs
+against the production provider itself. That removes a task-root convention
+from free-form model inference without prescribing TLP internals.
+
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and
 content identities. Candidate-authored claims cannot mark a check passed. The

@@ -1519,6 +1519,15 @@ efficacy result or cross-domain SOTA claim.
   identity patterns, and extension policy. Treat required-field lists and
   prose invariants as indexes only. Contract 1.2 includes a negative
   array-versus-role-map regression test derived from the immutable v9 failure.
+- [ ] `[must]` `ARF7.3-06b` Extend admitted provider conformance from post-hoc
+  `document_set` validation to a bounded executable operation sequence. The
+  consumer-owned fixture must declare exact calls, dependency/output bindings,
+  execution step, expected artifacts, and resource/network limits; the trusted
+  worker invokes the production provider, binds its owner data root below
+  `ADAOS_TASK_RUNTIME_DIR`, and emits a digest-bound execution receipt. A
+  candidate-authored pytest or helper may supplement this receipt but cannot
+  create it. Keep the ABI domain-neutral: TLP supplies fixture values, not core
+  control flow.
 - [x] `[must]` `ARF7.3-07` Let Codex return typed clarification, feasibility,
   capability-gap, and protocol-conflict results. Require a reviewed new
   formulation/protocol revision instead of silent scientific mutation.
@@ -1654,6 +1663,22 @@ efficacy result or cross-domain SOTA claim.
   reached the durable ready handshake without operator intervention (launcher
   PID 4068, worker PID 13624), so its outcome is eligible for the frozen
   comparison. No v31 candidate or result is reused.
+  v32 completed two counterbalanced pairs with valid observed order and no
+  operator intervention, then stopped under the preregistered futility rule:
+  both pairs were `0/0` EVC ties and the best possible final one-sided exact
+  result was `p=0.0625`. C0 failed twice at operationalization after drifting
+  from the frozen protocol and runner ABI. C3 built materially more faithful
+  Torch/TLP providers and repaired exact tool schemas, but failed twice at
+  engineering compilation because its evidence-document tests wrote outside
+  the trusted task runtime root. Summary/package digests are respectively
+  `sha256:d2029e11f81f009aaa81d41f7117ac21d614f64aea1447246d6158e3b8c75d61`
+  and
+  `sha256:c16117690a28cc65e27986dc83008f0aad738b76759660453638c963ca053969`.
+  The result is `incomplete_no_claim` and does not support structured-formulation
+  superiority. Post-freeze core `91129b77` makes the owner-data/task-runtime
+  binding explicit, but a fresh claim-eligible comparison is blocked on the
+  consumer-executed fixture in `ARF7.3-06b`; v32 candidates and outcomes remain
+  diagnostic only.
 - [ ] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and
@@ -1858,6 +1883,16 @@ a top-level direction or ordinary Desktop application.
   `v0.1/data` bucket across slots A/B while Builder traces remained
   session-owned. This is supporting migration evidence, not yet the required
   retention/GC and joined-projection acceptance proof.
+- [ ] `[should]` `ARF7.4-35` Define a generic coordinator/managed-component
+  durability handoff without introducing parent access to child storage.
+  Owner-scoped runtime `data` remains durable across compatible A/B and patch
+  migrations; execution logs remain session-owned. A coordinator may receive
+  only typed, content-addressed outputs or governed logical views, with
+  producer/consumer/release refs, retention class, and an idempotent transfer
+  receipt. Prove independent migration, retry, purge, and re-install behavior
+  for both participants before exposing an SDK convenience API. Avoid
+  `master/slave` in the ABI; the relationship is orchestration and lifecycle,
+  not inherited data authority.
 
 #### ARF7.4 implementation checkpoint (2026-08-18)
 
