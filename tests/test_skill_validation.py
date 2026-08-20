@@ -56,6 +56,28 @@ def ping():
     assert "schema.invalid" not in {issue.code for issue in report.issues}
 
 
+def test_dynamic_validation_registers_handler_module_for_dataclasses(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from dataclasses import dataclass
+from adaos.sdk.core.decorators import tool
+
+@dataclass(frozen=True)
+class Reply:
+    ok: bool = True
+
+@tool(summary="ping")
+def ping():
+    return {"ok": Reply().ok}
+""",
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, strict=True)
+
+    assert "import.failed" not in {issue.code for issue in report.issues}
+
+
 def test_validation_rejects_capability_mapping_not_consumed_by_admission(tmp_path: Path) -> None:
     skill_dir = _write_skill(
         tmp_path,

@@ -1254,6 +1254,7 @@ if spec is None or spec.loader is None:
     print(json.dumps({{"ok": False, "error": "spec/load failure"}}))
     raise SystemExit(0)
 module = importlib.util.module_from_spec(spec)
+sys.modules[mod_name] = module
 spec.loader.exec_module(module)
 
 # попытка получить новые публичные реестры (с fallback на старые)
