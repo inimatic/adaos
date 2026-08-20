@@ -584,6 +584,21 @@ class DistributedRuntime:
             principal=principal,
             idempotency_key=idempotency_key,
         )
+        if operation.state == "succeeded":
+            for partition_id in dict.fromkeys(
+                step.partition_id for step in plan.steps
+            ):
+                partition = self.store.get_partition(partition_id)
+                if partition.status != "moving":
+                    continue
+                self.store.put_partition(
+                    replace(
+                        partition,
+                        status="ready",
+                        revision=partition.revision + 1,
+                    ),
+                    expected_revision=partition.revision,
+                )
         self._publish_projection()
         return operation
 
@@ -1197,6 +1212,7 @@ class DistributedRuntime:
     ) -> dict[str, Any]:
         principal.require("distributed.topology.inspect")
         requested = tuple(dict.fromkeys(str(item) for item in partition_ids))
+        dataset = self.store.get_dataset(dataset_id)
         explanation: list[dict[str, Any]] = []
         for partition_id in requested:
             try:
@@ -1211,21 +1227,94 @@ class DistributedRuntime:
                 )
                 continue
             replicas = _all_pages(self.store.list_replicas, partition_id=partition_id)
+            replica_explanations: list[dict[str, Any]] = []
+            for item in replicas[:20]:
+                eligible = True
+                reason = "ready"
+                if item.lifecycle not in {"ready", "stale"}:
+                    eligible = False
+                    reason = f"replica_{item.lifecycle}"
+                elif item.content_state in {"unknown", "unavailable"}:
+                    eligible = False
+                    reason = f"content_{item.content_state}"
+                else:
+                    try:
+                        instance = self.store.get_instance(item.instance_id)
+                        self._require_active_membership(instance)
+                    except (FileNotFoundError, DistributedRuntimeError):
+                        eligible = False
+                        reason = "membership_inactive"
+                    else:
+                        if (
+                            not instance.readiness
+                            or instance.status != "ready"
+                            or not instance.endpoints
+                        ):
+                            eligible = False
+                            reason = "instance_not_ready"
+                authority_eligible: bool | None = None
+                authority_reason: str | None = None
+                if item.role == "authority":
+                    try:
+                        self.assert_authority(
+                            scope_ref=f"partition:{partition_id}",
+                            instance_id=item.instance_id,
+                            epoch=item.authority_epoch,
+                        )
+                    except StaleAuthorityEpochError:
+                        authority_eligible = False
+                        authority_reason = "authority_lease_inactive"
+                    else:
+                        authority_eligible = eligible
+                        authority_reason = "ready" if eligible else reason
+                replica_explanations.append(
+                    {
+                        "replica_id": item.replica_id,
+                        "lifecycle": item.lifecycle,
+                        "content_state": item.content_state,
+                        "freshness_seconds": item.freshness_seconds,
+                        "authority_epoch": item.authority_epoch,
+                        "eligible": eligible,
+                        "reason": reason,
+                        "authority_eligible": authority_eligible,
+                        "authority_reason": authority_reason,
+                    }
+                )
+            partition_eligible = (
+                partition.dataset_id == dataset_id
+                and partition.status not in {"unavailable", "removed"}
+                and any(item["eligible"] for item in replica_explanations)
+            )
+            authority_required = dataset.consistency_profile == "single_authority"
+            authority_eligible = (
+                any(item["authority_eligible"] is True for item in replica_explanations)
+                if authority_required
+                else None
+            )
             explanation.append(
                 {
                     "partition_id": partition_id,
-                    "eligible": partition.dataset_id == dataset_id and bool(replicas),
+                    "eligible": partition_eligible,
+                    "reason": (
+                        "dataset_mismatch"
+                        if partition.dataset_id != dataset_id
+                        else "partition_unavailable"
+                        if partition.status in {"unavailable", "removed"}
+                        else "ready"
+                        if partition_eligible
+                        else "no_eligible_replica"
+                    ),
                     "partition_status": partition.status,
-                    "replicas": [
-                        {
-                            "replica_id": item.replica_id,
-                            "lifecycle": item.lifecycle,
-                            "content_state": item.content_state,
-                            "freshness_seconds": item.freshness_seconds,
-                            "authority_epoch": item.authority_epoch,
-                        }
-                        for item in replicas[:20]
-                    ],
+                    "authority_required": authority_required,
+                    "authority_eligible": authority_eligible,
+                    "authority_reason": (
+                        "not_required"
+                        if not authority_required
+                        else "ready"
+                        if authority_eligible
+                        else "authority_lease_or_replica_unavailable"
+                    ),
+                    "replicas": replica_explanations,
                     "truncated": len(replicas) > 20,
                 }
             )

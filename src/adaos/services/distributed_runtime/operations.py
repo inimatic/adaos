@@ -165,6 +165,12 @@ class TopologyExecutor:
                             principal,
                             authority_epoch,
                         )
+                        operation = replace(
+                            operation,
+                            authority_epoch=authority_epoch,
+                            updated_at=utc_now(),
+                        )
+                        self.store.put_operation(operation)
                     result = self._run_phase(
                         operation=operation,
                         plan=plan,
@@ -182,6 +188,7 @@ class TopologyExecutor:
             operation = replace(
                 operation,
                 state="succeeded",
+                authority_epoch=authority_epoch,
                 phases=tuple(completed),
                 updated_at=utc_now(),
             )

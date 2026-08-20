@@ -650,11 +650,11 @@ def test_reviewed_handoff_plan_commits_epoch_before_domain_promotion(
         idempotency_key="reviewed-handoff-a-to-b",
         principal=_principal(),
     )
-    partition = runtime.store.get_partition("media-files:root-a")
-
     assert operation.state == "succeeded"
-    assert operation.authority_epoch == 1
+    assert operation.authority_epoch == 2
+    partition = runtime.store.get_partition("media-files:root-a")
     assert partition.authority_epoch == 2
+    assert partition.status == "ready"
     promote_index = next(
         index for index, call in enumerate(adapter.calls) if call[0] == "promote"
     )
@@ -668,6 +668,95 @@ def test_reviewed_handoff_plan_commits_epoch_before_domain_promotion(
             instance_id="media-agent-node-a",
             epoch=1,
         )
+
+
+def test_route_explanation_distinguishes_read_and_expired_authority(
+    tmp_path: Path,
+) -> None:
+    runtime, clock, release = _runtime(tmp_path)
+    for node_id in ("node-a", "node-b"):
+        runtime.register_instance(
+            _instance(release, node_id),
+            expected_revision=0,
+            lease_seconds=300,
+            principal=_principal(),
+        )
+    runtime.define_dataset(
+        Dataset(
+            dataset_id="media-catalog",
+            owner_ref="skill:media_library_agent",
+            contract="media.catalog-authority.v1",
+            consistency_profile="single_authority",
+            partition_scheme={"kind": "home"},
+            retention={"on_remove": "retain"},
+            data_class="authoritative",
+            desired_revision=1,
+        ),
+        expected_revision=0,
+        principal=_principal(),
+    )
+    runtime.put_partition(
+        Partition(
+            partition_id="media-catalog:home",
+            dataset_id="media-catalog",
+            selector={"shard": "home"},
+            desired_replicas=1,
+            topology_generation=1,
+            authority_lease_id=None,
+            authority_epoch=0,
+            checkpoint="catalog:1",
+            status="ready",
+        ),
+        expected_revision=0,
+        principal=_principal(),
+    )
+    lease = runtime.handoff_authority(
+        "media-catalog:home",
+        "media-agent-node-a",
+        expected_partition_revision=1,
+        expected_epoch=0,
+        operation_id="authority-home",
+        lease_seconds=120,
+        principal=_principal(),
+    )
+    runtime.observe_replica(
+        Replica(
+            replica_id="home-node-a",
+            partition_id="media-catalog:home",
+            instance_id="media-agent-node-a",
+            node_id="node-a",
+            role="authority",
+            lifecycle="ready",
+            content_state="non_empty",
+            authority_epoch=lease.epoch,
+            checkpoint="catalog:1",
+            source_ref="catalog:home",
+            freshness_seconds=0,
+            item_count=1,
+            byte_count=10,
+            observed_at=_NOW.isoformat(),
+        ),
+        expected_revision=0,
+        principal=_principal(),
+    )
+
+    ready = runtime.explain_route(
+        "media-catalog",
+        ("media-catalog:home",),
+        principal=_principal(),
+    )["partitions"][0]
+    assert ready["eligible"] is True
+    assert ready["authority_eligible"] is True
+
+    clock.advance(121)
+    expired = runtime.explain_route(
+        "media-catalog",
+        ("media-catalog:home",),
+        principal=_principal(),
+    )["partitions"][0]
+    assert expired["eligible"] is True
+    assert expired["authority_eligible"] is False
+    assert expired["replicas"][0]["authority_reason"] == "authority_lease_inactive"
 
 
 class FakeTopologyAdapter:
