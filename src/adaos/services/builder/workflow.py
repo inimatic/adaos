@@ -1578,7 +1578,7 @@ class BuilderWorkflowService:
             "can_prepare_candidate": mutable
             and active == "automation"
             and automation_status == "completed"
-            and delivery_status not in {"trial", "accepted"},
+            and delivery_status == "checkpoint",
             "can_decide_candidate": mutable and delivery_status == "trial",
             "can_publish": mutable
             and active == "automation"
