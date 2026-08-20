@@ -264,6 +264,35 @@ class LocalComponentDeploymentAdapter:
             raise ProjectDeploymentExecutionError("fetched package identity mismatch")
         return {"package_digest": package.digest, "cached": True}
 
+    def _phase_observe(self, **kwargs: Any) -> Mapping[str, Any]:
+        change: DeploymentPlanChange = kwargs["change"]
+        package = self._require_package(kwargs["package"])
+        verified = self.package_store.verify(package.digest)
+        if verified.ref != package:
+            raise ProjectDeploymentExecutionError("observed package identity mismatch")
+        target = self._target(change, package)
+        if not target.is_dir():
+            raise ProjectDeploymentExecutionError(
+                "observed component materialization is missing"
+            )
+        kind, component_id = change.component_ref.split(":", 1)
+        health = dict(
+            self.hooks.health(
+                kind=kind,
+                component_id=component_id,
+                version=package.version,
+            )
+        )
+        if health.get("ready") is not True:
+            raise ProjectDeploymentExecutionError(
+                "observed component health did not report ready"
+            )
+        return {
+            "observed": True,
+            "package_digest": package.digest,
+            "health": health,
+        }
+
     def _phase_verify(self, **kwargs: Any) -> Mapping[str, Any]:
         package = self._require_package(kwargs["package"])
         verified = self.package_store.verify(package.digest)
@@ -406,9 +435,7 @@ class RoutingComponentDeploymentAdapter:
         if node.node_id == self.local_node_id:
             return self.local.execute_phase(**kwargs)
         try:
-            return self.remote.execute_component_phase(
-                node_id=node.node_id, **kwargs
-            )
+            return self.remote.execute_component_phase(node_id=node.node_id, **kwargs)
         except UncertainDeploymentPhaseError:
             raise
         except TimeoutError as exc:

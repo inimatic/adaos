@@ -386,14 +386,11 @@ def test_planner_emits_noop_update_and_explicit_remove() -> None:
         local_node_id="node-a",
     )
 
-    assert (
-        next(
-            item
-            for item in plan.changes
-            if item.component_ref == activation.component_ref
-        ).action
-        == "noop"
+    noop = next(
+        item for item in plan.changes if item.component_ref == activation.component_ref
     )
+    assert noop.action == "noop"
+    assert noop.phases == ("observe",)
     removal = next(
         item for item in plan.changes if item.component_ref == stale.component_ref
     )

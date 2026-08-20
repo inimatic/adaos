@@ -98,9 +98,9 @@ class ProjectDeploymentPlanner:
                 for resource, required in placement.required_capacity.items()
             }
             exact = current.get((placement.component_ref, node.node_id))
-            score = (1000 if exact is not None and exact.status == "active" else 0) + sum(
-                min(value, 1_000_000_000) for value in headroom.values()
-            )
+            score = (
+                1000 if exact is not None and exact.status == "active" else 0
+            ) + sum(min(value, 1_000_000_000) for value in headroom.values())
             candidates.append(
                 {
                     "node_id": node.node_id,
@@ -111,7 +111,9 @@ class ProjectDeploymentPlanner:
                     "labels": dict(node.labels),
                     "headroom": headroom,
                     "reasons": [
-                        "exact_activation" if exact is not None and exact.status == "active" else "eligible",
+                        "exact_activation"
+                        if exact is not None and exact.status == "active"
+                        else "eligible",
                         "capacity_headroom",
                     ],
                 }
@@ -265,7 +267,7 @@ class ProjectDeploymentPlanner:
                             observed.activation_id if observed is not None else None
                         ),
                         reason=reason,
-                        phases=() if action == "noop" else _ACTIVATE_PHASES,
+                        phases=("observe",) if action == "noop" else _ACTIVATE_PHASES,
                         availability_impact=impact,
                     )
                 )

@@ -329,6 +329,65 @@ def _persist_remote_lifecycle(
     store.put_activation(replace(local, status=status, updated_at=utc_now()))
 
 
+def _observe_remote_activation(
+    store: ProjectDeploymentStore,
+    *,
+    desired: ProjectDeployment,
+    change: DeploymentPlanChange,
+    package: ArtifactPackageRef | None,
+    current_activation: ComponentActivation | None,
+) -> ComponentActivation:
+    if (
+        change.action != "noop"
+        or package is None
+        or current_activation is None
+        or current_activation.status != "active"
+        or current_activation.deployment_id != desired.deployment_id
+        or current_activation.component_ref != change.component_ref
+        or current_activation.node_id != change.node_id
+        or (
+            current_activation.release_digest != desired.release_digest
+            and not desired.compatibility.allow_release_skew
+        )
+        or current_activation.package_digest != package.digest
+        or current_activation.activation_id != change.current_activation_ref
+    ):
+        raise ProjectDeploymentExecutionError(
+            "remote_activation_observation_identity_mismatch"
+        )
+    try:
+        existing = store.get_activation(current_activation.activation_id)
+    except FileNotFoundError:
+        existing = None
+    if existing is None:
+        observed = current_activation
+    else:
+        identity_fields = (
+            "activation_id",
+            "deployment_id",
+            "component_ref",
+            "node_id",
+            "release_digest",
+            "package_digest",
+            "generation",
+        )
+        if any(
+            getattr(existing, field) != getattr(current_activation, field)
+            for field in identity_fields
+        ):
+            raise ProjectDeploymentExecutionError(
+                "remote_activation_observation_conflict"
+            )
+        observed = replace(
+            existing,
+            status="active",
+            health=dict(current_activation.health),
+            evidence=dict(current_activation.evidence),
+            updated_at=utc_now(),
+        )
+    return store.put_activation(observed)
+
+
 def execute_remote_component_phase(payload: Mapping[str, Any]) -> dict[str, Any]:
     with _receiver_lock:
         adapter = _receiver_adapter
@@ -431,6 +490,14 @@ def execute_remote_component_phase(payload: Mapping[str, Any]) -> dict[str, Any]
         if committed_activation is not None:
             _restore_remote_activation(store, committed_activation, previous_local)
         raise
+    if phase == "observe":
+        _observe_remote_activation(
+            store,
+            desired=desired,
+            change=change,
+            package=package,
+            current_activation=current_activation,
+        )
     _persist_remote_lifecycle(
         store,
         phase=phase,

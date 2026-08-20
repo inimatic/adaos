@@ -376,21 +376,6 @@ class ProjectDeploymentExecutor:
             operation, node_id=node.node_id, component_ref=change.component_ref
         )
         phases = list(existing.phases) if existing is not None else []
-        if change.action == "noop":
-            result = DeploymentComponentResult(
-                component_ref=change.component_ref,
-                action=change.action,
-                state="succeeded",
-                phases=tuple(phases),
-                activation_ref=(
-                    current_activation.activation_id
-                    if current_activation is not None
-                    else None
-                ),
-            )
-            operation = self._persist_component(operation, node.node_id, result)
-            return operation, result
-
         result = DeploymentComponentResult(
             component_ref=change.component_ref,
             action=change.action,
@@ -417,6 +402,7 @@ class ProjectDeploymentExecutor:
             if result.state in {"failed", "uncertain"}:
                 if (
                     result.state == "failed"
+                    and change.action != "noop"
                     and desired.rollout.rollback_on_failure
                     and phase not in {"rollback", "remove"}
                 ):
@@ -433,6 +419,21 @@ class ProjectDeploymentExecutor:
                         preserve_failure=True,
                     )
                 return operation, result
+
+        if change.action == "noop":
+            result = replace(
+                result,
+                state="succeeded",
+                activation_ref=(
+                    current_activation.activation_id
+                    if current_activation is not None
+                    else None
+                ),
+                error={},
+                uncertain=False,
+            )
+            operation = self._persist_component(operation, node.node_id, result)
+            return operation, result
 
         activation_ref = self._commit_activation(
             operation,

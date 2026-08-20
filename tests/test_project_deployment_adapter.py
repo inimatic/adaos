@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -255,14 +256,17 @@ def test_remote_receiver_revalidates_identity_and_package_digest(
     assert result["target_node_id"] == "node-b"
     assert store.verify(package.ref.digest).ref == package.ref
 
-    committed = execute_remote_component_phase(
-        {
-            **payload,
-            "phase": "commit",
-            "idempotency_key": "remote:test-worker:commit",
-            "package_archive_b64": None,
-        }
-    )
+    committed = None
+    for phase in ("verify", "stage", "activate", "health", "commit"):
+        committed = execute_remote_component_phase(
+            {
+                **payload,
+                "phase": phase,
+                "idempotency_key": f"remote:test-worker:{phase}",
+                "package_archive_b64": None,
+            }
+        )
+    assert committed is not None
     activation_store = ProjectDeploymentStore(state_dir=tmp_path / "remote-state")
     desired = _desired(release)
     activation = activation_store.get_activation(
@@ -274,6 +278,25 @@ def test_remote_receiver_revalidates_identity_and_package_digest(
     assert activation.node_id == "node-b"
     assert activation.release_digest == desired.release_digest
     assert activation.generation == desired.revision
+
+    observed = execute_remote_component_phase(
+        {
+            **payload,
+            "phase": "observe",
+            "change": replace(
+                change,
+                action="noop",
+                current_activation_ref=activation.activation_id,
+                phases=("observe",),
+            ).to_dict(),
+            "current_activation": activation.to_dict(),
+            "idempotency_key": "remote:observe-worker:observe",
+            "package_archive_b64": None,
+        }
+    )
+
+    assert observed["receipt"]["observed"] is True
+    assert activation_store.get_activation(activation.activation_id).status == "active"
     with pytest.raises(
         ProjectDeploymentExecutionError, match="target_identity_mismatch"
     ):

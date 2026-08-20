@@ -55,6 +55,7 @@ OPERATION_STATES = {
 }
 TRUST_STATES = {"trusted", "pending", "revoked", "untrusted"}
 OPERATION_PHASES = {
+    "observe",
     "fetch",
     "verify",
     "stage",
