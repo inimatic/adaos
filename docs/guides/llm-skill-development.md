@@ -64,6 +64,16 @@ visible as a design defect and be returned for repair. It should not be hidden
 by runtime magic that makes the browser appear healthy while the skill keeps
 producing unsafe data.
 
+Production declarations have one source authority. The runtime must load
+`skill.yaml`, `webui.json`, resources, receiver contracts, and handler code
+from the same selected immutable runtime version and A/B slot. A workspace or
+repository source is a development/install input, not a production fallback
+after an active runtime exists. Do not repair a missing desktop catalog by
+copying files back into a stale workspace directory; report active
+version/slot/source evidence and fix installation or runtime resolution. Test
+scenario rebuilds with the workspace source removed and only the active slot
+present so persisted Yjs state cannot hide a declaration-authority defect.
+
 ## Required data route plan
 
 Before editing a browser-facing skill, write down the route plan. A concise
@@ -1341,6 +1351,14 @@ Stream rules:
   They must not call slow discovery, root relay, remote sync, or legacy fallback
   paths during browser state rebuilds; those belong behind explicit refresh,
   repair, or details actions with visible progress and failure.
+- synchronous event subscribers may be adapted through a worker thread and
+  therefore must not use `asyncio.get_running_loop()` as the decision between
+  background and inline execution. Submit expensive snapshot work to an
+  explicitly bounded executor/queue in every call context, coalesce by
+  `(webspace, receiver, node)`, and return from the subscriber immediately.
+  Expose active/peak/capacity, scheduled/coalesced/rejected/failed counts, and
+  last/max duration. Drain/dispose must cancel queued work and suppress results
+  from an obsolete runtime generation.
 
 Stream variables should be demand-aware. A stream receiver that is not
 subscribed should not keep rebuilding full snapshots just in case a browser
@@ -1928,6 +1946,11 @@ Before publishing:
   repair path `adaos skill install NAME --source workspace --local --recover
   --test --silent`; recovery without tests is rejected, and the quarantine must
   remain effective until candidate activation succeeds.
+- remove or rename the workspace source after activation, leave the selected
+  slot intact, switch to another scenario and back, and verify the catalog,
+  resources, receivers, and tools still materialize from that exact active
+  version/slot. Assert source-authority evidence rather than accepting a
+  populated catalog that may have survived in persisted Yjs state.
 - verify `data_routes` exists for browser-facing Yjs, stream, details, or
   diagnostic surfaces
 - verify every tool-backed surface names its exact tool and has a causal
@@ -1981,6 +2004,9 @@ Before publishing:
 - verify collection routes keep Yjs summaries constant-size under synthetic
   large-row tests
 - verify hot events have debounce/budget tests
+- verify a synchronous snapshot subscriber returns promptly when its builder is
+  deliberately blocked, repeated requests coalesce, queue capacity is bounded,
+  and lifecycle drain prevents the stale worker from publishing
 - verify SDK projection diagnostics show the expected `by_event` pressure
   counters for dirty refresh paths before optimizing a noisy event source
 - verify stream request bursts cannot rebuild every skill section by default

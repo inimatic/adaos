@@ -11,6 +11,8 @@ from typing import Any, Dict, List
 
 import yaml
 
+from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+
 
 @dataclass(frozen=True, slots=True)
 class WebspaceSkillCatalogOperations:
@@ -42,6 +44,41 @@ class WebspaceSkillCatalogOperations:
 
 
 class WebspaceSkillCatalogService:
+    @staticmethod
+    def _active_runtime_source(paths: Any, skill_name: str) -> dict[str, Any] | None:
+        """Resolve declarations from the same immutable slot that runs the skill."""
+
+        try:
+            skills_root = Path(paths.skills_dir()).expanduser().resolve()
+            environment = SkillRuntimeEnvironment(
+                skills_root=skills_root,
+                skill_name=skill_name,
+            )
+            version = str(environment.resolve_active_version() or "").strip()
+            if not version:
+                return None
+            slot = str(environment.read_active_slot(version) or "").strip().upper()
+            if slot not in {"A", "B"}:
+                return None
+            slot_paths = environment.build_slot_paths(version, slot)
+            slot_root = slot_paths.root.expanduser().resolve()
+            skill_dir = (slot_paths.src_dir / "skills" / skill_name).resolve()
+            if skill_dir != slot_root and slot_root not in skill_dir.parents:
+                return None
+            resolved_manifest = slot_paths.resolved_manifest.expanduser().resolve()
+            if not skill_dir.is_dir() or not resolved_manifest.is_file():
+                return None
+            source_manifest = skill_dir / "skill.yaml"
+            return {
+                "skill_dir": skill_dir,
+                "manifest_path": source_manifest if source_manifest.is_file() else resolved_manifest,
+                "resolved_manifest": resolved_manifest,
+                "version": version,
+                "slot": slot,
+            }
+        except (OSError, RuntimeError, ValueError):
+            return None
+
     def load_webui(
         self,
         runtime: Any,
@@ -54,9 +91,16 @@ class WebspaceSkillCatalogService:
         paths = runtime.ctx.paths
         base = paths.dev_skills_dir() if space == "dev" else paths.skills_dir()
         skill_dir = Path(base) / skill_name
-        path = skill_dir / "webui.json"
         manifest_path = skill_dir / "skill.yaml"
-        if not path.exists():
+        source_authority = "dev_workspace" if space == "dev" else "workspace_source"
+        runtime_source = self._active_runtime_source(paths, skill_name) if space != "dev" else None
+        if runtime_source is not None:
+            skill_dir = Path(runtime_source["skill_dir"])
+            manifest_path = Path(runtime_source["manifest_path"])
+            source_authority = "active_runtime_slot"
+
+        path = skill_dir / "webui.json"
+        if not path.exists() and runtime_source is None:
             try:
                 repo_root_attr = getattr(paths, "repo_root", None)
                 repo_root = repo_root_attr() if callable(repo_root_attr) else repo_root_attr
@@ -68,6 +112,7 @@ class WebspaceSkillCatalogService:
                     if fallback.exists():
                         path = fallback
                         manifest_path = fallback_dir / "skill.yaml"
+                        source_authority = "repo_workspace_fallback"
             except Exception:
                 pass
         if not path.exists():
@@ -141,6 +186,7 @@ class WebspaceSkillCatalogService:
             "skill": skill_name,
             "space": space,
             "source_path": str(path.parent.resolve()),
+            "source_authority": source_authority,
             "node_id": operations.local_node_id(),
             "ui_owner": ui_owner,
             "apps": [operations.apply_webui_load_hint(it) for it in apps if isinstance(it, dict)],
@@ -169,6 +215,10 @@ class WebspaceSkillCatalogService:
                 ),
             },
         }
+        if runtime_source is not None:
+            payload["runtime_version"] = str(runtime_source["version"])
+            payload["runtime_slot"] = str(runtime_source["slot"])
+            payload["resolved_manifest"] = str(runtime_source["resolved_manifest"])
         if stamp is not None:
             operations.cache_state.put_webui_declaration(cache_key, stamp, payload)
         return payload
@@ -182,7 +232,37 @@ class WebspaceSkillCatalogService:
         *,
         include_remote: bool = True,
     ) -> list[dict[str, Any]]:
-        cache_key = f"{str(mode or '').strip() or 'mixed'}:{1 if include_remote else 0}"
+        try:
+            cap = operations.get_local_capacity()
+            skills = cap.get("skills") or []
+        except Exception:
+            skills = []
+        if not isinstance(skills, list):
+            skills = []
+
+        active_records = [
+            rec
+            for rec in skills
+            if isinstance(rec, dict) and rec.get("active", True) and (rec.get("name") or rec.get("id"))
+        ]
+        selection_evidence: list[dict[str, Any]] = []
+        for rec in active_records:
+            skill_name = str(rec.get("name") or rec.get("id"))
+            runtime_source = self._active_runtime_source(runtime.ctx.paths, skill_name) if mode != "dev" else None
+            selection_evidence.append(
+                {
+                    "name": skill_name,
+                    "dev": bool(rec.get("dev")),
+                    "runtime_version": str((runtime_source or {}).get("version") or ""),
+                    "runtime_slot": str((runtime_source or {}).get("slot") or ""),
+                    "resolved_manifest": str((runtime_source or {}).get("resolved_manifest") or ""),
+                }
+            )
+        selection_fingerprint = operations.fingerprint_json_like(selection_evidence)
+        cache_key = (
+            f"{str(mode or '').strip() or 'mixed'}:{1 if include_remote else 0}:"
+            f"{selection_fingerprint}"
+        )
         now = time.monotonic()
         cached = operations.cache_state.get_skill_declarations(cache_key)
         if cached is not None and now - float(cached[0]) <= operations.skill_decls_cache_ttl_s():
@@ -195,21 +275,9 @@ class WebspaceSkillCatalogService:
             except Exception:
                 return [dict(item) for item in cached[2] if isinstance(item, dict)]
 
-        try:
-            cap = operations.get_local_capacity()
-            skills = cap.get("skills") or []
-        except Exception:
-            skills = []
-        if not isinstance(skills, list):
-            skills = []
-
         decls: List[Dict[str, Any]] = []
-        for rec in skills:
-            if not isinstance(rec, dict) or not rec.get("active", True):
-                continue
+        for rec in active_records:
             name = rec.get("name") or rec.get("id")
-            if not name:
-                continue
             skill_name = str(name)
 
             if mode == "workspace":
