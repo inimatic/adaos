@@ -18,6 +18,7 @@ from typing import Any
 from packaging.version import InvalidVersion, Version
 
 from adaos.adapters.db import SqliteSkillRegistry
+from adaos.build_info import BUILD_INFO
 from adaos.services.agent_context import AgentContext
 from adaos.services.runtime_refresh import RuntimeRefreshError, rebuild_webspace_projection_sync, refresh_skill_runtime
 from adaos.services.skill.manager import SkillManager
@@ -489,6 +490,10 @@ def _clean_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _core_runtime_identity() -> str:
+    return _clean_text(BUILD_INFO.git_commit) or _clean_text(BUILD_INFO.version)
+
+
 def _read_local_artifact_version(artifact_dir: Path) -> str:
     try:
         entry = build_registry_entry("skills", artifact_dir)
@@ -565,6 +570,7 @@ def migration_candidates(
 ) -> list[dict[str, Any]]:
     registry_versions = _registry_versions(ctx)
     requested_name = str(name or "").strip()
+    core_identity = _core_runtime_identity()
     # Workspace registry entries describe materialized artifacts, not install
     # intent.  Only the installed registry may enroll a skill in an automatic
     # runtime migration; an explicit request may still recover one by name.
@@ -584,17 +590,20 @@ def migration_candidates(
             and not bool(deactivation.get("committed_core_switch"))
         )
         attempted_version = _clean_text(deactivation.get("attempted_version"))
+        attempted_core_identity = _clean_text(deactivation.get("attempted_core_identity"))
         reason = "force" if force else ""
         if not force:
             explicitly_recovering = bool(requested_name and runtime_state.get("deactivated"))
             if explicitly_recovering:
                 reason = "explicit_quarantine_recovery"
             elif bool(runtime_state.get("deactivated")):
-                if precommit_migration_failure and _runtime_is_behind(workspace_version, runtime_version):
-                    reason = "recover_precommit_migration_failure"
+                candidate_changed = attempted_version != workspace_version
+                core_changed = bool(core_identity and attempted_core_identity != core_identity)
+                if precommit_migration_failure and (candidate_changed or core_changed):
+                    reason = "recover_precommit_migration_failure" if candidate_changed else "recover_after_core_update"
                 else:
                     # Post-commit quarantine remains fail-closed. A pre-commit
-                    # failure is retried only when a newer candidate exists.
+                    # failure is retried for a newer candidate or core build.
                     continue
             elif precommit_migration_failure and attempted_version == workspace_version:
                 # The active fallback remains live. Do not retry the same
@@ -765,6 +774,7 @@ def _preserve_runtime_after_candidate_failure(
             active_slot_before=before_slot,
             rollback_performed=rollback_performed,
             source="skill_runtime_migration_worker",
+            attempted_core_identity=_core_runtime_identity(),
         )
         entry["candidate_quarantine"] = marker
         entry["deactivation"] = marker
@@ -788,6 +798,8 @@ def _preserve_runtime_after_candidate_failure(
         comment=str(error),
         operation_id=operation_id,
         transient=False,
+        attempted_version=str(candidate.get("workspace_version") or ""),
+        attempted_core_identity=_core_runtime_identity(),
     )
     entry["deactivation"] = deactivation
     entry["fallback_preserved"] = False
@@ -1256,7 +1268,7 @@ def _worker_main(argv: list[str] | None = None) -> int:
     init_ctx()
     ctx = get_ctx()
     try:
-        result = _run_migration_sync(
+        _run_migration_sync(
             ctx,
             operation_id=str(args.operation_id),
             webspace_id=str(args.webspace_id),

@@ -8,6 +8,7 @@ from typing import Any
 from adaos.adapters.db import SqliteScenarioRegistry, SqliteSkillRegistry
 from adaos.adapters.git.workspace import SparseWorkspace
 from adaos.services.git.workspace_guard import ensure_clean
+from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 from adaos.services.workspace_registry import (
     load_workspace_registry,
     rebuild_workspace_registry,
@@ -167,6 +168,51 @@ def installed_names(rows: list[object]) -> list[str]:
             continue
         names.append(str(name))
     return sorted(set(names))
+
+
+def selected_runtime_skill_names(ctx) -> list[str]:
+    """Return skills with an authoritative selected immutable runtime."""
+
+    try:
+        skills_dir_attr = getattr(ctx.paths, "skills_dir", None)
+        if skills_dir_attr is None:
+            skills_root = Path(ctx.paths.workspace_dir()) / "skills"
+        else:
+            skills_root = Path(skills_dir_attr() if callable(skills_dir_attr) else skills_dir_attr)
+    except Exception:
+        return []
+    runtime_root = skills_root / ".runtime"
+    if not runtime_root.is_dir():
+        return []
+    names: set[str] = set()
+    for skill_root in runtime_root.iterdir():
+        if not skill_root.is_dir():
+            continue
+        name = skill_root.name
+        if not _ARTIFACT_NAME_RE.fullmatch(name):
+            continue
+        env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=name)
+        payload = env.read_runtime_selection()
+        version = str(payload.get("version") or "").strip() if payload else ""
+        slot = str(payload.get("slot") or payload.get("active_slot") or "").strip().upper() if payload else ""
+        if version and slot in {"A", "B"}:
+            names.add(name)
+            continue
+
+        # Legacy runtimes selected their immutable version and slot with two
+        # text markers before current_runtime.json was introduced.
+        version_marker = env.active_version_marker()
+        if not version_marker.is_file():
+            continue
+        try:
+            legacy_version = str(version_marker.read_text(encoding="utf-8") or "").strip()
+            active_marker = env.active_marker(legacy_version)
+            legacy_slot = str(active_marker.read_text(encoding="utf-8") or "").strip().upper()
+        except Exception:
+            continue
+        if legacy_version and legacy_slot in {"A", "B"}:
+            names.add(name)
+    return sorted(names)
 
 
 def workspace_kind_names(ctx, workspace_root: Path, kind: str) -> list[str]:

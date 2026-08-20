@@ -819,6 +819,8 @@ def _find_existing_registry_entry(
 
 def _load_manifest(directory: Path, kind: RegistryKind) -> tuple[Path | None, dict[str, Any]]:
     required = _REQUIRED_MANIFEST_BY_KIND[kind]
+    if not directory.is_dir():
+        return None, {}
     path = directory / required
     if not path.exists():
         unsupported = [
@@ -874,7 +876,7 @@ def _is_sparse_placeholder_dir(directory: Path) -> bool:
     except Exception:
         return False
     if not entries:
-        return False
+        return True
     return all(entry.is_file() and entry.name == ".gitignore" for entry in entries)
 
 

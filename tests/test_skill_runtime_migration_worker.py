@@ -32,6 +32,8 @@ class _FakeManager:
                     "failure_kind": "migration",
                     "comment": "pytest exit code -15",
                     "operation_id": "skill-migrate-old",
+                    "attempted_version": version,
+                    "attempted_core_identity": worker._core_runtime_identity(),
                 }
                 if is_deactivated
                 else {}
@@ -228,6 +230,40 @@ def test_background_discovery_reports_quarantine_without_retrying_it(monkeypatch
     ]
 
 
+def test_background_discovery_retries_quarantine_once_after_core_update(monkeypatch, tmp_path):
+    ctx = SimpleNamespace(paths=SimpleNamespace(workspace_dir=lambda: tmp_path, skills_workspace_dir=lambda: tmp_path / "skills"))
+    skill_dir = tmp_path / "skills" / "infrastate_skill"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+
+    class _Manager:
+        def runtime_status(self, _name: str) -> dict:
+            return {
+                "name": "infrastate_skill",
+                "version": "0.75.59",
+                "active_slot": "A",
+                "deactivated": True,
+                "deactivation": {
+                    "reason": "runtime_migration_failed",
+                    "committed_core_switch": False,
+                    "attempted_version": "0.75.59",
+                    "attempted_core_identity": "core-old",
+                },
+            }
+
+    monkeypatch.setattr(worker, "_registered_skill_names", lambda _ctx: ["infrastate_skill"])
+    monkeypatch.setattr(worker, "_registry_versions", lambda _ctx: {})
+    monkeypatch.setattr(worker, "_workspace_skill_source", lambda _ctx, name: tmp_path / "skills" / name)
+    monkeypatch.setattr(worker, "_read_local_artifact_version", lambda _path: "0.75.59")
+
+    monkeypatch.setattr(worker, "_core_runtime_identity", lambda: "core-new")
+    candidates = worker.migration_candidates(ctx, _Manager())
+    assert [item["skill"] for item in candidates] == ["infrastate_skill"]
+    assert candidates[0]["reason"] == "recover_after_core_update"
+
+    monkeypatch.setattr(worker, "_core_runtime_identity", lambda: "core-old")
+    assert worker.migration_candidates(ctx, _Manager()) == []
+
+
 def test_background_discovery_recovers_newer_candidate_behind_legacy_quarantine(monkeypatch, tmp_path):
     ctx = SimpleNamespace(paths=SimpleNamespace(workspace_dir=lambda: tmp_path, skills_workspace_dir=lambda: tmp_path / "skills"))
     skill_dir = tmp_path / "skills" / "infrastate_skill"
@@ -245,6 +281,34 @@ def test_background_discovery_recovers_newer_candidate_behind_legacy_quarantine(
 
     assert [item["skill"] for item in result] == ["infrastate_skill"]
     assert result[0]["reason"] == "recover_precommit_migration_failure"
+
+
+def test_background_discovery_does_not_repeat_same_failed_candidate_and_core(monkeypatch, tmp_path):
+    ctx = SimpleNamespace(paths=SimpleNamespace(workspace_dir=lambda: tmp_path, skills_workspace_dir=lambda: tmp_path / "skills"))
+    skill_dir = tmp_path / "skills" / "infrastate_skill"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+
+    class _Manager:
+        def runtime_status(self, _name: str) -> dict:
+            return {
+                "version": "0.75.59",
+                "active_slot": "A",
+                "deactivated": True,
+                "deactivation": {
+                    "reason": "runtime_migration_failed",
+                    "committed_core_switch": False,
+                    "attempted_version": "0.75.60",
+                    "attempted_core_identity": "core-current",
+                },
+            }
+
+    monkeypatch.setattr(worker, "_registered_skill_names", lambda _ctx: ["infrastate_skill"])
+    monkeypatch.setattr(worker, "_registry_versions", lambda _ctx: {})
+    monkeypatch.setattr(worker, "_workspace_skill_source", lambda _ctx, name: tmp_path / "skills" / name)
+    monkeypatch.setattr(worker, "_read_local_artifact_version", lambda _path: "0.75.60")
+    monkeypatch.setattr(worker, "_core_runtime_identity", lambda: "core-current")
+
+    assert worker.migration_candidates(ctx, _Manager()) == []
 
 
 def test_background_discovery_skips_same_rejected_candidate_but_accepts_newer(monkeypatch, tmp_path):
@@ -448,6 +512,7 @@ def test_candidate_failure_preserves_only_the_exact_pre_attempt_selection(monkey
     assert calls == ["record"]
     assert marker["fallback_version"] == "1.2.2"
     assert marker["fallback_slot"] == "B"
+    assert marker["attempted_core_identity"] == worker._core_runtime_identity()
     assert entry["rollback_performed"] is False
     assert entry["fallback_preserved"] is True
 

@@ -2629,6 +2629,8 @@ class SkillManager:
         comment: str = "",
         operation_id: str = "",
         transient: bool | None = None,
+        attempted_version: str = "",
+        attempted_core_identity: str = "",
     ) -> dict[str, Any]:
         env = self._runtime_env(name)
         version = env.resolve_active_version()
@@ -2679,6 +2681,10 @@ class SkillManager:
             "source": deactivation_source,
             "committed_core_switch": bool(committed_core_switch),
         }
+        if str(attempted_version or "").strip():
+            payload["attempted_version"] = str(attempted_version).strip()
+        if str(attempted_core_identity or "").strip():
+            payload["attempted_core_identity"] = str(attempted_core_identity).strip()
         self._record_slot_quarantine(env=env, payload=payload)
         env.write_deactivation(payload)
         try:
@@ -2701,6 +2707,7 @@ class SkillManager:
         active_slot_before: str = "",
         rollback_performed: bool = False,
         source: str = "skill_runtime_migration_worker",
+        attempted_core_identity: str = "",
     ) -> dict[str, Any]:
         """Quarantine a candidate while keeping the selected runtime active."""
 
@@ -2731,6 +2738,8 @@ class SkillManager:
             "fallback_preserved": True,
             "rollback_performed": bool(rollback_performed),
         }
+        if str(attempted_core_identity or "").strip():
+            payload["attempted_core_identity"] = str(attempted_core_identity).strip()
         env.write_deactivation(payload)
         try:
             install_skill_in_capacity(name, version, active=True)

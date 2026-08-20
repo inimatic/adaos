@@ -24,9 +24,11 @@ from adaos.services.workspace_sync import (
     reconcile_workspace_db_to_materialized,
     resolve_scenario_requirements,
     runtime_required_scenario_refs,
+    selected_runtime_skill_names,
     sync_workspace_sparse_to_registry,
 )
 from adaos.services.workspace_registry import (
+    build_registry_entry,
     load_workspace_registry_git_ref,
     list_workspace_registry_entries,
     load_workspace_registry,
@@ -240,6 +242,30 @@ def test_rebuild_workspace_registry_skips_sparse_placeholder_dirs(tmp_path: Path
 
     assert payload["skills"] == []
     assert payload["scenarios"] == []
+    assert "required declaration is missing" not in caplog.text
+
+
+def test_rebuild_workspace_registry_skips_empty_sparse_placeholder_dirs(tmp_path: Path, caplog, monkeypatch):
+    monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
+    caplog.set_level(logging.ERROR, logger="adaos.workspace_registry")
+    workspace = tmp_path / "workspace"
+    (workspace / "skills" / "sparse_skill").mkdir(parents=True)
+    (workspace / "scenarios" / "sparse_scene").mkdir(parents=True)
+
+    payload = rebuild_workspace_registry(workspace)
+
+    assert payload["skills"] == []
+    assert payload["scenarios"] == []
+    assert "required declaration is missing" not in caplog.text
+
+
+def test_build_registry_entry_skips_non_materialized_catalog_path(tmp_path: Path, caplog, monkeypatch):
+    monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
+    caplog.set_level(logging.ERROR, logger="adaos.workspace_registry")
+
+    entry = build_registry_entry("skills", tmp_path / "workspace" / "skills" / "catalog_only")
+
+    assert entry is None
     assert "required declaration is missing" not in caplog.text
 
 
@@ -1055,6 +1081,45 @@ def test_sparse_sync_keeps_runtime_scenarios_and_materializes_required_skills(tm
         "scenarios/web_desktop",
     ]
     assert git.pulls == 1
+
+
+def test_selected_runtime_skill_names_requires_valid_selection(tmp_path: Path):
+    skills_root = tmp_path / "workspace" / "skills"
+    runtime_root = skills_root / ".runtime"
+    selected = runtime_root / "weather_skill" / "current_runtime.json"
+    selected.parent.mkdir(parents=True)
+    selected.write_text(json.dumps({"version": "2.6.23", "slot": "B"}), encoding="utf-8")
+    invalid = runtime_root / "broken_skill" / "current_runtime.json"
+    invalid.parent.mkdir(parents=True)
+    invalid.write_text(json.dumps({"version": "1.0.0"}), encoding="utf-8")
+    corrupt = runtime_root / "corrupt_skill" / "current_runtime.json"
+    corrupt.parent.mkdir(parents=True)
+    corrupt.write_text("not-json", encoding="utf-8")
+    ctx = SimpleNamespace(paths=SimpleNamespace(skills_dir=lambda: skills_root))
+
+    assert selected_runtime_skill_names(ctx) == ["weather_skill"]
+
+
+def test_selected_runtime_skill_names_preserves_legacy_selection(tmp_path: Path):
+    skills_root = tmp_path / "workspace" / "skills"
+    runtime_root = skills_root / ".runtime"
+    selected = runtime_root / "legacy_skill"
+    selected.mkdir(parents=True)
+    (selected / "current_version").write_text("1.2.3", encoding="utf-8")
+    active = selected / "v1.2" / "active"
+    active.parent.mkdir(parents=True)
+    active.write_text("B", encoding="utf-8")
+
+    invalid = runtime_root / "invalid_legacy_skill"
+    invalid.mkdir(parents=True)
+    (invalid / "current_version").write_text("2.0.0", encoding="utf-8")
+    invalid_active = invalid / "v2.0" / "active"
+    invalid_active.parent.mkdir(parents=True)
+    invalid_active.write_text("pending", encoding="utf-8")
+
+    ctx = SimpleNamespace(paths=SimpleNamespace(skills_dir=lambda: skills_root))
+
+    assert selected_runtime_skill_names(ctx) == ["legacy_skill"]
 
 
 def test_workspace_materialization_audit_is_read_only(tmp_path: Path, monkeypatch):
