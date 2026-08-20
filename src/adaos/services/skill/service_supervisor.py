@@ -1019,6 +1019,14 @@ class ServiceSkillSupervisor:
         )
         env["ADAOS_RUNTIME_INSTANCE_ID"] = runtime_instance_id()
         env["ADAOS_RUNTIME_TRANSITION_ROLE"] = runtime_transition_role()
+        config = getattr(self._ctx, "config", None)
+        node_id = str(
+            getattr(config, "node_id_value", "")
+            or getattr(config, "node_id", "")
+            or ""
+        ).strip()
+        if node_id:
+            env["ADAOS_NODE_ID"] = node_id
         bucket_root = _infer_runtime_bucket_root(spec.skill_root, name)
         if bucket_root is not None:
             skill_env_path = bucket_root / "data" / "db" / "skill_env.json"

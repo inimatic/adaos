@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -516,6 +517,7 @@ def test_service_supervisor_pythonpath_includes_package_root(tmp_path):
 
 
 def test_service_supervisor_overrides_foreign_skill_scope(monkeypatch, tmp_path):
+    from adaos.services.agent_context import get_ctx
     from adaos.services.skill import service_supervisor as mod
 
     name = "owned_service"
@@ -582,6 +584,8 @@ def test_service_supervisor_overrides_foreign_skill_scope(monkeypatch, tmp_path)
     )
     monkeypatch.setattr(mod.subprocess, "Popen", _popen)
 
+    ctx = get_ctx()
+    object.__setattr__(ctx, "config", SimpleNamespace(node_id="node-service-owner"))
     supervisor = mod.ServiceSkillSupervisor()
     supervisor._specs[name] = spec
     supervisor.ensure_discovered = lambda *args, **kwargs: None  # type: ignore[method-assign]
@@ -593,6 +597,7 @@ def test_service_supervisor_overrides_foreign_skill_scope(monkeypatch, tmp_path)
     assert captured["ADAOS_SKILL_ROOT"] == str(skill_root)
     assert captured["ADAOS_SKILL_ENV_PATH"] == str(bucket / "data" / "db" / "skill_env.json")
     assert captured["ADAOS_RUNTIME_INSTANCE_ID"] == mod.runtime_instance_id()
+    assert captured["ADAOS_NODE_ID"] == "node-service-owner"
     assert captured["ADAOS_SERVICE_OWNER_PID"] == str(os.getpid())
     assert bridge_scope == {
         "skill": name,
