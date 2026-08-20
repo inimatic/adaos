@@ -28,6 +28,7 @@ from adaos.services.runtime_identity import runtime_instance_id, runtime_transit
 from adaos.services.skill.dependency_disk_guard import ensure_dependency_disk_budget
 from adaos.services.skill.dependency_requirements import resolve_skill_dependency_args
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+from adaos.services.skill.service_event_bridge import service_event_bridge_environment
 from adaos.domain.blob_storage import BlobStorageRequirements
 from adaos.domain.relational_storage import RelationalStorageRequirements
 from adaos.services.storage.blob import get_blob_storage_broker
@@ -997,6 +998,7 @@ class ServiceSkillSupervisor:
         env["ADAOS_SERVICE_ROOT"] = str(spec.skill_root)
         env["ADAOS_SERVICE_WORKDIR"] = str(spec.workdir)
         env["ADAOS_SERVICE_OWNER_PID"] = str(os.getpid())
+        env.update(service_event_bridge_environment(name))
         env["ADAOS_RUNTIME_INSTANCE_ID"] = runtime_instance_id()
         env["ADAOS_RUNTIME_TRANSITION_ROLE"] = runtime_transition_role()
         bucket_root = _infer_runtime_bucket_root(spec.skill_root, name)

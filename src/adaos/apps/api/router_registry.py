@@ -29,6 +29,7 @@ def runtime_routers() -> tuple[RuntimeRouter, ...]:
         release_validation,
         root_endpoints,
         scenarios,
+        service_event_bridge_api,
         service_ui,
         skills,
         stt_api,
@@ -54,6 +55,10 @@ def runtime_routers() -> tuple[RuntimeRouter, ...]:
         RuntimeRouter(release_validation.router, "/api/release-validation"),
         RuntimeRouter(scenarios.router, "/api/scenarios"),
         RuntimeRouter(skills.router, "/api/skills"),
+        RuntimeRouter(
+            service_event_bridge_api.router,
+            "/api/node/internal/service-events",
+        ),
         RuntimeRouter(service_ui.router, "/api"),
         RuntimeRouter(stt_api.router, "/api"),
         RuntimeRouter(redevice_api.router),

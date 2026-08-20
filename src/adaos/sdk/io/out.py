@@ -16,6 +16,8 @@ import time
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from adaos.sdk.core.decorators import tool
 from adaos.sdk.data.context import get_current_skill
@@ -30,11 +32,49 @@ __all__ = ["chat_append", "say", "media_route", "telegram_photo", "stream_publis
 
 
 def _publish(topic: str, payload: dict, *, source: str) -> None:
-    ctx = get_ctx()
-    bus = getattr(ctx, "bus", None)
-    if bus is None:
-        raise RuntimeError("AgentContext.bus is not initialized")
+    try:
+        ctx = get_ctx()
+        bus = getattr(ctx, "bus", None)
+        if bus is None:
+            raise RuntimeError("AgentContext.bus is not initialized")
+    except RuntimeError:
+        if os.getenv("ADAOS_SERVICE_EVENT_BRIDGE_URL"):
+            _publish_via_service_bridge(topic, payload)
+            return
+        raise
     _emit(bus, topic, payload, source)
+
+
+def _publish_via_service_bridge(topic: str, payload: Mapping[str, Any]) -> None:
+    url = str(os.getenv("ADAOS_SERVICE_EVENT_BRIDGE_URL") or "").strip()
+    token = str(os.getenv("ADAOS_SERVICE_EVENT_BRIDGE_TOKEN") or "").strip()
+    if not url or not token:
+        raise RuntimeError("service_event_bridge_not_configured")
+    body = json.dumps(
+        {"topic": str(topic or "").strip(), "payload": dict(payload)},
+        ensure_ascii=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    if len(body) > 256 * 1024:
+        raise RuntimeError("service_event_payload_too_large")
+    request = Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-AdaOS-Service-Event-Token": token,
+        },
+    )
+    try:
+        with urlopen(request, timeout=2.0) as response:
+            status = int(getattr(response, "status", 0) or 0)
+            response.read(64 * 1024)
+    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        raise RuntimeError(f"service_event_bridge_failed:{type(exc).__name__}") from exc
+    if status < 200 or status >= 300:
+        raise RuntimeError(f"service_event_bridge_failed:http_{status}")
 
 
 def _normalize_meta(meta: Mapping[str, Any]) -> dict[str, Any]:
