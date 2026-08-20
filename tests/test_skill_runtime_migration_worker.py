@@ -134,6 +134,20 @@ def test_migration_candidates_include_only_runtime_behind(monkeypatch, tmp_path)
     assert {item["reason"] for item in result} == {"runtime_version_behind"}
 
 
+def test_registered_skill_names_includes_selected_runtime_when_sqlite_lost_intent(monkeypatch):
+    class _Registry:
+        def __init__(self, _sql) -> None:
+            pass
+
+        def list(self) -> list:
+            return [SimpleNamespace(name="database_skill", installed=True)]
+
+    monkeypatch.setattr(worker, "SqliteSkillRegistry", _Registry)
+    monkeypatch.setattr(worker, "selected_runtime_skill_names", lambda _ctx: ["weather_skill"])
+
+    assert worker._registered_skill_names(SimpleNamespace(sql=object())) == ["database_skill", "weather_skill"]
+
+
 def test_migration_candidates_use_registry_version_for_sparse_placeholder(monkeypatch, tmp_path):
     skills_root = tmp_path / "skills"
     placeholder = skills_root / "weather_skill"

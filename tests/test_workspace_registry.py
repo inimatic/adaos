@@ -24,6 +24,7 @@ from adaos.services.workspace_sync import (
     reconcile_workspace_db_to_materialized,
     resolve_scenario_requirements,
     runtime_required_scenario_refs,
+    selected_runtime_skill_names,
     sync_workspace_sparse_to_registry,
 )
 from adaos.services.workspace_registry import (
@@ -1023,6 +1024,7 @@ def test_sparse_sync_keeps_runtime_scenarios_and_materializes_required_skills(tm
     )
     monkeypatch.setattr(workspace_sync_module, "SparseWorkspace", _Sparse)
     monkeypatch.setattr(workspace_sync_module, "runtime_required_scenario_refs", lambda: ["web_desktop"])
+    monkeypatch.setattr(workspace_sync_module, "selected_runtime_skill_names", lambda _ctx: ["weather_skill"])
     monkeypatch.setattr(
         workspace_sync_module,
         "reconcile_workspace_db_to_materialized",
@@ -1044,17 +1046,36 @@ def test_sparse_sync_keeps_runtime_scenarios_and_materializes_required_skills(tm
         "voice_chat_skill",
         "web_desktop_skill",
     ]
+    assert result["selected_runtime_skills"] == ["weather_skill"]
     assert result["unresolved_runtime_scenarios"] == []
     assert result["patterns"] == [
         "registry.json",
         "skills/media_center_skill",
         "skills/mediaserver",
         "skills/voice_chat_skill",
+        "skills/weather_skill",
         "skills/web_desktop_skill",
         "scenarios/media_center",
         "scenarios/web_desktop",
     ]
     assert git.pulls == 1
+
+
+def test_selected_runtime_skill_names_requires_valid_selection(tmp_path: Path):
+    skills_root = tmp_path / "workspace" / "skills"
+    runtime_root = skills_root / ".runtime"
+    selected = runtime_root / "weather_skill" / "current_runtime.json"
+    selected.parent.mkdir(parents=True)
+    selected.write_text(json.dumps({"version": "2.6.23", "slot": "B"}), encoding="utf-8")
+    invalid = runtime_root / "broken_skill" / "current_runtime.json"
+    invalid.parent.mkdir(parents=True)
+    invalid.write_text(json.dumps({"version": "1.0.0"}), encoding="utf-8")
+    corrupt = runtime_root / "corrupt_skill" / "current_runtime.json"
+    corrupt.parent.mkdir(parents=True)
+    corrupt.write_text("not-json", encoding="utf-8")
+    ctx = SimpleNamespace(paths=SimpleNamespace(skills_dir=lambda: skills_root))
+
+    assert selected_runtime_skill_names(ctx) == ["weather_skill"]
 
 
 def test_workspace_materialization_audit_is_read_only(tmp_path: Path, monkeypatch):
@@ -1139,6 +1160,24 @@ def test_reconcile_workspace_db_to_materialized_updates_sqlite(tmp_path: Path):
     assert skill_rows["weather_skill"].active_version == "1.2.3"
     assert list(scenario_rows) == ["greet_on_boot"]
     assert scenario_rows["greet_on_boot"].active_version == "0.4.0"
+
+
+def test_reconcile_preserves_sqlite_install_with_selected_runtime(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    current = workspace / "skills" / ".runtime" / "weather_skill" / "current_runtime.json"
+    current.parent.mkdir(parents=True)
+    current.write_text(json.dumps({"version": "2.6.12", "slot": "B"}), encoding="utf-8")
+    sql = _Sql(tmp_path / "adaos.db")
+    registry = SqliteSkillRegistry(sql)
+    registry.register("weather_skill", active_version="2.6.12")
+    ctx = SimpleNamespace(paths=SimpleNamespace(workspace_dir=lambda: workspace), sql=sql)
+
+    result = reconcile_workspace_db_to_materialized(ctx)
+
+    assert result["skills"] == []
+    assert result["skills_removed"] == []
+    assert result["skills_preserved_by_runtime"] == ["weather_skill"]
+    assert [row.name for row in registry.list()] == ["weather_skill"]
 
 
 def test_reconcile_workspace_db_preserves_git_authoritative_catalog(tmp_path: Path, monkeypatch):
