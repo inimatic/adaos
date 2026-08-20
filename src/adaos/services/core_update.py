@@ -153,6 +153,14 @@ def _update_command_output_tail_chars() -> int:
         return 8000
 
 
+def _root_promotion_preflight_timeout_sec() -> float:
+    raw = str(os.getenv("ADAOS_CORE_ROOT_PROMOTION_PREFLIGHT_TIMEOUT_SEC") or "180").strip()
+    try:
+        return max(45.0, min(float(raw), 900.0))
+    except (TypeError, ValueError):
+        return 180.0
+
+
 class _OutputTailBuffer:
     def __init__(self, max_chars: int) -> None:
         self._max_chars = max(1, int(max_chars))
@@ -819,7 +827,7 @@ def _preflight_root_promotion(
             env=env,
             capture_output=True,
             text=True,
-            timeout=45.0,
+            timeout=_root_promotion_preflight_timeout_sec(),
         )
         if completed.returncode != 0:
             detail = str(completed.stderr or completed.stdout or "import preflight failed").strip()[-4000:]

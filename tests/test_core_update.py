@@ -929,6 +929,22 @@ def test_promote_root_from_slot_aborts_before_mutation_when_import_preflight_fai
     assert not list((tmp_path / "base" / "state" / "root_promotion").glob("*-b"))
 
 
+def test_root_promotion_preflight_timeout_is_bounded_and_tolerates_io_pressure(monkeypatch) -> None:
+    import adaos.services.core_update as core_update
+
+    monkeypatch.delenv("ADAOS_CORE_ROOT_PROMOTION_PREFLIGHT_TIMEOUT_SEC", raising=False)
+    assert core_update._root_promotion_preflight_timeout_sec() == 180.0
+
+    monkeypatch.setenv("ADAOS_CORE_ROOT_PROMOTION_PREFLIGHT_TIMEOUT_SEC", "10")
+    assert core_update._root_promotion_preflight_timeout_sec() == 45.0
+
+    monkeypatch.setenv("ADAOS_CORE_ROOT_PROMOTION_PREFLIGHT_TIMEOUT_SEC", "1200")
+    assert core_update._root_promotion_preflight_timeout_sec() == 900.0
+
+    monkeypatch.setenv("ADAOS_CORE_ROOT_PROMOTION_PREFLIGHT_TIMEOUT_SEC", "invalid")
+    assert core_update._root_promotion_preflight_timeout_sec() == 180.0
+
+
 def test_write_status_retries_transient_windows_replace_denial(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     real_replace = core_update_service.os.replace
