@@ -1504,6 +1504,180 @@ def _document_contract_assignment(workspace: Path) -> dict:
     }
 
 
+def _operation_sequence_assignment(workspace: Path, *, omit_output: bool = False) -> dict:
+    skill = workspace / "skills" / "sequence_provider"
+    handlers = skill / "handlers"
+    handlers.mkdir(parents=True)
+    (skill / "skill.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "sequence_provider",
+                "version": "0.1.0",
+                "provider_contracts": [
+                    {
+                        "contract": "example.sequence.v1",
+                        "capability": "example.sequence",
+                        "operations": ["prepare", "collect", "verify"],
+                    }
+                ],
+                "tools": [
+                    {"name": "prepare", "entry": "handlers.main:prepare"},
+                    {"name": "collect", "entry": "handlers.main:collect"},
+                    {"name": "verify", "entry": "handlers.main:verify"},
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (handlers / "main.py").write_text(
+        "from __future__ import annotations\n"
+        "import hashlib, json, os, sys\n"
+        "from pathlib import Path\n"
+        f"OMIT_OUTPUT = {omit_output!r}\n"
+        "def prepare(request):\n"
+        "    root = Path(os.environ['ADAOS_SKILL_INTERNAL_DATA_ROOT']) / 'attempt'\n"
+        "    root.mkdir(parents=True, exist_ok=True)\n"
+        "    return {'command': [sys.executable, str(Path(__file__).resolve()), 'execute'], "
+        "'working_directory': str(root), 'expected_outputs': ['result.json'], "
+        "'output_ref': str(root)}\n"
+        "def collect(output_ref):\n"
+        "    path = Path(output_ref) / 'result.json'\n"
+        "    raw = path.read_bytes()\n"
+        "    digest = 'sha256:' + hashlib.sha256(raw).hexdigest()\n"
+        "    return {'complete': True, 'artifacts': [{'uri': str(path), 'digest': digest}]}\n"
+        "def verify(uri, digest):\n"
+        "    path = Path(uri)\n"
+        "    actual = 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest()\n"
+        "    return {'ok': path.is_file() and actual == digest}\n"
+        "if __name__ == '__main__' and len(sys.argv) > 1 and sys.argv[1] == 'execute':\n"
+        "    if not OMIT_OUTPUT:\n"
+        "        Path('result.json').write_text(json.dumps({'value': 6}) + '\\n', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    instruction = workspace / ".adaos_context" / "dev-sequence" / "instructions" / "contract.json"
+    instruction.parent.mkdir(parents=True)
+    object_schema = {"type": "object", "additionalProperties": True}
+    contract = {
+        "schema": "adaos.contract.operation_set.v1",
+        "contract": "example.sequence.v1",
+        "capability": "example.sequence",
+        "candidate_role": "provider",
+        "operations": {
+            "prepare": {
+                "input_schema": {
+                    "type": "object",
+                    "required": ["request"],
+                    "properties": {
+                        "request": {
+                            "type": "object",
+                            "required": ["value"],
+                            "properties": {"value": {"const": 3}},
+                            "additionalProperties": False,
+                        }
+                    },
+                    "additionalProperties": False,
+                },
+                "output_schema": {
+                    "type": "object",
+                    "required": ["command", "working_directory", "expected_outputs", "output_ref"],
+                    "properties": {
+                        "command": {"type": "array"},
+                        "working_directory": {"type": "string"},
+                        "expected_outputs": {"type": "array"},
+                        "output_ref": {"type": "string"},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            "collect": {
+                "input_schema": {
+                    "type": "object",
+                    "required": ["output_ref"],
+                    "properties": {"output_ref": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+                "output_schema": object_schema,
+            },
+            "verify": {
+                "input_schema": {
+                    "type": "object",
+                    "required": ["uri", "digest"],
+                    "properties": {
+                        "uri": {"type": "string"},
+                        "digest": {"type": "string"},
+                    },
+                    "additionalProperties": False,
+                },
+                "output_schema": {
+                    "type": "object",
+                    "required": ["ok"],
+                    "properties": {"ok": {"type": "boolean"}},
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "conformance_fixtures": [
+            {
+                "id": "trusted-production-path",
+                "kind": "operation_sequence",
+                "required": True,
+                "steps": [
+                    {
+                        "id": "prepare",
+                        "kind": "operation",
+                        "operation": "prepare",
+                        "input": {"request": {"value": 3}},
+                    },
+                    {
+                        "id": "execute",
+                        "kind": "execution_spec",
+                        "source_step": "prepare",
+                        "timeout_seconds": 10,
+                    },
+                    {
+                        "id": "collect",
+                        "kind": "operation",
+                        "operation": "collect",
+                        "input": {
+                            "output_ref": {
+                                "$bind": {"step": "prepare", "pointer": "/output_ref"}
+                            }
+                        },
+                        "assert": [{"pointer": "/complete", "equals": True}],
+                    },
+                    {
+                        "id": "verify",
+                        "kind": "operation",
+                        "operation": "verify",
+                        "for_each": {
+                            "$bind": {"step": "collect", "pointer": "/artifacts"}
+                        },
+                        "input": {"uri": {"$item": "/uri"}, "digest": {"$item": "/digest"}},
+                        "assert": [{"pointer": "/ok", "equals": True}],
+                    },
+                ],
+            }
+        ],
+    }
+    instruction.write_text(json.dumps(contract, indent=2) + "\n", encoding="utf-8")
+    return {
+        "realize_request": {
+            "artifacts": {
+                "development_context": {
+                    "instruction_inputs": [
+                        {
+                            "kind": "consumer_contract",
+                            "media_type": "application/json",
+                            "path": instruction.relative_to(workspace).as_posix(),
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+
 def _operation_contract_assignment(
     workspace: Path,
     *,
@@ -1780,6 +1954,67 @@ def test_worker_validates_admitted_contract_runtime_documents(tmp_path: Path) ->
     assert len(errors) == 1
     assert "run_log.json at /network" in errors[0]
     assert "blocked_calls" in errors[0]
+
+
+def test_worker_executes_consumer_owned_operation_sequence(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _operation_sequence_assignment(workspace)
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    worker._validate_admitted_contract_operation_sequences(
+        assignment,
+        workspace,
+        runtime_dir=tmp_path / "runtime",
+        checks=checks,
+        errors=errors,
+    )
+
+    assert errors == []
+    assert len(checks) == 1
+    assert checks[0]["kind"] == "admitted_contract.operation_sequence"
+    assert [item["id"] for item in checks[0]["steps"]] == [
+        "prepare",
+        "execute",
+        "collect",
+        "verify",
+    ]
+    assert (tmp_path / "runtime" / checks[0]["runtime_path"] / "attempt" / "result.json").is_file()
+
+
+def test_worker_operation_sequence_detects_missing_execution_output(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _operation_sequence_assignment(workspace, omit_output=True)
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    worker._validate_admitted_contract_operation_sequences(
+        assignment,
+        workspace,
+        runtime_dir=tmp_path / "runtime",
+        checks=checks,
+        errors=errors,
+    )
+
+    assert checks == []
+    assert len(errors) == 1
+    assert "execution_spec omitted exact expected outputs: result.json" in errors[0]
 
 
 def test_worker_selects_newest_complete_contract_document_set(tmp_path: Path) -> None:

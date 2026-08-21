@@ -1728,6 +1728,16 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             errors,
             skip_frozen_skills=workflow_transition == "return_to_prototype",
         )
+        task_runtime_root = SubprocessCodexExecutor._task_runtime_root(
+            workspace.resolve().parent / "output"
+        )
+        self._validate_admitted_contract_operation_sequences(
+            assignment,
+            workspace,
+            runtime_dir=task_runtime_root,
+            checks=checks,
+            errors=errors,
+        )
         self._validate_admitted_contract_documents(
             assignment,
             workspace,
@@ -1736,13 +1746,182 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             # private session envelope (state.json, event logs), not
             # candidate output. Derive the root from the workspace/output
             # invariant so recovery and the normal path cannot diverge.
-            runtime_dir=SubprocessCodexExecutor._task_runtime_root(
-                workspace.resolve().parent / "output"
-            ),
+            runtime_dir=task_runtime_root,
             checks=checks,
             errors=errors,
         )
         return {"ok": not errors, "status": "passed" if not errors else "failed", "checks": checks, "errors": errors}
+
+    def _validate_admitted_contract_operation_sequences(
+        self,
+        assignment: Mapping[str, Any],
+        workspace: Path,
+        *,
+        runtime_dir: Path | None,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        """Execute consumer-authored operation sequences against candidate tools.
+
+        Candidate-authored tests remain useful diagnostics, but cannot prove
+        that a published provider satisfies the consumer's real call order.
+        ``operation_sequence`` fixtures are immutable Development inputs.  A
+        separate trusted core process interprets their small declarative DSL,
+        validates every operation input/output with the admitted schemas, and
+        bounds any returned Python execution spec below task-owned storage.
+        """
+
+        if runtime_dir is None:
+            return
+        runtime_root = runtime_dir.resolve()
+        runtime_root.mkdir(parents=True, exist_ok=True)
+        request = (
+            assignment.get("realize_request")
+            if isinstance(assignment.get("realize_request"), Mapping)
+            else {}
+        )
+        artifacts = (
+            request.get("artifacts")
+            if isinstance(request.get("artifacts"), Mapping)
+            else {}
+        )
+        development = (
+            artifacts.get("development_context")
+            if isinstance(artifacts.get("development_context"), Mapping)
+            else {}
+        )
+        workspace_root = workspace.resolve()
+        admitted: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        for descriptor in development.get("instruction_inputs") or []:
+            if not isinstance(descriptor, Mapping):
+                continue
+            if str(descriptor.get("media_type") or "").lower() != "application/json":
+                continue
+            relative = Path(str(descriptor.get("path") or ""))
+            if relative.is_absolute() or ".." in relative.parts:
+                continue
+            source = (workspace_root / relative).resolve()
+            try:
+                source.relative_to(workspace_root)
+                contract = _read_json(source)
+            except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+                continue
+            if contract.get("schema") != "adaos.contract.operation_set.v1":
+                continue
+            for fixture in contract.get("conformance_fixtures") or []:
+                if (
+                    isinstance(fixture, Mapping)
+                    and str(fixture.get("kind") or "") == "operation_sequence"
+                ):
+                    admitted.append((dict(contract), dict(fixture)))
+        if not admitted:
+            return
+
+        manifests: list[tuple[Path, dict[str, Any]]] = []
+        for manifest_path in sorted(workspace.glob("skills/*/skill.yaml")):
+            try:
+                manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+            except Exception:
+                continue
+            if isinstance(manifest, Mapping):
+                manifests.append((manifest_path.parent.resolve(), dict(manifest)))
+
+        for contract, fixture in admitted[:20]:
+            contract_id = str(contract.get("contract") or "contract")
+            capability = str(contract.get("capability") or "")
+            fixture_id = str(fixture.get("id") or "operation_sequence")
+            providers: list[Path] = []
+            for skill_dir, manifest in manifests:
+                for declaration in manifest.get("provider_contracts") or []:
+                    if not isinstance(declaration, Mapping):
+                        continue
+                    if str(declaration.get("contract") or "") != contract_id:
+                        continue
+                    if capability and str(declaration.get("capability") or "") != capability:
+                        continue
+                    providers.append(skill_dir)
+                    break
+            label = f"{contract_id}:{fixture_id}"
+            if not providers:
+                if bool(fixture.get("required", True)):
+                    errors.append(
+                        f"admitted operation sequence {label} has no matching candidate provider"
+                    )
+                continue
+            for skill_dir in providers:
+                run_id = _safe_token(
+                    f"{contract_id}-{fixture_id}-{skill_dir.name}-{uuid4().hex[:8]}",
+                    fallback="contract-sequence",
+                )
+                envelope = runtime_root / ".adaos-contract-validation" / run_id
+                request_path = envelope / "request.json"
+                result_path = envelope / "result.json"
+                _write_json(
+                    request_path,
+                    {
+                        "skill_dir": str(skill_dir),
+                        "runtime_root": str(runtime_root),
+                        "invocation_id": run_id,
+                        "contract": contract,
+                        "fixture": fixture,
+                    },
+                )
+                environment = SubprocessCodexExecutor(
+                    repo_root=self.repo_root
+                )._execution_environment(runtime_base_dir=runtime_root)
+                try:
+                    result = _run(
+                        [
+                            sys.executable,
+                            "-m",
+                            "adaos.services.skill_factory_contract_runner",
+                            "--request",
+                            str(request_path),
+                            "--result",
+                            str(result_path),
+                        ],
+                        cwd=self.repo_root,
+                        timeout=float(
+                            min(
+                                330,
+                                max(
+                                    10,
+                                    int(fixture.get("timeout_seconds") or 90) + 30,
+                                ),
+                            )
+                        ),
+                        env=environment,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    errors.append(
+                        f"admitted operation sequence {label} timed out for "
+                        f"{skill_dir.name} after {exc.timeout} seconds"
+                    )
+                    continue
+                try:
+                    report = _read_json(result_path)
+                except Exception as exc:
+                    report = {
+                        "ok": False,
+                        "error": f"missing trusted sequence report: {type(exc).__name__}: {exc}",
+                    }
+                if result.returncode or not report.get("ok"):
+                    detail = str(report.get("error") or (result.stdout + result.stderr)[-2000:])
+                    errors.append(
+                        f"admitted operation sequence {label} failed for {skill_dir.name}: {detail}"
+                    )
+                    continue
+                checks.append(
+                    {
+                        "kind": "admitted_contract.operation_sequence",
+                        "contract": contract_id,
+                        "fixture_id": fixture_id,
+                        "skill_id": skill_dir.name,
+                        "runtime_path": report.get("runtime_path"),
+                        "steps": report.get("steps") or [],
+                        "ok": True,
+                    }
+                )
 
     @staticmethod
     def _validate_admitted_contract_documents(
