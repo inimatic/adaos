@@ -2,7 +2,7 @@
 
 Status: target architecture and empirical evaluation program.
 
-Last reviewed: 2026-08-18.
+Last reviewed: 2026-08-21.
 
 This document defines the bridge from heterogeneous scientific source
 artifacts to an executable AdaOS research direction and the evidence required
@@ -881,6 +881,26 @@ eligible comparison must go further: an admitted operation-set fixture should
 carry an executable, bounded invocation sequence that the trusted worker runs
 against the production provider itself. That removes a task-root convention
 from free-form model inference without prescribing TLP internals.
+
+Task `tlp_structured_proof_02.task-006` subsequently passed the separate
+end-to-end operability gate. One digest-bound successor Builder task completed
+in one model attempt, produced a normal ProjectRelease, instantiated an exact
+StudyRealization, and ran a real paired three-epoch CPU preflight through the
+installed direction skill. The first execution campaign exposed a generic
+delegated-data-owner defect and remains failed evidence. Core now binds a
+trusted `ExecutionSpec.data_owner_ref`; a typed replacement campaign preserved
+the accepted compilation, release, realization and conditions, then produced
+a campaign-scoped Evidence bundle whose 56 record refs and 26 runner artifacts
+verify with zero errors. The bundle is explicitly `workflow_validation` and
+cannot support a claim decision. The exact receipt is
+[Structured TLP Realization Evidence Receipt](research-structured-realization-evidence-2026-08-21.md).
+
+This closes only gate 1 of the proof protocol. The task used one successor
+lineage rather than a fresh empty-workspace comparative unit, and no new C0 arm
+was run. It therefore cannot reverse v32's negative/inconclusive primary
+endpoint or support a probability claim. The next eligible paired comparison
+still requires the trusted consumer-executed operation sequence and fresh
+frozen C0/C3 units.
 
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and

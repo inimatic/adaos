@@ -2,7 +2,7 @@
 
 Status: domain roadmap for the proposed AdaOS Research Fabric.
 
-Last reviewed: 2026-08-18.
+Last reviewed: 2026-08-21.
 
 This roadmap sequences the implementation of the
 [AdaOS Research Fabric](research-fabric.md). TLP is the first transparent
@@ -162,11 +162,11 @@ scientific conclusion. A local demo is not production acceptance.
 | Distributed execution | Current/selected member-node execution through existing AdaOS semantics; no Ray provider | deliberately deferred until the complete local research loop is proven |
 | Research domain | Versioned Study/Experiment/Protocol/Trial/Run/Attempt/Observation/Evidence/Claim contracts, runner-provider boundary, ResearchSpace owner projection, and governed workflows | reusable control plane is separated from domain runner/data ownership |
 | Scenario guidance | Versioned README, modal binding, workflow-aware state/action projection, deterministic EN/RU text and voice intents | implemented first in `tlp_research`; cross-scenario rollout is incremental |
-| TLP | E002 conditions, separate TLP runner/data-owner skill, real deterministic CPU runner, native Workbench, clean fixtures, sanitized exploratory provenance | Builder-published direction skill `0.1.5` passes bounded realization acceptance; clean from-raw research compilation, real-data workflow, and confirmatory scientific proof remain ARF7.3/ARF6 work |
-| Research authoring | Shared Workbench portfolio/focus, atomic Project + direction-skill creation, direction-owned manifested artifacts, typed formulation, private local checkpoint, least-write Development Session, consumer-owned contract requirements, exact system specification, scope gate, and canonical preview | ARF7.2 validated locally on a review-assisted TLP handoff; the earlier `initial-review` performed part of the scientific-to-engineering bridge, so stage visibility, from-raw compilation, controlled typing ablation, ProjectRelease, and accepted-workflow execution remain open |
+| TLP | E002 conditions, separate TLP runner/data-owner skill, real deterministic CPU runner, native Workbench, clean fixtures, sanitized exploratory provenance | task-006 direction skill `0.1.7` is published through a ProjectRelease and passes an installed real CPU workflow with independently verified operational Evidence; confirmatory scientific proof remains ARF6 work |
+| Research authoring | Shared Workbench portfolio/focus, atomic Project + direction-skill creation, direction-owned manifested artifacts, typed formulation, private local checkpoint, least-write Development Session, consumer-owned contract requirements, exact system specification, scope gate, canonical preview, ProjectRelease/StudyRealization bridge, and workflow-evidence projection | clean staged formulation and local structured-realization operability are validated; the repeated C0/C3 probability comparison, full traceability UI, and authenticated reconnect receipt remain open |
 | Agent assistance/autonomy | Root LLM jobs, durable Builder Runs/context packets, governed workflows, conversations, and exact action admission exist | no Research Mandate, autonomy profile, autonomous campaign controller, agent budget ledger, or TLP autonomous proof |
 | Scientific release | EvidenceBundle and ClaimDecision contracts exist | no ClaimSet synthesis projection, distinct ResearchRelease, external review loop, or writer input contract |
-| Comparative evaluation | TLP supplies one internal transparent implementation case and hidden legacy oracle | no clean C0-C4 typing ablation, frozen multi-task ResearchCompilerBench/ARRB package, target rubric evaluator, matched-budget baseline, or benchmark release |
+| Comparative evaluation | TLP supplies a frozen C0-C4 harness, retained negative/inconclusive v32 comparison, and one later C3 successor-path operability success | no positive paired probability result, frozen multi-task ResearchCompilerBench/ARRB package, or benchmark release; task-006 must not be reused as a fresh C3 unit |
 
 ## Milestone Sequence
 
@@ -182,8 +182,8 @@ scientific conclusion. A local demo is not production acceptance.
 | ARF6 | TLP passes the deterministic scientific and operational reference proof | `hypothesis` | next scientific gate |
 | ARF7.0 | Builder-embedded precursor proves SourceBundle, ResearchPrototype acceptance, and AutomationBrief contracts | `validated-local` | technical precursor complete |
 | ARF7.1 | Research Workbench creates/focuses a local research Project, admits local artifact groups, exposes provenance/coverage and a deterministic formulation review, and creates a scoped pre-Codex Development Session | `validated-local`, including strengthened TLP admission; authenticated browser reload receipt pending | active UX acceptance gate |
-| ARF7.2 | Codex realizes the exact brief as a validated and published TLP direction skill | `validated-local`; direction-skill checkpoint published, ProjectRelease not yet created | complete locally |
-| ARF7.3 | Clean from-raw research compilation is calibrated under matched C0-C4 TLP arms; the published direction then instantiates and runs the accepted local workflow | `hypothesis` | next integrated authoring/scientific gate alongside ARF6 |
+| ARF7.2 | Codex realizes the exact brief as a validated and published TLP direction skill | `validated-local`; task-006 also has an immutable ProjectRelease | complete locally |
+| ARF7.3 | Clean from-raw research compilation is calibrated under matched C0-C4 TLP arms; the published direction then instantiates and runs the accepted local workflow | `validated-local-operability`; v32 is negative/inconclusive for probability and task-006 closes only the end-to-end C3 operability gate | paired probability proof remains open alongside ARF6 |
 | ARF7.4 | Workbench separates live Direction/Agenda/Task/ImplementationTrack from distributable Project, migrates TLP calibration into one task lineage, and proves generic outline/full-page navigation | `implemented-partial` | domain normalization, Project contracts, generic navigation, and TLP lineage are locally proven; release/export and full recovery proof remain open |
 | ARF8 | aResearcher completes a mandate-bound autonomous TLP loop through ResearchRelease | `hypothesis` | after ARF7.4 |
 | ARF9 | ResearchCompilerBench/ARRB measures artifact-to-experiment compilation and replication on frozen multi-domain tasks and matched budgets | `hypothesis` | compilation track after ARF7.3; autonomous replication track after ARF8 |
@@ -1319,11 +1319,13 @@ not substitute for this operator path.
   admission tests before Trial/Publication. The bounded real-path fixture also
   exercises the published manager consumer, native package/install/activation,
   crash/resume, and shared heavy-dependency resolution.
-- [ ] `[must]` `ARF7-14` Publish the selected ImplementationTrack's Project as
+- [x] `[must]` `ARF7-14` Publish the selected ImplementationTrack's Project as
   one exact ProjectRelease containing its owned research-implementation
   components; link that release to the ResearchTask and instantiate
   Study/Campaign state from the accepted ResearchCompilation without retaining
-  two mutable copies.
+  two mutable copies. Task-006 ProjectRelease
+  `sha256:45f0d4ebb49d5db5ab55d2ec1aa4e93e05e7a3c05eb34c506551b078f660e59a`
+  is linked to one immutable StudyRealization and installed runner.
 - [ ] `[must]` `ARF7-15` Add runtime-to-Builder re-entry: a typed CapabilityGap
   or defect creates a linked Issue/Change with direction, Study/Campaign,
   evidence, handoff, and installed-release refs. Ordinary experiment/campaign
@@ -1679,10 +1681,13 @@ efficacy result or cross-domain SOTA claim.
   binding explicit, but a fresh claim-eligible comparison is blocked on the
   consumer-executed fixture in `ARF7.3-06b`; v32 candidates and outcomes remain
   diagnostic only.
-- [ ] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
+- [x] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and
-  artifacts, not a TLP-specific scenario or management UI.
+  artifacts, not a TLP-specific scenario or management UI. Task-006 completed
+  this path with the generic orchestrator/manager and a three-epoch CPU
+  workflow; see the
+  [2026-08-21 evidence receipt](research-structured-realization-evidence-2026-08-21.md).
 - [ ] `[must]` `ARF7.3-13` Freeze a machine-recomputable calibration package,
   document negative and inconclusive outcomes, and record which candidate
   fields remain profile-local. No contract enters core from TLP alone.
@@ -1692,19 +1697,27 @@ efficacy result or cross-domain SOTA claim.
   The package is score-recomputable, but admitted source bytes, licenses,
   runtime images, and an external verification recipe are not yet a portable
   release, so this item remains open.
-- [ ] `[must]` `ARF7.3-14` Bind the successful candidate through one immutable
+- [x] `[must]` `ARF7.3-14` Bind the successful candidate through one immutable
   `StudyRealization` joining ResearchDirection, ResearchTask,
   ResearchCompilation, ImplementationTrack, DevelopmentSession,
   ProjectRelease, installed runner provider, and manager-owned Study. Reject
-  mutable or digest-incomplete realization links.
-- [ ] `[must]` `ARF7.3-15` Federate Builder, Artifact Pipeline, Study execution,
+  mutable or digest-incomplete realization links. Task-006 realization digest
+  is `sha256:3e56195412fd8f437bc20bc00894bdd7b4ce52e189376b3a8098f810e0d05ecd`.
+- [x] `[must]` `ARF7.3-15` Federate Builder, Artifact Pipeline, Study execution,
   tracker, and evaluator events into the direction activity projection with
   original actor/origin/time/subject refs and idempotent source-event ids.
-  Workbench is a projection consumer, not a second journal owner.
+  Workbench is a projection consumer, not a second journal owner. The selected
+  track now projects implementation, release, Study/campaign recovery,
+  tracker-export acceptance, independent result verification, and scoped
+  Evidence with original origin/actor/subject and idempotent source-event ids.
 - [ ] `[must]` `ARF7.3-16` Close the local structured-realization proof only
   after a normal installed ProjectRelease completes the real CPU Study path,
   independent evidence acceptance, process restart/reconnect, and exact
   source-to-result lineage reconstruction. Preserve all failed attempts.
+  Task-006 now satisfies ProjectRelease, installed CPU execution, independent
+  operational Evidence, skill-process/version migration, and exact lineage;
+  an authenticated Workbench restart/reconnect receipt remains open. This item
+  also does not replace the repeated C0/C3 probability gate.
 
 ### ARF7.4 direction/task topology and Project-scoped development
 
