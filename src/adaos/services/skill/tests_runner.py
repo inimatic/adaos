@@ -49,9 +49,15 @@ def run_tests(
     skill_version: str | None = None,
     slot_current_dir: Path | None = None,
     dev_mode: bool = False,
+    timeout_seconds: int | None = None,
 ) -> Dict[str, TestResult]:
     results: Dict[str, TestResult] = {}
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    explicit_timeout = (
+        max(1, min(3600, int(timeout_seconds)))
+        if timeout_seconds is not None
+        else None
+    )
 
     env_template = os.environ.copy()
     if extra_env:
@@ -122,7 +128,7 @@ def run_tests(
                 suite_results[suite] = _run_suite(
                     suite,
                     suite_dir,
-                    timeout=_TEST_TIMEOUTS.get(suite, 30),
+                    timeout=explicit_timeout or _TEST_TIMEOUTS.get(suite, 30),
                     log=log,
                     interpreter=interpreter,
                     env=env_template,
@@ -140,7 +146,7 @@ def run_tests(
                     suite_name="pytest",
                     tests_dir=runtime_tests_root,
                     marker=None,
-                    timeout=_fallback_pytest_timeout(),
+                    timeout=explicit_timeout or _fallback_pytest_timeout(),
                     log=log,
                     interpreter=interpreter,
                     env=env_template,
@@ -166,7 +172,7 @@ def run_tests(
                     suite_name=suite_name,
                     tests_dir=suite_dir or dev_tests_root,
                     marker=marker,
-                    timeout=_TEST_TIMEOUTS.get(suite_name, 60),
+                    timeout=explicit_timeout or _TEST_TIMEOUTS.get(suite_name, 60),
                     log=log,
                     interpreter=interpreter,
                     env=env_template,

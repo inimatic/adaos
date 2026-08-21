@@ -49,6 +49,17 @@
           },
           "additionalProperties": false
         },
+        "validation_budget": {
+          "type": "object",
+          "required": ["schema", "packaged_pytest_wall_seconds", "source", "execution_max_wall_seconds"],
+          "properties": {
+            "schema": {"const": "adaos.builder.validation_budget.v1"},
+            "packaged_pytest_wall_seconds": {"type": "integer", "minimum": 1, "maximum": 300},
+            "source": {"type": "string", "minLength": 1, "maxLength": 160},
+            "execution_max_wall_seconds": {"type": ["integer", "null"], "minimum": 1, "maximum": 86400}
+          },
+          "additionalProperties": false
+        },
         "agent_profile": {
           "type": "object",
           "required": ["provider", "model", "reasoning_effort", "tool_profile"],

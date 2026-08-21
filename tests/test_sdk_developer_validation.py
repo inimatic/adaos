@@ -17,7 +17,7 @@ from adaos.services import developer_project_validation as service
 def test_developer_validation_requires_narrow_capability_and_calls_service(monkeypatch) -> None:
     ctx = SimpleNamespace()
     admitted: list[str] = []
-    calls: list[tuple[object, str, bool, bool, bool]] = []
+    calls: list[tuple[object, str, bool, bool, bool, int | None]] = []
     monkeypatch.setattr(validation, "require_ctx", lambda _operation: ctx)
     monkeypatch.setattr(
         validation,
@@ -25,8 +25,25 @@ def test_developer_validation_requires_narrow_capability_and_calls_service(monke
         lambda _ctx, capability: admitted.append(capability),
     )
 
-    def fake_validate(context, project_id, *, strict, probe_tools, run_packaged_tests):
-        calls.append((context, project_id, strict, probe_tools, run_packaged_tests))
+    def fake_validate(
+        context,
+        project_id,
+        *,
+        strict,
+        probe_tools,
+        run_packaged_tests,
+        test_timeout_seconds,
+    ):
+        calls.append(
+            (
+                context,
+                project_id,
+                strict,
+                probe_tools,
+                run_packaged_tests,
+                test_timeout_seconds,
+            )
+        )
         return {"ok": True, "digest": "sha256:" + "1" * 64}
 
     monkeypatch.setattr(
@@ -34,11 +51,15 @@ def test_developer_validation_requires_narrow_capability_and_calls_service(monke
         fake_validate,
     )
 
-    result = validation.validate_skill("candidate", run_tests=False)
+    result = validation.validate_skill(
+        "candidate",
+        run_tests=False,
+        test_timeout_seconds=180,
+    )
 
     assert result["ok"] is True
     assert admitted == ["builder.project_validation"]
-    assert calls == [(ctx, "candidate", True, True, False)]
+    assert calls == [(ctx, "candidate", True, True, False, 180)]
 
 
 def test_developer_source_inspection_is_bounded_and_capability_gated(

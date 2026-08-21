@@ -96,6 +96,7 @@ def validate_dev_skill(
     strict: bool = True,
     probe_tools: bool = True,
     run_packaged_tests: bool = True,
+    test_timeout_seconds: int | None = None,
 ) -> dict[str, Any]:
     root = _root(ctx, project_id)
     inventory, source_digest = _source_inventory(root)
@@ -131,6 +132,7 @@ def validate_dev_skill(
                 "ADAOS_DEV_DIR": str(root.parent.parent),
                 "ADAOS_DEV_SKILL_DIR": str(root),
             },
+            timeout_seconds=test_timeout_seconds,
         )
         test_rows = [asdict(item) for _, item in sorted(results.items())]
         if log_path.is_file():
@@ -146,6 +148,7 @@ def validate_dev_skill(
         "validation": {"ok": bool(validation.ok), "issues": validation_issues},
         "tests": {
             "requested": bool(run_packaged_tests),
+            "timeout_seconds": test_timeout_seconds,
             "ok": tests_ok if run_packaged_tests else None,
             "results": test_rows,
             "log_ref": log_ref,

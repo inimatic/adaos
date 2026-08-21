@@ -168,6 +168,37 @@ def test_skill_factory_fails_closed_on_corrupt_authoritative_state(tmp_path: Pat
         service.snapshot(include_tasks=True)
 
 
+def test_skill_factory_reads_do_not_mutate_or_wait_for_mutation_lock(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = SkillFactoryService(state_dir=tmp_path)
+    task = service.submit_realize_request(
+        {"target": {"type": "skill", "id": "read_only_projection"}}
+    )["task"]
+
+    monkeypatch.setattr(
+        SkillFactoryService,
+        "_write_state",
+        lambda *_args, **_kwargs: pytest.fail("read projection attempted a state write"),
+    )
+    monkeypatch.setattr(
+        SkillFactoryService,
+        "_expire_overdue_tasks",
+        lambda *_args, **_kwargs: pytest.fail("read projection attempted timeout mutation"),
+    )
+
+    # Holding the mutation fence in this thread would deadlock any read path
+    # that tried to participate in the global write protocol on Windows.
+    with service._state_lock():
+        observed = service.read_task(task["task_id"])
+        snapshot = service.snapshot(include_tasks=True)
+
+    assert observed["task_id"] == task["task_id"]
+    assert [item["task_id"] for item in snapshot["tasks"]] == [task["task_id"]]
+    assert snapshot["diagnostics"]["projection_consistency"] == "atomic_document"
+
+
 def test_skill_factory_rejects_result_outside_sparse_paths(tmp_path: Path) -> None:
     service = SkillFactoryService(state_dir=tmp_path)
     task = service.submit_realize_request({"target": {"type": "scenario", "id": "morning"}})["task"]

@@ -14,6 +14,7 @@ def validate_skill(
     strict: bool = True,
     probe_tools: bool = True,
     run_tests: bool = True,
+    test_timeout_seconds: int | None = None,
 ) -> dict[str, Any]:
     ctx = require_ctx("sdk.developer.validation.validate_skill")
     require_skill_capability(ctx, "builder.project_validation")
@@ -25,6 +26,7 @@ def validate_skill(
         strict=strict,
         probe_tools=probe_tools,
         run_packaged_tests=run_tests,
+        test_timeout_seconds=test_timeout_seconds,
     )
 
 

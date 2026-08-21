@@ -85,12 +85,10 @@ class UserHubResultService:
         )
         if errors:
             raise UserHubSubmissionError(f"User Hub result ABI validation failed: {errors[0].message}")
-        task = next(
-            (item for item in self.factory.snapshot(include_tasks=True)["tasks"] if item["task_id"] == task_id),
-            None,
-        )
-        if task is None:
-            raise UserHubSubmissionError("User Hub result references an unknown task")
+        try:
+            task = self.factory.read_task(task_id)
+        except KeyError as exc:
+            raise UserHubSubmissionError("User Hub result references an unknown task") from exc
         normalized = self.factory._normalize_result(result, task)
         self.factory.validate_result_paths(task, normalized)
         submission_id = f"uhsub.{new_id()}"

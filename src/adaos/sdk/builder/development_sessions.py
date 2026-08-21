@@ -20,6 +20,7 @@ from jsonschema import Draft202012Validator
 from adaos.sdk.core._ctx import require_ctx
 from adaos.sdk.core.errors import SdkError
 from adaos.sdk.developer import artifact_context, compositions, projects
+from adaos.domain.development_validation import derive_validation_budget
 from adaos.services.artifact_pipeline.storage import (
     atomic_write_bytes,
     atomic_write_json,
@@ -728,6 +729,10 @@ def create(
             "reasoning_effort": str(agent_profile.get("reasoning_effort") or "").strip(),
             "tool_profile": str(agent_profile.get("tool_profile") or "").strip(),
         }
+    validation_budget = derive_validation_budget(
+        normalized_budget,
+        source="development_session.execution_budget",
+    )
     handoff = {
         **(
             {"automation_brief_digest": legacy_brief_digest}
@@ -750,6 +755,7 @@ def create(
         ),
         **({"request": str(request).strip()} if str(request or "").strip() else {}),
         **({"execution_budget": normalized_budget} if normalized_budget else {}),
+        "validation_budget": validation_budget,
         **({"agent_profile": normalized_agent_profile} if normalized_agent_profile else {}),
         "prohibited_actions": [
             str(item).strip() for item in prohibited_actions if str(item).strip()

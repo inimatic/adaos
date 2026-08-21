@@ -1197,27 +1197,57 @@ class SkillFactoryService:
             )
 
     def snapshot(self, *, include_tasks: bool = True) -> dict[str, Any]:
+        """Return a side-effect-free projection of the authoritative state.
+
+        State writes use an atomic replacement, so a reader observes either
+        the previous complete document or the next complete document. A
+        projection must not acquire the global mutation lock, expire tasks, or
+        rewrite the whole store: status polling is allowed to run while a DEV
+        worker is crossing a mutation checkpoint.
+        """
+
+        state = self._read_state()
+        tasks = list(state["tasks"].values()) if include_tasks else []
+        nodes = list(state["dev_nodes"].values())
+        return {
+            "ok": True,
+            "schema": STATE_SCHEMA,
+            "state_path": str(self.state_path),
+            "forge": state.get("forge", self.forge_policy()),
+            "queue": self._queue_summary(state),
+            "dev_nodes": [_json_clone(item) for item in nodes],
+            "tasks": [_json_clone(item) for item in tasks],
+            "ready_events": _json_clone(state.get("ready_events", []))[-50:],
+            "diagnostics": {
+                "node_count": len(nodes),
+                "task_count": len(state["tasks"]),
+                "ready_event_count": len(state.get("ready_events", [])),
+                "published_status": "root.skill_factory.state",
+                "projection_consistency": "atomic_document",
+            },
+        }
+
+    def read_task(self, task_id: str) -> dict[str, Any]:
+        """Read one task without participating in the mutation protocol."""
+
+        task_token = _text(task_id)
+        if not task_token:
+            raise ValueError("task_id is required")
+        state = self._read_state()
+        return _json_clone(self._require_task(state, task_token))
+
+    def expire_overdue_tasks(self) -> dict[str, Any]:
+        """Apply timeout transitions explicitly from an owning control loop."""
+
         with self._state_lock():
             state = self._read_state()
-            self._expire_overdue_tasks(state)
-            self._write_state(state)
-            tasks = list(state["tasks"].values()) if include_tasks else []
-            nodes = list(state["dev_nodes"].values())
+            changed = self._expire_overdue_tasks(state)
+            if changed:
+                self._write_state(state)
             return {
                 "ok": True,
-                "schema": STATE_SCHEMA,
-                "state_path": str(self.state_path),
-                "forge": state.get("forge", self.forge_policy()),
+                "changed": changed,
                 "queue": self._queue_summary(state),
-                "dev_nodes": [_json_clone(item) for item in nodes],
-                "tasks": [_json_clone(item) for item in tasks],
-                "ready_events": _json_clone(state.get("ready_events", []))[-50:],
-                "diagnostics": {
-                    "node_count": len(nodes),
-                    "task_count": len(state["tasks"]),
-                    "ready_event_count": len(state.get("ready_events", [])),
-                    "published_status": "root.skill_factory.state",
-                },
             }
 
     def validate_task_access_lease(
@@ -1574,7 +1604,7 @@ class SkillFactoryService:
         node["updated_at"] = _now_iso()
         state["dev_nodes"][node_id] = node
 
-    def _expire_overdue_tasks(self, state: dict[str, Any]) -> None:
+    def _expire_overdue_tasks(self, state: dict[str, Any]) -> bool:
         now = datetime.now(timezone.utc)
         changed = False
         for task_id, task in list(state["tasks"].items()):
@@ -1599,6 +1629,7 @@ class SkillFactoryService:
                 changed = True
         if changed:
             state["updated_at"] = _now_iso()
+        return changed
 
 
 def get_skill_factory_service() -> SkillFactoryService:

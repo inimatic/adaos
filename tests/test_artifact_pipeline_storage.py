@@ -43,3 +43,11 @@ def test_replace_syncs_source_and_target_directory_entries(
     assert target.read_text(encoding="utf-8") == "new"
     assert not source.exists()
     assert synced == [target_root.resolve(), source_root.resolve()]
+
+
+def test_mutation_lock_is_reentrant_for_the_owning_thread(tmp_path: Path) -> None:
+    lock_path = tmp_path / "state" / ".mutation.lock"
+
+    with storage.mutation_lock(lock_path, timeout_s=0.1):
+        with storage.mutation_lock(lock_path, timeout_s=0.1):
+            assert lock_path.is_file()

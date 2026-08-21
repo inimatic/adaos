@@ -433,6 +433,7 @@ class BuilderAutomationService:
             "target_ref": target_ref,
             "request": session["handoff"].get("request"),
             "execution_budget": copy.deepcopy(session["handoff"].get("execution_budget")),
+            "validation_budget": copy.deepcopy(session["handoff"].get("validation_budget")),
             "agent_profile": copy.deepcopy(session["handoff"].get("agent_profile")),
             "artifact_inputs": artifact_receipts,
             "instruction_inputs": instruction_receipts,
@@ -1979,9 +1980,9 @@ class BuilderAutomationService:
         task_id = str(current.get("current_task_id") or "").strip()
         if not task_id:
             return current
-        snapshot = self.factory.snapshot(include_tasks=True)
-        task = next((item for item in snapshot.get("tasks", []) if item.get("task_id") == task_id), None)
-        if not task:
+        try:
+            task = self.factory.read_task(task_id)
+        except KeyError:
             return current
         recovered = self._recover_orphaned_task(current, task)
         if recovered is not None:
@@ -1989,8 +1990,10 @@ class BuilderAutomationService:
         # A failed one-shot reconciliation updates the authoritative factory
         # task before returning.  Refresh the snapshot so this read exposes the
         # failure instead of preserving the stale in-progress projection.
-        snapshot = self.factory.snapshot(include_tasks=True)
-        task = next((item for item in snapshot.get("tasks", []) if item.get("task_id") == task_id), task)
+        try:
+            task = self.factory.read_task(task_id)
+        except KeyError:
+            pass
         task_status = task.get("status")
         materialization_pending = bool(
             task_status == "completed"
@@ -2199,11 +2202,10 @@ class BuilderAutomationService:
                 _log.exception("one-shot orphaned Automation recovery failed task=%s", task_id)
                 return None
 
-            snapshot = self.factory.snapshot(include_tasks=True)
-            completed_task = next(
-                (item for item in snapshot.get("tasks", []) if item.get("task_id") == task_id),
-                None,
-            )
+            try:
+                completed_task = self.factory.read_task(task_id)
+            except KeyError:
+                completed_task = None
             if not isinstance(completed_task, Mapping) or completed_task.get("status") != "completed":
                 return None
             current = dict(latest)

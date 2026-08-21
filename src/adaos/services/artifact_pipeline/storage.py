@@ -18,6 +18,7 @@ class MutationLockTimeout(TimeoutError):
 
 _MUTATION_LOCKS_GUARD = threading.Lock()
 _MUTATION_LOCKS: dict[str, threading.RLock] = {}
+_MUTATION_LOCK_DEPTH = threading.local()
 _MOVEFILE_REPLACE_EXISTING = 0x1
 _MOVEFILE_WRITE_THROUGH = 0x8
 
@@ -40,6 +41,28 @@ def mutation_lock(path: Path, *, timeout_s: float = 10.0) -> Iterator[None]:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     thread_lock = _thread_lock_for(lock_path)
     with thread_lock:
+        # ``thread_lock`` is deliberately re-entrant, therefore the process
+        # lock must be re-entrant for the same thread as well. Windows byte
+        # range locks are associated with the file handle, not the process;
+        # locking the same byte through a second handle would wait on our own
+        # outer lock until ``MutationLockTimeout``.
+        depths = getattr(_MUTATION_LOCK_DEPTH, "depths", None)
+        if depths is None:
+            depths = {}
+            _MUTATION_LOCK_DEPTH.depths = depths
+        key = str(lock_path)
+        if int(depths.get(key) or 0) > 0:
+            depths[key] = int(depths[key]) + 1
+            try:
+                yield
+            finally:
+                remaining = int(depths.get(key) or 1) - 1
+                if remaining > 0:
+                    depths[key] = remaining
+                else:
+                    depths.pop(key, None)
+            return
+
         started = time.monotonic()
         with lock_path.open("a+b") as handle:
             if handle.seek(0, os.SEEK_END) == 0:
@@ -60,8 +83,10 @@ def mutation_lock(path: Path, *, timeout_s: float = 10.0) -> Iterator[None]:
                             ) from exc
                         time.sleep(0.05)
                 try:
+                    depths[key] = 1
                     yield
                 finally:
+                    depths.pop(key, None)
                     with contextlib.suppress(OSError):
                         handle.seek(0)
                         msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
@@ -83,8 +108,10 @@ def mutation_lock(path: Path, *, timeout_s: float = 10.0) -> Iterator[None]:
                         ) from exc
                     time.sleep(0.05)
             try:
+                depths[key] = 1
                 yield
             finally:
+                depths.pop(key, None)
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 

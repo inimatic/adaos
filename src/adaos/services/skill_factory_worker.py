@@ -20,6 +20,10 @@ from uuid import uuid4
 import psutil
 import yaml
 
+from adaos.domain.development_validation import (
+    derive_validation_budget,
+    normalize_validation_budget,
+)
 from adaos.services.artifact_pipeline.storage import replace_with_retry
 from adaos.services.skill_factory import SkillFactoryService
 from adaos.services.skill_factory_sources import (
@@ -36,9 +40,6 @@ from adaos.services.workflow_artifacts import (
 
 
 RUNNER_VERSION = "adaos-local-codex-worker/0.6.0"
-DEFAULT_GENERATED_TEST_TIMEOUT_SECONDS = 60
-MAX_GENERATED_TEST_TIMEOUT_SECONDS = 300
-GENERATED_TEST_BUDGET_DIVISOR = 60
 PACKET_SCHEMA = "adaos.skill_factory.codex_packet.v1"
 LOCAL_SESSION_SCHEMA = "adaos.skill_factory.local_run.v1"
 _log = logging.getLogger("adaos.skill_factory.local_worker")
@@ -236,6 +237,9 @@ def _generated_test_budget(assignment: Mapping[str, Any] | None) -> dict[str, An
         if isinstance(artifacts.get("development_context"), Mapping)
         else {}
     )
+    explicit = development.get("validation_budget")
+    if isinstance(explicit, Mapping):
+        return normalize_validation_budget(explicit)
     candidates = (
         (
             "development_session.execution_budget",
@@ -256,19 +260,10 @@ def _generated_test_budget(assignment: Mapping[str, Any] | None) -> dict[str, An
             source = candidate_source
             max_wall_seconds = value
             break
-    timeout_seconds = int(DEFAULT_GENERATED_TEST_TIMEOUT_SECONDS)
-    if max_wall_seconds is not None:
-        scaled = (
-            max_wall_seconds + int(GENERATED_TEST_BUDGET_DIVISOR) - 1
-        ) // int(GENERATED_TEST_BUDGET_DIVISOR)
-        timeout_seconds = max(timeout_seconds, scaled)
-    timeout_seconds = min(int(MAX_GENERATED_TEST_TIMEOUT_SECONDS), timeout_seconds)
-    return {
-        "schema": "adaos.builder.validation_budget.v1",
-        "packaged_pytest_wall_seconds": timeout_seconds,
-        "source": source,
-        "execution_max_wall_seconds": max_wall_seconds,
-    }
+    return derive_validation_budget(
+        {"max_wall_seconds": max_wall_seconds} if max_wall_seconds is not None else None,
+        source=source,
+    )
 
 
 def _git(command: Sequence[str], *, cwd: Path, timeout: float = 120.0) -> str:
@@ -1362,9 +1357,11 @@ class LocalSkillFactoryWorker:
             return {"ok": False, "assignment": dict(assignment), **failure, "run_dir": str(run_root)}
 
     def _task_status(self, task_id: str) -> str:
-        snapshot = self.factory.snapshot(include_tasks=True)
-        task = next((item for item in snapshot.get("tasks", []) if item.get("task_id") == task_id), None)
-        return str((task or {}).get("status") or "missing").strip().lower()
+        try:
+            task = self.factory.read_task(task_id)
+        except KeyError:
+            return "missing"
+        return str(task.get("status") or "missing").strip().lower()
 
     def _ensure_task_active(self, task_id: str) -> None:
         status = self._task_status(task_id)

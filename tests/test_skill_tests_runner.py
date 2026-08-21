@@ -102,3 +102,25 @@ def test_runtime_fallback_pytest_uses_bounded_production_budget(
     mod.run_tests(skill_root, log_path=tmp_path / "bounded.log")
 
     assert captured == [600, 900]
+
+
+def test_dev_packaged_tests_use_explicit_development_budget(
+    tmp_path, monkeypatch
+) -> None:
+    skill_root = tmp_path / "skill"
+    (skill_root / "tests").mkdir(parents=True)
+    captured = []
+
+    def fake_pytest(**kwargs):
+        captured.append(kwargs["timeout"])
+        return mod.TestResult(name="pytest", status="passed")
+
+    monkeypatch.setattr(mod, "_run_pytest_suite", fake_pytest)
+    mod.run_tests(
+        skill_root,
+        log_path=tmp_path / "dev.log",
+        dev_mode=True,
+        timeout_seconds=180,
+    )
+
+    assert captured == [180]
