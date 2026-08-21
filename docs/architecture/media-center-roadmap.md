@@ -576,8 +576,24 @@ Local implementation checkpoint (not stand acceptance):
   client `0b31eaa`. It captures D-pad input, playback progress, Long Tasks,
   main-thread/process CPU, heap growth, listeners/timers, UI/Yjs mutation
   rates, dropped frames, bounded failure diagnostics and start/end screenshots.
-  Harness tests pass locally, but a one-hour run on representative TV hardware
-  and the update-under-playback evidence are still mandatory.
+  Client `857dd6e` adds bounded failure-artifact commands, guaranteed managed
+  Chrome process-tree teardown, late desktop/scenario navigation, stable
+  semantic selectors, same-origin network attribution, and eight passing
+  harness contract tests. The local restricted-sandbox probe
+  `media-center-local-soak-2026-08-21-steady.json` completed without a hang and
+  recorded 5.681% main-thread CPU, 7.78% renderer CPU, 1.855% GPU-process CPU,
+  negative JS-heap growth, 0.2 ms event-loop p95, 14.9 ms frame p95, 14.2 ms
+  input p95, 40 ms D-pad interaction latency, 4.913 DOM mutations/s, 40 added
+  listeners, and seven active timers. It used software/restricted graphics,
+  exercised no playback, and exceeded the strict idle CPU budget at 6.733%, so
+  it is diagnostic evidence only. A one-hour run on representative Android TV
+  hardware and the update-under-playback evidence remain mandatory.
+- Skill dictionaries remain owned by `media_center_skill` under
+  `assets/i18n/{en,ru}.json`. Core now has local contract coverage for reading
+  that same publishable path with English fallback and legacy-path
+  compatibility; browser publication is verified as a content-addressed JSON
+  resource. This closes the local transport half of `MC8-09`, not the stand UI
+  and long-text evidence.
 
 ## Cross-Domain Dependencies
 

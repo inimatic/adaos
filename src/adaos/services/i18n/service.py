@@ -1,8 +1,10 @@
 from __future__ import annotations
-import os, json, inspect
+
+import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Any, Dict
+from typing import Any, Dict, Optional
 
 from adaos.services.agent_context import AgentContext
 
@@ -24,7 +26,6 @@ class I18nService:
     _cache_global: Dict[str, Dict[str, str]] = field(default_factory=dict, init=False, repr=False)
     _cache_skill: Dict[tuple[str, str], Dict[str, str]] = field(default_factory=dict, init=False, repr=False)
 
-    # ---------- public ----------
     def translate(
         self,
         key: str,
@@ -33,9 +34,9 @@ class I18nService:
         params: Optional[dict[str, Any]] = None,
         skill_path: Optional[Path] = None,
         skill_id: Optional[str] = None,
-        scope: Optional[str] = None,  # "global" | "skill" | None (auto)
+        scope: Optional[str] = None,
     ) -> str:
-        """Единая точка перевода. Без SDK-зависимостей."""
+        """Resolve one global or skill-owned message without an SDK dependency."""
         lang = normalize_language_code(
             lang or getattr(self.ctx.settings, "lang", None) or os.getenv("ADAOS_LANG") or DEFAULT_LANG
         )
@@ -50,10 +51,8 @@ class I18nService:
         try:
             return text.format(**params)
         except Exception:
-            # не валимся, если плейсхолдеры не сошлись
             return text
 
-    # ---------- loaders ----------
     def _load_global(self, lang: str) -> Dict[str, str]:
         lang = normalize_language_code(lang)
         if lang in self._cache_global:
@@ -61,50 +60,44 @@ class I18nService:
         base = self.ctx.paths.locales_dir()
         data: Dict[str, str] = {}
         for candidate in dict.fromkeys([DEFAULT_LANG, lang]):
-            p = base / f"{candidate}.json"
-            if p.exists():
-                loaded = json.loads(p.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    data.update(loaded)
+            data.update(self._read_messages(base / f"{candidate}.json"))
         self._cache_global[lang] = data
         return data
 
-    def _load_skill(self, lang: str, *, skill_path: Optional[Path], skill_id: Optional[str]) -> Dict[str, str]:
+    def _load_skill(
+        self,
+        lang: str,
+        *,
+        skill_path: Optional[Path],
+        skill_id: Optional[str],
+    ) -> Dict[str, str]:
         lang = normalize_language_code(lang)
-        # ключ кэша: (skill_id|path, lang)
         key = ((skill_id or (skill_path.name if skill_path else "")), lang)
         if key in self._cache_skill:
             return self._cache_skill[key]
 
-        # приоритет путей:
-        # 1) <skill_path>/i18n/<lang>.json
-        # 2) <skills_locales_dir>/<skill_id or folder>/<lang>.json
         data: Dict[str, str] = {}
-        if skill_path:
-            p1 = skill_path / "i18n" / f"{lang}.json"
-            if p1.exists():
-                data = json.loads(p1.read_text(encoding="utf-8"))
-        if not data:
-            base = self.ctx.paths.skills_locales_dir()
-            sid = skill_id or (skill_path.name if skill_path else None)
+        sid = skill_id or (skill_path.name if skill_path else None)
+        for candidate in dict.fromkeys([DEFAULT_LANG, lang]):
             if sid:
-                p2 = base / sid / f"{lang}.json"
-                if p2.exists():
-                    data = json.loads(p2.read_text(encoding="utf-8"))
-
-        # fallback на DEFAULT_LANG в тех же местах
-        if not data:
+                centralized = self.ctx.paths.skills_locales_dir() / sid / f"{candidate}.json"
+                data.update(self._read_messages(centralized))
             if skill_path:
-                p1d = skill_path / "i18n" / f"{DEFAULT_LANG}.json"
-                if p1d.exists():
-                    data = json.loads(p1d.read_text(encoding="utf-8"))
-            if not data and (skill_id or skill_path):
-                base = self.ctx.paths.skills_locales_dir()
-                sid = skill_id or (skill_path.name if skill_path else None)
-                if sid:
-                    p2d = base / sid / f"{DEFAULT_LANG}.json"
-                    if p2d.exists():
-                        data = json.loads(p2d.read_text(encoding="utf-8"))
+                # assets/i18n is canonical when one dictionary is shared with the browser.
+                # The legacy i18n directory remains readable during rolling upgrades.
+                for relative_root in (Path("i18n"), Path("assets") / "i18n"):
+                    data.update(
+                        self._read_messages(skill_path / relative_root / f"{candidate}.json")
+                    )
 
         self._cache_skill[key] = data
         return data
+
+    @staticmethod
+    def _read_messages(path: Path) -> Dict[str, str]:
+        if not path.exists():
+            return {}
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
+            return {}
+        return {str(key): value for key, value in loaded.items() if isinstance(value, str)}
