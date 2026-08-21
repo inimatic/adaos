@@ -76,4 +76,26 @@ def resolve_skill_data_root(ctx: Any, current_skill: Any) -> Path:
     return env.data_root(version)
 
 
-__all__ = ["resolve_skill_data_root"]
+def resolve_installed_skill_data_root(ctx: Any, skill_name: str) -> Path:
+    """Resolve another installed skill's data root for trusted core brokering.
+
+    Unlike :func:`resolve_skill_data_root`, this helper is not exposed through
+    the skill SDK.  A service must first admit a typed owner delegation before
+    using the returned physical path.
+    """
+
+    name = str(skill_name or "").strip()
+    if not name or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_.-" for character in name.lower()):
+        raise RuntimeError("installed skill identity is invalid")
+    skills_root = _path_from_provider(ctx.paths, "skills_dir")
+    if skills_root is None:
+        raise RuntimeError("installed skill runtime root is unavailable")
+    env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=name)
+    version = env.resolve_active_version()
+    if not version:
+        raise RuntimeError(f"skill {name!r} has no active installed runtime")
+    env.ensure_data_dirs(version)
+    return env.data_root(version)
+
+
+__all__ = ["resolve_installed_skill_data_root", "resolve_skill_data_root"]

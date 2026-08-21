@@ -224,7 +224,13 @@ class LocalProcessExecutor:
         except ValueError:
             return False
 
-    def submit(self, spec: ExecutionSpec, *, idempotency_key: str) -> ExecutionAttempt:
+    def submit(
+        self,
+        spec: ExecutionSpec,
+        *,
+        idempotency_key: str,
+        runtime_environment: Mapping[str, str] | None = None,
+    ) -> ExecutionAttempt:
         key = str(idempotency_key or "").strip()
         if not key:
             raise ExecutionContractError("idempotency_key must be non-empty")
@@ -268,7 +274,21 @@ class LocalProcessExecutor:
                 raise ExecutionContractError("execution attempt budget exhausted")
 
             attempt_dir.mkdir(parents=True, exist_ok=False)
-            _atomic_json(spec_path, {"digest": spec.digest, "spec": spec.to_dict()})
+            trusted_environment = {
+                str(name): str(value)
+                for name, value in dict(runtime_environment or {}).items()
+            }
+            _atomic_json(
+                spec_path,
+                {
+                    "digest": spec.digest,
+                    "spec": spec.to_dict(),
+                    "runtime": {
+                        "data_owner_ref": spec.data_owner_ref,
+                        "environment": trusted_environment,
+                    },
+                },
+            )
             attempt = ExecutionAttempt(
                 attempt_id=attempt_id,
                 owner_ref=owner_ref,
@@ -286,6 +306,7 @@ class LocalProcessExecutor:
                     "provider_id": self.provider_id,
                     "protocol_version": self.capabilities.protocol_version,
                     "hostile_isolation": False,
+                    "data_owner_ref": spec.data_owner_ref,
                 },
                 status_history=(_history("accepted"), _history("submitting")),
             )

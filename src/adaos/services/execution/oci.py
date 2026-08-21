@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 from dataclasses import replace
 from pathlib import Path
+from typing import Mapping
 
 from adaos.domain.execution import (
     ExecutionContractError,
@@ -100,9 +101,19 @@ class OCIExecutor(LocalProcessExecutor):
             metadata={**dict(spec.metadata), "oci_original_spec_digest": spec.digest},
         )
 
-    def submit(self, spec: ExecutionSpec, *, idempotency_key: str):
+    def submit(
+        self,
+        spec: ExecutionSpec,
+        *,
+        idempotency_key: str,
+        runtime_environment: Mapping[str, str] | None = None,
+    ):
         container_spec = self._container_spec(spec, idempotency_key=idempotency_key)
-        attempt = super().submit(container_spec, idempotency_key=idempotency_key)
+        attempt = super().submit(
+            container_spec,
+            idempotency_key=idempotency_key,
+            runtime_environment=runtime_environment,
+        )
         rebound = replace(
             attempt,
             spec_id=spec.spec_id,

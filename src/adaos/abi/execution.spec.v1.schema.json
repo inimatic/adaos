@@ -32,6 +32,7 @@
     "schema": { "const": "adaos.execution.spec.v1" },
     "spec_id": { "type": "string", "minLength": 1 },
     "owner_ref": { "type": "string", "pattern": "^(skill|service|core):[a-z0-9_.-]+$" },
+    "data_owner_ref": { "type": "string", "pattern": "^(skill|service|core):[a-z0-9_.-]+$" },
     "command": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
     "working_directory": { "type": "string", "minLength": 1 },
     "trial_id": { "type": ["string", "null"] },

@@ -34,6 +34,7 @@ def spec(
     command: Sequence[str],
     *,
     working_directory: str | Path | None = None,
+    data_owner_ref: str | None = None,
     trial_id: str | None = None,
     run_id: str | None = None,
     sample_generation: int = 0,
@@ -60,6 +61,7 @@ def spec(
     return ExecutionSpec(
         spec_id=spec_id,
         owner_ref=f"skill:{skill_name}",
+        data_owner_ref=data_owner_ref,
         command=tuple(str(item) for item in command),
         working_directory=str(working_directory or current.path),
         trial_id=trial_id,

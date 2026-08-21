@@ -17,6 +17,19 @@ EXECUTION_TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled", "lo
 EXECUTION_STATUSES = frozenset(
     {"accepted", "submitting", "running", "cancelling", "unknown", *EXECUTION_TERMINAL_STATUSES}
 )
+EXECUTION_PROTECTED_ENVIRONMENT_KEYS = frozenset(
+    {
+        "ADAOS_SKILL_ENV_PATH",
+        "ADAOS_SKILL_MEMORY_PATH",
+        "ADAOS_SKILL_INTERNAL_DATA_ROOT",
+        "ADAOS_SKILL_INTERNAL_ACTIVE_PATH",
+        "ADAOS_SKILL_INTERNAL_TARGET_PATH",
+        "ADAOS_SKILL_NAME",
+        "ADAOS_SKILL_PACKAGE",
+        "ADAOS_SKILL_ROOT",
+        "ADAOS_SKILL_MODE",
+    }
+)
 
 
 class ExecutionContractError(ValueError):
@@ -354,6 +367,7 @@ class ExecutionSpec:
     owner_ref: str
     command: tuple[str, ...]
     working_directory: str
+    data_owner_ref: str | None = None
     trial_id: str | None = None
     run_id: str | None = None
     sample_generation: int = 0
@@ -375,6 +389,7 @@ class ExecutionSpec:
     def __post_init__(self) -> None:
         spec_id = _token(self.spec_id, "spec_id")
         owner_ref = validate_owner_ref(self.owner_ref)
+        data_owner_ref = validate_owner_ref(self.data_owner_ref or owner_ref)
         command = tuple(_token(item, "command item") for item in self.command)
         if not command:
             raise ExecutionContractError("command must contain at least one item")
@@ -404,6 +419,12 @@ class ExecutionSpec:
             _token(key, "environment key"): str(value)
             for key, value in dict(self.environment).items()
         }
+        protected = sorted(EXECUTION_PROTECTED_ENVIRONMENT_KEYS.intersection(environment))
+        if protected:
+            raise ExecutionContractError(
+                "execution environment contains core-owned skill bindings: "
+                + ", ".join(protected)
+            )
         secret_refs = tuple(dict.fromkeys(_token(item, "secret_refs item") for item in self.secret_refs))
         expected_outputs = tuple(
             dict.fromkeys(_token(item, "expected_outputs item") for item in self.expected_outputs)
@@ -414,6 +435,7 @@ class ExecutionSpec:
                 raise ExecutionContractError("expected_outputs must be relative paths without '..'")
         object.__setattr__(self, "spec_id", spec_id)
         object.__setattr__(self, "owner_ref", owner_ref)
+        object.__setattr__(self, "data_owner_ref", data_owner_ref)
         object.__setattr__(self, "command", command)
         object.__setattr__(self, "working_directory", working_directory)
         object.__setattr__(self, "trial_id", trial_id)
@@ -428,7 +450,7 @@ class ExecutionSpec:
         object.__setattr__(self, "metadata", dict(self.metadata))
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        value = {
             "schema": self.SCHEMA,
             "spec_id": self.spec_id,
             "owner_ref": self.owner_ref,
@@ -452,6 +474,12 @@ class ExecutionSpec:
             "preemption": self.preemption.to_dict(),
             "metadata": dict(self.metadata),
         }
+        # Preserve the digest of existing v1 same-owner specifications.  The
+        # optional field is serialized only when the workload data owner is
+        # intentionally delegated by the control-plane owner.
+        if self.data_owner_ref != self.owner_ref:
+            value["data_owner_ref"] = self.data_owner_ref
+        return value
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "ExecutionSpec":
@@ -496,6 +524,9 @@ class ExecutionSpec:
         return cls(
             spec_id=str(value.get("spec_id") or ""),
             owner_ref=str(value.get("owner_ref") or ""),
+            data_owner_ref=(
+                str(value.get("data_owner_ref")) if value.get("data_owner_ref") else None
+            ),
             command=tuple(str(item) for item in value.get("command") or ()),
             working_directory=str(value.get("working_directory") or ""),
             trial_id=str(value.get("trial_id")) if value.get("trial_id") else None,

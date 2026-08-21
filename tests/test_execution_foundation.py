@@ -25,6 +25,7 @@ from adaos.domain.ownership import OwnershipIsolationError
 from adaos.domain.runtime_bindings import ContentRef
 from adaos.services.execution import local as local_execution
 from adaos.services.execution import local_worker
+from adaos.services.execution import service as execution_service
 from adaos.services.execution.local import LocalProcessExecutor
 from adaos.services.execution.oci import OCIExecutor
 from adaos.services.execution.service import ExecutionService
@@ -69,6 +70,111 @@ def test_execution_service_exposes_owner_scoped_provider_capabilities(tmp_path) 
     assert snapshot["provider_id"] == "local-process"
     assert snapshot["protocol_version"] == "1.0"
     assert "network_offline" not in snapshot["features"]
+
+
+def test_execution_spec_rejects_skill_runtime_environment_spoofing(tmp_path) -> None:
+    with pytest.raises(ExecutionContractError, match="core-owned skill bindings"):
+        ExecutionSpec(
+            spec_id="fixture.spoof.v1",
+            owner_ref="skill:research_manager",
+            command=(sys.executable, "-c", "print('x')"),
+            working_directory=str(tmp_path),
+            environment={"ADAOS_SKILL_INTERNAL_DATA_ROOT": str(tmp_path / "other")},
+        )
+
+
+def test_local_execution_applies_trusted_runtime_environment_after_ambient_context(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executor = LocalProcessExecutor(state_root=tmp_path / "state", allowed_roots=(tmp_path,))
+    ambient = tmp_path / "ambient"
+    delegated = tmp_path / "delegated"
+    monkeypatch.setenv("ADAOS_SKILL_INTERNAL_DATA_ROOT", str(ambient))
+    script = (
+        "import os; from pathlib import Path; "
+        "Path('bound.txt').write_text(os.environ['ADAOS_SKILL_INTERNAL_DATA_ROOT'], encoding='utf-8')"
+    )
+    spec = _spec(tmp_path, sys.executable, "-c", script)
+    spec = replace(spec, expected_outputs=("bound.txt",))
+
+    attempt = executor.submit(
+        spec,
+        idempotency_key="trusted-runtime-environment",
+        runtime_environment={"ADAOS_SKILL_INTERNAL_DATA_ROOT": str(delegated)},
+    )
+    terminal = _wait_terminal(executor, attempt.attempt_id, owner_ref=spec.owner_ref)
+
+    assert terminal.status == "succeeded"
+    assert (tmp_path / "bound.txt").read_text(encoding="utf-8") == str(delegated)
+
+
+def test_execution_service_binds_delegated_data_owner_without_transferring_attempt_ownership(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    control_root = tmp_path / "control"
+    target_root = tmp_path / "target"
+    target_source = tmp_path / "target-source"
+    target_root.mkdir()
+    target_source.mkdir()
+    provider = LocalProcessExecutor(state_root=tmp_path / "state", allowed_roots=(tmp_path,))
+    current = SimpleNamespace(name="research_manager_skill", path=control_root)
+    ctx = SimpleNamespace(
+        skill_ctx=SimpleNamespace(get=lambda: current),
+        execution_provider=provider,
+    )
+    admitted: list[str] = []
+    monkeypatch.setattr(
+        execution_service,
+        "require_skill_capability",
+        lambda _ctx, capability: admitted.append(capability),
+    )
+    monkeypatch.setattr(
+        execution_service,
+        "resolve_skill_data_root",
+        lambda _ctx, _current: control_root,
+    )
+    monkeypatch.setattr(
+        execution_service,
+        "resolve_installed_skill_data_root",
+        lambda _ctx, name: target_root if name == "runner_skill" else None,
+    )
+    monkeypatch.setattr(
+        execution_service,
+        "find_skill_dir",
+        lambda name, ctx: target_source if name == "runner_skill" else None,
+    )
+    package = ContentRef(
+        uri="content://runner/package",
+        digest="sha256:" + "1" * 64,
+        size_bytes=1,
+        media_type="application/octet-stream",
+        owner_ref="skill:runner_skill",
+        kind="execution-package",
+    )
+    script = (
+        "import os; from pathlib import Path; "
+        "Path('owner.txt').write_text(os.environ['ADAOS_SKILL_NAME'] + '\\n' + "
+        "os.environ['ADAOS_SKILL_INTERNAL_DATA_ROOT'], encoding='utf-8')"
+    )
+    spec = ExecutionSpec(
+        spec_id="fixture.delegated.v1",
+        owner_ref="skill:research_manager_skill",
+        data_owner_ref="skill:runner_skill",
+        command=(sys.executable, "-c", script),
+        working_directory=str(target_root),
+        package_ref=package,
+        expected_outputs=("owner.txt",),
+    )
+
+    attempt = ExecutionService(ctx).submit(spec, idempotency_key="delegated-owner")
+    terminal = _wait_terminal(provider, attempt.attempt_id, owner_ref=spec.owner_ref)
+
+    assert admitted == ["execution.jobs.delegate_data_owner"]
+    assert terminal.owner_ref == "skill:research_manager_skill"
+    assert terminal.provider_binding["data_owner_ref"] == "skill:runner_skill"
+    assert (target_root / "owner.txt").read_text(encoding="utf-8") == (
+        f"runner_skill\n{target_root}"
+    )
 
 
 @pytest.mark.parametrize("module", (local_execution, local_worker))

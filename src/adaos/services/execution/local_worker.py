@@ -18,6 +18,19 @@ from typing import Any
 import psutil
 
 
+_PROTECTED_SKILL_ENVIRONMENT = {
+    "ADAOS_SKILL_ENV_PATH",
+    "ADAOS_SKILL_MEMORY_PATH",
+    "ADAOS_SKILL_INTERNAL_DATA_ROOT",
+    "ADAOS_SKILL_INTERNAL_ACTIVE_PATH",
+    "ADAOS_SKILL_INTERNAL_TARGET_PATH",
+    "ADAOS_SKILL_NAME",
+    "ADAOS_SKILL_PACKAGE",
+    "ADAOS_SKILL_ROOT",
+    "ADAOS_SKILL_MODE",
+}
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -151,7 +164,13 @@ def run(attempt_dir: Path) -> int:
     )
     log_limit = int(resources.get("max_log_bytes") or 4 * 1024 * 1024)
     environment = dict(os.environ)
+    for key in _PROTECTED_SKILL_ENVIRONMENT:
+        environment.pop(key, None)
     environment.update({str(key): str(value) for key, value in dict(spec.get("environment") or {}).items()})
+    runtime = dict(spec_record.get("runtime") or {})
+    environment.update(
+        {str(key): str(value) for key, value in dict(runtime.get("environment") or {}).items()}
+    )
     started_at = _now()
 
     receipt: dict[str, Any]
