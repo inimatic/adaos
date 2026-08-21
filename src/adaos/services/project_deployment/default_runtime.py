@@ -304,11 +304,7 @@ class AdaOSComponentLifecycleHooks:
         if previous_pid is not None:
             return bool(
                 observed.get("pid") is not None
-                and (
-                    observed.get("pid") != previous_pid
-                    or observed.get("process_observed_at")
-                    != previous.get("process_observed_at")
-                )
+                and observed.get("pid") != previous_pid
             )
         if previous.get("external_ready") is True:
             return bool(
@@ -316,7 +312,7 @@ class AdaOSComponentLifecycleHooks:
                 and observed.get("external_ready_at")
                 != previous.get("external_ready_at")
             )
-        return True
+        return previous.get("running") is not True
 
     def _wait_for_skill_service_ready(
         self,

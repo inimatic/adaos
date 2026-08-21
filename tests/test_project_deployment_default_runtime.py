@@ -211,6 +211,63 @@ def test_skill_service_activation_does_not_accept_old_ready_process(monkeypatch)
     assert receipt["restart_observed"] is True
 
 
+def test_skill_service_activation_ignores_poll_timestamp_as_process_identity(monkeypatch) -> None:
+    hooks = AdaOSComponentLifecycleHooks(SimpleNamespace())
+    observations = iter(
+        (
+            {
+                "managed": True,
+                "ready": True,
+                "running": True,
+                "process_spec_matches": True,
+                "health_ok": True,
+                "pid": 10,
+                "process_observed_at": 2.0,
+            },
+            {
+                "managed": True,
+                "ready": True,
+                "running": True,
+                "process_spec_matches": True,
+                "health_ok": True,
+                "pid": 11,
+                "process_observed_at": 3.0,
+            },
+        )
+    )
+    monkeypatch.setenv("ADAOS_PROJECT_SERVICE_ACTIVATION_TIMEOUT_S", "5")
+    monkeypatch.setattr(
+        AdaOSComponentLifecycleHooks,
+        "_service_activation_status",
+        staticmethod(lambda _component_id: next(observations)),
+    )
+    monkeypatch.setattr(default_runtime, "_sleep", lambda _seconds: None)
+
+    receipt = hooks._wait_for_skill_service_ready(
+        "media_library_agent",
+        previous={
+            "managed": True,
+            "ready": True,
+            "running": True,
+            "pid": 10,
+            "process_observed_at": 1.0,
+        },
+    )
+
+    assert receipt["pid"] == 11
+    assert receipt["restart_observed"] is True
+
+
+def test_skill_service_activation_requires_identity_when_running_pid_is_missing() -> None:
+    assert (
+        AdaOSComponentLifecycleHooks._service_restart_observed(
+            {"managed": True, "running": True, "pid": None},
+            {"managed": True, "running": True, "pid": 11},
+        )
+        is False
+    )
+
+
 def test_skill_service_activation_fails_when_new_process_never_converges(monkeypatch) -> None:
     hooks = AdaOSComponentLifecycleHooks(SimpleNamespace())
     clock = iter((0.0, 0.0, 6.0))
