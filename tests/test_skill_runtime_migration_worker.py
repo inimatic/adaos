@@ -10,6 +10,8 @@ import threading
 import time
 from types import SimpleNamespace
 
+from adaos.domain.project_deployment import ComponentActivation
+
 worker = importlib.import_module("adaos.services.skill.runtime_migration_worker")
 
 
@@ -157,6 +159,61 @@ def test_migration_candidates_include_only_runtime_behind(monkeypatch, tmp_path)
 
     assert [item["skill"] for item in result] == ["missing_runtime_skill", "old_skill"]
     assert {item["reason"] for item in result} == {"runtime_version_behind"}
+
+
+def test_migration_candidates_preserve_project_managed_exact_runtime(monkeypatch, tmp_path):
+    state_dir = tmp_path / "state"
+    skills_dir = tmp_path / "skills"
+    ctx = SimpleNamespace(
+        config=SimpleNamespace(node_id="node-a"),
+        paths=SimpleNamespace(
+            state_dir=lambda: state_dir,
+            workspace_dir=lambda: tmp_path,
+            skills_workspace_dir=lambda: skills_dir,
+        ),
+    )
+    versions = {
+        "media_library_agent": "0.6.18",
+        "standalone_skill": "2.0.0",
+    }
+    for skill_name in versions:
+        (skills_dir / skill_name).mkdir(parents=True, exist_ok=True)
+    worker.ProjectDeploymentStore(state_dir=state_dir).put_activation(
+        ComponentActivation(
+            activation_id="activation.media-agent",
+            deployment_id="media-center-home",
+            component_ref="skill:media_library_agent",
+            node_id="node-a",
+            release_digest="sha256:" + "a" * 64,
+            package_digest="sha256:" + "b" * 64,
+            generation=40,
+            status="active",
+        )
+    )
+    monkeypatch.setattr(worker, "_registered_skill_names", lambda _ctx: sorted(versions))
+    monkeypatch.setattr(worker, "_registry_versions", lambda _ctx: {})
+    monkeypatch.setattr(worker, "_workspace_skill_source", lambda _ctx, name: skills_dir / name)
+    monkeypatch.setattr(worker, "_read_local_artifact_version", lambda path: versions[path.name])
+    manager = _FakeManager({"standalone_skill": "1.0.0"})
+
+    records = worker._installed_runtime_version_records(ctx, manager)
+    project_record = next(item for item in records if item["skill"] == "media_library_agent")
+    assert project_record["runtime_version"] == ""
+    assert project_record["runtime_behind"] is False
+    assert project_record["migration_owner"] == "project_deployment"
+    assert project_record["project_activation"] == {
+        "activation_id": "activation.media-agent",
+        "deployment_id": "media-center-home",
+        "generation": 40,
+        "package_digest": "sha256:" + "b" * 64,
+        "release_digest": "sha256:" + "a" * 64,
+    }
+    assert [item["skill"] for item in worker.migration_candidates(ctx, manager)] == [
+        "standalone_skill"
+    ]
+    assert [item["skill"] for item in worker.migration_candidates(ctx, manager, force=True)] == [
+        "standalone_skill"
+    ]
 
 
 def test_registered_skill_names_includes_selected_runtime_when_sqlite_lost_intent(monkeypatch):
