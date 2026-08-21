@@ -1734,7 +1734,18 @@ efficacy result or cross-domain SOTA claim.
   Project/session/source materialization. Fresh v41 is frozen at
   `sha256:e994111297c7cdc82e6bacc232d3e37ab64fa933e2d6b0fb6543bc7f357d50bf`
   on clean detached core `415c0357` and workspace `0e51b65f`; all 25 packets
-  were materialized first and the counterbalanced execution starts with C3.
+  were materialized first and the counterbalanced execution started with C3.
+  C3 produced a real Torch implementation but exhausted two attempts while
+  the trusted worker disclosed protected environment overrides serially; it
+  remained EVC false (1/7). Matched C0 completed in one attempt and remained
+  EVC false (2/7). The false/false tie made the best possible remaining result
+  `p=0.0625`, so frozen v41 stopped as `incomplete_no_claim` under summary
+  `sha256:51418e60ab6aa3d00b0bb4a2fd8f56c24f05a3b14c2f2d842580b12a71e85bb3`.
+  Core `e4c91d2f` now reports all protected/invalid execution-environment keys
+  together; manager `0.41.0` publishes the invariant in runner ABI `1.18`;
+  evaluator `0.1.42` keeps the hidden probe digest for provenance but removes
+  it at the candidate's exact public-schema boundary. These generic fixes are
+  active and tested but require a fresh zero-result calibration task.
 - [x] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and

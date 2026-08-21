@@ -248,8 +248,29 @@ existing DevelopmentSession and binding without recreating the Project,
 instructions, or source before relaunch. Fresh v41 is frozen at
 `sha256:e994111297c7cdc82e6bacc232d3e37ab64fa933e2d6b0fb6543bc7f357d50bf`
 on clean detached core `415c0357`; all 25 packets existed before execution and
-the counterbalanced order starts with C3. Its comparison is in progress and
-supplies no probability claim yet.
+the counterbalanced order started with C3. The first C3 implementation built a
+real Torch runner, passed candidate tests and strict validation, but exhausted
+its two-attempt budget while the trusted worker disclosed protected execution
+environment overrides one at a time. Independent result
+`sha256:ba9084d53dd8482e32aa840986f0a44ee7edf03babb797e650652ecf2d5112b2`
+is EVC false and passes 1/7 mandatory checks. Matched C0 completed in one
+attempt under result
+`sha256:6828c6b96d6d4cc8bb5fcc79b057a59c3410a845901a5cb1dedc834d58fc58b9`,
+is EVC false, and passes 2/7 checks. The pair is therefore a false/false tie.
+Even four treatment-only wins in the remaining pairs could reach only the
+preregistered one-sided `p=0.0625`; v41 stopped for futility and remains an
+immutable `incomplete_no_claim` comparison under summary
+`sha256:51418e60ab6aa3d00b0bb4a2fd8f56c24f05a3b14c2f2d842580b12a71e85bb3`.
+
+The failed pair exposed two domain-neutral rail defects, not a basis for
+rescoring v41. Core `e4c91d2f` reports every protected or invalid
+`ExecutionSpec.environment` key in one deterministic diagnostic, so one repair
+can remove the complete violation set. Manager `0.41.0` / runner ABI `1.18`
+now declares that boundary explicitly. Evaluator `0.1.42` keeps its hidden
+probe-request digest for provenance and scoring but removes that
+evaluator-owned field before invoking the candidate's exact public input
+schema. Both skills passed their normal `adaos skill test` gates and were
+activated through A/B migration. These fixes apply only to a new frozen task.
 
 ## Conclusion and remaining proof
 
@@ -262,9 +283,10 @@ campaign, replacement campaign, owner boundary and evidence class separately
 checkable.
 
 It does not prove the probability hypothesis. The retained v32 paired result
-was negative/inconclusive for the primary endpoint, and this task-006 receipt
-is one successor-path C3 operability success. The consumer-executed sequence
-in `ARF7.3-06b` is now implemented and locally proven, but a new frozen
-comparison must still create fresh C0/C3 units and follow the preregistered
-repeated paired analysis. A
+was negative/inconclusive for the primary endpoint, v41 stopped after a
+false/false tie, and this task-006 receipt is one successor-path C3 operability
+success. The consumer-executed sequence in `ARF7.3-06b` is implemented and
+locally proven, but a new zero-result frozen comparison on the corrected rails
+must still create fresh C0/C3 units and follow the preregistered repeated
+paired analysis. A
 cross-domain or SOTA claim additionally requires ResearchCompilerBench/ARRB.

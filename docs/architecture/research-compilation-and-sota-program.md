@@ -1001,8 +1001,26 @@ Project, instructions, or binding. Fresh v41, digest
 `sha256:e994111297c7cdc82e6bacc232d3e37ab64fa933e2d6b0fb6543bc7f357d50bf`,
 binds clean detached core `415c0357`, workspace `0e51b65f`, the unchanged
 matched budgets and five pairs. All 25 packets were materialized before the
-first arm, and counterbalancing starts with C3. The run is in progress; no
-probability claim is currently allowed.
+first arm, and counterbalancing started with C3. C3 built and validated a real
+Torch implementation, but its trusted realization exhausted both attempts
+while protected environment overrides were reported serially; independent
+result `sha256:ba9084d53dd8482e32aa840986f0a44ee7edf03babb797e650652ecf2d5112b2`
+is EVC false (1/7). Matched C0 completed in one attempt and remained EVC false
+(2/7), result
+`sha256:6828c6b96d6d4cc8bb5fcc79b057a59c3410a845901a5cb1dedc834d58fc58b9`.
+The false/false tie made the best possible remaining one-sided result
+`p=0.0625`. V41 therefore stopped under its frozen futility rule; immutable
+summary `sha256:51418e60ab6aa3d00b0bb4a2fd8f56c24f05a3b14c2f2d842580b12a71e85bb3`
+is `incomplete_no_claim` and permits no probability claim.
+
+V41 also identified two generic contract defects. Core `e4c91d2f` now reports
+the complete protected/invalid execution-environment key set in one repairable
+diagnostic. Research Manager `0.41.0` exposes the same invariant in runner ABI
+`1.18`. Research Evaluator `0.1.42` retains the hidden-probe digest in its own
+provenance record while removing that evaluator-owned field before candidate
+invocation, keeping the candidate boundary equal to the published input
+schema. The changes passed source tests, normal AdaOS skill tests and A/B
+activation; they can be assessed only in a fresh zero-result task.
 
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and
