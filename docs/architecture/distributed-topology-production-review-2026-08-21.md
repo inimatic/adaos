@@ -42,6 +42,10 @@ acceptance evidence.
   adapter receipts and idempotency payloads; full details remain behind the
   authorized cursor API. Projections do not expose credentials, package
   authorization records, source bytes or raw node-local media paths.
+- Adapter terminal failures and remote service, topology and Project deployment
+  failures retain only bounded machine-code strings without credential markers;
+  successful remote receipts are bounded and sanitized too. Skills map those
+  stable codes to their own localized human-readable messages.
 - Automatic cross-subnet placement and general multi-writer behavior remain
   deferred. Their threat and conflict models are not inherited from the
   trusted-subnet pilot.

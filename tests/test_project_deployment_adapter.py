@@ -25,6 +25,7 @@ from adaos.services.project_deployment import (
     MemberLinkNodeDeploymentTransport,
     NoopComponentLifecycleHooks,
     ProjectDeploymentExecutionError,
+    RetryableDeploymentPhaseError,
     RoutingComponentDeploymentAdapter,
     UncertainDeploymentPhaseError,
     execute_remote_component_phase,
@@ -434,6 +435,72 @@ def test_http_transport_sends_exact_contract_and_marks_lost_ack_uncertain(
         )
 
 
+def test_http_transport_sanitizes_remote_error_detail(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package = _package(tmp_path)
+    release = _release(package)
+    change = replace_node(_change("install", package), "node-b")
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda *_args, **_kwargs: httpx.Response(
+            500,
+            json={"detail": "authorization:private-token"},
+        ),
+    )
+    transport = HttpNodeDeploymentTransport(
+        endpoint_resolver=lambda _node_id: "http://node-b:8778",
+        token_provider=lambda: "subnet-token",
+        package_reader=lambda _digest: package.archive_bytes,
+        source_node_id="node-a",
+    )
+
+    with pytest.raises(
+        ProjectDeploymentExecutionError, match="remote_node_http_500"
+    ) as raised:
+        transport.execute_component_phase(
+            node_id="node-b",
+            phase="fetch",
+            node=_node("node-b"),
+            change=change,
+            desired=_desired(release),
+            release_plan=release,
+            package=package.ref,
+            current_activation=None,
+            idempotency_key="remote:test-worker:fetch-private",
+            attempt=1,
+        )
+
+    assert "private" not in str(raised.value)
+
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda *_args, **_kwargs: httpx.Response(
+            200,
+            json={
+                "schema": "adaos.project.remote_component_phase_result.v1",
+                "receipt": {"detail": "authorization:private-token"},
+            },
+        ),
+    )
+    receipt = transport.execute_component_phase(
+        node_id="node-b",
+        phase="health",
+        node=_node("node-b"),
+        change=change,
+        desired=_desired(release),
+        release_plan=release,
+        package=package.ref,
+        current_activation=None,
+        idempotency_key="remote:test-worker:health-private",
+        attempt=1,
+    )
+    assert receipt == {"detail": "<redacted>"}
+
+
 def test_member_link_transport_sends_exact_contract_and_marks_lost_ack_uncertain(
     tmp_path: Path,
 ) -> None:
@@ -491,3 +558,36 @@ def test_member_link_transport_sends_exact_contract_and_marks_lost_ack_uncertain
             idempotency_key="member:test-worker:health",
             attempt=1,
         )
+
+
+def test_member_link_transport_normalizes_known_runtime_error(tmp_path: Path) -> None:
+    package = _package(tmp_path)
+    release = _release(package)
+    change = replace_node(_change("install", package), "node-b")
+
+    def rpc_call(*_args: Any, **_kwargs: Any) -> Mapping[str, Any]:
+        raise RuntimeError("member_not_connected authorization:private-token")
+
+    transport = MemberLinkNodeDeploymentTransport(
+        rpc_call=rpc_call,
+        package_reader=lambda _digest: package.archive_bytes,
+        source_node_id="node-a",
+    )
+
+    with pytest.raises(
+        RetryableDeploymentPhaseError, match="^member_not_connected$"
+    ) as raised:
+        transport.execute_component_phase(
+            node_id="node-b",
+            phase="health",
+            node=_node("node-b"),
+            change=change,
+            desired=_desired(release),
+            release_plan=release,
+            package=package.ref,
+            current_activation=None,
+            idempotency_key="member:test-worker:health-private",
+            attempt=1,
+        )
+
+    assert "private" not in str(raised.value)
