@@ -272,6 +272,37 @@ evaluator-owned field before invoking the candidate's exact public input
 schema. Both skills passed their normal `adaos skill test` gates and were
 activated through A/B migration. These fixes apply only to a new frozen task.
 
+Fresh v42, `tlp-structured-formalization-paired-v42`, was then frozen at
+`sha256:0697567836ce2eafae7b9d624f7c280dc832cc028f464fd1f2027e87549f2a6e`
+on a clean detached checkout of core `e4c91d2f` and workspace `d8633460`.
+It bound `gpt-5.5` at high effort, five counterbalanced pairs, a matched
+12,000,000-token/10,800-second downstream budget, zero human interventions,
+and 25 packets materialized before execution. Its zero-result summary was
+`sha256:e5fbf583c1c0bd7e00b5421abb492d6d660678ad27d7cd73a7254e48064bebd6`.
+The first C0 used 4,400,983 model tokens and passed 2/7 mandatory checks;
+independent result
+`sha256:348060993ba6e4c23c2e644e68e0a7482f6f0c0a6e730cdfce63a10e6b930aaa`
+is EVC false. The matched C3 generated and self-tested a real Torch direction
+skill without intervention, but the trusted package-shaped pytest gate timed
+out at its fixed 60-second lifecycle boundary before installation. Result
+`sha256:34254d0adf3c54f212ceb0bfa1d74040512e3f39d1f963b331e3e15622827bed`
+is therefore EVC false (1/7), with `engineering_compilation` as the failure
+stage after 6,408,492 model tokens. The false/false tie again makes the best
+possible remaining one-sided result `p=0.0625`; execution stopped under the
+frozen futility rule and summary
+`sha256:ddca458d835ca5fb09d49e644e8727c35563849b8f5061d00dd192e0f57a31d2`
+remains `incomplete_no_claim`.
+
+Post-outcome diagnosis did not rescore v42. The exact package-shaped tests
+passed unchanged in 29.83 seconds when replayed after the host load subsided;
+they use one-sample bounded fixtures and do not run the three-epoch scientific
+smoke. Thus the v42 stop identifies a domain-neutral validation-budget
+confound: a fixed 60-second wall limit can penalize dependency-heavy typed
+implementations under transient CPU contention even when their bounded suite
+is valid. The next task must bind the package-test allowance to the immutable
+DevelopmentSession execution budget and expose the same exact allowance to
+Codex and the trusted worker. V42 itself stays immutable.
+
 ## Conclusion and remaining proof
 
 This receipt proves that the structured AdaOS path can close end to end on the
@@ -283,8 +314,8 @@ campaign, replacement campaign, owner boundary and evidence class separately
 checkable.
 
 It does not prove the probability hypothesis. The retained v32 paired result
-was negative/inconclusive for the primary endpoint, v41 stopped after a
-false/false tie, and this task-006 receipt is one successor-path C3 operability
+was negative/inconclusive for the primary endpoint, v41 and v42 stopped after
+false/false ties, and this task-006 receipt is one successor-path C3 operability
 success. The consumer-executed sequence in `ARF7.3-06b` is implemented and
 locally proven, but a new zero-result frozen comparison on the corrected rails
 must still create fresh C0/C3 units and follow the preregistered repeated

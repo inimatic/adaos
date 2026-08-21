@@ -1022,6 +1022,24 @@ invocation, keeping the candidate boundary equal to the published input
 schema. The changes passed source tests, normal AdaOS skill tests and A/B
 activation; they can be assessed only in a fresh zero-result task.
 
+Fresh v42 was frozen at
+`sha256:0697567836ce2eafae7b9d624f7c280dc832cc028f464fd1f2027e87549f2a6e`
+on clean detached core `e4c91d2f` and workspace `d8633460`, with 25 packets
+prematerialized and matched 12M-token/10,800-second budgets. C0 remained EVC
+false (2/7) under result
+`sha256:348060993ba6e4c23c2e644e68e0a7482f6f0c0a6e730cdfce63a10e6b930aaa`.
+C3 generated a real Torch implementation in one intervention-free turn, but
+the trusted package-shaped test gate hit its fixed 60-second timeout before
+installation; result
+`sha256:34254d0adf3c54f212ceb0bfa1d74040512e3f39d1f963b331e3e15622827bed`
+is EVC false (1/7) at `engineering_compilation`. The tie again makes the best
+possible remaining one-sided outcome `p=0.0625`, so immutable summary
+`sha256:ddca458d835ca5fb09d49e644e8727c35563849b8f5061d00dd192e0f57a31d2`
+is `incomplete_no_claim`. An unchanged post-outcome replay of the exact
+package tests passed in 29.83 seconds. This replay is diagnostic, not rescored
+evidence: it exposes a fixed-timeout confound under host contention and
+requires a fresh task after a generic budget-bound validation fix.
+
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and
 content identities. Candidate-authored claims cannot mark a check passed. The

@@ -1745,7 +1745,18 @@ efficacy result or cross-domain SOTA claim.
   together; manager `0.41.0` publishes the invariant in runner ABI `1.18`;
   evaluator `0.1.42` keeps the hidden probe digest for provenance but removes
   it at the candidate's exact public-schema boundary. These generic fixes are
-  active and tested but require a fresh zero-result calibration task.
+  active and tested. Fresh v42 bound them on clean detached core `e4c91d2f`,
+  workspace `d8633460`, 25 prematerialized packets and matched 12M-token
+  budgets. C0 remained EVC false (2/7); C3 generated a real Torch skill but
+  hit the trusted package-test gate's fixed 60-second timeout before install
+  and remained EVC false (1/7). The tie forced another preregistered futility
+  stop (`p_best=0.0625`) under immutable summary
+  `sha256:ddca458d835ca5fb09d49e644e8727c35563849b8f5061d00dd192e0f57a31d2`.
+  Its exact unchanged packaged tests passed in 29.83 seconds after host load
+  subsided, so the replay is diagnostic evidence of a domain-neutral
+  fixed-timeout confound, not a rescore. A fresh zero-result task is required
+  after the worker derives one explicit package-test allowance from the
+  immutable DevelopmentSession budget and exposes it identically to Codex.
 - [x] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and
