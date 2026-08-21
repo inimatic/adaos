@@ -1711,11 +1711,18 @@ efficacy result or cross-domain SOTA claim.
   best attainable one-sided result was `p=0.0625`, so v37 stopped as
   `incomplete_no_claim`. V38 retained one fresh C0 failure, but its paired C3
   was excluded before model execution by a Windows SDK-snapshot rename denial;
-  core `b6e9ac44` now uses bounded atomic-publication retries. Fresh v39 is
-  frozen at
+  core `b6e9ac44` added bounded atomic-publication retries. V39 was frozen at
   `sha256:bd178f7cc0c5c30e96fcf327d8fe0ed32bdeef8b63647002e7c13d270e4ebcd4`
   on clean detached core `b6e9ac44` and runner ABI 1.17; all 25 packets were
-  materialized before its first arm and its comparison is in progress.
+  materialized before its first arm. Its C0 passed 2/7 checks and remained EVC
+  false; its paired C3 hit a second pre-token SDK-directory rename denial and
+  was excluded, leaving summary
+  `sha256:690ced473f058da7e020806b2e92d2976b7dffad6b7c68752a37041c3e90e841`
+  as `incomplete_no_claim`. Core `787ab9d3` removes the unnecessary atomic
+  directory switch: a task-private SDK tree is materialized in place and its
+  readiness receipt is written last. Fresh v40 is frozen at
+  `sha256:12fea861988b38b52448416aef54171583892b624d1ab94941caeaf1249b34b4`
+  on clean detached core `787ab9d3`; its comparison is in progress.
 - [x] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and

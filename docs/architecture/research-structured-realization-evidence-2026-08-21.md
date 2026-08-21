@@ -216,9 +216,22 @@ ABI 1.17 now executes baseline and intervention production paths and checks
 their exact arm, seed, evidence class, primary observation, artifact identities
 and shared pairing identity before Builder acceptance. Negative end-to-end
 tests reject both a mismatched observation and a mismatched cross-step value.
-The filtered SDK snapshot is also published through the standard retrying
-atomic filesystem primitive after v38 exposed a transient Windows sharing
-violation before model execution (`b6e9ac44`).
+V38 and v39 independently exposed Windows denial of the whole-directory rename
+used to publish a freshly extracted SDK snapshot before model execution. The
+bounded retry in `b6e9ac44` was insufficient because Windows scanners may hold
+an extracted file for an unbounded interval. Core `787ab9d3` removes that
+unnecessary shared-publication boundary: the snapshot is extracted directly
+into its task-private runtime directory and `SDK_SNAPSHOT.json` is written last
+as the readiness receipt. A regression test observes that SDK content exists
+before the receipt, and failures now carry the exact snapshot destination.
+
+Frozen v39 retained a fresh C0 result (2/7, EVC false) but excluded C3 before
+its first token under the preregistered platform-outage rule. Its summary is
+`sha256:690ced473f058da7e020806b2e92d2976b7dffad6b7c68752a37041c3e90e841`.
+Fresh v40 is frozen at
+`sha256:12fea861988b38b52448416aef54171583892b624d1ab94941caeaf1249b34b4`
+on clean detached core `787ab9d3`; it remains in progress and supplies no
+probability claim yet.
 
 ## Conclusion and remaining proof
 

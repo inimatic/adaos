@@ -961,14 +961,30 @@ retained a fresh C0 result (`2/7`, EVC false, operationalization drift), but its
 paired C3 was excluded before model execution when Windows denied the atomic
 rename of the filtered SDK snapshot. Its incomplete summary is
 `sha256:46526f0359d58475e83295b4a979672d430fc57fedd92cfa6bedc9e2ad500404`.
-Core `b6e9ac44` reuses the platform's bounded atomic-publication retry for this
-transient Windows sharing violation. No v38 candidate is reused. Fresh v39,
-digest
+Core `b6e9ac44` first reused the platform's bounded atomic-publication retry for
+this transient Windows sharing violation. No v38 candidate was reused. Frozen
+v39, digest
 `sha256:bd178f7cc0c5c30e96fcf327d8fe0ed32bdeef8b63647002e7c13d270e4ebcd4`,
-binds clean detached core `b6e9ac44`, ResearchManager 0.40.0/runner ABI 1.17,
+bound clean detached core `b6e9ac44`, ResearchManager 0.40.0/runner ABI 1.17,
 the same `gpt-5.5` high-effort profile, matched 8.5M-token budgets, five
-counterbalanced pairs, and 25 packets materialized before execution. Its
-comparison remains in progress and no probability claim is currently allowed.
+counterbalanced pairs, and 25 packets materialized before execution. Its fresh
+C0 used 2,727,849 tokens and passed 2/7 checks; it again drifted from the frozen
+protocol and omitted `dataset_status.split_bindings`. The paired C3 was then
+excluded before its first model token by another SDK-directory rename denial.
+The immutable incomplete summary is
+`sha256:690ced473f058da7e020806b2e92d2976b7dffad6b7c68752a37041c3e90e841`;
+it permits no arm or probability claim.
+
+The repeated outage showed that bounded retry was the wrong abstraction: each
+SDK snapshot already belongs to one private task and has no concurrent reader
+before Codex starts. Core `787ab9d3` therefore extracts directly into that
+task-owned destination and writes `SDK_SNAPSHOT.json` last as its readiness
+receipt. Cleanup can no longer mask a completed snapshot, and any filesystem
+failure now names the failed stage and target. Fresh v40, digest
+`sha256:12fea861988b38b52448416aef54171583892b624d1ab94941caeaf1249b34b4`,
+is frozen on clean detached core `787ab9d3` with the otherwise unchanged
+paired design and packets. Its comparison is in progress; no probability claim
+is currently allowed.
 
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and
