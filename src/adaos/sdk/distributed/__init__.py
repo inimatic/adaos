@@ -321,7 +321,7 @@ def explain_route(dataset_id: str, partition_ids: Iterable[str]) -> dict:
     )
 
 
-OPERATOR_PROJECTION_SCHEMA = "adaos.distributed.operator_projection.v1"
+OPERATOR_PROJECTION_SCHEMA = "adaos.distributed.operator_projection.v2"
 
 
 __all__ = [

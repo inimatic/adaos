@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 from threading import Event, Lock
 from typing import Any, Callable, Mapping
@@ -1405,6 +1406,49 @@ def test_topology_operation_preserves_bounded_machine_adapter_error(
     assert operation.state == "failed"
     failed = next(phase for phase in operation.phases if phase.state == "failed")
     assert failed.error_code == "service_invocation_activation_missing"
+
+
+@pytest.mark.parametrize(
+    ("failure_type", "expected_state"),
+    (
+        (UncertainTopologyPhaseError, "uncertain"),
+        (RetryableTopologyPhaseError, "failed"),
+    ),
+)
+def test_topology_operation_sanitizes_adapter_error_secrets(
+    tmp_path: Path,
+    failure_type: type[Exception],
+    expected_state: str,
+) -> None:
+    class SecretErrorAdapter(FakeTopologyAdapter):
+        def inspect(self, context) -> Mapping[str, Any]:
+            self.calls.append((context.phase, context.attempt, context.idempotency_key))
+            raise failure_type("authorization:private-token")
+
+    runtime, _, _ = _runtime(tmp_path)
+    _derived_topology(runtime)
+    runtime.topology_adapter = SecretErrorAdapter()
+    plan = runtime.plan_replica_change(
+        "media-catalog:root-a",
+        action="repair",
+        source_instance_id="media-agent-node-a",
+        target_instance_id="media-agent-node-b",
+        replica_role="derived",
+        principal=_principal(),
+    )
+
+    operation = runtime.apply_topology_plan(
+        str(plan.plan_digest),
+        idempotency_key=f"repair-secret-{expected_state}",
+        principal=_principal(),
+    )
+
+    assert operation.state == expected_state
+    terminal = next(
+        phase for phase in operation.phases if phase.state in {"failed", "uncertain"}
+    )
+    assert terminal.error_code == "adapter_phase_failed:inspect"
+    assert "private" not in json.dumps(operation.to_dict())
 
 
 class ChunkSource:

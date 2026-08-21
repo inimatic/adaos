@@ -86,6 +86,7 @@ def _adapter_error_code(exc: Exception, phase: str) -> str:
     if (
         candidate
         and len(candidate) <= 160
+        and not any(word in candidate for word in _SECRET_WORDS)
         and all(
             char.isascii() and (char.isalnum() or char in "._:-") for char in candidate
         )
@@ -357,6 +358,7 @@ class TopologyExecutor:
                     finished_at=utc_now(),
                 )
             except UncertainTopologyPhaseError as exc:
+                error_code = _adapter_error_code(exc, phase)
                 result = TopologyPhaseResult(
                     phase=f"{step.step_id}.{phase}",
                     state="uncertain",
@@ -365,7 +367,7 @@ class TopologyExecutor:
                     receipt={},
                     started_at=started_at,
                     finished_at=utc_now(),
-                    error_code=str(exc) or "uncertain_adapter_outcome",
+                    error_code=error_code,
                 )
                 self._append_terminal_phase(operation, result)
                 raise
@@ -373,6 +375,7 @@ class TopologyExecutor:
                 if attempt < max_attempts:
                     self.sleep(min(float(attempt), 5.0))
                     continue
+                error_code = _adapter_error_code(exc, phase)
                 self._append_terminal_phase(
                     operation,
                     TopologyPhaseResult(
@@ -383,10 +386,10 @@ class TopologyExecutor:
                         receipt={},
                         started_at=started_at,
                         finished_at=utc_now(),
-                        error_code=str(exc) or "retry_exhausted",
+                        error_code=error_code,
                     ),
                 )
-                raise TopologyExecutionError(str(exc) or "retry_exhausted") from exc
+                raise TopologyExecutionError(error_code) from exc
             except Exception as exc:
                 error_code = _adapter_error_code(exc, phase)
                 self._append_terminal_phase(

@@ -37,8 +37,10 @@ acceptance evidence.
   digests. The previous desired release and every live membership release must
   be admitted before definition mutation. The old digest is removed only after
   every live instance has converged to the new release.
-- Public SDK and operator projections expose bounded identifiers, states,
-  counts, digests and failure classes. They do not expose credentials, package
+- Public SDK and operator projection v2 expose bounded identifiers, states,
+  counts, digests and failure classes. Subscribed recent-operation rows omit
+  adapter receipts and idempotency payloads; full details remain behind the
+  authorized cursor API. Projections do not expose credentials, package
   authorization records, source bytes or raw node-local media paths.
 - Automatic cross-subnet placement and general multi-writer behavior remain
   deferred. Their threat and conflict models are not inherited from the

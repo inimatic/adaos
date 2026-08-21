@@ -412,6 +412,12 @@ High-cardinality partition details are cursor-backed. High-frequency replica
 metrics use an observability channel and aggregation, not synchronized product
 state.
 
+The subscribed operator projection uses
+`adaos.distributed.operator_projection.v2`. Recent operation rows contain only
+bounded lifecycle fields and phase/error summaries; adapter receipts,
+idempotency keys and payload details remain available only through the
+authorized cursor/detail API and are never copied into the Yjs projection.
+
 ## Media Center Mapping
 
 Media Center is the first representative consumer:
