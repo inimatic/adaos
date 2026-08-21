@@ -16,7 +16,7 @@ import uuid
 from collections import Counter
 from functools import partial
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Iterator, Mapping, Optional
 
 import anyio
 import requests
@@ -56,6 +56,11 @@ from adaos.services.media_core import (
     media_resource_from_path,
     parse_media_range,
     resolve_media_reference,
+)
+from adaos.services.media_delivery_activity import (
+    begin_media_delivery,
+    end_media_delivery,
+    touch_media_delivery,
 )
 from adaos.services.media_indexer_library import (
     resolve_media_indexer_resource,
@@ -6371,6 +6376,21 @@ async def node_yjs_restore(webspace_id: str) -> dict[str, Any]:
     return result
 
 
+def _tracked_media_file_range(
+    resource: MediaResource,
+    *,
+    start: int,
+    end: int,
+) -> Iterator[bytes]:
+    lease_id = begin_media_delivery(media_type=resource.mime_type)
+    try:
+        for chunk in file_range_iter(resource.path, start=start, end=end):
+            touch_media_delivery(lease_id)
+            yield chunk
+    finally:
+        end_media_delivery(lease_id)
+
+
 def _stream_media_resource(resource: MediaResource, request: Request) -> StreamingResponse | Response:
     target = resource.path
     size = int(resource.size_bytes)
@@ -6391,7 +6411,7 @@ def _stream_media_resource(resource: MediaResource, request: Request) -> Streami
         include_content_type=False,
     )
     return StreamingResponse(
-        file_range_iter(target, start=start, end=end),
+        _tracked_media_file_range(resource, start=start, end=end),
         status_code=status_code,
         media_type=resource.mime_type,
         headers=headers,

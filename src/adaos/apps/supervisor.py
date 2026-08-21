@@ -4893,6 +4893,16 @@ class SupervisorManager:
                 "continuity_contract": continuity_contract,
             }
 
+        if role == "hub" and hub_policy == "defer" and bool(update_guard.get("live_session_present")):
+            return {
+                "code": "hub_live_media_defer",
+                "planned_reason": "live_media_guard",
+                "message": f"{operation_label} deferred while hub serves an active media stream",
+                "retry_after_sec": max(_live_media_guard_defer_sec(), _min_update_period_sec()),
+                "live_media_guard": update_guard,
+                "continuity_contract": continuity_contract,
+            }
+
         if role == "hub" and required and hub_policy == "preserve_sidecar" and current_support != "ready":
             return {
                 "code": "hub_sidecar_continuity_pending",

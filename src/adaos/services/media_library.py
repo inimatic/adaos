@@ -413,6 +413,19 @@ def media_runtime_snapshot(items: list[dict[str, Any]] | None = None) -> dict[st
     route_profiles, member_browser_direct = _media_route_profiles(
         webrtc_supported=webrtc_supported,
     )
+    try:
+        from adaos.services.media_delivery_activity import media_delivery_activity_snapshot
+
+        delivery_activity = media_delivery_activity_snapshot()
+    except Exception:
+        delivery_activity = {
+            "schema": "adaos.media.delivery_activity.v1",
+            "active": False,
+            "active_streams": 0,
+            "tracked_streams": 0,
+            "kind_counts": {"audio": 0, "video": 0, "other": 0},
+            "saturated": False,
+        }
     default_route = (
         route_profiles.get("scenario_response_media")
         if isinstance(route_profiles.get("scenario_response_media"), dict)
@@ -505,6 +518,7 @@ def media_runtime_snapshot(items: list[dict[str, Any]] | None = None) -> dict[st
         "attempt": default_route.get("attempt"),
         "monitoring": default_route.get("monitoring"),
         "member_browser_direct": member_browser_direct,
+        "delivery_activity": delivery_activity,
         "counts": {
             "file_total": len(items),
             "total_bytes": total_bytes,
@@ -514,6 +528,7 @@ def media_runtime_snapshot(items: list[dict[str, Any]] | None = None) -> dict[st
             "incoming_video_tracks": int(live_webrtc.get("incoming_video_tracks") or 0),
             "loopback_audio_tracks": int(live_webrtc.get("loopback_audio_tracks") or 0),
             "loopback_video_tracks": int(live_webrtc.get("loopback_video_tracks") or 0),
+            "active_media_deliveries": int(delivery_activity.get("active_streams") or 0),
         },
         "live_webrtc": live_webrtc if isinstance(live_webrtc, dict) else {},
         "storage": {

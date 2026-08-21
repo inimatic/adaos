@@ -78,6 +78,10 @@ This means:
 For the target media-continuity path, this split also enables a more selective policy:
 
 - if a member currently owns an active live media session, that member update should be deferred
+- if the local runtime is actively streaming source bytes over an HTTP/range
+  response or the direct WebRTC media DataChannel, either a hub or member
+  update is deferred until the bounded delivery lease closes or expires; the
+  diagnostic lease reports only counts and media kinds, never source paths
 - a hub runtime restart may still be allowed if the hub-side realtime sidecar can stay alive and continue serving the delegated realtime continuity path
 - supervisor should therefore treat "restart runtime" and "tear down sidecar" as different actions once live media continuity depends on sidecar ownership
 
