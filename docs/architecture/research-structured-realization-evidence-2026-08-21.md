@@ -228,10 +228,28 @@ before the receipt, and failures now carry the exact snapshot destination.
 Frozen v39 retained a fresh C0 result (2/7, EVC false) but excluded C3 before
 its first token under the preregistered platform-outage rule. Its summary is
 `sha256:690ced473f058da7e020806b2e92d2976b7dffad6b7c68752a37041c3e90e841`.
-Fresh v40 is frozen at
-`sha256:12fea861988b38b52448416aef54171583892b624d1ab94941caeaf1249b34b4`
-on clean detached core `787ab9d3`; it remains in progress and supplies no
-probability claim yet.
+Frozen v40 retained a fresh C0 result (2/7, EVC false) under result digest
+`sha256:f3c8e13989b275454a157930f23ee39874551b78f073351af56ccdc4ee2815de`.
+Its C3 worker reached the durable ready handshake before a host power loss.
+After restart, the idempotent Builder start retained the exact candidate,
+DevelopmentSession, task, packet and attempt identities and relaunched only
+the dead worker. The task then failed before its first model token because the
+directory-form source snapshot no longer matched its frozen manifest. The
+attempt is therefore a preregistered platform-outage exclusion, not a C3
+score. The immutable incomplete summary is
+`sha256:04b1acf74b0b0a1f2868b0123faef265ee2d227c7aa1c3d24a939ac786743ce6`.
+
+Core `415c0357` removes mutable directory payloads from new Builder source
+snapshots. It stores one deterministic content-addressed ZIP, verifies both
+the archive digest and every manifest-bound logical tree, rejects unbound
+archive entries, and extracts only safe admitted paths. Legacy directory
+snapshots remain readable. Calibration runner `0.1.17` also reuses an exact
+existing DevelopmentSession and binding without recreating the Project,
+instructions, or source before relaunch. Fresh v41 is frozen at
+`sha256:e994111297c7cdc82e6bacc232d3e37ab64fa933e2d6b0fb6543bc7f357d50bf`
+on clean detached core `415c0357`; all 25 packets existed before execution and
+the counterbalanced order starts with C3. Its comparison is in progress and
+supplies no probability claim yet.
 
 ## Conclusion and remaining proof
 

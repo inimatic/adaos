@@ -1720,9 +1720,21 @@ efficacy result or cross-domain SOTA claim.
   `sha256:690ced473f058da7e020806b2e92d2976b7dffad6b7c68752a37041c3e90e841`
   as `incomplete_no_claim`. Core `787ab9d3` removes the unnecessary atomic
   directory switch: a task-private SDK tree is materialized in place and its
-  readiness receipt is written last. Fresh v40 is frozen at
+  readiness receipt is written last. Frozen v40 at
   `sha256:12fea861988b38b52448416aef54171583892b624d1ab94941caeaf1249b34b4`
-  on clean detached core `787ab9d3`; its comparison is in progress.
+  retained a fresh C0 failure (2/7, EVC false). Its C3 durable worker survived
+  to the ready boundary before a power loss; exact-id restart retained the
+  task/packet/attempt but then rejected a mismatched directory-form source
+  snapshot before the first token. The outage was excluded and incomplete
+  summary
+  `sha256:04b1acf74b0b0a1f2868b0123faef265ee2d227c7aa1c3d24a939ac786743ce6`
+  permits no comparison claim. Core `415c0357` replaces new mutable directory
+  payloads with a manifest-bound content-addressed ZIP, and calibration runner
+  `0.1.17` resumes an exact existing DevelopmentSession without repeating
+  Project/session/source materialization. Fresh v41 is frozen at
+  `sha256:e994111297c7cdc82e6bacc232d3e37ab64fa933e2d6b0fb6543bc7f357d50bf`
+  on clean detached core `415c0357` and workspace `0e51b65f`; all 25 packets
+  were materialized first and the counterbalanced execution starts with C3.
 - [x] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and

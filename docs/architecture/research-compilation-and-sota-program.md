@@ -980,11 +980,29 @@ SDK snapshot already belongs to one private task and has no concurrent reader
 before Codex starts. Core `787ab9d3` therefore extracts directly into that
 task-owned destination and writes `SDK_SNAPSHOT.json` last as its readiness
 receipt. Cleanup can no longer mask a completed snapshot, and any filesystem
-failure now names the failed stage and target. Fresh v40, digest
+failure now names the failed stage and target. Frozen v40, digest
 `sha256:12fea861988b38b52448416aef54171583892b624d1ab94941caeaf1249b34b4`,
-is frozen on clean detached core `787ab9d3` with the otherwise unchanged
-paired design and packets. Its comparison is in progress; no probability claim
-is currently allowed.
+ran on clean detached core `787ab9d3`. C0 used 3,794,102 model tokens, passed
+2/7 checks and remained EVC false. A host power loss then interrupted C3 after
+its durable worker-ready receipt but before candidate execution. Exact-id
+recovery kept its task and packet unchanged, but the old directory-form source
+snapshot failed its manifest check before the first model token. C3 was
+excluded under the frozen platform-outage rule; incomplete summary
+`sha256:04b1acf74b0b0a1f2868b0123faef265ee2d227c7aa1c3d24a939ac786743ce6`
+permits no comparison claim.
+
+Core `415c0357` now makes new source-snapshot payloads single-file,
+content-addressed ZIP archives. Verification binds the archive digest, every
+logical source/attachment tree and the complete entry set; materialization
+rejects unsafe or unbound paths while the legacy directory reader remains
+compatible. Calibration runner `0.1.17` treats an existing exact
+DevelopmentSession as the recovery authority and does not rematerialize its
+Project, instructions, or binding. Fresh v41, digest
+`sha256:e994111297c7cdc82e6bacc232d3e37ab64fa933e2d6b0fb6543bc7f357d50bf`,
+binds clean detached core `415c0357`, workspace `0e51b65f`, the unchanged
+matched budgets and five pairs. All 25 packets were materialized before the
+first arm, and counterbalancing starts with C3. The run is in progress; no
+probability claim is currently allowed.
 
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and
