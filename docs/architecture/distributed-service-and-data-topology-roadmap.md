@@ -248,6 +248,16 @@ an explicit verified follower and fenced handoff, but zero-downtime rolling
 activation/topology ordering is not yet proven. `DS5-05` remains open for the
 long browser/playback/resource soak and final operator review.
 
+Local DS5-04 implementation checkpoint: `ServiceDefinition` v2 adds a bounded
+exact-release overlap while retaining v1 read compatibility. Group admission
+requires the previous desired release and every live membership release to
+remain accepted, and membership rollover now gives topology-only generation
+changes a collision-resistant lease identity. Contract, membership, runtime,
+adapter and Project deployment suites pass locally. The checkbox remains open
+until the sequence is exercised through a normal batch-one Project rollout on
+two physical nodes, with one ready old-release route retained while each new
+activation registers and with the old digest removed only after convergence.
+
 ## Evidence Policy
 
 - Every implementation checkbox links exact core/client/consumer revisions and

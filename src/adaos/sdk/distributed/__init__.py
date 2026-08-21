@@ -231,6 +231,16 @@ def get_plan(plan_digest: str) -> TopologyPlan:
     )
 
 
+def get_service_definition(definition_id: str, version: str) -> ServiceDefinition:
+    """Read one immutable versioned service definition through the public SDK."""
+
+    return get_distributed_runtime().get_service_definition(
+        definition_id,
+        version,
+        principal=_principal(("distributed.topology.inspect",)),
+    )
+
+
 def get_operation(operation_id: str) -> TopologyOperation:
     """Read one durable topology operation by its stable identifier."""
 
@@ -344,6 +354,7 @@ __all__ = [
     "drain",
     "explain_route",
     "get_plan",
+    "get_service_definition",
     "get_operation",
     "handoff_authority",
     "inspect",

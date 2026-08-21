@@ -6,7 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from adaos.services.distributed_runtime import membership_supervisor as membership_module
+from adaos.services.distributed_runtime import (
+    membership_supervisor as membership_module,
+)
 from adaos.services.distributed_runtime.membership_supervisor import (
     DistributedServiceMembershipSupervisor,
     ServiceMembershipSpec,
@@ -54,7 +56,13 @@ class _Store:
 
     def get_definition(self, definition_id: str, version: str):
         assert (definition_id, version) == ("media-library-agent", "1")
-        return SimpleNamespace(release_digest="sha256:" + "a" * 64, protocol_version="1")
+        release_digest = "sha256:" + "a" * 64
+        return SimpleNamespace(
+            release_digest=release_digest,
+            compatible_release_digests=(),
+            protocol_version="1",
+            accepts_release=lambda candidate: candidate == release_digest,
+        )
 
     def get_instance(self, instance_id: str):
         if self.instance is None or self.instance.instance_id != instance_id:
@@ -121,9 +129,13 @@ class _Runtime:
         self.expire_calls = 0
         self.authority_renew_calls = 0
 
-    def register_instance(self, instance, *, expected_revision, lease_seconds, principal):
+    def register_instance(
+        self, instance, *, expected_revision, lease_seconds, principal
+    ):
         self.register_calls += 1
-        assert expected_revision == (self.store.instance.revision if self.store.instance else 0)
+        assert expected_revision == (
+            self.store.instance.revision if self.store.instance else 0
+        )
         assert lease_seconds == 600
         principal.require("distributed.service.register")
         now = datetime.now(timezone.utc)
@@ -182,7 +194,9 @@ class _Runtime:
         return ("authority-lease",)
 
 
-def test_membership_supervisor_registers_and_renews_exact_activation(monkeypatch) -> None:
+def test_membership_supervisor_registers_and_renews_exact_activation(
+    monkeypatch,
+) -> None:
     runtime = _Runtime()
     monkeypatch.setattr(membership_module, "get_distributed_runtime", lambda: runtime)
     supervisor = DistributedServiceMembershipSupervisor(
@@ -271,7 +285,9 @@ def test_membership_supervisor_rolls_activation_under_stable_instance_identity(
     assert runtime.authority_renew_calls == 2
 
 
-def test_membership_supervisor_reconciles_expired_leases_periodically(monkeypatch) -> None:
+def test_membership_supervisor_reconciles_expired_leases_periodically(
+    monkeypatch,
+) -> None:
     runtime = _Runtime()
     monkeypatch.setattr(membership_module, "get_distributed_runtime", lambda: runtime)
     supervisor = DistributedServiceMembershipSupervisor(
@@ -283,7 +299,9 @@ def test_membership_supervisor_reconciles_expired_leases_periodically(monkeypatc
     assert runtime.expire_calls == 1
 
 
-def test_member_reports_membership_without_mutating_a_local_authority(monkeypatch) -> None:
+def test_member_reports_membership_without_mutating_a_local_authority(
+    monkeypatch,
+) -> None:
     published = []
 
     class _Bus:
@@ -293,7 +311,9 @@ def test_member_reports_membership_without_mutating_a_local_authority(monkeypatc
     monkeypatch.setattr(
         membership_module,
         "get_distributed_runtime",
-        lambda: (_ for _ in ()).throw(AssertionError("member must not open authority runtime")),
+        lambda: (_ for _ in ()).throw(
+            AssertionError("member must not open authority runtime")
+        ),
     )
     supervisor = DistributedServiceMembershipSupervisor(
         SimpleNamespace(
@@ -316,7 +336,9 @@ def test_member_reports_membership_without_mutating_a_local_authority(monkeypatc
     assert published[0].payload["membership"]["group_id"] == "media-library-home"
 
 
-def test_authority_ingests_member_report_with_transport_node_identity(monkeypatch) -> None:
+def test_authority_ingests_member_report_with_transport_node_identity(
+    monkeypatch,
+) -> None:
     runtime = _Runtime()
     monkeypatch.setattr(membership_module, "get_distributed_runtime", lambda: runtime)
     DistributedServiceMembershipSupervisor(

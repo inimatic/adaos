@@ -31,7 +31,7 @@ _NOW = "2026-08-19T18:00:00+00:00"
 _LATER = "2026-08-19T18:05:00+00:00"
 _LATEST = "2026-08-19T18:10:00+00:00"
 _SCHEMAS = (
-    "distributed.service-definition.v1.schema.json",
+    "distributed.service-definition.v2.schema.json",
     "distributed.service-group.v1.schema.json",
     "distributed.service-instance.v1.schema.json",
     "distributed.topology-lease.v1.schema.json",
@@ -266,6 +266,35 @@ def test_distributed_contracts_round_trip_and_validate_json_schemas() -> None:
             _schema(schema_name), format_checker=jsonschema.FormatChecker()
         ).validate(payload)
         assert record_type.from_mapping(payload) == record
+
+
+def test_service_definition_v1_remains_readable_during_rolling_upgrade() -> None:
+    current = _definition()
+    legacy = current.to_dict()
+    legacy["schema"] = "adaos.distributed.service_definition.v1"
+    legacy.pop("compatible_release_digests")
+
+    jsonschema.Draft202012Validator(
+        _schema("distributed.service-definition.v1.schema.json"),
+        format_checker=jsonschema.FormatChecker(),
+    ).validate(legacy)
+
+    restored = ServiceDefinition.from_mapping(legacy)
+    assert restored == current
+    assert restored.to_dict()["schema"] == "adaos.distributed.service_definition.v2"
+
+
+def test_service_definition_bounds_exact_release_overlap() -> None:
+    with pytest.raises(
+        DistributedContractError,
+        match="compatible_release_digests exceeds 8 items",
+    ):
+        replace(
+            _definition(),
+            compatible_release_digests=tuple(
+                f"sha256:{index:064x}" for index in range(1, 10)
+            ),
+        )
 
 
 def test_unknown_fields_fail_closed() -> None:
