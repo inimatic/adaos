@@ -296,10 +296,27 @@ def _run_execution_spec(
     if returned_env:
         if not isinstance(returned_env, Mapping):
             raise ContractSequenceError("execution_spec environment must be an object")
+        returned_names = [str(key) for key in returned_env]
+        protected_names = sorted({name for name in returned_names if name in _PROTECTED_ENV})
+        if protected_names:
+            quoted = ", ".join(repr(name) for name in protected_names)
+            raise ContractSequenceError(
+                f"execution_spec may not override protected environment keys: {quoted}"
+            )
+        invalid_names = sorted(
+            {
+                name
+                for name in returned_names
+                if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+            }
+        )
+        if invalid_names:
+            quoted = ", ".join(repr(name) for name in invalid_names)
+            raise ContractSequenceError(
+                f"execution_spec contains invalid environment names: {quoted}"
+            )
         for key, value in returned_env.items():
             name = str(key)
-            if name in _PROTECTED_ENV or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
-                raise ContractSequenceError(f"execution_spec may not override protected environment {name!r}")
             if not isinstance(value, str):
                 raise ContractSequenceError(f"execution_spec environment {name!r} must be a string")
             environment[name] = value

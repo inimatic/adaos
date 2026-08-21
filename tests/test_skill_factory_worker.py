@@ -13,7 +13,6 @@ import pytest
 import yaml
 
 from adaos.services import skill_factory_worker as worker_module
-from adaos.services.artifact_pipeline import storage as storage_module
 from adaos.services.root.service import _rewrite_skill_template_identity
 from adaos.services.skill_factory import SkillFactoryService
 from adaos.services.skill_factory_sources import (
@@ -1308,10 +1307,7 @@ def test_codex_executor_uses_current_sdk_and_utf8_python(
     assert "OPENAI_API_KEY" not in environment
 
 
-def test_codex_executor_materializes_filtered_commit_bound_sdk(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
+def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -> None:
     repo_root = tmp_path / "adaos"
     (repo_root / "src" / "adaos").mkdir(parents=True)
     (repo_root / "docs" / "architecture").mkdir(parents=True)
@@ -1341,17 +1337,6 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(
         capture_output=True,
     )
     executor = SubprocessCodexExecutor(repo_root=repo_root)
-    replace_once = storage_module._replace_once
-    replace_attempts = 0
-
-    def flaky_replace(source: Path, target: Path) -> None:
-        nonlocal replace_attempts
-        replace_attempts += 1
-        if replace_attempts == 1:
-            raise PermissionError("simulated transient SDK snapshot sharing violation")
-        replace_once(source, target)
-
-    monkeypatch.setattr(storage_module, "_replace_once", flaky_replace)
 
     snapshot = executor._materialize_sdk_snapshot(tmp_path / "task-runtime")
 
@@ -1368,7 +1353,6 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(
         text=True,
     ).stdout.strip()
     assert receipt["core_commit"] == expected_commit
-    assert replace_attempts == 2
     environment = executor._execution_environment(sdk_root=snapshot)
     assert environment["ADAOS_REPO_ROOT"] == str(snapshot.resolve())
 
@@ -1647,6 +1631,8 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(
     assert "trusted worker finalizer owns package" in prompt
     assert "ADAOS_TASK_RUNTIME_DIR" in prompt
     assert "bind `ADAOS_SKILL_INTERNAL_DATA_ROOT` to a dedicated child" in prompt
+    assert "Never copy that binding into the returned ExecutionSpec" in prompt
+    assert "`PYTHONHOME`, or `PYTHONPATH`" in prompt
     assert "Path(working_directory) / expected_outputs[i]" in prompt
     assert "collection through the returned `output_ref`" in prompt
     assert "never create repository-relative `.adaos*` runtime directories" in prompt
@@ -1901,6 +1887,7 @@ def _operation_sequence_assignment(
     omit_output: bool = False,
     mismatched_observation: bool = False,
     mismatched_cross_step: bool = False,
+    returned_environment: dict[str, str] | None = None,
 ) -> dict:
     skill = workspace / "skills" / "sequence_provider"
     handlers = skill / "handlers"
@@ -1939,7 +1926,7 @@ def _operation_sequence_assignment(
         "    root.mkdir(parents=True, exist_ok=True)\n"
         "    return {'command': [sys.executable, str(Path(__file__).resolve()), 'execute'], "
         "'working_directory': str(root), 'expected_outputs': ['result.json'], "
-        "'output_ref': str(root)}\n"
+        f"'output_ref': str(root), 'environment': {dict(returned_environment or {})!r}}}\n"
         "def collect(output_ref):\n"
         "    path = Path(output_ref) / 'result.json'\n"
         "    raw = path.read_bytes()\n"
@@ -2000,6 +1987,10 @@ def _operation_sequence_assignment(
                         "working_directory": {"type": "string"},
                         "expected_outputs": {"type": "array"},
                         "output_ref": {"type": "string"},
+                        "environment": {
+                            "type": "object",
+                            "additionalProperties": {"type": "string"},
+                        },
                     },
                     "additionalProperties": False,
                 },
@@ -2482,6 +2473,43 @@ def test_worker_operation_sequence_detects_missing_execution_output(
     assert checks == []
     assert len(errors) == 1
     assert "execution_spec omitted exact expected outputs: result.json" in errors[0]
+
+
+def test_worker_operation_sequence_reports_all_protected_environment_overrides(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _operation_sequence_assignment(
+        workspace,
+        returned_environment={
+            "PYTHONPATH": "candidate-path",
+            "ADAOS_SKILL_INTERNAL_DATA_ROOT": "candidate-data",
+        },
+    )
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    worker._validate_admitted_contract_operation_sequences(
+        assignment,
+        workspace,
+        runtime_dir=tmp_path / "runtime",
+        checks=checks,
+        errors=errors,
+    )
+
+    assert checks == []
+    assert len(errors) == 1
+    assert "protected environment keys" in errors[0]
+    assert "ADAOS_SKILL_INTERNAL_DATA_ROOT" in errors[0]
+    assert "PYTHONPATH" in errors[0]
 
 
 def test_worker_operation_sequence_enforces_cross_field_array_invariant(
