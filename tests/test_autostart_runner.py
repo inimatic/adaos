@@ -484,11 +484,6 @@ def test_launch_active_slot_rolls_back_on_failed_validation(monkeypatch) -> None
         lambda *args, **kwargs: {"ok": True, "slot": "B", "stdout": "cli_import_ok"},
     )
     monkeypatch.setattr(autostart_runner, "rollback_to_previous_slot", lambda: "A")
-    monkeypatch.setattr(
-        autostart_runner,
-        "rollback_installed_skill_runtimes",
-        lambda: {"ok": True, "total": 1, "failed_total": 0, "rollback_total": 1, "skills": [{"skill": "weather_skill", "ok": True}]},
-    )
     captured: list[dict] = []
     clear_calls: list[str] = []
     monkeypatch.setattr(autostart_runner, "clear_plan", lambda: clear_calls.append("clear"))
@@ -507,7 +502,7 @@ def test_launch_active_slot_rolls_back_on_failed_validation(monkeypatch) -> None
     assert captured[-1]["phase"] == "validate"
     assert captured[-1]["restored_slot"] == "A"
     assert captured[-1]["rollback"]["ok"] is True
-    assert captured[-1]["skill_runtime_rollback"]["rollback_total"] == 1
+    assert "skill_runtime_rollback" not in captured[-1]
 
 
 def test_autostart_runner_preserves_plan_during_successful_apply_until_validation(monkeypatch, tmp_path: Path) -> None:
@@ -1090,7 +1085,6 @@ def test_launch_active_slot_fails_when_cli_smoke_check_fails(monkeypatch) -> Non
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("missing module")),
     )
     monkeypatch.setattr(autostart_runner, "rollback_to_previous_slot", lambda: "A")
-    monkeypatch.setattr(autostart_runner, "rollback_installed_skill_runtimes", lambda: {"ok": True, "rollback_total": 0, "failed_total": 0, "skills": []})
     monkeypatch.setattr(autostart_runner, "clear_plan", lambda: None)
     monkeypatch.setattr(autostart_runner, "write_status", lambda payload: captured.append(dict(payload)))
 

@@ -29,7 +29,6 @@ class UpdateReconciliationOperations:
     reconcile_failed_target_mismatch_after_active_switch: Any
     recover_active_attempt_target_already_active: Any
     revoke_prepare_lease: Any
-    rollback_installed_skill_runtimes: Any
     rollback_to_previous_slot: Any
     runtime_ready_for_boot_status_finalize: Any
     status_updated_at: Any
@@ -186,7 +185,25 @@ class UpdateReconciliationService:
                     reason="active slot target mismatch",
                 )
                 return payload
-            payload["attempt"] = operations.complete_update_attempt(state="completed", status=status, reason="terminal core update status")
+            payload["attempt"] = operations.complete_update_attempt(
+                state="completed", status=status, reason="terminal core update status"
+            )
+            return payload
+
+        status_state = str(status.get("state") or "").strip().lower()
+        status_phase = str(status.get("phase") or "").strip().lower()
+        if status_state == "countdown" and status_phase == "countdown":
+            # Countdown is a durable schedule, not an in-flight runtime mutation.
+            # After a supervisor pause/restart the monitor resumes it from
+            # scheduled_for; timing it out here races that recovery and can roll
+            # back skill runtimes before the core slot was ever switched.
+            payload["reconciliation"] = {
+                "deferred": True,
+                "retryable": True,
+                "reason": "durable_countdown_resumable",
+                "worker_running": bool(runtime.get("update_task_running")),
+            }
+            payload["_served_by"] = "supervisor_countdown_resume_pending"
             return payload
 
         if not operations.update_transition_timed_out(
@@ -230,7 +247,6 @@ class UpdateReconciliationService:
         if action == "update":
             target_slot = str(status.get("target_slot") or attempt.get("target_slot") or "").strip().upper()
             restored = operations.rollback_to_previous_slot()
-            skill_runtime_rollback = operations.rollback_installed_skill_runtimes() if restored else {}
             if restored:
                 failed_payload["restored_slot"] = restored
                 failed_payload["rollback"] = {"ok": True, "slot": restored}
@@ -246,10 +262,6 @@ class UpdateReconciliationService:
                     "slot": target_slot,
                     "reason": "runtime_stop_not_confirmed",
                 }
-            if skill_runtime_rollback:
-                failed_payload["skill_runtime_rollback"] = skill_runtime_rollback
-                if restored and not bool(skill_runtime_rollback.get("ok")):
-                    failed_payload["message"] += " | some skill runtime rollbacks failed"
         if not operations.transition_snapshot_current(status=status, attempt=attempt):
             payload["status"] = operations.read_core_update_status()
             payload["attempt"] = operations.read_update_attempt() or payload["attempt"]
@@ -258,7 +270,6 @@ class UpdateReconciliationService:
                 "retryable": False,
                 "reason": "transition_advanced_during_timeout_recovery",
                 "rollback": failed_payload.get("rollback"),
-                "skill_runtime_rollback": failed_payload.get("skill_runtime_rollback"),
             }
             payload["_served_by"] = "supervisor_stale_timeout_write_suppressed"
             return payload

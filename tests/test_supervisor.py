@@ -23,11 +23,6 @@ def test_reconcile_update_status_marks_stale_attempt_failed(monkeypatch, tmp_pat
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "60")
     monkeypatch.setattr(supervisor, "rollback_to_previous_slot", lambda: "A")
-    monkeypatch.setattr(
-        supervisor,
-        "rollback_installed_skill_runtimes",
-        lambda: {"ok": True, "total": 1, "failed_total": 0, "rollback_total": 1, "skills": []},
-    )
 
     monkeypatch.setattr(supervisor.time, "time", lambda: 120.0)
     write_status(
@@ -65,7 +60,7 @@ def test_reconcile_update_status_marks_stale_attempt_failed(monkeypatch, tmp_pat
     assert payload["status"]["phase"] == "shutdown"
     assert payload["status"]["restored_slot"] == "A"
     assert payload["status"]["rollback"]["ok"] is True
-    assert payload["status"]["skill_runtime_rollback"]["rollback_total"] == 1
+    assert "skill_runtime_rollback" not in payload["status"]
     assert payload["_served_by"] == "supervisor_timeout_recovery"
     assert read_plan() is None
     attempt = supervisor._read_update_attempt()
@@ -76,7 +71,64 @@ def test_reconcile_update_status_marks_stale_attempt_failed(monkeypatch, tmp_pat
     assert attempt["last_status"]["state"] == "failed"
 
 
-def test_timeout_reconciliation_cannot_overwrite_advanced_transition(monkeypatch, tmp_path) -> None:
+def test_reconcile_update_status_preserves_resumable_countdown(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "60")
+    monkeypatch.setattr(supervisor.time, "time", lambda: 240.0)
+
+    def _unexpected_rollback() -> str:
+        raise AssertionError("countdown has not switched the active core slot")
+
+    monkeypatch.setattr(supervisor, "rollback_to_previous_slot", _unexpected_rollback)
+    write_status(
+        {
+            "state": "countdown",
+            "phase": "countdown",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "target-build",
+            "target_slot": "B",
+            "scheduled_for": 60.0,
+            "updated_at": 10.0,
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "active",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "target-build",
+            "transitioned_at": 60.0,
+            "updated_at": 10.0,
+        }
+    )
+
+    payload = supervisor._reconcile_update_status(
+        {
+            "ok": True,
+            "status": read_status(),
+            "runtime": {"update_task_running": False},
+            "_served_by": "supervisor_monitor",
+        }
+    )
+
+    assert payload["status"]["state"] == "countdown"
+    assert payload["attempt"]["state"] == "active"
+    assert payload["reconciliation"] == {
+        "deferred": True,
+        "retryable": True,
+        "reason": "durable_countdown_resumable",
+        "worker_running": False,
+    }
+    assert payload["_served_by"] == "supervisor_countdown_resume_pending"
+    assert read_plan() is None
+
+
+def test_timeout_reconciliation_cannot_overwrite_advanced_transition(
+    monkeypatch, tmp_path
+) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "60")
     monkeypatch.setattr(supervisor.time, "time", lambda: 240.0)
@@ -113,7 +165,6 @@ def test_timeout_reconciliation_cannot_overwrite_advanced_transition(monkeypatch
         return "B"
 
     monkeypatch.setattr(supervisor, "rollback_to_previous_slot", _advance_during_rollback)
-    monkeypatch.setattr(supervisor, "rollback_installed_skill_runtimes", lambda: {})
 
     payload = supervisor._reconcile_update_status(
         {"ok": True, "status": read_status(), "_served_by": "supervisor_fallback"}
@@ -151,7 +202,6 @@ def test_timeout_rollback_defers_slot_cleanup_until_runtime_stop_is_confirmed(mo
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "60")
     monkeypatch.setattr(supervisor, "rollback_to_previous_slot", lambda: "A")
-    monkeypatch.setattr(supervisor, "rollback_installed_skill_runtimes", lambda: {})
     monkeypatch.setattr(
         supervisor,
         "remove_inactive_slot",
@@ -4735,6 +4785,69 @@ def test_supervisor_monitor_resumes_due_planned_transition(monkeypatch, tmp_path
 
     assert calls
     assert calls[0]["request"]["target_rev"] == "rev2026"
+
+
+def test_supervisor_monitor_resumes_stale_durable_countdown(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "60")
+    monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
+    write_status(
+        {
+            "state": "countdown",
+            "phase": "countdown",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "target-build",
+            "reason": "test.resume_countdown",
+            "countdown_sec": 30.0,
+            "scheduled_for": 100.0,
+            "updated_at": 50.0,
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "active",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "target-build",
+            "reason": "test.resume_countdown",
+            "countdown_sec": 30.0,
+            "scheduled_for": 100.0,
+            "transitioned_at": 100.0,
+            "updated_at": 50.0,
+        }
+    )
+    manager = supervisor.SupervisorManager(
+        runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token"
+    )
+    calls: list[dict] = []
+
+    def _capture(request: dict, *, countdown_sec: float | None = None) -> dict:
+        calls.append({"request": dict(request), "countdown_sec": countdown_sec})
+        return {"ok": True, "accepted": True}
+
+    monkeypatch.setattr(manager, "_begin_countdown_transition", _capture)
+
+    asyncio.run(manager._maybe_resume_or_continue_transition())
+
+    assert calls == [
+        {
+            "request": {
+                "action": "update",
+                "target_rev": "rev2026",
+                "target_version": "target-build",
+                "reason": "test.resume_countdown",
+                "countdown_sec": 30.0,
+                "drain_timeout_sec": 10.0,
+                "signal_delay_sec": 0.25,
+                "requested_at": 500.0,
+            },
+            "countdown_sec": 0.0,
+        }
+    ]
+    assert read_status()["state"] == "countdown"
 
 
 def test_supervisor_monitor_waits_for_recovered_channel_after_failed_cutover(monkeypatch, tmp_path) -> None:

@@ -537,16 +537,24 @@ Target flow:
 11. on slot-validation success, supervisor commits the transition result
 12. if bootstrap-managed files changed, supervisor records `root_promotion_required` and promotes root from the same validated candidate
 13. on autostart-managed deployments, supervisor requests autostart-service restart so the root-based supervisor/bootstrap code actually switches over
-14. on failure or deadline expiry, supervisor rolls back the slot and records failure
+14. on failure after slot activation or skill migration commit, supervisor
+    rolls back only the state that was actually committed and records failure;
+    a pre-cutover failure keeps the active slot and skill runtimes unchanged
 
 Important invariants:
 
 - the attempt record is not cleared before validation succeeds
 - `restarting` and `applying` are bounded by deadlines
+- `countdown` is a durable schedule, not an in-flight mutation deadline;
+  interrupted supervisor boot resumes it from `scheduled_for` before any
+  cutover, and generic stale-transition reconciliation cannot roll it back
 - interrupted supervisor boot resumes or resolves the last incomplete attempt
 - if a new update signal arrives during an active transition, supervisor records exactly one deferred `subsequent_transition` and executes it once after the current transition reaches a terminal state
 - minimum update interval gating schedules a future update window instead of rejecting the request outright
 - installed skills do not silently inherit old runtime dependencies after core migration
+- installed-skill rollback is allowed only when the update attempt proves that
+  skill migration was committed; countdown and pre-cutover failures never roll
+  back independently managed skill slots
 - root/bootstrap promotion never happens before the candidate already passed slot validation
 - root promotion must preserve any already-queued subsequent transition metadata so a self-update handoff does not lose the next requested transition
 - prepared slot contents must not inherit another slot's git remotes or become the authority for future updates

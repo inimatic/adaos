@@ -81,7 +81,6 @@ from adaos.services.core_update import read_last_result as read_core_update_last
 from adaos.services.core_update import read_plan as read_core_update_plan
 from adaos.services.core_update import read_status as read_core_update_status
 from adaos.services.core_update import resolved_root_promotion_requirement
-from adaos.services.core_update import rollback_installed_skill_runtimes
 from adaos.services.core_update import write_plan as write_core_update_plan
 from adaos.services.core_update import write_status as write_core_update_status
 from adaos.services.core_update_policy import (
@@ -184,7 +183,6 @@ def _update_reconciliation_operations() -> UpdateReconciliationOperations:
         ),
         recover_active_attempt_target_already_active=_recover_active_attempt_target_already_active,
         revoke_prepare_lease=_revoke_prepare_lease,
-        rollback_installed_skill_runtimes=rollback_installed_skill_runtimes,
         rollback_to_previous_slot=rollback_to_previous_slot,
         runtime_ready_for_boot_status_finalize=_runtime_ready_for_boot_status_finalize,
         status_updated_at=_status_updated_at,

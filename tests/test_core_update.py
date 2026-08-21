@@ -20,7 +20,6 @@ from adaos.services.core_update import (
     read_last_result,
     read_plan,
     read_status,
-    rollback_installed_skill_runtimes,
     write_plan,
     write_status,
 )
@@ -403,14 +402,10 @@ def test_execute_pending_update_rolls_back(monkeypatch, tmp_path) -> None:
     write_slot_manifest("B", {"argv": ["python", "-m", "adaos.apps.autostart_runner"]})
     activate_slot("A")
     activate_slot("B")
-    monkeypatch.setattr(
-        "adaos.services.core_update.rollback_installed_skill_runtimes",
-        lambda: {"ok": True, "total": 2, "failed_total": 0, "rollback_total": 2, "skills": []},
-    )
     result = execute_pending_update({"action": "rollback"})
     assert result["state"] == "rolled_back"
     assert active_slot() == "A"
-    assert result["skill_runtime_rollback"]["rollback_total"] == 2
+    assert "skill_runtime_rollback" not in result
 
 
 def test_execute_pending_update_inherits_target_rev_from_active_slot(monkeypatch, tmp_path) -> None:
@@ -485,45 +480,6 @@ def test_prepare_pending_update_defers_skill_runtime_migration(monkeypatch, tmp_
     assert result["target_slot"] == "B"
     assert captured["slot"] == "B"
     assert captured["migrate_skill_runtimes"] is False
-
-
-def test_rollback_installed_skill_runtimes_marks_expected_skips(monkeypatch) -> None:
-    class _Row:
-        def __init__(self, name: str, installed: bool = True) -> None:
-            self.name = name
-            self.installed = installed
-
-    class _Registry:
-        def __init__(self, _sql) -> None:
-            pass
-
-        def list(self):
-            return [_Row("weather_skill"), _Row("voice_skill"), _Row("draft_skill", installed=False)]
-
-    class _Manager:
-        def rollback_runtime(self, name: str) -> str:
-            if name == "weather_skill":
-                return "A"
-            raise RuntimeError("no previous slot recorded for rollback")
-
-    class _Ctx:
-        sql = object()
-        skills_repo = object()
-        git = object()
-        paths = object()
-        bus = None
-        caps = object()
-
-    monkeypatch.setattr("adaos.services.core_update.get_ctx", lambda: _Ctx())
-    monkeypatch.setattr("adaos.adapters.db.SqliteSkillRegistry", _Registry)
-    monkeypatch.setattr("adaos.services.skill.manager.SkillManager", lambda **kwargs: _Manager())
-
-    payload = rollback_installed_skill_runtimes()
-
-    assert payload["ok"] is True
-    assert payload["rollback_total"] == 1
-    assert payload["skipped_total"] == 1
-    assert payload["failed_total"] == 0
 
 
 def test_finalize_runtime_boot_status_marks_root_promotion_pending(monkeypatch, tmp_path) -> None:

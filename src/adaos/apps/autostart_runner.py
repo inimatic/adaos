@@ -37,7 +37,6 @@ from adaos.services.core_update import (
     read_plan,
     read_status,
     resolved_root_promotion_requirement,
-    rollback_installed_skill_runtimes,
     write_status,
 )
 from adaos.services.core_slots import (
@@ -1188,7 +1187,6 @@ def _launch_active_slot_if_needed(args: argparse.Namespace, *, host: str, port: 
         validation_stdout = _tail_text(stdout_path)
         validation_stderr = _tail_text(stderr_path)
         restored = rollback_to_previous_slot()
-        skill_runtime_rollback = rollback_installed_skill_runtimes() if restored else {}
         payload: dict[str, Any] = {
             "state": "failed",
             "phase": "validate",
@@ -1209,10 +1207,6 @@ def _launch_active_slot_if_needed(args: argparse.Namespace, *, host: str, port: 
         }
         if restored:
             payload["rollback"] = {"ok": True, "slot": restored}
-        if skill_runtime_rollback:
-            payload["skill_runtime_rollback"] = skill_runtime_rollback
-            if not bool(skill_runtime_rollback.get("ok")):
-                payload["message"] += " | some skill runtime rollbacks failed"
         write_status(payload)
         clear_plan()
         raise SystemExit(1)
@@ -1281,7 +1275,6 @@ def main() -> None:
                 except Exception as exc:
                     clear_plan()
                     restored = rollback_to_previous_slot()
-                    skill_runtime_rollback = rollback_installed_skill_runtimes() if restored else {}
                     payload: dict[str, Any] = {
                         "state": "failed",
                         "phase": "apply",
@@ -1300,10 +1293,6 @@ def main() -> None:
                     }
                     if restored:
                         payload["rollback"] = {"ok": True, "slot": restored}
-                    if skill_runtime_rollback:
-                        payload["skill_runtime_rollback"] = skill_runtime_rollback
-                        if not bool(skill_runtime_rollback.get("ok")):
-                            payload["message"] += " | some skill runtime rollbacks failed"
                     write_status(payload)
                     raise SystemExit(1) from exc
                 prepared_restart_boot = True
