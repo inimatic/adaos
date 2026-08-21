@@ -48,6 +48,22 @@ def test_windows_self_restart_requires_managed_restartable_wrapper(monkeypatch) 
     assert SupervisorRuntimeConfig.autostart_self_restart_supported() is True
 
 
+def test_supervisor_update_timeouts_allow_slow_deployment_environments(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", raising=False)
+    monkeypatch.delenv("ADAOS_SUPERVISOR_PREPARE_TIMEOUT_SEC", raising=False)
+    config = SupervisorRuntimeConfig()
+
+    assert config.update_attempt_timeout_sec() == 900.0
+    assert config.update_prepare_timeout_sec() == 900.0
+
+    monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "1200")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_PREPARE_TIMEOUT_SEC", "600")
+    assert config.update_attempt_timeout_sec() == 1200.0
+    assert config.update_prepare_timeout_sec() == 1200.0
+
+
 @pytest.mark.anyio
 async def test_update_state_machine_owns_worker_lifecycle() -> None:
     machine = UpdateStateMachine()

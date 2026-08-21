@@ -46,7 +46,7 @@ class SupervisorRuntimeConfig:
         return str(raw).strip().lower() in TRUE_VALUES
 
     def update_attempt_timeout_sec(self) -> float:
-        return self._float("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", 180.0, minimum=10.0)
+        return self._float("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", 900.0, minimum=10.0)
 
     def update_prepare_timeout_sec(self) -> float:
         return max(
