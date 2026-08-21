@@ -280,8 +280,10 @@ def execute_dev_spec(
     spec = ExecutionSpec.from_dict(dict(value))
     if spec.owner_ref != f"skill:{project_id}":
         raise PermissionError("execution spec owner differs from the evaluated project")
-    if spec.network.mode != "offline":
-        raise ValueError("developer trial execution requires an offline-intent spec")
+    if spec.network.mode not in {"offline", "unrestricted"}:
+        raise ValueError(
+            "developer trial execution supports only offline or unrestricted network intent"
+        )
     if spec.resources.gpu_count:
         raise ValueError("developer trial execution does not admit GPU allocation")
     command = [str(item) for item in spec.command]

@@ -146,8 +146,9 @@ def test_developer_trial_execution_is_capability_gated(monkeypatch) -> None:
     assert admitted == ["builder.project_validation"]
 
 
+@pytest.mark.parametrize("network_mode", ["offline", "unrestricted"])
 def test_developer_trial_uses_candidate_owned_working_directory(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, network_mode: str
 ) -> None:
     dev_skills = tmp_path / "dev" / "skills"
     source = dev_skills / "candidate"
@@ -201,7 +202,7 @@ def test_developer_trial_uses_candidate_owned_working_directory(
         owner_ref="skill:candidate",
         command=(sys.executable, str(script.resolve())),
         working_directory=str(workdir),
-        network=ExecutionNetworkPolicy(mode="offline"),
+        network=ExecutionNetworkPolicy(mode=network_mode),
         environment={"TEST_CONTRACT": "preserved"},
         expected_outputs=("result.json",),
     )
@@ -210,13 +211,14 @@ def test_developer_trial_uses_candidate_owned_working_directory(
         ctx,
         "candidate",
         execution.to_dict(),
-        idempotency_key="smoke-17",
+        idempotency_key=f"smoke-17-{network_mode}",
         timeout=30,
     )
 
     assert receipt["ok"] is True
     assert receipt["documents"]["result.json"] == {"ok": True, "contract": "preserved"}
     assert receipt["provider"]["process_tree_isolated"] is True
+    assert receipt["provider"]["network_intent"] == network_mode
     assert receipt["provider"]["network_enforced"] is False
     assert receipt["limits"]["wall_time_exceeded"] is False
     assert json.loads((workdir / "result.json").read_text(encoding="utf-8")) == {
