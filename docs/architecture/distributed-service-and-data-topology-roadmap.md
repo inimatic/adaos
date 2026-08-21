@@ -246,7 +246,11 @@ source, so the plan correctly failed closed with
 `topology_skill_activation_identity_mismatch`. The stand was recovered through
 an explicit verified follower and fenced handoff, but zero-downtime rolling
 activation/topology ordering is not yet proven. `DS5-05` remains open for the
-long browser/playback/resource soak and final operator review.
+long browser/playback/resource soak and final operator review. The
+[production review](distributed-topology-production-review-2026-08-21.md)
+records the security, privacy, resource, rolling upgrade and recovery gates,
+runbooks and explicit rejection decision; physical execution evidence is still
+required before the checkbox can close.
 
 Local DS5-04 implementation checkpoint: `ServiceDefinition` v2 adds a bounded
 exact-release overlap while retaining v1 read compatibility. Group admission

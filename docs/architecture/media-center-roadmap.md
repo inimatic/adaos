@@ -467,7 +467,9 @@ injection, resource budgets, and a reviewed production decision.
   Decision: bounded two-node trusted-subnet technical pilot accepted;
   production acceptance rejected pending MC7-07/08, zero-downtime rolling
   topology upgrade, and operator review. See the
-  [two-node stand receipt](distributed-media-center-stand-validation-2026-08-21.md).
+  [two-node stand receipt](distributed-media-center-stand-validation-2026-08-21.md)
+  and the generic
+  [distributed topology production review](distributed-topology-production-review-2026-08-21.md).
 - [x] `[should]` `MC7-11` Add automatic repair recommendations and reviewed
   reconcile plans for missing agents, stale shards, failed providers and
   incompatible variants.
