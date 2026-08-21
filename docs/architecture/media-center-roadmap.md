@@ -542,6 +542,15 @@ must not be marked complete from contract or unit-test coverage alone.
 - [ ] `[must]` `MC8-10` Add TV/controller E2E and screenshot evidence for every
   item above, including reconnect, stale projection recovery, D-pad-only use,
   long translated text, and a member update during active playback.
+- [ ] `[must]` `MC8-11` Add a repeatable Android TV renderer responsiveness
+  soak for browse, playback, background indexing, reconnect and update phases.
+  Capture Chrome Long Tasks, main-thread and compositor CPU, heap/GC, media
+  decode and dropped-frame metrics, UI/Yjs projection rates, collection
+  cardinality, and live subscription/timer counts. The test must export a
+  bounded diagnostic artifact when the page becomes unresponsive and enforce
+  explicit steady-state CPU, memory-growth, render/update-rate and input-latency
+  budgets on representative TV hardware; a desktop-only profile is not
+  acceptance evidence.
 
 ## Cross-Domain Dependencies
 

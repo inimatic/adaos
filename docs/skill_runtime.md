@@ -143,6 +143,21 @@ Migration selection is bounded:
 - successful migration clears transient process state during activation and
   should not leave persistent UI noise
 
+Project-managed activations have a stricter ownership boundary. When an active
+local `ComponentActivation` selects an exact skill package, manifest and runtime
+slot from a `ProjectRelease`, that Project deployment owns the pointer. The
+background workspace migration worker records
+`migration_owner=project_deployment`, reports the selected runtime as not behind,
+and skips it even when migration was requested with `force`. Core updates may
+restart or rehydrate the selected service process, but they must not replace the
+Project-selected slot with a workspace/GitHub runtime.
+
+Drift or a failed Project-owned runtime is repaired through Project deployment
+reconciliation: drain/remove the affected activation when required, compute a
+new desired/observed deployment plan, and activate the exact immutable package
+again. The generic skill migration endpoint is not a Project conformance or
+repair mechanism.
+
 Handler discovery is read-only with respect to installed skill runtime slots.
 For an explicit local development workflow, `ADAOS_SKILL_RUNTIME_SOURCE_SYNC=1`
 allows the loader to synchronize workspace sources before discovery. The sync
