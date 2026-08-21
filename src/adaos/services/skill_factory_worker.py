@@ -9,6 +9,7 @@ import signal
 import shutil
 import subprocess
 import sys
+import tarfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -229,6 +230,7 @@ class CodexRunResult:
     stderr: str = ""
     final_message: str = ""
     command: tuple[str, ...] = ()
+    sdk_snapshot: dict[str, Any] | None = None
 
 
 class TaskExecutionCancelled(RuntimeError):
@@ -343,6 +345,7 @@ class SubprocessCodexExecutor:
             # Windows.  The output parent is already isolated per task and is
             # retained with the worker evidence after finalization.
             task_runtime_root = self._task_runtime_root(output_dir)
+            sdk_root = self._materialize_sdk_snapshot(task_runtime_root)
             process = subprocess.Popen(
                 command,
                 cwd=str(workspace),
@@ -352,7 +355,10 @@ class SubprocessCodexExecutor:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                env=self._execution_environment(runtime_base_dir=task_runtime_root),
+                env=self._execution_environment(
+                    runtime_base_dir=task_runtime_root,
+                    sdk_root=sdk_root,
+                ),
                 **popen_kwargs,
             )
             try:
@@ -381,12 +387,18 @@ class SubprocessCodexExecutor:
         events = live_events_path.read_text(encoding="utf-8", errors="replace")
         stderr = live_stderr_path.read_text(encoding="utf-8", errors="replace")
         final_message = final_path.read_text(encoding="utf-8", errors="replace") if final_path.exists() else ""
+        sdk_snapshot = (
+            _read_json(sdk_root / "SDK_SNAPSHOT.json")
+            if sdk_root is not None and (sdk_root / "SDK_SNAPSHOT.json").is_file()
+            else None
+        )
         return CodexRunResult(
             returncode=int(process.returncode or 0),
             events=events,
             stderr=stderr,
             final_message=final_message,
             command=tuple(command),
+            sdk_snapshot=sdk_snapshot,
         )
 
     @staticmethod
@@ -473,10 +485,89 @@ class SubprocessCodexExecutor:
         }
         return {key: value for key, value in os.environ.items() if key.upper() in allowed and value}
 
-    def _execution_environment(self, *, runtime_base_dir: Path | None = None) -> dict[str, str]:
+    def _materialize_sdk_snapshot(self, runtime_root: Path) -> Path | None:
+        """Expose only a commit-bound SDK reference, never the live repository.
+
+        Autonomous candidates need AdaOS imports, schemas and the runtime
+        dependency policy. Pointing ``ADAOS_REPO_ROOT`` at the canonical
+        checkout also exposed unrelated projects, evaluations and domain
+        reference implementations. A narrow archive preserves SDK utility
+        while making the admitted context boundary meaningful.
+        """
+
+        if self.repo_root is None:
+            return None
+        root = Path(runtime_root).resolve()
+        sdk_root = root / "sdk-reference"
+        receipt_path = sdk_root / "SDK_SNAPSHOT.json"
+        if receipt_path.is_file():
+            return sdk_root
+        root.mkdir(parents=True, exist_ok=True)
+        commit = _git(["rev-parse", "HEAD"], cwd=self.repo_root)
+        archive_path = root / "sdk-reference.tar"
+        result = _run(
+            [
+                "git",
+                "archive",
+                "--format=tar",
+                f"--output={archive_path}",
+                commit,
+                "--",
+                "src/adaos",
+                "docs/skill_runtime.md",
+            ],
+            cwd=self.repo_root,
+            timeout=120,
+        )
+        if result.returncode:
+            detail = (result.stderr or result.stdout).strip()
+            raise RuntimeError(f"cannot materialize filtered AdaOS SDK snapshot: {detail}")
+        staging = root / f".sdk-reference-{uuid4().hex}"
+        staging.mkdir(parents=True)
+        try:
+            with tarfile.open(archive_path, mode="r:") as archive:
+                members = archive.getmembers()
+                for member in members:
+                    destination = (staging / member.name).resolve()
+                    try:
+                        destination.relative_to(staging.resolve())
+                    except ValueError as exc:
+                        raise RuntimeError("AdaOS SDK archive contains an unsafe path") from exc
+                    if member.issym() or member.islnk():
+                        raise RuntimeError("AdaOS SDK archive may not contain links")
+                archive.extractall(staging, members=members)
+            _write_json(
+                staging / "SDK_SNAPSHOT.json",
+                {
+                    "schema": "adaos.skill_factory.sdk_snapshot.v1",
+                    "core_commit": commit,
+                    "included_roots": ["src/adaos", "docs/skill_runtime.md"],
+                    "excluded_by_default": [
+                        "docs/architecture",
+                        "tests",
+                        ".adaos",
+                        "project and domain sources",
+                    ],
+                    "access": "read-only-reference",
+                },
+            )
+            os.replace(staging, sdk_root)
+        finally:
+            archive_path.unlink(missing_ok=True)
+            if staging.exists():
+                shutil.rmtree(staging)
+        return sdk_root
+
+    def _execution_environment(
+        self,
+        *,
+        runtime_base_dir: Path | None = None,
+        sdk_root: Path | None = None,
+    ) -> dict[str, str]:
         environment = self._bounded_environment()
         environment["PYTHONUTF8"] = "1"
         environment["PYTHONIOENCODING"] = "utf-8"
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
         if runtime_base_dir is not None:
             # SDK/CLI calls made by generated code must not initialize the
             # repository-local default ``.adaos/state`` tree.  Keep all
@@ -502,9 +593,10 @@ class SubprocessCodexExecutor:
                 if entry
             )
         )
-        if self.repo_root is not None:
-            environment["ADAOS_REPO_ROOT"] = str(self.repo_root)
-            environment["PYTHONPATH"] = str(self.repo_root / "src")
+        exposed_sdk = Path(sdk_root).resolve() if sdk_root is not None else self.repo_root
+        if exposed_sdk is not None:
+            environment["ADAOS_REPO_ROOT"] = str(exposed_sdk)
+            environment["PYTHONPATH"] = str(exposed_sdk / "src")
         return environment
 
 
@@ -697,6 +789,10 @@ class LocalSkillFactoryWorker:
             task_prompt = (input_dir / "task.md").read_text(encoding="utf-8")
             packet_hash = "sha256:" + hashlib.sha256(task_prompt.encode("utf-8")).hexdigest()
             source_snapshot = dict((assignment.get("forge") or {}).get("source_snapshot") or {})
+            sdk_snapshot_path = runtime_dir / "codex-sdk-snapshot.json"
+            sdk_snapshot = (
+                _read_json(sdk_snapshot_path) if sdk_snapshot_path.is_file() else {}
+            )
             provenance = {
                 "schema": "adaos.skill_factory.task_provenance.v1",
                 "runner_version": RUNNER_VERSION,
@@ -712,6 +808,7 @@ class LocalSkillFactoryWorker:
                 if source_snapshot
                 else None,
                 "tool_versions": {"python": sys.version.split()[0]},
+                "sdk_snapshot": sdk_snapshot or None,
                 "created_at": _now_iso(),
                 "recovery": {"mode": "pre_commit_deterministic_resume"},
             }
@@ -1114,6 +1211,7 @@ class LocalSkillFactoryWorker:
                 if source_snapshot
                 else None,
                 "tool_versions": {"python": sys.version.split()[0]},
+                "sdk_snapshot": dict(codex_result.sdk_snapshot or {}) or None,
                 "created_at": _now_iso(),
             }
             _write_json(evidence_root / "provenance.json", provenance)
@@ -1243,6 +1341,11 @@ class LocalSkillFactoryWorker:
         (runtime_dir / f"codex-stderr{suffix}.log").write_text(result.stderr, encoding="utf-8")
         if result.final_message:
             (runtime_dir / f"codex-final{suffix}.md").write_text(result.final_message, encoding="utf-8")
+        if result.sdk_snapshot:
+            _write_json(
+                runtime_dir / f"codex-sdk-snapshot{suffix}.json",
+                result.sdk_snapshot,
+            )
 
     def _progress(self, task_id: str, status: str, message: str) -> None:
         self.factory.report_progress(
@@ -1406,9 +1509,10 @@ When `scenarios/{target_id}/.builder_current_publication` exists, treat it as th
 3. For a scenario prototype, connect `scenarios/{target_id}` to every required companion skill ({companions_label}) through `depends`, declarative actions and data routes as appropriate.
 4. Create or correct `webui.json` when the project has a UI. Preserve useful prototype behavior and make actions use real skill tools instead of mocks where possible. Scenario runtime UI must remain renderable: declare metadata in `scenario.yaml`, and either keep `ui.application` there or reference the adjacent complete descriptor as `ui.manifest: webui.json`.
 5. Keep the result compatible with the repository's existing AdaOS schemas and conventions. Do not add dependencies unless essential.
-6. Run relevant bounded checks. Fix failures caused by your changes. Use the Python exposed by `ADAOS_PYTHON` with the authoritative SDK source exposed by `ADAOS_REPO_ROOT`/`PYTHONPATH`; do not validate against an unrelated globally installed AdaOS version.
+6. Run relevant bounded checks. Fix failures caused by your changes. Use the Python exposed by `ADAOS_PYTHON` with the authoritative SDK snapshot, commit-bound and exposed by `ADAOS_REPO_ROOT`/`PYTHONPATH`; do not validate against an unrelated globally installed AdaOS version.
 7. Do not edit anything outside these task paths: {allowed_paths}.
 8. Do not access secrets, production data, other AdaOS runtime state, or external APIs.
+8a. Read only this isolated checkout, its admitted `.adaos_context` inputs, task-owned runtime paths, and the filtered SDK snapshot at `ADAOS_REPO_ROOT`. Do not inspect the SDK snapshot's parent, the canonical AdaOS checkout, sibling projects, installed skills, evaluations, or domain reference implementations. Such access invalidates Development evidence even when the filesystem technically permits it.
 9. Preserve manifest `version` and `updated_at`; the transactional Forge checkpoint owns both fields. Tests must validate their shape or semantics and must not assert an exact value for either field, because checkpointing changes them after your checks.
 10. Keep UTF-8 source and payload text intact. Prefer `apply_patch` for source edits; do not route non-ASCII source text through a PowerShell string pipeline. On Windows PowerShell 5.1, every textual `Get-Content` read of source, JSON, YAML, Markdown, or instruction files MUST include `-Encoding UTF8`; never rely on its ANSI default. Treat console mojibake as a display defect and verify file content as UTF-8 before rewriting it.
 11. Do not edit `.builder_current_publication`; it is immutable implementation input.

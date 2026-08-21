@@ -1093,7 +1093,58 @@ def test_codex_executor_uses_current_sdk_and_utf8_python(monkeypatch, tmp_path: 
     assert environment["PATH"].split(os.pathsep)[0] == str(Path(sys.executable).resolve().parent)
     assert environment["PYTHONUTF8"] == "1"
     assert environment["PYTHONIOENCODING"] == "utf-8"
+    assert environment["PYTHONDONTWRITEBYTECODE"] == "1"
     assert "OPENAI_API_KEY" not in environment
+
+
+def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -> None:
+    repo_root = tmp_path / "adaos"
+    (repo_root / "src" / "adaos").mkdir(parents=True)
+    (repo_root / "docs" / "architecture").mkdir(parents=True)
+    (repo_root / "src" / "adaos" / "sdk_marker.py").write_text(
+        "SDK = True\n", encoding="utf-8"
+    )
+    (repo_root / "docs" / "skill_runtime.md").write_text(
+        "runtime policy\n", encoding="utf-8"
+    )
+    (repo_root / "docs" / "architecture" / "domain-reference.md").write_text(
+        "must stay hidden\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "init"], cwd=repo_root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=repo_root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "AdaOS Test"], cwd=repo_root, check=True
+    )
+    subprocess.run(["git", "add", "-A"], cwd=repo_root, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "fixture"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+    )
+    executor = SubprocessCodexExecutor(repo_root=repo_root)
+
+    snapshot = executor._materialize_sdk_snapshot(tmp_path / "task-runtime")
+
+    assert snapshot is not None
+    assert (snapshot / "src" / "adaos" / "sdk_marker.py").is_file()
+    assert (snapshot / "docs" / "skill_runtime.md").is_file()
+    assert not (snapshot / "docs" / "architecture").exists()
+    receipt = json.loads((snapshot / "SDK_SNAPSHOT.json").read_text(encoding="utf-8"))
+    expected_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert receipt["core_commit"] == expected_commit
+    environment = executor._execution_environment(sdk_root=snapshot)
+    assert environment["ADAOS_REPO_ROOT"] == str(snapshot.resolve())
 
 
 def test_codex_executor_scopes_mutable_adaos_runtime_to_task(monkeypatch, tmp_path: Path) -> None:
