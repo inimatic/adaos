@@ -4,7 +4,7 @@ import json
 import time
 from pathlib import Path
 
-from adaos.services import bootstrap as bootstrap_mod
+from adaos.services.bootstrap_runtime import nats_bridge
 
 
 def _write_sidecar_diag(path: Path, *, ts: float, last_error: str | None) -> None:
@@ -19,8 +19,8 @@ def _write_sidecar_diag(path: Path, *, ts: float, last_error: str | None) -> Non
 def test_should_refresh_nats_credentials_for_explicit_auth_failure() -> None:
     err = Exception("nats: 'Authorization Violation'")
 
-    assert bootstrap_mod._should_refresh_nats_credentials(err, server="nats://127.0.0.1:7422") is True
-    assert bootstrap_mod._nats_credentials_refresh_evidence(err, server="nats://127.0.0.1:7422") == "explicit_auth_error"
+    assert nats_bridge._should_refresh_nats_credentials(err, server="nats://127.0.0.1:7422") is True
+    assert nats_bridge._nats_credentials_refresh_evidence(err, server="nats://127.0.0.1:7422") == "explicit_auth_error"
 
 
 def test_should_not_refresh_nats_credentials_for_unexpected_eof_without_sidecar_auth_signal(tmp_path: Path) -> None:
@@ -28,7 +28,7 @@ def test_should_not_refresh_nats_credentials_for_unexpected_eof_without_sidecar_
     err = Exception("nats: unexpected EOF")
 
     assert (
-        bootstrap_mod._should_refresh_nats_credentials(
+        nats_bridge._should_refresh_nats_credentials(
             err,
             server="nats://127.0.0.1:7422",
             sidecar_diag_file=diag_path,
@@ -36,7 +36,7 @@ def test_should_not_refresh_nats_credentials_for_unexpected_eof_without_sidecar_
         is False
     )
     assert (
-        bootstrap_mod._nats_credentials_refresh_evidence(
+        nats_bridge._nats_credentials_refresh_evidence(
             err,
             server="nats://127.0.0.1:7422",
             sidecar_diag_file=diag_path,
@@ -55,7 +55,7 @@ def test_should_refresh_nats_credentials_for_unexpected_eof_only_with_fresh_side
     err = Exception("nats: unexpected EOF")
 
     assert (
-        bootstrap_mod._should_refresh_nats_credentials(
+        nats_bridge._should_refresh_nats_credentials(
             err,
             server="nats://127.0.0.1:7422",
             sidecar_diag_file=diag_path,
@@ -63,7 +63,7 @@ def test_should_refresh_nats_credentials_for_unexpected_eof_only_with_fresh_side
         is True
     )
     assert (
-        bootstrap_mod._nats_credentials_refresh_evidence(
+        nats_bridge._nats_credentials_refresh_evidence(
             err,
             server="nats://127.0.0.1:7422",
             sidecar_diag_file=diag_path,
@@ -82,7 +82,7 @@ def test_should_not_refresh_nats_credentials_for_stale_sidecar_auth_signal(tmp_p
     err = Exception("nats: unexpected EOF")
 
     assert (
-        bootstrap_mod._should_refresh_nats_credentials(
+        nats_bridge._should_refresh_nats_credentials(
             err,
             server="nats://127.0.0.1:7422",
             sidecar_diag_file=diag_path,
@@ -101,7 +101,7 @@ def test_should_not_refresh_nats_credentials_for_unexpected_eof_on_non_sidecar_s
     err = Exception("nats: unexpected EOF")
 
     assert (
-        bootstrap_mod._should_refresh_nats_credentials(
+        nats_bridge._should_refresh_nats_credentials(
             err,
             server="nats://nats.inimatic.com:4222",
             sidecar_diag_file=diag_path,
