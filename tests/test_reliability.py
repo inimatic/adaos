@@ -2821,6 +2821,42 @@ def test_media_plane_runtime_snapshot_exposes_live_update_guard(monkeypatch) -> 
     assert guard["current_support"] == "planned"
 
 
+def test_media_plane_runtime_snapshot_defers_update_during_source_delivery(monkeypatch) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.media_library",
+        SimpleNamespace(
+            media_runtime_snapshot=lambda: {
+                "available": True,
+                "paths": {
+                    "direct_local_http": {"ready": True},
+                    "root_routed_http": {"ready": True},
+                    "webrtc_tracks": {"ready": False},
+                },
+                "delivery_activity": {
+                    "schema": "adaos.media.delivery_activity.v1",
+                    "active": True,
+                    "active_streams": 1,
+                    "tracked_streams": 1,
+                    "kind_counts": {"audio": 0, "video": 1, "other": 0},
+                    "saturated": False,
+                },
+                "counts": {},
+            }
+        ),
+    )
+
+    snapshot = media_plane_runtime_snapshot(role="hub", route_mode="hub", connected_to_hub=None)
+    guard = snapshot["update_guard"]
+
+    assert guard["live_session_present"] is True
+    assert guard["observed_live_topology"] == "source_media_delivery"
+    assert guard["member_runtime_update"] == "defer"
+    assert guard["hub_runtime_update"] == "defer"
+    assert guard["hub_sidecar_continuity_required"] is False
+    assert guard["current_support"] == "ready"
+
+
 def test_media_plane_runtime_snapshot_does_not_block_update_for_trackless_hub_peer(monkeypatch) -> None:
     def _snapshot_with_counts(counts: dict[str, int]) -> dict[str, object]:
         return {

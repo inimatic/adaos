@@ -444,9 +444,12 @@ injection, resource budgets, and a reviewed production decision.
   fallback, unsupported codec, browser reconnect, and conflicting controllers.
 - [ ] `[must]` `MC7-07` Run local large-library, long-duration, CPU/memory,
   Yjs-pressure, browser-render, and playback-under-indexing tests against the
-  declared budgets. Large-library budgets, a 45-second worker sample and
-  concurrent playback reads passed; long-duration browser/playback soak is
-  still open.
+  declared budgets. Large-library budgets and concurrent playback reads pass.
+  The 2026-08-21 enforced development soak ran 60.032 seconds on 2,000 items,
+  applied 5,175 agent deltas without errors, and recorded p95 latencies of
+  51.732 ms FTS, 45.361 ms catalog page, 32.097 ms playback plan and 110.456 ms
+  delta apply. RSS peaked at 27.59 MiB with 0.34 MiB sustained growth; aggregate
+  CPU p95 was 12.5%. Long-duration browser/playback soak is still open.
 - [ ] `[must]` `MC7-08` Deploy the exact ProjectRelease through normal channels
   to the designated stand, execute TV plus controller E2E, and record package
   digests, deployment generation, node activations, catalog/shard revisions,
@@ -560,6 +563,15 @@ Local implementation checkpoint (not stand acceptance):
 - `MC8-02` has the fullscreen-safe generic transition overlay in client
   `4090c74`, including policy-gated update deferral. The physical update and
   playback recovery proof remains open.
+- The local implementation half of `MC8-03` now includes a generic bounded
+  media-delivery lease in core. Every direct or root-routed HTTP/range stream
+  and direct WebRTC media DataChannel download holds and refreshes an in-memory
+  path-free lease; runtime diagnostics expose only aggregate audio/video counts,
+  and supervisor reschedules hub or member transitions while the source stream
+  is active. Existing agent resource
+  pressure still pauses scan/rendition workers during an explicitly asserted
+  playback pressure state. Physical update-under-playback QoE and disk/CPU
+  evidence remain open.
 - `MC8-04` and `MC8-05` are represented by client `4eeef8c`/`467366c` and
   registry `745061d`/`86ea4ca`; authoritative post-deployment behavior still
   requires the stand run.

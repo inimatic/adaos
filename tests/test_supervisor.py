@@ -4682,6 +4682,62 @@ def test_supervisor_start_update_defers_when_live_media_guard_blocks_transition(
     assert status["live_media_guard"]["observed_live_topology"] == "member_browser_direct"
 
 
+def test_supervisor_start_update_defers_while_hub_serves_media(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
+    manager = supervisor.SupervisorManager(
+        runtime_host="127.0.0.1",
+        runtime_port=8777,
+        token="dev-local-token",
+    )
+    monkeypatch.setattr(
+        manager,
+        "_runtime_request_json",
+        lambda **kwargs: {
+            "ok": True,
+            "runtime": {
+                "media_runtime": {
+                    "update_guard": {
+                        "role": "hub",
+                        "live_session_present": True,
+                        "observed_live_topology": "source_media_delivery",
+                        "hub_runtime_update": "defer",
+                        "hub_sidecar_continuity_required": False,
+                        "current_support": "ready",
+                        "reason": "active media delivery",
+                    }
+                },
+                "sidecar_runtime": {
+                    "continuity_contract": {
+                        "required": False,
+                        "hub_runtime_update": "defer",
+                        "current_support": "not_applicable",
+                    }
+                },
+            },
+        },
+    )
+
+    result = asyncio.run(
+        manager.start_update(
+            action="update",
+            target_rev="rev2026",
+            target_version="1.2.3",
+            reason="test.active_media_delivery",
+            countdown_sec=30.0,
+            drain_timeout_sec=10.0,
+            signal_delay_sec=0.25,
+        )
+    )
+
+    assert result["accepted"] is True
+    assert result["planned"] is True
+    status = read_status()
+    assert status["planned_reason"] == "live_media_guard"
+    assert status["guard_code"] == "hub_live_media_defer"
+    assert status["live_media_guard"]["observed_live_topology"] == "source_media_delivery"
+
+
 def test_supervisor_defer_update_reschedules_active_countdown(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     write_status(
