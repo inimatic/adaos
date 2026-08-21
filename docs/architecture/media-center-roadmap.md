@@ -552,6 +552,33 @@ must not be marked complete from contract or unit-test coverage alone.
   budgets on representative TV hardware; a desktop-only profile is not
   acceptance evidence.
 
+Local implementation checkpoint (not stand acceptance):
+
+- `MC8-01` is implemented by the generic endpoint-session bridge in client
+  `3ebe27a`/`98745a5` and the Media Center adapter projection in registry
+  `b2490f6`. Cross-browser TV/controller convergence remains to be recorded.
+- `MC8-02` has the fullscreen-safe generic transition overlay in client
+  `4090c74`, including policy-gated update deferral. The physical update and
+  playback recovery proof remains open.
+- `MC8-04` and `MC8-05` are represented by client `4eeef8c`/`467366c` and
+  registry `745061d`/`86ea4ca`; authoritative post-deployment behavior still
+  requires the stand run.
+- `MC8-06` uses the generic D-pad carousel from client `d988ae5`; `MC8-07` uses
+  the generic adaptive toolbar from client `834d3fd`/`84148f0` and registry
+  `5378ad8`.
+- `MC8-08` is implemented locally in registry `b88c669`: the source-owning
+  agent derives bounded artwork with provenance and the coordinator publishes
+  the sanitized `adaos.media.artwork.v1` projection. Project `0.6.44` must be
+  deployed and observed before acceptance.
+- `MC8-09` dictionaries remain skill-owned in registry `803f99e`; `b88c669`
+  adds UTF-8/Cyrillic integrity coverage and the artwork operation wording.
+- `MC8-10` and `MC8-11` use the external-CDP Android TV harness introduced in
+  client `0b31eaa`. It captures D-pad input, playback progress, Long Tasks,
+  main-thread/process CPU, heap growth, listeners/timers, UI/Yjs mutation
+  rates, dropped frames, bounded failure diagnostics and start/end screenshots.
+  Harness tests pass locally, but a one-hour run on representative TV hardware
+  and the update-under-playback evidence are still mandatory.
+
 ## Cross-Domain Dependencies
 
 | Requirement | Owning architecture/roadmap | Media Center dependency |

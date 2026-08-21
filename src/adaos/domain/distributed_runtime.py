@@ -7,7 +7,8 @@ from typing import Any, Mapping
 from adaos.domain.artifact_release import canonical_payload_digest
 
 
-SERVICE_DEFINITION_SCHEMA = "adaos.distributed.service_definition.v1"
+SERVICE_DEFINITION_SCHEMA_V1 = "adaos.distributed.service_definition.v1"
+SERVICE_DEFINITION_SCHEMA = "adaos.distributed.service_definition.v2"
 SERVICE_GROUP_SCHEMA = "adaos.distributed.service_group.v1"
 SERVICE_INSTANCE_SCHEMA = "adaos.distributed.service_instance.v1"
 TOPOLOGY_LEASE_SCHEMA = "adaos.distributed.topology_lease.v1"
@@ -239,6 +240,7 @@ class ServiceDefinition:
     provided_contracts: tuple[str, ...]
     topology_mode: str
     protocol_version: str
+    compatible_release_digests: tuple[str, ...] = ()
     required_capabilities: tuple[str, ...] = ()
     trust_class: str = "trusted"
     adapter_contracts: tuple[str, ...] = ()
@@ -272,6 +274,21 @@ class ServiceDefinition:
         object.__setattr__(
             self, "protocol_version", _token(self.protocol_version, "protocol_version")
         )
+        release_digests = tuple(
+            sorted(
+                {
+                    _digest(item, "compatible_release_digests")
+                    for item in self.compatible_release_digests
+                }
+            )
+        )
+        if len(release_digests) > 8:
+            raise DistributedContractError("compatible_release_digests exceeds 8 items")
+        if self.release_digest in release_digests:
+            raise DistributedContractError(
+                "compatible_release_digests must not repeat release_digest"
+            )
+        object.__setattr__(self, "compatible_release_digests", release_digests)
         object.__setattr__(
             self,
             "required_capabilities",
@@ -299,6 +316,7 @@ class ServiceDefinition:
             "definition_id": self.definition_id,
             "version": self.version,
             "release_digest": self.release_digest,
+            "compatible_release_digests": list(self.compatible_release_digests),
             "compatible_components": list(self.compatible_components),
             "provided_contracts": list(self.provided_contracts),
             "topology_mode": self.topology_mode,
@@ -312,7 +330,7 @@ class ServiceDefinition:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ServiceDefinition":
-        fields = {
+        common_fields = {
             "schema",
             "definition_id",
             "version",
@@ -327,9 +345,25 @@ class ServiceDefinition:
             "health_protocol",
             "drain_protocol",
         }
+        schema = str(value.get("schema") or "") if isinstance(value, Mapping) else ""
+        if schema == SERVICE_DEFINITION_SCHEMA_V1:
+            fields = common_fields
+            compatible_release_digests: tuple[str, ...] = ()
+        elif schema == SERVICE_DEFINITION_SCHEMA:
+            fields = common_fields | {"compatible_release_digests"}
+            compatible_release_digests = _texts(
+                value.get("compatible_release_digests"),
+                "compatible_release_digests",
+                max_items=8,
+            )
+        else:
+            raise DistributedContractError(
+                "ServiceDefinition must use "
+                f"{SERVICE_DEFINITION_SCHEMA_V1} or {SERVICE_DEFINITION_SCHEMA}"
+            )
         payload = _strict(
             value,
-            schema=SERVICE_DEFINITION_SCHEMA,
+            schema=schema,
             fields=fields,
             field_name="ServiceDefinition",
         )
@@ -345,6 +379,7 @@ class ServiceDefinition:
             ),
             topology_mode=payload["topology_mode"],
             protocol_version=payload["protocol_version"],
+            compatible_release_digests=compatible_release_digests,
             required_capabilities=_texts(
                 payload["required_capabilities"], "required_capabilities"
             ),
@@ -352,6 +387,13 @@ class ServiceDefinition:
             adapter_contracts=_texts(payload["adapter_contracts"], "adapter_contracts"),
             health_protocol=payload["health_protocol"],
             drain_protocol=payload["drain_protocol"],
+        )
+
+    def accepts_release(self, release_digest: str) -> bool:
+        candidate = _digest(release_digest, "release_digest")
+        return (
+            candidate == self.release_digest
+            or candidate in self.compatible_release_digests
         )
 
 
@@ -1663,6 +1705,7 @@ __all__ = [
     "Replica",
     "RouteEndpoint",
     "SERVICE_DEFINITION_SCHEMA",
+    "SERVICE_DEFINITION_SCHEMA_V1",
     "SERVICE_GROUP_SCHEMA",
     "SERVICE_INSTANCE_SCHEMA",
     "ServiceDefinition",
