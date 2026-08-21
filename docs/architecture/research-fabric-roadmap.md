@@ -1757,6 +1757,22 @@ efficacy result or cross-domain SOTA claim.
   fixed-timeout confound, not a rescore. A fresh zero-result task is required
   after the worker derives one explicit package-test allowance from the
   immutable DevelopmentSession budget and exposes it identically to Codex.
+  Core `69597d27` implemented that allowance. Fresh v43 froze five pairs at
+  `sha256:171a180e2158f9913635ef82b1216d90753ffd6aad476438b010d6ce61d15228`
+  on the clean core/workspace and completed four in valid order. C0 was EVC
+  false in all four (`2/7` checks each); C3 was EVC true in three (`7/7`) and
+  false once (`3/7`), yielding three treatment wins and one tie. The fifth
+  pair was not started because its best possible result was already
+  `p=0.0625`. Immutable summary
+  `sha256:a0b07782df011a46ef782312c5d7c2035b2df2ab207fb7baf79e356df67b3805`
+  is `incomplete_no_claim`. Post-outcome inspection showed that the fourth C3
+  completed its CPU run but DEV execution changed the provider's canonical
+  owner data root between prepare and execute. Core `a7dc187a` now preserves
+  that identity like the normal execution service and Builder contract runner;
+  the regression and focused SDK/worker/execution suite pass through the
+  native AdaOS test command. V43 is not rescored. The next claim-eligible task
+  must freeze at least six fresh pairs so one tie still leaves five discordant
+  wins and an attainable one-sided exact `p=0.03125`.
 - [x] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and

@@ -303,6 +303,40 @@ is valid. The next task must bind the package-test allowance to the immutable
 DevelopmentSession execution budget and expose the same exact allowance to
 Codex and the trusted worker. V42 itself stays immutable.
 
+Core `69597d27` implemented that generic allowance: the trusted package-test
+budget is derived from the immutable DevelopmentSession wall budget, capped at
+300 seconds, and the same value is present in the packet, prompt and worker.
+Fresh v43 was frozen at
+`sha256:171a180e2158f9913635ef82b1216d90753ffd6aad476438b010d6ce61d15228`
+on that clean detached core and workspace `d8633460`, with five
+counterbalanced pairs, 25 packets materialized before execution, matched
+12,000,000-token/10,800-second budgets and no human intervention. Four pairs
+completed in valid observed order. C0 was EVC false in all four realizations
+and passed 2/7 mandatory checks each time. C3 was EVC true in the first three
+realizations and passed 7/7 checks; the fourth passed Builder validation and
+production-operation conformance but failed the installed consumer smoke,
+producing three treatment wins and one false/false tie. Even a treatment win
+in the fifth pair could have produced only four discordant wins and one-sided
+`p=0.0625`; the fifth pair was therefore not started under the preregistered
+futility rule. Frozen summary
+`sha256:a0b07782df011a46ef782312c5d7c2035b2df2ab207fb7baf79e356df67b3805`
+remains `incomplete_no_claim`. Descriptively, C3 completed 3/4 versus C0 0/4,
+but that is not the preregistered probability claim.
+
+Post-outcome diagnosis retained the failed result and found a domain-neutral
+rail defect. The provider prepared content identities under canonical
+`<runtime-bucket>/data`; `execute_dev_spec` alone rebound
+`ADAOS_SKILL_INTERNAL_DATA_ROOT` to `<runtime-bucket>/data/internal`. The
+candidate completed its CPU run and wrote four documents, then failed while
+constructing the fifth ContentRef because the prepared path was no longer
+relative to the substituted root. Builder's contract runner and the normal
+execution service already preserve one canonical root. Core `a7dc187a` makes
+DEV execution consistent and adds a subprocess regression test that observes
+the same owner root through the SDK. The focused SDK/worker/execution suite
+passes through `adaos tests run`. This diagnosis does not rescore v43. A fresh
+six-pair comparison is required so one tie does not make significance
+mathematically unreachable.
+
 ## Conclusion and remaining proof
 
 This receipt proves that the structured AdaOS path can close end to end on the
@@ -315,9 +349,10 @@ checkable.
 
 It does not prove the probability hypothesis. The retained v32 paired result
 was negative/inconclusive for the primary endpoint, v41 and v42 stopped after
-false/false ties, and this task-006 receipt is one successor-path C3 operability
-success. The consumer-executed sequence in `ARF7.3-06b` is implemented and
-locally proven, but a new zero-result frozen comparison on the corrected rails
-must still create fresh C0/C3 units and follow the preregistered repeated
+false/false ties, and v43 produced a promising 3/4 versus 0/4 descriptive
+result but correctly stopped without a claim after its fourth-pair tie. The
+consumer-executed sequence in `ARF7.3-06b` is implemented and locally proven,
+but a new zero-result six-pair comparison on core `a7dc187a` or a declared
+successor must still create fresh C0/C3 units and follow the preregistered
 paired analysis. A
 cross-domain or SOTA claim additionally requires ResearchCompilerBench/ARRB.

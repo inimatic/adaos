@@ -1063,6 +1063,21 @@ neither the frozen task/summary/result digests nor the `0/5` EVC outcome. It is
 evidence that the domain and UI projection preserve a source-to-result chain;
 it is not a rerun, ProjectRelease, ResearchRelease, or comparative SOTA result.
 
+#### Paired probability checkpoint
+
+The later frozen v43 rail comparison is the strongest local signal so far but
+is deliberately not a positive claim. Under matched downstream budgets and
+valid counterbalanced order, C3 produced three evidence-valid completions in
+four fresh realizations while C0 produced none; the fourth pair tied after a
+post-release owner-data-root mismatch in the generic DEV executor. Because the
+five-pair exact-sign design could no longer reach `p<0.05`, its fifth pair was
+not started and summary
+`sha256:a0b07782df011a46ef782312c5d7c2035b2df2ab207fb7baf79e356df67b3805`
+remains `incomplete_no_claim`. Core `a7dc187a` fixes the diagnosed rail defect
+without changing the frozen scores. The next local comparison uses at least
+six fresh pairs; wider SOTA language still requires the multi-task and
+cross-domain program below.
+
 ## Evidence Required for a Competitive Claim
 
 A TLP receipt is a case study. A defensible comparative or SOTA claim requires:
