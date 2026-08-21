@@ -551,7 +551,11 @@ class SubprocessCodexExecutor:
                     "access": "read-only-reference",
                 },
             )
-            os.replace(staging, sdk_root)
+            # Windows scanners and indexers can briefly retain handles after
+            # archive extraction.  Reuse the platform atomic-publication
+            # primitive so a transient sharing violation cannot fail a task
+            # before the autonomous candidate receives its first turn.
+            replace_with_retry(staging, sdk_root)
         finally:
             archive_path.unlink(missing_ok=True)
             if staging.exists():

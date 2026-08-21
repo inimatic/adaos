@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+from adaos.services.artifact_pipeline import storage as storage_module
 from adaos.services.root.service import _rewrite_skill_template_identity
 from adaos.services.skill_factory import SkillFactoryService
 from adaos.services.skill_factory_sources import capture_source_snapshot, materialize_source_snapshot
@@ -1097,7 +1098,10 @@ def test_codex_executor_uses_current_sdk_and_utf8_python(monkeypatch, tmp_path: 
     assert "OPENAI_API_KEY" not in environment
 
 
-def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -> None:
+def test_codex_executor_materializes_filtered_commit_bound_sdk(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     repo_root = tmp_path / "adaos"
     (repo_root / "src" / "adaos").mkdir(parents=True)
     (repo_root / "docs" / "architecture").mkdir(parents=True)
@@ -1127,6 +1131,17 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -
         capture_output=True,
     )
     executor = SubprocessCodexExecutor(repo_root=repo_root)
+    replace_once = storage_module._replace_once
+    replace_attempts = 0
+
+    def flaky_replace(source: Path, target: Path) -> None:
+        nonlocal replace_attempts
+        replace_attempts += 1
+        if replace_attempts == 1:
+            raise PermissionError("simulated transient SDK snapshot sharing violation")
+        replace_once(source, target)
+
+    monkeypatch.setattr(storage_module, "_replace_once", flaky_replace)
 
     snapshot = executor._materialize_sdk_snapshot(tmp_path / "task-runtime")
 
@@ -1143,6 +1158,7 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -
         text=True,
     ).stdout.strip()
     assert receipt["core_commit"] == expected_commit
+    assert replace_attempts == 2
     environment = executor._execution_environment(sdk_root=snapshot)
     assert environment["ADAOS_REPO_ROOT"] == str(snapshot.resolve())
 
