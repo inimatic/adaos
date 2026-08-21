@@ -908,6 +908,68 @@ endpoint or support a probability claim. The next eligible paired comparison
 now requires fresh frozen C0/C3 units using this trusted consumer-executed
 operation sequence; task-006 and all v32 units remain ineligible for reuse.
 
+#### Post-task-006 rail audit and fresh comparisons
+
+The first post-operability attempts were retained as measurement-system
+evidence rather than coerced into arm outcomes. Frozen v34
+(`sha256:27ed00dd4c6bf9c1d088522f8df7bee81576430ef9516654b8f8dd8ea058184e`)
+selected a locally unsupported Codex model id and failed before a usable
+candidate. Frozen v35
+(`sha256:080e3f7f8758107497509bc1c89666596f4c65eb654b1f3fccc084de2af2d7d6`)
+was cancelled when access audit showed that the live core checkout exposed a
+task-specific TLP reference outside the packet. Core `24406dd2` now gives
+Codex a commit-bound filtered SDK snapshot containing `src/adaos` and the
+runtime policy, not the live repository, tests, architecture documents, or
+other project sources.
+
+Frozen v36
+(`sha256:c60a33676e0789f7bf2c5abda13de339f269010d550b2809aec5644f3073cfce`)
+then produced a C3 candidate that passed three of seven mandatory checks but
+could not enter the developer trial: the public accepted smoke honestly
+declared `network_mode=unrestricted` with `network_enforced=false`, while core
+admitted only the literal `offline` intent. This was a harness/contract
+mismatch, not an implementation score. Core `84f5bcc6` now admits both honest
+developer intents and continues to reject unsupported modes; developer trials
+still make no network-enforcement claim.
+
+Fresh v37
+(`sha256:7029ebce9cc1533c00c60cc38f4e34c530525fb381ba6e50e01791a4111066d4`)
+ran from a clean detached worktree so simultaneous work in the canonical
+checkout could not change its environment. Its first counterbalanced pair was
+a scored EVC tie: C0 passed 2/7 checks, drifted from the accepted protocol and
+omitted `dataset_status.split_bindings`; C3 passed 3/7 checks and preserved the
+protocol, but `collect_attempt` failed to repeat `result.primary_metric` as the
+required observation. The summary is
+`sha256:211cd69ca8b1412fdc75df65c13ed6157aa192e1a1ddac5a1e4117710e69b3e8`.
+With four pairs left, even four C3 wins could reach only one-sided
+`p=0.0625`, so the task remains `incomplete_no_claim` and further pairs were
+not spent.
+
+The v37 failure proved that complete schemas plus prose `invariants` were not
+yet a complete executable contract. Core `4bfa6d6a` adds bounded declarative
+array-membership and same-output comparisons to the trusted sequence; runner
+ABI 1.16 uses them to require the primary-metric observation before Builder
+acceptance. Core `00afabe6` and runner ABI 1.17 additionally compare fields
+across operation steps and execute both baseline and intervention production
+paths, including exact arm, seed, evidence class and shared pairing identity.
+These are domain-neutral assertion primitives; the accepted ExperimentPlan
+supplies TLP values.
+
+Frozen v38
+(`sha256:0e7367c7eb32398b640d237a5aa61f2724ca2f72bdbfa63129435055e1fce68e`)
+retained a fresh C0 result (`2/7`, EVC false, operationalization drift), but its
+paired C3 was excluded before model execution when Windows denied the atomic
+rename of the filtered SDK snapshot. Its incomplete summary is
+`sha256:46526f0359d58475e83295b4a979672d430fc57fedd92cfa6bedc9e2ad500404`.
+Core `b6e9ac44` reuses the platform's bounded atomic-publication retry for this
+transient Windows sharing violation. No v38 candidate is reused. Fresh v39,
+digest
+`sha256:bd178f7cc0c5c30e96fcf327d8fe0ed32bdeef8b63647002e7c13d270e4ebcd4`,
+binds clean detached core `b6e9ac44`, ResearchManager 0.40.0/runner ABI 1.17,
+the same `gpt-5.5` high-effort profile, matched 8.5M-token budgets, five
+counterbalanced pairs, and 25 packets materialized before execution. Its
+comparison remains in progress and no probability claim is currently allowed.
+
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and
 content identities. Candidate-authored claims cannot mark a check passed. The

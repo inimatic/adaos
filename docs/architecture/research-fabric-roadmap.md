@@ -1538,6 +1538,15 @@ efficacy result or cross-domain SOTA claim.
   collect_attempt -> verify_artifacts`, verified 13 ContentRefs, and validated
   all five required evidence documents. A negative core regression proves that
   a zero-exit command which omits the exact expected output is rejected.
+- [x] `[must]` `ARF7.3-06c` Make cross-field and cross-operation consumer
+  invariants executable rather than leaving them as prompt prose. The trusted
+  assertion ABI now supports bounded array membership, same-output equality,
+  and equality to an earlier operation output. ResearchManager runner ABI 1.17
+  executes both accepted paired arms and checks exact arm, seed, evidence
+  class, primary-metric observation, artifact verification, and shared pairing
+  identity. Core negative regressions reject a mismatched observation and a
+  mismatched cross-step value. TLP supplies fixture data only; assertion
+  interpretation remains generic core behavior.
 - [x] `[must]` `ARF7.3-07` Let Codex return typed clarification, feasibility,
   capability-gap, and protocol-conflict results. Require a reviewed new
   formulation/protocol revision instead of silent scientific mutation.
@@ -1688,7 +1697,25 @@ efficacy result or cross-domain SOTA claim.
   superiority. Post-freeze core `91129b77` makes the owner-data/task-runtime
   binding explicit, but a fresh claim-eligible comparison is blocked on the
   consumer-executed fixture in `ARF7.3-06b`; v32 candidates and outcomes remain
-  diagnostic only.
+  diagnostic only. V34 was invalid before candidate realization because its
+  requested Codex model id was unsupported. V35 was cancelled after source
+  audit found that the live core checkout exposed a TLP reference; core
+  `24406dd2` now supplies a filtered commit-bound SDK snapshot. V36 exposed an
+  offline-only developer-trial admission mismatch and remains harness-invalid;
+  core `84f5bcc6` now admits honest `offline` and `unrestricted` intent without
+  claiming enforcement. V37 ran a fresh complete pair on a clean detached
+  worktree: C0 and C3 were both EVC false, producing one tie and summary
+  `sha256:211cd69ca8b1412fdc75df65c13ed6157aa192e1a1ddac5a1e4117710e69b3e8`.
+  C0 drifted at operationalization; C3 preserved the protocol but exposed a
+  non-executable primary-observation invariant. With four pairs remaining the
+  best attainable one-sided result was `p=0.0625`, so v37 stopped as
+  `incomplete_no_claim`. V38 retained one fresh C0 failure, but its paired C3
+  was excluded before model execution by a Windows SDK-snapshot rename denial;
+  core `b6e9ac44` now uses bounded atomic-publication retries. Fresh v39 is
+  frozen at
+  `sha256:bd178f7cc0c5c30e96fcf327d8fe0ed32bdeef8b63647002e7c13d270e4ebcd4`
+  on clean detached core `b6e9ac44` and runner ABI 1.17; all 25 packets were
+  materialized before its first arm and its comparison is in progress.
 - [x] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
   the accepted local workflow through `research_manager_skill` and the shared
   Workbench. The ResearchTask/ImplementationTrack supplies exact bindings and

@@ -202,6 +202,24 @@ ResearchManager `0.37.0`, Research Orchestrator `0.75.0`, and Research
 Evaluator `0.1.40`; the orchestrator still projected all seven durable
 directions, including `tlp_structured_proof_02`.
 
+Subsequent clean calibration showed that schema validation alone did not
+execute every semantic invariant. In v37 a fresh C3 provider passed the
+trusted sequence but the independent consumer rejected its collection because
+`result.primary_metric` was not repeated by a `metric.name=primary_metric`
+observation with the same evidence role. The negative result is immutable; it
+was not repaired or relabelled.
+
+Core `4bfa6d6a` extends the same domain-neutral sequence ABI with bounded
+`contains` assertions and comparisons to other fields in one response. Core
+`00afabe6` adds comparisons to prior operation outputs. ResearchManager runner
+ABI 1.17 now executes baseline and intervention production paths and checks
+their exact arm, seed, evidence class, primary observation, artifact identities
+and shared pairing identity before Builder acceptance. Negative end-to-end
+tests reject both a mismatched observation and a mismatched cross-step value.
+The filtered SDK snapshot is also published through the standard retrying
+atomic filesystem primitive after v38 exposed a transient Windows sharing
+violation before model execution (`b6e9ac44`).
+
 ## Conclusion and remaining proof
 
 This receipt proves that the structured AdaOS path can close end to end on the
