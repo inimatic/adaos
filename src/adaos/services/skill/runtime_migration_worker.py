@@ -21,6 +21,7 @@ from adaos.adapters.db import SqliteSkillRegistry
 from adaos.build_info import BUILD_INFO
 from adaos.services.agent_context import AgentContext
 from adaos.services.eventbus import emit as bus_emit
+from adaos.services.project_deployment.store import ProjectDeploymentStore
 from adaos.services.runtime_refresh import (
     RuntimeRefreshError,
     rebuild_webspace_projection,
@@ -594,6 +595,55 @@ def _runtime_is_behind(workspace_version: str, runtime_version: str) -> bool:
     return workspace_version != runtime_version
 
 
+def _project_managed_skill_activations(ctx: AgentContext) -> dict[str, dict[str, Any]]:
+    """Return active local skills whose exact runtime is owned by a Project."""
+
+    paths = getattr(ctx, "paths", None)
+    config = getattr(ctx, "config", None)
+    state_dir = getattr(paths, "state_dir", None)
+    node_id = str(getattr(config, "node_id", "") or "").strip()
+    if not callable(state_dir) or not node_id:
+        return {}
+
+    store = ProjectDeploymentStore(state_dir=Path(state_dir()).resolve())
+    selected: dict[str, Any] = {}
+    cursor: str | None = None
+    while True:
+        activations, cursor = store.list_activations(cursor=cursor, limit=200)
+        for activation in activations:
+            component_ref = str(activation.component_ref or "")
+            if (
+                activation.node_id != node_id
+                or activation.status != "active"
+                or not component_ref.startswith("skill:")
+            ):
+                continue
+            skill_name = component_ref.split(":", 1)[1]
+            current = selected.get(skill_name)
+            if current is None or (
+                activation.generation,
+                activation.updated_at,
+                activation.activation_id,
+            ) > (
+                current.generation,
+                current.updated_at,
+                current.activation_id,
+            ):
+                selected[skill_name] = activation
+        if not cursor:
+            break
+    return {
+        skill_name: {
+            "activation_id": activation.activation_id,
+            "deployment_id": activation.deployment_id,
+            "generation": activation.generation,
+            "package_digest": activation.package_digest,
+            "release_digest": activation.release_digest,
+        }
+        for skill_name, activation in selected.items()
+    }
+
+
 def _installed_runtime_version_records(
     ctx: AgentContext,
     mgr: SkillManager,
@@ -601,6 +651,7 @@ def _installed_runtime_version_records(
     name: str | None = None,
 ) -> list[dict[str, Any]]:
     registry_versions = _registry_versions(ctx)
+    project_activations = _project_managed_skill_activations(ctx)
     requested_name = str(name or "").strip()
     names = {requested_name} if requested_name else set(_registered_skill_names(ctx))
     records: list[dict[str, Any]] = []
@@ -618,19 +669,29 @@ def _installed_runtime_version_records(
             if isinstance(runtime_state, dict) and isinstance(runtime_state.get("deactivation"), dict)
             else {}
         )
-        records.append(
-            {
-                "skill": skill_name,
-                "workspace_version": workspace_version,
-                "runtime_version": runtime_version,
-                "source_path": str(source),
-                "source_materialized": bool(local_version),
-                "version_source": "workspace_manifest" if local_version else "workspace_registry",
-                "runtime_behind": _runtime_is_behind(workspace_version, runtime_version),
-                "deactivated": bool(runtime_state.get("deactivated")) if isinstance(runtime_state, dict) else False,
-                "deactivation": deactivation,
-            }
-        )
+        record = {
+            "skill": skill_name,
+            "workspace_version": workspace_version,
+            "runtime_version": runtime_version,
+            "source_path": str(source),
+            "source_materialized": bool(local_version),
+            "version_source": "workspace_manifest" if local_version else "workspace_registry",
+            "runtime_behind": (
+                False
+                if skill_name in project_activations
+                else _runtime_is_behind(workspace_version, runtime_version)
+            ),
+            "deactivated": bool(runtime_state.get("deactivated")) if isinstance(runtime_state, dict) else False,
+            "deactivation": deactivation,
+        }
+        if skill_name in project_activations:
+            record.update(
+                {
+                    "migration_owner": "project_deployment",
+                    "project_activation": project_activations[skill_name],
+                }
+            )
+        records.append(record)
     return records
 
 
@@ -649,6 +710,8 @@ def migration_candidates(
     candidates: list[dict[str, Any]] = []
     for record in _installed_runtime_version_records(ctx, mgr, name=requested_name or None):
         name = str(record["skill"])
+        if record.get("migration_owner") == "project_deployment":
+            continue
         workspace_version = str(record["workspace_version"])
         runtime_version = str(record["runtime_version"])
         deactivation = dict(record["deactivation"])
