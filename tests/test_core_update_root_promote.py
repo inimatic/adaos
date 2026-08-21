@@ -71,7 +71,7 @@ def test_candidate_root_promoter_fails_closed_when_wrapper_refresh_fails(monkeyp
     assert payload["wrapper_refresh"]["error_type"] == "OSError"
 
 
-def test_candidate_root_promoter_initializes_context_before_promotion(monkeypatch, tmp_path, capsys) -> None:
+def test_candidate_root_promoter_initializes_context_after_promotion(monkeypatch, tmp_path, capsys) -> None:
     from adaos.apps import bootstrap, core_update_root_promote
     from adaos.services import autostart, core_update
 
@@ -103,5 +103,5 @@ def test_candidate_root_promoter_initializes_context_before_promotion(monkeypatc
     )
 
     assert rc == 0
-    assert events == ["context", "promote:B"]
+    assert events == ["promote:B", "context"]
     assert json.loads(capsys.readouterr().out)["wrapper_refresh"]["ok"] is True

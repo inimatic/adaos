@@ -820,6 +820,13 @@ def _preflight_root_promotion(
             (str((candidate_root / "src").resolve()), str((root_dir / "src").resolve()))
         )
         env["PYTHONNOUSERSITE"] = "1"
+        # Imports validate executable code and may initialize the application
+        # context. Keep those side effects away from the live runtime database.
+        preflight_base_dir = (candidate_root / ".adaos-preflight").resolve()
+        env["ADAOS_BASE_DIR"] = str(preflight_base_dir)
+        env["ADAOS_ROOT_REPO_ROOT"] = str(candidate_root)
+        env["ADAOS_PROFILE"] = "core-update-preflight"
+        env["ADAOS_CORE_UPDATE_PREFLIGHT"] = "1"
         timeout_sec = _root_promotion_preflight_timeout_sec()
         try:
             completed = subprocess.run(
@@ -846,6 +853,7 @@ def _preflight_root_promotion(
             "ok": True,
             "skipped": False,
             "control_python": str(control_python),
+            "isolated_base_dir": str(preflight_base_dir),
             "modules": list(modules),
             "imported": imported if isinstance(imported, dict) else {},
         }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import threading
@@ -943,6 +944,61 @@ def test_root_promotion_preflight_timeout_is_bounded_and_tolerates_io_pressure(m
 
     monkeypatch.setenv("ADAOS_CORE_ROOT_PROMOTION_PREFLIGHT_TIMEOUT_SEC", "invalid")
     assert core_update._root_promotion_preflight_timeout_sec() == 300.0
+
+
+def test_root_promotion_preflight_isolates_import_state(monkeypatch, tmp_path) -> None:
+    import adaos.services.core_update as core_update
+
+    live_base = tmp_path / "live"
+    root_dir = tmp_path / "root"
+    slot_repo = tmp_path / "slot" / "repo"
+    for base in (root_dir, slot_repo):
+        (base / "src" / "adaos" / "apps").mkdir(parents=True)
+        (base / "src" / "adaos" / "apps" / "supervisor.py").write_text("", encoding="utf-8")
+        (base / "pyproject.toml").write_text(
+            "[project]\nname='adaos'\nversion='0.0.0'\n",
+            encoding="utf-8",
+        )
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(live_base))
+    monkeypatch.setenv("ADAOS_PROFILE", "production")
+    monkeypatch.setattr(core_update, "current_control_python", lambda _root: Path(os.sys.executable))
+    observed: dict[str, object] = {}
+
+    def _run(args, **kwargs):
+        candidate_root = Path(args[3]).resolve()
+        observed["candidate_root"] = candidate_root
+        observed["env"] = dict(kwargs["env"])
+        return subprocess.CompletedProcess(
+            args,
+            0,
+            json.dumps(
+                {
+                    "adaos.apps.supervisor": str(
+                        candidate_root / "src" / "adaos" / "apps" / "supervisor.py"
+                    )
+                }
+            ),
+            "",
+        )
+
+    monkeypatch.setattr(core_update.subprocess, "run", _run)
+
+    payload = core_update._preflight_root_promotion(
+        source_repo_dir=slot_repo,
+        root_dir=root_dir,
+        changed_paths=["src/adaos/apps/supervisor.py"],
+    )
+
+    env = observed["env"]
+    candidate_root = observed["candidate_root"]
+    assert isinstance(env, dict)
+    assert isinstance(candidate_root, Path)
+    assert env["ADAOS_BASE_DIR"] == str(candidate_root / ".adaos-preflight")
+    assert env["ADAOS_BASE_DIR"] != str(live_base)
+    assert env["ADAOS_ROOT_REPO_ROOT"] == str(candidate_root)
+    assert env["ADAOS_PROFILE"] == "core-update-preflight"
+    assert env["ADAOS_CORE_UPDATE_PREFLIGHT"] == "1"
+    assert payload["isolated_base_dir"] == env["ADAOS_BASE_DIR"]
 
 
 def test_promote_root_reports_preflight_timeout_before_root_mutation(monkeypatch, tmp_path) -> None:
