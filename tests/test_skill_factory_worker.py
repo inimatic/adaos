@@ -1580,6 +1580,7 @@ def _operation_sequence_assignment(
     *,
     omit_output: bool = False,
     mismatched_observation: bool = False,
+    mismatched_cross_step: bool = False,
 ) -> dict:
     skill = workspace / "skills" / "sequence_provider"
     handlers = skill / "handlers"
@@ -1631,7 +1632,8 @@ def _operation_sequence_assignment(
         "def verify(uri, digest):\n"
         "    path = Path(uri)\n"
         "    actual = 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest()\n"
-        "    return {'ok': path.is_file() and actual == digest}\n"
+        f"    return {{'ok': path.is_file() and actual == digest, "
+        f"'metric': {7 if mismatched_cross_step else 6}}}\n"
         "if __name__ == '__main__' and len(sys.argv) > 1 and sys.argv[1] == 'execute':\n"
         "    if not OMIT_OUTPUT:\n"
         "        Path('result.json').write_text(json.dumps({'value': 6}) + '\\n', encoding='utf-8')\n",
@@ -1696,8 +1698,11 @@ def _operation_sequence_assignment(
                 },
                 "output_schema": {
                     "type": "object",
-                    "required": ["ok"],
-                    "properties": {"ok": {"type": "boolean"}},
+                    "required": ["ok", "metric"],
+                    "properties": {
+                        "ok": {"type": "boolean"},
+                        "metric": {"type": "integer"},
+                    },
                     "additionalProperties": False,
                 },
             },
@@ -1760,7 +1765,16 @@ def _operation_sequence_assignment(
                             "$bind": {"step": "collect", "pointer": "/artifacts"}
                         },
                         "input": {"uri": {"$item": "/uri"}, "digest": {"$item": "/digest"}},
-                        "assert": [{"pointer": "/ok", "equals": True}],
+                        "assert": [
+                            {"pointer": "/ok", "equals": True},
+                            {
+                                "pointer": "/metric",
+                                "equals_step_pointer": {
+                                    "step": "collect",
+                                    "pointer": "/result/primary_metric",
+                                },
+                            },
+                        ],
                     },
                 ],
             }
@@ -2148,6 +2162,33 @@ def test_worker_operation_sequence_enforces_cross_field_array_invariant(tmp_path
     assert checks == []
     assert len(errors) == 1
     assert "contains no matching item" in errors[0]
+
+
+def test_worker_operation_sequence_enforces_cross_step_invariant(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _operation_sequence_assignment(workspace, mismatched_cross_step=True)
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    worker._validate_admitted_contract_operation_sequences(
+        assignment,
+        workspace,
+        runtime_dir=tmp_path / "runtime",
+        checks=checks,
+        errors=errors,
+    )
+
+    assert checks == []
+    assert len(errors) == 1
+    assert "expected 6, got 7" in errors[0]
 
 
 def test_worker_selects_newest_complete_contract_document_set(tmp_path: Path) -> None:

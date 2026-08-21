@@ -131,22 +131,44 @@ def _tool_entries(manifest: Mapping[str, Any]) -> dict[str, tuple[str, str]]:
     return entries
 
 
-def _assertion_expected(root: Any, raw: Mapping[str, Any]) -> Any:
+def _assertion_expected(
+    root: Any,
+    raw: Mapping[str, Any],
+    outputs: Mapping[str, Any],
+) -> Any:
     has_literal = "equals" in raw
     has_pointer = "equals_root_pointer" in raw
-    if has_literal == has_pointer:
+    has_step_pointer = "equals_step_pointer" in raw
+    if sum((has_literal, has_pointer, has_step_pointer)) != 1:
         raise ContractSequenceError(
-            "assertion must contain exactly one of equals or equals_root_pointer"
+            "assertion must contain exactly one of equals, equals_root_pointer, "
+            "or equals_step_pointer"
         )
     if has_pointer:
         return _json_pointer(root, str(raw["equals_root_pointer"] or ""))
+    if has_step_pointer:
+        binding = raw["equals_step_pointer"]
+        if not isinstance(binding, Mapping):
+            raise ContractSequenceError("equals_step_pointer must be an object")
+        step = str(binding.get("step") or "")
+        if step not in outputs:
+            raise ContractSequenceError(
+                f"equals_step_pointer refers to unavailable step {step!r}"
+            )
+        return _json_pointer(outputs[step], str(binding.get("pointer") or ""))
     return raw["equals"]
 
 
-def _scalar_assertion(step_id: str, root: Any, value: Any, raw: Mapping[str, Any]) -> None:
+def _scalar_assertion(
+    step_id: str,
+    root: Any,
+    value: Any,
+    raw: Mapping[str, Any],
+    outputs: Mapping[str, Any],
+) -> None:
     pointer = str(raw.get("pointer") or "")
     actual = _json_pointer(value, pointer)
-    expected = _assertion_expected(root, raw)
+    expected = _assertion_expected(root, raw, outputs)
     if actual != expected:
         raise ContractSequenceError(
             f"step {step_id} assertion {pointer or '/'} expected "
@@ -154,7 +176,12 @@ def _scalar_assertion(step_id: str, root: Any, value: Any, raw: Mapping[str, Any
         )
 
 
-def _assertions(step_id: str, value: Any, assertions: Any) -> None:
+def _assertions(
+    step_id: str,
+    value: Any,
+    assertions: Any,
+    outputs: Mapping[str, Any],
+) -> None:
     if assertions is None:
         return
     if not isinstance(assertions, list) or len(assertions) > 100:
@@ -163,9 +190,12 @@ def _assertions(step_id: str, value: Any, assertions: Any) -> None:
         if not isinstance(raw, Mapping):
             raise ContractSequenceError(f"step {step_id} has an invalid assertion")
         if "contains" not in raw:
-            _scalar_assertion(step_id, value, value, raw)
+            _scalar_assertion(step_id, value, value, raw, outputs)
             continue
-        if "equals" in raw or "equals_root_pointer" in raw:
+        if any(
+            key in raw
+            for key in ("equals", "equals_root_pointer", "equals_step_pointer")
+        ):
             raise ContractSequenceError(
                 f"step {step_id} contains assertion cannot also compare its selected array"
             )
@@ -188,7 +218,7 @@ def _assertions(step_id: str, value: Any, assertions: Any) -> None:
         for item in selected[:1000]:
             try:
                 for clause in clauses:
-                    _scalar_assertion(step_id, value, item, clause)
+                    _scalar_assertion(step_id, value, item, clause, outputs)
             except ContractSequenceError:
                 continue
             matched = True
@@ -370,7 +400,7 @@ def run_sequence(request: Mapping[str, Any]) -> dict[str, Any]:
                 data_root=data_root,
                 runtime_root=runtime_root,
             )
-            _assertions(step_id, result, step.get("assert"))
+            _assertions(step_id, result, step.get("assert"), outputs)
             outputs[step_id] = result
             report_steps.append({"id": step_id, "kind": kind, "ok": True})
             continue
@@ -420,7 +450,7 @@ def run_sequence(request: Mapping[str, Any]) -> dict[str, Any]:
                     raise ContractSequenceError(
                         f"step {step_id} output violates {operation}: " + "; ".join(failures[:20])
                     )
-            _assertions(step_id, result, step.get("assert"))
+            _assertions(step_id, result, step.get("assert"), outputs)
             results.append(result)
         output = results if "for_each" in step else results[0]
         outputs[step_id] = output
