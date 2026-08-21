@@ -87,6 +87,13 @@ def submit(value: ExecutionSpec, *, idempotency_key: str) -> ExecutionAttempt:
     return ExecutionService(ctx).submit(value, idempotency_key=idempotency_key)
 
 
+def capabilities() -> dict[str, Any]:
+    """Describe the executor currently admitted for the calling skill."""
+
+    ctx = _admitted()
+    return ExecutionService(ctx).capabilities()
+
+
 def reconcile(attempt_id: str) -> ExecutionAttempt:
     ctx = _admitted()
     return ExecutionService(ctx).reconcile(attempt_id)
@@ -110,6 +117,7 @@ __all__ = [
     "ExecutionSpec",
     "PreemptionPolicy",
     "cancel",
+    "capabilities",
     "reconcile",
     "spec",
     "submit",

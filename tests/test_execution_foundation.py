@@ -5,6 +5,7 @@ import sys
 import time
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,6 +27,7 @@ from adaos.services.execution import local as local_execution
 from adaos.services.execution import local_worker
 from adaos.services.execution.local import LocalProcessExecutor
 from adaos.services.execution.oci import OCIExecutor
+from adaos.services.execution.service import ExecutionService
 
 
 def _wait_terminal(
@@ -52,6 +54,21 @@ def _spec(tmp_path: Path, *command: str, wall_time_s: float | None = None) -> Ex
         working_directory=str(tmp_path),
         resources=ExecutionResourceRequest(wall_time_s=wall_time_s),
     )
+
+
+def test_execution_service_exposes_owner_scoped_provider_capabilities(tmp_path) -> None:
+    provider = LocalProcessExecutor(state_root=tmp_path / "state", allowed_roots=(tmp_path,))
+    current = SimpleNamespace(name="research_manager_skill", path=tmp_path)
+    ctx = SimpleNamespace(
+        skill_ctx=SimpleNamespace(get=lambda: current),
+        execution_provider=provider,
+    )
+
+    snapshot = ExecutionService(ctx).capabilities()
+
+    assert snapshot["provider_id"] == "local-process"
+    assert snapshot["protocol_version"] == "1.0"
+    assert "network_offline" not in snapshot["features"]
 
 
 @pytest.mark.parametrize("module", (local_execution, local_worker))

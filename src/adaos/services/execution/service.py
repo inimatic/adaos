@@ -44,6 +44,17 @@ class ExecutionService:
             )
         return self._provider().submit(spec, idempotency_key=idempotency_key)
 
+    def capabilities(self) -> dict[str, Any]:
+        """Return the active provider contract without exposing provider internals.
+
+        Capability discovery is deliberately owner-scoped even though the current
+        payload contains no secrets. This keeps admission checks on the same SDK
+        boundary as submit/reconcile when executor brokering is introduced.
+        """
+
+        self._current()
+        return self._provider().capabilities.to_dict()
+
     def reconcile(self, attempt_id: str) -> ExecutionAttempt:
         owner_ref, _ = self._current()
         return self._provider().reconcile(attempt_id, owner_ref=owner_ref)
