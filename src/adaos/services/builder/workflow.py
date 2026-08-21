@@ -164,6 +164,29 @@ _BUILDER_WORKFLOW_ACTIVITIES = frozenset(
 )
 
 
+def _reset_compatibility_head_for_new_change(
+    workflow: dict[str, Any],
+    *,
+    prototype_first: bool,
+) -> None:
+    """Detach the mutable compatibility head from predecessor lineage."""
+
+    workflow["active_phase"] = "prototype"
+    workflow["automation"] = {
+        "status": "not_started",
+        "iteration": 0,
+        "source_prototype_revision": _mapping(workflow.get("prototype")).get(
+            "head_revision"
+        ),
+    }
+    workflow["delivery"] = {"status": "idle"}
+    workflow["pending_transition"] = None
+    if prototype_first:
+        prototype = _mapping(workflow.get("prototype"))
+        prototype.update({"status": "working", "stable": False, "frozen_at": None})
+        workflow["prototype"] = prototype
+
+
 class BuilderWorkflowError(ValueError):
     """Raised when a Builder lifecycle transition is not permitted."""
 
@@ -4411,6 +4434,11 @@ class BuilderWorkflowService:
             if not change_set_id:
                 raise BuilderWorkflowError("change_set_id is required")
             existing = workflow.get("change_set")
+            existing_change_set_id = str(
+                (existing or {}).get("change_set_id")
+                if isinstance(existing, Mapping)
+                else ""
+            ).strip()
             if isinstance(existing, Mapping) and str(existing.get("status") or "") not in _CHANGE_SET_TERMINAL_STATES:
                 supersedes = str(metadata.get("supersedes_change_set_id") or "").strip()
                 if supersedes != str(existing.get("change_set_id") or ""):
@@ -4430,6 +4458,15 @@ class BuilderWorkflowService:
                 raise BuilderWorkflowError("change set issue_ids must be unique")
             route = "prototype_first" if any(item["lane"] == "prototype" for item in issues) else "automation_direct"
             gate = "prototype" if route == "prototype_first" else "automation"
+            if existing_change_set_id != change_set_id:
+                # A Project may retain a completed/published Automation as
+                # lineage while a new canonical Change becomes active. Reset
+                # only the compatibility head; immutable predecessor evidence
+                # remains in the Change portfolio and publication records.
+                _reset_compatibility_head_for_new_change(
+                    workflow,
+                    prototype_first=route == "prototype_first",
+                )
             workflow["change_set"] = {
                 "schema": BUILDER_CHANGE_SET_SCHEMA,
                 "change_set_id": change_set_id,
@@ -4800,6 +4837,20 @@ class BuilderWorkflowService:
                 update_change_set(status="approved", gate="automation")
             return
         if action in {"handoff_to_automation", "automation_started"}:
+            governed_state = str(
+                _mapping(workflow.get("governed")).get("state") or ""
+            ).strip()
+            if (
+                str(workflow.get("active_phase") or "prototype") != "prototype"
+                and governed_state == "automation_ready"
+            ):
+                # Upgrade an already planned Change persisted by an older
+                # compatibility projection. Canonical admission is the
+                # authority; predecessor results stay in the portfolio.
+                _reset_compatibility_head_for_new_change(
+                    workflow,
+                    prototype_first=False,
+                )
             self._require_active(workflow, "prototype", action)
             source_revision = str(metadata.get("source_prototype_revision") or "").strip()
             if source_revision.lower().startswith("ui "):

@@ -1181,6 +1181,106 @@ def test_completed_automation_rebinds_to_approved_successor_change(tmp_path: Pat
     assert request["artifacts"]["change_set"]["issues"][0]["issue_id"] == "input-policy"
 
 
+def test_fresh_change_replaces_terminal_session_from_canonical_ready_state(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    first_change_id = "CS-recipes-initial"
+    second_change_id = "CS-recipes-successor"
+    service._workflow().transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": first_change_id,
+            "request": "Implement recipe search.",
+            "issues": [
+                {
+                    "issue_id": "recipe-search",
+                    "title": "Implement recipe search",
+                    "lane": "automation",
+                    "acceptance_criteria": ["A recipe can be found by name."],
+                }
+            ],
+        },
+    )
+    first = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipe search.",
+        webspace_id="prompt-dev",
+        change_set_id=first_change_id,
+    )
+    assert first["session"]["status"] == "queued"
+    assert service.status(object_type="scenario", object_id="recipes")["session"][
+        "status"
+    ] == "completed"
+    service._workflow().transition(
+        "scenario",
+        "recipes",
+        "automation_completed",
+        metadata={"task_id": "task.initial", "version": "0.1.1"},
+    )
+
+    service._workflow().transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": second_change_id,
+            "supersedes_change_set_id": first_change_id,
+            "request": "Implement the accepted successor contract.",
+            "issues": [
+                {
+                    "issue_id": "successor-contract",
+                    "title": "Implement the accepted successor contract",
+                    "lane": "automation",
+                    "acceptance_criteria": ["The successor contract passes verification."],
+                }
+            ],
+        },
+    )
+
+    # Simulate a Change planned before the compatibility-head reset existed:
+    # the canonical instance is automation_ready while legacy fields still
+    # describe the published/completed predecessor.
+    workflow_service = service._workflow()
+    legacy_state = workflow_service._read_state("scenario", "recipes")
+    legacy_state["workflow"]["active_phase"] = "automation"
+    legacy_state["workflow"]["automation"] = {
+        "status": "completed",
+        "iteration": 1,
+        "head_task_id": "task.predecessor",
+    }
+    legacy_state["workflow"]["delivery"] = {"status": "published"}
+    workflow_service._write_state("scenario", "recipes", legacy_state)
+
+    successor = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement the accepted successor contract.",
+        webspace_id="prompt-dev",
+        change_set_id=second_change_id,
+    )
+
+    assert successor["session"]["status"] == "queued"
+    completed = service.status(object_type="scenario", object_id="recipes")["session"]
+    assert completed["status"] == "completed"
+    assert completed["change_set_id"] == second_change_id
+    assert completed["implementation_brief"] == (
+        "Implement the accepted successor contract."
+    )
+    service._workflow().transition(
+        "scenario",
+        "recipes",
+        "automation_completed",
+        metadata={"task_id": "task.successor", "version": "0.1.2"},
+    )
+    assert service._workflow().describe("scenario", "recipes")["governed"][
+        "state"
+    ] == "verification"
+
+
 def test_followup_invalidates_checkpoint_before_queueing_next_iteration(tmp_path: Path) -> None:
     service = _service(tmp_path)
     service.start_from_execute(

@@ -749,7 +749,21 @@ class BuilderAutomationService:
                     self._launch_worker(str(refreshed.get("session_id") or ""))
                     result["worker_relaunched"] = True
                 return result
-            if str(workflow_before.get("active_phase") or "prototype") != "prototype":
+            governed_before = (
+                workflow_before.get("governed")
+                if isinstance(workflow_before.get("governed"), Mapping)
+                else {}
+            )
+            governed_state = str(governed_before.get("state") or "").strip()
+            if governed_state:
+                if governed_state != "automation_ready":
+                    raise ValueError(
+                        "Automation cannot start from governed state "
+                        f"{governed_state}; submit an iteration only for the active Change"
+                    )
+            elif str(workflow_before.get("active_phase") or "prototype") != "prototype":
+                # Legacy state without a canonical governed instance retains
+                # the pre-workflow compatibility guard.
                 raise ValueError(
                     "Automation is already the active process; submit a new Automation iteration instead"
                 )
@@ -1044,6 +1058,7 @@ class BuilderAutomationService:
                 development_session_id=str(development_session_id or ""),
             )
             transition_token = str(workflow_transition or "").strip() or None
+            starts_successor_change = False
             if transition_token != "return_to_prototype":
                 workflow_before = self._workflow().describe(
                     str(session.get("object_type") or ""),
@@ -1132,6 +1147,7 @@ class BuilderAutomationService:
                     session["change_set_id"] = active_change_set_id
                     session["canonical_change_id"] = active_change_set_id
                     session.pop("context_packet_digest", None)
+                    starts_successor_change = governed_state == "automation_ready"
             session["iteration"] = int(session.get("iteration") or 0) + 1
             changed_at = _now_iso()
             previous_change_id = str(session.get("change_id") or "").strip()
@@ -1213,9 +1229,17 @@ class BuilderAutomationService:
                 self._workflow().transition(
                     str(session.get("object_type") or ""),
                     str(session.get("object_id") or ""),
-                    "automation_iteration_started",
+                    (
+                        "automation_started"
+                        if starts_successor_change
+                        else "automation_iteration_started"
+                    ),
                     actor="builder.automation",
-                    reason="a new Automation iteration was queued",
+                    reason=(
+                        "a new Automation was queued for the approved successor Change"
+                        if starts_successor_change
+                        else "a new Automation iteration was queued"
+                    ),
                     metadata={
                         "confirmed": True,
                         "task_id": session.get("current_task_id"),
