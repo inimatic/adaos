@@ -405,6 +405,51 @@ def test_service_supervisor_starts_distributed_memberships_first():
     ]
 
 
+def test_service_supervisor_runtime_summary_exposes_bounded_distributed_state(monkeypatch):
+    from adaos.services.skill import service_supervisor as mod
+
+    supervisor = mod.ServiceSkillSupervisor()
+    supervisor._specs = {  # type: ignore[assignment]
+        "optional_service": SimpleNamespace(distributed_membership=None),
+        "topology_agent": SimpleNamespace(distributed_membership=object()),
+    }
+    supervisor._process_states["topology_agent"] = {"running": True, "pid": 9123}
+    supervisor._health_states["topology_agent"] = {"ok": True, "source": "http"}
+    supervisor._membership.status = lambda _name: {  # type: ignore[method-assign]
+        "enabled": True,
+        "ok": True,
+        "state": "reported",
+        "group_id": "catalog-home",
+        "authority": "hub",
+        "observed_at": "2026-08-21T09:00:00+00:00",
+    }
+    monkeypatch.setattr(mod, "_SUPERVISOR", supervisor)
+
+    payload = mod.service_supervisor_runtime_summary()
+
+    assert payload["state"] == "running"
+    assert payload["tasks"] == {
+        "health": {"state": "not_started"},
+        "watchdog": {"state": "not_started"},
+    }
+    assert payload["distributed"] == [
+        {
+            "skill": "topology_agent",
+            "process_running": True,
+            "health_ok": True,
+            "health_source": "http",
+            "membership": {
+                "enabled": True,
+                "ok": True,
+                "state": "reported",
+                "group_id": "catalog-home",
+                "authority": "hub",
+                "observed_at": "2026-08-21T09:00:00+00:00",
+            },
+        }
+    ]
+
+
 def test_get_service_supervisor_replaces_shutdown_singleton(monkeypatch):
     from adaos.services.skill import service_supervisor as mod
 

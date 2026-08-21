@@ -455,6 +455,34 @@ def test_node_status_push_excludes_recursive_diagnostics(monkeypatch) -> None:
                 "session_state": "remote_active",
                 "last_diag": {"history": "x" * (300 * 1024)},
             },
+            "service_skills": {
+                "schema": "adaos.skill_service_supervisor.runtime.v1",
+                "state": "running",
+                "initialized": True,
+                "discovered_count": 6,
+                "tasks": {
+                    "health": {"state": "failed", "error_type": "RuntimeError", "error": "health loop stopped"},
+                    "watchdog": {"state": "running"},
+                },
+                "distributed": [
+                    {
+                        "skill": "media_library_agent",
+                        "process_running": True,
+                        "health_ok": True,
+                        "health_source": "http",
+                        "membership": {
+                            "enabled": True,
+                            "ok": True,
+                            "state": "reported",
+                            "group_id": "media-library-home",
+                            "authority": "hub",
+                            "observed_at": "2026-08-21T09:00:00+00:00",
+                            "private": "drop-me",
+                        },
+                    }
+                ],
+                "private": {"history": "x" * (300 * 1024)},
+            },
             "core_update_status": {
                 "state": "preparing",
                 "phase": "prewarm",
@@ -486,6 +514,36 @@ def test_node_status_push_excludes_recursive_diagnostics(monkeypatch) -> None:
     assert payload["runtime"]["sidecar_runtime"] == {
         "status": "ready",
         "session_state": "remote_active",
+    }
+    assert payload["runtime"]["service_skills"] == {
+        "schema": "adaos.skill_service_supervisor.runtime.v1",
+        "state": "running",
+        "initialized": True,
+        "discovered_count": 6,
+        "tasks": {
+            "health": {
+                "state": "failed",
+                "error_type": "RuntimeError",
+                "error": "health loop stopped",
+            },
+            "watchdog": {"state": "running"},
+        },
+        "distributed": [
+            {
+                "skill": "media_library_agent",
+                "process_running": True,
+                "health_ok": True,
+                "health_source": "http",
+                "membership": {
+                    "enabled": True,
+                    "ok": True,
+                    "state": "reported",
+                    "group_id": "media-library-home",
+                    "authority": "hub",
+                    "observed_at": "2026-08-21T09:00:00+00:00",
+                },
+            }
+        ],
     }
     assert payload["runtime"]["core_update_status"] == {
         "state": "preparing",

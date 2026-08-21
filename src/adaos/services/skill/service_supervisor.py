@@ -2502,6 +2502,87 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
                     await self._run_hook(spec, spec.hook_on_self_heal, payload={"issue": issue, "reason": "healthcheck_failed"})
 
 
+def _task_runtime_state(task: asyncio.Task | None) -> dict[str, Any]:
+    if task is None:
+        return {"state": "not_started"}
+    if task.cancelled():
+        return {"state": "cancelled"}
+    if not task.done():
+        return {"state": "running"}
+    try:
+        error = task.exception()
+    except (asyncio.CancelledError, RuntimeError):
+        return {"state": "cancelled"}
+    if error is None:
+        return {"state": "completed"}
+    return {
+        "state": "failed",
+        "error_type": type(error).__name__,
+        "error": str(error)[:300],
+    }
+
+
+def service_supervisor_runtime_summary() -> dict[str, Any]:
+    supervisor = _SUPERVISOR
+    if supervisor is None:
+        return {
+            "schema": "adaos.skill_service_supervisor.runtime.v1",
+            "state": "not_initialized",
+            "initialized": False,
+            "distributed": [],
+        }
+
+    distributed: list[dict[str, Any]] = []
+    for name, spec in sorted(supervisor._specs.items())[:64]:
+        if getattr(spec, "distributed_membership", None) is None:
+            continue
+        membership = supervisor._membership.status(name)
+        health = dict(supervisor._health_states.get(name) or {})
+        process = dict(supervisor._process_states.get(name) or {})
+        distributed.append(
+            {
+                "skill": name,
+                "process_running": bool(process.get("running")),
+                "health_ok": health.get("ok"),
+                "health_source": health.get("source"),
+                "membership": {
+                    key: membership[key]
+                    for key in (
+                        "enabled",
+                        "ok",
+                        "state",
+                        "group_id",
+                        "authority",
+                        "action",
+                        "instance_id",
+                        "error",
+                        "observed_at",
+                    )
+                    if key in membership
+                },
+            }
+        )
+        if len(distributed) >= 32:
+            break
+
+    health_task = _task_runtime_state(supervisor._health_task)
+    watchdog_task = _task_runtime_state(supervisor._task)
+    shutdown_requested = bool(supervisor._shutdown_requested)
+    failed = health_task.get("state") == "failed" or watchdog_task.get("state") == "failed"
+    return {
+        "schema": "adaos.skill_service_supervisor.runtime.v1",
+        "state": "shutdown" if shutdown_requested else "failed" if failed else "running",
+        "initialized": True,
+        "shutdown_requested": shutdown_requested,
+        "discovered_count": len(supervisor._specs),
+        "tasks": {
+            "health": health_task,
+            "watchdog": watchdog_task,
+        },
+        "distributed": distributed,
+    }
+
+
 _SUPERVISOR: ServiceSkillSupervisor | None = None
 
 

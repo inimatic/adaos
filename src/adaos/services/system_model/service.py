@@ -119,6 +119,22 @@ def _node_status_sidecar_runtime(role: str | None) -> dict[str, Any]:
         return {}
 
 
+def _node_status_service_supervisor_runtime() -> dict[str, Any]:
+    try:
+        from adaos.services.skill.service_supervisor import (
+            service_supervisor_runtime_summary,
+        )
+
+        return service_supervisor_runtime_summary()
+    except Exception:
+        return {
+            "schema": "adaos.skill_service_supervisor.runtime.v1",
+            "state": "unavailable",
+            "initialized": False,
+            "distributed": [],
+        }
+
+
 def current_node_identity_status_payload() -> dict[str, Any]:
     """Build the node identity without entering diagnostic I/O paths."""
 
@@ -166,6 +182,7 @@ def current_node_status_payload() -> dict[str, Any]:
     base_dir = current_base_dir()
     supervisor_runtime = _node_status_supervisor_runtime(base_dir)
     sidecar_runtime = _node_status_sidecar_runtime(str(identity.get("role") or "") or None)
+    service_skills = _node_status_service_supervisor_runtime()
     if sidecar_runtime:
         runtime_state = supervisor_runtime.get("runtime")
         runtime_state = dict(runtime_state) if isinstance(runtime_state, dict) else {}
@@ -181,6 +198,7 @@ def current_node_status_payload() -> dict[str, Any]:
             "supervisor_available": bool(supervisor_runtime.get("available")),
             "supervisor_runtime": supervisor_runtime,
             "sidecar_runtime": sidecar_runtime,
+            "service_skills": service_skills,
             "core_update_status": core_update_status if isinstance(core_update_status, dict) else {},
         },
         "environment": runtime_environment,
@@ -282,6 +300,51 @@ def _compact_core_update_status(value: object) -> dict[str, Any]:
             "active_slot_target_mismatch_reason",
         ),
     )
+
+
+def _compact_service_supervisor_runtime(value: object) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    compact = _select_mapping_fields(
+        source,
+        (
+            "schema",
+            "state",
+            "initialized",
+            "shutdown_requested",
+            "discovered_count",
+        ),
+    )
+    tasks = source.get("tasks") if isinstance(source.get("tasks"), dict) else {}
+    compact["tasks"] = {
+        name: _select_mapping_fields(task, ("state", "error_type", "error"))
+        for name, task in list(tasks.items())[:4]
+        if isinstance(name, str) and isinstance(task, dict)
+    }
+    distributed: list[dict[str, Any]] = []
+    for raw in list(source.get("distributed") or [])[:32]:
+        if not isinstance(raw, dict):
+            continue
+        item = _select_mapping_fields(
+            raw,
+            ("skill", "process_running", "health_ok", "health_source"),
+        )
+        item["membership"] = _select_mapping_fields(
+            raw.get("membership"),
+            (
+                "enabled",
+                "ok",
+                "state",
+                "group_id",
+                "authority",
+                "action",
+                "instance_id",
+                "error",
+                "observed_at",
+            ),
+        )
+        distributed.append(item)
+    compact["distributed"] = distributed
+    return compact
 
 
 def compact_node_status_transport_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -417,6 +480,7 @@ def compact_node_status_transport_payload(payload: dict[str, Any]) -> dict[str, 
         "supervisor_available": bool(runtime.get("supervisor_available")),
         "supervisor_runtime": compact_supervisor,
         "sidecar_runtime": compact_sidecar,
+        "service_skills": _compact_service_supervisor_runtime(runtime.get("service_skills")),
         "core_update_status": _compact_core_update_status(runtime.get("core_update_status")),
     }
     compact["environment"] = environment
