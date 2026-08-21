@@ -281,8 +281,11 @@ class AdaOSComponentLifecycleHooks:
             "ready": process_ready and health_ready,
             "running": bool(status.get("running")),
             "external_ready": bool(status.get("external_ready")),
+            "external_ready_at": status.get("external_ready_at"),
             "process_spec_matches": bool(status.get("process_spec_matches")),
+            "process_observed_at": status.get("process_observed_at"),
             "health_ok": status.get("health_ok"),
+            "health_observed_at": status.get("health_observed_at"),
             "health_observation_stale": bool(
                 status.get("health_observation_stale")
             ),
@@ -290,7 +293,37 @@ class AdaOSComponentLifecycleHooks:
             "skill_root": status.get("skill_root"),
         }
 
-    def _wait_for_skill_service_ready(self, component_id: str) -> dict[str, Any]:
+    @staticmethod
+    def _service_restart_observed(
+        previous: Mapping[str, Any],
+        observed: Mapping[str, Any],
+    ) -> bool:
+        if previous.get("managed") is not True:
+            return True
+        previous_pid = previous.get("pid")
+        if previous_pid is not None:
+            return bool(
+                observed.get("pid") is not None
+                and (
+                    observed.get("pid") != previous_pid
+                    or observed.get("process_observed_at")
+                    != previous.get("process_observed_at")
+                )
+            )
+        if previous.get("external_ready") is True:
+            return bool(
+                observed.get("external_ready") is True
+                and observed.get("external_ready_at")
+                != previous.get("external_ready_at")
+            )
+        return True
+
+    def _wait_for_skill_service_ready(
+        self,
+        component_id: str,
+        *,
+        previous: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         try:
             timeout_s = float(
                 os.getenv("ADAOS_PROJECT_SERVICE_ACTIVATION_TIMEOUT_S", "300")
@@ -301,10 +334,26 @@ class AdaOSComponentLifecycleHooks:
         timeout_s = max(5.0, min(timeout_s, 900.0))
         deadline = _monotonic() + timeout_s
         observed: dict[str, Any] = {}
+        baseline = dict(previous or {})
+        restart_required = bool(
+            baseline.get("managed") is True
+            and (
+                baseline.get("running") is True
+                or baseline.get("external_ready") is True
+            )
+        )
         while _monotonic() < deadline:
             observed = self._service_activation_status(component_id)
-            if observed.get("ready") is True:
-                return {**observed, "timeout_s": timeout_s}
+            restart_observed = self._service_restart_observed(baseline, observed)
+            if observed.get("ready") is True and (
+                not restart_required or restart_observed
+            ):
+                return {
+                    **observed,
+                    "restart_required": restart_required,
+                    "restart_observed": restart_observed,
+                    "timeout_s": timeout_s,
+                }
             _sleep(0.1)
         raise RuntimeError(
             "service skill did not converge to the active runtime slot "
@@ -319,6 +368,7 @@ class AdaOSComponentLifecycleHooks:
                 operation_id=operation_id,
                 timeout_s=900.0,
             ):
+                previous_service = self._service_activation_status(component_id)
                 slot = self._skill_manager().activate_runtime(component_id, version=version)
                 handler_reload = self._reload_skill_handlers(
                     component_id,
@@ -336,7 +386,10 @@ class AdaOSComponentLifecycleHooks:
                     slot=slot,
                     operation_id=operation_id,
                 )
-                service = self._wait_for_skill_service_ready(component_id)
+                service = self._wait_for_skill_service_ready(
+                    component_id,
+                    previous=previous_service,
+                )
             return {
                 "activated": True,
                 "version": version,
