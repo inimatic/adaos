@@ -304,6 +304,18 @@ def test_member_snapshot_heartbeat_carries_core_build_version(monkeypatch) -> No
             "endpoints": [],
         },
     )
+    service_supervisor = {
+        "schema": "adaos.skill_service_supervisor.runtime.v1",
+        "state": "running",
+        "initialized": True,
+        "tasks": {"health": {"state": "running"}},
+        "distributed": [],
+    }
+    monkeypatch.setattr(
+        mod,
+        "_service_supervisor_runtime_payload",
+        lambda: service_supervisor,
+    )
 
     snapshot = client._local_node_snapshot_heartbeat()
 
@@ -316,6 +328,7 @@ def test_member_snapshot_heartbeat_carries_core_build_version(monkeypatch) -> No
     assert snapshot["environment"]["voice"]["stt"] == "endpoint_audio"
     assert snapshot["environment"]["voice"]["tts"] == "native_or_browser"
     assert snapshot["services"]["voice_listening"] == voice_projection
+    assert snapshot["services"]["skill_supervisor"] == service_supervisor
     assert snapshot["deployment"]["capabilities"] == [
         "project.activate",
         "media.catalog",

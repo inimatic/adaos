@@ -57,6 +57,23 @@ def _deployment_inventory_payload() -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _service_supervisor_runtime_payload() -> dict[str, Any]:
+    try:
+        from adaos.services.skill.service_supervisor import (
+            service_supervisor_runtime_summary,
+        )
+
+        value = service_supervisor_runtime_summary()
+    except Exception:
+        return {
+            "schema": "adaos.skill_service_supervisor.runtime.v1",
+            "state": "unavailable",
+            "initialized": False,
+            "distributed": [],
+        }
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def _rpc_error_code(exc: BaseException) -> str:
     token = str(exc).split(":", 1)[0].strip()
     if token and len(token) <= 80 and all(char.isalnum() or char in "._-" for char in token):
@@ -928,7 +945,10 @@ class MemberLinkClient:
                     "tts": "native_or_browser",
                 },
             },
-            "services": {"voice_listening": voice_listening},
+            "services": {
+                "voice_listening": voice_listening,
+                "skill_supervisor": _service_supervisor_runtime_payload(),
+            },
             "deployment": _deployment_inventory_payload(),
             "build": {
                 "version": str(BUILD_INFO.version or ""),
