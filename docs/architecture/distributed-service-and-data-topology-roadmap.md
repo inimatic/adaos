@@ -245,8 +245,10 @@ ComponentActivation before a topology plan can use that activation as its
 source, so the plan correctly failed closed with
 `topology_skill_activation_identity_mismatch`. The stand was recovered through
 an explicit verified follower and fenced handoff, but zero-downtime rolling
-activation/topology ordering is not yet proven. `DS5-05` remains open for the
-long browser/playback/resource soak and final operator review. The
+activation/topology ordering is not yet proven. The one-hour local server gate
+now passes on 20,000 items with zero errors, 39.02 MiB peak RSS and 13.533% CPU
+p95. `DS5-05` remains open for the Android TV browser/playback/Yjs-pressure
+gate, exact-candidate security/privacy repetition, and final operator review. The
 [production review](distributed-topology-production-review-2026-08-21.md)
 records the security, privacy, resource, rolling upgrade and recovery gates,
 runbooks and explicit rejection decision; physical execution evidence is still

@@ -95,10 +95,13 @@ diagnostics.
   Long Tasks, input latency, UI/Yjs mutation pressure, decode and dropped
   frames during browse, playback, reconnect and update.
 
-Open resource proof: attach passing one-hour server JSON, passing one-hour
-Android TV JSON/screenshots, source/update CPU and disk-I/O evidence, and a
-member update during active playback. A shortened desktop run is diagnostic
-only.
+Local server proof passed on 2026-08-21 for 3,600.063 seconds, 20,000 items and
+307,950 agent deltas with zero errors, 39.02 MiB peak RSS, 0.793 MiB sustained
+RSS growth and 13.533% CPU p95. The JSON is retained at
+`.adaos/state/codex/evidence/media-center-server-acceptance-soak-2026-08-21.json`.
+Open resource proof: attach passing one-hour Android TV JSON/screenshots,
+source/update CPU and disk-I/O evidence, and a member update during active
+playback. A shortened desktop run is diagnostic only.
 
 ## Rolling Upgrade Runbook
 
@@ -158,7 +161,7 @@ definition version, authority epoch or checkpoint cannot be established.
 | Compatible rolling release | normal ProjectRelease rollout on two physical nodes; old route retained; all live memberships converge; overlap then removed | open |
 | Failure and recovery | planned handoff, unplanned authority loss, stale owner rejection and retained checkpoint on exact candidate | repeat on candidate |
 | Security/privacy | rejection matrix plus sanitized export and retained external-data witness | open |
-| Resource/soak | passing server and Android TV one-hour gates plus update-under-playback QoE/I/O | open |
+| Resource/soak | passing server and Android TV one-hour gates plus update-under-playback QoE/I/O | server passed; TV/update proof open |
 | Product E2E | separate TV and authorized controller with Now Playing, D-pad/touch, reconnect/resume, i18n and screenshots | open |
 | Operator recovery | runbook executed by operation ids with route/checkpoint evidence and reviewed rollback result | open |
 
