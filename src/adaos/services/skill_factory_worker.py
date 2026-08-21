@@ -235,6 +235,42 @@ class TaskExecutionCancelled(RuntimeError):
     """The authoritative Skill Factory task was cancelled while executing."""
 
 
+def _codex_failure_detail(result: CodexRunResult, *, limit: int = 2000) -> str:
+    """Recover the model/provider error emitted on Codex's JSONL stdout.
+
+    ``codex exec --json`` reports request failures as structured stdout events,
+    while stderr commonly contains only warnings.  Keeping only stderr turned
+    actionable failures such as an unsupported model into an empty diagnostic.
+    """
+
+    messages: list[str] = []
+    for line in str(result.events or "").splitlines():
+        try:
+            event = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(event, Mapping):
+            continue
+        event_type = str(event.get("type") or "")
+        message = ""
+        if event_type == "error":
+            message = str(event.get("message") or "")
+        elif event_type == "turn.failed":
+            error = event.get("error")
+            message = str(dict(error).get("message") or "") if isinstance(error, Mapping) else ""
+        elif event_type == "item.completed":
+            item = event.get("item")
+            if isinstance(item, Mapping) and str(item.get("type") or "") == "error":
+                message = str(item.get("message") or "")
+        if message.strip() and message.strip() not in messages:
+            messages.append(message.strip())
+    stderr = str(result.stderr or "").strip()
+    if stderr and stderr not in messages:
+        messages.append(stderr)
+    detail = " | ".join(messages) or "no Codex diagnostic was emitted"
+    return detail[-max(200, int(limit)) :]
+
+
 class SubprocessCodexExecutor:
     """Run the installed Codex CLI without exposing AdaOS credentials in the prompt."""
 
@@ -909,7 +945,8 @@ class LocalSkillFactoryWorker:
         self._record_codex_attempt(runtime_dir, result, attempt=attempt)
         if result.returncode:
             raise RuntimeError(
-                f"Codex repair exited with code {result.returncode}: {result.stderr[-1000:]}"
+                f"Codex repair exited with code {result.returncode}: "
+                f"{_codex_failure_detail(result)}"
             )
         if result.final_message:
             # Recovery uses the primary final-message path for the durable
@@ -968,7 +1005,10 @@ class LocalSkillFactoryWorker:
             self._ensure_task_active(task_id)
             self._record_codex_attempt(runtime_dir, codex_result, attempt=0)
             if codex_result.returncode:
-                raise RuntimeError(f"Codex exited with code {codex_result.returncode}: {codex_result.stderr[-1000:]}")
+                raise RuntimeError(
+                    f"Codex exited with code {codex_result.returncode}: "
+                    f"{_codex_failure_detail(codex_result)}"
+                )
 
             test_report: dict[str, Any] = {}
             for repair_attempt in range(self.max_repair_attempts + 1):
@@ -1046,7 +1086,8 @@ class LocalSkillFactoryWorker:
                 self._record_codex_attempt(runtime_dir, codex_result, attempt=repair_attempt + 1)
                 if codex_result.returncode:
                     raise RuntimeError(
-                        f"Codex repair exited with code {codex_result.returncode}: {codex_result.stderr[-1000:]}"
+                        f"Codex repair exited with code {codex_result.returncode}: "
+                        f"{_codex_failure_detail(codex_result)}"
                     )
             self._cleanup_generated_files(workspace)
             _write_json(output_dir / "test_report.json", test_report)

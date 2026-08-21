@@ -14,7 +14,27 @@ import yaml
 from adaos.services.root.service import _rewrite_skill_template_identity
 from adaos.services.skill_factory import SkillFactoryService
 from adaos.services.skill_factory_sources import capture_source_snapshot, materialize_source_snapshot
-from adaos.services.skill_factory_worker import CodexRunResult, LocalSkillFactoryWorker, SubprocessCodexExecutor
+from adaos.services.skill_factory_worker import (
+    CodexRunResult,
+    LocalSkillFactoryWorker,
+    SubprocessCodexExecutor,
+    _codex_failure_detail,
+)
+
+
+def test_codex_failure_detail_prefers_structured_jsonl_errors() -> None:
+    result = CodexRunResult(
+        returncode=1,
+        events=(
+            '{"type":"error","message":"unsupported model"}\n'
+            '{"type":"turn.failed","error":{"message":"request rejected"}}\n'
+        ),
+        stderr="provider warning only",
+    )
+
+    assert _codex_failure_detail(result) == (
+        "unsupported model | request rejected | provider warning only"
+    )
 
 
 def test_source_snapshot_keeps_reserved_artifacts_out_of_codex_workspace(tmp_path: Path) -> None:
