@@ -161,8 +161,8 @@ class DistributedRuntime:
         for step in plan.steps:
             partition = self.store.get_partition(step.partition_id)
             dataset = self.store.get_dataset(partition.dataset_id)
-            if dataset.data_class == "external" and step.retention != "retain":
-                raise DistributedRuntimeError("external_data_retention_must_be_retain")
+            if step.retention != dataset.removal_retention:
+                raise DistributedRuntimeError("topology_plan_retention_mismatch")
         result = self.store.put_plan(plan)
         self.store.append_audit(
             "topology.plan.reviewed",
@@ -285,7 +285,7 @@ class DistributedRuntime:
             availability_impact="reduced_capacity"
             if action in {"move", "drain", "remove"}
             else "none",
-            retention="retain" if dataset.data_class == "external" else "rebuild",
+            retention=dataset.removal_retention,
         )
         plan = TopologyPlan(
             plan_id=_identity(

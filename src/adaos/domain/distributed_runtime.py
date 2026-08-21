@@ -775,7 +775,15 @@ class Dataset:
         if "kind" not in partition_scheme:
             raise DistributedContractError("partition_scheme.kind is required")
         object.__setattr__(self, "partition_scheme", partition_scheme)
-        object.__setattr__(self, "retention", _mapping(self.retention, "retention"))
+        retention = _mapping(self.retention, "retention")
+        removal_policy = retention.get("on_remove")
+        if removal_policy is not None:
+            normalized_removal = _token(
+                removal_policy, "retention.on_remove", max_length=30
+            ).lower()
+            if normalized_removal not in {"retain", "delete", "rebuild"}:
+                raise DistributedContractError("retention.on_remove is invalid")
+        object.__setattr__(self, "retention", retention)
         data_class = _token(self.data_class, "data_class", max_length=30).lower()
         if data_class not in {"external", "derived", "authoritative", "cache"}:
             raise DistributedContractError("data_class is invalid")
@@ -788,6 +796,10 @@ class Dataset:
                 "derived_projection datasets must use derived data"
             )
         object.__setattr__(self, "data_class", data_class)
+        if data_class == "external" and self.removal_retention != "retain":
+            raise DistributedContractError(
+                "external datasets must retain data on removal"
+            )
         object.__setattr__(
             self,
             "desired_revision",
@@ -810,6 +822,15 @@ class Dataset:
             raise DistributedContractError("dataset status is invalid")
         object.__setattr__(self, "status", status)
         object.__setattr__(self, "metadata", _mapping(self.metadata, "metadata"))
+
+    @property
+    def removal_retention(self) -> str:
+        configured = self.retention.get("on_remove")
+        if configured is not None:
+            return str(configured).strip().lower()
+        if self.data_class in {"external", "authoritative"}:
+            return "retain"
+        return "rebuild"
 
     def to_dict(self) -> dict[str, Any]:
         return {

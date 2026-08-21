@@ -310,6 +310,11 @@ def test_replica_empty_and_unavailable_are_distinct() -> None:
 def test_dataset_profiles_preserve_payload_ownership_boundary() -> None:
     assert _dataset("external_authority").data_class == "external"
     assert _dataset("derived_projection").data_class == "derived"
+    assert _dataset("external_authority").removal_retention == "retain"
+    assert _dataset("derived_projection").removal_retention == "retain"
+    assert replace(_dataset("derived_projection"), retention={}).removal_retention == (
+        "rebuild"
+    )
     with pytest.raises(DistributedContractError, match="external data"):
         Dataset(
             dataset_id="bad",
@@ -319,6 +324,17 @@ def test_dataset_profiles_preserve_payload_ownership_boundary() -> None:
             partition_scheme={"kind": "key"},
             retention={},
             data_class="derived",
+            desired_revision=1,
+        )
+    with pytest.raises(DistributedContractError, match="must retain"):
+        Dataset(
+            dataset_id="unsafe-external",
+            owner_ref="skill:test",
+            contract="test.v1",
+            consistency_profile="external_authority",
+            partition_scheme={"kind": "key"},
+            retention={"on_remove": "delete"},
+            data_class="external",
             desired_revision=1,
         )
 

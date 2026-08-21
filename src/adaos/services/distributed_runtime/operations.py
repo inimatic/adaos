@@ -483,10 +483,8 @@ class TopologyExecutor:
     def _validate_retention(self, step: TopologyPlanStep) -> None:
         partition = self.store.get_partition(step.partition_id)
         dataset: Dataset = self.store.get_dataset(partition.dataset_id)
-        if dataset.data_class == "external" and step.retention != "retain":
-            raise TopologyExecutionError(
-                "external_authoritative_data_cannot_be_deleted"
-            )
+        if step.retention != dataset.removal_retention:
+            raise TopologyExecutionError("topology_plan_retention_mismatch")
 
     @staticmethod
     def _require_approvals(plan: TopologyPlan, principal: DistributedPrincipal) -> None:

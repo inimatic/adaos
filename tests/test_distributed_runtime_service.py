@@ -645,6 +645,7 @@ def test_reviewed_handoff_plan_commits_epoch_before_domain_promotion(
         replica_role="authority",
         principal=_principal(),
     )
+    assert plan.steps[0].retention == "retain"
     assert (
         runtime.get_topology_plan(str(plan.plan_digest), principal=_principal()) == plan
     )
@@ -901,6 +902,7 @@ def test_topology_operation_retries_known_failure_and_redacts_receipt(
         replica_role="derived",
         principal=_principal(),
     )
+    assert plan.steps[0].retention == "rebuild"
     operation = runtime.apply_topology_plan(
         str(plan.plan_digest),
         idempotency_key="rebuild-catalog-10",
@@ -934,6 +936,7 @@ def test_topology_operation_resumes_persisted_running_phases(tmp_path: Path) -> 
         replica_role="derived",
         principal=_principal(),
     )
+    assert plan.steps[0].retention == "rebuild"
     step = plan.steps[0]
     first_phase = step.phases[0]
     idempotency_key = "resume-rebuild-catalog-10"
@@ -993,6 +996,7 @@ def test_uncertain_topology_phase_is_not_retried(tmp_path: Path) -> None:
         replica_role="derived",
         principal=_principal(),
     )
+    assert plan.steps[0].retention == "rebuild"
     operation = runtime.apply_topology_plan(
         str(plan.plan_digest),
         idempotency_key="repair-catalog-10",
