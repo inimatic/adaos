@@ -899,7 +899,9 @@ worker without deleting retained domain data.
   external-data ownership as separate reviewed decisions.
 - [x] `[must]` `AP8-08` Publish cursor-backed deployment inventory and bounded
   desired/observed/operation projections suitable for skills, Builder and
-  operator UI.
+  operator UI. The subscribed `adaos.project.deployment_projection.v1` shape
+  is fail-closed by an ABI JSON Schema and excludes package bytes and operation
+  receipts; full inventory remains cursor-backed.
 - [x] `[must]` `AP8-09` Expose planning, apply, inspect, drain, remove and
   reconcile through a public SDK/control-plane boundary; skills must not import
   package store, Workspace, supervisor or node-inventory internals.

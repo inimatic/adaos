@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -7,6 +8,7 @@ from threading import Event
 from typing import Any, Mapping
 
 import pytest
+from jsonschema import Draft202012Validator, FormatChecker
 
 from adaos.domain.artifact_release import (
     ArtifactPackageRef,
@@ -693,6 +695,23 @@ def test_runtime_exposes_plan_apply_inspect_drain_and_remove(tmp_path: Path) -> 
     assert store.get_activation(activation.activation_id).status == "removed"
     assert published[-1]["schema"] == "adaos.project.deployment_projection.v1"
     assert published[-1]["items"][0]["observed"]["operation_total"] == 3
+    projection_schema = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "src"
+            / "adaos"
+            / "abi"
+            / "project.deployment_projection.v1.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    Draft202012Validator.check_schema(projection_schema)
+    Draft202012Validator(
+        projection_schema,
+        format_checker=FormatChecker(),
+    ).validate(published[-1])
+    encoded_projection = json.dumps(published[-1], ensure_ascii=False)
+    assert "package_bytes" not in encoded_projection
+    assert "receipt" not in encoded_projection
 
 
 def test_runtime_submit_returns_before_background_component_phases(
