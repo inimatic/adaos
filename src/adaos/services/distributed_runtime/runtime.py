@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from threading import RLock
 from typing import Any, Callable, Iterable, Mapping, Protocol, TypeVar
@@ -111,6 +111,7 @@ class DistributedRuntime:
     service_invoker: ServiceInvocationAdapter | None = None
     projection_publisher: Callable[[Mapping[str, Any]], Any] | None = None
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
+    _membership_lock: RLock = field(default_factory=RLock, init=False, repr=False)
 
     def define_service(
         self, definition: ServiceDefinition, *, principal: DistributedPrincipal
@@ -710,52 +711,59 @@ class DistributedRuntime:
             raise DistributedRuntimeError("service_node_capability_mismatch")
         if node.protocols.get("distributed_runtime") != definition.protocol_version:
             raise DistributedRuntimeError("service_node_protocol_mismatch")
-        self._admit_placement(group, instance, node=node)
+        # The authority runtime is the single writer for membership. Keep placement
+        # admission and its lease/instance commit in one serialized transaction so
+        # concurrent heartbeats cannot both consume the same capacity slot.
+        with self._membership_lock:
+            self._admit_placement(group, instance, node=node)
 
-        try:
-            previous_instance = self.store.get_instance(instance.instance_id)
-        except FileNotFoundError:
-            previous_instance = None
-        if previous_instance is not None:
-            previous_lease = self.store.get_lease(previous_instance.lease_id)
-            if previous_lease.status == "active":
-                self.store.put_lease(replace(previous_lease, status="released"))
+            try:
+                previous_instance = self.store.get_instance(instance.instance_id)
+            except FileNotFoundError:
+                previous_instance = None
+            if previous_instance is not None:
+                previous_lease = self.store.get_lease(previous_instance.lease_id)
+                if previous_lease.status == "active":
+                    self.store.put_lease(replace(previous_lease, status="released"))
 
-        now = self.clock()
-        duration = max(30, min(int(lease_seconds), 600))
-        renew_by = now + timedelta(seconds=max(10, duration * 2 // 3))
-        valid_until = now + timedelta(seconds=duration)
-        lease_id = _identity(
-            "membership", instance.instance_id, instance.runtime_generation, _iso(now)
-        )
-        lease = TopologyLease(
-            lease_id=lease_id,
-            scope_ref=f"service_group:{group.group_id}",
-            owner_instance_id=instance.instance_id,
-            kind="membership",
-            epoch=0,
-            topology_generation=group.desired_generation,
-            operation_ref=None,
-            issued_at=_iso(now),
-            renew_by=_iso(renew_by),
-            valid_until=_iso(valid_until),
-        )
-        self.store.put_lease(lease)
-        registered = replace(
-            instance,
-            lease_id=lease_id,
-            observed_at=_iso(now),
-            revision=expected_revision + 1,
-        )
-        result = self.store.put_instance(
-            registered, expected_revision=expected_revision
-        )
-        self.store.append_audit(
-            "service.instance.registered",
-            instance_id=result.instance_id,
-            activation_id=result.activation_id,
-            actor_ref=principal.actor_ref,
-        )
+            now = self.clock()
+            duration = max(30, min(int(lease_seconds), 600))
+            renew_by = now + timedelta(seconds=max(10, duration * 2 // 3))
+            valid_until = now + timedelta(seconds=duration)
+            lease_id = _identity(
+                "membership",
+                instance.instance_id,
+                instance.runtime_generation,
+                _iso(now),
+            )
+            lease = TopologyLease(
+                lease_id=lease_id,
+                scope_ref=f"service_group:{group.group_id}",
+                owner_instance_id=instance.instance_id,
+                kind="membership",
+                epoch=0,
+                topology_generation=group.desired_generation,
+                operation_ref=None,
+                issued_at=_iso(now),
+                renew_by=_iso(renew_by),
+                valid_until=_iso(valid_until),
+            )
+            self.store.put_lease(lease)
+            registered = replace(
+                instance,
+                lease_id=lease_id,
+                observed_at=_iso(now),
+                revision=expected_revision + 1,
+            )
+            result = self.store.put_instance(
+                registered, expected_revision=expected_revision
+            )
+            self.store.append_audit(
+                "service.instance.registered",
+                instance_id=result.instance_id,
+                activation_id=result.activation_id,
+                actor_ref=principal.actor_ref,
+            )
         self._publish_projection()
         return result
 

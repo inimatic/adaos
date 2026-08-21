@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Event, Lock
 from typing import Any, Callable, Mapping
 
 import pytest
@@ -439,6 +441,64 @@ def test_draining_instance_releases_placement_capacity_for_replacement(
 
     assert replacement.status == "ready"
     assert replacement.node_id == "node-a"
+
+
+def test_concurrent_registration_cannot_overbook_one_node(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, _, release = _runtime(tmp_path)
+    first_entered = Event()
+    release_first = Event()
+    second_entered = Event()
+    counter_lock = Lock()
+    admission_count = 0
+    original = DistributedRuntime._admit_placement
+
+    def gated_admission(self, *args, **kwargs):
+        nonlocal admission_count
+        with counter_lock:
+            admission_count += 1
+            call_number = admission_count
+        if call_number == 1:
+            first_entered.set()
+            assert release_first.wait(timeout=5)
+        else:
+            second_entered.set()
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(DistributedRuntime, "_admit_placement", gated_admission)
+    first = replace(_instance(release, "node-a"), instance_id="node-a-first")
+    second = replace(_instance(release, "node-a"), instance_id="node-a-second")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_result = pool.submit(
+            runtime.register_instance,
+            first,
+            expected_revision=0,
+            principal=_principal(),
+        )
+        assert first_entered.wait(timeout=5)
+        second_result = pool.submit(
+            runtime.register_instance,
+            second,
+            expected_revision=0,
+            principal=_principal(),
+        )
+        assert second_entered.wait(timeout=0.2) is False
+        release_first.set()
+
+        assert first_result.result(timeout=5).instance_id == "node-a-first"
+        with pytest.raises(
+            DistributedRuntimeError, match="service_group_node_capacity_exhausted"
+        ):
+            second_result.result(timeout=5)
+
+    active = [
+        item
+        for item in runtime.store.list_instances(group_id="media-library-home")[0]
+        if runtime._occupies_capacity(item)
+    ]
+    assert [item.instance_id for item in active] == ["node-a-first"]
 
 
 def test_expired_membership_releases_capacity_before_status_reconciliation(
