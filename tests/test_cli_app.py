@@ -44,6 +44,31 @@ def test_cli_i18n_preboot_normalizes_and_falls_back(monkeypatch) -> None:
     assert cli_i18n._preboot_translate("cli.help_skill") == "Working with skills"
 
 
+def test_cli_rejects_source_checkout_as_base_before_creating_runtime_files(monkeypatch, tmp_path: Path) -> None:
+    checkout = tmp_path / "adaos"
+    (checkout / "src" / "adaos").mkdir(parents=True)
+    (checkout / "pyproject.toml").write_text("[project]\nname='adaos'\n", encoding="utf-8")
+    canonical_runtime = checkout / ".adaos"
+    (canonical_runtime / "state").mkdir(parents=True)
+    monkeypatch.setenv("ADAOS_TESTING", "1")
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(checkout))
+    monkeypatch.setenv("ENV_TYPE", "prod")
+
+    result = CliRunner().invoke(
+        cli_app.app,
+        ["--base-dir", str(checkout), "where"],
+        terminal_width=1000,
+    )
+
+    assert result.exit_code == 2
+    assert "base_dir_source_checkout_conflict" in result.output
+    assert "Selected base:" in result.output
+    assert "stopped before initializing CTX" in result.output
+    assert not (checkout / "node.yaml").exists()
+    assert not (checkout / "state").exists()
+    assert not (checkout / "logs").exists()
+
+
 def test_active_slot_manifest_payload_prefers_active_slot_venv(monkeypatch, tmp_path: Path) -> None:
     base_dir = tmp_path / ".adaos"
     slot_dir = base_dir / "state" / "core_slots" / "slots" / "B"
@@ -85,6 +110,20 @@ def test_active_slot_manifest_payload_prefers_active_slot_venv(monkeypatch, tmp_
     assert env_map["ADAOS_ACTIVE_CORE_SLOT_DIR"] == str(slot_dir)
     assert env_map["ADAOS_SLOT_REPO_ROOT"] == str(repo_dir)
     assert env_map["PYTHONPATH"] == f"{src_dir}{os.pathsep}/existing/pythonpath"
+
+
+def test_wrong_source_checkout_base_is_not_used_for_active_slot_reexec(monkeypatch, tmp_path: Path) -> None:
+    checkout = tmp_path / "adaos"
+    (checkout / "src" / "adaos").mkdir(parents=True)
+    (checkout / "pyproject.toml").write_text("[project]\nname='adaos'\n", encoding="utf-8")
+    slot_dir = checkout / "state" / "core_slots" / "slots" / "B"
+    (checkout / "state" / "core_slots").mkdir(parents=True)
+    (checkout / "state" / "core_slots" / "active").write_text("B\n", encoding="utf-8")
+    slot_dir.mkdir(parents=True)
+    (slot_dir / "manifest.json").write_text("{}\n", encoding="utf-8")
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(checkout))
+
+    assert cli_app._active_slot_manifest_payload() == (None, {}, None)
 
 
 def test_should_reexec_active_slot_venv_when_current_python_differs(monkeypatch, tmp_path: Path) -> None:

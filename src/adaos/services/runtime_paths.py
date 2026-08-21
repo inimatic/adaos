@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 
 def _ctx_path(attr: str) -> Path | None:
@@ -47,6 +48,35 @@ def _looks_like_project_root(path: Path | None) -> bool:
         return bool((path / ".git").exists() or (path / "pyproject.toml").exists() or (path / "src" / "adaos").exists())
     except Exception:
         return False
+
+
+def source_checkout_base_dir_conflict(base_dir: Path | str | None) -> dict[str, Any]:
+    """Describe an unsafe runtime/source-checkout path collision.
+
+    AdaOS runtime state is mutable and may be removed by lifecycle commands such
+    as ``adaos reset``. A source checkout is therefore never a safe runtime base.
+    Keep this check side-effect free so composition roots can call it before
+    constructing CTX or preparing an environment.
+    """
+
+    candidate = _resolve_path(base_dir)
+    if candidate is None:
+        return {}
+    try:
+        is_checkout = (candidate / "pyproject.toml").is_file() and (candidate / "src" / "adaos").is_dir()
+    except OSError:
+        return {}
+    if not is_checkout:
+        return {}
+
+    suggested = (candidate / ".adaos").resolve()
+    runtime_markers = [suggested / "node.yaml", suggested / "state", suggested / "workspace"]
+    return {
+        "code": "base_dir_source_checkout_conflict",
+        "selected_base_dir": str(candidate),
+        "suggested_base_dir": str(suggested),
+        "suggested_runtime_detected": any(marker.exists() for marker in runtime_markers),
+    }
 
 
 def is_core_slot_path(path: Path | str | None, *, base_dir: Path | None = None) -> bool:

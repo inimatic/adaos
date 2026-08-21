@@ -8,7 +8,7 @@ import pytest
 from adaos.apps import autostart_runner
 from adaos.services import agent_context
 from adaos.services import autostart, core_slots, core_update, hub_root_outbox_store, hub_root_protocol_store
-from adaos.services.runtime_paths import is_core_slot_path
+from adaos.services.runtime_paths import is_core_slot_path, source_checkout_base_dir_conflict
 
 
 class _FakePaths:
@@ -90,6 +90,23 @@ def test_core_slot_path_detection_uses_wrapper_path_not_symlink_target(tmp_path:
 
     assert slot_python.resolve() == target_python.resolve()
     assert is_core_slot_path(slot_python, base_dir=base_dir) is True
+
+
+def test_source_checkout_cannot_be_used_as_runtime_base(tmp_path: Path) -> None:
+    checkout = tmp_path / "adaos"
+    (checkout / "src" / "adaos").mkdir(parents=True)
+    (checkout / "pyproject.toml").write_text("[project]\nname='adaos'\n", encoding="utf-8")
+    (checkout / ".adaos" / "state").mkdir(parents=True)
+
+    conflict = source_checkout_base_dir_conflict(checkout)
+
+    assert conflict == {
+        "code": "base_dir_source_checkout_conflict",
+        "selected_base_dir": str(checkout.resolve()),
+        "suggested_base_dir": str((checkout / ".adaos").resolve()),
+        "suggested_runtime_detected": True,
+    }
+    assert source_checkout_base_dir_conflict(checkout / ".adaos") == {}
 
 
 def test_autostart_runner_slot_launch_spec_uses_context_base_dir(monkeypatch, tmp_path: Path) -> None:

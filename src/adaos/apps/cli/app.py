@@ -17,6 +17,7 @@ except Exception:
     def find_dotenv(*args, **kwargs):
         return ""
 from adaos.services.runtime_dotenv import apply_runtime_dotenv_overrides
+from adaos.services.runtime_paths import source_checkout_base_dir_conflict
 
 
 def _repo_venv_python() -> str | None:
@@ -34,6 +35,8 @@ def _repo_venv_python() -> str | None:
 def _active_slot_manifest_payload() -> tuple[str | None, dict[str, str], str | None]:
     try:
         base_dir = Path(os.getenv("ADAOS_BASE_DIR") or (Path.home() / ".adaos")).expanduser().resolve()
+        if source_checkout_base_dir_conflict(base_dir):
+            return None, {}, None
         active_path = base_dir / "state" / "core_slots" / "active"
         if not active_path.exists():
             return None, {}, None
@@ -520,6 +523,25 @@ def ensure_environment():
         prepare_environment()
 
 
+def _fail_if_unsafe_cli_base_dir(base_dir: Path | str | None) -> None:
+    """Fail before CTX/environment initialization can mutate an unsafe path."""
+
+    conflict = source_checkout_base_dir_conflict(base_dir)
+    if not conflict:
+        return
+    selected = conflict["selected_base_dir"]
+    suggested = conflict["suggested_base_dir"]
+    detected = " Existing AdaOS runtime markers were found there." if conflict["suggested_runtime_detected"] else ""
+    raise typer.BadParameter(
+        "Invalid AdaOS runtime base (base_dir_source_checkout_conflict).\n"
+        f"Selected base: {selected}\n"
+        "The selected directory is an AdaOS source checkout; mutable runtime state must not be stored there.\n"
+        f"Use ADAOS_BASE_DIR={suggested} or pass --base-dir {suggested}.{detected}\n"
+        "The CLI stopped before initializing CTX or creating runtime files.",
+        param_hint="--base-dir/ADAOS_BASE_DIR",
+    )
+
+
 # -------- корневой callback (composition root) --------
 
 
@@ -541,6 +563,11 @@ def main(
 
     # 2) применяем CLI-переопределения только к безопасным полям
     settings = settings.with_overrides(base_dir=base_dir, profile=profile)
+
+    # Fail before init_ctx()/ensure_environment(): using a source checkout as
+    # mutable runtime storage both pollutes the checkout and makes `reset`
+    # capable of deleting source code.
+    _fail_if_unsafe_cli_base_dir(settings.base_dir)
 
     # 3) создать/пересобрать единый контекст процесса
     if reload:
