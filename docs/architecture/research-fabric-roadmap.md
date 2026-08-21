@@ -1521,7 +1521,7 @@ efficacy result or cross-domain SOTA claim.
   identity patterns, and extension policy. Treat required-field lists and
   prose invariants as indexes only. Contract 1.2 includes a negative
   array-versus-role-map regression test derived from the immutable v9 failure.
-- [ ] `[must]` `ARF7.3-06b` Extend admitted provider conformance from post-hoc
+- [x] `[must]` `ARF7.3-06b` Extend admitted provider conformance from post-hoc
   `document_set` validation to a bounded executable operation sequence. The
   consumer-owned fixture must declare exact calls, dependency/output bindings,
   execution step, expected artifacts, and resource/network limits; the trusted
@@ -1529,7 +1529,15 @@ efficacy result or cross-domain SOTA claim.
   `ADAOS_TASK_RUNTIME_DIR`, and emits a digest-bound execution receipt. A
   candidate-authored pytest or helper may supplement this receipt but cannot
   create it. Keep the ABI domain-neutral: TLP supplies fixture values, not core
-  control flow.
+  control flow. Core `e9270d05` adds the trusted declarative interpreter and
+  fail-closed Builder gate. ResearchManager ABI `1.14.0` materializes the
+  sequence from the exact ExperimentPlan and runner identity; Workbench,
+  acceptance and the calibration evaluator bind the same contract digest. On
+  the reference Windows node the fixture invoked the task-006 TLP production
+  provider as `dataset_status -> prepare_attempt -> execute_attempt ->
+  collect_attempt -> verify_artifacts`, verified 13 ContentRefs, and validated
+  all five required evidence documents. A negative core regression proves that
+  a zero-exit command which omits the exact expected output is rejected.
 - [x] `[must]` `ARF7.3-07` Let Codex return typed clarification, feasibility,
   capability-gap, and protocol-conflict results. Require a reviewed new
   formulation/protocol revision instead of silent scientific mutation.

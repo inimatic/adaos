@@ -161,6 +161,47 @@ skill-process/version-migration recovery evidence. An authenticated
 Workbench browser reconnect receipt is still required by the broader
 ARF7.3-16 gate.
 
+## Trusted consumer-executed provider sequence
+
+The later `ARF7.3-06b` rail removes the remaining dependence on a candidate
+interpreting how to perform its own conformance check. Core `e9270d05`
+interprets a consumer-owned, declarative `operation_sequence` in an isolated
+process. It validates every call against the admitted input/output schemas,
+resolves only explicit prior-output and per-item bindings, binds a fresh owner
+data root below `ADAOS_TASK_RUNTIME_DIR`, and permits a returned execution
+command only when it uses the active Python interpreter, a script below the
+candidate skill, and a working directory below that trusted data root. The
+command is time-bounded and every expected output must exist at its exact
+declared relative path.
+
+ResearchManager runner ABI `1.14.0` materializes this sequence from the exact
+accepted ExperimentPlan and target runner identity. The active contract for
+task-006 has digest
+`sha256:82396719f0e0d9326401dcebb7f5cc110df69d218369a5366c802caef6096404`.
+The same plan-bound contract is requested by Workbench session creation and
+refresh, independently reconstructed by ResearchManager acceptance, and frozen
+by the evaluator for a C3 packet.
+
+On the reference node the trusted worker invoked the task-006 provider in this
+order:
+
+1. `dataset_status`;
+2. `prepare_attempt` for the accepted intervention arm and workflow-smoke
+   profile;
+3. the returned production command in its exact working directory;
+4. `collect_attempt` through the returned `output_ref`;
+5. `verify_artifact` for every collected artifact.
+
+All five steps passed, all 13 collected ContentRefs verified, and
+`run_log.json`, `evaluation_audit.json`,
+`implementation_observation.json`, `result_record.json`, and
+`artifacts_index.json` passed the consumer-owned schemas. A generic negative
+test proves that a zero-exit provider which omits `result.json` is rejected.
+After standard skill releases and A/B migration the active runtimes are
+ResearchManager `0.37.0`, Research Orchestrator `0.75.0`, and Research
+Evaluator `0.1.40`; the orchestrator still projected all seven durable
+directions, including `tlp_structured_proof_02`.
+
 ## Conclusion and remaining proof
 
 This receipt proves that the structured AdaOS path can close end to end on the
@@ -173,7 +214,8 @@ checkable.
 
 It does not prove the probability hypothesis. The retained v32 paired result
 was negative/inconclusive for the primary endpoint, and this task-006 receipt
-is one successor-path C3 operability success. A new frozen comparison must
-implement the consumer-executed operation sequence in `ARF7.3-06b`, create
-fresh C0/C3 units, and follow the preregistered repeated paired analysis. A
+is one successor-path C3 operability success. The consumer-executed sequence
+in `ARF7.3-06b` is now implemented and locally proven, but a new frozen
+comparison must still create fresh C0/C3 units and follow the preregistered
+repeated paired analysis. A
 cross-domain or SOTA claim additionally requires ResearchCompilerBench/ARRB.

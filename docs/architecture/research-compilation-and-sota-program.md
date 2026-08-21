@@ -877,10 +877,16 @@ consumer sequence must execute.
 Core `91129b77`, committed only after v32 was frozen, improves the generic
 diagnostic and prompt by naming the trusted runtime root and the required
 `skill_data_root()` binding. It is not part of the v32 treatment. The next
-eligible comparison must go further: an admitted operation-set fixture should
-carry an executable, bounded invocation sequence that the trusted worker runs
-against the production provider itself. That removes a task-root convention
-from free-form model inference without prescribing TLP internals.
+eligible comparison had to go further: an admitted operation-set fixture had
+to carry an executable, bounded invocation sequence that the trusted worker
+runs against the production provider itself. Core `e9270d05` now implements
+that domain-neutral interpreter. ResearchManager runner ABI `1.14.0`
+materializes concrete inputs and bindings from the accepted ExperimentPlan;
+TLP remains data, never core control flow. The task-006 provider passed the
+trusted five-step production sequence on the reference node, including exact
+command/cwd/output checks, collection, 13 independent artifact verifications,
+and schema validation of the five mandatory evidence documents. This closes
+the infrastructure prerequisite but is later evidence and cannot alter v32.
 
 Task `tlp_structured_proof_02.task-006` subsequently passed the separate
 end-to-end operability gate. One digest-bound successor Builder task completed
@@ -899,8 +905,8 @@ This closes only gate 1 of the proof protocol. The task used one successor
 lineage rather than a fresh empty-workspace comparative unit, and no new C0 arm
 was run. It therefore cannot reverse v32's negative/inconclusive primary
 endpoint or support a probability claim. The next eligible paired comparison
-still requires the trusted consumer-executed operation sequence and fresh
-frozen C0/C3 units.
+now requires fresh frozen C0/C3 units using this trusted consumer-executed
+operation sequence; task-006 and all v32 units remain ineligible for reuse.
 
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and
