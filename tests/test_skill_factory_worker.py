@@ -44,6 +44,92 @@ def test_codex_failure_detail_prefers_structured_jsonl_errors() -> None:
     )
 
 
+def test_contract_execution_checklist_surfaces_every_exact_sequence_assertion(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    contract_path = workspace / ".adaos_context" / "session" / "runner.json"
+    contract_path.parent.mkdir(parents=True)
+    contract_path.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.contract.operation_set.v1",
+                "contract": "example.runner.v1",
+                "capability": "example.runner",
+                "candidate_role": "provider",
+                "operations": {
+                    "collect_attempt": {
+                        "input_schema": {
+                            "type": "object",
+                            "required": ["output_ref"],
+                            "additionalProperties": False,
+                        },
+                        "output_schema": {
+                            "type": "object",
+                            "required": ["result", "observations"],
+                            "additionalProperties": False,
+                        },
+                        "invariants": ["observation repeats the result metric"],
+                    }
+                },
+                "conformance_fixtures": [
+                    {
+                        "id": "production_sequence",
+                        "kind": "operation_sequence",
+                        "required": True,
+                        "steps": [
+                            {
+                                "id": "collect",
+                                "operation": "collect_attempt",
+                                "input": {"output_ref": "opaque"},
+                                "assert": [
+                                    {
+                                        "pointer": "/observations",
+                                        "contains": [
+                                            {
+                                                "pointer": "/evidence_role",
+                                                "equals_root_pointer": "/result/evidence_class",
+                                            }
+                                        ],
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    development = {
+        "instruction_inputs": [
+            {
+                "path": ".adaos_context/session/runner.json",
+                "media_type": "application/json",
+                "content_digest": "sha256:" + "a" * 64,
+            }
+        ]
+    }
+
+    checklist = worker_module._contract_execution_checklist(development, workspace)
+
+    assert checklist["schema"] == "adaos.builder.contract_execution_checklist.v1"
+    assert checklist["digest"].startswith("sha256:")
+    projected = checklist["contracts"][0]
+    assert projected["authoritative_path"] == ".adaos_context/session/runner.json"
+    assert projected["operations"][0]["input_required"] == ["output_ref"]
+    assert projected["operations"][0]["output_required"] == [
+        "result",
+        "observations",
+    ]
+    assertion = projected["operation_sequences"][0]["steps"][0]["assert"][0]
+    assert assertion["contains"][0] == {
+        "pointer": "/evidence_role",
+        "equals_root_pointer": "/result/evidence_class",
+    }
+    assert "opaque" not in json.dumps(checklist)
+
+
 def test_source_snapshot_keeps_reserved_artifacts_out_of_codex_workspace(
     tmp_path: Path,
 ) -> None:
@@ -1620,6 +1706,7 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(
     assert "`-Encoding UTF8`" in prompt
     assert "UTF-8" in prompt
     assert "Governed Change context" in prompt
+    assert "Exact provider contract checklist" in prompt
     assert "change.demo" in prompt
     assert "workflow.json validates" in prompt
     assert "complete TransitionDescriptor contract" in prompt

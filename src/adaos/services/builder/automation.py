@@ -31,7 +31,7 @@ from adaos.services.skill_factory_worker import LocalSkillFactoryWorker
 
 
 AUTOMATION_SESSION_SCHEMA = "adaos.builder.automation_session.v1"
-STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.9.0"
+STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.10.0"
 FINALIZATION_HEARTBEAT_SECONDS = 10.0
 AUTOMATION_PROJECTION_SCHEMA = "adaos.builder.automation_projection.v1"
 _LOCK = threading.RLock()
@@ -1837,32 +1837,85 @@ class BuilderAutomationService:
             if isinstance(previous, Mapping):
                 if str(previous.get("development_session_id") or "") != expected_session_id:
                     raise ValueError("stored runtime release belongs to a different Development Session")
-                return {"ok": True, "idempotent": True, "runtime_release": dict(previous)}
+                if str(previous.get("status") or "released") == "released":
+                    return {"ok": True, "idempotent": True, "runtime_release": dict(previous)}
 
-            diagnostics = self._archive_candidate_runtime_diagnostics(
-                project_id=project_id,
-                development_session_id=expected_session_id,
+            diagnostics = (
+                dict(previous.get("diagnostics") or {})
+                if isinstance(previous, Mapping)
+                and isinstance(previous.get("diagnostics"), Mapping)
+                else self._archive_candidate_runtime_diagnostics(
+                    project_id=project_id,
+                    development_session_id=expected_session_id,
+                )
             )
-            cleanup = _cleanup_dev_skill_runtime(project_id)
+            cleanup_attempts = (
+                int(previous.get("cleanup_attempts") or 0) + 1
+                if isinstance(previous, Mapping)
+                else 1
+            )
+            cleanup: dict[str, Any]
+            cleanup_error: OSError | None = None
+            try:
+                cleanup = _cleanup_dev_skill_runtime(project_id)
+            except OSError as exc:
+                if not self._retryable_runtime_cleanup_error(exc):
+                    raise
+                cleanup_error = exc
+                cleanup = {
+                    "runtime_existed": True,
+                    "runtime_removed": False,
+                    "purged_data": False,
+                }
+            released = bool(cleanup.get("runtime_removed"))
+            attempted_at = _now_iso()
             receipt = {
                 "schema": "adaos.builder.runtime_release.v1",
                 "object_type": kind,
                 "object_id": project_id,
                 "development_session_id": expected_session_id,
                 "automation_status": status,
-                "released_at": _now_iso(),
+                "status": "released" if released else "cleanup_pending",
+                "cleanup_attempts": cleanup_attempts,
+                "attempted_at": attempted_at,
                 "runtime_removed": bool(cleanup.get("runtime_removed")),
                 "runtime_existed": bool(cleanup.get("runtime_existed")),
                 "purged_data": bool(cleanup.get("purged_data")),
+                "retryable": not released,
             }
             if diagnostics is not None:
                 receipt["diagnostics"] = diagnostics
-            if not receipt["runtime_removed"]:
-                raise RuntimeError("DEV runtime cleanup did not remove the candidate runtime")
+            if released:
+                receipt["released_at"] = attempted_at
+            else:
+                receipt["pending_reason"] = (
+                    "native_module_mapped_by_runtime_process"
+                    if cleanup_error is not None
+                    else "runtime_not_removed"
+                )
+                if cleanup_error is not None:
+                    receipt["cleanup_error"] = {
+                        "type": type(cleanup_error).__name__,
+                        "errno": cleanup_error.errno,
+                        "winerror": getattr(cleanup_error, "winerror", None),
+                    }
             session["runtime_release"] = receipt
-            session["updated_at"] = receipt["released_at"]
+            session["updated_at"] = attempted_at
             self._save_session(session)
-            return {"ok": True, "idempotent": False, "runtime_release": receipt}
+            return {
+                "ok": True,
+                "idempotent": False,
+                "cleanup_pending": not released,
+                "runtime_release": receipt,
+            }
+
+    @staticmethod
+    def _retryable_runtime_cleanup_error(exc: OSError) -> bool:
+        """Recognize OS errors caused by a still-mapped native module."""
+
+        if isinstance(exc, PermissionError):
+            return True
+        return getattr(exc, "winerror", None) in {5, 32, 145}
 
     def _archive_candidate_runtime_diagnostics(
         self,

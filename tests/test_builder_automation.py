@@ -100,7 +100,7 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["status"] == "completed"
     assert status["session"]["source_prototype_version"] == "0.1.0"
     assert status["automation"]["source_prototype_version"] == "0.1.0"
-    assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.9.0"
+    assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.10.0"
     assert status["session"]["created_artifacts"][0]["kind"] == "skill"
     assert status["session"]["created_artifacts"][0]["name"] == "recipes_skill"
     task = next(
@@ -163,6 +163,65 @@ def test_terminal_skill_candidate_runtime_release_is_exact_and_idempotent(
     persisted = service.get_session("skill", "candidate_skill")
     assert persisted is not None
     assert persisted["runtime_release"]["development_session_id"] == "dev_candidate_01"
+    assert persisted["runtime_release"]["status"] == "released"
+
+
+def test_terminal_candidate_native_runtime_cleanup_is_durable_and_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation_candidate",
+            "object_type": "skill",
+            "object_id": "candidate_skill",
+            "development_session_id": "dev_candidate_01",
+            "status": "completed",
+            "updated_at": "2026-08-20T00:00:00+00:00",
+        }
+    )
+    outcomes: list[str] = ["locked", "released"]
+
+    def cleanup(_skill_id: str) -> dict[str, object]:
+        outcome = outcomes.pop(0)
+        if outcome == "locked":
+            raise PermissionError(13, "native DLL is still mapped")
+        return {
+            "runtime_existed": True,
+            "runtime_removed": True,
+            "purged_data": True,
+        }
+
+    monkeypatch.setattr(automation_module, "_cleanup_dev_skill_runtime", cleanup)
+
+    pending = service.release_candidate_runtime(
+        object_type="skill",
+        object_id="candidate_skill",
+        development_session_id="dev_candidate_01",
+    )
+    released = service.release_candidate_runtime(
+        object_type="skill",
+        object_id="candidate_skill",
+        development_session_id="dev_candidate_01",
+    )
+    repeated = service.release_candidate_runtime(
+        object_type="skill",
+        object_id="candidate_skill",
+        development_session_id="dev_candidate_01",
+    )
+
+    assert pending["ok"] is True
+    assert pending["cleanup_pending"] is True
+    assert pending["runtime_release"]["status"] == "cleanup_pending"
+    assert pending["runtime_release"]["pending_reason"] == (
+        "native_module_mapped_by_runtime_process"
+    )
+    assert released["runtime_release"]["status"] == "released"
+    assert released["runtime_release"]["cleanup_attempts"] == 2
+    assert repeated["idempotent"] is True
+    assert outcomes == []
 
 
 def test_terminal_candidate_release_preserves_runtime_diagnostics_as_builder_evidence(
@@ -1333,7 +1392,9 @@ def test_duplicate_queued_start_relaunches_orphaned_worker(tmp_path: Path, monke
         "current_task_id": "task.queued",
     }
     service._save_session(session)
-    service.factory = SimpleNamespace(snapshot=lambda **_kwargs: {"tasks": []})
+    service.factory = SimpleNamespace(
+        read_task=lambda _task_id: (_ for _ in ()).throw(KeyError(_task_id))
+    )
     launched: list[str] = []
     monkeypatch.setattr(
         BuilderAutomationService,
@@ -1553,21 +1614,17 @@ def test_refresh_recovers_terminal_orphan_once_and_finalizes_without_rerunning_c
 
     service.worker_factory = _Worker
 
-    def snapshot(**_kwargs):
+    def read_task(_task_id):
         completed = bool(recovered)
         return {
-            "tasks": [
-                {
-                    "task_id": task_id,
-                    "status": "completed" if completed else "in_progress",
-                    "updated_at": "2026-07-28T15:13:00+00:00",
-                    "result": {"summary": "Recovered result."} if completed else None,
-                    "progress": [],
-                }
-            ]
+            "task_id": task_id,
+            "status": "completed" if completed else "in_progress",
+            "updated_at": "2026-07-28T15:13:00+00:00",
+            "result": {"summary": "Recovered result."} if completed else None,
+            "progress": [],
         }
 
-    service.factory = SimpleNamespace(snapshot=snapshot)
+    service.factory = SimpleNamespace(read_task=read_task)
     finalized: list[dict] = []
 
     def finalize(_service, value):
@@ -1612,16 +1669,12 @@ def test_refresh_resumes_detached_completed_task_finalization(
     }
     service._save_session(session)
     service.factory = SimpleNamespace(
-        snapshot=lambda **_kwargs: {
-            "tasks": [
-                {
-                    "task_id": task_id,
-                    "status": "completed",
-                    "updated_at": "2026-08-19T11:58:14+00:00",
-                    "result": {"summary": "Recovered validated result."},
-                    "progress": [],
-                }
-            ]
+        read_task=lambda _task_id: {
+            "task_id": task_id,
+            "status": "completed",
+            "updated_at": "2026-08-19T11:58:14+00:00",
+            "result": {"summary": "Recovered validated result."},
+            "progress": [],
         }
     )
     finalized: list[dict] = []
@@ -1668,16 +1721,12 @@ def test_refresh_defers_finalization_while_detached_worker_owner_is_active(
     }
     service._save_session(session)
     service.factory = SimpleNamespace(
-        snapshot=lambda **_kwargs: {
-            "tasks": [
-                {
-                    "task_id": task_id,
-                    "status": "completed",
-                    "updated_at": "2026-08-19T14:47:38+00:00",
-                    "result": {"summary": "Validated result."},
-                    "progress": [],
-                }
-            ]
+        read_task=lambda _task_id: {
+            "task_id": task_id,
+            "status": "completed",
+            "updated_at": "2026-08-19T14:47:38+00:00",
+            "result": {"summary": "Validated result."},
+            "progress": [],
         }
     )
     worker_root = (
@@ -1738,16 +1787,12 @@ def test_refresh_never_projects_factory_completion_as_terminal_before_finalizati
     }
     service._save_session(session)
     service.factory = SimpleNamespace(
-        snapshot=lambda **_kwargs: {
-            "tasks": [
-                {
-                    "task_id": task_id,
-                    "status": "completed",
-                    "updated_at": "2026-08-19T22:59:40+00:00",
-                    "result": {"summary": "Candidate validation completed."},
-                    "progress": [],
-                }
-            ]
+        read_task=lambda _task_id: {
+            "task_id": task_id,
+            "status": "completed",
+            "updated_at": "2026-08-19T22:59:40+00:00",
+            "result": {"summary": "Candidate validation completed."},
+            "progress": [],
         }
     )
     monkeypatch.setattr(
@@ -1812,15 +1857,11 @@ def test_refresh_preserves_finalization_progress_after_worker_completion(
         lambda _service, _session_id: True,
     )
     service.factory = SimpleNamespace(
-        snapshot=lambda **_kwargs: {
-            "tasks": [
-                {
-                    "task_id": "task.1",
-                    "status": "completed",
-                    "updated_at": "2026-07-18T00:00:00+00:00",
-                    "progress": [{"status": "commit_ready", "message": "worker commit"}],
-                }
-            ]
+        read_task=lambda _task_id: {
+            "task_id": "task.1",
+            "status": "completed",
+            "updated_at": "2026-07-18T00:00:00+00:00",
+            "progress": [{"status": "commit_ready", "message": "worker commit"}],
         }
     )
 
@@ -1879,17 +1920,13 @@ def test_refresh_preserves_terminal_orchestration_progress_after_worker_completi
 ) -> None:
     service = _service(tmp_path)
     service.factory = SimpleNamespace(
-        snapshot=lambda **_kwargs: {
-            "tasks": [
-                {
-                    "task_id": "task.1",
-                    "status": "completed",
-                    "updated_at": "2026-07-18T00:00:00+00:00",
-                    "progress": [
-                        {"status": "commit_ready", "message": "worker commit"}
-                    ],
-                }
-            ]
+        read_task=lambda _task_id: {
+            "task_id": "task.1",
+            "status": "completed",
+            "updated_at": "2026-07-18T00:00:00+00:00",
+            "progress": [
+                {"status": "commit_ready", "message": "worker commit"}
+            ],
         }
     )
 
@@ -1995,16 +2032,12 @@ def test_session_store_allows_first_finalization_of_validated_task(tmp_path: Pat
 def test_refresh_reconciles_legacy_false_positive_checkpoint_completion(tmp_path: Path) -> None:
     service = _service(tmp_path)
     service.factory = SimpleNamespace(
-        snapshot=lambda **_kwargs: {
-            "tasks": [
-                {
-                    "task_id": "task.1",
-                    "status": "completed",
-                    "updated_at": "2026-07-18T00:00:00+00:00",
-                    "result": {"summary": "code complete"},
-                    "progress": [],
-                }
-            ]
+        read_task=lambda _task_id: {
+            "task_id": "task.1",
+            "status": "completed",
+            "updated_at": "2026-07-18T00:00:00+00:00",
+            "result": {"summary": "code complete"},
+            "progress": [],
         }
     )
 
@@ -2032,16 +2065,12 @@ def test_refresh_reconciles_legacy_false_positive_checkpoint_completion(tmp_path
 def test_refresh_reconciles_completed_task_with_failed_live_readiness(tmp_path: Path) -> None:
     service = _service(tmp_path)
     service.factory = SimpleNamespace(
-        snapshot=lambda **_kwargs: {
-            "tasks": [
-                {
-                    "task_id": "task.1",
-                    "status": "completed",
-                    "updated_at": "2026-07-18T00:00:00+00:00",
-                    "result": {"summary": "code complete"},
-                    "progress": [],
-                }
-            ]
+        read_task=lambda _task_id: {
+            "task_id": "task.1",
+            "status": "completed",
+            "updated_at": "2026-07-18T00:00:00+00:00",
+            "result": {"summary": "code complete"},
+            "progress": [],
         }
     )
 
@@ -3031,8 +3060,8 @@ def test_refresh_restores_recovered_return_to_prototype_transition(
     }
     monkeypatch.setattr(
         type(service.factory),
-        "snapshot",
-        lambda _self, **_kwargs: {"tasks": [task]},
+        "read_task",
+        lambda _self, _task_id: task,
     )
 
     refreshed = service.refresh_session(session)

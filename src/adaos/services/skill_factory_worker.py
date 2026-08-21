@@ -39,7 +39,7 @@ from adaos.services.workflow_artifacts import (
 )
 
 
-RUNNER_VERSION = "adaos-local-codex-worker/0.6.0"
+RUNNER_VERSION = "adaos-local-codex-worker/0.7.0"
 PACKET_SCHEMA = "adaos.skill_factory.codex_packet.v1"
 LOCAL_SESSION_SCHEMA = "adaos.skill_factory.local_run.v1"
 _log = logging.getLogger("adaos.skill_factory.local_worker")
@@ -193,6 +193,138 @@ def _context_packet_prompt_projection(value: Any) -> dict[str, Any]:
         "coverage": dict(packet.get("coverage") or {}),
         "budget": dict(packet.get("budget") or {}),
     }
+
+
+def _contract_execution_checklist(
+    development_context: Mapping[str, Any],
+    workspace: Path,
+) -> dict[str, Any]:
+    """Project admitted provider contracts into a compact exact checklist.
+
+    The complete instruction document remains authoritative and is retained by
+    path and digest in the Development Session. This projection removes only
+    descriptive schema bulk and repeated fixture inputs; it keeps operation
+    names, required fields, invariants, iteration bindings, and every declared
+    output assertion verbatim.
+    """
+
+    workspace_root = workspace.resolve()
+    contracts: list[dict[str, Any]] = []
+    for descriptor in development_context.get("instruction_inputs") or []:
+        if not isinstance(descriptor, Mapping):
+            continue
+        if str(descriptor.get("media_type") or "").lower() != "application/json":
+            continue
+        relative = Path(str(descriptor.get("path") or ""))
+        if relative.is_absolute() or ".." in relative.parts:
+            continue
+        source = (workspace_root / relative).resolve()
+        try:
+            source.relative_to(workspace_root)
+            contract = _read_json(source)
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+            continue
+        if contract.get("schema") != "adaos.contract.operation_set.v1":
+            continue
+
+        operations: list[dict[str, Any]] = []
+        for operation_id, raw_operation in (contract.get("operations") or {}).items():
+            if not isinstance(raw_operation, Mapping):
+                continue
+            operation = dict(raw_operation)
+            input_schema = (
+                dict(operation.get("input_schema") or {})
+                if isinstance(operation.get("input_schema"), Mapping)
+                else {}
+            )
+            output_schema = (
+                dict(operation.get("output_schema") or {})
+                if isinstance(operation.get("output_schema"), Mapping)
+                else {}
+            )
+            operations.append(
+                {
+                    "operation": str(operation_id),
+                    "input_required": list(
+                        operation.get("input_required")
+                        or input_schema.get("required")
+                        or []
+                    ),
+                    "input_additional_properties": input_schema.get(
+                        "additionalProperties"
+                    ),
+                    "output_required": list(
+                        operation.get("output_required")
+                        or output_schema.get("required")
+                        or []
+                    ),
+                    "output_additional_properties": output_schema.get(
+                        "additionalProperties"
+                    ),
+                    "invariants": [
+                        str(item) for item in operation.get("invariants") or []
+                    ],
+                }
+            )
+
+        sequences: list[dict[str, Any]] = []
+        for raw_fixture in contract.get("conformance_fixtures") or []:
+            if not isinstance(raw_fixture, Mapping):
+                continue
+            fixture = dict(raw_fixture)
+            if str(fixture.get("kind") or "") != "operation_sequence":
+                continue
+            steps: list[dict[str, Any]] = []
+            for raw_step in fixture.get("steps") or []:
+                if not isinstance(raw_step, Mapping):
+                    continue
+                step = dict(raw_step)
+                steps.append(
+                    {
+                        "id": str(step.get("id") or ""),
+                        "kind": str(step.get("kind") or "operation"),
+                        "operation": str(step.get("operation") or "") or None,
+                        "assert": list(step.get("assert") or []),
+                        **(
+                            {"for_each": dict(step["for_each"])}
+                            if isinstance(step.get("for_each"), Mapping)
+                            else {}
+                        ),
+                    }
+                )
+            sequences.append(
+                {
+                    "id": str(fixture.get("id") or "operation_sequence"),
+                    "required": bool(fixture.get("required", True)),
+                    "all_assertions_are_conjunctive_and_exact": True,
+                    "steps": steps,
+                }
+            )
+        contracts.append(
+            {
+                "contract": str(contract.get("contract") or ""),
+                "capability": str(contract.get("capability") or ""),
+                "candidate_role": str(contract.get("candidate_role") or ""),
+                "authoritative_path": relative.as_posix(),
+                "authoritative_digest": str(descriptor.get("content_digest") or ""),
+                "operations": operations,
+                "operation_sequences": sequences,
+            }
+        )
+    if not contracts:
+        return {}
+    projection: dict[str, Any] = {
+        "schema": "adaos.builder.contract_execution_checklist.v1",
+        "contracts": contracts,
+    }
+    canonical = json.dumps(
+        projection,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    projection["digest"] = "sha256:" + hashlib.sha256(canonical).hexdigest()
+    return projection
 
 
 def _run(
@@ -1531,6 +1663,10 @@ class LocalSkillFactoryWorker:
             if isinstance(artifacts.get("development_context"), Mapping)
             else {}
         )
+        contract_checklist = _contract_execution_checklist(
+            development_context,
+            workspace,
+        )
         allowed = [str(item) for item in (assignment.get("forge") or {}).get("sparse_paths") or []]
         packet = {
             "schema": PACKET_SCHEMA,
@@ -1549,6 +1685,7 @@ class LocalSkillFactoryWorker:
             "development_context": development_context or None,
             "development_context_digest": str(development_context.get("digest") or "").strip()
             or None,
+            "contract_execution_checklist": contract_checklist or None,
             "validation_budget": _generated_test_budget(assignment),
         }
         _write_json(input_dir / "packet.json", packet)
@@ -1623,6 +1760,11 @@ When `scenarios/{target_id}/.builder_current_publication` exists, treat it as th
             if development_context
             else "No external Development Session inputs were admitted."
         )
+        contract_execution_checklist = (
+            json.dumps(contract_checklist, ensure_ascii=False, indent=2, sort_keys=True)
+            if contract_checklist
+            else "No typed provider operation sequence was admitted."
+        )
         prompt = f"""# AdaOS local realization task
 
 You are implementing a real AdaOS project from an approved interface prototype. Work autonomously in the current repository and finish the implementation; do not merely describe code.
@@ -1663,6 +1805,19 @@ part of the submitted source snapshot.
 
 ```json
 {development_inputs}
+```
+
+## Exact provider contract checklist
+
+This is a lossless projection of operation names, required fields, invariants,
+iteration bindings, and output assertions from the admitted typed provider
+contracts. Every listed assertion is mandatory and conjunctive. Use it as a
+working checklist, then consult each `authoritative_path` for the complete
+schema and fixture inputs. The trusted worker evaluates the authoritative
+contract, not this convenience projection.
+
+```json
+{contract_execution_checklist}
 ```
 
 {transition_requirements}

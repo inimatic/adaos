@@ -3067,6 +3067,14 @@ class SkillManager:
         runtime_root = env.runtime_root
         existed = runtime_root.exists()
         version = env.resolve_active_version() if existed else None
+        # Remove routing authority before touching files. A native extension
+        # already imported by this process can keep its DLL mapped on Windows;
+        # that must not leave the terminal DEV candidate invokable while its
+        # physical cleanup is deferred until process restart.
+        try:
+            uninstall_skill_from_capacity(name)
+        except Exception:
+            pass
         if existed and purge_data:
             self._remove_tree(runtime_root)
         elif existed:
@@ -3091,10 +3099,6 @@ class SkillManager:
                 runtime_root.rmdir()
             except OSError:
                 pass
-        try:
-            uninstall_skill_from_capacity(name)
-        except Exception:
-            pass
         payload = {
             "name": name,
             "version": version,
