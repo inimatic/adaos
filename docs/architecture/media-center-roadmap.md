@@ -459,7 +459,10 @@ injection, resource budgets, and a reviewed production decision.
   exact generation `39` activations, topology generation `15`, replicated
   catalog witnesses and playback route evidence. Separate TV/controller
   browser interaction, screenshots and long reconnect playback evidence remain
-  open.
+  open. Candidate `0.6.45` at registry revision `7119aabac4b74e055755ddff4b6f19175a6efb16`
+  now has two matching independent local builds with release digest
+  `sha256:4bd827fd9f819107c1d20d85dc13d31b4ce5f0f75f18f57a5238a596ec8ddfe0`;
+  publication and exact stand deployment remain open.
 - [x] `[must]` `MC7-09` Perform security/privacy review for remote deployment,
   root containment, route grants, provider egress, shared-screen state, voice,
   logs, derived data and uninstall retention.

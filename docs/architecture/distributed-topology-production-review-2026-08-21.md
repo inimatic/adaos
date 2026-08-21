@@ -12,12 +12,28 @@ does not authorize cross-subnet placement or a general multi-writer profile.
 | Surface | Candidate | Review boundary |
 | --- | --- | --- |
 | AdaOS core | `rev2026` release candidate based on `0.1.917` | service definition v2, exact release overlap, membership, fencing, routes, transfer and deployment control |
-| Media Center Project | `0.6.45` | representative coordinator plus node-local agents and retained external media |
+| Media Center Project | `0.6.45` at registry `7119aabac4b74e055755ddff4b6f19175a6efb16`; release `sha256:4bd827fd9f819107c1d20d85dc13d31b4ce5f0f75f18f57a5238a596ec8ddfe0` | representative coordinator plus node-local agents and retained external media |
 | Deployment scope | two trusted physical nodes in one subnet | selected-node staged rollout; separate TV/controller presentations |
 
 Exact commit, package and release digests must be copied from the normal
 published build and stand receipts. A working-tree or overlay run is not
 acceptance evidence.
+
+Two independent local builds with separate package/release caches produced the
+same release and package digests, and every archive hash matches its package
+reference. The exact package set is:
+
+| Component | Package digest |
+| --- | --- |
+| `scenario:media_center@0.6.8` | `sha256:56ab1426e7001db890c2773a76709972b4cfd2d49487ff55d33e973e6f533ca5` |
+| `skill:media_center_skill@0.8.41` | `sha256:26ebfd0c79d46a126b163c77f5e83fb0321549b7b78cf41e337842e9f1d61507` |
+| `skill:media_control_skill@0.2.1` | `sha256:ad1a647521751d75cc1498e42dc4c5deccf344f6912a4a615cafcf11a375ead3` |
+| `skill:media_library_agent@0.6.20` | `sha256:8c26a77ae7e40c391eaef1f954ae5e05aad2a26a40e22296ebdf5e356a589be0` |
+| `skill:mediaserver@0.9.15` | `sha256:e225581bd044e94ea09134efdb092e899975b77fcb42d6a072da51e9d6281024` |
+
+This closes local reproducibility only. The release is not a stand candidate
+until that exact registry revision and digest are published through normal
+channels.
 
 ## Security Review
 
