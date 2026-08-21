@@ -1116,6 +1116,9 @@ class ServiceSkillSupervisor:
         process_observed_at = process_state.get("observed_at") if state_matches else None
         process_age_s = max(0.0, now - float(process_observed_at)) if process_observed_at else None
         spec_key = self._spec_key(spec)
+        process_spec_matches = bool(
+            running and self._proc_specs.get(name) == spec_key
+        )
         external_ready = self._external_ready_specs.get(name) == spec_key and not running
         resource_activity = dict(
             self._resource_activity.get(name)
@@ -1139,6 +1142,7 @@ class ServiceSkillSupervisor:
             "process_observed_at": process_observed_at,
             "process_observation_age_s": round(process_age_s, 3) if process_age_s is not None else None,
             "process_observation_source": process_state.get("source") if state_matches else "spawn_pending_poll",
+            "process_spec_matches": process_spec_matches,
             "base_url": spec.base_url,
             "host": spec.host,
             "port": spec.port,

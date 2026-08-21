@@ -103,6 +103,12 @@ def test_service_supervisor_discovers_active_runtime_slot_instead_of_workspace_s
     assert ".runtime" in status["skill_root"]
     assert status["skill_root"].endswith(str(Path("src") / "skills" / "slot_service"))
     assert status["venv_dir"].endswith(str(Path("v0.1") / "venv"))
+    process = SimpleNamespace(pid=1234, returncode=None)
+    supervisor._procs["slot_service"] = process
+    supervisor._proc_specs["slot_service"] = supervisor._spec_key(
+        supervisor._specs["slot_service"]
+    )
+    assert supervisor.status("slot_service")["process_spec_matches"] is True
 
     (version_root / "active").write_text("B", encoding="utf-8")
     supervisor.ensure_discovered(force=True)
@@ -111,6 +117,7 @@ def test_service_supervisor_discovers_active_runtime_slot_instead_of_workspace_s
     assert status is not None
     assert status["port"] == 1113
     assert status["venv_dir"].endswith(str(Path("v0.1") / "venv"))
+    assert status["process_spec_matches"] is False
 
 
 def test_service_supervisor_skips_deactivated_runtime_service():

@@ -53,6 +53,21 @@ def test_skill_component_activation_reloads_live_handlers(monkeypatch) -> None:
             or {"ok": True, "handlers": ["handlers/main.py"]}
         ),
     )
+    monkeypatch.setattr(
+        AdaOSComponentLifecycleHooks,
+        "_publish_skill_activation",
+        lambda _self, component_id, **_kwargs: (
+            events.append(("event", component_id)) or {"emitted": True}
+        ),
+    )
+    monkeypatch.setattr(
+        AdaOSComponentLifecycleHooks,
+        "_wait_for_skill_service_ready",
+        lambda _self, component_id: (
+            events.append(("service", component_id))
+            or {"managed": True, "ready": True}
+        ),
+    )
 
     receipt = AdaOSComponentLifecycleHooks(SimpleNamespace()).activate(
         kind="skill",
@@ -63,9 +78,13 @@ def test_skill_component_activation_reloads_live_handlers(monkeypatch) -> None:
     assert events == [
         ("slot", "media_center_skill:0.8.23"),
         ("handlers", "media_center_skill"),
+        ("event", "media_center_skill"),
+        ("service", "media_center_skill"),
     ]
     assert receipt["slot"] == "B"
     assert receipt["handler_reload"]["ok"] is True
+    assert receipt["activation_event"]["emitted"] is True
+    assert receipt["service"]["ready"] is True
 
 
 def test_skill_component_activation_fails_when_live_handlers_do_not_activate(monkeypatch) -> None:
@@ -90,6 +109,62 @@ def test_skill_component_activation_fails_when_live_handlers_do_not_activate(mon
             component_id="media_center_skill",
             version="0.8.23",
         )
+
+
+def test_skill_service_activation_waits_for_new_process_spec(monkeypatch) -> None:
+    hooks = AdaOSComponentLifecycleHooks(SimpleNamespace())
+    observations = iter(
+        (
+            {
+                "managed": True,
+                "ready": False,
+                "running": True,
+                "process_spec_matches": False,
+            },
+            {
+                "managed": True,
+                "ready": True,
+                "running": True,
+                "process_spec_matches": True,
+                "health_ok": True,
+            },
+        )
+    )
+    monkeypatch.setenv("ADAOS_PROJECT_SERVICE_ACTIVATION_TIMEOUT_S", "5")
+    monkeypatch.setattr(
+        AdaOSComponentLifecycleHooks,
+        "_service_activation_status",
+        staticmethod(lambda _component_id: next(observations)),
+    )
+    monkeypatch.setattr(default_runtime, "_sleep", lambda _seconds: None)
+
+    receipt = hooks._wait_for_skill_service_ready("media_library_agent")
+
+    assert receipt["ready"] is True
+    assert receipt["process_spec_matches"] is True
+
+
+def test_skill_service_activation_fails_when_new_process_never_converges(monkeypatch) -> None:
+    hooks = AdaOSComponentLifecycleHooks(SimpleNamespace())
+    clock = iter((0.0, 0.0, 6.0))
+    monkeypatch.setenv("ADAOS_PROJECT_SERVICE_ACTIVATION_TIMEOUT_S", "5")
+    monkeypatch.setattr(
+        AdaOSComponentLifecycleHooks,
+        "_service_activation_status",
+        staticmethod(
+            lambda _component_id: {
+                "managed": True,
+                "ready": False,
+                "running": True,
+                "process_spec_matches": False,
+            }
+        ),
+    )
+    monkeypatch.setattr(default_runtime, "_monotonic", lambda: next(clock))
+    monkeypatch.setattr(default_runtime, "_sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="did not converge"):
+        hooks._wait_for_skill_service_ready("media_library_agent")
 
 
 def test_default_runtimes_share_durable_store_and_publish_local_inventory(monkeypatch) -> None:

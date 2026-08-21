@@ -6,6 +6,7 @@ import json
 import os
 import platform
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock, Thread
@@ -21,6 +22,7 @@ from adaos.services.artifact_pipeline.channels import ReleaseRepository
 from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
 from adaos.services.artifact_pipeline.releases import ReleasePlan
 from adaos.services.distributed_runtime.bootstrap import configure_distributed_runtime
+from adaos.services.eventbus import emit as bus_emit
 from adaos.services.distributed_runtime import (
     MemberLinkServiceInvocationTransport,
     MemberLinkTopologyPhaseTransport,
@@ -48,6 +50,14 @@ from adaos.services.skill.runtime_migration_worker import runtime_mutation_lease
 
 def _tokens(value: str) -> tuple[str, ...]:
     return tuple(sorted({item.strip() for item in value.split(",") if item.strip()}))
+
+
+def _monotonic() -> float:
+    return time.monotonic()
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
 
 
 def _labels() -> dict[str, str]:
@@ -213,6 +223,94 @@ class AdaOSComponentLifecycleHooks:
         )
         return dict(receipt or {})
 
+    def _publish_skill_activation(
+        self,
+        component_id: str,
+        *,
+        version: str,
+        slot: str,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        bus = getattr(self.ctx, "bus", None)
+        if bus is None:
+            raise RuntimeError("project deployment event bus is unavailable")
+        bus_emit(
+            bus,
+            "skills.activated",
+            {
+                "skill_name": component_id,
+                "space": "default",
+                "defer_webspace_rebuild": True,
+                "source": "project_deployment",
+                "operation_id": operation_id,
+                "expected_version": version,
+                "expected_slot": slot,
+            },
+            "project.deployment",
+        )
+        return {
+            "emitted": True,
+            "topic": "skills.activated",
+            "expected_version": version,
+            "expected_slot": slot,
+        }
+
+    @staticmethod
+    def _service_activation_status(component_id: str) -> dict[str, Any]:
+        from adaos.services.skill.service_supervisor import get_service_supervisor
+
+        supervisor = get_service_supervisor()
+        supervisor.ensure_discovered(force=True)
+        status = supervisor.status(component_id, check_health=True)
+        if status is None:
+            return {
+                "managed": False,
+                "ready": True,
+                "reason": "not_a_service_skill",
+            }
+        process_ready = bool(
+            (status.get("running") and status.get("process_spec_matches"))
+            or status.get("external_ready")
+        )
+        health_ready = (
+            status.get("health_ok") is True
+            and not bool(status.get("health_observation_stale"))
+        )
+        return {
+            "managed": True,
+            "ready": process_ready and health_ready,
+            "running": bool(status.get("running")),
+            "external_ready": bool(status.get("external_ready")),
+            "process_spec_matches": bool(status.get("process_spec_matches")),
+            "health_ok": status.get("health_ok"),
+            "health_observation_stale": bool(
+                status.get("health_observation_stale")
+            ),
+            "pid": status.get("pid"),
+            "skill_root": status.get("skill_root"),
+        }
+
+    def _wait_for_skill_service_ready(self, component_id: str) -> dict[str, Any]:
+        try:
+            timeout_s = float(
+                os.getenv("ADAOS_PROJECT_SERVICE_ACTIVATION_TIMEOUT_S", "300")
+                or "300"
+            )
+        except ValueError:
+            timeout_s = 300.0
+        timeout_s = max(5.0, min(timeout_s, 900.0))
+        deadline = _monotonic() + timeout_s
+        observed: dict[str, Any] = {}
+        while _monotonic() < deadline:
+            observed = self._service_activation_status(component_id)
+            if observed.get("ready") is True:
+                return {**observed, "timeout_s": timeout_s}
+            _sleep(0.1)
+        raise RuntimeError(
+            "service skill did not converge to the active runtime slot "
+            f"skill={component_id} timeout_s={timeout_s:g} observed={observed}"
+        )
+
     def activate(self, *, kind: str, component_id: str, version: str) -> Mapping[str, Any]:
         if kind == "skill":
             operation_id = f"project-deployment:{component_id}:{version}"
@@ -232,11 +330,20 @@ class AdaOSComponentLifecycleHooks:
                     raise RuntimeError(
                         f"live handler activation failed for skill '{component_id}': {reason}"
                     )
+                activation_event = self._publish_skill_activation(
+                    component_id,
+                    version=version,
+                    slot=slot,
+                    operation_id=operation_id,
+                )
+                service = self._wait_for_skill_service_ready(component_id)
             return {
                 "activated": True,
                 "version": version,
                 "slot": slot,
                 "handler_reload": handler_reload,
+                "activation_event": activation_event,
+                "service": service,
             }
         if kind == "scenario":
             return {"activated": True, "version": version, "mode": "source_available"}
@@ -245,7 +352,12 @@ class AdaOSComponentLifecycleHooks:
     def health(self, *, kind: str, component_id: str, version: str) -> Mapping[str, Any]:
         if kind == "skill":
             observed = str(resolve_active_version(component_id, ctx=self.ctx) or "")
-            return {"ready": observed == version, "version": observed}
+            service = self._service_activation_status(component_id)
+            return {
+                "ready": observed == version and service.get("ready") is True,
+                "version": observed,
+                "service": service,
+            }
         path = Path(self.ctx.paths.scenarios_dir()) / component_id / "scenario.yaml"
         try:
             manifest = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
