@@ -2048,6 +2048,7 @@ class SkillManager:
         run_tests: bool = False,
         preferred_slot: str | None = None,
         allow_deactivated: bool = False,
+        source_manifest_digest: str | None = None,
     ) -> RuntimeInstallResult:
         skills_root = self.ctx.paths.skills_dir()
         skill_dir = Path(path).resolve() if path is not None else (skills_root / name)
@@ -2179,6 +2180,7 @@ class SkillManager:
             "version": version,
             "runtime_bucket": env.runtime_bucket(version),
             "resolved_manifest": str(slot.resolved_manifest),
+            "source_manifest_digest": source_manifest_digest,
             "installed_at": datetime.now(timezone.utc).isoformat(),
             "tests": {name: result.status for name, result in tests.items()},
             "data_migration": dict(data_migration),
@@ -2205,7 +2207,27 @@ class SkillManager:
             lifecycle=dict(lifecycle),
         )
 
-    def activate_runtime(self, name: str, *, version: str | None = None, slot: str | None = None) -> str:
+    def active_runtime_source_manifest_digest(self, name: str) -> str | None:
+        env = self._runtime_env(name)
+        version = env.resolve_active_version()
+        if not version:
+            return None
+        slot = env.read_active_slot(version)
+        if not slot:
+            return None
+        metadata = env.read_version_metadata(version)
+        slot_meta = metadata.get("slots", {}).get(slot, {})
+        digest = str(slot_meta.get("source_manifest_digest") or "").strip()
+        return digest or None
+
+    def activate_runtime(
+        self,
+        name: str,
+        *,
+        version: str | None = None,
+        slot: str | None = None,
+        source_manifest_digest: str | None = None,
+    ) -> str:
         env = self._runtime_env(name)
         source_path: Path | None = None
         previous_active_version = env.resolve_active_version()
@@ -2249,6 +2271,9 @@ class SkillManager:
         slot_version = self._prepared_slot_version(slot_meta=slot_meta, manifest_path=manifest_path)
         slot_source_root = slot_paths.src_dir / "skills" / name
         needs_prepare = not manifest_path.exists() or not slot_source_root.exists() or not any(slot_source_root.iterdir())
+        prepared_source_digest = str(slot_meta.get("source_manifest_digest") or "").strip()
+        if source_manifest_digest is not None and source_manifest_digest != prepared_source_digest:
+            needs_prepare = True
         if (
             not needs_prepare
             and source_path is not None
@@ -2277,6 +2302,7 @@ class SkillManager:
                 run_tests=False,
                 preferred_slot=target_slot,
                 allow_deactivated=_is_runtime_migration_transient_deactivation(previous_deactivation),
+                source_manifest_digest=source_manifest_digest,
             )
             metadata = env.read_version_metadata(target_version)
             slot_meta = metadata.get("slots", {}).get(target_slot, {})

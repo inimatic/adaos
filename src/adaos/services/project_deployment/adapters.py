@@ -26,11 +26,23 @@ from .execution import (
 
 class ComponentLifecycleHooks(Protocol):
     def activate(
-        self, *, kind: str, component_id: str, version: str
+        self,
+        *,
+        kind: str,
+        component_id: str,
+        version: str,
+        package_digest: str | None = None,
+        manifest_digest: str | None = None,
     ) -> Mapping[str, Any]: ...
 
     def health(
-        self, *, kind: str, component_id: str, version: str
+        self,
+        *,
+        kind: str,
+        component_id: str,
+        version: str,
+        package_digest: str | None = None,
+        manifest_digest: str | None = None,
     ) -> Mapping[str, Any]: ...
 
     def cordon(self, *, kind: str, component_id: str) -> Mapping[str, Any]: ...
@@ -60,23 +72,39 @@ class NoopComponentLifecycleHooks:
     """Materialization-only hooks for tests and runtimes without live reload."""
 
     def activate(
-        self, *, kind: str, component_id: str, version: str
+        self,
+        *,
+        kind: str,
+        component_id: str,
+        version: str,
+        package_digest: str | None = None,
+        manifest_digest: str | None = None,
     ) -> Mapping[str, Any]:
         return {
             "activated": True,
             "kind": kind,
             "component_id": component_id,
             "version": version,
+            "package_digest": package_digest,
+            "manifest_digest": manifest_digest,
         }
 
     def health(
-        self, *, kind: str, component_id: str, version: str
+        self,
+        *,
+        kind: str,
+        component_id: str,
+        version: str,
+        package_digest: str | None = None,
+        manifest_digest: str | None = None,
     ) -> Mapping[str, Any]:
         return {
             "ready": True,
             "kind": kind,
             "component_id": component_id,
             "version": version,
+            "package_digest": package_digest,
+            "manifest_digest": manifest_digest,
         }
 
     def cordon(self, *, kind: str, component_id: str) -> Mapping[str, Any]:
@@ -98,13 +126,27 @@ class CallbackComponentLifecycleHooks:
     deactivate_callback: Callable[[str, str], Mapping[str, Any]]
 
     def activate(
-        self, *, kind: str, component_id: str, version: str
+        self,
+        *,
+        kind: str,
+        component_id: str,
+        version: str,
+        package_digest: str | None = None,
+        manifest_digest: str | None = None,
     ) -> Mapping[str, Any]:
+        del package_digest, manifest_digest
         return self.activate_callback(kind, component_id, version)
 
     def health(
-        self, *, kind: str, component_id: str, version: str
+        self,
+        *,
+        kind: str,
+        component_id: str,
+        version: str,
+        package_digest: str | None = None,
+        manifest_digest: str | None = None,
     ) -> Mapping[str, Any]:
+        del package_digest, manifest_digest
         return self.health_callback(kind, component_id, version)
 
     def cordon(self, *, kind: str, component_id: str) -> Mapping[str, Any]:
@@ -252,6 +294,78 @@ class LocalComponentDeploymentAdapter:
             raise ProjectDeploymentExecutionError("component package is required")
         return package
 
+    @staticmethod
+    def _file_digest(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return f"sha256:{digest.hexdigest()}"
+
+    def _verify_materialized_target(
+        self,
+        package: ArtifactPackageRef,
+        target: Path,
+    ) -> Mapping[str, Any]:
+        verified = self.package_store.verify(package.digest)
+        if verified.ref != package:
+            raise ProjectDeploymentExecutionError(
+                "materialized component package identity mismatch"
+            )
+        if not target.is_dir():
+            raise ProjectDeploymentExecutionError(
+                "observed component materialization is missing"
+            )
+        raw_files = verified.package_manifest.get("files")
+        if not isinstance(raw_files, list):
+            raise ProjectDeploymentExecutionError(
+                "component package manifest has no file list"
+            )
+        checked = 0
+        target_root = target.resolve()
+        expected_paths: set[str] = set()
+        for item in raw_files:
+            if not isinstance(item, Mapping):
+                raise ProjectDeploymentExecutionError(
+                    "component package manifest file is invalid"
+                )
+            relative = Path(str(item.get("path") or ""))
+            expected_paths.add(relative.as_posix())
+            materialized = (target / relative).resolve()
+            if target_root != materialized and target_root not in materialized.parents:
+                raise ProjectDeploymentExecutionError(
+                    "materialized component file escaped its target"
+                )
+            if not materialized.is_file():
+                raise ProjectDeploymentExecutionError(
+                    f"materialized component file is missing: {relative.as_posix()}"
+                )
+            if materialized.stat().st_size != int(item.get("size")):
+                raise ProjectDeploymentExecutionError(
+                    f"materialized component file size changed: {relative.as_posix()}"
+                )
+            if self._file_digest(materialized) != str(item.get("digest") or "").strip().lower():
+                raise ProjectDeploymentExecutionError(
+                    f"materialized component file changed: {relative.as_posix()}"
+                )
+            checked += 1
+        observed_paths = {
+            path.relative_to(target).as_posix()
+            for path in target.rglob("*")
+            if path.is_file() or path.is_symlink()
+        }
+        if observed_paths != expected_paths:
+            missing = sorted(expected_paths - observed_paths)
+            extra = sorted(observed_paths - expected_paths)
+            raise ProjectDeploymentExecutionError(
+                f"materialized component file set changed: missing={missing} extra={extra}"
+            )
+        return {
+            "package_digest": package.digest,
+            "manifest_digest": package.manifest_digest,
+            "files": checked,
+        }
+
     def _phase_fetch(self, **kwargs: Any) -> Mapping[str, Any]:
         package = self._require_package(kwargs["package"])
         if not self.package_store.has(package.digest):
@@ -271,16 +385,15 @@ class LocalComponentDeploymentAdapter:
         if verified.ref != package:
             raise ProjectDeploymentExecutionError("observed package identity mismatch")
         target = self._target(change, package)
-        if not target.is_dir():
-            raise ProjectDeploymentExecutionError(
-                "observed component materialization is missing"
-            )
+        materialization = self._verify_materialized_target(package, target)
         kind, component_id = change.component_ref.split(":", 1)
         health = dict(
             self.hooks.health(
                 kind=kind,
                 component_id=component_id,
                 version=package.version,
+                package_digest=package.digest,
+                manifest_digest=package.manifest_digest,
             )
         )
         if health.get("ready") is not True:
@@ -290,6 +403,7 @@ class LocalComponentDeploymentAdapter:
         return {
             "observed": True,
             "package_digest": package.digest,
+            "materialization": materialization,
             "health": health,
         }
 
@@ -346,7 +460,11 @@ class LocalComponentDeploymentAdapter:
         kind, component_id = change.component_ref.split(":", 1)
         hook = dict(
             self.hooks.activate(
-                kind=kind, component_id=component_id, version=package.version
+                kind=kind,
+                component_id=component_id,
+                version=package.version,
+                package_digest=package.digest,
+                manifest_digest=package.manifest_digest,
             )
         )
         return {
@@ -358,16 +476,25 @@ class LocalComponentDeploymentAdapter:
     def _phase_health(self, **kwargs: Any) -> Mapping[str, Any]:
         change: DeploymentPlanChange = kwargs["change"]
         package = self._require_package(kwargs["package"])
+        materialization = self._verify_materialized_target(
+            package,
+            self._target(change, package),
+        )
         kind, component_id = change.component_ref.split(":", 1)
         receipt = dict(
             self.hooks.health(
-                kind=kind, component_id=component_id, version=package.version
+                kind=kind,
+                component_id=component_id,
+                version=package.version,
+                package_digest=package.digest,
+                manifest_digest=package.manifest_digest,
             )
         )
         if receipt.get("ready") is not True:
             raise ProjectDeploymentExecutionError(
                 "component health did not report ready"
             )
+        receipt["materialization"] = materialization
         return receipt
 
     def _phase_commit(self, **kwargs: Any) -> Mapping[str, Any]:

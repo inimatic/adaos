@@ -2,7 +2,7 @@
 
 Status: current runtime and lifecycle contract.
 
-Last reviewed: 2026-08-20.
+Last reviewed: 2026-08-21.
 
 AdaOS supports **service skills**: skills that run as **external long-running processes** managed by the hub (instead of in-process Python handlers).
 
@@ -30,11 +30,37 @@ The hub discovers and manages these skills via:
 
 ### Auto-start
 
-During hub boot, AdaOS starts all discovered service skills:
-- `src/adaos/services/bootstrap.py`
+During node boot, AdaOS lets the API and core channels become ready, waits the
+bounded service-start delay, and then starts all already-installed service
+skills. Managed NLU installation or repair runs only after that first pass and
+triggers a second discovery/start pass when it is enabled. An optional model or
+dependency operation therefore cannot hold unrelated installed services behind
+it:
+
+- `src/adaos/services/bootstrap_runtime/boot_sequence.py`
+- default delay: `30` seconds
+- override: `ADAOS_SERVICE_SKILLS_START_DELAY_S` (`0.5..300` seconds)
+
+Within a start pass, services declaring `service.membership` form the first,
+stable startup tier. As soon as that tier has been attempted, the health and
+membership loop starts; it does not wait for slower optional services later in
+the pass. This guarantees bounded topology reporting after a core restart
+without encoding product-specific skill names in core. Startup remains
+sequential inside each tier to avoid unbounded dependency-install and process
+launch pressure on small nodes.
 
 Also, when a skill gets (re)activated or rolled back, AdaOS restarts the service (if it is a service skill):
 - `src/adaos/services/skill/service_supervisor_runtime.py`
+
+For Project deployments, a version string is not component identity. The local
+and remote adapters verify every materialized file against the immutable
+package manifest and pass its exact `manifest_digest` into the skill lifecycle.
+The prepared runtime slot records that digest. Activation prepares a different
+slot when the version is unchanged but the digest differs, and health succeeds
+only when version, digest, service process specification, and service health all
+match. A workspace manifest declaring `runtime.kind: service` but absent from
+supervisor discovery is `service_not_discovered`, never a successful
+`not_a_service_skill` result.
 
 ### Health
 
@@ -174,6 +200,15 @@ Self-management:
 - `GET /api/services/{name}/doctor/requests`
 - `POST /api/services/{name}/doctor/request`
 - `GET /api/services/{name}/doctor/reports`
+
+`GET /api/node/status` also contains the bounded
+`services.skill_supervisor` runtime summary: initialization state, discovered
+count, health/watchdog task states, and compact distributed-membership receipts.
+The same summary is carried under
+`node_snapshot.services.skill_supervisor` in authenticated member snapshots, so
+the hub can distinguish a missing member report from a member whose supervisor
+is alive but has not discovered the expected distributed service. Paths,
+tokens, environment values, and unbounded logs are not included.
 
 ---
 

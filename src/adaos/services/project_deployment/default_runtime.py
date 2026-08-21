@@ -255,18 +255,31 @@ class AdaOSComponentLifecycleHooks:
             "expected_slot": slot,
         }
 
-    @staticmethod
-    def _service_activation_status(component_id: str) -> dict[str, Any]:
+    def _workspace_skill_requires_service(self, component_id: str) -> bool:
+        paths = getattr(self.ctx, "paths", None)
+        skills_dir = getattr(paths, "skills_dir", None)
+        if not callable(skills_dir):
+            return False
+        manifest_path = Path(skills_dir()) / component_id / "skill.yaml"
+        try:
+            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return False
+        runtime = manifest.get("runtime") if isinstance(manifest, Mapping) else None
+        return isinstance(runtime, Mapping) and runtime.get("kind") == "service"
+
+    def _service_activation_status(self, component_id: str) -> dict[str, Any]:
         from adaos.services.skill.service_supervisor import get_service_supervisor
 
         supervisor = get_service_supervisor()
         supervisor.ensure_discovered(force=True)
         status = supervisor.status(component_id, check_health=True)
         if status is None:
+            service_required = self._workspace_skill_requires_service(component_id)
             return {
-                "managed": False,
-                "ready": True,
-                "reason": "not_a_service_skill",
+                "managed": service_required,
+                "ready": not service_required,
+                "reason": "service_not_discovered" if service_required else "not_a_service_skill",
             }
         process_ready = bool(
             (status.get("running") and status.get("process_spec_matches"))
@@ -356,7 +369,15 @@ class AdaOSComponentLifecycleHooks:
             f"skill={component_id} timeout_s={timeout_s:g} observed={observed}"
         )
 
-    def activate(self, *, kind: str, component_id: str, version: str) -> Mapping[str, Any]:
+    def activate(
+        self,
+        *,
+        kind: str,
+        component_id: str,
+        version: str,
+        package_digest: str | None = None,
+        manifest_digest: str | None = None,
+    ) -> Mapping[str, Any]:
         if kind == "skill":
             operation_id = f"project-deployment:{component_id}:{version}"
             with runtime_mutation_lease(
@@ -365,7 +386,11 @@ class AdaOSComponentLifecycleHooks:
                 timeout_s=900.0,
             ):
                 previous_service = self._service_activation_status(component_id)
-                slot = self._skill_manager().activate_runtime(component_id, version=version)
+                slot = self._skill_manager().activate_runtime(
+                    component_id,
+                    version=version,
+                    source_manifest_digest=manifest_digest,
+                )
                 handler_reload = self._reload_skill_handlers(
                     component_id,
                     version=version,
@@ -389,6 +414,8 @@ class AdaOSComponentLifecycleHooks:
             return {
                 "activated": True,
                 "version": version,
+                "package_digest": package_digest,
+                "manifest_digest": manifest_digest,
                 "slot": slot,
                 "handler_reload": handler_reload,
                 "activation_event": activation_event,
@@ -398,13 +425,29 @@ class AdaOSComponentLifecycleHooks:
             return {"activated": True, "version": version, "mode": "source_available"}
         raise RuntimeError(f"unsupported component kind: {kind}")
 
-    def health(self, *, kind: str, component_id: str, version: str) -> Mapping[str, Any]:
+    def health(
+        self,
+        *,
+        kind: str,
+        component_id: str,
+        version: str,
+        package_digest: str | None = None,
+        manifest_digest: str | None = None,
+    ) -> Mapping[str, Any]:
         if kind == "skill":
             observed = str(resolve_active_version(component_id, ctx=self.ctx) or "")
+            observed_manifest_digest = (
+                self._skill_manager().active_runtime_source_manifest_digest(component_id)
+            )
+            exact_runtime = manifest_digest is None or observed_manifest_digest == manifest_digest
             service = self._service_activation_status(component_id)
             return {
-                "ready": observed == version and service.get("ready") is True,
+                "ready": observed == version and exact_runtime and service.get("ready") is True,
                 "version": observed,
+                "package_digest": package_digest,
+                "expected_manifest_digest": manifest_digest,
+                "observed_manifest_digest": observed_manifest_digest,
+                "exact_runtime": exact_runtime,
                 "service": service,
             }
         path = Path(self.ctx.paths.scenarios_dir()) / component_id / "scenario.yaml"

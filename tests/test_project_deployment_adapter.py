@@ -176,6 +176,70 @@ def test_local_adapter_materializes_exact_component_and_removes_only_component(
     assert external.read_bytes() == b"original"
 
 
+def test_local_adapter_observe_rejects_materialized_content_drift(tmp_path: Path) -> None:
+    package = _package(tmp_path)
+    release = _release(package)
+    store = ContentAddressedPackageStore(tmp_path / "packages")
+    adapter = LocalComponentDeploymentAdapter(
+        local_node_id="node-a",
+        workspace_root=tmp_path / "workspace",
+        state_root=tmp_path / "state",
+        package_store=store,
+        fetch_package=lambda ref: package.archive_bytes,
+        hooks=NoopComponentLifecycleHooks(),
+    )
+    change = _change("install", package)
+    for phase in change.phases:
+        adapter.execute_phase(
+            phase=phase,
+            node=_node("node-a"),
+            change=change,
+            desired=_desired(release),
+            release_plan=release,
+            package=package.ref,
+            current_activation=None,
+            idempotency_key=f"install:test_worker:{phase}",
+            attempt=1,
+        )
+    target = tmp_path / "workspace" / "skills" / "test_worker"
+    extra = target / "unexpected.py"
+    extra.write_text("unexpected = True\n", encoding="utf-8")
+
+    with pytest.raises(
+        ProjectDeploymentExecutionError,
+        match="materialized component file set changed",
+    ):
+        adapter.execute_phase(
+            phase="observe",
+            node=_node("node-a"),
+            change=replace(change, action="noop", phases=("observe",)),
+            desired=_desired(release),
+            release_plan=release,
+            package=package.ref,
+            current_activation=None,
+            idempotency_key="observe:test_worker:extra",
+            attempt=1,
+        )
+    extra.unlink()
+    (target / "test_worker.py").write_text("tampered = True\n", encoding="utf-8")
+
+    with pytest.raises(
+        ProjectDeploymentExecutionError,
+        match="materialized component file (size )?changed",
+    ):
+        adapter.execute_phase(
+            phase="observe",
+            node=_node("node-a"),
+            change=replace(change, action="noop", phases=("observe",)),
+            desired=_desired(release),
+            release_plan=release,
+            package=package.ref,
+            current_activation=None,
+            idempotency_key="observe:test_worker:observe",
+            attempt=1,
+        )
+
+
 class TimeoutTransport:
     def execute_component_phase(self, **kwargs: Any) -> Mapping[str, Any]:
         raise TimeoutError("ack lost")

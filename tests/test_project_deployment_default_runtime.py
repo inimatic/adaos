@@ -37,10 +37,18 @@ def test_async_bridge_runs_when_activation_is_called_from_an_event_loop() -> Non
 
 def test_skill_component_activation_reloads_live_handlers(monkeypatch) -> None:
     events: list[tuple[str, str]] = []
+    manifest_digest = "sha256:" + "a" * 64
 
     class Manager:
-        def activate_runtime(self, component_id: str, *, version: str) -> str:
+        def activate_runtime(
+            self,
+            component_id: str,
+            *,
+            version: str,
+            source_manifest_digest: str | None = None,
+        ) -> str:
             events.append(("slot", f"{component_id}:{version}"))
+            assert source_manifest_digest == manifest_digest
             return "B"
 
     monkeypatch.setattr(AdaOSComponentLifecycleHooks, "_skill_manager", lambda _self: Manager())
@@ -78,6 +86,8 @@ def test_skill_component_activation_reloads_live_handlers(monkeypatch) -> None:
         kind="skill",
         component_id="media_center_skill",
         version="0.8.23",
+        package_digest="sha256:" + "b" * 64,
+        manifest_digest=manifest_digest,
     )
 
     assert events == [
@@ -90,11 +100,19 @@ def test_skill_component_activation_reloads_live_handlers(monkeypatch) -> None:
     assert receipt["handler_reload"]["ok"] is True
     assert receipt["activation_event"]["emitted"] is True
     assert receipt["service"]["ready"] is True
+    assert receipt["manifest_digest"] == manifest_digest
 
 
 def test_skill_component_activation_fails_when_live_handlers_do_not_activate(monkeypatch) -> None:
     class Manager:
-        def activate_runtime(self, _component_id: str, *, version: str) -> str:
+        def activate_runtime(
+            self,
+            _component_id: str,
+            *,
+            version: str,
+            source_manifest_digest: str | None = None,
+        ) -> str:
+            assert source_manifest_digest is None
             return "A"
 
     monkeypatch.setattr(AdaOSComponentLifecycleHooks, "_skill_manager", lambda _self: Manager())
@@ -289,6 +307,79 @@ def test_skill_service_activation_fails_when_new_process_never_converges(monkeyp
 
     with pytest.raises(RuntimeError, match="did not converge"):
         hooks._wait_for_skill_service_ready("media_library_agent")
+
+
+def test_missing_declared_service_is_not_accepted_as_non_service(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    skill_root = tmp_path / "skills" / "media_library_agent"
+    skill_root.mkdir(parents=True)
+    (skill_root / "skill.yaml").write_text(
+        "name: media_library_agent\nversion: 1.0.0\nruntime:\n  kind: service\n",
+        encoding="utf-8",
+    )
+    hooks = AdaOSComponentLifecycleHooks(
+        SimpleNamespace(paths=SimpleNamespace(skills_dir=lambda: tmp_path / "skills"))
+    )
+
+    class Supervisor:
+        def ensure_discovered(self, *, force: bool) -> None:
+            assert force is True
+
+        def status(self, component_id: str, *, check_health: bool):
+            assert component_id == "media_library_agent"
+            assert check_health is True
+            return None
+
+    from adaos.services.skill import service_supervisor
+
+    monkeypatch.setattr(service_supervisor, "get_service_supervisor", lambda: Supervisor())
+
+    status = hooks._service_activation_status("media_library_agent")
+
+    assert status == {
+        "managed": True,
+        "ready": False,
+        "reason": "service_not_discovered",
+    }
+
+
+def test_skill_health_requires_exact_activated_package_manifest(monkeypatch) -> None:
+    expected = "sha256:" + "a" * 64
+
+    class Manager:
+        def active_runtime_source_manifest_digest(self, component_id: str) -> str:
+            assert component_id == "media_library_agent"
+            return "sha256:" + "b" * 64
+
+    hooks = AdaOSComponentLifecycleHooks(SimpleNamespace())
+    monkeypatch.setattr(
+        AdaOSComponentLifecycleHooks,
+        "_skill_manager",
+        lambda _self: Manager(),
+    )
+    monkeypatch.setattr(
+        AdaOSComponentLifecycleHooks,
+        "_service_activation_status",
+        lambda _self, _component_id: {"ready": True},
+    )
+    monkeypatch.setattr(
+        default_runtime,
+        "resolve_active_version",
+        lambda _component_id, **_kwargs: "1.0.0",
+    )
+
+    health = hooks.health(
+        kind="skill",
+        component_id="media_library_agent",
+        version="1.0.0",
+        manifest_digest=expected,
+    )
+
+    assert health["ready"] is False
+    assert health["exact_runtime"] is False
+    assert health["expected_manifest_digest"] == expected
 
 
 def test_default_runtimes_share_durable_store_and_publish_local_inventory(monkeypatch) -> None:
