@@ -8327,6 +8327,7 @@ def test_memory_policy_auto_profile_waits_for_min_uptime(monkeypatch, tmp_path) 
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
     manager._last_start_at = 100.0
     monkeypatch.setattr(manager, "_sidecar_role", lambda: None)
+    monkeypatch.setattr(manager, "_memory_profile_subnet_guard", lambda: (True, None))
 
     allowed, reason = manager._memory_policy_auto_profile_guard(now=250.0)
 
