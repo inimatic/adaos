@@ -177,6 +177,14 @@ class DistributedRuntime:
         principal.require("distributed.topology.inspect")
         return self.store.get_plan(str(plan_digest))
 
+    def get_topology_operation(
+        self, operation_id: str, *, principal: DistributedPrincipal
+    ) -> TopologyOperation:
+        """Read one durable operation without scanning topology inventory."""
+
+        principal.require("distributed.topology.inspect")
+        return self.store.get_operation(str(operation_id))
+
     def plan_replica_change(
         self,
         partition_id: str,

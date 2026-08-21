@@ -231,6 +231,15 @@ def get_plan(plan_digest: str) -> TopologyPlan:
     )
 
 
+def get_operation(operation_id: str) -> TopologyOperation:
+    """Read one durable topology operation by its stable identifier."""
+
+    return get_distributed_runtime().get_topology_operation(
+        operation_id,
+        principal=_principal(("distributed.topology.inspect",)),
+    )
+
+
 def plan_rebalance(
     dataset_id: str,
     *,
@@ -335,6 +344,7 @@ __all__ = [
     "drain",
     "explain_route",
     "get_plan",
+    "get_operation",
     "handoff_authority",
     "inspect",
     "invoke",

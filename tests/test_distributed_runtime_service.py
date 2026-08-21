@@ -974,6 +974,10 @@ def test_topology_operation_resumes_persisted_running_phases(tmp_path: Path) -> 
     assert [item.phase for item in operation.phases] == [
         f"{step.step_id}.{phase}" for phase in step.phases
     ]
+    assert (
+        runtime.get_topology_operation(operation.operation_id, principal=_principal())
+        == operation
+    )
 
 
 def test_uncertain_topology_phase_is_not_retried(tmp_path: Path) -> None:
