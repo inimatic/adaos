@@ -723,8 +723,45 @@ class DistributedRuntime:
                 previous_instance = None
             if previous_instance is not None:
                 previous_lease = self.store.get_lease(previous_instance.lease_id)
-                if previous_lease.status == "active":
-                    self.store.put_lease(replace(previous_lease, status="released"))
+                stable_identity = (
+                    "instance_id",
+                    "group_id",
+                    "node_id",
+                    "component_ref",
+                    "protocol_version",
+                )
+                if any(
+                    getattr(previous_instance, name) != getattr(instance, name)
+                    for name in stable_identity
+                ):
+                    raise DistributedRuntimeError(
+                        "service_instance_stable_identity_mismatch"
+                    )
+                activation_changed = (
+                    previous_instance.activation_id != instance.activation_id
+                    or previous_instance.release_digest != instance.release_digest
+                    or previous_instance.runtime_generation
+                    != instance.runtime_generation
+                )
+                if (
+                    activation_changed
+                    and instance.runtime_generation
+                    <= previous_instance.runtime_generation
+                ):
+                    raise DistributedRuntimeError(
+                        "service_instance_runtime_generation_not_monotonic"
+                    )
+                if (
+                    previous_instance.topology_generation
+                    != instance.topology_generation
+                    and instance.topology_generation
+                    <= previous_instance.topology_generation
+                ):
+                    raise DistributedRuntimeError(
+                        "service_instance_topology_generation_not_monotonic"
+                    )
+            else:
+                previous_lease = None
 
             now = self.clock()
             duration = max(30, min(int(lease_seconds), 600))
@@ -747,6 +784,9 @@ class DistributedRuntime:
                 issued_at=_iso(now),
                 renew_by=_iso(renew_by),
                 valid_until=_iso(valid_until),
+                previous_lease_id=(
+                    previous_lease.lease_id if previous_lease is not None else None
+                ),
             )
             self.store.put_lease(lease)
             registered = replace(
@@ -755,13 +795,28 @@ class DistributedRuntime:
                 observed_at=_iso(now),
                 revision=expected_revision + 1,
             )
-            result = self.store.put_instance(
-                registered, expected_revision=expected_revision
-            )
+            try:
+                result = self.store.put_instance(
+                    registered,
+                    expected_revision=expected_revision,
+                    allow_generation_change=previous_instance is not None,
+                )
+            except Exception:
+                self.store.put_lease(replace(lease, status="released"))
+                raise
+            if previous_lease is not None and previous_lease.status == "active":
+                self.store.put_lease(replace(previous_lease, status="released"))
             self.store.append_audit(
                 "service.instance.registered",
                 instance_id=result.instance_id,
                 activation_id=result.activation_id,
+                previous_activation_id=(
+                    previous_instance.activation_id
+                    if previous_instance is not None
+                    else None
+                ),
+                runtime_generation=result.runtime_generation,
+                topology_generation=result.topology_generation,
                 actor_ref=principal.actor_ref,
             )
         self._publish_projection()

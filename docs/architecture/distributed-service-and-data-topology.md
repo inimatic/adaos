@@ -137,13 +137,23 @@ Media Center coordinator group or one research executor pool. It records:
 
 ### ServiceInstance
 
-Observed runtime instance bound to exact node, ComponentActivation, release,
-process/runtime generation, and protocol version. It publishes a renewable
-lease, readiness, health, pressure, capabilities, endpoints, and last accepted
-topology generation.
+Observed logical runtime instance bound to one service group, node, component,
+and protocol. Its current generation is bound to an exact ComponentActivation,
+ProjectRelease, runtime generation, and topology generation. It publishes a
+renewable lease, readiness, health, pressure, capabilities, endpoints, and the
+last accepted topology generation.
 
-Process id alone is not instance identity. A restart creates a new instance
-generation and cannot inherit an expired authority epoch implicitly.
+Process id alone is not instance identity. A compatible activation rollover on
+the same node keeps the logical `instance_id` so Replica and authority-owner
+references remain stable, but core accepts the new generation only after
+validating the exact active ComponentActivation and ProjectRelease. Runtime and
+topology generations must advance monotonically. Registration writes a new
+membership lease with `previous_lease_id`, commits the new generation, and only
+then releases the previous membership lease; a failed commit releases the new
+lease and preserves the old one. Existing activation-bound instance ids are
+adopted in place during migration. Moving to another node, group, component, or
+protocol creates a different logical instance and requires an explicit topology
+operation. No rollover can inherit an expired authority epoch implicitly.
 
 ### Dataset
 

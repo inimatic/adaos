@@ -65,27 +65,46 @@ class _Store:
         assert self.lease is not None and self.lease.lease_id == lease_id
         return self.lease
 
+    def list_instances(self, *, group_id=None, cursor=None, limit=100):
+        assert cursor is None
+        assert limit == 100
+        values = () if self.instance is None else (self.instance,)
+        if group_id is not None:
+            values = tuple(item for item in values if item.group_id == group_id)
+        return values, None
+
 
 class _DeploymentStore:
+    def __init__(self) -> None:
+        self.generation = 9
+
     def list_activations(self, *, cursor=None, limit=100):
         assert cursor is None
         assert limit == 100
         return (
             (
                 SimpleNamespace(
-                    activation_id="activation.media-agent-a",
+                    activation_id=(
+                        "activation.media-agent-a"
+                        if self.generation == 9
+                        else f"activation.media-agent-a-v{self.generation}"
+                    ),
                     component_ref="skill:media_library_agent",
                     node_id="node-a",
                     release_digest="sha256:" + "a" * 64,
-                    generation=9,
+                    generation=self.generation,
                     status="active",
                 ),
                 SimpleNamespace(
-                    activation_id="activation.media-agent-b",
+                    activation_id=(
+                        "activation.media-agent-b"
+                        if self.generation == 9
+                        else f"activation.media-agent-b-v{self.generation}"
+                    ),
                     component_ref="skill:media_library_agent",
                     node_id="node-b",
                     release_digest="sha256:" + "a" * 64,
-                    generation=9,
+                    generation=self.generation,
                     status="active",
                 ),
             ),
@@ -209,6 +228,47 @@ def test_membership_supervisor_registers_and_renews_exact_activation(monkeypatch
     assert runtime.store.instance.endpoints[0].address_ref == (
         "skill://node-a/media_library_agent/catalog"
     )
+
+
+def test_membership_supervisor_rolls_activation_under_stable_instance_identity(
+    monkeypatch,
+) -> None:
+    runtime = _Runtime()
+    monkeypatch.setattr(membership_module, "get_distributed_runtime", lambda: runtime)
+    supervisor = DistributedServiceMembershipSupervisor(
+        SimpleNamespace(config=SimpleNamespace(node_id="node-a"))
+    )
+    health = {"status": "passing", "ready": True, "http_status": 200}
+    pressure = {"state": "normal", "active_jobs": 0}
+
+    first = supervisor.reconcile(
+        "media_library_agent",
+        _spec(),
+        readiness=True,
+        health=health,
+        pressure=pressure,
+    )
+    assert first["action"] == "registered"
+    runtime.store.instance = replace(
+        runtime.store.instance,
+        instance_id="service-legacy-activation-bound",
+    )
+    first_instance_id = runtime.store.instance.instance_id
+    runtime.deployment_store.generation = 10
+    rolled = supervisor.reconcile(
+        "media_library_agent",
+        _spec(),
+        readiness=True,
+        health=health,
+        pressure=pressure,
+    )
+
+    assert rolled["action"] == "registered"
+    assert rolled["instance_id"] == first_instance_id
+    assert rolled["activation_id"] == "activation.media-agent-a-v10"
+    assert rolled["runtime_generation"] == 10
+    assert runtime.register_calls == 2
+    assert runtime.authority_renew_calls == 2
 
 
 def test_membership_supervisor_reconciles_expired_leases_periodically(monkeypatch) -> None:

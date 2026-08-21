@@ -307,7 +307,11 @@ class DistributedRuntimeStore:
         )
 
     def put_instance(
-        self, instance: ServiceInstance, *, expected_revision: int
+        self,
+        instance: ServiceInstance,
+        *,
+        expected_revision: int,
+        allow_generation_change: bool = False,
     ) -> ServiceInstance:
         path = self._path("instances", instance.instance_id)
         with mutation_lock(self.lock_path, timeout_s=30.0):
@@ -326,24 +330,47 @@ class DistributedRuntimeStore:
             if instance.revision != observed + 1:
                 raise DistributedStoreError("instance revision must advance by one")
             if previous is not None:
-                immutable = (
+                stable_identity = (
                     "instance_id",
                     "group_id",
                     "node_id",
-                    "activation_id",
-                    "release_digest",
                     "component_ref",
-                    "runtime_generation",
                     "protocol_version",
-                    "topology_generation",
                 )
                 if any(
                     getattr(previous, name) != getattr(instance, name)
-                    for name in immutable
+                    for name in stable_identity
                 ):
                     raise DistributedStoreError(
                         "service instance immutable identity changed"
                     )
+                activation_changed = (
+                    previous.activation_id != instance.activation_id
+                    or previous.release_digest != instance.release_digest
+                    or previous.runtime_generation != instance.runtime_generation
+                )
+                topology_changed = (
+                    previous.topology_generation != instance.topology_generation
+                )
+                if activation_changed or topology_changed:
+                    if not allow_generation_change:
+                        raise DistributedStoreError(
+                            "service instance generation identity changed"
+                        )
+                    if (
+                        activation_changed
+                        and instance.runtime_generation <= previous.runtime_generation
+                    ):
+                        raise DistributedStoreError(
+                            "service instance runtime generation must advance"
+                        )
+                    if (
+                        topology_changed
+                        and instance.topology_generation <= previous.topology_generation
+                    ):
+                        raise DistributedStoreError(
+                            "service instance topology generation must advance"
+                        )
             atomic_write_json(path, instance.to_dict())
             self._audit(
                 "service.instance.observed",

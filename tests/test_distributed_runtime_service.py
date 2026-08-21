@@ -443,6 +443,105 @@ def test_draining_instance_releases_placement_capacity_for_replacement(
     assert replacement.node_id == "node-a"
 
 
+def test_instance_generation_rollover_preserves_logical_identity_and_authority(
+    tmp_path: Path,
+) -> None:
+    runtime, _, release = _runtime(tmp_path)
+    current = runtime.register_instance(
+        _instance(release, "node-a"),
+        expected_revision=0,
+        principal=_principal(),
+    )
+    previous_lease = runtime.store.get_lease(current.lease_id)
+    runtime.deployment_store.put_activation(
+        replace(
+            _activation(release, "node-a", generation=2),
+            activation_id="activation-agent-node-a-v2",
+        )
+    )
+    upgraded_definition = ServiceDefinition(
+        definition_id="media-library-agent",
+        version="1.1",
+        release_digest=str(release.release.release_digest),
+        compatible_components=("skill:media_library_agent",),
+        provided_contracts=("media.catalog.v1",),
+        topology_mode="multi_instance",
+        protocol_version="1",
+        required_capabilities=("media.catalog",),
+        adapter_contracts=("adaos.distributed.adapter.v1",),
+    )
+    runtime.define_service(upgraded_definition, principal=_principal())
+    group = runtime.store.get_group("media-library-home")
+    runtime.define_group(
+        replace(
+            group,
+            definition_version="1.1",
+            desired_generation=2,
+            desired_revision=2,
+        ),
+        expected_revision=1,
+        principal=_principal(),
+    )
+    candidate = replace(
+        _instance(release, "node-a"),
+        instance_id=current.instance_id,
+        activation_id="activation-agent-node-a-v2",
+        runtime_generation=2,
+        topology_generation=2,
+        revision=current.revision,
+    )
+
+    rolled = runtime.register_instance(
+        candidate,
+        expected_revision=current.revision,
+        principal=_principal(),
+    )
+
+    assert rolled.instance_id == current.instance_id
+    assert rolled.activation_id == "activation-agent-node-a-v2"
+    assert rolled.runtime_generation == 2
+    assert rolled.topology_generation == 2
+    assert runtime.store.get_lease(previous_lease.lease_id).status == "released"
+    assert runtime.store.get_lease(rolled.lease_id).previous_lease_id == previous_lease.lease_id
+
+
+def test_instance_rollover_rejects_non_monotonic_activation_before_releasing_lease(
+    tmp_path: Path,
+) -> None:
+    runtime, _, release = _runtime(tmp_path)
+    current = runtime.register_instance(
+        _instance(release, "node-a"),
+        expected_revision=0,
+        principal=_principal(),
+    )
+    previous_lease = runtime.store.get_lease(current.lease_id)
+    runtime.deployment_store.put_activation(
+        replace(
+            _activation(release, "node-a"),
+            activation_id="activation-agent-node-a-conflict",
+        )
+    )
+    candidate = replace(
+        _instance(release, "node-a"),
+        instance_id=current.instance_id,
+        activation_id="activation-agent-node-a-conflict",
+        revision=current.revision,
+    )
+
+    with pytest.raises(
+        DistributedRuntimeError,
+        match="service_instance_runtime_generation_not_monotonic",
+    ):
+        runtime.register_instance(
+            candidate,
+            expected_revision=current.revision,
+            principal=_principal(),
+        )
+
+    assert runtime.store.get_lease(previous_lease.lease_id).status == "active"
+    assert runtime.store.get_instance(current.instance_id) == current
+
+
 def test_concurrent_registration_cannot_overbook_one_node(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

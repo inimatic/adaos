@@ -268,7 +268,16 @@ class DistributedServiceMembershipSupervisor:
         if spec.protocol_version and spec.protocol_version != definition.protocol_version:
             raise RuntimeError("service_membership_protocol_mismatch")
 
-        instance_id = self._instance_id(spec.group_id, node_id, activation.activation_id)
+        instance_id = self._instance_id(spec.group_id, node_id, component_ref)
+        current = self._selected_instance(
+            runtime.store,
+            instance_id=instance_id,
+            group_id=spec.group_id,
+            node_id=node_id,
+            component_ref=component_ref,
+        )
+        if current is not None:
+            instance_id = current.instance_id
         status = "ready" if readiness else "unavailable"
         endpoints = self._endpoints(
             spec,
@@ -276,10 +285,6 @@ class DistributedServiceMembershipSupervisor:
             skill_name=skill_name,
             activation_id=activation.activation_id,
         )
-        try:
-            current = runtime.store.get_instance(instance_id)
-        except FileNotFoundError:
-            current = None
         if current is not None and current.status == "draining":
             return {
                 "enabled": True,
@@ -330,8 +335,14 @@ class DistributedServiceMembershipSupervisor:
                 or dict(current.health) != dict(health)
                 or dict(current.pressure) != dict(pressure)
             )
+            generation_changed = (
+                current.activation_id != candidate.activation_id
+                or current.release_digest != candidate.release_digest
+                or current.runtime_generation != candidate.runtime_generation
+                or current.topology_generation != candidate.topology_generation
+            )
             renew_due = not lease_active or _utc(lease.renew_by) <= now
-            if not lease_active:
+            if not lease_active or generation_changed:
                 current = runtime.register_instance(
                     candidate,
                     expected_revision=current.revision,
@@ -402,11 +413,51 @@ class DistributedServiceMembershipSupervisor:
         return max(matches, key=lambda item: (item.generation, item.activation_id))
 
     @staticmethod
-    def _instance_id(group_id: str, node_id: str, activation_id: str) -> str:
+    def _instance_id(group_id: str, node_id: str, component_ref: str) -> str:
         digest = hashlib.sha256(
-            f"{group_id}\0{node_id}\0{activation_id}".encode("utf-8")
+            f"{group_id}\0{node_id}\0{component_ref}".encode("utf-8")
         ).hexdigest()[:28]
         return f"service-{digest}"
+
+    @staticmethod
+    def _selected_instance(
+        store: Any,
+        *,
+        instance_id: str,
+        group_id: str,
+        node_id: str,
+        component_ref: str,
+    ) -> ServiceInstance | None:
+        try:
+            return store.get_instance(instance_id)
+        except FileNotFoundError:
+            pass
+        matches: list[ServiceInstance] = []
+        cursor: str | None = None
+        while True:
+            values, cursor = store.list_instances(
+                group_id=group_id,
+                cursor=cursor,
+                limit=100,
+            )
+            matches.extend(
+                item
+                for item in values
+                if item.node_id == node_id and item.component_ref == component_ref
+            )
+            if not cursor:
+                break
+        if not matches:
+            return None
+        return max(
+            matches,
+            key=lambda item: (
+                item.runtime_generation,
+                item.topology_generation,
+                item.revision,
+                item.instance_id,
+            ),
+        )
 
     @staticmethod
     def _endpoints(
