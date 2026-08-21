@@ -68,7 +68,13 @@ def _json_pointer(value: Any, pointer: str) -> Any:
     return current
 
 
-def _resolve(value: Any, outputs: Mapping[str, Any], *, item: Any = None) -> Any:
+def _resolve(
+    value: Any,
+    outputs: Mapping[str, Any],
+    *,
+    item: Any = None,
+    candidate: Mapping[str, Any] | None = None,
+) -> Any:
     if isinstance(value, Mapping):
         if set(value) == {"$bind"}:
             binding = value["$bind"]
@@ -82,9 +88,19 @@ def _resolve(value: Any, outputs: Mapping[str, Any], *, item: Any = None) -> Any
             if item is None:
                 raise ContractSequenceError("$item is only valid inside for_each")
             return _json_pointer(item, str(value["$item"] or ""))
-        return {str(key): _resolve(child, outputs, item=item) for key, child in value.items()}
+        if set(value) == {"$candidate"}:
+            if candidate is None:
+                raise ContractSequenceError("$candidate is unavailable")
+            return _json_pointer(candidate, str(value["$candidate"] or ""))
+        return {
+            str(key): _resolve(child, outputs, item=item, candidate=candidate)
+            for key, child in value.items()
+        }
     if isinstance(value, list):
-        return [_resolve(child, outputs, item=item) for child in value]
+        return [
+            _resolve(child, outputs, item=item, candidate=candidate)
+            for child in value
+        ]
     return value
 
 
@@ -276,6 +292,7 @@ def run_sequence(request: Mapping[str, Any]) -> dict[str, Any]:
         }
     )
     entries = _tool_entries(manifest)
+    candidate = {"skill_id": skill_dir.name}
     operations = dict(contract.get("operations") or {})
     steps = fixture.get("steps")
     if not isinstance(steps, list) or not steps or len(steps) > 50:
@@ -312,7 +329,7 @@ def run_sequence(request: Mapping[str, Any]) -> dict[str, Any]:
             raise ContractSequenceError(f"candidate exports no tool for operation {operation!r}")
         repetitions: list[Any] = [None]
         if "for_each" in step:
-            source = _resolve(step["for_each"], outputs)
+            source = _resolve(step["for_each"], outputs, candidate=candidate)
             if not isinstance(source, list) or not source:
                 raise ContractSequenceError(f"step {step_id} for_each must resolve to a non-empty array")
             if len(source) > 100:
@@ -320,7 +337,12 @@ def run_sequence(request: Mapping[str, Any]) -> dict[str, Any]:
             repetitions = source
         results: list[Any] = []
         for item in repetitions:
-            payload = _resolve(step.get("input") or {}, outputs, item=item)
+            payload = _resolve(
+                step.get("input") or {},
+                outputs,
+                item=item,
+                candidate=candidate,
+            )
             input_schema = operation_contract.get("input_schema")
             if isinstance(input_schema, Mapping):
                 failures = _schema_errors(input_schema, payload)

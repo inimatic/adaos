@@ -1536,6 +1536,8 @@ def _operation_sequence_assignment(workspace: Path, *, omit_output: bool = False
         "from pathlib import Path\n"
         f"OMIT_OUTPUT = {omit_output!r}\n"
         "def prepare(request):\n"
+        "    if request.get('provider') != 'sequence_provider':\n"
+        "        raise ValueError('trusted candidate binding was not resolved')\n"
         "    root = Path(os.environ['ADAOS_SKILL_INTERNAL_DATA_ROOT']) / 'attempt'\n"
         "    root.mkdir(parents=True, exist_ok=True)\n"
         "    return {'command': [sys.executable, str(Path(__file__).resolve()), 'execute'], "
@@ -1571,8 +1573,11 @@ def _operation_sequence_assignment(workspace: Path, *, omit_output: bool = False
                     "properties": {
                         "request": {
                             "type": "object",
-                            "required": ["value"],
-                            "properties": {"value": {"const": 3}},
+                            "required": ["value", "provider"],
+                            "properties": {
+                                "value": {"const": 3},
+                                "provider": {"const": "sequence_provider"},
+                            },
                             "additionalProperties": False,
                         }
                     },
@@ -1627,7 +1632,12 @@ def _operation_sequence_assignment(workspace: Path, *, omit_output: bool = False
                         "id": "prepare",
                         "kind": "operation",
                         "operation": "prepare",
-                        "input": {"request": {"value": 3}},
+                        "input": {
+                            "request": {
+                                "value": 3,
+                                "provider": {"$candidate": "/skill_id"},
+                            }
+                        },
                     },
                     {
                         "id": "execute",
