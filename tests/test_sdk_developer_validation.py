@@ -157,7 +157,8 @@ def test_developer_trial_uses_candidate_owned_working_directory(
     script.write_text(
         "from pathlib import Path\n"
         "import json, os\n"
-        "Path('result.json').write_text(json.dumps({'ok': True, 'contract': os.environ['TEST_CONTRACT']}), encoding='utf-8')\n",
+        "from adaos.sdk.skill_env import skill_data_root\n"
+        "Path('result.json').write_text(json.dumps({'ok': True, 'contract': os.environ['TEST_CONTRACT'], 'data_root': str(skill_data_root())}), encoding='utf-8')\n",
         encoding="utf-8",
     )
     runtime_bucket = "v0.1"
@@ -175,7 +176,8 @@ def test_developer_trial_uses_candidate_owned_working_directory(
     runtime_source.mkdir(parents=True)
     manifest = runtime_source / "resolved.manifest.json"
     manifest.write_text("{}\n", encoding="utf-8")
-    workdir = dev_skills / ".runtime" / "candidate" / runtime_bucket / "data" / "internal" / "attempt"
+    data_root = dev_skills / ".runtime" / "candidate" / runtime_bucket / "data"
+    workdir = data_root / "attempts" / "candidate-smoke"
     workdir.mkdir(parents=True)
     state_dir = tmp_path / "state"
     package_path = tmp_path / "package"
@@ -216,7 +218,11 @@ def test_developer_trial_uses_candidate_owned_working_directory(
     )
 
     assert receipt["ok"] is True
-    assert receipt["documents"]["result.json"] == {"ok": True, "contract": "preserved"}
+    assert receipt["documents"]["result.json"] == {
+        "ok": True,
+        "contract": "preserved",
+        "data_root": str(data_root.resolve()),
+    }
     assert receipt["provider"]["process_tree_isolated"] is True
     assert receipt["provider"]["network_intent"] == network_mode
     assert receipt["provider"]["network_enforced"] is False
@@ -224,6 +230,7 @@ def test_developer_trial_uses_candidate_owned_working_directory(
     assert json.loads((workdir / "result.json").read_text(encoding="utf-8")) == {
         "ok": True,
         "contract": "preserved",
+        "data_root": str(data_root.resolve()),
     }
 
 

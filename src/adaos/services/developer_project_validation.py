@@ -304,7 +304,6 @@ def execute_dev_spec(
         / runtime_bucket
         / "data"
     ).resolve()
-    internal_data_root = (data_root / "internal").resolve()
     if not any(_under(script, root) for root in (source_root, runtime_root)):
         raise PermissionError("developer trial command is outside evaluated skill sources")
     if not script.is_file() or script.suffix.lower() != ".py":
@@ -371,9 +370,14 @@ def execute_dev_spec(
             "PYTHONIOENCODING": "utf-8",
             "ADAOS_SKILL_NAME": str(project_id),
             "ADAOS_SKILL_ROOT": str(runtime_root),
-            "ADAOS_SKILL_INTERNAL_DATA_ROOT": str(internal_data_root),
-            "ADAOS_SKILL_INTERNAL_ACTIVE_PATH": str(internal_data_root),
-            "ADAOS_SKILL_INTERNAL_TARGET_PATH": str(internal_data_root),
+            # The provider prepares its ExecutionSpec against this canonical
+            # compatibility-bucket data root.  Preserve that exact owner
+            # identity in the child process; substituting ``data/internal``
+            # makes SDK content references change meaning between prepare and
+            # execute, even though both paths remain owner-scoped.
+            "ADAOS_SKILL_INTERNAL_DATA_ROOT": str(data_root),
+            "ADAOS_SKILL_INTERNAL_ACTIVE_PATH": str(data_root),
+            "ADAOS_SKILL_INTERNAL_TARGET_PATH": str(data_root),
             "ADAOS_SKILL_ENV_PATH": str(data_root / "db" / "skill_env.json"),
             "PYTHONPATH": os.pathsep.join((str(runtime_root), str(ctx.paths.package_path()))),
         }
