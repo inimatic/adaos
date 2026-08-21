@@ -920,6 +920,12 @@ worker without deleting retained domain data.
 
 Checked local implementation evidence: [Distributed Deployment And Topology
 Conformance - 2026-08-20](distributed-runtime-conformance-2026-08-20.md).
+Media Center `0.6.45` at registry revision
+`7119aabac4b74e055755ddff4b6f19175a6efb16` was built twice with independent
+package/release caches; both builds produced release digest
+`sha256:4bd827fd9f819107c1d20d85dc13d31b4ce5f0f75f18f57a5238a596ec8ddfe0`
+and identical verified package archives. The reproducibility receipt is
+`.adaos/state/codex/evidence/media-center-project-release-0.6.45-reproducibility.json`.
 `AP8-12` remains open until the exact release is exercised on two physical
 nodes; the implemented recommendation API does not waive that admission gate
 for `AP8-13`.
