@@ -442,7 +442,7 @@ class DistributedRuntimeStore:
         if lease.kind != "authority" or lease.status != "active":
             raise DistributedStoreError("handoff requires a new active authority lease")
         with mutation_lock(self.lock_path, timeout_s=30.0):
-            current: TopologyLease | None = None
+            authorities: list[TopologyLease] = []
             root = self.root / "leases"
             if root.is_dir():
                 for path in root.glob("*.json"):
@@ -450,11 +450,10 @@ class DistributedRuntimeStore:
                     if (
                         candidate.scope_ref == lease.scope_ref
                         and candidate.kind == "authority"
-                        and candidate.status == "active"
-                        and (current is None or candidate.epoch > current.epoch)
                     ):
-                        current = candidate
-            observed_epoch = current.epoch if current is not None else 0
+                        authorities.append(candidate)
+            latest = max(authorities, key=lambda item: item.epoch, default=None)
+            observed_epoch = latest.epoch if latest is not None else 0
             if expected_epoch != observed_epoch:
                 raise DistributedConflictError(
                     resource="authority_epoch",
@@ -465,7 +464,9 @@ class DistributedRuntimeStore:
                 raise DistributedStoreError(
                     "authority epoch must advance by exactly one"
                 )
-            if current is not None:
+            for current in authorities:
+                if current.status != "active":
+                    continue
                 released = replace(current, status="released")
                 atomic_write_json(
                     self._path("leases", released.lease_id), released.to_dict()
@@ -477,7 +478,7 @@ class DistributedRuntimeStore:
             self._audit(
                 "topology.authority.handoff",
                 scope_ref=lease.scope_ref,
-                previous_lease_id=None if current is None else current.lease_id,
+                previous_lease_id=None if latest is None else latest.lease_id,
                 lease_id=lease.lease_id,
                 owner_instance_id=lease.owner_instance_id,
                 epoch=lease.epoch,

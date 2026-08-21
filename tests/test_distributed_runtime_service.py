@@ -600,6 +600,72 @@ def test_fenced_handoff_rejects_old_owner_and_routes_partial_topology(
     assert [item.replica_id for item in route.endpoints] == ["root-a-node-b"]
 
 
+def test_fenced_handoff_continues_epoch_after_authority_lease_expires(
+    tmp_path: Path,
+) -> None:
+    runtime, clock, release = _runtime(tmp_path)
+    _register_both(runtime, release)
+    _external_topology(runtime)
+    first = runtime.handoff_authority(
+        "media-files:root-a",
+        "media-agent-node-a",
+        expected_partition_revision=1,
+        expected_epoch=0,
+        operation_id="initial-authority",
+        lease_seconds=30,
+        principal=_principal(),
+    )
+    runtime.observe_replica(
+        Replica(
+            replica_id="root-a-node-b",
+            partition_id="media-files:root-a",
+            instance_id="media-agent-node-b",
+            node_id="node-b",
+            role="follower",
+            lifecycle="ready",
+            content_state="non_empty",
+            authority_epoch=first.epoch,
+            checkpoint="scan:10",
+            source_ref="file:///mnt/disk1/Music",
+            freshness_seconds=0,
+            item_count=10,
+            byte_count=1000,
+            observed_at=_NOW.isoformat(),
+        ),
+        expected_revision=0,
+        principal=_principal(),
+    )
+
+    clock.advance(31)
+    assert first.lease_id in runtime.expire_leases(principal=_principal())
+    recovered = runtime.handoff_authority(
+        "media-files:root-a",
+        "media-agent-node-b",
+        expected_partition_revision=2,
+        expected_epoch=1,
+        operation_id="recover-expired-authority",
+        principal=_principal(),
+    )
+
+    assert recovered.epoch == 2
+    assert recovered.previous_lease_id == first.lease_id
+    assert runtime.store.get_lease(first.lease_id).status == "expired"
+    partition = runtime.store.get_partition("media-files:root-a")
+    assert partition.authority_epoch == 2
+    assert partition.authority_lease_id == recovered.lease_id
+    runtime.assert_authority(
+        scope_ref="partition:media-files:root-a",
+        instance_id="media-agent-node-b",
+        epoch=2,
+    )
+    with pytest.raises(StaleAuthorityEpochError):
+        runtime.assert_authority(
+            scope_ref="partition:media-files:root-a",
+            instance_id="media-agent-node-a",
+            epoch=1,
+        )
+
+
 def test_reviewed_handoff_plan_commits_epoch_before_domain_promotion(
     tmp_path: Path,
 ) -> None:

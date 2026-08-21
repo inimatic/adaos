@@ -946,6 +946,8 @@ class DistributedRuntime:
         partition = self.store.get_partition(partition_id)
         if partition.revision != expected_partition_revision:
             raise DistributedRuntimeError("partition_revision_conflict")
+        if partition.authority_epoch != expected_epoch:
+            raise StaleAuthorityEpochError("partition_authority_epoch_conflict")
         instance = self.store.get_instance(target_instance_id)
         self._require_active_membership(instance)
         if not instance.readiness or instance.status != "ready":
