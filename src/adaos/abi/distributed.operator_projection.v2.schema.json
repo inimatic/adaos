@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "distributed.operator_projection.v2.schema.json",
+  "title": "AdaOS Distributed Operator Projection v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "summary", "status", "freshness", "pressure", "recent_operations", "inventory"],
+  "properties": {
+    "schema": { "const": "adaos.distributed.operator_projection.v2" },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["groups", "ready_groups", "instances", "ready_instances", "active_leases", "datasets", "partitions", "replicas", "partial_routes", "active_operations"],
+      "properties": {
+        "groups": { "$ref": "#/$defs/count" },
+        "ready_groups": { "$ref": "#/$defs/count" },
+        "instances": { "$ref": "#/$defs/count" },
+        "ready_instances": { "$ref": "#/$defs/count" },
+        "active_leases": { "$ref": "#/$defs/count" },
+        "datasets": { "$ref": "#/$defs/count" },
+        "partitions": { "$ref": "#/$defs/count" },
+        "replicas": { "$ref": "#/$defs/count" },
+        "partial_routes": { "$ref": "#/$defs/count" },
+        "active_operations": { "$ref": "#/$defs/count" }
+      }
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["groups", "instances", "datasets", "partitions", "replicas", "content", "operations"],
+      "properties": {
+        "groups": { "$ref": "#/$defs/countMap" },
+        "instances": { "$ref": "#/$defs/countMap" },
+        "datasets": { "$ref": "#/$defs/countMap" },
+        "partitions": { "$ref": "#/$defs/countMap" },
+        "replicas": { "$ref": "#/$defs/countMap" },
+        "content": { "$ref": "#/$defs/countMap" },
+        "operations": { "$ref": "#/$defs/countMap" }
+      }
+    },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observed_replicas", "maximum_seconds"],
+      "properties": {
+        "observed_replicas": { "$ref": "#/$defs/count" },
+        "maximum_seconds": { "type": ["number", "null"], "minimum": 0 }
+      }
+    },
+    "pressure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observed_values", "maximum"],
+      "properties": {
+        "observed_values": { "$ref": "#/$defs/count" },
+        "maximum": { "type": ["number", "null"] }
+      }
+    },
+    "recent_operations": {
+      "type": "array",
+      "maxItems": 50,
+      "items": { "$ref": "#/$defs/operation" }
+    },
+    "inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bounded", "page_limit", "detail_transport"],
+      "properties": {
+        "bounded": { "const": true },
+        "page_limit": { "type": "integer", "minimum": 1, "maximum": 200 },
+        "detail_transport": { "const": "cursor_api" }
+      }
+    }
+  },
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "token": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "nullableToken": { "type": ["string", "null"], "minLength": 1, "maxLength": 500 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "countMap": {
+      "type": "object",
+      "maxProperties": 64,
+      "additionalProperties": { "$ref": "#/$defs/count" }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation_id", "kind", "target_ref", "state", "expected_revision", "authority_epoch", "phase_count", "terminal_phase_count", "current_phase", "current_phase_state", "error_code", "created_at", "updated_at"],
+      "properties": {
+        "operation_id": { "$ref": "#/$defs/token" },
+        "kind": { "enum": ["reconcile", "replicate", "handoff", "drain", "remove", "repair"] },
+        "target_ref": { "$ref": "#/$defs/token" },
+        "state": { "enum": ["pending", "running", "succeeded", "failed", "uncertain"] },
+        "expected_revision": { "$ref": "#/$defs/count" },
+        "authority_epoch": { "$ref": "#/$defs/count" },
+        "phase_count": { "$ref": "#/$defs/count" },
+        "terminal_phase_count": { "$ref": "#/$defs/count" },
+        "current_phase": { "$ref": "#/$defs/nullableToken" },
+        "current_phase_state": { "type": ["string", "null"], "enum": ["pending", "running", "succeeded", "failed", "uncertain", "skipped", null] },
+        "error_code": { "$ref": "#/$defs/nullableToken" },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "updated_at": { "$ref": "#/$defs/timestamp" }
+      }
+    }
+  }
+}
