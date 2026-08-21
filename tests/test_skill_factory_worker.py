@@ -1559,6 +1559,15 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(
             "target": {"type": "skill", "id": "demo"},
             "artifacts": {
                 "implementation_brief": "Keep Russian text intact.",
+                "development_context": {
+                    "execution_budget": {
+                        "budget_view": "fixed_downstream",
+                        "max_wall_seconds": 10800,
+                        "max_model_tokens": 12000000,
+                        "max_attempts": 2,
+                        "max_human_interventions": 0,
+                    }
+                },
                 "context_packet": {
                     "schema": "adaos.builder.context_packet.v1",
                     "digest": "sha256:" + "a" * 64,
@@ -1617,7 +1626,7 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(
     assert "fabricated metrics" in prompt
     assert "Resolve skill-owned runtime storage through AdaOS SDK" in prompt
     assert "does not permit omitting the executable scientific path" in prompt
-    assert "60-second lifecycle budget" in prompt
+    assert "lifecycle allowance for this task is 180 seconds" in prompt
     assert (
         "Do not execute a scientific smoke or confirmatory workload from packaged tests"
         in prompt
@@ -1640,6 +1649,12 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(
     assert "workflow.json" in prompt
     assert "irrelevant.full.catalog" not in prompt
     assert packet["context_packet_digest"] == "sha256:" + "a" * 64
+    assert packet["validation_budget"] == {
+        "schema": "adaos.builder.validation_budget.v1",
+        "packaged_pytest_wall_seconds": 180,
+        "source": "development_session.execution_budget",
+        "execution_max_wall_seconds": 10800,
+    }
     assert packet["context_packet"]["change"]["change_id"] == "change.demo"
     assert packet["context_packet"]["facets"]["workflow_definition"]["authoring"][
         "adapter_catalog"
@@ -2823,6 +2838,80 @@ def test_worker_runs_generated_tests_from_package_shaped_projection(
     assert checks[0]["kind"] == "pytest.packaged"
     assert checks[0]["ok"] is False
     assert any("packaged pytest failed" in error for error in errors)
+
+
+def test_worker_records_budgeted_package_test_timeout_for_autonomous_repair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = tmp_path / "run" / "workspace"
+    tests_dir = workspace / "skills" / "demo" / "tests"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_slow.py").write_text(
+        "def test_slow():\n    assert True\n",
+        encoding="utf-8",
+    )
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo_root,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    assignment = {
+        "realize_request": {
+            "artifacts": {
+                "development_context": {
+                    "execution_budget": {"max_wall_seconds": 10800}
+                }
+            }
+        }
+    }
+    observed: dict[str, float] = {}
+
+    def timeout_run(*_args, **kwargs):
+        observed["timeout"] = float(kwargs["timeout"])
+        raise subprocess.TimeoutExpired(
+            cmd=["python", "-m", "pytest"],
+            timeout=kwargs["timeout"],
+            output="partial output",
+        )
+
+    monkeypatch.setattr(worker_module, "_run", timeout_run)
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    worker._run_generated_tests(
+        workspace,
+        checks,
+        errors,
+        assignment=assignment,
+    )
+
+    assert observed["timeout"] == 180.0
+    assert checks == [
+        {
+            "kind": "pytest.packaged",
+            "path": "skills/demo/tests",
+            "ok": False,
+            "status": "timeout",
+            "timeout_seconds": 180,
+            "validation_budget": {
+                "schema": "adaos.builder.validation_budget.v1",
+                "packaged_pytest_wall_seconds": 180,
+                "source": "development_session.execution_budget",
+                "execution_max_wall_seconds": 10800,
+            },
+            "output": "partial output",
+        }
+    ]
+    assert errors == [
+        "skills/demo/tests: packaged pytest timed out after 180 seconds: partial output"
+    ]
+    assert worker_module._generated_test_budget({})[
+        "packaged_pytest_wall_seconds"
+    ] == 60
 
 
 def test_worker_ignores_unchanged_baseline_version_pins(tmp_path: Path) -> None:

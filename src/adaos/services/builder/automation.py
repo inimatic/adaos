@@ -31,7 +31,7 @@ from adaos.services.skill_factory_worker import LocalSkillFactoryWorker
 
 
 AUTOMATION_SESSION_SCHEMA = "adaos.builder.automation_session.v1"
-STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.8.0"
+STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.9.0"
 FINALIZATION_HEARTBEAT_SECONDS = 10.0
 AUTOMATION_PROJECTION_SCHEMA = "adaos.builder.automation_projection.v1"
 _LOCK = threading.RLock()

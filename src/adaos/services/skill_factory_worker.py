@@ -35,8 +35,10 @@ from adaos.services.workflow_artifacts import (
 )
 
 
-RUNNER_VERSION = "adaos-local-codex-worker/0.5.0"
-GENERATED_TEST_TIMEOUT_SECONDS = 60
+RUNNER_VERSION = "adaos-local-codex-worker/0.6.0"
+DEFAULT_GENERATED_TEST_TIMEOUT_SECONDS = 60
+MAX_GENERATED_TEST_TIMEOUT_SECONDS = 300
+GENERATED_TEST_BUDGET_DIVISOR = 60
 PACKET_SCHEMA = "adaos.skill_factory.codex_packet.v1"
 LOCAL_SESSION_SCHEMA = "adaos.skill_factory.local_run.v1"
 _log = logging.getLogger("adaos.skill_factory.local_worker")
@@ -213,6 +215,60 @@ def _run(
         check=False,
         env=dict(env) if env is not None else None,
     )
+
+
+def _generated_test_budget(assignment: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Derive one prompt/validator test allowance from admitted task authority."""
+
+    task = assignment if isinstance(assignment, Mapping) else {}
+    request = (
+        task.get("realize_request")
+        if isinstance(task.get("realize_request"), Mapping)
+        else {}
+    )
+    artifacts = (
+        request.get("artifacts")
+        if isinstance(request.get("artifacts"), Mapping)
+        else {}
+    )
+    development = (
+        artifacts.get("development_context")
+        if isinstance(artifacts.get("development_context"), Mapping)
+        else {}
+    )
+    candidates = (
+        (
+            "development_session.execution_budget",
+            development.get("execution_budget"),
+        ),
+        ("realize_request.execution_budget", artifacts.get("execution_budget")),
+    )
+    source = "platform_default"
+    max_wall_seconds: int | None = None
+    for candidate_source, raw_budget in candidates:
+        if not isinstance(raw_budget, Mapping):
+            continue
+        try:
+            value = int(raw_budget.get("max_wall_seconds") or 0)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            source = candidate_source
+            max_wall_seconds = value
+            break
+    timeout_seconds = int(DEFAULT_GENERATED_TEST_TIMEOUT_SECONDS)
+    if max_wall_seconds is not None:
+        scaled = (
+            max_wall_seconds + int(GENERATED_TEST_BUDGET_DIVISOR) - 1
+        ) // int(GENERATED_TEST_BUDGET_DIVISOR)
+        timeout_seconds = max(timeout_seconds, scaled)
+    timeout_seconds = min(int(MAX_GENERATED_TEST_TIMEOUT_SECONDS), timeout_seconds)
+    return {
+        "schema": "adaos.builder.validation_budget.v1",
+        "packaged_pytest_wall_seconds": timeout_seconds,
+        "source": source,
+        "execution_max_wall_seconds": max_wall_seconds,
+    }
 
 
 def _git(command: Sequence[str], *, cwd: Path, timeout: float = 120.0) -> str:
@@ -1496,6 +1552,7 @@ class LocalSkillFactoryWorker:
             "development_context": development_context or None,
             "development_context_digest": str(development_context.get("digest") or "").strip()
             or None,
+            "validation_budget": _generated_test_budget(assignment),
         }
         _write_json(input_dir / "packet.json", packet)
         (input_dir / "allowed_files.txt").write_text("\n".join(allowed) + "\n", encoding="utf-8")
@@ -1536,7 +1593,7 @@ When `scenarios/{target_id}/.builder_current_publication` exists, treat it as th
 14. Never substitute fabricated metrics, synthetic success defaults, placeholder digests, or caller-asserted invariants for requested execution. Fixtures may make tests bounded, but they must drive the same model, data, storage, tracker, recovery, and analysis components used by the real path.
 15. Resolve skill-owned runtime storage through AdaOS SDK/capability bindings. Do not let ordinary tool callers choose arbitrary filesystem roots. Use typed platform contracts such as ContentRef and tracker providers when the brief requires them instead of look-alike dictionaries local to the skill.
 16. Audit the final implementation against every Issue and acceptance criterion in the governed context. If any item is not implemented, state it as an open item; do not describe the project as complete. The prohibition on running a scientific workload during code generation does not permit omitting the executable scientific path.
-17. Tests must be capable of failing for a stubbed implementation: cover real operator/model behavior, real manifest verification, storage isolation, provider calls, retry/idempotency boundaries, and event completeness where those concerns are required. The standard native fallback pytest suite has a 60-second lifecycle budget. Keep it within that budget by bounding fixtures or splitting suites, never by replacing the production path with a faster look-alike. Do not execute a scientific smoke or confirmatory workload from packaged tests; test the production path with bounded fixtures and let the admitted consumer own real workflow-smoke execution.
+17. Tests must be capable of failing for a stubbed implementation: cover real operator/model behavior, real manifest verification, storage isolation, provider calls, retry/idempotency boundaries, and event completeness where those concerns are required. The exact trusted package-shaped pytest lifecycle allowance for this task is {generated_test_timeout_seconds} seconds, derived from the admitted immutable execution budget and recorded in `packet.json.validation_budget`. Keep the suite within that allowance by bounding fixtures or splitting suites, never by replacing the production path with a faster look-alike. Do not execute a scientific smoke or confirmatory workload from packaged tests; test the production path with bounded fixtures and let the admitted consumer own real workflow-smoke execution.
 18. Treat typed provider operation names and schemas as ABI, not suggestions. Implement every required operation under its exact declared name, export it as a tool, and run any admitted consumer/conformance fixture against the production handler path; a semantically similar alias does not satisfy the contract.
 19. Before adding or importing a third-party Python package, inspect the authoritative manifest schema at `${{ADAOS_REPO_ROOT}}/src/adaos/services/skill/skill_schema.json` and the dependency-isolation policy in `${{ADAOS_REPO_ROOT}}/docs/skill_runtime.md`. Declare every imported dependency. Heavy/native dependencies require a service boundary or the explicit documented transitional `allow_heavy_dependencies` allowance. Run install-strict `SkillValidationService.validate_path(...)` so manifest schema, imports, exported tools, and dependency isolation fail in one bounded pass before concluding.
 20. This checkout is an isolated candidate, not the canonical AdaOS workspace. Run source-tree validation and bounded tests here, but do not copy into or mutate the canonical workspace/runtime and do not publish, install, or activate the candidate yourself. The trusted worker finalizer owns package, install, activation, and rollback receipts after your turn."""
@@ -1555,6 +1612,9 @@ When `scenarios/{target_id}/.builder_current_publication` exists, treat it as th
             companion=companion,
             companions_label=", ".join(companions),
             allowed_paths=", ".join(allowed),
+            generated_test_timeout_seconds=_generated_test_budget(assignment)[
+                "packaged_pytest_wall_seconds"
+            ],
         )
         governed_context = (
             json.dumps(context_projection, ensure_ascii=False, indent=2, sort_keys=True)
@@ -1886,6 +1946,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             workspace,
             checks,
             errors,
+            assignment=assignment,
             skip_frozen_skills=workflow_transition == "return_to_prototype",
         )
         task_runtime_root = SubprocessCodexExecutor._task_runtime_root(
@@ -2668,6 +2729,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         checks: list[dict[str, Any]],
         errors: list[str],
         *,
+        assignment: Mapping[str, Any] | None = None,
         skip_frozen_skills: bool = False,
     ) -> None:
         validation_root = workspace.parent / "package-validation"
@@ -2735,25 +2797,52 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     ),
                 }
             )
-            result = _run(
-                [
-                    sys.executable,
-                    "-m",
-                    "pytest",
-                    "-q",
-                    str(packaged_tests),
-                    "-p",
-                    "no:cacheprovider",
-                ],
-                cwd=validation_root,
-                timeout=float(GENERATED_TEST_TIMEOUT_SECONDS),
-                env=environment,
+            validation_budget = _generated_test_budget(assignment)
+            timeout_seconds = int(
+                validation_budget["packaged_pytest_wall_seconds"]
             )
+            try:
+                result = _run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "pytest",
+                        "-q",
+                        str(packaged_tests),
+                        "-p",
+                        "no:cacheprovider",
+                    ],
+                    cwd=validation_root,
+                    timeout=float(timeout_seconds),
+                    env=environment,
+                )
+            except subprocess.TimeoutExpired as exc:
+                captured = "".join(
+                    str(value or "") for value in (exc.stdout, exc.stderr)
+                )[-4000:]
+                checks.append(
+                    {
+                        "kind": "pytest.packaged",
+                        "path": relative,
+                        "ok": False,
+                        "status": "timeout",
+                        "timeout_seconds": timeout_seconds,
+                        "validation_budget": validation_budget,
+                        "output": captured,
+                    }
+                )
+                errors.append(
+                    f"{relative}: packaged pytest timed out after "
+                    f"{timeout_seconds} seconds: {captured[-2000:]}"
+                )
+                continue
             checks.append(
                 {
                     "kind": "pytest.packaged",
                     "path": relative,
                     "ok": result.returncode == 0,
+                    "timeout_seconds": timeout_seconds,
+                    "validation_budget": validation_budget,
                     "output": (result.stdout + result.stderr)[-4000:],
                 }
             )
