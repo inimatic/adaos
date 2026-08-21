@@ -772,6 +772,36 @@ def test_runtime_submit_returns_before_background_component_phases(
     runtime.shutdown(wait=True)
 
 
+def test_store_retries_transient_reader_contention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release = _release()
+    desired = _deployment(release)
+    store = ProjectDeploymentStore(state_dir=tmp_path)
+    store.save_deployment(
+        desired,
+        expected_revision=0,
+        actor_ref="user:owner",
+        reason="reader contention fixture",
+    )
+    target = store._deployment_root(desired.deployment_id) / "current.json"
+    original = Path.read_text
+    attempts = 0
+
+    def contested_read(path: Path, *args: Any, **kwargs: Any) -> str:
+        nonlocal attempts
+        if path == target and attempts < 2:
+            attempts += 1
+            raise PermissionError(13, "temporary reader contention", str(path))
+        attempts += 1
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", contested_read)
+
+    assert store.get_deployment(desired.deployment_id) == desired
+    assert attempts == 3
+
+
 def test_runtime_recovers_durably_accepted_operation(tmp_path: Path) -> None:
     release_plan = _release((("skill", "media_center_coordinator", "a"),))
     desired = ProjectDeployment(

@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence, TypeVar
 
@@ -50,12 +51,28 @@ def _token(value: str) -> str:
 
 
 def _read_mapping(path: Path) -> dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    payload: Any = None
+    error: OSError | json.JSONDecodeError | None = None
+    for attempt in range(8):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            error = None
+            break
+        except json.JSONDecodeError as exc:
+            error = exc
+            break
+        except OSError as exc:
+            error = exc
+            retryable = isinstance(exc, PermissionError) or getattr(
+                exc, "winerror", None
+            ) in {5, 32, 33}
+            if not retryable or attempt == 7:
+                break
+            time.sleep(min(0.01 * (2**attempt), 0.25))
+    if error is not None:
         raise ProjectDeploymentStoreError(
             f"cannot read deployment record {path.name}"
-        ) from exc
+        ) from error
     if not isinstance(payload, Mapping):
         raise ProjectDeploymentStoreError(
             f"deployment record {path.name} is not an object"
