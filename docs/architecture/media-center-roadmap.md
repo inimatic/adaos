@@ -444,12 +444,13 @@ injection, resource budgets, and a reviewed production decision.
   fallback, unsupported codec, browser reconnect, and conflicting controllers.
 - [ ] `[must]` `MC7-07` Run local large-library, long-duration, CPU/memory,
   Yjs-pressure, browser-render, and playback-under-indexing tests against the
-  declared budgets. Large-library budgets and concurrent playback reads pass.
-  The 2026-08-21 enforced development soak ran 60.032 seconds on 2,000 items,
-  applied 5,175 agent deltas without errors, and recorded p95 latencies of
-  51.732 ms FTS, 45.361 ms catalog page, 32.097 ms playback plan and 110.456 ms
-  delta apply. RSS peaked at 27.59 MiB with 0.34 MiB sustained growth; aggregate
-  CPU p95 was 12.5%. Long-duration browser/playback soak is still open.
+  declared budgets. The 2026-08-21 enforced server acceptance ran 3,600.063
+  seconds on 20,000 items, applied 307,950 agent deltas without errors, and
+  recorded p95 latencies of 64.079 ms FTS, 57.656 ms catalog page, 33.881 ms
+  playback plan and 120.926 ms delta apply. RSS peaked at 39.02 MiB with 0.793
+  MiB sustained growth; aggregate CPU p95 was 13.533%. The evidence is
+  `.adaos/state/codex/evidence/media-center-server-acceptance-soak-2026-08-21.json`.
+  The one-hour Android TV browser/playback/Yjs-pressure gate is still open.
 - [ ] `[must]` `MC7-08` Deploy the exact ProjectRelease through normal channels
   to the designated stand, execute TV plus controller E2E, and record package
   digests, deployment generation, node activations, catalog/shard revisions,
