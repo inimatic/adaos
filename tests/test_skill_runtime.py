@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import shutil
+import sys
 import textwrap
 from collections.abc import Callable
 from pathlib import Path
@@ -130,6 +131,69 @@ def test_smoke_import_does_not_leak_sdk_decorator_registries(skill_factory):
     assert decorators.subscriptions == baseline_subscriptions
     assert decorators.tools_registry == baseline_tools
     assert decorators.tools_meta == baseline_tools_meta
+
+
+def test_sequential_smoke_imports_isolate_same_named_private_packages(skill_factory):
+    def prepare(name: str, expected: str):
+        source = f"""
+        import sys
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1]
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from research.marker import VALUE
+        assert VALUE == {expected!r}
+
+        def handle(topic, payload):
+            return {{"value": VALUE}}
+        """
+        env, version = skill_factory(
+            name,
+            handler_source=source,
+            prep_source=None,
+        )
+        skill_root = env.build_slot_paths(version, "A").src_dir / "skills" / name
+        private_package = skill_root / "research"
+        private_package.mkdir()
+        private_package.joinpath("__init__.py").write_text("", encoding="utf-8")
+        private_package.joinpath("marker.py").write_text(
+            f"VALUE = {expected!r}\n",
+            encoding="utf-8",
+        )
+        return env, version
+
+    previous = {
+        key: module
+        for key, module in list(sys.modules.items())
+        if key == "research" or key.startswith("research.")
+    }
+    for key in previous:
+        sys.modules.pop(key, None)
+    manager = object.__new__(SkillManager)
+    try:
+        first_env, first_version = prepare("first_private_skill", "first")
+        second_env, second_version = prepare("second_private_skill", "second")
+
+        manager._smoke_import(
+            env=first_env,
+            name="first_private_skill",
+            version=first_version,
+            slot="A",
+        )
+        assert "research" not in sys.modules
+        manager._smoke_import(
+            env=second_env,
+            name="second_private_skill",
+            version=second_version,
+            slot="A",
+        )
+        assert "research" not in sys.modules
+    finally:
+        for key in list(sys.modules):
+            if key == "research" or key.startswith("research."):
+                sys.modules.pop(key, None)
+        sys.modules.update(previous)
 
 
 def test_find_skill_dir_returns_package_path(skill_factory):

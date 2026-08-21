@@ -3686,6 +3686,35 @@ class SkillManager:
             raise RuntimeError(f"active slot for {name} lacks src directory: {src_path}")
 
         vendor_path = slot_paths.vendor_dir
+        skill_package_root = (src_path / "skills" / name).resolve()
+        private_roots: set[str] = set()
+        if skill_package_root.is_dir():
+            private_roots.update(
+                child.name
+                for child in skill_package_root.iterdir()
+                if child.is_dir() and (child / "__init__.py").is_file()
+            )
+            private_roots.update(
+                child.stem
+                for child in skill_package_root.glob("*.py")
+                if child.name != "__init__.py"
+            )
+
+        def isolated_module(module_key: str) -> bool:
+            return (
+                module_key == f"skills.{name}"
+                or module_key.startswith(f"skills.{name}.")
+                or any(
+                    module_key == root or module_key.startswith(f"{root}.")
+                    for root in private_roots
+                )
+            )
+
+        displaced_modules = {
+            module_key: module
+            for module_key, module in list(sys.modules.items())
+            if isolated_module(module_key)
+        }
 
         original_sys_path = list(sys.path)
         sdk_decorators = None
@@ -3718,18 +3747,26 @@ class SkillManager:
             for candidate in reversed(paths_to_add):
                 if candidate not in sys.path:
                     sys.path.insert(0, candidate)
-            for mod in list(sys.modules.keys()):
-                if mod == f"skills.{name}" or mod == module_name or mod.startswith(f"skills.{name}."):
-                    sys.modules.pop(mod, None)
+            for mod in displaced_modules:
+                sys.modules.pop(mod, None)
             importlib.invalidate_caches()
             importlib.import_module(module_name)
         except Exception as exc:
             raise RuntimeError(f"failed to import handler module for {name}: {exc}") from exc
         finally:
             sys.path[:] = original_sys_path
-            for mod in list(sys.modules.keys()):
-                if mod == f"skills.{name}" or mod == module_name or mod.startswith(f"skills.{name}."):
+            for mod, module in list(sys.modules.items()):
+                module_file = str(getattr(module, "__file__", "") or "")
+                belongs_to_skill = False
+                if module_file:
+                    try:
+                        Path(module_file).resolve().relative_to(skill_package_root)
+                        belongs_to_skill = True
+                    except (OSError, ValueError):
+                        pass
+                if isolated_module(mod) or belongs_to_skill:
                     sys.modules.pop(mod, None)
+            sys.modules.update(displaced_modules)
             if sdk_decorators is not None and registry_snapshot is not None:
                 try:
                     sdk_decorators._restore_registry_snapshot(registry_snapshot)
