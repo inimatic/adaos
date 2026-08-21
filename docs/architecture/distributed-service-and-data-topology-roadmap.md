@@ -3,7 +3,7 @@
 Status: implementation roadmap for
 [Distributed Service And Data Topology](distributed-service-and-data-topology.md).
 
-Last reviewed: 2026-08-20.
+Last reviewed: 2026-08-21.
 
 ## Outcome
 
@@ -46,11 +46,11 @@ Checked implementation work must link reproducible evidence.
 | Milestone | State | Target maturity |
 | --- | --- | --- |
 | DS0 Boundary and contracts | validated-local | specified |
-| DS1 Service groups, instances, and leases | validated-local | validated-stand |
-| DS2 Datasets, partitions, replicas, and routing | validated-local | validated-stand |
-| DS3 Adapter operations and safe topology change | validated-local | validated-stand |
-| DS4 SDK, projections, and representative consumers | validated-local | validated-stand |
-| DS5 Replicated authority and production acceptance | implemented/stand-open | production-accepted |
+| DS1 Service groups, instances, and leases | validated-stand | validated-stand |
+| DS2 Datasets, partitions, replicas, and routing | validated-stand | validated-stand |
+| DS3 Adapter operations and safe topology change | validated-stand | validated-stand |
+| DS4 SDK, projections, and representative consumers | validated-stand | validated-stand |
+| DS5 Replicated authority and production acceptance | validated-stand/review-open | production-accepted |
 
 ## Milestone DS0: Boundary And Contract Specification
 
@@ -220,7 +220,7 @@ failover or a product relies on replicated authoritative state.
 
 - [x] `[should]` `DS5-01` Implement and conform-test `single_authority` snapshot,
   follower catch-up, promotion, fencing and old-authority rejection.
-- [ ] `[should]` `DS5-02` Prove planned handoff and unplanned authority loss on
+- [x] `[should]` `DS5-02` Prove planned handoff and unplanned authority loss on
   two physical nodes with exact epochs and data witnesses.
 - [x] `[should]` `DS5-03` Define recovery point/time objectives and backup versus
   replica semantics for the representative service.
@@ -233,12 +233,20 @@ failover or a product relies on replicated authoritative state.
 - [ ] `[deferred]` `DS5-07` Add a general multi-writer profile beyond explicit
   CRDT adapters before conflict, compaction and partition-healing proofs exist.
 
-The 2026-08-20 one-node Media Center stand validates agent participation,
-external-reference retention, cursor catch-up and direct ranged playback, but
-does not close DS5. The only other physical development hub observed during
-the audit belongs to a different live subnet. DS5-02/04/05 therefore remain
-open for a second trusted node, handoff/loss, compatible rolling upgrade and a
-sustained operator/resource soak.
+The [2026-08-21 two-node stand receipt](distributed-media-center-stand-validation-2026-08-21.md)
+closes `DS5-02`: planned handoff in both directions, unplanned member loss,
+stale-owner rejection, monotonic recovery through epoch `11`, exact
+`catalog:40663` witnesses and retained external media were observed on two
+physical nodes. It also validates compatible definition admission and
+incompatible definition rejection before mutation.
+
+`DS5-04` remains open. A normal ProjectRelease rollout replaces the old
+ComponentActivation before a topology plan can use that activation as its
+source, so the plan correctly failed closed with
+`topology_skill_activation_identity_mismatch`. The stand was recovered through
+an explicit verified follower and fenced handoff, but zero-downtime rolling
+activation/topology ordering is not yet proven. `DS5-05` remains open for the
+long browser/playback/resource soak and final operator review.
 
 ## Evidence Policy
 

@@ -3,7 +3,7 @@
 Status: implementation roadmap for the
 [Distributed Media Center Target Architecture](media-center-target-architecture.md).
 
-Last reviewed: 2026-08-20.
+Last reviewed: 2026-08-21.
 
 ## Outcome
 
@@ -83,18 +83,19 @@ The current bounded implementation already provides useful seams:
 
 `MC0-03` was re-audited against the exact revisions in the local and stand
 receipts. Parallel repository changes remain outside that accepted set. The
-baseline and bounded one-node stand proof are not distributed-production
-claims.
+2026-08-21 proof now includes two physical same-subnet agents, replicated
+catalog state, fenced authority handoff and direct playback routing, but it is
+still a bounded technical pilot rather than distributed-production acceptance.
 
 ## Delivery Snapshot
 
 | Milestone | State | Target maturity | Main dependency |
 | --- | --- | --- | --- |
 | MC0 Architecture and baseline | validated local | specified | current repositories |
-| MC1 Project and agent deployment | validated local; one-node stand slice | validated-stand | core `AP8`, `DS1` |
-| MC2 Distributed roots and indexing | validated local; one-node stand slice | validated-stand | MC1, `DS2`, `DS3` |
-| MC3 Catalog, search, folders, and collections | validated local; one-node stand slice | validated-stand | MC2 |
-| MC4 Playback sessions and control surfaces | validated local; one-node playback slice | validated-stand | MC1, MC3 |
+| MC1 Project and agent deployment | validated-stand | validated-stand | core `AP8`, `DS1` |
+| MC2 Distributed roots and indexing | validated-stand | validated-stand | MC1, `DS2`, `DS3` |
+| MC3 Catalog, search, folders, and collections | validated-stand | validated-stand | MC2 |
+| MC4 Playback sessions and control surfaces | validated local; two-node route slice | validated-stand | MC1, MC3 |
 | MC5 Adaptive UI and settings | validated local | validated-stand | MC3, MC4 |
 | MC6 Personalization, access, and voice | validated local | validated-stand | identity roadmap, MC4, MC5 |
 | MC7 Enrichment, variants, and production operations | bounded pilot; production rejected | production-accepted | MC2-MC6 |
@@ -447,17 +448,21 @@ injection, resource budgets, and a reviewed production decision.
 - [ ] `[must]` `MC7-08` Deploy the exact ProjectRelease through normal channels
   to the designated stand, execute TV plus controller E2E, and record package
   digests, deployment generation, node activations, catalog/shard revisions,
-  routes, test output and screenshots. Exact skills/scenario and a one-node
-  source route are validated on `.30`; a second same-subnet node and separate
-  TV/controller browser evidence are unavailable and remain open.
+  routes, test output and screenshots. Project `0.6.37` is validated through
+  the normal durable deployment path on two same-subnet physical nodes with
+  exact generation `39` activations, topology generation `15`, replicated
+  catalog witnesses and playback route evidence. Separate TV/controller
+  browser interaction, screenshots and long reconnect playback evidence remain
+  open.
 - [x] `[must]` `MC7-09` Perform security/privacy review for remote deployment,
   root containment, route grants, provider egress, shared-screen state, voice,
   logs, derived data and uninstall retention.
 - [x] `[must]` `MC7-10` Record an explicit production acceptance, bounded pilot,
   or rejection decision; do not infer acceptance from a successful stand run.
-  Decision: bounded single-node trusted-subnet pilot accepted; distributed and
-  production acceptance rejected pending MC7-07/08 evidence. See the
-  [stand receipt](media-center-stand-validation-2026-08-20.md).
+  Decision: bounded two-node trusted-subnet technical pilot accepted;
+  production acceptance rejected pending MC7-07/08, zero-downtime rolling
+  topology upgrade, and operator review. See the
+  [two-node stand receipt](distributed-media-center-stand-validation-2026-08-21.md).
 - [x] `[should]` `MC7-11` Add automatic repair recommendations and reviewed
   reconcile plans for missing agents, stale shards, failed providers and
   incompatible variants.
