@@ -11,13 +11,14 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Mapping, Sequence
+from typing import Literal, Mapping, Sequence, cast
 from urllib.parse import urlparse
 
 import psutil
 import requests
 
 from adaos.build_info import BUILD_INFO
+from adaos.adapters.fs.path_provider import PathProvider
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.core_slots import active_slot, activate_slot, read_slot_manifest, slot_dir
 from adaos.services.env_policy import truthy
@@ -37,6 +38,12 @@ class AutostartSpec:
     name: str
     argv: tuple[str, ...]
     env: dict[str, str]
+
+
+@dataclass(slots=True)
+class _AutostartPathContext:
+    settings: Settings
+    paths: PathProvider
 
 
 _LINUX_CLI_SHIM_MARKER = "Managed by AdaOS autostart"
@@ -79,9 +86,9 @@ def _truthy_env(value: str | None) -> bool:
     return truthy(value, default=False)
 
 
-def _runtime_role() -> str | None:
+def _runtime_role(ctx: AgentContext | None = None) -> str | None:
     try:
-        conf = load_config()
+        conf = load_config(ctx=ctx)
     except Exception:
         return None
     return str(getattr(conf, "role", "") or "").strip().lower() or None
@@ -190,7 +197,7 @@ def default_spec(
             env_file_vars = _parse_env_file(str(shared_dotenv))
         except Exception:
             env_file_vars = {}
-    role = _runtime_role()
+    role = _runtime_role(ctx)
     for key in _AUTOSTART_PASSTHROUGH_ENV_KEYS:
         value = str(os.getenv(key) or env_file_vars.get(key) or "").strip()
         if value:
@@ -219,18 +226,18 @@ def default_spec(
         env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(pythonpath_entries))
     env.setdefault("ADAOS_SUPERVISOR_HOST", DEFAULT_LOOPBACK_HOST)
     env.setdefault("ADAOS_SUPERVISOR_PORT", str(DEFAULT_SUPERVISOR_PORT))
-    resolved_token = str(token or _default_control_token() or "").strip()
+    resolved_token = str(token or _default_control_token(ctx) or "").strip()
     if resolved_token:
         env["ADAOS_TOKEN"] = resolved_token
     return AutostartSpec(name="adaos", argv=argv, env=env)
 
 
-def _default_control_token() -> str | None:
+def _default_control_token(ctx: AgentContext | None = None) -> str | None:
     raw = str(os.getenv("ADAOS_TOKEN") or os.getenv("ADAOS_HUB_TOKEN") or os.getenv("HUB_TOKEN") or "").strip()
     if raw:
         return raw
     try:
-        shared_dotenv = _shared_dotenv_path(get_ctx())
+        shared_dotenv = _shared_dotenv_path(ctx or get_ctx())
     except Exception:
         shared_dotenv = None
     if shared_dotenv is not None:
@@ -243,7 +250,7 @@ def _default_control_token() -> str | None:
             if raw:
                 return raw
     try:
-        conf = load_config()
+        conf = load_config(ctx=ctx)
     except Exception:
         conf = None
     token = str(getattr(conf, "token", "") or "").strip() if conf is not None else ""
@@ -1574,7 +1581,7 @@ def _linux_systemctl_user_unavailable_hint(*, user_service_path: Path, wrapper: 
         "",
         "This usually happens when running as root, over SSH without a login session, or inside a container without systemd.",
         "",
-        f"Generated files (already written):",
+        "Generated files (already written):",
         f"- service: {user_service_path}",
         f"- wrapper: {wrapper}",
         "",
@@ -1589,7 +1596,7 @@ def _linux_systemctl_user_unavailable_hint(*, user_service_path: Path, wrapper: 
     parts += [
         "",
         "After the session bus is available, you can enable the service manually:",
-        f"- `systemctl --user daemon-reload`",
+        "- `systemctl --user daemon-reload`",
         f"- `systemctl --user enable --now {_linux_service_name()}`",
     ]
     return "\n".join(parts).strip()
@@ -2022,6 +2029,24 @@ def refresh_wrapper(ctx: AgentContext, spec: AutostartSpec) -> dict[str, object]
             "changed": cli_shim_before != cli_shim_after,
         }
     return result
+
+
+def refresh_runtime_wrapper(
+    *,
+    base_dir: str | Path,
+    host: str = DEFAULT_LOOPBACK_HOST,
+    port: int = DEFAULT_RUNTIME_PORT,
+) -> dict[str, object]:
+    """Refresh the control wrapper without constructing a database-backed context."""
+    settings = Settings.from_sources().with_overrides(
+        base_dir=Path(base_dir).expanduser().resolve()
+    )
+    ctx = cast(
+        AgentContext,
+        _AutostartPathContext(settings=settings, paths=PathProvider(settings)),
+    )
+    spec = default_spec(ctx, host=host, port=port)
+    return refresh_wrapper(ctx, spec)
 
 
 def disable(ctx: AgentContext) -> dict:

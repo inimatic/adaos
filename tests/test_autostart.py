@@ -63,6 +63,46 @@ def test_default_autostart_spec_uses_runner(tmp_path: Path) -> None:
     assert spec.env["ADAOS_TOKEN"] == "t1"
 
 
+def test_refresh_runtime_wrapper_uses_path_only_context(monkeypatch, tmp_path: Path) -> None:
+    import adaos.services.autostart as autostart
+
+    observed: dict[str, object] = {}
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path / "live"))
+    monkeypatch.setenv("ADAOS_ROOT_REPO_ROOT", str(Path.cwd()))
+    monkeypatch.setenv("ADAOS_TOKEN", "runtime-token")
+    monkeypatch.setattr(
+        autostart,
+        "get_ctx",
+        lambda: (_ for _ in ()).throw(AssertionError("database context must not be loaded")),
+    )
+    monkeypatch.setattr(
+        autostart,
+        "load_config",
+        lambda *, ctx=None: SimpleNamespace(role="hub", token="runtime-token"),
+    )
+
+    def _refresh(ctx, spec):
+        observed["ctx"] = ctx
+        observed["spec"] = spec
+        return {"ok": True}
+
+    monkeypatch.setattr(autostart, "refresh_wrapper", _refresh)
+
+    result = autostart.refresh_runtime_wrapper(
+        base_dir=tmp_path / "live",
+        host="127.0.0.1",
+        port=8777,
+    )
+
+    ctx = observed["ctx"]
+    spec = observed["spec"]
+    assert result == {"ok": True}
+    assert not hasattr(ctx, "kv")
+    assert ctx.paths.base_dir() == (tmp_path / "live").resolve()
+    assert spec.env["ADAOS_BASE_DIR"] == str((tmp_path / "live").resolve())
+    assert spec.env["ADAOS_TOKEN"] == "runtime-token"
+
+
 def test_default_autostart_spec_passes_explicit_dev_update_permission(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ADAOS_DEV_ALLOW_CORE_UPDATE", "1")
     monkeypatch.setenv("ADAOS_UNRELATED_RUNTIME_FLAG", "must-not-pass")
@@ -289,7 +329,11 @@ def test_default_autostart_spec_falls_back_to_loaded_runtime_token(monkeypatch, 
     monkeypatch.delenv("ADAOS_TOKEN", raising=False)
     monkeypatch.delenv("ADAOS_HUB_TOKEN", raising=False)
     monkeypatch.delenv("HUB_TOKEN", raising=False)
-    monkeypatch.setattr(autostart, "load_config", lambda: SimpleNamespace(token="runtime-token"))
+    monkeypatch.setattr(
+        autostart,
+        "load_config",
+        lambda *, ctx=None: SimpleNamespace(token="runtime-token"),
+    )
 
     spec = default_spec(_FakeCtx(tmp_path), host="127.0.0.1", port=8779)
 
@@ -302,7 +346,7 @@ def test_default_autostart_spec_omits_token_when_no_runtime_or_env_token(monkeyp
     monkeypatch.delenv("ADAOS_TOKEN", raising=False)
     monkeypatch.delenv("ADAOS_HUB_TOKEN", raising=False)
     monkeypatch.delenv("HUB_TOKEN", raising=False)
-    monkeypatch.setattr(autostart, "load_config", lambda: SimpleNamespace(token=""))
+    monkeypatch.setattr(autostart, "load_config", lambda *, ctx=None: SimpleNamespace(token=""))
 
     spec = default_spec(_FakeCtx(tmp_path), host="127.0.0.1", port=8779)
 
@@ -366,7 +410,11 @@ def test_default_autostart_spec_omits_hub_default_sidecar_env_from_shared_dotenv
     )
 
     monkeypatch.setattr(autostart, "_shared_dotenv_path", lambda ctx: shared_dotenv)
-    monkeypatch.setattr(autostart, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setattr(
+        autostart,
+        "load_config",
+        lambda *, ctx=None: SimpleNamespace(role="hub"),
+    )
 
     spec = default_spec(_FakeCtx(tmp_path / "base"), host="127.0.0.1", port=8779, token="t1")
 

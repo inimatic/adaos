@@ -28,19 +28,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     result = promote_root_from_slot(slot=str(args.slot))
     if bool(result.get("ok")):
         try:
-            # Promotion itself does not need the live application context.
-            # Initialize it only for the wrapper refresh so import preflight
-            # cannot contend with the running node's SQLite state.
-            from adaos.apps.bootstrap import init_ctx
-            from adaos.services.autostart import default_spec, refresh_wrapper
+            from adaos.services.autostart import refresh_runtime_wrapper
 
-            ctx = init_ctx()
-            spec = default_spec(
-                ctx,
+            result["wrapper_refresh"] = refresh_runtime_wrapper(
+                base_dir=str(args.base_dir),
                 host=str(args.runtime_host),
                 port=int(args.runtime_port),
             )
-            result["wrapper_refresh"] = refresh_wrapper(ctx, spec)
         except Exception as exc:
             result["ok"] = False
             result["wrapper_refresh"] = {
