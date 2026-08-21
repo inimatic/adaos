@@ -15,7 +15,12 @@ import yaml
 from adaos.services import skill_factory_worker as worker_module
 from adaos.services.root.service import _rewrite_skill_template_identity
 from adaos.services.skill_factory import SkillFactoryService
-from adaos.services.skill_factory_sources import capture_source_snapshot, materialize_source_snapshot
+from adaos.services.skill_factory_sources import (
+    SourceSnapshotError,
+    capture_source_snapshot,
+    materialize_source_snapshot,
+    verify_source_snapshot,
+)
 from adaos.services.skill_factory_worker import (
     CodexRunResult,
     LocalSkillFactoryWorker,
@@ -39,11 +44,15 @@ def test_codex_failure_detail_prefers_structured_jsonl_errors() -> None:
     )
 
 
-def test_source_snapshot_keeps_reserved_artifacts_out_of_codex_workspace(tmp_path: Path) -> None:
+def test_source_snapshot_keeps_reserved_artifacts_out_of_codex_workspace(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     skill = tmp_path / "direction_skill"
     (skill / "artifacts" / "part0").mkdir(parents=True)
-    (skill / "skill.yaml").write_text("name: direction_skill\nversion: 0.1.0\n", encoding="utf-8")
+    (skill / "skill.yaml").write_text(
+        "name: direction_skill\nversion: 0.1.0\n", encoding="utf-8"
+    )
     (skill / "artifacts" / "part0" / "formulation-only.md").write_text(
         "hidden review", encoding="utf-8"
     )
@@ -59,6 +68,12 @@ def test_source_snapshot_keeps_reserved_artifacts_out_of_codex_workspace(tmp_pat
     )
     artifact = snapshot["artifacts"][0]
     assert artifact["source_projection"]["excluded_paths"] == ["artifacts/"]
+    assert snapshot["archive"]["format"] == "zip"
+    snapshot_root = (
+        state_dir / "skill_factory" / "source_snapshots" / snapshot["snapshot_id"]
+    )
+    assert (snapshot_root / "payload.zip").is_file()
+    assert not (snapshot_root / "skills").exists()
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -75,7 +90,36 @@ def test_source_snapshot_keeps_reserved_artifacts_out_of_codex_workspace(tmp_pat
     ).is_file()
 
 
-def test_projected_snapshot_activation_preserves_owner_artifacts(tmp_path: Path) -> None:
+def test_source_snapshot_archive_fails_closed_after_byte_mutation(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    skill = tmp_path / "direction_skill"
+    skill.mkdir()
+    (skill / "skill.yaml").write_text(
+        "name: direction_skill\nversion: 0.1.0\n", encoding="utf-8"
+    )
+    snapshot = capture_source_snapshot(
+        state_dir=state_dir,
+        artifacts=(("skill", "direction_skill", skill),),
+        created_at="2026-08-21T00:00:00Z",
+    )
+    archive = (
+        state_dir
+        / "skill_factory"
+        / "source_snapshots"
+        / snapshot["snapshot_id"]
+        / "payload.zip"
+    )
+    archive.write_bytes(archive.read_bytes() + b"corrupt")
+
+    with pytest.raises(SourceSnapshotError, match="archive digest mismatch"):
+        verify_source_snapshot(state_dir=state_dir, reference=snapshot)
+
+
+def test_projected_snapshot_activation_preserves_owner_artifacts(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     dev_skills = tmp_path / "dev" / "skills"
     dev_scenarios = tmp_path / "dev" / "scenarios"
@@ -146,7 +190,12 @@ def _scenario(root: Path, scenario_id: str) -> Path:
         encoding="utf-8",
     )
     (target / "builder.draft.json").write_text(
-        json.dumps({"draft_id": "draft.recipe", "source": {"utterance": "Create a recipe book"}}),
+        json.dumps(
+            {
+                "draft_id": "draft.recipe",
+                "source": {"utterance": "Create a recipe book"},
+            }
+        ),
         encoding="utf-8",
     )
     return target
@@ -154,7 +203,9 @@ def _scenario(root: Path, scenario_id: str) -> Path:
 
 def _core_created_skill_fixture(repo_root: Path, root: Path, skill_id: str) -> Path:
     target = root / skill_id
-    shutil.copytree(repo_root / "src" / "adaos" / "skills_templates" / "skill_default", target)
+    shutil.copytree(
+        repo_root / "src" / "adaos" / "skills_templates" / "skill_default", target
+    )
     _rewrite_skill_template_identity(target, skill_id)
     return target
 
@@ -172,7 +223,10 @@ def test_local_worker_realizes_scenario_and_companion_skill(tmp_path: Path) -> N
     submitted = factory.submit_realize_request(
         {
             "target": {"type": "scenario", "id": "recipe_book"},
-            "source": {"type": "prompt_ide", "text": "Implement the approved recipe book prototype."},
+            "source": {
+                "type": "prompt_ide",
+                "text": "Implement the approved recipe book prototype.",
+            },
             "artifacts": {
                 "implementation_brief": "Recipes must be searchable and open a detailed view.",
                 "companion_skill_id": "recipe_book_skill",
@@ -189,13 +243,24 @@ def test_local_worker_realizes_scenario_and_companion_skill(tmp_path: Path) -> N
 
     def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:
         assert "Recipes must be searchable" in prompt
-        skill_handler = workspace / "skills" / "recipe_book_skill" / "handlers" / "main.py"
-        skill_handler.write_text(skill_handler.read_text(encoding="utf-8") + "\n# realized by test\n", encoding="utf-8")
+        skill_handler = (
+            workspace / "skills" / "recipe_book_skill" / "handlers" / "main.py"
+        )
+        skill_handler.write_text(
+            skill_handler.read_text(encoding="utf-8") + "\n# realized by test\n",
+            encoding="utf-8",
+        )
         scenario_path = workspace / "scenarios" / "recipe_book" / "scenario.yaml"
         scenario = yaml.safe_load(scenario_path.read_text(encoding="utf-8"))
         scenario["depends"] = ["recipe_book_skill"]
-        scenario_path.write_text(yaml.safe_dump(scenario, sort_keys=False), encoding="utf-8")
-        return CodexRunResult(returncode=0, events='{"type":"done"}\n', final_message="Implemented recipe skill.")
+        scenario_path.write_text(
+            yaml.safe_dump(scenario, sort_keys=False), encoding="utf-8"
+        )
+        return CodexRunResult(
+            returncode=0,
+            events='{"type":"done"}\n',
+            final_message="Implemented recipe skill.",
+        )
 
     worker = LocalSkillFactoryWorker(
         state_dir=state_dir,
@@ -208,10 +273,16 @@ def test_local_worker_realizes_scenario_and_companion_skill(tmp_path: Path) -> N
     result = worker.run_once()
 
     assert result["ok"] is True, result
-    assert result["assignment"]["realize_request"]["artifacts"]["implementation_brief"].startswith("Recipes")
+    assert result["assignment"]["realize_request"]["artifacts"][
+        "implementation_brief"
+    ].startswith("Recipes")
     assert (dev_skills / "recipe_book_skill" / "skill.yaml").exists()
-    assert "realized by test" in (dev_skills / "recipe_book_skill" / "handlers" / "main.py").read_text(encoding="utf-8")
-    scenario = yaml.safe_load((dev_scenarios / "recipe_book" / "scenario.yaml").read_text(encoding="utf-8"))
+    assert "realized by test" in (
+        dev_skills / "recipe_book_skill" / "handlers" / "main.py"
+    ).read_text(encoding="utf-8")
+    scenario = yaml.safe_load(
+        (dev_scenarios / "recipe_book" / "scenario.yaml").read_text(encoding="utf-8")
+    )
     assert scenario["depends"] == ["recipe_book_skill"]
     task = next(
         item
@@ -220,7 +291,9 @@ def test_local_worker_realizes_scenario_and_companion_skill(tmp_path: Path) -> N
     )
     assert task["status"] == "completed"
     assert task["result"]["commit_hash"]
-    assert task["result"]["provenance"]["runner_version"].startswith("adaos-local-codex-worker/")
+    assert task["result"]["provenance"]["runner_version"].startswith(
+        "adaos-local-codex-worker/"
+    )
     evidence = task["result"]["evidence"]
     assert evidence["storage"] == "worker_task_envelope"
     assert {item["kind"] for item in evidence["artifacts"]} == {
@@ -241,7 +314,9 @@ def test_local_worker_realizes_scenario_and_companion_skill(tmp_path: Path) -> N
     assert not any(path.startswith(".adaos/tasks/") for path in tracked)
 
 
-def test_local_worker_does_not_apply_result_after_task_cancellation(tmp_path: Path) -> None:
+def test_local_worker_does_not_apply_result_after_task_cancellation(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"
     dev_skills = tmp_path / "dev" / "skills"
@@ -258,8 +333,13 @@ def test_local_worker_does_not_apply_result_after_task_cancellation(tmp_path: Pa
 
     def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:  # noqa: ARG001
         manifest = workspace / "scenarios" / "cancelled_recipe" / "scenario.yaml"
-        manifest.write_text(manifest.read_text(encoding="utf-8") + "\n# must not be applied\n", encoding="utf-8")
-        cancelled = factory.cancel_task(submitted["task"]["task_id"], reason="test cancellation", actor="test")
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8") + "\n# must not be applied\n",
+            encoding="utf-8",
+        )
+        cancelled = factory.cancel_task(
+            submitted["task"]["task_id"], reason="test cancellation", actor="test"
+        )
         assert cancelled["ok"] is True
         return CodexRunResult(returncode=0, final_message="late result")
 
@@ -275,7 +355,9 @@ def test_local_worker_does_not_apply_result_after_task_cancellation(tmp_path: Pa
 
     assert result["ok"] is False
     assert result["status"] == "cancelled", result
-    assert (scenario_dir / "scenario.yaml").read_text(encoding="utf-8") == original_manifest
+    assert (scenario_dir / "scenario.yaml").read_text(
+        encoding="utf-8"
+    ) == original_manifest
     task = next(
         item
         for item in factory.snapshot(include_tasks=True)["tasks"]
@@ -285,7 +367,9 @@ def test_local_worker_does_not_apply_result_after_task_cancellation(tmp_path: Pa
     assert not task.get("result")
 
 
-def test_local_worker_materializes_and_syncs_all_companion_skills(tmp_path: Path) -> None:
+def test_local_worker_materializes_and_syncs_all_companion_skills(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"
     dev_skills = tmp_path / "dev" / "skills"
@@ -302,7 +386,10 @@ def test_local_worker_materializes_and_syncs_all_companion_skills(tmp_path: Path
             "artifacts": {
                 "implementation_brief": "Implement both declared recipe capabilities.",
                 "companion_skill_id": "recipe_book_skill",
-                "companion_skill_ids": ["recipe_book_skill", "recipe_book_control_skill"],
+                "companion_skill_ids": [
+                    "recipe_book_skill",
+                    "recipe_book_control_skill",
+                ],
             },
             "repo": {
                 "sparse_paths": [
@@ -342,11 +429,15 @@ def test_local_worker_materializes_and_syncs_all_companion_skills(tmp_path: Path
         ).read_text(encoding="utf-8")
 
 
-def test_worker_rejects_codex_changes_to_checkpoint_owned_manifest_metadata(tmp_path: Path) -> None:
+def test_worker_rejects_codex_changes_to_checkpoint_owned_manifest_metadata(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     workspace = tmp_path / "workspace"
     scenario = _scenario(workspace / "scenarios", "recipe_book")
-    skill = _core_created_skill_fixture(repo_root, workspace / "skills", "recipe_book_skill")
+    skill = _core_created_skill_fixture(
+        repo_root, workspace / "skills", "recipe_book_skill"
+    )
     worker = LocalSkillFactoryWorker(
         state_dir=tmp_path / "state",
         repo_root=repo_root,
@@ -356,7 +447,9 @@ def test_worker_rejects_codex_changes_to_checkpoint_owned_manifest_metadata(tmp_
     )
     worker._init_git_workspace(workspace, "test/checkpoint-metadata")
 
-    scenario_manifest = yaml.safe_load((scenario / "scenario.yaml").read_text(encoding="utf-8"))
+    scenario_manifest = yaml.safe_load(
+        (scenario / "scenario.yaml").read_text(encoding="utf-8")
+    )
     scenario_manifest["version"] = "9.9.9"
     (scenario / "scenario.yaml").write_text(
         yaml.safe_dump(scenario_manifest, sort_keys=False),
@@ -390,7 +483,9 @@ def test_local_worker_rejects_out_of_scope_codex_change(tmp_path: Path) -> None:
         {
             "target": {"type": "scenario", "id": "recipe_book"},
             "artifacts": {"companion_skill_id": "recipe_book_skill"},
-            "repo": {"sparse_paths": ["scenarios/recipe_book/", "skills/recipe_book_skill/"]},
+            "repo": {
+                "sparse_paths": ["scenarios/recipe_book/", "skills/recipe_book_skill/"]
+            },
         }
     )
 
@@ -414,7 +509,9 @@ def test_local_worker_rejects_out_of_scope_codex_change(tmp_path: Path) -> None:
     assert not (tmp_path / "outside.txt").exists()
 
 
-def test_local_worker_does_not_overwrite_dev_that_changed_after_task_snapshot(tmp_path: Path) -> None:
+def test_local_worker_does_not_overwrite_dev_that_changed_after_task_snapshot(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"
     dev_skills = tmp_path / "dev" / "skills"
@@ -452,8 +549,12 @@ def test_local_worker_does_not_overwrite_dev_that_changed_after_task_snapshot(tm
         task_scenario = workspace / "scenarios" / "recipe_book" / "scenario.yaml"
         assert "concurrent user edit" not in task_scenario.read_text(encoding="utf-8")
         handler = workspace / "skills" / "recipe_book_skill" / "handlers" / "main.py"
-        handler.write_text(handler.read_text(encoding="utf-8") + "\n# task result\n", encoding="utf-8")
-        return CodexRunResult(returncode=0, final_message="Implemented from exact base.")
+        handler.write_text(
+            handler.read_text(encoding="utf-8") + "\n# task result\n", encoding="utf-8"
+        )
+        return CodexRunResult(
+            returncode=0, final_message="Implemented from exact base."
+        )
 
     worker = LocalSkillFactoryWorker(
         state_dir=state_dir,
@@ -470,14 +571,18 @@ def test_local_worker_does_not_overwrite_dev_that_changed_after_task_snapshot(tm
     assert result["ok"] is False
     assert "DEV source changed while Codex was running" in result["error"]
     assert "concurrent user edit" in scenario_path.read_text(encoding="utf-8")
-    assert "task result" not in (skill_root / "handlers" / "main.py").read_text(encoding="utf-8")
+    assert "task result" not in (skill_root / "handlers" / "main.py").read_text(
+        encoding="utf-8"
+    )
     task_workspace = Path(result["run_dir"]) / "workspace"
     assert "task result" in (
         task_workspace / "skills" / "recipe_book_skill" / "handlers" / "main.py"
     ).read_text(encoding="utf-8")
 
 
-def test_local_worker_recovers_committed_validated_result_without_rerunning_codex(tmp_path: Path) -> None:
+def test_local_worker_recovers_committed_validated_result_without_rerunning_codex(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"
     dev_skills = tmp_path / "dev" / "skills"
@@ -510,7 +615,10 @@ def test_local_worker_recovers_committed_validated_result_without_rerunning_code
     def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:  # noqa: ARG001
         codex_calls.append(prompt)
         handler = workspace / "skills" / "recipe_book_skill" / "handlers" / "main.py"
-        handler.write_text(handler.read_text(encoding="utf-8") + "\n# recovered task result\n", encoding="utf-8")
+        handler.write_text(
+            handler.read_text(encoding="utf-8") + "\n# recovered task result\n",
+            encoding="utf-8",
+        )
         return CodexRunResult(returncode=0, final_message="Implemented once.")
 
     runs_root = tmp_path / "runs"
@@ -534,14 +642,18 @@ def test_local_worker_recovers_committed_validated_result_without_rerunning_code
         dev_skills_root=dev_skills,
         dev_scenarios_root=dev_scenarios,
         runs_root=runs_root,
-        executor=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("Codex must not rerun")),
+        executor=lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Codex must not rerun")
+        ),
     )
 
     recovered = recovery_worker.recover_validated_run(submitted["task"]["task_id"])
 
     assert recovered["ok"] is True
     assert codex_calls and len(codex_calls) == 1
-    assert "recovered task result" in (skill_root / "handlers" / "main.py").read_text(encoding="utf-8")
+    assert "recovered task result" in (skill_root / "handlers" / "main.py").read_text(
+        encoding="utf-8"
+    )
     task = next(
         item
         for item in factory.snapshot(include_tasks=True)["tasks"]
@@ -552,7 +664,9 @@ def test_local_worker_recovers_committed_validated_result_without_rerunning_code
     assert task["result_recovery_history"][-1]["failure_id"]
 
 
-def test_local_worker_recovers_precommit_result_without_rerunning_codex(tmp_path: Path) -> None:
+def test_local_worker_recovers_precommit_result_without_rerunning_codex(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"
     dev_skills = tmp_path / "dev" / "skills"
@@ -562,7 +676,10 @@ def test_local_worker_recovers_precommit_result_without_rerunning_codex(tmp_path
     skill_root = _core_created_skill_fixture(repo_root, dev_skills, "recipe_book_skill")
     snapshot = capture_source_snapshot(
         state_dir=state_dir,
-        artifacts=(("scenario", "recipe_book", scenario_root), ("skill", "recipe_book_skill", skill_root)),
+        artifacts=(
+            ("scenario", "recipe_book", scenario_root),
+            ("skill", "recipe_book_skill", skill_root),
+        ),
         created_at="2026-07-28T12:00:00+00:00",
     )
     factory = SkillFactoryService(state_dir=state_dir)
@@ -582,7 +699,10 @@ def test_local_worker_recovers_precommit_result_without_rerunning_codex(tmp_path
     def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:  # noqa: ARG001
         codex_calls.append(prompt)
         handler = workspace / "skills" / "recipe_book_skill" / "handlers" / "main.py"
-        handler.write_text(handler.read_text(encoding="utf-8") + "\n# preserved result\n", encoding="utf-8")
+        handler.write_text(
+            handler.read_text(encoding="utf-8") + "\n# preserved result\n",
+            encoding="utf-8",
+        )
         return CodexRunResult(returncode=0, final_message="Implemented once.")
 
     class ValidationCrashWorker(LocalSkillFactoryWorker):
@@ -607,14 +727,18 @@ def test_local_worker_recovers_precommit_result_without_rerunning_codex(tmp_path
         dev_skills_root=dev_skills,
         dev_scenarios_root=dev_scenarios,
         runs_root=runs_root,
-        executor=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("Codex must not rerun")),
+        executor=lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Codex must not rerun")
+        ),
     )
 
     recovered = recovery_worker.recover_validated_run(submitted["task"]["task_id"])
 
     assert recovered["ok"] is True
     assert len(codex_calls) == 1
-    assert "preserved result" in (skill_root / "handlers" / "main.py").read_text(encoding="utf-8")
+    assert "preserved result" in (skill_root / "handlers" / "main.py").read_text(
+        encoding="utf-8"
+    )
     provenance = recovered["result"]["provenance"]
     assert provenance["recovery"]["mode"] == "pre_commit_deterministic_resume"
 
@@ -631,7 +755,10 @@ def test_local_worker_recovers_terminal_orphan_after_api_restart_without_rerunni
     skill_root = _core_created_skill_fixture(repo_root, dev_skills, "recipe_book_skill")
     snapshot = capture_source_snapshot(
         state_dir=state_dir,
-        artifacts=(("scenario", "recipe_book", scenario_root), ("skill", "recipe_book_skill", skill_root)),
+        artifacts=(
+            ("scenario", "recipe_book", scenario_root),
+            ("skill", "recipe_book_skill", skill_root),
+        ),
         created_at="2026-07-28T12:00:00+00:00",
     )
     factory = SkillFactoryService(state_dir=state_dir)
@@ -653,7 +780,9 @@ def test_local_worker_recovers_terminal_orphan_after_api_restart_without_rerunni
         dev_skills_root=dev_skills,
         dev_scenarios_root=dev_scenarios,
         runs_root=runs_root,
-        executor=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("Codex must not rerun")),
+        executor=lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Codex must not rerun")
+        ),
     )
     worker.ensure_registered()
     polled = worker.factory.poll_assignment(worker.node_id)
@@ -676,10 +805,17 @@ def test_local_worker_recovers_terminal_orphan_after_api_restart_without_rerunni
     worker._init_git_workspace(workspace, f"realize/{task_id}")
 
     handler = workspace / "skills" / "recipe_book_skill" / "handlers" / "main.py"
-    handler.write_text(handler.read_text(encoding="utf-8") + "\n# completed after parent restart\n", encoding="utf-8")
+    handler.write_text(
+        handler.read_text(encoding="utf-8") + "\n# completed after parent restart\n",
+        encoding="utf-8",
+    )
     subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
-    subprocess.run(["git", "commit", "-m", "codex child result"], cwd=workspace, check=True)
-    (output_dir / "last_message.md").write_text("Implemented after parent restart.", encoding="utf-8")
+    subprocess.run(
+        ["git", "commit", "-m", "codex child result"], cwd=workspace, check=True
+    )
+    (output_dir / "last_message.md").write_text(
+        "Implemented after parent restart.", encoding="utf-8"
+    )
     (output_dir / "codex-live.jsonl").write_text(
         '{"type":"item.completed"}\n{"type":"turn.completed"}\n',
         encoding="utf-8",
@@ -688,16 +824,18 @@ def test_local_worker_recovers_terminal_orphan_after_api_restart_without_rerunni
     recovered = worker.recover_orphaned_codex_run(task_id)
 
     assert recovered["ok"] is True
-    assert "completed after parent restart" in (skill_root / "handlers" / "main.py").read_text(
-        encoding="utf-8"
-    )
+    assert "completed after parent restart" in (
+        skill_root / "handlers" / "main.py"
+    ).read_text(encoding="utf-8")
     task = next(
         item
         for item in factory.snapshot(include_tasks=True)["tasks"]
         if item["task_id"] == task_id
     )
     assert task["status"] == "completed"
-    runtime_state = json.loads((run_root / "runtime" / "state.json").read_text(encoding="utf-8"))
+    runtime_state = json.loads(
+        (run_root / "runtime" / "state.json").read_text(encoding="utf-8")
+    )
     assert runtime_state["status"] == "completed"
     assert runtime_state["recovered"] is True
 
@@ -712,7 +850,10 @@ def test_local_worker_repairs_preserved_precommit_result_once(tmp_path: Path) ->
     skill_root = _core_created_skill_fixture(repo_root, dev_skills, "recipe_book_skill")
     snapshot = capture_source_snapshot(
         state_dir=state_dir,
-        artifacts=(("scenario", "recipe_book", scenario_root), ("skill", "recipe_book_skill", skill_root)),
+        artifacts=(
+            ("scenario", "recipe_book", scenario_root),
+            ("skill", "recipe_book_skill", skill_root),
+        ),
         created_at="2026-07-28T12:00:00+00:00",
     )
     factory = SkillFactoryService(state_dir=state_dir)
@@ -734,11 +875,16 @@ def test_local_worker_repairs_preserved_precommit_result_once(tmp_path: Path) ->
         calls += 1
         handler = workspace / "skills" / "recipe_book_skill" / "handlers" / "main.py"
         if calls == 1:
-            handler.write_text(handler.read_text(encoding="utf-8") + "\nthis is invalid python\n", encoding="utf-8")
+            handler.write_text(
+                handler.read_text(encoding="utf-8") + "\nthis is invalid python\n",
+                encoding="utf-8",
+            )
             return CodexRunResult(returncode=0, final_message="Initial invalid result.")
         assert "Deterministic validation repair" in prompt
         handler.write_text(
-            handler.read_text(encoding="utf-8").replace("this is invalid python", "# repaired"),
+            handler.read_text(encoding="utf-8").replace(
+                "this is invalid python", "# repaired"
+            ),
             encoding="utf-8",
         )
         return CodexRunResult(returncode=0, final_message="Repaired deterministically.")
@@ -769,7 +915,9 @@ def test_local_worker_repairs_preserved_precommit_result_once(tmp_path: Path) ->
 
     assert recovered["ok"] is True
     assert calls == 2
-    assert "# repaired" in (skill_root / "handlers" / "main.py").read_text(encoding="utf-8")
+    assert "# repaired" in (skill_root / "handlers" / "main.py").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_orphaned_completion_resumes_bounded_deterministic_repair(
@@ -800,7 +948,9 @@ def test_orphaned_completion_resumes_bounded_deterministic_repair(
         runs_root=runs_root,
     )
     failures: list[dict] = []
-    worker.factory = SimpleNamespace(fail_task=lambda value: failures.append(dict(value)))
+    worker.factory = SimpleNamespace(
+        fail_task=lambda value: failures.append(dict(value))
+    )
     repairs: list[str] = []
     monkeypatch.setattr(
         worker,
@@ -863,7 +1013,9 @@ def test_orphaned_recovery_refuses_a_live_durable_worker_owner(tmp_path: Path) -
         worker.recover_orphaned_codex_run(task_id)
 
 
-def test_return_to_prototype_uses_snapshot_but_cannot_modify_automation_skill(tmp_path: Path) -> None:
+def test_return_to_prototype_uses_snapshot_but_cannot_modify_automation_skill(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"
     dev_skills = tmp_path / "dev" / "skills"
@@ -871,13 +1023,22 @@ def test_return_to_prototype_uses_snapshot_but_cannot_modify_automation_skill(tm
     dev_skills.mkdir(parents=True)
     _scenario(dev_scenarios, "recipe_book")
     _core_created_skill_fixture(repo_root, dev_skills, "recipe_book_skill")
-    snapshot = state_dir / "builder" / "workflow_snapshots" / "scenario" / "recipe_book" / "automation"
+    snapshot = (
+        state_dir
+        / "builder"
+        / "workflow_snapshots"
+        / "scenario"
+        / "recipe_book"
+        / "automation"
+    )
     snapshot.mkdir(parents=True)
     (snapshot / "webui.json").write_text(
         json.dumps({"schema": "adaos.webui.v1", "ui": {"application": {}}}),
         encoding="utf-8",
     )
-    (snapshot / "snapshot.json").write_text(json.dumps({"task_id": "task.previous"}), encoding="utf-8")
+    (snapshot / "snapshot.json").write_text(
+        json.dumps({"task_id": "task.previous"}), encoding="utf-8"
+    )
     factory = SkillFactoryService(state_dir=state_dir)
     factory.submit_realize_request(
         {
@@ -886,15 +1047,26 @@ def test_return_to_prototype_uses_snapshot_but_cannot_modify_automation_skill(tm
                 "companion_skill_id": "recipe_book_skill",
                 "workflow_transition": "return_to_prototype",
             },
-            "repo": {"sparse_paths": ["scenarios/recipe_book/", "skills/recipe_book_skill/"]},
+            "repo": {
+                "sparse_paths": ["scenarios/recipe_book/", "skills/recipe_book_skill/"]
+            },
         }
     )
 
     def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:  # noqa: ARG001
         assert "returns the completed Automation result to Prototype" in prompt
-        assert (workspace / "scenarios" / "recipe_book" / ".builder_previous_automation" / "webui.json").is_file()
+        assert (
+            workspace
+            / "scenarios"
+            / "recipe_book"
+            / ".builder_previous_automation"
+            / "webui.json"
+        ).is_file()
         skill = workspace / "skills" / "recipe_book_skill" / "handlers" / "main.py"
-        skill.write_text(skill.read_text(encoding="utf-8") + "\n# forbidden change\n", encoding="utf-8")
+        skill.write_text(
+            skill.read_text(encoding="utf-8") + "\n# forbidden change\n",
+            encoding="utf-8",
+        )
         return CodexRunResult(returncode=0)
 
     worker = LocalSkillFactoryWorker(
@@ -911,9 +1083,9 @@ def test_return_to_prototype_uses_snapshot_but_cannot_modify_automation_skill(tm
 
     assert result["ok"] is False
     assert "may not modify the frozen Automation implementation" in result["error"]
-    assert "forbidden change" not in (dev_skills / "recipe_book_skill" / "handlers" / "main.py").read_text(
-        encoding="utf-8"
-    )
+    assert "forbidden change" not in (
+        dev_skills / "recipe_book_skill" / "handlers" / "main.py"
+    ).read_text(encoding="utf-8")
 
 
 def test_automation_cannot_modify_current_publication_baseline(tmp_path: Path) -> None:
@@ -944,7 +1116,9 @@ def test_automation_cannot_modify_current_publication_baseline(tmp_path: Path) -
         )
 
 
-def test_return_to_prototype_skips_frozen_skill_tests_but_enforces_safe_ui(tmp_path: Path) -> None:
+def test_return_to_prototype_skips_frozen_skill_tests_but_enforces_safe_ui(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     workspace = tmp_path / "workspace"
     scenarios = workspace / "scenarios"
@@ -977,12 +1151,16 @@ def test_return_to_prototype_skips_frozen_skill_tests_but_enforces_safe_ui(tmp_p
     safe = worker._validate_workspace(assignment, workspace)
 
     assert safe["ok"] is True
-    skipped = next(check for check in safe["checks"] if check.get("status") == "skipped")
+    skipped = next(
+        check for check in safe["checks"] if check.get("status") == "skipped"
+    )
     assert skipped["path"] == "skills/recipe_book_skill/tests"
 
     manifest = yaml.safe_load((scenario / "scenario.yaml").read_text(encoding="utf-8"))
     manifest["depends"] = ["recipe_book_skill"]
-    (scenario / "scenario.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    (scenario / "scenario.yaml").write_text(
+        yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
+    )
     (scenario / "webui.json").write_text(
         json.dumps(
             {
@@ -995,7 +1173,10 @@ def test_return_to_prototype_skips_frozen_skill_tests_but_enforces_safe_ui(tmp_p
                                     {
                                         "id": "recipes",
                                         "type": "ui.list",
-                                        "dataSource": {"kind": "skill", "name": "recipe_book_skill.list"},
+                                        "dataSource": {
+                                            "kind": "skill",
+                                            "name": "recipe_book_skill.list",
+                                        },
                                     }
                                 ]
                             }
@@ -1010,10 +1191,14 @@ def test_return_to_prototype_skips_frozen_skill_tests_but_enforces_safe_ui(tmp_p
     unsafe = worker._validate_workspace(assignment, workspace)
 
     assert unsafe["ok"] is False
-    assert any("left functional or external bindings" in error for error in unsafe["errors"])
+    assert any(
+        "left functional or external bindings" in error for error in unsafe["errors"]
+    )
 
 
-def test_return_to_prototype_ignores_preexisting_generated_skill_caches(tmp_path: Path) -> None:
+def test_return_to_prototype_ignores_preexisting_generated_skill_caches(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"
     dev_skills = tmp_path / "dev" / "skills"
@@ -1024,13 +1209,22 @@ def test_return_to_prototype_ignores_preexisting_generated_skill_caches(tmp_path
     cache = skill / "handlers" / "__pycache__" / "main.cpython-311.pyc"
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_bytes(b"generated")
-    snapshot = state_dir / "builder" / "workflow_snapshots" / "scenario" / "recipe_book" / "automation"
+    snapshot = (
+        state_dir
+        / "builder"
+        / "workflow_snapshots"
+        / "scenario"
+        / "recipe_book"
+        / "automation"
+    )
     snapshot.mkdir(parents=True)
     (snapshot / "webui.json").write_text(
         json.dumps({"schema": "adaos.webui.v1", "ui": {"application": {}}}),
         encoding="utf-8",
     )
-    (snapshot / "snapshot.json").write_text(json.dumps({"task_id": "task.previous"}), encoding="utf-8")
+    (snapshot / "snapshot.json").write_text(
+        json.dumps({"task_id": "task.previous"}), encoding="utf-8"
+    )
     factory = SkillFactoryService(state_dir=state_dir)
     factory.submit_realize_request(
         {
@@ -1039,7 +1233,9 @@ def test_return_to_prototype_ignores_preexisting_generated_skill_caches(tmp_path
                 "companion_skill_id": "recipe_book_skill",
                 "workflow_transition": "return_to_prototype",
             },
-            "repo": {"sparse_paths": ["scenarios/recipe_book/", "skills/recipe_book_skill/"]},
+            "repo": {
+                "sparse_paths": ["scenarios/recipe_book/", "skills/recipe_book_skill/"]
+            },
         }
     )
 
@@ -1047,7 +1243,9 @@ def test_return_to_prototype_ignores_preexisting_generated_skill_caches(tmp_path
         manifest_path = workspace / "scenarios" / "recipe_book" / "scenario.yaml"
         manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
         manifest["description"] = "Safe local recipe prototype"
-        manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+        manifest_path.write_text(
+            yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
+        )
         return CodexRunResult(returncode=0, final_message="Created safe prototype.")
 
     worker = LocalSkillFactoryWorker(
@@ -1064,11 +1262,17 @@ def test_return_to_prototype_ignores_preexisting_generated_skill_caches(tmp_path
 
     assert result["ok"] is True, result
     assert not cache.exists()
-    assert all(not path.startswith("skills/") for path in result["result"]["changed_paths"])
-    assert "Safe local recipe prototype" in (scenario / "scenario.yaml").read_text(encoding="utf-8")
+    assert all(
+        not path.startswith("skills/") for path in result["result"]["changed_paths"]
+    )
+    assert "Safe local recipe prototype" in (scenario / "scenario.yaml").read_text(
+        encoding="utf-8"
+    )
 
 
-def test_codex_executor_environment_does_not_inherit_api_or_adaos_secrets(monkeypatch) -> None:
+def test_codex_executor_environment_does_not_inherit_api_or_adaos_secrets(
+    monkeypatch,
+) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "secret")
     monkeypatch.setenv("ADAOS_TOKEN", "secret")
     monkeypatch.setenv("CODEX_HOME", "C:/codex-home")
@@ -1082,7 +1286,9 @@ def test_codex_executor_environment_does_not_inherit_api_or_adaos_secrets(monkey
     assert "ADAOS_TOKEN" not in environment
 
 
-def test_codex_executor_uses_current_sdk_and_utf8_python(monkeypatch, tmp_path: Path) -> None:
+def test_codex_executor_uses_current_sdk_and_utf8_python(
+    monkeypatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("PATH", "C:/global-bin")
     repo_root = tmp_path / "adaos"
     executor = SubprocessCodexExecutor(repo_root=repo_root)
@@ -1092,7 +1298,9 @@ def test_codex_executor_uses_current_sdk_and_utf8_python(monkeypatch, tmp_path: 
     assert environment["ADAOS_REPO_ROOT"] == str(repo_root.resolve())
     assert environment["PYTHONPATH"] == str(repo_root.resolve() / "src")
     assert environment["ADAOS_PYTHON"] == str(Path(sys.executable).resolve())
-    assert environment["PATH"].split(os.pathsep)[0] == str(Path(sys.executable).resolve().parent)
+    assert environment["PATH"].split(os.pathsep)[0] == str(
+        Path(sys.executable).resolve().parent
+    )
     assert environment["PYTHONUTF8"] == "1"
     assert environment["PYTHONIOENCODING"] == "utf-8"
     assert environment["PYTHONDONTWRITEBYTECODE"] == "1"
@@ -1201,10 +1409,14 @@ def test_codex_executor_publishes_task_private_sdk_receipt_last(
     assert (snapshot / "SDK_SNAPSHOT.json").is_file()
 
 
-def test_codex_executor_scopes_mutable_adaos_runtime_to_task(monkeypatch, tmp_path: Path) -> None:
+def test_codex_executor_scopes_mutable_adaos_runtime_to_task(
+    monkeypatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", "C:/host-adaos")
     executor = SubprocessCodexExecutor(repo_root=tmp_path / "repo")
-    task_runtime = tmp_path / "workspace" / ".adaos" / "tasks" / "task.example" / "adaos-runtime"
+    task_runtime = (
+        tmp_path / "workspace" / ".adaos" / "tasks" / "task.example" / "adaos-runtime"
+    )
 
     environment = executor._execution_environment(runtime_base_dir=task_runtime)
 
@@ -1225,7 +1437,9 @@ def test_codex_task_runtime_is_outside_candidate_worktree(tmp_path: Path) -> Non
     assert task_runtime.parent == output_dir.parent
 
 
-def test_generated_tests_receive_task_owned_runtime_outside_candidate(tmp_path: Path) -> None:
+def test_generated_tests_receive_task_owned_runtime_outside_candidate(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "run" / "workspace"
     tests_dir = workspace / "skills" / "candidate" / "tests"
     tests_dir.mkdir(parents=True)
@@ -1260,7 +1474,9 @@ def test_generated_tests_receive_task_owned_runtime_outside_candidate(tmp_path: 
 
     assert errors == []
     assert checks[0]["ok"] is True
-    assert (workspace.parent / "adaos-runtime-packaged" / "validation-marker.txt").is_file()
+    assert (
+        workspace.parent / "adaos-runtime-packaged" / "validation-marker.txt"
+    ).is_file()
     assert (
         workspace.parent
         / "adaos-runtime-packaged"
@@ -1272,7 +1488,9 @@ def test_generated_tests_receive_task_owned_runtime_outside_candidate(tmp_path: 
     assert not (workspace / "skills" / ".runtime").exists()
 
 
-def test_generated_cleanup_removes_only_reserved_runtime_projection(tmp_path: Path) -> None:
+def test_generated_cleanup_removes_only_reserved_runtime_projection(
+    tmp_path: Path,
+) -> None:
     reserved = tmp_path / "skills" / ".runtime" / "candidate" / "state.json"
     arbitrary = tmp_path / ".adaos_validation_base" / "state.json"
     reserved.parent.mkdir(parents=True)
@@ -1286,7 +1504,9 @@ def test_generated_cleanup_removes_only_reserved_runtime_projection(tmp_path: Pa
     assert arbitrary.is_file()
 
 
-def test_worker_applies_frozen_agent_profile_to_codex_executor(monkeypatch, tmp_path: Path) -> None:
+def test_worker_applies_frozen_agent_profile_to_codex_executor(
+    monkeypatch, tmp_path: Path
+) -> None:
     captured: dict[str, str | None] = {}
 
     def fake_call(self, **_kwargs):
@@ -1320,7 +1540,9 @@ def test_worker_applies_frozen_agent_profile_to_codex_executor(monkeypatch, tmp_
     assert captured == {"model": "gpt-5.4", "reasoning_effort": "high"}
 
 
-def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(tmp_path: Path) -> None:
+def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     worker = LocalSkillFactoryWorker(
         state_dir=tmp_path / "state",
@@ -1362,7 +1584,9 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(tmp_path: P
                             "authoring": {
                                 "status": "present",
                                 "definition_path": "workflow.json",
-                                "adapter_catalog": [{"implementation": "irrelevant.full.catalog"}],
+                                "adapter_catalog": [
+                                    {"implementation": "irrelevant.full.catalog"}
+                                ],
                             },
                         },
                     },
@@ -1394,7 +1618,10 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(tmp_path: P
     assert "Resolve skill-owned runtime storage through AdaOS SDK" in prompt
     assert "does not permit omitting the executable scientific path" in prompt
     assert "60-second lifecycle budget" in prompt
-    assert "Do not execute a scientific smoke or confirmatory workload from packaged tests" in prompt
+    assert (
+        "Do not execute a scientific smoke or confirmatory workload from packaged tests"
+        in prompt
+    )
     assert "exact declared name" in prompt
     assert "skill_schema.json" in prompt
     assert "allow_heavy_dependencies" in prompt
@@ -1412,7 +1639,9 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(tmp_path: P
     assert "irrelevant.full.catalog" not in prompt
     assert packet["context_packet_digest"] == "sha256:" + "a" * 64
     assert packet["context_packet"]["change"]["change_id"] == "change.demo"
-    assert packet["context_packet"]["facets"]["workflow_definition"]["authoring"]["adapter_catalog"]
+    assert packet["context_packet"]["facets"]["workflow_definition"]["authoring"][
+        "adapter_catalog"
+    ]
 
 
 def test_worker_compiles_manifest_bound_workflow_definition(tmp_path: Path) -> None:
@@ -1422,7 +1651,9 @@ def test_worker_compiles_manifest_bound_workflow_definition(tmp_path: Path) -> N
     manifest_path = skill / "skill.yaml"
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     manifest["workflow"] = {"manifest": "workflow.json"}
-    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
+    )
     workflow_path = skill / "workflow.json"
     workflow_path.write_text("{}\n", encoding="utf-8")
     worker = LocalSkillFactoryWorker(
@@ -1443,9 +1674,14 @@ def test_worker_compiles_manifest_bound_workflow_definition(tmp_path: Path) -> N
     assert any("workflow definition" in error for error in invalid["errors"])
 
     workflow_path.write_text(
-        (repo_root / "src" / "adaos" / "services" / "builder" / "builder_change.workflow.json").read_text(
-            encoding="utf-8"
-        ),
+        (
+            repo_root
+            / "src"
+            / "adaos"
+            / "services"
+            / "builder"
+            / "builder_change.workflow.json"
+        ).read_text(encoding="utf-8"),
         encoding="utf-8",
     )
 
@@ -1459,7 +1695,9 @@ def test_worker_compiles_manifest_bound_workflow_definition(tmp_path: Path) -> N
     assert workflow_check["definition_digest"].startswith("sha256:")
 
 
-def test_worker_treats_browser_data_route_warnings_as_strict_errors(tmp_path: Path) -> None:
+def test_worker_treats_browser_data_route_warnings_as_strict_errors(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     skill_root = workspace / "skills" / "demo"
     skill_root.mkdir(parents=True)
@@ -1493,7 +1731,9 @@ def test_worker_treats_browser_data_route_warnings_as_strict_errors(tmp_path: Pa
     assert checks == []
 
 
-def test_worker_rejects_skill_manifest_that_runtime_dependency_policy_will_refuse(tmp_path: Path) -> None:
+def test_worker_rejects_skill_manifest_that_runtime_dependency_policy_will_refuse(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     skill_root = workspace / "skills" / "demo"
     skill_root.mkdir(parents=True)
@@ -1511,7 +1751,9 @@ def test_worker_rejects_skill_manifest_that_runtime_dependency_policy_will_refus
     checks: list[dict] = []
     errors: list[str] = []
 
-    LocalSkillFactoryWorker._validate_skill_dependency_isolation(workspace, checks, errors)
+    LocalSkillFactoryWorker._validate_skill_dependency_isolation(
+        workspace, checks, errors
+    )
 
     assert any("runtime.dependencies.heavy_isolation" in error for error in errors)
     assert checks == []
@@ -1532,7 +1774,9 @@ def test_worker_enforces_structured_brief_provider_contract(tmp_path: Path) -> N
                         "operations": ["prepare_attempt"],
                     }
                 ],
-                "tools": [{"name": "prepare_attempt", "input_schema": {"type": "object"}}],
+                "tools": [
+                    {"name": "prepare_attempt", "input_schema": {"type": "object"}}
+                ],
             },
             sort_keys=False,
         ),
@@ -1560,14 +1804,20 @@ def test_worker_enforces_structured_brief_provider_contract(tmp_path: Path) -> N
     checks: list[dict] = []
     errors: list[str] = []
 
-    LocalSkillFactoryWorker._validate_brief_contract_requirements(assignment, workspace, checks, errors)
+    LocalSkillFactoryWorker._validate_brief_contract_requirements(
+        assignment, workspace, checks, errors
+    )
 
-    assert errors == ["implementation brief provider requirement runner is missing operations: collect_attempt"]
+    assert errors == [
+        "implementation brief provider requirement runner is missing operations: collect_attempt"
+    ]
     assert checks == []
 
 
 def _document_contract_assignment(workspace: Path) -> dict:
-    instruction = workspace / ".adaos_context" / "dev-1" / "instructions" / "contract.json"
+    instruction = (
+        workspace / ".adaos_context" / "dev-1" / "instructions" / "contract.json"
+    )
     instruction.parent.mkdir(parents=True)
     instruction.write_text(
         json.dumps(
@@ -1693,7 +1943,9 @@ def _operation_sequence_assignment(
         "        Path('result.json').write_text(json.dumps({'value': 6}) + '\\n', encoding='utf-8')\n",
         encoding="utf-8",
     )
-    instruction = workspace / ".adaos_context" / "dev-sequence" / "instructions" / "contract.json"
+    instruction = (
+        workspace / ".adaos_context" / "dev-sequence" / "instructions" / "contract.json"
+    )
     instruction.parent.mkdir(parents=True)
     object_schema = {"type": "object", "additionalProperties": True}
     contract = {
@@ -1721,7 +1973,12 @@ def _operation_sequence_assignment(
                 },
                 "output_schema": {
                     "type": "object",
-                    "required": ["command", "working_directory", "expected_outputs", "output_ref"],
+                    "required": [
+                        "command",
+                        "working_directory",
+                        "expected_outputs",
+                        "output_ref",
+                    ],
                     "properties": {
                         "command": {"type": "array"},
                         "working_directory": {"type": "string"},
@@ -1798,7 +2055,10 @@ def _operation_sequence_assignment(
                             {
                                 "pointer": "/observations",
                                 "contains": [
-                                    {"pointer": "/metric/name", "equals": "primary_metric"},
+                                    {
+                                        "pointer": "/metric/name",
+                                        "equals": "primary_metric",
+                                    },
                                     {
                                         "pointer": "/value",
                                         "equals_root_pointer": "/result/primary_metric",
@@ -1818,7 +2078,10 @@ def _operation_sequence_assignment(
                         "for_each": {
                             "$bind": {"step": "collect", "pointer": "/artifacts"}
                         },
-                        "input": {"uri": {"$item": "/uri"}, "digest": {"$item": "/digest"}},
+                        "input": {
+                            "uri": {"$item": "/uri"},
+                            "digest": {"$item": "/digest"},
+                        },
                         "assert": [
                             {"pointer": "/ok", "equals": True},
                             {
@@ -1860,7 +2123,9 @@ def _operation_contract_assignment(
     candidate_role: str | None = None,
     candidate_capability: str = "example.probe",
 ) -> dict:
-    instruction = workspace / ".adaos_context" / "dev-ops" / "instructions" / "contract.json"
+    instruction = (
+        workspace / ".adaos_context" / "dev-ops" / "instructions" / "contract.json"
+    )
     instruction.parent.mkdir(parents=True)
     contract_input = {
         "type": "object",
@@ -1958,7 +2223,9 @@ def _operation_contract_assignment(
     }
 
 
-def test_worker_binds_provider_tool_schema_to_admitted_operation_contract(tmp_path: Path) -> None:
+def test_worker_binds_provider_tool_schema_to_admitted_operation_contract(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     exact_input = {
@@ -2000,7 +2267,9 @@ def test_worker_binds_provider_tool_schema_to_admitted_operation_contract(tmp_pa
     ]
 
 
-def test_worker_rejects_flat_tool_input_for_wrapped_consumer_operation(tmp_path: Path) -> None:
+def test_worker_rejects_flat_tool_input_for_wrapped_consumer_operation(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     assignment = _operation_contract_assignment(
@@ -2028,7 +2297,9 @@ def test_worker_rejects_flat_tool_input_for_wrapped_consumer_operation(tmp_path:
     assert "/properties missing keys ['request']" in errors[0]
 
 
-def test_worker_requires_every_admitted_operation_in_provider_declaration(tmp_path: Path) -> None:
+def test_worker_requires_every_admitted_operation_in_provider_declaration(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     assignment = _operation_contract_assignment(
@@ -2050,7 +2321,9 @@ def test_worker_requires_every_admitted_operation_in_provider_declaration(tmp_pa
     ]
 
 
-def test_worker_requires_provider_for_provider_role_operation_set(tmp_path: Path) -> None:
+def test_worker_requires_provider_for_provider_role_operation_set(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     assignment = _operation_contract_assignment(
@@ -2161,10 +2434,14 @@ def test_worker_executes_consumer_owned_operation_sequence(tmp_path: Path) -> No
         "collect",
         "verify",
     ]
-    assert (tmp_path / "runtime" / checks[0]["runtime_path"] / "attempt" / "result.json").is_file()
+    assert (
+        tmp_path / "runtime" / checks[0]["runtime_path"] / "attempt" / "result.json"
+    ).is_file()
 
 
-def test_worker_operation_sequence_detects_missing_execution_output(tmp_path: Path) -> None:
+def test_worker_operation_sequence_detects_missing_execution_output(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     assignment = _operation_sequence_assignment(workspace, omit_output=True)
@@ -2191,7 +2468,9 @@ def test_worker_operation_sequence_detects_missing_execution_output(tmp_path: Pa
     assert "execution_spec omitted exact expected outputs: result.json" in errors[0]
 
 
-def test_worker_operation_sequence_enforces_cross_field_array_invariant(tmp_path: Path) -> None:
+def test_worker_operation_sequence_enforces_cross_field_array_invariant(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     assignment = _operation_sequence_assignment(workspace, mismatched_observation=True)
@@ -2218,7 +2497,9 @@ def test_worker_operation_sequence_enforces_cross_field_array_invariant(tmp_path
     assert "contains no matching item" in errors[0]
 
 
-def test_worker_operation_sequence_enforces_cross_step_invariant(tmp_path: Path) -> None:
+def test_worker_operation_sequence_enforces_cross_step_invariant(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     assignment = _operation_sequence_assignment(workspace, mismatched_cross_step=True)
@@ -2343,10 +2624,15 @@ def test_worker_reports_incomplete_contract_document_roots(tmp_path: Path) -> No
 
     assert checks == []
     assert len(errors) == 1
-    assert "incomplete sets found: candidate-self-check/attempt-1=run_log.json" in errors[0]
+    assert (
+        "incomplete sets found: candidate-self-check/attempt-1=run_log.json"
+        in errors[0]
+    )
 
 
-def test_workspace_validates_contract_output_from_codex_task_runtime(tmp_path: Path) -> None:
+def test_workspace_validates_contract_output_from_codex_task_runtime(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     run_root = tmp_path / "run"
     workspace = run_root / "workspace"
@@ -2380,7 +2666,9 @@ def test_workspace_validates_contract_output_from_codex_task_runtime(tmp_path: P
     assert contract_check["runtime_path"] == "self-check/attempt-1"
 
 
-def test_worker_rejects_tests_that_pin_checkpoint_owned_versions(tmp_path: Path) -> None:
+def test_worker_rejects_tests_that_pin_checkpoint_owned_versions(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     tests_dir = workspace / "skills" / "demo" / "tests"
     tests_dir.mkdir(parents=True)
@@ -2393,7 +2681,9 @@ def test_worker_rejects_tests_that_pin_checkpoint_owned_versions(tmp_path: Path)
     checks: list[dict] = []
     errors: list[str] = []
 
-    LocalSkillFactoryWorker._validate_tests_do_not_pin_checkpoint_metadata(workspace, checks, errors)
+    LocalSkillFactoryWorker._validate_tests_do_not_pin_checkpoint_metadata(
+        workspace, checks, errors
+    )
 
     assert any("manifest version" in error for error in errors)
     assert any("manifest updated_at" in error for error in errors)
@@ -2414,7 +2704,9 @@ def test_worker_allows_semantic_manifest_version_checks(tmp_path: Path) -> None:
     checks: list[dict] = []
     errors: list[str] = []
 
-    LocalSkillFactoryWorker._validate_tests_do_not_pin_checkpoint_metadata(workspace, checks, errors)
+    LocalSkillFactoryWorker._validate_tests_do_not_pin_checkpoint_metadata(
+        workspace, checks, errors
+    )
 
     assert errors == []
     assert checks == [
@@ -2426,7 +2718,9 @@ def test_worker_allows_semantic_manifest_version_checks(tmp_path: Path) -> None:
     ]
 
 
-def test_worker_rejects_package_tests_bound_to_development_context(tmp_path: Path) -> None:
+def test_worker_rejects_package_tests_bound_to_development_context(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     test_path = workspace / "skills" / "demo" / "tests" / "test_context.py"
     test_path.parent.mkdir(parents=True)
@@ -2452,7 +2746,9 @@ def test_worker_rejects_package_tests_bound_to_development_context(tmp_path: Pat
     assert ".adaos_context" in errors[0]
 
 
-def test_worker_runs_generated_tests_from_package_shaped_projection(tmp_path: Path) -> None:
+def test_worker_runs_generated_tests_from_package_shaped_projection(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     workspace = tmp_path / "run" / "workspace"
     tests_dir = workspace / "skills" / "demo" / "tests"
@@ -2492,8 +2788,7 @@ def test_worker_ignores_unchanged_baseline_version_pins(tmp_path: Path) -> None:
     baseline_tests.mkdir(parents=True)
     changed_tests.mkdir(parents=True)
     (baseline_tests / "test_manifest.py").write_text(
-        "def test_version(manifest):\n"
-        "    assert manifest['version'] == '0.1.0'\n",
+        "def test_version(manifest):\n    assert manifest['version'] == '0.1.0'\n",
         encoding="utf-8",
     )
     (changed_tests / "test_manifest.py").write_text(
@@ -2522,16 +2817,27 @@ def test_worker_ignores_unchanged_baseline_version_pins(tmp_path: Path) -> None:
     ]
 
 
-def test_worker_changed_paths_supports_single_commit_dirty_workspace(tmp_path: Path) -> None:
+def test_worker_changed_paths_supports_single_commit_dirty_workspace(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
     subprocess.run(["git", "config", "user.name", "test"], cwd=workspace, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=workspace,
+        check=True,
+    )
     tracked = workspace / "tracked.txt"
     tracked.write_text("baseline\n", encoding="utf-8")
     subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
-    subprocess.run(["git", "commit", "-m", "baseline"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "baseline"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+    )
     tracked.write_text("changed\n", encoding="utf-8")
     (workspace / "new.txt").write_text("new\n", encoding="utf-8")
 
@@ -2545,21 +2851,37 @@ def test_worker_changed_paths_differs_from_root_after_commit(tmp_path: Path) -> 
     workspace.mkdir()
     subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
     subprocess.run(["git", "config", "user.name", "test"], cwd=workspace, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=workspace,
+        check=True,
+    )
     tracked = workspace / "tracked.txt"
     tracked.write_text("baseline\n", encoding="utf-8")
     subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
-    subprocess.run(["git", "commit", "-m", "baseline"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "baseline"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+    )
     tracked.write_text("changed\n", encoding="utf-8")
     subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
-    subprocess.run(["git", "commit", "-m", "result"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "result"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+    )
 
     worker = object.__new__(LocalSkillFactoryWorker)
 
     assert worker._changed_from_baseline(workspace) == ["tracked.txt"]
 
 
-def test_codex_executor_discovers_vscode_bundled_cli(monkeypatch, tmp_path: Path) -> None:
+def test_codex_executor_discovers_vscode_bundled_cli(
+    monkeypatch, tmp_path: Path
+) -> None:
     executable = (
         tmp_path
         / ".vscode"
@@ -2578,7 +2900,9 @@ def test_codex_executor_discovers_vscode_bundled_cli(monkeypatch, tmp_path: Path
     assert SubprocessCodexExecutor()._resolve_executable() == str(executable.resolve())
 
 
-def test_codex_executor_reports_actionable_missing_cli(monkeypatch, tmp_path: Path) -> None:
+def test_codex_executor_reports_actionable_missing_cli(
+    monkeypatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.delenv("ADAOS_CODEX_EXECUTABLE", raising=False)
     monkeypatch.setenv("PATH", "")
@@ -2600,7 +2924,9 @@ def test_worker_reasks_codex_to_repair_validation_failure(tmp_path: Path) -> Non
         {
             "target": {"type": "scenario", "id": "recipe_book"},
             "artifacts": {"companion_skill_id": "recipe_book_skill"},
-            "repo": {"sparse_paths": ["scenarios/recipe_book/", "skills/recipe_book_skill/"]},
+            "repo": {
+                "sparse_paths": ["scenarios/recipe_book/", "skills/recipe_book_skill/"]
+            },
         }
     )
     calls: list[str] = []
@@ -2635,7 +2961,9 @@ def test_worker_reasks_codex_to_repair_validation_failure(tmp_path: Path) -> Non
     assert "required file missing" in calls[1]
 
 
-def test_worker_reasks_codex_to_repair_source_boundary_violation(tmp_path: Path) -> None:
+def test_worker_reasks_codex_to_repair_source_boundary_violation(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"
     dev_skills = tmp_path / "dev" / "skills"
@@ -2648,7 +2976,9 @@ def test_worker_reasks_codex_to_repair_source_boundary_violation(tmp_path: Path)
         {
             "target": {"type": "scenario", "id": "recipe_book"},
             "artifacts": {"companion_skill_id": "recipe_book_skill"},
-            "repo": {"sparse_paths": ["scenarios/recipe_book/", "skills/recipe_book_skill/"]},
+            "repo": {
+                "sparse_paths": ["scenarios/recipe_book/", "skills/recipe_book_skill/"]
+            },
         }
     )
     calls: list[str] = []
@@ -2683,7 +3013,9 @@ def test_worker_reasks_codex_to_repair_source_boundary_violation(tmp_path: Path)
     assert "outside the task scope" in calls[1]
 
 
-def test_worker_isolates_generated_test_side_effects_from_candidate_source(tmp_path: Path) -> None:
+def test_worker_isolates_generated_test_side_effects_from_candidate_source(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"
     dev_skills = tmp_path / "dev" / "skills"
@@ -2701,7 +3033,9 @@ def test_worker_isolates_generated_test_side_effects_from_candidate_source(tmp_p
 
     def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:  # noqa: ARG001
         calls.append(prompt)
-        test_file = workspace / "skills" / "boundary_skill" / "tests" / "test_side_effect.py"
+        test_file = (
+            workspace / "skills" / "boundary_skill" / "tests" / "test_side_effect.py"
+        )
         test_file.parent.mkdir(parents=True, exist_ok=True)
         escaped = workspace / "escaped-validation.txt"
         if len(calls) == 1:
@@ -2712,7 +3046,9 @@ def test_worker_isolates_generated_test_side_effects_from_candidate_source(tmp_p
                 encoding="utf-8",
             )
         else:
-            test_file.write_text("def test_side_effect():\n    assert True\n", encoding="utf-8")
+            test_file.write_text(
+                "def test_side_effect():\n    assert True\n", encoding="utf-8"
+            )
             escaped.unlink(missing_ok=True)
         return CodexRunResult(returncode=0, final_message="done")
 
@@ -2730,7 +3066,9 @@ def test_worker_isolates_generated_test_side_effects_from_candidate_source(tmp_p
 
     assert result["ok"] is True, result
     assert len(calls) == 1
-    assert not (Path(result["result"]["local_run_dir"]) / "workspace" / "escaped-validation.txt").exists()
+    assert not (
+        Path(result["result"]["local_run_dir"]) / "workspace" / "escaped-validation.txt"
+    ).exists()
     assert not (Path(result["result"]["local_run_dir"]) / "package-validation").exists()
 
 
@@ -2747,7 +3085,9 @@ def test_worker_reports_progress_to_automation_callback(tmp_path: Path) -> None:
         repo_root=tmp_path / "repo",
         dev_skills_root=tmp_path / "skills",
         dev_scenarios_root=tmp_path / "scenarios",
-        progress_callback=lambda task_id, status, message: projected.append((task_id, status, message)),
+        progress_callback=lambda task_id, status, message: projected.append(
+            (task_id, status, message)
+        ),
     )
     worker.factory = _Factory()
 
