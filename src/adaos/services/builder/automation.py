@@ -214,7 +214,10 @@ def _prefer_persisted_session(
     explicit_checkpoint_recovery = bool(
         explicit_finalization
         and incoming.get("reuse_confirmed_checkpoints") is True
-        and not isinstance(previous_readiness.get("workflow_checkpoint"), Mapping)
+        and (
+            not isinstance(previous_readiness.get("workflow_checkpoint"), Mapping)
+            or incoming.get("rebind_confirmed_checkpoint") is True
+        )
     )
     if terminal_readiness and not explicit_checkpoint_recovery and not (
         incoming_status == "completed"
@@ -1380,6 +1383,47 @@ class BuilderAutomationService:
                 and not isinstance(readiness.get("workflow_checkpoint"), Mapping)
                 and str(current.get("change_id") or "").strip()
             )
+            trial_checkpoint_rebind_pending = False
+            if (
+                current_status == "completed"
+                and readiness.get("ok")
+                and confirmed_primary_checkpoint
+                and isinstance(readiness.get("workflow_checkpoint"), Mapping)
+                and str(current.get("change_id") or "").strip()
+            ):
+                try:
+                    workflow = self._workflow().describe(
+                        str(current.get("object_type") or ""),
+                        str(current.get("object_id") or ""),
+                    )
+                except Exception:
+                    workflow = {}
+                workflow_automation = (
+                    workflow.get("automation")
+                    if isinstance(workflow.get("automation"), Mapping)
+                    else {}
+                )
+                workflow_delivery = (
+                    workflow.get("delivery")
+                    if isinstance(workflow.get("delivery"), Mapping)
+                    else {}
+                )
+                trial_checkpoint_rebind_pending = bool(
+                    str(workflow_automation.get("status") or "") == "completed"
+                    and str(workflow_automation.get("head_task_id") or "") == task_id
+                    and str(workflow_delivery.get("status") or "") == "idle"
+                    and str(workflow_delivery.get("reconciled_at") or "").strip()
+                    and str(workflow_delivery.get("checkpoint_change_id") or "").strip()
+                    == str(current.get("change_id") or "").strip()
+                    and str(workflow_delivery.get("package_digest") or "").strip()
+                    == str(confirmed_primary_checkpoint.get("package_digest") or "").strip()
+                    and str(workflow_delivery.get("source_revision") or "").strip()
+                    == str(
+                        confirmed_primary_checkpoint.get("source_revision")
+                        or confirmed_primary_checkpoint.get("commit")
+                        or ""
+                    ).strip()
+                )
             recovered_transition_pending = (
                 current_status == "completed"
                 and bool(pending_transition)
@@ -1396,6 +1440,7 @@ class BuilderAutomationService:
                 current_status != "failed"
                 and not recovered_transition_pending
                 and not workflow_checkpoint_pending
+                and not trial_checkpoint_rebind_pending
                 and not validated_activation_pending
             ):
                 raise ValueError("validated result recovery requires a failed Automation task")
@@ -1403,6 +1448,7 @@ class BuilderAutomationService:
             if (
                 recovered_transition_pending
                 or workflow_checkpoint_pending
+                or trial_checkpoint_rebind_pending
                 or validated_activation_pending
                 or task_status == "completed"
                 and failure_stage == "live_readiness"
@@ -1417,13 +1463,24 @@ class BuilderAutomationService:
                         if recovered_transition_pending
                         else "workflow_checkpoint"
                         if workflow_checkpoint_pending
+                        else "trial_checkpoint_rebind"
+                        if trial_checkpoint_rebind_pending
                         else "validated_activation"
                         if validated_activation_pending
                         else "live_readiness"
                     ),
                 }
-                if not recovered_transition_pending and not validated_activation_pending:
+                if (
+                    not recovered_transition_pending
+                    and not validated_activation_pending
+                ):
                     current["reuse_confirmed_checkpoints"] = True
+                if trial_checkpoint_rebind_pending:
+                    # The operator-facing reconciliation deliberately cleared
+                    # an unknown Trial outcome.  Only a system-validated,
+                    # previously persisted Forge receipt may restore the exact
+                    # checkpoint; callers cannot supply replacement identities.
+                    current["rebind_confirmed_checkpoint"] = True
             else:
                 if task_status != "failed":
                     raise ValueError("validated result recovery requires a failed Automation task")
@@ -3058,22 +3115,39 @@ class BuilderAutomationService:
                             "context_packet_digest": current.get("context_packet_digest"),
                         },
                     )
-                self._workflow().transition(
-                    object_type,
-                    object_id,
-                    "automation_completed",
-                    actor="builder.automation",
-                    metadata={
-                        "task_id": current.get("current_task_id"),
-                        "change_id": current.get("change_id"),
-                        "version": self._project_version(object_type, object_id),
-                        "snapshot_path": (
-                            readiness.get("automation_snapshot", {}).get("path")
-                            if isinstance(readiness.get("automation_snapshot"), Mapping)
-                            else None
-                        ),
-                    },
+                    workflow_projection = self._workflow().describe(object_type, object_id)
+                    workflow_automation = (
+                        workflow_projection.get("automation")
+                        if isinstance(workflow_projection.get("automation"), Mapping)
+                        else {}
+                    )
+                exact_completed_task = bool(
+                    str(workflow_automation.get("status") or "") == "completed"
+                    and str(workflow_automation.get("head_task_id") or "").strip()
+                    == str(current.get("current_task_id") or "").strip()
                 )
+                if exact_completed_task:
+                    readiness["workflow_automation"] = {
+                        "status": "reused_completed_task",
+                        "task_id": str(current.get("current_task_id") or "").strip(),
+                    }
+                else:
+                    self._workflow().transition(
+                        object_type,
+                        object_id,
+                        "automation_completed",
+                        actor="builder.automation",
+                        metadata={
+                            "task_id": current.get("current_task_id"),
+                            "change_id": current.get("change_id"),
+                            "version": self._project_version(object_type, object_id),
+                            "snapshot_path": (
+                                readiness.get("automation_snapshot", {}).get("path")
+                                if isinstance(readiness.get("automation_snapshot"), Mapping)
+                                else None
+                            ),
+                        },
+                    )
             preview_matches_project = self._preview_target_matches_project(
                 preview_target,
                 object_type=object_type,
@@ -3191,6 +3265,7 @@ class BuilderAutomationService:
             }
             current.pop("finalizing_task_id", None)
             current.pop("reuse_confirmed_checkpoints", None)
+            current.pop("rebind_confirmed_checkpoint", None)
             current.pop("last_failure", None)
             current["updated_at"] = readiness["completed_at"]
             self._save_session(current)
@@ -3207,6 +3282,7 @@ class BuilderAutomationService:
             }
             current.pop("finalizing_task_id", None)
             current.pop("pending_workflow_transition", None)
+            current.pop("rebind_confirmed_checkpoint", None)
             current["last_failure"] = {
                 "stage": (
                     "forge_checkpoint"

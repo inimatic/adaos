@@ -2933,6 +2933,81 @@ def test_validated_result_recovery_records_missing_workflow_checkpoint_without_r
     assert finalized[0]["reuse_confirmed_checkpoints"] is True
 
 
+def test_validated_result_recovery_rebinds_checkpoint_after_unknown_trial_reconciliation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    session = {
+        "object_type": "skill",
+        "object_id": "experiment_skill",
+        "change_id": "change-1",
+        "current_task_id": "task.1",
+        "status": "completed",
+        "task": {"task_id": "task.1", "status": "completed"},
+        "last_result": {"summary": "ready"},
+        "completion_readiness": {
+            "ok": True,
+            "task_id": "task.1",
+            "vcs_checkpoints": [
+                {
+                    "ok": True,
+                    "kind": "skill",
+                    "name": "experiment_skill",
+                    "commit": "forge-1",
+                    "package_digest": "sha256:" + "1" * 64,
+                    "source_revision": "forge-1",
+                    "version": "0.1.1",
+                }
+            ],
+            "workflow_checkpoint": {"ok": True, "generation": 8},
+        },
+    }
+    service._save_session(session)
+    finalized: list[dict] = []
+
+    monkeypatch.setattr(BuilderAutomationService, "refresh_session", lambda self, value: dict(value))
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_workflow",
+        lambda _self: SimpleNamespace(
+            describe=lambda *_args: {
+                "automation": {"status": "completed", "head_task_id": "task.1"},
+                "delivery": {
+                    "status": "idle",
+                    "reconciled_at": "2026-08-21T06:00:00+00:00",
+                    "checkpoint_change_id": "change-1",
+                    "package_digest": "sha256:" + "1" * 64,
+                    "source_revision": "forge-1",
+                },
+            }
+        ),
+    )
+
+    def finalize(_service, value):
+        finalized.append(dict(value))
+        completed = dict(value)
+        completed["status"] = "completed"
+        completed.pop("reuse_confirmed_checkpoints", None)
+        completed.pop("rebind_confirmed_checkpoint", None)
+        _service._save_session(completed)
+
+    monkeypatch.setattr(BuilderAutomationService, "_finalize_completed_session", finalize)
+    service.worker_factory = lambda: (_ for _ in ()).throw(AssertionError("worker must not run"))
+
+    result = service.recover_validated_result(
+        object_type="skill",
+        object_id="experiment_skill",
+    )
+
+    assert result["ok"] is True
+    assert result["worker"]["reused_validated_result"] is True
+    assert result["worker"]["recovery_stage"] == "trial_checkpoint_rebind"
+    assert finalized[0]["status"] == "commit_ready"
+    assert finalized[0]["reuse_confirmed_checkpoints"] is True
+    assert finalized[0]["rebind_confirmed_checkpoint"] is True
+
+
 def test_refresh_restores_recovered_return_to_prototype_transition(
     tmp_path: Path,
     monkeypatch,
