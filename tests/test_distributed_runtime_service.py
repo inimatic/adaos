@@ -20,6 +20,8 @@ from adaos.domain.distributed_runtime import (
     ServiceEndpoint,
     ServiceGroup,
     ServiceInstance,
+    TopologyOperation,
+    TopologyPhaseResult,
     TransferRecord,
 )
 from adaos.domain.project_deployment import (
@@ -917,6 +919,61 @@ def test_topology_operation_retries_known_failure_and_redacts_receipt(
         principal=_principal(),
     )
     assert repeated == operation
+
+
+def test_topology_operation_resumes_persisted_running_phases(tmp_path: Path) -> None:
+    runtime, _, _ = _runtime(tmp_path)
+    _derived_topology(runtime)
+    adapter = FakeTopologyAdapter()
+    runtime.topology_adapter = adapter
+    plan = runtime.plan_replica_change(
+        "media-catalog:root-a",
+        action="rebuild",
+        source_instance_id="media-agent-node-a",
+        target_instance_id="media-agent-node-b",
+        replica_role="derived",
+        principal=_principal(),
+    )
+    step = plan.steps[0]
+    first_phase = step.phases[0]
+    idempotency_key = "resume-rebuild-catalog-10"
+    operation_id = f"topology-{str(plan.plan_digest).split(':', 1)[1][:20]}"
+    first_result = TopologyPhaseResult(
+        phase=f"{step.step_id}.{first_phase}",
+        state="succeeded",
+        attempt=1,
+        idempotency_key=f"{idempotency_key}:{step.step_id}:{first_phase}",
+        receipt={"checkpoint": "catalog:10"},
+        started_at=_NOW.isoformat(),
+        finished_at=_NOW.isoformat(),
+    )
+    runtime.store.put_operation(
+        TopologyOperation(
+            operation_id=operation_id,
+            kind=plan.kind,
+            target_ref=plan.target_ref,
+            state="running",
+            expected_revision=plan.expected_observed_revision,
+            authority_epoch=plan.authority_epoch,
+            idempotency_key=idempotency_key,
+            phases=(first_result,),
+            created_at=_NOW.isoformat(),
+            updated_at=_NOW.isoformat(),
+        )
+    )
+
+    operation = runtime.apply_topology_plan(
+        str(plan.plan_digest),
+        idempotency_key=idempotency_key,
+        principal=_principal(),
+    )
+
+    assert operation.state == "succeeded"
+    assert operation.phases[0] == first_result
+    assert first_phase not in [item[0] for item in adapter.calls]
+    assert [item.phase for item in operation.phases] == [
+        f"{step.step_id}.{phase}" for phase in step.phases
+    ]
 
 
 def test_uncertain_topology_phase_is_not_retried(tmp_path: Path) -> None:

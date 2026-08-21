@@ -11,6 +11,10 @@ from adaos.domain.distributed_runtime import (
     TopologyPhaseResult,
     utc_now,
 )
+from adaos.services.artifact_pipeline.storage import (
+    MutationLockTimeout,
+    mutation_lock,
+)
 
 from .authorization import DistributedPrincipal
 from .store import DistributedRuntimeStore
@@ -123,54 +127,127 @@ class TopologyExecutor:
         principal: DistributedPrincipal,
         idempotency_key: str,
     ) -> TopologyOperation:
+        lock_name = f"{str(plan.plan_digest).split(':', 1)[-1]}.lock"
+        lock_path = self.store.root / "operation_execution" / lock_name
+        execution_lock = mutation_lock(lock_path, timeout_s=0.1)
+        try:
+            execution_lock.__enter__()
+        except MutationLockTimeout as exc:
+            previous = self.store.get_operation_by_idempotency(idempotency_key)
+            if previous is not None:
+                return previous
+            raise TopologyExecutionError("topology_operation_execution_busy") from exc
+        try:
+            return self._execute_locked(
+                plan,
+                principal=principal,
+                idempotency_key=idempotency_key,
+            )
+        finally:
+            execution_lock.__exit__(None, None, None)
+
+    def _execute_locked(
+        self,
+        plan: TopologyPlan,
+        *,
+        principal: DistributedPrincipal,
+        idempotency_key: str,
+    ) -> TopologyOperation:
         principal.require("distributed.topology.apply")
         self._require_approvals(plan, principal)
         if plan.status != "ready":
             raise TopologyExecutionError("topology_plan_not_ready")
         previous = self.store.get_operation_by_idempotency(idempotency_key)
-        if previous is not None:
+        if previous is not None and previous.state in {
+            "succeeded",
+            "failed",
+            "uncertain",
+        }:
             return previous
-        self._validate_plan_state(plan)
-        operation_id = f"topology-{str(plan.plan_digest).split(':', 1)[1][:20]}"
-        created_at = utc_now()
-        operation = TopologyOperation(
-            operation_id=operation_id,
-            kind=plan.kind,
-            target_ref=plan.target_ref,
-            state="pending",
-            expected_revision=plan.expected_observed_revision,
-            authority_epoch=plan.authority_epoch,
-            idempotency_key=idempotency_key,
-            phases=(),
-            created_at=created_at,
-            updated_at=created_at,
-        )
-        self.store.put_operation(operation)
+        if previous is None:
+            self._validate_plan_state(plan)
+            operation_id = (
+                f"topology-{str(plan.plan_digest).split(':', 1)[1][:20]}"
+            )
+            created_at = utc_now()
+            operation = TopologyOperation(
+                operation_id=operation_id,
+                kind=plan.kind,
+                target_ref=plan.target_ref,
+                state="pending",
+                expected_revision=plan.expected_observed_revision,
+                authority_epoch=plan.authority_epoch,
+                idempotency_key=idempotency_key,
+                phases=(),
+                created_at=created_at,
+                updated_at=created_at,
+            )
+            self.store.put_operation(operation)
+            completed: list[TopologyPhaseResult] = []
+            authority_epoch = plan.authority_epoch
+        else:
+            self._validate_resume_identity(plan, previous)
+            terminal_phase = next(
+                (
+                    item
+                    for item in previous.phases
+                    if item.state in {"failed", "uncertain"}
+                ),
+                None,
+            )
+            if terminal_phase is not None:
+                operation = replace(
+                    previous,
+                    state=terminal_phase.state,
+                    updated_at=utc_now(),
+                )
+                self.store.put_operation(operation)
+                return operation
+            operation = previous
+            completed = list(previous.phases)
+            authority_epoch = previous.authority_epoch
+            self.store.append_audit(
+                "topology.operation.resumed",
+                operation_id=operation.operation_id,
+                plan_digest=plan.plan_digest,
+                completed_phases=len(completed),
+                actor_ref=principal.actor_ref,
+            )
         operation = replace(operation, state="running", updated_at=utc_now())
         self.store.put_operation(operation)
-        completed: list[TopologyPhaseResult] = []
-        authority_epoch = plan.authority_epoch
         try:
             for step in plan.steps:
                 self._validate_retention(step)
                 for phase in step.phases:
+                    phase_name = f"{step.step_id}.{phase}"
+                    phase_key = (
+                        f"{operation.idempotency_key}:{step.step_id}:{phase}"
+                    )
+                    if any(
+                        item.phase == phase_name
+                        and item.idempotency_key == phase_key
+                        and item.state == "succeeded"
+                        for item in completed
+                    ):
+                        continue
                     if phase == "promote":
                         if self.authority_handoff is None:
                             raise TopologyExecutionError(
                                 "authority_handoff_committer_not_configured"
                             )
-                        authority_epoch = self.authority_handoff(
-                            step,
-                            operation,
-                            principal,
-                            authority_epoch,
-                        )
-                        operation = replace(
-                            operation,
-                            authority_epoch=authority_epoch,
-                            updated_at=utc_now(),
-                        )
-                        self.store.put_operation(operation)
+                        if authority_epoch == plan.authority_epoch:
+                            authority_epoch = self.authority_handoff(
+                                step,
+                                operation,
+                                principal,
+                                authority_epoch,
+                            )
+                            operation = replace(
+                                operation,
+                                authority_epoch=authority_epoch,
+                                updated_at=utc_now(),
+                            )
+                            self.store.put_operation(operation)
                     result = self._run_phase(
                         operation=operation,
                         plan=plan,
@@ -387,6 +464,21 @@ class TopologyExecutor:
                 and partition.authority_epoch != plan.authority_epoch
             ):
                 raise TopologyExecutionError("topology_authority_epoch_changed")
+
+    @staticmethod
+    def _validate_resume_identity(
+        plan: TopologyPlan, operation: TopologyOperation
+    ) -> None:
+        expected_operation_id = (
+            f"topology-{str(plan.plan_digest).split(':', 1)[1][:20]}"
+        )
+        if (
+            operation.operation_id != expected_operation_id
+            or operation.kind != plan.kind
+            or operation.target_ref != plan.target_ref
+            or operation.expected_revision != plan.expected_observed_revision
+        ):
+            raise TopologyExecutionError("topology_operation_plan_mismatch")
 
     def _validate_retention(self, step: TopologyPlanStep) -> None:
         partition = self.store.get_partition(step.partition_id)
