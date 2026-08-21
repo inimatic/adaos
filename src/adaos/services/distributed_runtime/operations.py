@@ -15,6 +15,10 @@ from adaos.services.artifact_pipeline.storage import (
     MutationLockTimeout,
     mutation_lock,
 )
+from adaos.services.operational_errors import (
+    SENSITIVE_ERROR_MARKERS,
+    normalized_error_code,
+)
 
 from .authorization import DistributedPrincipal
 from .store import DistributedRuntimeStore
@@ -78,28 +82,18 @@ _APPROVAL_PERMISSIONS = {
     "replica_remove": "distributed.replica.remove",
     "replica_data_delete": "distributed.data.delete",
 }
-_SECRET_WORDS = {"authorization", "cookie", "password", "secret", "token"}
-
-
 def _adapter_error_code(exc: Exception, phase: str) -> str:
-    candidate = str(exc).strip().lower()
-    if (
-        candidate
-        and len(candidate) <= 160
-        and not any(word in candidate for word in _SECRET_WORDS)
-        and all(
-            char.isascii() and (char.isalnum() or char in "._:-") for char in candidate
-        )
-    ):
-        return candidate
-    return f"adapter_phase_failed:{phase}"
+    return normalized_error_code(exc, fallback=f"adapter_phase_failed:{phase}")
 
 
 def _redact(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {
             str(key): "[redacted]"
-            if any(word in str(key).lower() for word in _SECRET_WORDS)
+            if any(
+                marker in str(key).lower()
+                for marker in SENSITIVE_ERROR_MARKERS
+            )
             else _redact(item)
             for key, item in value.items()
         }

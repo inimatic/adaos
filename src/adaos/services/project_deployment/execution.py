@@ -19,6 +19,10 @@ from adaos.domain.project_deployment import (
     utc_now,
 )
 from adaos.services.artifact_pipeline.releases import ReleasePlan
+from adaos.services.operational_errors import (
+    SENSITIVE_ERROR_MARKERS,
+    normalized_error_code,
+)
 from adaos.services.id_gen import new_id
 
 from .authorization import DeploymentPrincipal
@@ -76,9 +80,6 @@ class ComponentDeploymentAdapter(Protocol):
     ) -> Mapping[str, Any]: ...
 
 
-_SENSITIVE_FRAGMENTS = ("secret", "password", "credential", "private", "token")
-
-
 def _safe_payload(value: Any, *, depth: int = 0) -> Any:
     if depth > 5:
         return "<truncated>"
@@ -86,16 +87,19 @@ def _safe_payload(value: Any, *, depth: int = 0) -> Any:
         output: dict[str, Any] = {}
         for raw_key, item in list(value.items())[:100]:
             key = str(raw_key)
-            if any(fragment in key.lower() for fragment in _SENSITIVE_FRAGMENTS):
+            if any(fragment in key.lower() for fragment in SENSITIVE_ERROR_MARKERS):
                 output[key] = "<redacted>"
             else:
                 output[key] = _safe_payload(item, depth=depth + 1)
         return output
     if isinstance(value, (list, tuple)):
         return [_safe_payload(item, depth=depth + 1) for item in list(value)[:100]]
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        text = value if not isinstance(value, str) else value[:2000]
-        return text
+    if isinstance(value, str):
+        if any(marker in value.lower() for marker in SENSITIVE_ERROR_MARKERS):
+            return "<redacted>"
+        return value[:2000]
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
     return str(type(value).__name__)
 
 
@@ -103,7 +107,7 @@ def _safe_error(exc: BaseException, *, code: str) -> dict[str, Any]:
     return {
         "code": code,
         "type": type(exc).__name__,
-        "message": str(exc)[:1000],
+        "message": normalized_error_code(exc, fallback=code),
     }
 
 

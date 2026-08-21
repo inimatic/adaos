@@ -8,6 +8,7 @@ from typing import Any, Callable, Mapping, Protocol
 import httpx
 
 from adaos.domain.distributed_runtime import ServiceInstance
+from adaos.services.operational_errors import normalized_error_code
 
 from .operations import (
     RetryableTopologyPhaseError,
@@ -146,15 +147,23 @@ class HttpServiceInvocationTransport:
             body = response.json()
         except ValueError as exc:
             raise TopologyExecutionError("remote_service_response_invalid") from exc
+        if not isinstance(body, Mapping):
+            raise TopologyExecutionError("remote_service_response_invalid")
         if response.status_code in {429, 502, 503, 504}:
             raise RetryableTopologyPhaseError(
-                str(body.get("detail") or "remote_service_busy")
+                normalized_error_code(
+                    body.get("detail"),
+                    fallback="remote_service_busy",
+                )
             )
         if response.status_code >= 400:
             raise TopologyExecutionError(
-                str(body.get("detail") or f"remote_service_http_{response.status_code}")
+                normalized_error_code(
+                    body.get("detail"),
+                    fallback=f"remote_service_http_{response.status_code}",
+                )
             )
-        if not isinstance(body, Mapping) or body.get("schema") != SERVICE_INVOCATION_RESULT_SCHEMA:
+        if body.get("schema") != SERVICE_INVOCATION_RESULT_SCHEMA:
             raise TopologyExecutionError("remote_service_response_schema_invalid")
         return _bounded_json(body.get("result"), reason="service_invocation_result")
 
@@ -199,9 +208,16 @@ class MemberLinkServiceInvocationTransport:
             raise RetryableTopologyPhaseError("remote_service_member_link_unavailable") from exc
         except RuntimeError as exc:
             reason = str(exc)
-            if any(token in reason for token in ("member_not_connected", "member_rpc_busy", "link_replaced")):
-                raise RetryableTopologyPhaseError(reason) from exc
-            raise TopologyExecutionError(reason) from exc
+            for code in (
+                "member_not_connected",
+                "member_rpc_busy",
+                "link_replaced",
+            ):
+                if code in reason:
+                    raise RetryableTopologyPhaseError(code) from exc
+            raise TopologyExecutionError(
+                normalized_error_code(reason, fallback="remote_service_failed")
+            ) from exc
         if not isinstance(body, Mapping) or body.get("schema") != SERVICE_INVOCATION_RESULT_SCHEMA:
             raise TopologyExecutionError("remote_service_response_schema_invalid")
         return _bounded_json(body.get("result"), reason="service_invocation_result")

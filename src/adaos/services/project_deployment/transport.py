@@ -16,6 +16,10 @@ from adaos.domain.project_deployment import (
     utc_now,
 )
 from adaos.services.artifact_pipeline.releases import ReleasePlan
+from adaos.services.operational_errors import (
+    SENSITIVE_ERROR_MARKERS,
+    normalized_error_code,
+)
 
 from .adapters import LocalComponentDeploymentAdapter
 from .execution import (
@@ -44,19 +48,20 @@ def _safe_receipt(value: Any, *, depth: int = 0) -> Any:
         result: dict[str, Any] = {}
         for key, item in list(value.items())[:100]:
             token = str(key)
-            if any(
-                secret in token.lower()
-                for secret in ("token", "secret", "password", "credential")
-            ):
+            if any(secret in token.lower() for secret in SENSITIVE_ERROR_MARKERS):
                 result[token] = "<redacted>"
             else:
                 result[token] = _safe_receipt(item, depth=depth + 1)
         return result
     if isinstance(value, (list, tuple)):
         return [_safe_receipt(item, depth=depth + 1) for item in list(value)[:100]]
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value if not isinstance(value, str) else value[:2000]
-    return str(value)[:500]
+    if isinstance(value, str):
+        if any(marker in value.lower() for marker in SENSITIVE_ERROR_MARKERS):
+            return "<redacted>"
+        return value[:2000]
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return type(value).__name__
 
 
 def _remote_phase_payload(
@@ -111,7 +116,10 @@ def _remote_phase_receipt(body: Any) -> dict[str, Any]:
     receipt = body.get("receipt")
     if not isinstance(receipt, Mapping):
         raise ProjectDeploymentExecutionError("remote_node_receipt_missing")
-    return dict(receipt)
+    sanitized = _safe_receipt(receipt)
+    if not isinstance(sanitized, Mapping):
+        raise ProjectDeploymentExecutionError("remote_node_receipt_missing")
+    return dict(sanitized)
 
 
 @dataclass(slots=True)
@@ -167,13 +175,20 @@ class HttpNodeDeploymentTransport:
             raise ProjectDeploymentExecutionError(
                 "remote_node_response_invalid"
             ) from exc
+        if not isinstance(body, Mapping):
+            raise ProjectDeploymentExecutionError("remote_node_response_invalid")
         if response.status_code in {429, 502, 503, 504}:
             raise RetryableDeploymentPhaseError(
-                str(body.get("detail") or "remote_node_busy")
+                normalized_error_code(
+                    body.get("detail"), fallback="remote_node_busy"
+                )
             )
         if response.status_code >= 400:
             raise ProjectDeploymentExecutionError(
-                str(body.get("detail") or f"remote_node_http_{response.status_code}")
+                normalized_error_code(
+                    body.get("detail"),
+                    fallback=f"remote_node_http_{response.status_code}",
+                )
             )
         return _remote_phase_receipt(body)
 
@@ -213,16 +228,16 @@ class MemberLinkNodeDeploymentTransport:
             ) from exc
         except RuntimeError as exc:
             reason = str(exc)
-            if any(
-                token in reason
-                for token in (
-                    "member_not_connected",
-                    "member_rpc_busy",
-                    "link_replaced",
-                )
+            for code in (
+                "member_not_connected",
+                "member_rpc_busy",
+                "link_replaced",
             ):
-                raise RetryableDeploymentPhaseError(reason) from exc
-            raise ProjectDeploymentExecutionError(reason) from exc
+                if code in reason:
+                    raise RetryableDeploymentPhaseError(code) from exc
+            raise ProjectDeploymentExecutionError(
+                normalized_error_code(reason, fallback="remote_node_failed")
+            ) from exc
         return _remote_phase_receipt(body)
 
 

@@ -37,6 +37,7 @@ from adaos.services.project_deployment import (
     SnapshotNodeInventoryProvider,
     UncertainDeploymentPhaseError,
 )
+from adaos.services.project_deployment.execution import _safe_error, _safe_payload
 
 
 _NOW = "2026-08-19T18:00:00+00:00"
@@ -53,6 +54,22 @@ _COMPONENTS = (
     ("skill", "media_endpoint_agent", "d"),
     ("scenario", "media_center", "e"),
 )
+
+
+def test_deployment_error_receipts_do_not_publish_sensitive_text() -> None:
+    error = _safe_error(
+        RuntimeError("authorization:private-token"),
+        code="adapter_phase_failed",
+    )
+
+    assert error == {
+        "code": "adapter_phase_failed",
+        "type": "RuntimeError",
+        "message": "adapter_phase_failed",
+    }
+    assert _safe_payload({"detail": "authorization:private-token"}) == {
+        "detail": "<redacted>"
+    }
 
 
 def _digest(character: str) -> str:
