@@ -522,22 +522,28 @@ class SubprocessCodexExecutor:
         if result.returncode:
             detail = (result.stderr or result.stdout).strip()
             raise RuntimeError(f"cannot materialize filtered AdaOS SDK snapshot: {detail}")
-        staging = root / f".sdk-reference-{uuid4().hex}"
-        staging.mkdir(parents=True)
+        # ``runtime_root`` is private to one task and no consumer starts until
+        # this method returns.  Extracting into a staging directory and then
+        # renaming the whole tree therefore added no atomicity, while Windows
+        # scanners can hold any freshly extracted file and make the directory
+        # rename fail for an unbounded interval.  Materialize directly into the
+        # task-private destination and publish the receipt last; its presence
+        # remains the readiness marker.
+        sdk_root.mkdir(parents=True)
         try:
             with tarfile.open(archive_path, mode="r:") as archive:
                 members = archive.getmembers()
                 for member in members:
-                    destination = (staging / member.name).resolve()
+                    destination = (sdk_root / member.name).resolve()
                     try:
-                        destination.relative_to(staging.resolve())
+                        destination.relative_to(sdk_root.resolve())
                     except ValueError as exc:
                         raise RuntimeError("AdaOS SDK archive contains an unsafe path") from exc
                     if member.issym() or member.islnk():
                         raise RuntimeError("AdaOS SDK archive may not contain links")
-                archive.extractall(staging, members=members)
+                archive.extractall(sdk_root, members=members)
             _write_json(
-                staging / "SDK_SNAPSHOT.json",
+                receipt_path,
                 {
                     "schema": "adaos.skill_factory.sdk_snapshot.v1",
                     "core_commit": commit,
@@ -551,15 +557,20 @@ class SubprocessCodexExecutor:
                     "access": "read-only-reference",
                 },
             )
-            # Windows scanners and indexers can briefly retain handles after
-            # archive extraction.  Reuse the platform atomic-publication
-            # primitive so a transient sharing violation cannot fail a task
-            # before the autonomous candidate receives its first turn.
-            replace_with_retry(staging, sdk_root)
+        except OSError as exc:
+            raise RuntimeError(
+                "cannot materialize task-private AdaOS SDK snapshot "
+                f"at {sdk_root}: {type(exc).__name__}: {exc}"
+            ) from exc
         finally:
-            archive_path.unlink(missing_ok=True)
-            if staging.exists():
-                shutil.rmtree(staging)
+            try:
+                archive_path.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                _log.warning(
+                    "cannot remove temporary SDK archive path=%s error=%s",
+                    archive_path,
+                    cleanup_error,
+                )
         return sdk_root
 
     def _execution_environment(
