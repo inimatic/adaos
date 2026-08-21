@@ -99,6 +99,7 @@ still a bounded technical pilot rather than distributed-production acceptance.
 | MC5 Adaptive UI and settings | validated local | validated-stand | MC3, MC4 |
 | MC6 Personalization, access, and voice | validated local | validated-stand | identity roadmap, MC4, MC5 |
 | MC7 Enrichment, variants, and production operations | bounded pilot; production rejected | production-accepted | MC2-MC6 |
+| MC8 Post-pilot product hardening | observed on stand; planned | validated-stand | MC4-MC7, updater UX |
 
 ## Dependency Order
 
@@ -114,6 +115,7 @@ MC0
   -> MC5 TV/desktop/mobile-control presentation profiles
   -> MC6 synchronized personal state, access, and voice
   -> MC7 enrichment, variants, resilience, and acceptance
+  -> MC8 cross-surface and TV product hardening
 ```
 
 MC3 UI read-model work may proceed in parallel with late MC2 agent work using
@@ -472,6 +474,74 @@ injection, resource budgets, and a reviewed production decision.
   authorization, routing, consistency and operations are production-accepted.
 - [ ] `[deferred]` `MC7-14` Add adaptive-bitrate packaging and hardware
   transcoding after the bounded single-rendition worker is proven.
+
+## Milestone MC8: Post-Pilot Product Hardening
+
+**Outcome:** the bounded distributed implementation behaves as one familiar
+household product across a TV and its desktop/mobile control surfaces, and
+never presents an initialization, update, or playback transition as an
+unexplained empty or frozen screen.
+
+**Admission gate:** retain the exact two-node Project topology and playback
+route accepted by MC7; do not reopen the deployment architecture while
+correcting product-state and presentation defects.
+
+**Exit proof:** a recorded Chrome on Android TV plus Chrome on Windows/mobile
+session demonstrates subscribed Now Playing, D-pad navigation, update
+deferral/diagnostics, artwork, loading/empty truth, localized UI, and playback
+continuity under a member update.
+
+The following backlog records observations from the `.30` stand on
+2026-08-21. They are not included in the current bounded-pilot acceptance and
+must not be marked complete from contract or unit-test coverage alone.
+
+- [ ] `[must]` `MC8-01` Make the endpoint-owned `PlaybackSession` and Now
+  Playing projection authoritative and subscription-backed across TV and
+  authorized controller browsers. A film started on Chrome for Android TV
+  must appear in Media Remote on Chrome for Windows without polling or a
+  browser-local fallback to `Nothing is playing`.
+- [ ] `[must]` `MC8-02` Add a fullscreen-safe operational overlay for update,
+  reconnect, route change, buffering, and playback recovery. It must report a
+  localized phase and expected impact without covering transport recovery, and
+  expose `Defer` only when the supervisor's existing update policy says the
+  action is admissible.
+- [ ] `[must]` `MC8-03` Isolate playback from update workload and lifecycle
+  transitions. Prove that updating a member does not stall media served by the
+  hub, and capture CPU, disk I/O, route, buffer, and QoE evidence when source
+  and updated node are the same or different.
+- [ ] `[must]` `MC8-04` Render `autoplay` and `auto fullscreen/maximize` as
+  persisted boolean toggles or checkboxes in Settings, with effective
+  profile/endpoint policy. They are state, not command buttons.
+- [ ] `[must]` `MC8-05` Enforce an explicit asynchronous collection state
+  machine: `initial/loading`, `ready/nonempty`, `ready/empty`,
+  `unconfigured/first_scan`, `partial/stale`, and `failed`. Switching Personal
+  or Household context must enter `loading` and must never flash the first-scan
+  prompt before a loaded, authoritative empty result proves it is applicable.
+- [ ] `[must]` `MC8-06` Replace the TV rail's raw horizontal scrollbar with a
+  bounded D-pad carousel that has visible previous/next actions, deterministic
+  focus, page-sized movement, focus restoration, and cursor-backed loading.
+  Reuse the client's generic carousel primitive (including Taiga where it is
+  the established implementation), without introducing media-specific client
+  behavior.
+- [ ] `[should]` `MC8-07` Consolidate the primary browse controls into one
+  adaptive toolbar: Remote, profile scope (Personal/Household/Kids), media
+  section, layout, and Settings. Use compact dropdown/modal/segmented controls
+  appropriate to TV, desktop, and touch rather than separate rows of buttons.
+- [ ] `[should]` `MC8-08` Complete the artwork pipeline. Resolve embedded
+  covers and folder artwork first, then optional external metadata providers;
+  persist provenance and source revision, generate bounded cached renditions,
+  publish fallback/error state, and populate the existing `artwork.url`
+  presentation field. The current implementation has the UI field and
+  `thumbnail` job kind but no default thumbnail/artwork provider or catalog
+  materialization path.
+- [ ] `[must]` `MC8-09` Provide complete English and Russian Media Center
+  localization, including loading/empty/error/update/playback states. Domain
+  catalogs and wording remain owned by the scenario/skills; core and client
+  own only generic i18n transport, interpolation, locale selection, and
+  fallback behavior.
+- [ ] `[must]` `MC8-10` Add TV/controller E2E and screenshot evidence for every
+  item above, including reconnect, stale projection recovery, D-pad-only use,
+  long translated text, and a member update during active playback.
 
 ## Cross-Domain Dependencies
 
