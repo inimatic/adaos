@@ -1575,7 +1575,12 @@ def _document_contract_assignment(workspace: Path) -> dict:
     }
 
 
-def _operation_sequence_assignment(workspace: Path, *, omit_output: bool = False) -> dict:
+def _operation_sequence_assignment(
+    workspace: Path,
+    *,
+    omit_output: bool = False,
+    mismatched_observation: bool = False,
+) -> dict:
     skill = workspace / "skills" / "sequence_provider"
     handlers = skill / "handlers"
     handlers.mkdir(parents=True)
@@ -1618,7 +1623,11 @@ def _operation_sequence_assignment(workspace: Path, *, omit_output: bool = False
         "    path = Path(output_ref) / 'result.json'\n"
         "    raw = path.read_bytes()\n"
         "    digest = 'sha256:' + hashlib.sha256(raw).hexdigest()\n"
-        "    return {'complete': True, 'artifacts': [{'uri': str(path), 'digest': digest}]}\n"
+        f"    observed = {7 if mismatched_observation else 6}\n"
+        "    return {'complete': True, 'artifacts': [{'uri': str(path), 'digest': digest}], "
+        "'result': {'primary_metric': 6, 'evidence_class': 'workflow_smoke'}, "
+        "'observations': [{'metric': {'name': 'primary_metric'}, 'value': observed, "
+        "'evidence_role': 'workflow_smoke'}]}\n"
         "def verify(uri, digest):\n"
         "    path = Path(uri)\n"
         "    actual = 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest()\n"
@@ -1725,7 +1734,23 @@ def _operation_sequence_assignment(workspace: Path, *, omit_output: bool = False
                                 "$bind": {"step": "prepare", "pointer": "/output_ref"}
                             }
                         },
-                        "assert": [{"pointer": "/complete", "equals": True}],
+                        "assert": [
+                            {"pointer": "/complete", "equals": True},
+                            {
+                                "pointer": "/observations",
+                                "contains": [
+                                    {"pointer": "/metric/name", "equals": "primary_metric"},
+                                    {
+                                        "pointer": "/value",
+                                        "equals_root_pointer": "/result/primary_metric",
+                                    },
+                                    {
+                                        "pointer": "/evidence_role",
+                                        "equals_root_pointer": "/result/evidence_class",
+                                    },
+                                ],
+                            },
+                        ],
                     },
                     {
                         "id": "verify",
@@ -2096,6 +2121,33 @@ def test_worker_operation_sequence_detects_missing_execution_output(tmp_path: Pa
     assert checks == []
     assert len(errors) == 1
     assert "execution_spec omitted exact expected outputs: result.json" in errors[0]
+
+
+def test_worker_operation_sequence_enforces_cross_field_array_invariant(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assignment = _operation_sequence_assignment(workspace, mismatched_observation=True)
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    worker._validate_admitted_contract_operation_sequences(
+        assignment,
+        workspace,
+        runtime_dir=tmp_path / "runtime",
+        checks=checks,
+        errors=errors,
+    )
+
+    assert checks == []
+    assert len(errors) == 1
+    assert "contains no matching item" in errors[0]
 
 
 def test_worker_selects_newest_complete_contract_document_set(tmp_path: Path) -> None:

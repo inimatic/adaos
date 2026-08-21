@@ -131,16 +131,71 @@ def _tool_entries(manifest: Mapping[str, Any]) -> dict[str, tuple[str, str]]:
     return entries
 
 
+def _assertion_expected(root: Any, raw: Mapping[str, Any]) -> Any:
+    has_literal = "equals" in raw
+    has_pointer = "equals_root_pointer" in raw
+    if has_literal == has_pointer:
+        raise ContractSequenceError(
+            "assertion must contain exactly one of equals or equals_root_pointer"
+        )
+    if has_pointer:
+        return _json_pointer(root, str(raw["equals_root_pointer"] or ""))
+    return raw["equals"]
+
+
+def _scalar_assertion(step_id: str, root: Any, value: Any, raw: Mapping[str, Any]) -> None:
+    pointer = str(raw.get("pointer") or "")
+    actual = _json_pointer(value, pointer)
+    expected = _assertion_expected(root, raw)
+    if actual != expected:
+        raise ContractSequenceError(
+            f"step {step_id} assertion {pointer or '/'} expected "
+            f"{expected!r}, got {actual!r}"
+        )
+
+
 def _assertions(step_id: str, value: Any, assertions: Any) -> None:
-    for raw in assertions or []:
-        if not isinstance(raw, Mapping) or "equals" not in raw:
+    if assertions is None:
+        return
+    if not isinstance(assertions, list) or len(assertions) > 100:
+        raise ContractSequenceError(f"step {step_id} assertions must be an array of at most 100 items")
+    for raw in assertions:
+        if not isinstance(raw, Mapping):
             raise ContractSequenceError(f"step {step_id} has an invalid assertion")
-        pointer = str(raw.get("pointer") or "")
-        actual = _json_pointer(value, pointer)
-        if actual != raw["equals"]:
+        if "contains" not in raw:
+            _scalar_assertion(step_id, value, value, raw)
+            continue
+        if "equals" in raw or "equals_root_pointer" in raw:
             raise ContractSequenceError(
-                f"step {step_id} assertion {pointer or '/'} expected "
-                f"{raw['equals']!r}, got {actual!r}"
+                f"step {step_id} contains assertion cannot also compare its selected array"
+            )
+        pointer = str(raw.get("pointer") or "")
+        selected = _json_pointer(value, pointer)
+        clauses = raw["contains"]
+        if not isinstance(selected, list):
+            raise ContractSequenceError(
+                f"step {step_id} contains assertion {pointer or '/'} did not select an array"
+            )
+        if not isinstance(clauses, list) or not clauses or len(clauses) > 20:
+            raise ContractSequenceError(
+                f"step {step_id} contains assertion requires 1..20 comparison clauses"
+            )
+        if any(not isinstance(clause, Mapping) or "contains" in clause for clause in clauses):
+            raise ContractSequenceError(
+                f"step {step_id} contains assertion has an invalid comparison clause"
+            )
+        matched = False
+        for item in selected[:1000]:
+            try:
+                for clause in clauses:
+                    _scalar_assertion(step_id, value, item, clause)
+            except ContractSequenceError:
+                continue
+            matched = True
+            break
+        if not matched:
+            raise ContractSequenceError(
+                f"step {step_id} assertion {pointer or '/'} contains no matching item"
             )
 
 
