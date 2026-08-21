@@ -373,6 +373,38 @@ def test_service_supervisor_start_all_attributes_each_service_result(monkeypatch
     assert any("service skill startup summary attempted=2 failed=1" in line for line in logged)
 
 
+def test_service_supervisor_starts_distributed_memberships_first():
+    from adaos.services.skill import service_supervisor as mod
+
+    supervisor = mod.ServiceSkillSupervisor()
+    calls: list[str] = []
+
+    async def _refresh_discovered(*, force: bool = False) -> None:  # noqa: ARG001
+        return None
+
+    async def _ensure_started(name, spec, *, force: bool) -> None:  # noqa: ANN001, ARG001
+        calls.append(name)
+
+    supervisor._specs = {  # type: ignore[assignment]
+        "optional_service": SimpleNamespace(distributed_membership=None),
+        "topology_agent": SimpleNamespace(distributed_membership=object()),
+        "second_optional_service": SimpleNamespace(distributed_membership=None),
+    }
+    supervisor.refresh_discovered = _refresh_discovered  # type: ignore[method-assign]
+    supervisor.ensure_started = _ensure_started  # type: ignore[method-assign]
+    supervisor._ensure_health_task = lambda: calls.append("membership_health")  # type: ignore[method-assign]
+    supervisor._ensure_background_tasks = lambda: None  # type: ignore[method-assign]
+
+    asyncio.run(supervisor.start_all())
+
+    assert calls == [
+        "topology_agent",
+        "membership_health",
+        "optional_service",
+        "second_optional_service",
+    ]
+
+
 def test_get_service_supervisor_replaces_shutdown_singleton(monkeypatch):
     from adaos.services.skill import service_supervisor as mod
 

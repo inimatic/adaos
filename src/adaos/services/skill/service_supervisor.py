@@ -1422,7 +1422,18 @@ class ServiceSkillSupervisor:
         await self.refresh_discovered(force=True)
         attempted = 0
         failed: list[str] = []
-        for name, spec in list(self._specs.items()):
+        specs = list(self._specs.items())
+        specs.sort(
+            key=lambda item: 0
+            if getattr(item[1], "distributed_membership", None) is not None
+            else 1
+        )
+        distributed_remaining = sum(
+            1
+            for _, spec in specs
+            if getattr(spec, "distributed_membership", None) is not None
+        )
+        for name, spec in specs:
             if self._shutdown_requested:
                 return
             attempted += 1
@@ -1445,6 +1456,10 @@ class ServiceSkillSupervisor:
                     service_status,
                     time.perf_counter() - service_started_at,
                 )
+                if getattr(spec, "distributed_membership", None) is not None:
+                    distributed_remaining -= 1
+                    if distributed_remaining == 0:
+                        self._ensure_health_task()
 
         self._ensure_background_tasks()
         _log.log(
@@ -1769,6 +1784,11 @@ class ServiceSkillSupervisor:
             return
         if self._task is None:
             self._task = asyncio.create_task(self._watchdog_loop(), name="adaos-skill-service-watchdog")
+        self._ensure_health_task()
+
+    def _ensure_health_task(self) -> None:
+        if self._shutdown_requested:
+            return
         if self._health_task is None:
             self._health_task = asyncio.create_task(self._health_loop(), name="adaos-skill-service-health")
 

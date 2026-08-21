@@ -28,6 +28,52 @@ def _deferred_service_skills_delay_s() -> float:
     return max(0.5, min(value, 300.0))
 
 
+async def _start_services_before_managed_nlu(
+    *,
+    state: Any,
+    start_service_skills: Any,
+    ensure_managed_nlu_service_skills: Any,
+    log: logging.Logger,
+) -> None:
+    # Distributed and other already-installed services must not wait for an
+    # optional model install or dependency repair on a slow node.
+    await start_service_skills("post_ready_start_service_skills")
+
+    install_started_at = time.time()
+    state.managed_nlu_install_status = {
+        "state": "running",
+        "started_at": install_started_at,
+        "updated_at": install_started_at,
+    }
+    try:
+        install_result = await asyncio.to_thread(ensure_managed_nlu_service_skills, log)
+        install_payload = install_result if isinstance(install_result, dict) else {"ok": True}
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        log.warning("failed to ensure managed NLU service skills", exc_info=True)
+        install_payload = {
+            "ok": False,
+            "enabled": True,
+            "installed": False,
+            "error_type": type(exc).__name__,
+        }
+
+    completed_at = time.time()
+    state.managed_nlu_install_status = {
+        "state": "ready" if bool(install_payload.get("ok")) else "failed",
+        "started_at": install_started_at,
+        "completed_at": completed_at,
+        "elapsed_s": round(max(0.0, completed_at - install_started_at), 3),
+        "enabled": install_payload.get("enabled"),
+        "installed": install_payload.get("installed"),
+        "error_type": install_payload.get("error_type"),
+        "updated_at": completed_at,
+    }
+    if bool(install_payload.get("enabled")) and bool(install_payload.get("installed")):
+        await start_service_skills("post_managed_nlu_start_service_skills")
+
+
 @dataclass(frozen=True, slots=True)
 class BootstrapBootOperations:
     bus: Any
@@ -152,25 +198,12 @@ class BootstrapBootCoordinator:
             # Let the ASGI lifespan return and bind the listener before any
             # external process discovery competes for CPU or disk.
             await asyncio.sleep(_deferred_service_skills_delay_s())
-            install_started_at = time.time()
-            app.state.managed_nlu_install_status = {
-                "state": "running",
-                "started_at": install_started_at,
-                "updated_at": install_started_at,
-            }
-            install_result = await asyncio.to_thread(operations.ensure_managed_nlu_service_skills, service._log)
-            install_payload = install_result if isinstance(install_result, dict) else {"ok": True}
-            app.state.managed_nlu_install_status = {
-                "state": "ready" if bool(install_payload.get("ok")) else "failed",
-                "started_at": install_started_at,
-                "completed_at": time.time(),
-                "elapsed_s": round(max(0.0, time.time() - install_started_at), 3),
-                "enabled": install_payload.get("enabled"),
-                "installed": install_payload.get("installed"),
-                "error_type": install_payload.get("error_type"),
-                "updated_at": time.time(),
-            }
-            await _start_service_skills("post_ready_start_service_skills")
+            await _start_services_before_managed_nlu(
+                state=app.state,
+                start_service_skills=_start_service_skills,
+                ensure_managed_nlu_service_skills=operations.ensure_managed_nlu_service_skills,
+                log=service._log,
+            )
 
         async def _run_release_validation_autorun(trigger: str) -> None:
             try:
