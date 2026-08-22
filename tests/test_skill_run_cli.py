@@ -17,6 +17,11 @@ def test_skill_run_accepts_utf8_json_file(tmp_path, monkeypatch) -> None:
     calls: list[tuple[object, ...]] = []
     monkeypatch.setattr(
         skill_cmd,
+        "_configure_skill_run_sdk_runtimes",
+        lambda: calls.append(("configure_sdk",)),
+    )
+    monkeypatch.setattr(
+        skill_cmd,
         "_mgr",
         lambda: SimpleNamespace(
             run_tool=lambda name, tool, payload, timeout=None: calls.append((name, tool, payload, timeout))
@@ -32,6 +37,7 @@ def test_skill_run_accepts_utf8_json_file(tmp_path, monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert json.loads(result.output) == {"ok": True}
     assert calls == [
+        ("configure_sdk",),
         (
             "research_orchestrator_skill",
             "chat",

@@ -593,6 +593,14 @@ def _mgr() -> SkillManager:
     return SkillManager(repo=repo, registry=reg, git=ctx.git, paths=ctx.paths, bus=getattr(ctx, "bus", None), caps=ctx.caps)
 
 
+def _configure_skill_run_sdk_runtimes() -> None:
+    from adaos.services.project_deployment.default_runtime import (
+        configure_default_distributed_runtimes,
+    )
+
+    configure_default_distributed_runtimes(get_ctx())
+
+
 def _hub_base_url() -> str:
     # Skill operations are node-local even on member nodes, so prefer the
     # local control API over the durable member->hub rendezvous URL.
@@ -1681,6 +1689,7 @@ def run_tool(
         typer.secho(f"invalid payload: {exc}", fg=typer.colors.RED)
         raise typer.Exit(1)
 
+    _configure_skill_run_sdk_runtimes()
     mgr = _mgr()
     try:
         result = mgr.run_tool(name, tool, payload_obj, timeout=timeout)
