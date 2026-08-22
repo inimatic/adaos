@@ -391,6 +391,35 @@ def test_missing_declared_service_is_not_accepted_as_non_service(
     }
 
 
+def test_in_process_skill_status_does_not_run_service_discovery(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    skill_root = tmp_path / "skills" / "media_center_skill"
+    skill_root.mkdir(parents=True)
+    (skill_root / "skill.yaml").write_text(
+        "name: media_center_skill\nversion: 1.0.0\nruntime:\n  python: '3.11'\n",
+        encoding="utf-8",
+    )
+    hooks = AdaOSComponentLifecycleHooks(
+        SimpleNamespace(paths=SimpleNamespace(skills_dir=lambda: tmp_path / "skills"))
+    )
+
+    from adaos.services.skill import service_supervisor
+
+    monkeypatch.setattr(
+        service_supervisor,
+        "get_service_supervisor",
+        lambda: pytest.fail("in-process skills must not run service discovery"),
+    )
+
+    assert hooks._service_activation_status("media_center_skill") == {
+        "managed": False,
+        "ready": True,
+        "reason": "not_a_service_skill",
+    }
+
+
 def test_skill_health_requires_exact_activated_package_manifest(monkeypatch) -> None:
     expected = "sha256:" + "a" * 64
 

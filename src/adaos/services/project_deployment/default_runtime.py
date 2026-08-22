@@ -270,17 +270,23 @@ class AdaOSComponentLifecycleHooks:
         return isinstance(runtime, Mapping) and runtime.get("kind") == "service"
 
     def _service_activation_status(self, component_id: str) -> dict[str, Any]:
+        if not self._workspace_skill_requires_service(component_id):
+            return {
+                "managed": False,
+                "ready": True,
+                "reason": "not_a_service_skill",
+            }
+
         from adaos.services.skill.service_supervisor import get_service_supervisor
 
         supervisor = get_service_supervisor()
         supervisor.ensure_discovered(force=True)
         status = supervisor.status(component_id, check_health=True)
         if status is None:
-            service_required = self._workspace_skill_requires_service(component_id)
             return {
-                "managed": service_required,
-                "ready": not service_required,
-                "reason": "service_not_discovered" if service_required else "not_a_service_skill",
+                "managed": True,
+                "ready": False,
+                "reason": "service_not_discovered",
             }
         process_ready = bool(
             (status.get("running") and status.get("process_spec_matches"))
