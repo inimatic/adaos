@@ -278,6 +278,20 @@ Incompatible definitions continued to fail before mutation under the existing
 conformance matrix. The stand receipt retains the exact sequence and open
 production gates.
 
+The exact operator lifecycle slice was subsequently completed. The member was
+drained and its exact activation removed by durable operations
+`deploymentop.01M0ME88HHV3VA46VA97F2AGXA` and
+`deploymentop.01M0ME8TR124KFGA7DJAWBPFWA`; the receipt retained external data.
+Deployment revision `49` and operation
+`deploymentop.01M0MEAH08T72VGSX8174PK1Q9` restored exact agent `0.6.20` as
+activation `activation.c93de6188890381ddaf47a7251993c9e`. Core `0.1.926`
+(`10cb9d9a`) then reached both nodes and automatically readmitted the same
+stable member instance under definition v21 and generation `19`. Both exact
+instances were ready, topology inspection was non-partial, the source
+size/mtime/inode witness was unchanged and range playback remained `206`.
+This closes the drain/remove/restore portion of `DS5-05`; the exact security
+matrix, Android TV soak and final production decision remain open.
+
 ## Evidence Policy
 
 - Every implementation checkbox links exact core/client/consumer revisions and

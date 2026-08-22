@@ -11,7 +11,7 @@ does not authorize cross-subnet placement or a general multi-writer profile.
 
 | Surface | Candidate | Review boundary |
 | --- | --- | --- |
-| AdaOS core | `rev2026` through `0.1.925` (`a3559e14`) | service definition v2, exact release overlap, membership, fencing, routes, transfer and deployment control |
+| AdaOS core | `rev2026` through `0.1.926` (`10cb9d9a`) | service definition v2, exact release overlap, membership, replacement readmission, fencing, routes, transfer and deployment control |
 | Media Center Project | `0.6.45` at registry `7119aabac4b74e055755ddff4b6f19175a6efb16`; release `sha256:4bd827fd9f819107c1d20d85dc13d31b4ce5f0f75f18f57a5238a596ec8ddfe0` | representative coordinator plus node-local agents and retained external media |
 | Deployment scope | two trusted physical nodes in one subnet | selected-node staged rollout; separate TV/controller presentations |
 
@@ -48,9 +48,12 @@ deployment revision `48` and operation
 `0.6.20`. Definition v20 removed the old digest only after both physical
 generation-18 instances were ready on release
 `sha256:4bd827fd9f819107c1d20d85dc13d31b4ce5f0f75f18f57a5238a596ec8ddfe0`.
-Topology inspection was non-partial. This closes the compatible rolling-release
-gate and `DS5-04`; it does not substitute for the exact-candidate rejection,
-drain/remove, browser or soak gates below.
+Topology inspection was non-partial. The later revision-49
+drain/remove/restore run replaced the member activation, retained external
+media and returned both exact instances to ready under definition v21 and
+generation `19`. This closes the compatible rolling-release gate and
+`DS5-04`; it does not substitute for the remaining exact-candidate rejection,
+browser or soak gates below.
 
 ## Security Review
 
@@ -83,9 +86,11 @@ drain/remove, browser or soak gates below.
   deferred. Their threat and conflict models are not inherited from the
   trusted-subnet pilot.
 
-Open security proof: repeat incompatible-release, stale epoch, expired lease,
-revoked instance and unauthorized retention mutation rejection against the
-exact published candidate on the stand. Export sanitized receipts.
+Exact-candidate incompatible-release admission was rejected before mutation,
+and the active definition/group remained v21/generation `19`. Open security
+proof: repeat stale epoch, expired lease, revoked instance and unauthorized
+retention mutation rejection against the exact published candidate on the
+stand, then export sanitized receipts.
 
 ## Privacy And Retention Review
 
@@ -104,10 +109,12 @@ exact published candidate on the stand. Export sanitized receipts.
   expose byte counts, checkpoints, hashes, retries and phases, but never payload
   contents or credentials.
 
-Open privacy proof: after staged update, drain and removal, record filesystem
-and catalog witnesses showing retained external source bytes, the reviewed
-replica/derived-data decision and absence of source paths in exported
-diagnostics.
+The exact drain/remove/restore run recorded `external_data=retained`; source
+size `57387298`, mtime `1150860693` and inode `89788` were unchanged, member
+storage remained `external_reference` with `media_bytes_copied=false`, and
+range playback still returned `206`. Open privacy proof is narrowed to the
+reviewed replica/derived-data cleanup decision and confirmation that exported
+diagnostics contain no source paths.
 
 ## Resource And Soak Review
 
@@ -193,10 +200,10 @@ definition version, authority epoch or checkpoint cannot be established.
 | --- | --- | --- |
 | Compatible rolling release | normal ProjectRelease rollout on two physical nodes; old route retained; all live memberships converge; overlap then removed | accepted on exact `0.6.45`, operation `deploymentop.01M0MCVXNM45RR6Q5Q8MCCFSHJ` |
 | Failure and recovery | planned handoff, unplanned authority loss, stale owner rejection and retained checkpoint on exact candidate | repeat on candidate |
-| Security/privacy | rejection matrix plus sanitized export and retained external-data witness | open |
+| Security/privacy | rejection matrix plus sanitized export and retained external-data witness | external retention and incompatible release accepted; remaining rejection/export matrix open |
 | Resource/soak | passing server and Android TV one-hour gates plus update-under-playback QoE/I/O | server passed; TV/update proof open |
 | Product E2E | separate TV and authorized controller with Now Playing, D-pad/touch, reconnect/resume, i18n and screenshots | open |
-| Operator recovery | runbook executed by operation ids with route/checkpoint evidence and reviewed rollback result | open |
+| Operator recovery | runbook executed by operation ids with route/checkpoint evidence and reviewed rollback result | drain/remove/restore accepted; authority rollback/recovery review open |
 
 Production remains rejected while any row is open. Passing contract tests or a
 single successful deployment cannot change this decision by implication.

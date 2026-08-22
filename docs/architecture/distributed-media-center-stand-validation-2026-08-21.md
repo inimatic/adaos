@@ -19,7 +19,7 @@ does not treat a successful stand run as production acceptance.
 | Media Center registry | `eb3d2ab` | follower snapshots cannot replace the authority checkpoint; promoted authority can recover from persisted replica state |
 | AdaOS client | `7647943` | a confirmed hub/subnet zone overrides and removes a stale URL `zone` hint |
 | Media Center Project | `0.6.37`, release `sha256:e13832e3cb77b20e110f249c12d5f0d9fc46974696757bcf9e6d62b6e6bd402a` | exact immutable scenario and four-skill compatibility closure |
-| AdaOS core | `0.1.925`, `a3559e14` | remote activation diagnostics, stale-candidate preparation identity and practical ordinary-wheel disk admission |
+| AdaOS core | `0.1.926`, `10cb9d9a` | remote activation diagnostics, practical ordinary-wheel disk admission and drained-instance readmission after replacement |
 | Media Center Project | `0.6.45`, release `sha256:4bd827fd9f819107c1d20d85dc13d31b4ce5f0f75f18f57a5238a596ec8ddfe0` | exact two-node compatible rolling release and exact-only topology convergence |
 
 The Project release was built twice from registry revision
@@ -164,6 +164,40 @@ reported `artwork_not_found`, while video-frame fallback reported
 `artwork_video_backend_unavailable` because ffmpeg is absent on this stand.
 Those are truthful provider limitations, not successful artwork coverage.
 
+## Exact Operator Lifecycle Addendum - 2026-08-22
+
+The exact candidate also completed a destructive-control-plane lifecycle while
+preserving external media:
+
+1. Member instance `service-af4aa981321519b6bfaf2f50f74a` was moved to
+   `draining` by compare-and-switch at topology revision `30`.
+2. Deployment operation `deploymentop.01M0ME88HHV3VA46VA97F2AGXA` cordoned
+   and drained member activation
+   `activation.71c96bf7af8bf4efb50f646d113d3a7e`; operation
+   `deploymentop.01M0ME8TR124KFGA7DJAWBPFWA` then deactivated and removed it.
+   The removal receipt explicitly reported `external_data=retained`.
+3. Deployment revision `49`, plan
+   `sha256:3982f0aeb5d08ade69b0dfea10b57b17005e4e907f2914a446fe538b295b8cc9`
+   and operation `deploymentop.01M0MEAH08T72VGSX8174PK1Q9` restored exact
+   agent `0.6.20` as activation
+   `activation.c93de6188890381ddaf47a7251993c9e` through all installation and
+   service-health phases.
+4. Definition v21 and group generation `19` retained exact-only release
+   admission. Core `0.1.926` (`10cb9d9a`) fixed the generic lifecycle rule so
+   a replacement activation can readmit the same stable instance id after the
+   previous activation was drained. Both nodes updated through the normal
+   hub/member update path, and the member automatically returned to `ready`
+   with its new activation and lease. Inspection with a bounded limit of 100
+   reported both exact instances ready and `partial=false`.
+
+Before removal and after restoration, the original source witness remained
+size `57387298`, mtime `1150860693` and inode `89788`. A non-leading range read
+still returned `206 audio/mpeg` with the expected total size. The restored
+member reported `storage.mode=external_reference` and
+`media_bytes_copied=false`; catalog participation reported both agents fresh,
+and filename search for `PART006` still returned the original item. No source
+file was copied into AdaOS state or removed by component lifecycle operations.
+
 ## Defects Found And Closed
 
 1. Expired authority leases previously reset observed epoch to zero during
@@ -179,6 +213,11 @@ Those are truthful provider limitations, not successful artwork coverage.
 4. Windows readers could receive a transient `PermissionError` while a
    deployment operation journal was atomically replaced. The store retries only
    bounded sharing violations; malformed JSON still fails immediately.
+5. A stable instance that had been explicitly drained stayed draining after a
+   replacement activation and topology generation were ready. Core now
+   preserves drain only for the same activation, release and generations, and
+   readmits a replacement through the ordinary compare-and-switch registration
+   path. The focused suite proves both preservation and replacement behavior.
 
 ## Local And CI Evidence
 
@@ -191,6 +230,8 @@ Those are truthful provider limitations, not successful artwork coverage.
 - Firebase/client CI for the zone fix: run `32450364469`, succeeded.
 - Core ordinary-dependency disk admission: `22` focused tests and Ruff passed;
   AdaOS CI run `32564373453` succeeded and published `0.1.925`.
+- Drained-instance replacement: `33` focused core tests and Ruff passed; AdaOS
+  CI run `32566490113` succeeded and published `0.1.926` to both stand nodes.
 
 ## Open Gates
 
@@ -198,9 +239,10 @@ Those are truthful provider limitations, not successful artwork coverage.
    screenshots, D-pad/touch control, reconnect and resume (`MC7-08`).
 2. Long playback-under-indexing, browser render, CPU/RSS and Yjs pressure soak
    remains open (`MC7-07`, `DS5-05`).
-3. Repeat the exact-candidate security/privacy rejection matrix and execute the
-   operator drain/remove runbook with explicit retention receipts (`DS5-05`,
-   `AP8-12`).
+3. Complete the remaining exact-candidate stale-epoch, expired-lease, revoked
+   instance and unauthorized-retention rejection matrix, plus sanitized export
+   review (`DS5-05`). Incompatible release rejection and the operator
+   drain/remove/restore retention slice are now recorded.
 4. Automatic authority election, cross-subnet placement and native mobile
    background playback remain deferred by their roadmaps.
 

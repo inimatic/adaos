@@ -465,9 +465,13 @@ injection, resource budgets, and a reviewed production decision.
   exact stand deployment is now complete. Deployment revision `48` and
   operation `deploymentop.01M0MCVXNM45RR6Q5Q8MCCFSHJ` converged the hub and
   member to exact release `0.6.45`; topology definition v20 removed the old
-  compatibility digest after both generation-18 instances were ready. Separate
-  TV/controller browser interaction, screenshots and long reconnect playback
-  evidence remain open, so the task is not closed.
+  compatibility digest after both generation-18 instances were ready. A later
+  drain/remove/restore used deployment revision `49` and operation
+  `deploymentop.01M0MEAH08T72VGSX8174PK1Q9`; definition v21/generation `19`
+  returned both exact instances to ready with retained external media and
+  working range playback. Separate TV/controller browser interaction,
+  screenshots and long reconnect playback evidence remain open, so the task
+  is not closed.
 - [x] `[must]` `MC7-09` Perform security/privacy review for remote deployment,
   root containment, route grants, provider egress, shared-screen state, voice,
   logs, derived data and uninstall retention.
