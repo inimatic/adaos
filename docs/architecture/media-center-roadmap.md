@@ -110,7 +110,7 @@ cyclic action signatures. Targeted tests, a Node 24 production build, 50 local
 and 100 published open/close cycles remained responsive. This is implementation
 and desktop-browser evidence for `MC8-07`/`MC8-11`, not Android TV acceptance.
 
-Local candidate `0.6.52` at registry revision
+Release `0.6.52` at registry revision
 `84914f30b37d3b9c59e34603e7b98b53a5325481` has release digest
 `sha256:895afd1dc002a57bfcdac6ffedd85af733f98847e1a262109537dbbf344f9165`.
 It suppresses unchanged idle catalog publications, starts personal shelves from
@@ -121,8 +121,15 @@ folders-first drill-down. The enforced 20,000-item gate recorded Home p95
 could repeatedly re-register an already attached mini-player and publish a new
 snapshot forever. Client `cab3ffb` adds generic typed collection selection so
 the UI-as-data scenario can navigate folders without Media Center logic in the
-renderer. These are local candidate facts until the exact release and client
-bundle are exercised on the stand.
+renderer. Deployment operation `deploymentop.01M0NTQ6YVAX4FJ18VGJ7825KA`
+installed the exact release on both `.30` nodes. Published client `3f97355`
+then completed Movies/List/Harry-Potter open, scroll and close with one shell
+media element, `readyState=4` and event-loop p95 of 6 ms; Folders drilled into
+`!Audiobooks` without opening playback. Range delivery returned 206 from the
+original `/mnt/disk1` file with `storage_mode=reference`. This validates the
+desktop playback/folder slice on the stand, not Android TV or cross-surface
+acceptance. Client `bdb0ab0` locally adds idempotent buffering-event publication
+and 13 passing focused tests.
 
 ## Dependency Order
 

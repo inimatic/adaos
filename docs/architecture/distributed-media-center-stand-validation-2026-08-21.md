@@ -362,9 +362,55 @@ Client `0b6649a` makes mini-player host attachment idempotent and prevents the
 hard snapshot loop observed after open, scroll and close. Its focused playback
 and list suites passed 51 tests and the Node 24 production build succeeded.
 Client `cab3ffb` supplies typed declarative list selection for folders versus
-files. Stand deployment, real playback close/open-second, idle CPU, folder
-navigation and Android TV responsiveness remain to be recorded below this
-local checkpoint.
+files. Client `bdb0ab0` additionally coalesces repeated native `waiting` and
+`stalled` events while playback is already buffering; the focused coordinator
+and transition-overlay suite passed 13 tests.
+
+## Exact 0.6.52 Stand Rollout And Browser Reproduction - 2026-08-23
+
+Deployment revision `58`, plan
+`sha256:a7009daf9b0a922af2ee85b3463bd2b8eac48d12527e8d2b7bc47db8dcaf4133`
+and operation `deploymentop.01M0NTQ6YVAX4FJ18VGJ7825KA` converged both
+physical nodes with `state=succeeded` and `uncertain=false`. The installed
+packages exactly matched Project `0.6.52`: scenario `0.6.13`
+(`sha256:b5088ee429e5b408030dcda1d0b7aaa3c87ce38ef22f8e4f8191d58962055c8c`),
+coordinator `0.8.45`
+(`sha256:0d8454caf0d0a2903cd7ff3628bb3c700a700c94141504079a57c1e2697db89a`),
+control `0.2.4`
+(`sha256:d31dccec62c16900ee90d3ddd1214083a9a521c5e9029fec23eacc7cbabce122`)
+and agent `0.6.26`
+(`sha256:259a5c90c529b379da6f80f5edf82977cf2d4aec2e464ec657c6ae55f5d4b989`).
+
+The coordinator activation took 130.779 seconds because its one-time
+`2026-08-23.1` SQLite migration built folder/profile indexes over a 1.16 GB
+catalog on the slow stand disk. The runtime stayed responsive, the operation
+completed, and subsequent activation phases were normal. Lifecycle migrations
+still need explicit progress/heartbeat evidence so a long but advancing index
+build is distinguishable from a stuck activation.
+
+Published client build `3f97355` reproduced the reported desktop path on a
+fresh Chrome renderer: Movies, List, `Harry Potter`, open, scroll and close.
+The modal opened in 1.151 seconds; after close exactly one media element was
+owned by the shell mini-player, `readyState=4`, and event-loop delay p95 was
+6 ms. A second interaction navigated Folders to `!Audiobooks`; breadcrumbs and
+seven child folders changed without opening a playback modal. The root folder
+view remained cursor-backed at 30 rows and reported page `1 / 178`.
+
+The Harry Potter resource returned `206 Partial Content` for bytes `0-1023`
+of `8,804,736,172` with `video/x-matroska`. Its catalog descriptor retained
+`storage_mode=reference` and resolved to the original
+`/mnt/disk1/Video/share/!Nina/Harry Potter/Harry.Potter.and.the.Prisoner.of.Azkaban.2004.Extended.WEB-DL.1080p.mkv`
+path (folder names transliterated here for a stable ASCII evidence record).
+The only files above 100 MB in Media Center runtime storage were the 1.16 GB
+coordinator and 704 MB agent SQLite databases; no media payload was copied into
+`.adaos`.
+
+Two Chrome tabs that had entered the pre-fix renderer loop could not execute a
+bounded CDP expression and had to be closed. A fresh tab loaded build
+`3f97355`, remained responsive through the exact reproduction above, and is
+the accepted desktop evidence. Existing hung documents cannot hot-recover to a
+new JavaScript bundle. Representative Android TV responsiveness and the
+one-hour playback/indexing/reconnect soak remain open acceptance gates.
 
 ## Update Duration Note
 
