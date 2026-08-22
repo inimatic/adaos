@@ -134,9 +134,12 @@ def dependency_disk_budget_bytes(args: Iterable[str], *, has_requirements_file: 
     if dependency_args_contain_heavy_packages(specs):
         return _env_bytes("ADAOS_SKILL_DEP_DISK_HEAVY_FREE_GIB", 12.0)
 
-    base = _env_bytes("ADAOS_SKILL_DEP_DISK_BASE_FREE_GIB", 2.0)
-    per_spec = _env_bytes("ADAOS_SKILL_DEP_DISK_PER_SPEC_GIB", 1.0)
-    req_file = _env_bytes("ADAOS_SKILL_DEP_DISK_REQUIREMENTS_GIB", 4.0) if has_requirements_file else 0
+    # Ordinary wheel installs are bounded by a modest operational reserve plus
+    # per-package workspace. Heavy/native stacks keep their separate strict
+    # threshold above because their unpacked artifacts can consume many GiB.
+    base = _env_bytes("ADAOS_SKILL_DEP_DISK_BASE_FREE_GIB", 0.5)
+    per_spec = _env_bytes("ADAOS_SKILL_DEP_DISK_PER_SPEC_GIB", 0.25)
+    req_file = _env_bytes("ADAOS_SKILL_DEP_DISK_REQUIREMENTS_GIB", 2.0) if has_requirements_file else 0
     return base + per_spec * len(specs) + req_file
 
 

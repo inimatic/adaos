@@ -45,14 +45,35 @@ def test_dependency_disk_guard_can_be_disabled(monkeypatch, tmp_path):
 
 
 def test_dependency_disk_budget_counts_specs_not_pip_flags(monkeypatch):
-    monkeypatch.delenv("ADAOS_SKILL_DEP_DISK_HEAVY_FREE_GIB", raising=False)
+    monkeypatch.delenv("ADAOS_SKILL_DEP_DISK_BASE_FREE_GIB", raising=False)
+    monkeypatch.delenv("ADAOS_SKILL_DEP_DISK_PER_SPEC_GIB", raising=False)
+    monkeypatch.delenv("ADAOS_SKILL_DEP_DISK_REQUIREMENTS_GIB", raising=False)
 
     required = guard.dependency_disk_budget_bytes(
         ["-r", "requirements.in", "--no-deps", "tiny-lib==1.0"],
         has_requirements_file=True,
     )
 
-    assert required == 7 * 1024 * 1024 * 1024
+    assert required == int(2.75 * 1024 * 1024 * 1024)
+
+
+def test_dependency_disk_budget_keeps_ordinary_wheels_practical(monkeypatch):
+    monkeypatch.delenv("ADAOS_SKILL_DEP_DISK_BASE_FREE_GIB", raising=False)
+    monkeypatch.delenv("ADAOS_SKILL_DEP_DISK_PER_SPEC_GIB", raising=False)
+
+    required = guard.dependency_disk_budget_bytes(["pillow>=10.0.0", "mutagen>=1.47.0"])
+
+    assert required == 1024 * 1024 * 1024
+
+
+def test_dependency_disk_budget_allows_operator_thresholds(monkeypatch):
+    monkeypatch.setenv("ADAOS_SKILL_DEP_DISK_BASE_FREE_GIB", "1.25")
+    monkeypatch.setenv("ADAOS_SKILL_DEP_DISK_PER_SPEC_GIB", "0.5")
+    monkeypatch.setenv("ADAOS_SKILL_DEP_DISK_REQUIREMENTS_GIB", "3")
+
+    required = guard.dependency_disk_budget_bytes(["small-a", "small-b"], has_requirements_file=True)
+
+    assert required == int(5.25 * 1024 * 1024 * 1024)
 
 
 def test_heavy_dependency_detection_uses_package_names_not_substrings():
