@@ -362,7 +362,7 @@ Client `0b6649a` makes mini-player host attachment idempotent and prevents the
 hard snapshot loop observed after open, scroll and close. Its focused playback
 and list suites passed 51 tests and the Node 24 production build succeeded.
 Client `cab3ffb` supplies typed declarative list selection for folders versus
-files. Client `bdb0ab0` additionally coalesces repeated native `waiting` and
+files. Client `3bb15f3` additionally coalesces repeated native `waiting` and
 `stalled` events while playback is already buffering; the focused coordinator
 and transition-overlay suite passed 13 tests.
 
