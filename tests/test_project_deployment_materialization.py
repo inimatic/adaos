@@ -10,6 +10,7 @@ from adaos.services.artifact_pipeline.packages import (
     build_artifact_package,
 )
 from adaos.services.project_deployment.materialization import (
+    active_project_component,
     restore_project_owned_materializations,
 )
 from adaos.services.project_deployment.store import ProjectDeploymentStore
@@ -86,3 +87,5 @@ def test_restore_project_owned_materialization_removes_workspace_sync_drift(
     assert not restored_test.exists()
     assert second["ok"] is True
     assert second["repaired"] == []
+    assert active_project_component(ctx, "scenario:media_center") is True
+    assert active_project_component(ctx, "skill:media_center_skill") is False
