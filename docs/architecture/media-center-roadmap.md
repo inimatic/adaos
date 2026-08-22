@@ -128,8 +128,11 @@ media element, `readyState=4` and event-loop p95 of 6 ms; Folders drilled into
 `!Audiobooks` without opening playback. Range delivery returned 206 from the
 original `/mnt/disk1` file with `storage_mode=reference`. This validates the
 desktop playback/folder slice on the stand, not Android TV or cross-surface
-acceptance. Client `3bb15f3` locally adds idempotent buffering-event publication
-and 13 passing focused tests.
+acceptance. Client `3bb15f3` adds idempotent buffering-event publication and 13
+passing focused tests. Published release `0.0.367` (build `474b3b6`) repeated
+the same open, scroll and close path with one mini-player media element,
+`readyState=4`, and event-loop p95/max of 2.1 ms. GitHub Actions run
+`32605061308` built and deployed it successfully on Node 24 actions.
 
 ## Dependency Order
 

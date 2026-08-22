@@ -364,7 +364,10 @@ and list suites passed 51 tests and the Node 24 production build succeeded.
 Client `cab3ffb` supplies typed declarative list selection for folders versus
 files. Client `3bb15f3` additionally coalesces repeated native `waiting` and
 `stalled` events while playback is already buffering; the focused coordinator
-and transition-overlay suite passed 13 tests.
+and transition-overlay suite passed 13 tests. Client release `0.0.367` (build
+`474b3b6`, containing `3bb15f3`) was built and deployed by GitHub Actions run
+`32605061308`; both version bump and Firebase deployment completed successfully
+with the workflow actions running on Node 24.
 
 ## Exact 0.6.52 Stand Rollout And Browser Reproduction - 2026-08-23
 
@@ -411,6 +414,13 @@ bounded CDP expression and had to be closed. A fresh tab loaded build
 the accepted desktop evidence. Existing hung documents cannot hot-recover to a
 new JavaScript bundle. Representative Android TV responsiveness and the
 one-hour playback/indexing/reconnect soak remain open acceptance gates.
+
+After release `0.0.367` reached production, a second fresh Chrome renderer
+repeated Movies, List, `Harry Potter`, open, scroll and close. The modal closed,
+the single media element moved to `data-playback-view=mini` with `readyState=4`,
+and a 20-sample timer probe recorded event-loop delay p95/max of 2.1 ms. This
+also exercised the loading/buffering transition path and found no informer
+writeback loop.
 
 ## Update Duration Note
 
