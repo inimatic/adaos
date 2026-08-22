@@ -309,7 +309,15 @@ class DistributedServiceMembershipSupervisor:
             skill_name=skill_name,
             activation_id=activation.activation_id,
         )
-        if current is not None and current.status == "draining":
+        draining_selection_unchanged = (
+            current is not None
+            and current.status == "draining"
+            and current.activation_id == activation.activation_id
+            and current.release_digest == activation.release_digest
+            and current.runtime_generation == activation.generation
+            and current.topology_generation == group.desired_generation
+        )
+        if draining_selection_unchanged:
             return {
                 "enabled": True,
                 "ok": True,
