@@ -178,6 +178,81 @@ def _read(path: Path) -> dict[str, Any]:
     return dict(payload)
 
 
+def _file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def verify_materialized_component_target(
+    package_store: ContentAddressedPackageStore,
+    package: ArtifactPackageRef,
+    target: Path,
+) -> Mapping[str, Any]:
+    verified = package_store.verify(package.digest)
+    if verified.ref != package:
+        raise ProjectDeploymentExecutionError(
+            "materialized component package identity mismatch"
+        )
+    if not target.is_dir():
+        raise ProjectDeploymentExecutionError(
+            "observed component materialization is missing"
+        )
+    raw_files = verified.package_manifest.get("files")
+    if not isinstance(raw_files, list):
+        raise ProjectDeploymentExecutionError(
+            "component package manifest has no file list"
+        )
+    checked = 0
+    target_root = target.resolve()
+    expected_paths: set[str] = set()
+    for item in raw_files:
+        if not isinstance(item, Mapping):
+            raise ProjectDeploymentExecutionError(
+                "component package manifest file is invalid"
+            )
+        relative = Path(str(item.get("path") or ""))
+        expected_paths.add(relative.as_posix())
+        materialized = (target / relative).resolve()
+        if target_root != materialized and target_root not in materialized.parents:
+            raise ProjectDeploymentExecutionError(
+                "materialized component file escaped its target"
+            )
+        if not materialized.is_file():
+            raise ProjectDeploymentExecutionError(
+                f"materialized component file is missing: {relative.as_posix()}"
+            )
+        if materialized.stat().st_size != int(item.get("size")):
+            raise ProjectDeploymentExecutionError(
+                f"materialized component file size changed: {relative.as_posix()}"
+            )
+        if _file_digest(materialized) != str(
+            item.get("digest") or ""
+        ).strip().lower():
+            raise ProjectDeploymentExecutionError(
+                f"materialized component file changed: {relative.as_posix()}"
+            )
+        checked += 1
+    observed_paths = {
+        path.relative_to(target).as_posix()
+        for path in target.rglob("*")
+        if path.is_file() or path.is_symlink()
+    }
+    if observed_paths != expected_paths:
+        missing = sorted(expected_paths - observed_paths)
+        extra = sorted(observed_paths - expected_paths)
+        raise ProjectDeploymentExecutionError(
+            f"materialized component file set changed: missing={missing} extra={extra}"
+        )
+    return {
+        "package_digest": package.digest,
+        "manifest_digest": package.manifest_digest,
+        "files": checked,
+    }
+
+
 @dataclass(slots=True)
 class LocalComponentDeploymentAdapter:
     local_node_id: str
@@ -296,75 +371,18 @@ class LocalComponentDeploymentAdapter:
 
     @staticmethod
     def _file_digest(path: Path) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return f"sha256:{digest.hexdigest()}"
+        return _file_digest(path)
 
     def _verify_materialized_target(
         self,
         package: ArtifactPackageRef,
         target: Path,
     ) -> Mapping[str, Any]:
-        verified = self.package_store.verify(package.digest)
-        if verified.ref != package:
-            raise ProjectDeploymentExecutionError(
-                "materialized component package identity mismatch"
-            )
-        if not target.is_dir():
-            raise ProjectDeploymentExecutionError(
-                "observed component materialization is missing"
-            )
-        raw_files = verified.package_manifest.get("files")
-        if not isinstance(raw_files, list):
-            raise ProjectDeploymentExecutionError(
-                "component package manifest has no file list"
-            )
-        checked = 0
-        target_root = target.resolve()
-        expected_paths: set[str] = set()
-        for item in raw_files:
-            if not isinstance(item, Mapping):
-                raise ProjectDeploymentExecutionError(
-                    "component package manifest file is invalid"
-                )
-            relative = Path(str(item.get("path") or ""))
-            expected_paths.add(relative.as_posix())
-            materialized = (target / relative).resolve()
-            if target_root != materialized and target_root not in materialized.parents:
-                raise ProjectDeploymentExecutionError(
-                    "materialized component file escaped its target"
-                )
-            if not materialized.is_file():
-                raise ProjectDeploymentExecutionError(
-                    f"materialized component file is missing: {relative.as_posix()}"
-                )
-            if materialized.stat().st_size != int(item.get("size")):
-                raise ProjectDeploymentExecutionError(
-                    f"materialized component file size changed: {relative.as_posix()}"
-                )
-            if self._file_digest(materialized) != str(item.get("digest") or "").strip().lower():
-                raise ProjectDeploymentExecutionError(
-                    f"materialized component file changed: {relative.as_posix()}"
-                )
-            checked += 1
-        observed_paths = {
-            path.relative_to(target).as_posix()
-            for path in target.rglob("*")
-            if path.is_file() or path.is_symlink()
-        }
-        if observed_paths != expected_paths:
-            missing = sorted(expected_paths - observed_paths)
-            extra = sorted(observed_paths - expected_paths)
-            raise ProjectDeploymentExecutionError(
-                f"materialized component file set changed: missing={missing} extra={extra}"
-            )
-        return {
-            "package_digest": package.digest,
-            "manifest_digest": package.manifest_digest,
-            "files": checked,
-        }
+        return verify_materialized_component_target(
+            self.package_store,
+            package,
+            target,
+        )
 
     def _phase_fetch(self, **kwargs: Any) -> Mapping[str, Any]:
         package = self._require_package(kwargs["package"])
