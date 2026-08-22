@@ -101,6 +101,15 @@ still a bounded technical pilot rather than distributed-production acceptance.
 | MC7 Enrichment, variants, and production operations | bounded pilot; production rejected | production-accepted | MC2-MC6 |
 | MC8 Post-pilot product hardening | observed on stand; planned | validated-stand | MC4-MC7, updater UX |
 
+The exact `0.6.50` rollout on 2026-08-22 closed immutable Root publication and
+retrieval, repeated a two-node exact deployment, advanced authority to epoch
+`13`, and retained original-source range playback. It also proved the generic
+adaptive-toolbar renderer fix in the published client: client `e8bc3d9`
+normalizes UI-as-data menu options once, uses stable identities and bounds
+cyclic action signatures. Targeted tests, a Node 24 production build, 50 local
+and 100 published open/close cycles remained responsive. This is implementation
+and desktop-browser evidence for `MC8-07`/`MC8-11`, not Android TV acceptance.
+
 ## Dependency Order
 
 ```text
@@ -582,6 +591,14 @@ must not be marked complete from contract or unit-test coverage alone.
   acceptance evidence.
 
 Local implementation checkpoint (not stand acceptance):
+
+- Client `e8bc3d9` closes a deterministic hard renderer loop in the compact
+  toolbar. `menuOptions()` had allocated a new option array and objects during
+  every Angular change-detection pass, forcing Ionic menu/icon DOM recreation.
+  In the published bundle 100 profile-menu open/close cycles completed in
+  4.039 seconds and a subsequent CDP ping returned immediately. The remaining
+  `MC8-11` gate still requires representative Android TV hardware and the full
+  browse/playback/reconnect/update soak.
 
 - `MC8-01` is implemented by the generic endpoint-session bridge in client
   `3ebe27a`/`98745a5` and the Media Center adapter projection in registry

@@ -240,6 +240,59 @@ core/backend release schema remains a platform deployment gate; the local
 content-addressed admission is evidence for the candidate, not evidence that
 the Root publication path is healthy.
 
+## Exact 0.6.50 Publication And Handoff Addendum - 2026-08-22
+
+Project `media_center@0.6.50` was published to the RU Root through the normal
+artifact API after backend commit `926c2de` added strict governed
+`composition_lock` validation. Root returned and re-read the exact release
+digest
+`sha256:c56a0c2527fb8bf7d9a898beca2dddeb134267a2384d906e682890e4c394e6fa`;
+the retrieved record was byte-for-byte equal to the local release plan. The
+exact owned packages were scenario `0.6.12`
+(`sha256:22cbf335a04e2b63b3f608075eb2ead45e7f565ab9c2cf771da1af42d1ec1f71`),
+coordinator `0.8.44`
+(`sha256:2b113b7d62be2e745340d5235dd84572c42eb1df4ea950106c892fabb233f590`),
+control `0.2.4`
+(`sha256:ded8da0b2d5fa7976013e78e8487a9e95c6e9c2dcdce7a95b171840b01e4e50d`)
+and agent `0.6.25`
+(`sha256:0104c66eee7e7da936ea1dce5c15f2c88ef3a607105c02603b5a85b86e2d8164`).
+
+The hub imported those immutable records into its verified local cache and
+created deployment revision `54`, plan
+`sha256:585621627afae2966827dd2bb71db61127b246fa4553d5417d4cc3871c396d87`.
+Operation `deploymentop.01M0NHQ3X6F712AP18V4TCHVC1` completed all six normal
+phases on hub and member in 172 seconds with `uncertain=false`. Both agent
+health receipts proved the exact package and a restarted matching service.
+The in-process coordinator activation no longer ran global service discovery;
+core commit `b679d254` reports it as `not_a_service_skill`.
+
+Definition v28 temporarily admitted the previous exact release while both
+agents converged to release `0.6.50`. Definition v29 then removed the overlap;
+both stable exact instances were ready at group generation `27`. A fenced
+handoff to member instance `service-af4aa981321519b6bfaf2f50f74a` completed in
+0.522 seconds by reusing the unchanged persisted snapshot. Replica observations
+then committed partition revision `33`, epoch `13`, member authority and hub
+follower, both at checkpoint `catalog:40663` with `40,663` items. Route explain
+reported `authority_eligible=true`. A unique stale request with revision `31`
+and epoch `12` was rejected as `partition_revision_conflict`.
+
+Post-rollout checks found `/mnt/disk1/Music`, `/mnt/disk1/Video` and one disabled
+fixture tombstone. Filename search for `Wayne Dyer` and folder search for
+`101 Ways to Transform Your Life` each returned the two original audiobook
+files in under 0.5 seconds. Catalog responses remained capped at 30 and
+returned an opaque keyset `next_cursor`. A 1,024-byte read returned `206
+Partial Content`, `audio/mpeg` and the exact total size. Resolving the resource
+internally produced the original
+`/mnt/disk1/Music/!Аудиокниги/101 Ways to Transform Your Life/Wayne Dyer - (1 Of 2).mp3`
+path with `storage_mode=reference`; no managed Media Server copy was involved.
+
+The first two configure attempts also exposed a control-plane atomicity gap:
+`configure_deployment` persisted desired revisions `52` and `53` before
+planning failed because the verified local release cache was not populated.
+CAS correctly rejected stale retries, and revision `54` succeeded after exact
+cache admission, but define-plus-plan should become one atomic operator
+transition or compensate the desired write on planning failure.
+
 ## Defects Found And Closed
 
 1. Expired authority leases previously reset observed epoch to zero during

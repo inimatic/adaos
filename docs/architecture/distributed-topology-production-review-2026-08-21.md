@@ -76,6 +76,20 @@ source contains the stricter release validator, but deployment and a successful
 Root publish/read proof remain required; local artifact admission does not
 close that platform gate.
 
+That platform gate was subsequently closed for the next exact candidate.
+Backend `0.1.183` at commit `926c2de` accepted only the governed Project
+composition-lock shape and published/retrieved `media_center@0.6.50` with exact
+digest
+`sha256:c56a0c2527fb8bf7d9a898beca2dddeb134267a2384d906e682890e4c394e6fa`.
+Deployment revision `54` and operation
+`deploymentop.01M0NHQ3X6F712AP18V4TCHVC1` then converged both physical nodes.
+Definition v28 provided bounded old/new overlap; exact-only v29 and group
+generation `27` removed it after both instances were ready. The authority
+handoff advanced the representative partition to revision `33`, epoch `13`,
+with matching `catalog:40663` witnesses and an authority-eligible route. This
+closes Root publication/retrieval and repeats compatible exact-candidate
+admission; it does not close the physical Android TV soak gate.
+
 ## Security Review
 
 - Node selection is restricted to admitted trusted node identities. A service
