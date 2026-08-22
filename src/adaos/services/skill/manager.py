@@ -2308,15 +2308,37 @@ class SkillManager:
                     f"slot {target_slot} of version {target_version} is not prepared; "
                     f"run 'adaos skill install {name} --slot={target_slot}' first"
                 )
-            self.prepare_runtime(
-                name,
-                path=source_path,
-                version_override=target_version,
-                run_tests=False,
-                preferred_slot=target_slot,
-                allow_deactivated=_is_runtime_migration_transient_deactivation(previous_deactivation),
-                source_manifest_digest=source_manifest_digest,
-            )
+            try:
+                self.prepare_runtime(
+                    name,
+                    path=source_path,
+                    version_override=target_version,
+                    run_tests=False,
+                    preferred_slot=target_slot,
+                    allow_deactivated=_is_runtime_migration_transient_deactivation(previous_deactivation),
+                    source_manifest_digest=source_manifest_digest,
+                )
+            except SkillCoreCompatibilityError as exc:
+                raise RuntimeError("skill_runtime_core_incompatible") from exc
+            except SkillDependencyIsolationError as exc:
+                raise RuntimeError("skill_runtime_dependency_isolation_failed") from exc
+            except FileNotFoundError as exc:
+                raise RuntimeError("skill_runtime_source_missing") from exc
+            except TimeoutError as exc:
+                raise RuntimeError("skill_runtime_prepare_timeout") from exc
+            except RuntimeError as exc:
+                message = str(exc).lower()
+                if "not enough free disk space" in message:
+                    code = "skill_runtime_dependency_disk_budget_failed"
+                elif "failed to install" in message and "dependenc" in message:
+                    code = "skill_runtime_dependency_install_failed"
+                elif "deactivated" in message:
+                    code = "skill_runtime_deactivated"
+                else:
+                    code = "skill_runtime_prepare_failed"
+                raise RuntimeError(code) from exc
+            except Exception as exc:
+                raise RuntimeError("skill_runtime_prepare_failed") from exc
             metadata = env.read_version_metadata(target_version)
             slot_meta = metadata.get("slots", {}).get(target_slot, {})
             manifest_path = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)

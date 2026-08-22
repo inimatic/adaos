@@ -159,6 +159,27 @@ def test_skill_component_activation_reports_runtime_stage(monkeypatch) -> None:
     assert str(error.value.__cause__) == "candidate smoke import failed"
 
 
+def test_skill_component_activation_preserves_specific_runtime_code(monkeypatch) -> None:
+    class Manager:
+        def activate_runtime(self, *_args, **_kwargs) -> str:
+            raise RuntimeError("skill_runtime_dependency_install_failed")
+
+    monkeypatch.setattr(AdaOSComponentLifecycleHooks, "_skill_manager", lambda _self: Manager())
+    monkeypatch.setattr(default_runtime, "runtime_mutation_lease", lambda *_args, **_kwargs: nullcontext())
+    monkeypatch.setattr(
+        AdaOSComponentLifecycleHooks,
+        "_service_activation_status",
+        staticmethod(lambda _component_id: {"managed": False, "ready": True}),
+    )
+
+    with pytest.raises(RuntimeError, match="skill_runtime_dependency_install_failed"):
+        AdaOSComponentLifecycleHooks(SimpleNamespace()).activate(
+            kind="skill",
+            component_id="media_library_agent",
+            version="0.6.20",
+        )
+
+
 def test_skill_service_activation_waits_for_new_process_spec(monkeypatch) -> None:
     hooks = AdaOSComponentLifecycleHooks(SimpleNamespace())
     observations = iter(

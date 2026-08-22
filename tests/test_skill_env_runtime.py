@@ -207,13 +207,14 @@ def test_activate_runtime_reprepares_slot_from_different_core_identity(
 
     monkeypatch.setattr(mgr, "prepare_runtime", _prepare)
 
-    with pytest.raises(ReprepareExpected):
+    with pytest.raises(RuntimeError, match="skill_runtime_prepare_failed") as error:
         mgr.activate_runtime(
             skill_name,
             version="1.0.0",
             slot="B",
             source_manifest_digest="sha256:" + "1" * 64,
         )
+    assert isinstance(error.value.__cause__, ReprepareExpected)
 
 
 def test_activate_dev_runtime_uses_manifest_version_and_reprepares_stale_patch_slot(

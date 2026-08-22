@@ -43,6 +43,7 @@ from adaos.services.project_deployment.transport import (
     MemberLinkNodeDeploymentTransport,
     register_local_deployment_receiver,
 )
+from adaos.services.operational_errors import normalized_error_code
 from adaos.services.skill.manager import SkillManager
 from adaos.services.skill.runtime import resolve_active_version
 from adaos.services.skill.runtime_migration_worker import runtime_mutation_lease
@@ -396,6 +397,12 @@ class AdaOSComponentLifecycleHooks:
                         source_manifest_digest=manifest_digest,
                     )
                 except Exception as exc:
+                    cause_code = normalized_error_code(
+                        getattr(exc, "code", None) or str(exc),
+                        fallback="",
+                    )
+                    if cause_code.startswith("skill_runtime_"):
+                        raise RuntimeError(cause_code) from exc
                     raise RuntimeError("skill_runtime_activation_failed") from exc
                 try:
                     handler_reload = self._reload_skill_handlers(
