@@ -13,6 +13,7 @@ from starlette.requests import ClientDisconnect
 
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.apps.api.auth import require_token
+from adaos.domain.node_identity import node_identities_match
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.skill.manager import SkillCoreCompatibilityError, SkillDependencyIsolationError, SkillManager
 from adaos.services.skill.artifacts import (
@@ -919,9 +920,37 @@ async def runtime_rebuild_webspace(body: RuntimeRebuildWebspaceReq):
 
 
 @router.get("/runtime/status/{name}")
-async def runtime_status(name: str, mgr: SkillManager = Depends(_get_manager)):
+async def runtime_status(
+    name: str,
+    target_node_id: str | None = None,
+    mgr: SkillManager = Depends(_get_manager),
+    ctx: AgentContext = Depends(get_ctx),
+):
+    target = str(target_node_id or "").strip()
+    config = getattr(ctx, "config", None)
+    local_node_id = str(getattr(config, "node_id", "") or "").strip()
+    if target and not node_identities_match(target, local_node_id):
+        if str(getattr(config, "role", "") or "").strip().lower() != "hub":
+            raise HTTPException(status_code=409, detail="remote_runtime_status_requires_hub")
+        from adaos.services.subnet.link_manager import get_hub_link_manager
+
+        try:
+            state = await get_hub_link_manager().rpc_call(
+                target,
+                method="skills.runtime.status",
+                params={"name": name},
+                timeout=30.0,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"remote_runtime_status_failed:{type(exc).__name__}",
+            ) from exc
+        if not isinstance(state, dict):
+            raise HTTPException(status_code=502, detail="remote_runtime_status_contract_invalid")
+        return {"ok": True, "state": state, "node_id": target, "remote": True}
     state = await asyncio.to_thread(mgr.runtime_status, name)
-    return {"ok": True, "state": state}
+    return {"ok": True, "state": state, "node_id": local_node_id, "remote": False}
 
 
 @router.post("/runtime/setup")

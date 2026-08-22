@@ -361,6 +361,25 @@ def test_member_rpc_dispatches_fail_closed_core_methods(monkeypatch) -> None:
         client._run_rpc("system.shell", {}, None, False)
 
 
+def test_member_rpc_exposes_bounded_skill_runtime_status(monkeypatch) -> None:
+    client = mod.MemberLinkClient()
+
+    class Manager:
+        def runtime_status(self, name: str) -> dict[str, object]:
+            return {"name": name, "version": "0.6.20", "ready": True}
+
+    monkeypatch.setattr(mod.MemberLinkClient, "_skill_manager", staticmethod(lambda: Manager()))
+
+    assert client._run_rpc(
+        "skills.runtime.status",
+        {"name": "media_library_agent"},
+        None,
+        False,
+    ) == {"name": "media_library_agent", "version": "0.6.20", "ready": True}
+    with pytest.raises(ValueError, match="skill_name_invalid"):
+        client._run_rpc("skills.runtime.status", {"name": "../secret"}, None, False)
+
+
 def test_member_snapshot_heartbeat_repairs_stale_default_manifest_version(monkeypatch) -> None:
     client = mod.MemberLinkClient()
     monkeypatch.setattr(mod, "BUILD_INFO", SimpleNamespace(version="0.1.259", build_date="2026-06-15T15:39:36+03:00"))

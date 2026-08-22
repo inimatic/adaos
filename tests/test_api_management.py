@@ -5,6 +5,7 @@ import sys
 import threading
 import types
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, List, Optional
 
@@ -635,6 +636,42 @@ def test_skill_status_reads_run_off_event_loop(monkeypatch) -> None:
     assert runtime["state"]["version"] == "1.0.0"
     assert call_threads
     assert all(thread_id != owner_thread for thread_id in call_threads)
+
+
+def test_skill_runtime_status_routes_to_connected_member(monkeypatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class LinkManager:
+        async def rpc_call(self, node_id: str, **kwargs: Any) -> dict[str, Any]:
+            calls.append({"node_id": node_id, **kwargs})
+            return {"version": "0.6.20", "slot": "B", "ready": True}
+
+    from adaos.services.subnet import link_manager
+
+    monkeypatch.setattr(link_manager, "get_hub_link_manager", lambda: LinkManager())
+    result = asyncio.run(
+        skills.runtime_status(
+            "media_library_agent",
+            target_node_id="member-1",
+            mgr=_FakeSkillManager(),
+            ctx=SimpleNamespace(config=SimpleNamespace(node_id="hub-1", role="hub")),
+        )
+    )
+
+    assert result == {
+        "ok": True,
+        "state": {"version": "0.6.20", "slot": "B", "ready": True},
+        "node_id": "member-1",
+        "remote": True,
+    }
+    assert calls == [
+        {
+            "node_id": "member-1",
+            "method": "skills.runtime.status",
+            "params": {"name": "media_library_agent"},
+            "timeout": 30.0,
+        }
+    ]
 
 
 def test_subscribed_skill_update_requires_reviewed_plan_and_records_runtime_health(monkeypatch) -> None:

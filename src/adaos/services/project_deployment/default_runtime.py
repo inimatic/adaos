@@ -385,32 +385,45 @@ class AdaOSComponentLifecycleHooks:
                 operation_id=operation_id,
                 timeout_s=900.0,
             ):
-                previous_service = self._service_activation_status(component_id)
-                slot = self._skill_manager().activate_runtime(
-                    component_id,
-                    version=version,
-                    source_manifest_digest=manifest_digest,
-                )
-                handler_reload = self._reload_skill_handlers(
-                    component_id,
-                    version=version,
-                    slot=slot,
-                )
-                if handler_reload.get("ok") is not True:
-                    reason = str(handler_reload.get("reason") or "unknown")
-                    raise RuntimeError(
-                        f"live handler activation failed for skill '{component_id}': {reason}"
+                try:
+                    previous_service = self._service_activation_status(component_id)
+                except Exception as exc:
+                    raise RuntimeError("skill_service_baseline_failed") from exc
+                try:
+                    slot = self._skill_manager().activate_runtime(
+                        component_id,
+                        version=version,
+                        source_manifest_digest=manifest_digest,
                     )
-                activation_event = self._publish_skill_activation(
-                    component_id,
-                    version=version,
-                    slot=slot,
-                    operation_id=operation_id,
-                )
-                service = self._wait_for_skill_service_ready(
-                    component_id,
-                    previous=previous_service,
-                )
+                except Exception as exc:
+                    raise RuntimeError("skill_runtime_activation_failed") from exc
+                try:
+                    handler_reload = self._reload_skill_handlers(
+                        component_id,
+                        version=version,
+                        slot=slot,
+                    )
+                    if handler_reload.get("ok") is not True:
+                        reason = str(handler_reload.get("reason") or "unknown")
+                        raise RuntimeError(reason)
+                except Exception as exc:
+                    raise RuntimeError("skill_handler_reload_failed") from exc
+                try:
+                    activation_event = self._publish_skill_activation(
+                        component_id,
+                        version=version,
+                        slot=slot,
+                        operation_id=operation_id,
+                    )
+                except Exception as exc:
+                    raise RuntimeError("skill_activation_event_failed") from exc
+                try:
+                    service = self._wait_for_skill_service_ready(
+                        component_id,
+                        previous=previous_service,
+                    )
+                except Exception as exc:
+                    raise RuntimeError("skill_service_convergence_failed") from exc
             return {
                 "activated": True,
                 "version": version,
