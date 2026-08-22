@@ -158,6 +158,11 @@ def test_member_rpc_failure_is_observable_without_argument_values(monkeypatch) -
     )
 
     assert responses[-1]["ok"] is False
+    assert responses[-1]["error"] == {
+        "schema": "adaos.subnet.member_rpc_error.v1",
+        "code": "tool_intent_mismatch",
+        "type": "PermissionError",
+    }
     assert client.snapshot()["rpc"]["failed_total"] == 1
     assert client.snapshot()["rpc"]["last_result"]["error_code"] == "tool_intent_mismatch"
     rendered = "\n".join(warnings)

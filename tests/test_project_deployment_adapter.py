@@ -33,6 +33,7 @@ from adaos.services.project_deployment import (
 )
 from adaos.services.project_deployment.execution import component_activation_id
 from adaos.services.project_deployment.store import ProjectDeploymentStore
+from adaos.services.subnet.rpc_errors import RemoteMemberRpcError
 
 
 _NOW = "2026-08-19T18:00:00+00:00"
@@ -591,3 +592,36 @@ def test_member_link_transport_normalizes_known_runtime_error(tmp_path: Path) ->
         )
 
     assert "private" not in str(raised.value)
+
+
+def test_member_link_transport_preserves_structured_remote_error(tmp_path: Path) -> None:
+    package = _package(tmp_path)
+    release = _release(package)
+    change = replace_node(_change("install", package), "node-b")
+
+    def rpc_call(*_args: Any, **_kwargs: Any) -> Mapping[str, Any]:
+        raise RemoteMemberRpcError(
+            "component_activation_failed", remote_type="RuntimeError"
+        )
+
+    transport = MemberLinkNodeDeploymentTransport(
+        rpc_call=rpc_call,
+        package_reader=lambda _digest: package.archive_bytes,
+        source_node_id="node-a",
+    )
+
+    with pytest.raises(
+        ProjectDeploymentExecutionError, match="^component_activation_failed$"
+    ):
+        transport.execute_component_phase(
+            node_id="node-b",
+            phase="activate",
+            node=_node("node-b"),
+            change=change,
+            desired=_desired(release),
+            release_plan=release,
+            package=package.ref,
+            current_activation=None,
+            idempotency_key="member:test-worker:activate",
+            attempt=1,
+        )

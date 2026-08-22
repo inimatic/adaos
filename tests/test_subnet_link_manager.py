@@ -274,6 +274,52 @@ def test_generic_member_rpc_preserves_method_and_payload() -> None:
     assert result == {"schema": "result.v1"}
 
 
+def test_generic_member_rpc_restores_structured_remote_error() -> None:
+    async def _run() -> RuntimeError:
+        manager = mod.HubLinkManager()
+        websocket = _FakeWebSocket()
+        manager._links["member-1"] = mod.HubMemberLink(
+            node_id="member-1", websocket=websocket
+        )
+        task = asyncio.create_task(
+            manager.rpc_call(
+                "member-1",
+                method="project.deployment.phase",
+                params={"schema": "adaos.project.remote_component_phase.v1"},
+                timeout=5.0,
+            )
+        )
+        for _ in range(20):
+            if websocket.messages:
+                break
+            await asyncio.sleep(0)
+        request = websocket.messages[-1]
+        await manager.handle_rpc_response(
+            "member-1",
+            {
+                "t": "rpc.res",
+                "id": request["id"],
+                "ok": False,
+                "error": {
+                    "schema": "adaos.subnet.member_rpc_error.v1",
+                    "code": "component_activation_failed",
+                    "type": "RuntimeError",
+                },
+            },
+        )
+        try:
+            await task
+        except RuntimeError as exc:
+            return exc
+        raise AssertionError("remote failure was not raised")
+
+    raised = asyncio.run(_run())
+
+    assert str(raised) == "component_activation_failed"
+    assert raised.code == "component_activation_failed"
+    assert raised.remote_type == "runtimeerror"
+
+
 async def _noop_push(*_args, **_kwargs) -> None:
     return None
 
