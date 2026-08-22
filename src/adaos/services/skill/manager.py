@@ -67,6 +67,16 @@ _log = logging.getLogger("adaos.skill.manager")
 _SKILL_MANIFEST_NAMES = ("skill.yaml",)
 
 
+def _runtime_preparation_identity() -> dict[str, str]:
+    core_identity = str(BUILD_INFO.git_commit or BUILD_INFO.version or "").strip()
+    return {
+        "schema": "adaos.skill_runtime.preparation_identity.v1",
+        "core_identity": core_identity,
+        "python_implementation": str(sys.implementation.name),
+        "python_cache_tag": str(getattr(sys.implementation, "cache_tag", "") or ""),
+    }
+
+
 def _archive_failed_candidate_test_log(
     *,
     env: SkillRuntimeEnvironment,
@@ -2181,6 +2191,7 @@ class SkillManager:
             "runtime_bucket": env.runtime_bucket(version),
             "resolved_manifest": str(slot.resolved_manifest),
             "source_manifest_digest": source_manifest_digest,
+            "preparation_identity": _runtime_preparation_identity(),
             "installed_at": datetime.now(timezone.utc).isoformat(),
             "tests": {name: result.status for name, result in tests.items()},
             "data_migration": dict(data_migration),
@@ -2273,6 +2284,8 @@ class SkillManager:
         needs_prepare = not manifest_path.exists() or not slot_source_root.exists() or not any(slot_source_root.iterdir())
         prepared_source_digest = str(slot_meta.get("source_manifest_digest") or "").strip()
         if source_manifest_digest is not None and source_manifest_digest != prepared_source_digest:
+            needs_prepare = True
+        if slot_meta.get("preparation_identity") != _runtime_preparation_identity():
             needs_prepare = True
         if (
             not needs_prepare
