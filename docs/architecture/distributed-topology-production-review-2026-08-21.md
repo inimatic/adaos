@@ -55,6 +55,27 @@ generation `19`. This closes the compatible rolling-release gate and
 `DS5-04`; it does not substitute for the remaining exact-candidate rejection,
 browser or soak gates below.
 
+## Bounded Diagnostics Follow-up - 2026-08-22
+
+Project `0.6.46`, release
+`sha256:7c2f9b8910d0318bbb06b43c3d052c2331ef563b5578b4360f1f79a34eca856b`,
+was admitted through the hub's verified content-addressed package/release
+repositories and deployed as revision `50`. Operation
+`deploymentop.01M0MHYGHXNCXVRA772C4E2G5Z` succeeded on both nodes. Definitions
+v22 and v23 preserved old/new overlap on each side of the primary-release
+switch; exact-only v24/generation `22` now reports both stable instances ready
+and `partial=false`.
+
+The follow-up removes an FTS5 full-token-table count from coordinator status.
+The real 68,429-row, 1.1 GiB stand catalog returned status in 0.803 seconds,
+exact filename search in 0.165 seconds and bounded topology inspection in 0.292
+seconds. Source identity and range playback were unchanged. The deployed RU
+Root endpoint rejected this current release plan as `invalid_project_release`
+and could not retrieve the already active `0.6.45` record. Current backend
+source contains the stricter release validator, but deployment and a successful
+Root publish/read proof remain required; local artifact admission does not
+close that platform gate.
+
 ## Security Review
 
 - Node selection is restricted to admitted trusted node identities. A service
@@ -86,11 +107,11 @@ browser or soak gates below.
   deferred. Their threat and conflict models are not inherited from the
   trusted-subnet pilot.
 
-Exact-candidate incompatible-release admission was rejected before mutation,
-and the active definition/group remained v21/generation `19`. Open security
-proof: repeat stale epoch, expired lease, revoked instance and unauthorized
-retention mutation rejection against the exact published candidate on the
-stand, then export sanitized receipts.
+Exact-candidate incompatible-release admission was rejected before mutation;
+the later valid rollout reached exact v24/generation `22`. Open security proof:
+repeat stale epoch, expired lease, revoked instance and unauthorized retention
+mutation rejection against the exact candidate on the stand, then export
+sanitized receipts.
 
 ## Privacy And Retention Review
 

@@ -292,6 +292,20 @@ size/mtime/inode witness was unchanged and range playback remained `206`.
 This closes the drain/remove/restore portion of `DS5-05`; the exact security
 matrix, Android TV soak and final production decision remain open.
 
+Project `0.6.46` then exercised a second compatible batch-one transition.
+Deployment revision `50`, plan
+`sha256:c8f4ba3caab178532c278351985f22a5d825441c1c4df8c6103a6c56c46de470`
+and operation `deploymentop.01M0MHYGHXNCXVRA772C4E2G5Z` passed every normal
+activation phase on both nodes. Definitions v22 and v23 retained old/new
+overlap while the primary release changed; definition v24 and group generation
+`22` then removed the old digest. Both stable instances are ready on exact
+release `sha256:7c2f9b8910d0318bbb06b43c3d052c2331ef563b5578b4360f1f79a34eca856b`
+and bounded inspection remains non-partial. This also proved that a 1.1 GiB
+consumer index no longer makes compact diagnostics unbounded. The deployed
+Root artifact endpoint still rejects the current release schema, so Root
+validator rollout and publication/retrieval proof join the remaining `DS5-05`
+platform gates; the stand used verified local content-addressed admission.
+
 ## Evidence Policy
 
 - Every implementation checkbox links exact core/client/consumer revisions and
