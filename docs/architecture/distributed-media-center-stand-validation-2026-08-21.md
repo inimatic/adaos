@@ -345,6 +345,27 @@ transition or compensate the desired write on planning failure.
 5. Automatic authority election, cross-subnet placement and native mobile
    background playback remain deferred by their roadmaps.
 
+## Local 0.6.52 Candidate - 2026-08-23
+
+Registry revision `84914f30b37d3b9c59e34603e7b98b53a5325481` builds exact
+Project `media_center@0.6.52` as
+`sha256:895afd1dc002a57bfcdac6ffedd85af733f98847e1a262109537dbbf344f9165`.
+Its changed components are scenario `0.6.13` and coordinator `0.8.45`.
+
+The complete local skill/scenario suite passed 102 tests and Ruff. The enforced
+20,000-item benchmark passed with FTS p95 36.442 ms, catalog-page p95 18.630
+ms, Home p95 227.967 ms, root-folder p95 14.280 ms and 30-file leaf-folder p95
+28.246 ms. The folder projection stores metadata and counts only; original
+media remains under its registered external path.
+
+Client `0b6649a` makes mini-player host attachment idempotent and prevents the
+hard snapshot loop observed after open, scroll and close. Its focused playback
+and list suites passed 51 tests and the Node 24 production build succeeded.
+Client `cab3ffb` supplies typed declarative list selection for folders versus
+files. Stand deployment, real playback close/open-second, idle CPU, folder
+navigation and Android TV responsiveness remain to be recorded below this
+local checkpoint.
+
 ## Update Duration Note
 
 An earlier core slot preparation on the same slow stand took about 239 seconds,

@@ -3,7 +3,7 @@
 Status: implementation roadmap for the
 [Distributed Media Center Target Architecture](media-center-target-architecture.md).
 
-Last reviewed: 2026-08-22.
+Last reviewed: 2026-08-23.
 
 ## Outcome
 
@@ -109,6 +109,20 @@ normalizes UI-as-data menu options once, uses stable identities and bounds
 cyclic action signatures. Targeted tests, a Node 24 production build, 50 local
 and 100 published open/close cycles remained responsive. This is implementation
 and desktop-browser evidence for `MC8-07`/`MC8-11`, not Android TV acceptance.
+
+Local candidate `0.6.52` at registry revision
+`84914f30b37d3b9c59e34603e7b98b53a5325481` has release digest
+`sha256:895afd1dc002a57bfcdac6ffedd85af733f98847e1a262109537dbbf344f9165`.
+It suppresses unchanged idle catalog publications, starts personal shelves from
+indexed profile state, and maintains a metadata-only folder projection for
+folders-first drill-down. The enforced 20,000-item gate recorded Home p95
+227.967 ms, root-folder p95 14.280 ms and leaf-folder p95 28.246 ms. Client
+`0b6649a` removes a second deterministic renderer loop: closing the full player
+could repeatedly re-register an already attached mini-player and publish a new
+snapshot forever. Client `cab3ffb` adds generic typed collection selection so
+the UI-as-data scenario can navigate folders without Media Center logic in the
+renderer. These are local candidate facts until the exact release and client
+bundle are exercised on the stand.
 
 ## Dependency Order
 
@@ -464,6 +478,9 @@ injection, resource budgets, and a reviewed production decision.
   exact filename catalog search returned in 0.165 seconds. These results close
   the discovered server-side diagnostics regression but do not replace the
   hardware browser soak.
+  Candidate `0.6.52` additionally passed the enforced 20,000-item local static
+  gate with Home/folder p95 budgets of 500/150 ms and observed 227.967/28.246
+  ms respectively. The complete 102-test skill/scenario suite and Ruff passed.
   The one-hour Android TV browser/playback/Yjs-pressure gate is still open.
 - [ ] `[must]` `MC7-08` Deploy the exact ProjectRelease through normal channels
   to the designated stand, execute TV plus controller E2E, and record package
@@ -599,6 +616,15 @@ Local implementation checkpoint (not stand acceptance):
   4.039 seconds and a subsequent CDP ping returned immediately. The remaining
   `MC8-11` gate still requires representative Android TV hardware and the full
   browse/playback/reconnect/update soak.
+
+- Client `0b6649a` closes the independent playback-modal lifecycle loop. After
+  a modal released its media element to the shell mini-player, shell host
+  registration wrote the unchanged `viewMode=mini` snapshot; the subscription
+  queued another registration and never yielded. Host attachment is now
+  idempotent and regression coverage asserts repeated registration emits no
+  snapshot. The buffering informer was only present on this path and was not
+  the source of the loop. Client `cab3ffb` routes `select:<item-type>` through
+  the generic list contract for folder drill-down versus media playback.
 
 - `MC8-01` is implemented by the generic endpoint-session bridge in client
   `3ebe27a`/`98745a5` and the Media Center adapter projection in registry
