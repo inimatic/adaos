@@ -18,6 +18,7 @@ from adaos.domain import Event as DomainEvent
 from adaos.domain.node_identity import node_identities_match, node_identity_token
 from adaos.services.agent_context import get_ctx
 from adaos.services.node_display import node_display_from_directory_node
+from adaos.services.subnet.rpc_errors import remote_member_rpc_error
 from adaos.services.yjs.doc import apply_update_to_live_room, async_get_ydoc, mutate_live_room
 from adaos.services.yjs.store import get_ystore_for_webspace, suppress_ystore_write_notifications, ystore_write_metadata
 
@@ -1916,7 +1917,7 @@ class HubLinkManager:
             fut.set_result(msg.get("result"))
         else:
             err = msg.get("error") or "rpc_failed"
-            fut.set_exception(RuntimeError(str(err)))
+            fut.set_exception(remote_member_rpc_error(err))
         return True
 
     async def rpc_tools_call(
