@@ -11,7 +11,7 @@ resolution-markers = [
 
 [[package]]
 name = "adaos"
-version = "0.1.927"
+version = "0.1.928"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
