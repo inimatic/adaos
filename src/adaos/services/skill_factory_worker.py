@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import hashlib
 import json
 import logging
@@ -39,7 +40,7 @@ from adaos.services.workflow_artifacts import (
 )
 
 
-RUNNER_VERSION = "adaos-local-codex-worker/0.7.0"
+RUNNER_VERSION = "adaos-local-codex-worker/0.8.0"
 PACKET_SCHEMA = "adaos.skill_factory.codex_packet.v1"
 LOCAL_SESSION_SCHEMA = "adaos.skill_factory.local_run.v1"
 _log = logging.getLogger("adaos.skill_factory.local_worker")
@@ -199,13 +200,13 @@ def _contract_execution_checklist(
     development_context: Mapping[str, Any],
     workspace: Path,
 ) -> dict[str, Any]:
-    """Project admitted provider contracts into a compact exact checklist.
+    """Project admitted provider contracts into an exact executable bundle.
 
-    The complete instruction document remains authoritative and is retained by
-    path and digest in the Development Session. This projection removes only
-    descriptive schema bulk and repeated fixture inputs; it keeps operation
-    names, required fields, invariants, iteration bindings, and every declared
-    output assertion verbatim.
+    The source instruction remains authoritative and is retained by path and
+    digest in the Development Session. The prompt projection deliberately
+    repeats exact schemas and fixtures: dropping nested constraints or fixture
+    inputs makes a typed contract less actionable for an autonomous builder
+    and shifts deterministic transcription work into probabilistic inference.
     """
 
     workspace_root = workspace.resolve()
@@ -245,6 +246,8 @@ def _contract_execution_checklist(
             operations.append(
                 {
                     "operation": str(operation_id),
+                    "description": str(operation.get("description") or ""),
+                    "input_schema": copy.deepcopy(input_schema),
                     "input_required": list(
                         operation.get("input_required")
                         or input_schema.get("required")
@@ -253,6 +256,7 @@ def _contract_execution_checklist(
                     "input_additional_properties": input_schema.get(
                         "additionalProperties"
                     ),
+                    "output_schema": copy.deepcopy(output_schema),
                     "output_required": list(
                         operation.get("output_required")
                         or output_schema.get("required")
@@ -284,9 +288,10 @@ def _contract_execution_checklist(
                         "id": str(step.get("id") or ""),
                         "kind": str(step.get("kind") or "operation"),
                         "operation": str(step.get("operation") or "") or None,
-                        "assert": list(step.get("assert") or []),
+                        "input": copy.deepcopy(step.get("input") or {}),
+                        "assert": copy.deepcopy(step.get("assert") or []),
                         **(
-                            {"for_each": dict(step["for_each"])}
+                            {"for_each": copy.deepcopy(step["for_each"])}
                             if isinstance(step.get("for_each"), Mapping)
                             else {}
                         ),
@@ -303,18 +308,34 @@ def _contract_execution_checklist(
         contracts.append(
             {
                 "contract": str(contract.get("contract") or ""),
+                "version": str(contract.get("version") or ""),
+                "consumer_ref": str(contract.get("consumer_ref") or ""),
                 "capability": str(contract.get("capability") or ""),
                 "candidate_role": str(contract.get("candidate_role") or ""),
+                "required_provider_declaration": {
+                    "contract": str(contract.get("contract") or ""),
+                    "capability": str(contract.get("capability") or ""),
+                },
                 "authoritative_path": relative.as_posix(),
                 "authoritative_digest": str(descriptor.get("content_digest") or ""),
                 "operations": operations,
+                "conformance_fixtures": copy.deepcopy(
+                    contract.get("conformance_fixtures") or []
+                ),
                 "operation_sequences": sequences,
+                "lifecycle": copy.deepcopy(contract.get("lifecycle") or {}),
+                "workflow_smoke_evidence": copy.deepcopy(
+                    contract.get("workflow_smoke_evidence") or {}
+                ),
+                "domain_conformance": copy.deepcopy(
+                    contract.get("domain_conformance") or {}
+                ),
             }
         )
     if not contracts:
         return {}
     projection: dict[str, Any] = {
-        "schema": "adaos.builder.contract_execution_checklist.v1",
+        "schema": "adaos.builder.contract_execution_checklist.v2",
         "contracts": contracts,
     }
     canonical = json.dumps(
@@ -1736,11 +1757,13 @@ When `scenarios/{target_id}/.builder_current_publication` exists, treat it as th
 22. Packaged tests must be hermetic. They cannot read `.adaos_context`, Builder Development-session instruction/artifact paths, session IDs, or other authoring-only files that Forge omits. Copy only a bounded non-secret fixture that remains necessary into the skill's own tests/fixtures, or leave admitted-context verification to consumer acceptance.
 23. Never reconstruct a skill's `.runtime`/slot path from `ADAOS_BASE_DIR`. Resolve mutable owner-scoped files with `adaos.sdk.skill_env.skill_data_root()` (or the equivalent typed SDK capability). Core supplies the exact DEV or installed data root through current skill context and execution bindings."""
         required_result += """
-24. Treat every admitted `adaos.contract.operation_set.v1` instruction as executable consumer authority. Read its exact contract, capability, operation schemas and `conformance_fixtures`; honor every `required`, `const`, enum, and `additionalProperties` boundary. An operation set with `candidate_role: provider` requires the target skill to declare a matching `provider_contracts` entry with that exact contract and capability; keep independent contracts (for example a generic runner and a domain probe) as independent provider declarations rather than merging their operations. Exercise the production provider itself with a bounded fixture below `ADAOS_TASK_RUNTIME_DIR`, including the declared operation sequence rather than only a helper that resembles it, so the trusted worker can validate the newest complete document set. If the SDK normally resolves provider output through `skill_data_root()`, bind `ADAOS_SKILL_INTERNAL_DATA_ROOT` to a dedicated child of `ADAOS_TASK_RUNTIME_DIR` in the local conformance process environment only; an OS-temporary or other owner-data root is not visible to trusted task validation. Never copy that binding into the returned ExecutionSpec. `prepare_attempt.environment` must not return any platform-protected key: `ADAOS_CURRENT_SKILL`, `ADAOS_SKILL_ENV_PATH`, `ADAOS_SKILL_INTERNAL_DATA_ROOT`, `ADAOS_SKILL_NAME`, `ADAOS_SKILL_ROOT`, `ADAOS_TASK_RUNTIME_DIR`, `PYTHONHOME`, or `PYTHONPATH`; the trusted executor supplies them. When a provider returns `working_directory` and `expected_outputs`, execute its returned command in that exact directory and require every output at the exact relative path `Path(working_directory) / expected_outputs[i]`; an undeclared implicit subdirectory is a missing output. Exercise collection through the returned `output_ref` and verification through the provider's declared operation. Do not replace consumer schemas with a permissive local look-alike."""
+24. Treat every admitted `adaos.contract.operation_set.v1` instruction as executable consumer authority. Copy its exact operation input and output schemas into the manifest operation declarations; compare their canonical JSON before concluding instead of rewriting the schemas from memory. Honor every `required`, `const`, enum, and `additionalProperties` boundary. An operation set with `candidate_role: provider` requires the target skill to declare every exact `required_provider_declaration`; keep independent contracts (for example a generic runner and a domain probe) as independent provider declarations rather than merging their operations. Execute every admitted required conformance fixture against the production provider, including document-set and operation-sequence fixtures rather than only a helper that resembles them, so the trusted worker can validate the newest complete document set. If the SDK normally resolves provider output through `skill_data_root()`, bind `ADAOS_SKILL_INTERNAL_DATA_ROOT` to a dedicated child of `ADAOS_TASK_RUNTIME_DIR` in the local conformance process environment only; an OS-temporary or other owner-data root is not visible to trusted task validation. Never copy that binding into the returned ExecutionSpec. `prepare_attempt.environment` must not return any platform-protected key: `ADAOS_CURRENT_SKILL`, `ADAOS_SKILL_ENV_PATH`, `ADAOS_SKILL_INTERNAL_DATA_ROOT`, `ADAOS_SKILL_NAME`, `ADAOS_SKILL_ROOT`, `ADAOS_TASK_RUNTIME_DIR`, `PYTHONHOME`, or `PYTHONPATH`; the trusted executor supplies them. When a provider returns `working_directory` and `expected_outputs`, execute its returned command in that exact directory and require every output at the exact relative path `Path(working_directory) / expected_outputs[i]`; an undeclared implicit subdirectory is a missing output. Exercise collection through the returned `output_ref` and verification through the provider's declared operation. Do not replace consumer schemas with a permissive local look-alike."""
         required_result += """
 25. For a governed scientific handoff, treat the accepted `experiment_plan.system` object and its digest as executable subject authority. Realize the declared system, component settings, arm semantics, intervention boundary, and locked invariants on the production runner path. A bounded fixture may reduce sample counts or runtime only where the accepted execution profile permits it; it must not substitute another model family, operator, input geometry, output space, or scientific subject. Emit the required implementation-observation document from that same path so an independent consumer can detect semantic substitution."""
         required_result += """
 26. In `adaos.research.runner.v1`, branch input acquisition only on the admitted `request.profile_conditions.input_policy.source`. `deterministic_contract_fixture` must run the bounded production conformance path without opening the accepted scientific dataset; `accepted_dataset` selects the admitted dataset path. Never invent or require a duplicate private selector under `request.conditions`."""
+        required_result += """
+27. When accepted authority requires a neutral/shared initialization or initial-equivalence invariant, test it directly on the production operators before training: use the same admitted input and shared initialization state for both arms and enforce the admitted tolerance. A declaration, parameter default, or post-training comparison is not evidence of initial equivalence."""
         required_result = required_result.format(
             target_id=target_id,
             companion=companion,
@@ -1807,13 +1830,13 @@ part of the submitted source snapshot.
 {development_inputs}
 ```
 
-## Exact provider contract checklist
+## Exact executable provider contract bundle
 
-This is a lossless projection of operation names, required fields, invariants,
-iteration bindings, and output assertions from the admitted typed provider
-contracts. Every listed assertion is mandatory and conjunctive. Use it as a
-working checklist, then consult each `authoritative_path` for the complete
-schema and fixture inputs. The trusted worker evaluates the authoritative
+This bundle repeats the exact operation schemas, provider declarations,
+semantic extensions, and conformance fixtures from every admitted typed
+provider contract. Every listed constraint and assertion is mandatory and
+conjunctive. Use it as an executable working contract and verify it against
+each `authoritative_path`. The trusted worker evaluates the authoritative
 contract, not this convenience projection.
 
 ```json

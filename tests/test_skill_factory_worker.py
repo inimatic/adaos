@@ -62,17 +62,43 @@ def test_contract_execution_checklist_surfaces_every_exact_sequence_assertion(
                         "input_schema": {
                             "type": "object",
                             "required": ["output_ref"],
+                            "properties": {
+                                "output_ref": {
+                                    "type": "string",
+                                    "pattern": "^content://",
+                                }
+                            },
                             "additionalProperties": False,
                         },
                         "output_schema": {
                             "type": "object",
                             "required": ["result", "observations"],
+                            "properties": {
+                                "result": {
+                                    "type": "object",
+                                    "required": ["evidence_class"],
+                                },
+                                "observations": {"type": "array"},
+                            },
                             "additionalProperties": False,
                         },
                         "invariants": ["observation repeats the result metric"],
                     }
                 },
                 "conformance_fixtures": [
+                    {
+                        "id": "evidence_documents",
+                        "kind": "document_set",
+                        "required": True,
+                        "required_documents": ["run_log.json"],
+                        "documents": {
+                            "run_log.json": {
+                                "type": "object",
+                                "required": ["status"],
+                                "properties": {"status": {"const": "complete"}},
+                            }
+                        },
+                    },
                     {
                         "id": "production_sequence",
                         "kind": "operation_sequence",
@@ -97,6 +123,16 @@ def test_contract_execution_checklist_surfaces_every_exact_sequence_assertion(
                         ],
                     }
                 ],
+                "lifecycle": {"execution": "candidate"},
+                "workflow_smoke_evidence": {
+                    "required_expected_outputs": ["run_log.json"]
+                },
+                "domain_conformance": {
+                    "initial_equivalence": {
+                        "required": True,
+                        "tolerance": 1e-6,
+                    }
+                },
             }
         ),
         encoding="utf-8",
@@ -113,10 +149,20 @@ def test_contract_execution_checklist_surfaces_every_exact_sequence_assertion(
 
     checklist = worker_module._contract_execution_checklist(development, workspace)
 
-    assert checklist["schema"] == "adaos.builder.contract_execution_checklist.v1"
+    assert checklist["schema"] == "adaos.builder.contract_execution_checklist.v2"
     assert checklist["digest"].startswith("sha256:")
     projected = checklist["contracts"][0]
     assert projected["authoritative_path"] == ".adaos_context/session/runner.json"
+    assert projected["required_provider_declaration"] == {
+        "contract": "example.runner.v1",
+        "capability": "example.runner",
+    }
+    assert projected["operations"][0]["input_schema"]["properties"][
+        "output_ref"
+    ]["pattern"] == "^content://"
+    assert projected["operations"][0]["output_schema"]["properties"][
+        "result"
+    ]["required"] == ["evidence_class"]
     assert projected["operations"][0]["input_required"] == ["output_ref"]
     assert projected["operations"][0]["output_required"] == [
         "result",
@@ -127,7 +173,21 @@ def test_contract_execution_checklist_surfaces_every_exact_sequence_assertion(
         "pointer": "/evidence_role",
         "equals_root_pointer": "/result/evidence_class",
     }
-    assert "opaque" not in json.dumps(checklist)
+    assert projected["operation_sequences"][0]["steps"][0]["input"] == {
+        "output_ref": "opaque"
+    }
+    assert projected["conformance_fixtures"][0]["documents"]["run_log.json"][
+        "properties"
+    ]["status"] == {"const": "complete"}
+    assert projected["lifecycle"] == {"execution": "candidate"}
+    assert projected["workflow_smoke_evidence"]["required_expected_outputs"] == [
+        "run_log.json"
+    ]
+    assert projected["domain_conformance"]["initial_equivalence"] == {
+        "required": True,
+        "tolerance": 1e-6,
+    }
+    assert "opaque" in json.dumps(checklist)
 
 
 def test_source_snapshot_keeps_reserved_artifacts_out_of_codex_workspace(
@@ -1706,7 +1766,7 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(
     assert "`-Encoding UTF8`" in prompt
     assert "UTF-8" in prompt
     assert "Governed Change context" in prompt
-    assert "Exact provider contract checklist" in prompt
+    assert "Exact executable provider contract bundle" in prompt
     assert "change.demo" in prompt
     assert "workflow.json validates" in prompt
     assert "complete TransitionDescriptor contract" in prompt
