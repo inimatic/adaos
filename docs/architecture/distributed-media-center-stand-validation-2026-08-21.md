@@ -198,6 +198,48 @@ member reported `storage.mode=external_reference` and
 and filename search for `PART006` still returned the original item. No source
 file was copied into AdaOS state or removed by component lifecycle operations.
 
+## Large-Library Diagnostics Addendum - 2026-08-22
+
+Project `0.6.46` closes a production defect found by probing the real stand
+catalog. The coordinator database was 1.1 GiB and a compact `status` call
+executed `SELECT COUNT(*) FROM catalog_search`. Because `catalog_search` is an
+FTS5 virtual table, this traversed the full token payload and held the request
+for minutes. Coordinator `0.8.42` derives the search row count from the ordinary
+`catalog_items` table under the enforced one-to-one rowid invariant; regression
+coverage records every executed statement and rejects an FTS count.
+
+The immutable Project release is
+`sha256:7c2f9b8910d0318bbb06b43c3d052c2331ef563b5578b4360f1f79a34eca856b`.
+Deployment revision `50`, plan
+`sha256:c8f4ba3caab178532c278351985f22a5d825441c1c4df8c6103a6c56c46de470`
+and operation `deploymentop.01M0MHYGHXNCXVRA772C4E2G5Z` updated the scenario,
+coordinator, control skill and both node-local agents through all six normal
+activation phases. The rollout used an old-primary/new-compatible definition
+v22, a new-primary/old-compatible definition v23 and exact-only definition v24.
+Group generation `22` then reported both stable instances ready at runtime
+generation `50`, exact release `0.6.46`, with `partial=false`.
+
+On `68,429` catalog rows, post-deployment `status` completed in 0.803 seconds,
+an exact filename catalog search in 0.165 seconds and bounded topology
+inspection in 0.292 seconds. Federated deep search matched `PART006` in the
+coordinator and both agent stages, including its Cyrillic audiobook folder
+metadata. The hub agent's direct technical FTS completed in 0.071 seconds.
+The same non-leading byte range returned `206 audio/mpeg`; the original source
+still had size `57387298`, mtime nanoseconds `1150860693572081600` and inode
+`89788`. Agent diagnostics again reported `storage.mode=external_reference` and
+`media_bytes_copied=false`.
+
+The deployed RU Root artifact endpoint rejected the current release-plan
+schema as `invalid_project_release`; it also did not contain the already active
+`0.6.45` release. For this stand run, archives were transferred to the hub's
+artifact staging area and admitted through `ContentAddressedPackageStore` and
+`ReleaseRepository`: every package and PackageRef was reverified before the
+ordinary Project deployment consumed it. No skill source was copied into an
+active runtime. Aligning the deployed Root artifact validator with the current
+core/backend release schema remains a platform deployment gate; the local
+content-addressed admission is evidence for the candidate, not evidence that
+the Root publication path is healthy.
+
 ## Defects Found And Closed
 
 1. Expired authority leases previously reset observed epoch to zero during
@@ -232,6 +274,8 @@ file was copied into AdaOS state or removed by component lifecycle operations.
   AdaOS CI run `32564373453` succeeded and published `0.1.925`.
 - Drained-instance replacement: `33` focused core tests and Ruff passed; AdaOS
   CI run `32566490113` succeeded and published `0.1.926` to both stand nodes.
+- Project `0.6.46`: `157` isolated scenario and skill tests passed; coordinator
+  `82`-test suite and Ruff passed with explicit no-FTS-count SQL tracing.
 
 ## Open Gates
 
@@ -243,7 +287,9 @@ file was copied into AdaOS state or removed by component lifecycle operations.
    instance and unauthorized-retention rejection matrix, plus sanitized export
    review (`DS5-05`). Incompatible release rejection and the operator
    drain/remove/restore retention slice are now recorded.
-4. Automatic authority election, cross-subnet placement and native mobile
+4. Deploy the current artifact release validator to Root and prove immutable
+   Project publication plus retrieval before treating Root as a release source.
+5. Automatic authority election, cross-subnet placement and native mobile
    background playback remain deferred by their roadmaps.
 
 ## Update Duration Note

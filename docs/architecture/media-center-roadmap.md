@@ -450,6 +450,11 @@ injection, resource budgets, and a reviewed production decision.
   playback plan and 120.926 ms delta apply. RSS peaked at 39.02 MiB with 0.793
   MiB sustained growth; aggregate CPU p95 was 13.533%. The evidence is
   `.adaos/state/codex/evidence/media-center-server-acceptance-soak-2026-08-21.json`.
+  A real 68,429-row/1.1-GiB-index stand probe on Project `0.6.46` returned
+  compact status in 0.803 seconds after removing a full FTS5 token-table count;
+  exact filename catalog search returned in 0.165 seconds. These results close
+  the discovered server-side diagnostics regression but do not replace the
+  hardware browser soak.
   The one-hour Android TV browser/playback/Yjs-pressure gate is still open.
 - [ ] `[must]` `MC7-08` Deploy the exact ProjectRelease through normal channels
   to the designated stand, execute TV plus controller E2E, and record package
@@ -469,7 +474,13 @@ injection, resource budgets, and a reviewed production decision.
   drain/remove/restore used deployment revision `49` and operation
   `deploymentop.01M0MEAH08T72VGSX8174PK1Q9`; definition v21/generation `19`
   returned both exact instances to ready with retained external media and
-  working range playback. Separate TV/controller browser interaction,
+  working range playback. Project `0.6.46`, release
+  `sha256:7c2f9b8910d0318bbb06b43c3d052c2331ef563b5578b4360f1f79a34eca856b`,
+  then completed deployment revision `50` and operation
+  `deploymentop.01M0MHYGHXNCXVRA772C4E2G5Z`. Definition v24/generation `22`
+  reports both exact instances ready with `partial=false`; filename search and
+  range playback still use the retained original source. Separate
+  TV/controller browser interaction,
   screenshots and long reconnect playback evidence remain open, so the task
   is not closed.
 - [x] `[must]` `MC7-09` Perform security/privacy review for remote deployment,
@@ -628,6 +639,14 @@ Local implementation checkpoint (not stand acceptance):
   compatibility; browser publication is verified as a content-addressed JSON
   resource. This closes the local transport half of `MC8-09`, not the stand UI
   and long-text evidence.
+- Project `0.6.46` is exact on both `.30` nodes. Coordinator `0.8.42` removes
+  the unbounded FTS5 row count from compact diagnostics; the 68,429-row stand
+  status probe completed in 0.803 seconds. The deployed Root artifact endpoint
+  still rejects the current release schema as `invalid_project_release`, so
+  this candidate was admitted through the hub's verified content-addressed
+  package and release repositories. Root validator rollout and publication
+  retrieval remain a platform gate, while TV/controller interaction and the
+  one-hour hardware soak remain the Media Center gates.
 
 ## Cross-Domain Dependencies
 
