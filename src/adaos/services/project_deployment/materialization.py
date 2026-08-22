@@ -23,6 +23,26 @@ def _context_paths(ctx: Any) -> tuple[Path, Path, str] | None:
     return Path(state_dir()).resolve(), Path(workspace_dir()).resolve(), node_id
 
 
+def active_project_component(ctx: Any, component_ref: str) -> bool:
+    resolved = _context_paths(ctx)
+    if resolved is None:
+        return False
+    state_dir, _workspace_root, local_node_id = resolved
+    store = ProjectDeploymentStore(state_dir=state_dir)
+    cursor: str | None = None
+    while True:
+        page, cursor = store.list_activations(cursor=cursor, limit=100)
+        if any(
+            activation.node_id == local_node_id
+            and activation.status == "active"
+            and activation.component_ref == component_ref
+            for activation in page
+        ):
+            return True
+        if cursor is None:
+            return False
+
+
 def restore_project_owned_materializations(ctx: Any) -> dict[str, Any]:
     resolved = _context_paths(ctx)
     if resolved is None:
@@ -124,4 +144,7 @@ def restore_project_owned_materializations(ctx: Any) -> dict[str, Any]:
     }
 
 
-__all__ = ["restore_project_owned_materializations"]
+__all__ = [
+    "active_project_component",
+    "restore_project_owned_materializations",
+]

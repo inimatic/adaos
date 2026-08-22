@@ -81,6 +81,33 @@ def _fake_ctx() -> SimpleNamespace:
     )
 
 
+def test_workspace_autosync_skips_project_owned_skill(monkeypatch) -> None:
+    updates: list[str] = []
+    ctx = _fake_ctx()
+    manager = SimpleNamespace(
+        runtime_update=lambda skill_name, **_kwargs: updates.append(skill_name)
+    )
+    monkeypatch.setattr(tool_bridge_module, "_debug_autosync_enabled", lambda: True)
+    monkeypatch.setattr(
+        tool_bridge_module,
+        "_workspace_skill_source_exists",
+        lambda *_args: True,
+    )
+    monkeypatch.setattr(tool_bridge_module, "_runtime_ready", lambda *_args: True)
+    monkeypatch.setattr(
+        "adaos.services.project_deployment.materialization.active_project_component",
+        lambda _ctx, component_ref: component_ref == "skill:media_center_skill",
+    )
+
+    tool_bridge_module._maybe_sync_workspace_runtime(
+        ctx,
+        manager,
+        "media_center_skill",
+    )
+
+    assert updates == []
+
+
 def _patch_runtime_approval_pending_actions(monkeypatch) -> list[dict[str, object]]:
     published: list[dict[str, object]] = []
 
