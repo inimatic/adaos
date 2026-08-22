@@ -3,7 +3,7 @@
 Status: implementation roadmap for the
 [Distributed Media Center Target Architecture](media-center-target-architecture.md).
 
-Last reviewed: 2026-08-21.
+Last reviewed: 2026-08-22.
 
 ## Outcome
 
@@ -462,7 +462,12 @@ injection, resource budgets, and a reviewed production decision.
   open. Candidate `0.6.45` at registry revision `7119aabac4b74e055755ddff4b6f19175a6efb16`
   now has two matching independent local builds with release digest
   `sha256:4bd827fd9f819107c1d20d85dc13d31b4ce5f0f75f18f57a5238a596ec8ddfe0`;
-  publication and exact stand deployment remain open.
+  exact stand deployment is now complete. Deployment revision `48` and
+  operation `deploymentop.01M0MCVXNM45RR6Q5Q8MCCFSHJ` converged the hub and
+  member to exact release `0.6.45`; topology definition v20 removed the old
+  compatibility digest after both generation-18 instances were ready. Separate
+  TV/controller browser interaction, screenshots and long reconnect playback
+  evidence remain open, so the task is not closed.
 - [x] `[must]` `MC7-09` Perform security/privacy review for remote deployment,
   root containment, route grants, provider egress, shared-screen state, voice,
   logs, derived data and uninstall retention.
@@ -586,8 +591,15 @@ Local implementation checkpoint (not stand acceptance):
   `5378ad8`.
 - `MC8-08` is implemented locally in registry `b88c669`: the source-owning
   agent derives bounded artwork with provenance and the coordinator publishes
-  the sanitized `adaos.media.artwork.v1` projection. Project `0.6.44` must be
-  deployed and observed before acceptance.
+  the sanitized `adaos.media.artwork.v1` projection. On exact stand Project
+  `0.6.45`, folder artwork for source
+  `source_1f3ab7f03be6fb8c8f49dd23b617` completed as a 7,654-byte bounded JPEG,
+  advanced agent delta sequence to `40664`, and appeared in the coordinator as
+  `state=ready` with provider, dimensions, source revision and fingerprint.
+  Missing audio artwork remains an explicit terminal state. Video-frame
+  fallback also correctly reported `artwork_video_backend_unavailable` because
+  ffmpeg is not installed on `.30`; provider coverage and TV rendering remain
+  open acceptance work.
 - `MC8-09` dictionaries remain skill-owned in registry `803f99e`; `b88c669`
   adds UTF-8/Cyrillic integrity coverage and the artwork operation wording.
 - `MC8-10` and `MC8-11` use the external-CDP Android TV harness introduced in

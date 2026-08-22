@@ -11,7 +11,7 @@ does not authorize cross-subnet placement or a general multi-writer profile.
 
 | Surface | Candidate | Review boundary |
 | --- | --- | --- |
-| AdaOS core | `rev2026` release candidate based on `0.1.917` | service definition v2, exact release overlap, membership, fencing, routes, transfer and deployment control |
+| AdaOS core | `rev2026` through `0.1.925` (`a3559e14`) | service definition v2, exact release overlap, membership, fencing, routes, transfer and deployment control |
 | Media Center Project | `0.6.45` at registry `7119aabac4b74e055755ddff4b6f19175a6efb16`; release `sha256:4bd827fd9f819107c1d20d85dc13d31b4ce5f0f75f18f57a5238a596ec8ddfe0` | representative coordinator plus node-local agents and retained external media |
 | Deployment scope | two trusted physical nodes in one subnet | selected-node staged rollout; separate TV/controller presentations |
 
@@ -31,9 +31,26 @@ reference. The exact package set is:
 | `skill:media_library_agent@0.6.20` | `sha256:8c26a77ae7e40c391eaef1f954ae5e05aad2a26a40e22296ebdf5e356a589be0` |
 | `skill:mediaserver@0.9.15` | `sha256:e225581bd044e94ea09134efdb092e899975b77fcb42d6a072da51e9d6281024` |
 
-This closes local reproducibility only. The release is not a stand candidate
-until that exact registry revision and digest are published through normal
-channels.
+The release was subsequently published and deployed through the normal durable
+Project path on both physical nodes. The exact rolling sequence is recorded in
+the 2026-08-22 addendum to the stand receipt; this closes reproducibility and
+compatible rolling-release admission, not the remaining product and production
+gates.
+
+## Compatible Rolling Release Result - 2026-08-22
+
+Definition v19 admitted the old and candidate exact release digests while the
+batch-one Project rollout was in progress. Failed member activations stayed on
+the ready old release and rolled back without route or external-data loss.
+After the stable disk-admission cause was fixed in core rather than bypassed,
+deployment revision `48` and operation
+`deploymentop.01M0MCVXNM45RR6Q5Q8MCCFSHJ` converged the member to exact agent
+`0.6.20`. Definition v20 removed the old digest only after both physical
+generation-18 instances were ready on release
+`sha256:4bd827fd9f819107c1d20d85dc13d31b4ce5f0f75f18f57a5238a596ec8ddfe0`.
+Topology inspection was non-partial. This closes the compatible rolling-release
+gate and `DS5-04`; it does not substitute for the exact-candidate rejection,
+drain/remove, browser or soak gates below.
 
 ## Security Review
 
@@ -174,7 +191,7 @@ definition version, authority epoch or checkpoint cannot be established.
 
 | Gate | Required evidence | Current decision |
 | --- | --- | --- |
-| Compatible rolling release | normal ProjectRelease rollout on two physical nodes; old route retained; all live memberships converge; overlap then removed | open |
+| Compatible rolling release | normal ProjectRelease rollout on two physical nodes; old route retained; all live memberships converge; overlap then removed | accepted on exact `0.6.45`, operation `deploymentop.01M0MCVXNM45RR6Q5Q8MCCFSHJ` |
 | Failure and recovery | planned handoff, unplanned authority loss, stale owner rejection and retained checkpoint on exact candidate | repeat on candidate |
 | Security/privacy | rejection matrix plus sanitized export and retained external-data witness | open |
 | Resource/soak | passing server and Android TV one-hour gates plus update-under-playback QoE/I/O | server passed; TV/update proof open |

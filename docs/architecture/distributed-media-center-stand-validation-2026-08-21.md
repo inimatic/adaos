@@ -19,6 +19,8 @@ does not treat a successful stand run as production acceptance.
 | Media Center registry | `eb3d2ab` | follower snapshots cannot replace the authority checkpoint; promoted authority can recover from persisted replica state |
 | AdaOS client | `7647943` | a confirmed hub/subnet zone overrides and removes a stale URL `zone` hint |
 | Media Center Project | `0.6.37`, release `sha256:e13832e3cb77b20e110f249c12d5f0d9fc46974696757bcf9e6d62b6e6bd402a` | exact immutable scenario and four-skill compatibility closure |
+| AdaOS core | `0.1.925`, `a3559e14` | remote activation diagnostics, stale-candidate preparation identity and practical ordinary-wheel disk admission |
+| Media Center Project | `0.6.45`, release `sha256:4bd827fd9f819107c1d20d85dc13d31b4ce5f0f75f18f57a5238a596ec8ddfe0` | exact two-node compatible rolling release and exact-only topology convergence |
 
 The Project release was built twice from registry revision
 `eb3d2ab5df1d2ca8f2fbe6bc6ef2c6fe695214ec`. Both builds produced the same
@@ -110,6 +112,58 @@ ineligible because their membership or authority lease is inactive.
 - The client now treats URL `zone` as a bootstrap hint. Once a hub/subnet zone
   is confirmed, it wins over a stale URL value and the URL is normalized.
 
+## Exact 0.6.45 Rolling Upgrade Addendum - 2026-08-22
+
+The exact candidate was exercised through the normal durable Project path,
+not by copying skill sources into either node:
+
+1. Service definition v19 and group generation `17` admitted exact release
+   `sha256:4bd827fd9f819107c1d20d85dc13d31b4ce5f0f75f18f57a5238a596ec8ddfe0`
+   plus the previous live release
+   `sha256:c700d17da1210b961997f27652de0923993fc52061131c3148af79132d9e3cb4`.
+2. Failed member attempts remained durable and rolled back to ready agent
+   `0.6.18`. Revision `47` exposed the exact terminal reason
+   `skill_runtime_dependency_disk_budget_failed`; no compatibility check or
+   disk guard was disabled.
+3. Core commits `3e5474bd`, `2beeb78f`, `6c6525a1` and `fe2c6d69` made stale
+   candidates reprepare, exposed authorized remote runtime state, classified
+   preparation failures and changed the ordinary-wheel reserve from an
+   unrealistic 4 GiB for two small dependencies to 1 GiB. The separate 12 GiB
+   heavy/native dependency threshold remains intact and all thresholds remain
+   operator-configurable.
+4. Both nodes converged to core `0.1.925` (`a3559e14`). Deployment revision
+   `48`, plan
+   `sha256:f244d00fa1c39a726e34c515b89d615968ddbe0765153ec3e67e8e94a15329ad`
+   and operation `deploymentop.01M0MCVXNM45RR6Q5Q8MCCFSHJ` then succeeded.
+   The member completed fetch, verify, stage, activate, health and commit for
+   package
+   `sha256:8c26a77ae7e40c391eaef1f954ae5e05aad2a26a40e22296ebdf5e356a589be0`,
+   and registered activation
+   `activation.71c96bf7af8bf4efb50f646d113d3a7e`.
+5. Definition v20 removed every compatibility digest only after hub instance
+   `service-16d6c176293b22270e7c364bfc74` and member instance
+   `service-af4aa981321519b6bfaf2f50f74a` were ready at topology generation
+   `18` on the exact release. Bounded inspection reported `partial=false`.
+
+Post-deployment product probes observed two configured hub roots, two fresh
+participating agents and `40,663` hub source records. Search matched both the
+real filename `PART006` and Cyrillic folder terms from the audiobook hierarchy.
+Catalog pages remained capped at `30`, the playback queue at `10`, and two
+non-overlapping HTTP range reads returned `206 audio/mpeg` directly from the
+original registered source. An isolated profile favorite advanced through
+revisions `1` and `2` and was visible through the profile-filtered catalog
+between mutations. No original media bytes were copied: the member status
+reported `storage.mode=external_reference` and `media_bytes_copied=false`.
+
+The bounded artwork path was also exercised. A source with adjacent
+`Folder.jpg` produced a 7,654-byte derived JPEG with provider
+`media_library_agent.folder_artwork.v1`; agent delta `40664` made the sanitized
+URL, dimensions, source revision and fingerprint visible in the coordinator,
+and the image route returned HTTP `200 image/jpeg`. A file without artwork
+reported `artwork_not_found`, while video-frame fallback reported
+`artwork_video_backend_unavailable` because ffmpeg is absent on this stand.
+Those are truthful provider limitations, not successful artwork coverage.
+
 ## Defects Found And Closed
 
 1. Expired authority leases previously reset observed epoch to zero during
@@ -135,18 +189,18 @@ ineligible because their membership or authority lease is inactive.
 - Core CI containing membership serialization and deployment read retry: run
   `32458989756`, succeeded.
 - Firebase/client CI for the zone fix: run `32450364469`, succeeded.
+- Core ordinary-dependency disk admission: `22` focused tests and Ruff passed;
+  AdaOS CI run `32564373453` succeeded and published `0.1.925`.
 
 ## Open Gates
 
-1. A normal ProjectRelease rollout activates the new package before the old
-   topology source is drained. A topology plan that referenced the replaced old
-   activation correctly failed with
-   `topology_skill_activation_identity_mismatch`. Zero-downtime rolling
-   activation/topology ordering remains open (`DS5-04`).
-2. TV and controller browsers still need a recorded cross-surface E2E with
+1. TV and controller browsers still need a recorded cross-surface E2E with
    screenshots, D-pad/touch control, reconnect and resume (`MC7-08`).
-3. Long playback-under-indexing, browser render, CPU/RSS and Yjs pressure soak
+2. Long playback-under-indexing, browser render, CPU/RSS and Yjs pressure soak
    remains open (`MC7-07`, `DS5-05`).
+3. Repeat the exact-candidate security/privacy rejection matrix and execute the
+   operator drain/remove runbook with explicit retention receipts (`DS5-05`,
+   `AP8-12`).
 4. Automatic authority election, cross-subnet placement and native mobile
    background playback remain deferred by their roadmaps.
 
@@ -159,3 +213,8 @@ optimization is an immutable dependency layer or wheel cache keyed by
 `uv.lock`, platform, architecture and Python ABI, with a small application
 overlay and prewarm/import validation. This remains an updater optimization,
 not a Media Center workaround.
+
+The `0.1.925` update confirmed the same cost profile: fresh slot preparation
+took about five minutes before prewarm and countdown, while the active runtime
+and member route remained available. This validates the larger timeout but
+strengthens the case for cached immutable dependency layers.
