@@ -422,6 +422,59 @@ and a 20-sample timer probe recorded event-loop delay p95/max of 2.1 ms. This
 also exercised the loading/buffering transition path and found no informer
 writeback loop.
 
+## Project 0.6.53 Single-Node Surface Addendum - 2026-08-23
+
+Registry revision `afad575cd6102154965b15feacf57054c21f771b` defines immutable
+Project `media_center@0.6.53` as
+`sha256:19856947b5f6f58427d4b4729e17df0c2d198bed468881dbe6a8edf2798b2b0e`.
+The changed packages are scenario `0.6.14`
+(`sha256:7594c47cfe9aab18ee0a1d39056c8bd67e11132a6344d1a001b1fa14089b6a09`),
+coordinator `0.8.46`
+(`sha256:5571a3c3270f20a0103a25d3703cb56f6f2f1c8ab976ac5c27c5f51bbdcc8be5`)
+and control skill `0.2.5`
+(`sha256:7a04fc0318b5771273933cf71571cd341c1e2b0aba0563da9c405d744d895370`).
+The unchanged agent `0.6.26` and Media Server `0.9.18` complete the release.
+
+Client `0.0.368` at `81280060305c43cca87ee2affe509315913e20e5`
+makes rail arrows perform an immediate bounded scroll even when native smooth
+scrolling is unavailable, keeps all mini-player controls in one stable shell
+surface, makes Close detach the shell view without issuing Stop, and orders the
+remote as target, now-playing context and transport. The scenario sends typed
+Home selections: folders update folder navigation, while only items,
+collections and playlists open the player. Metadata processing is lazy behind
+the Settings command. The focused client suite passed 44 tests, the Node 24
+production build passed, and local desktop/mobile browser checks observed rail
+movement without overflow or console errors. The scenario/skill suite passed
+88 tests and Ruff.
+
+The `.30` hub runs AdaOS `0.1.929` at `ecbe6c38`. A reviewed local-only batch
+activated scenario `0.6.14`, coordinator `0.8.46` and control `0.2.5`; all
+three committed their exact packages. The agent remained healthy at version
+`0.6.26` with two roots, 40,661 available sources, background discovery
+running, `storage.mode=external_reference` and `media_bytes_copied=false`.
+Its package activation did not commit. The batch operation is intentionally
+recorded as partial: process-local deployment convergence could not observe
+the supervisor-owned agent service and rolled that activation phase back. No
+remote removal from the misleading offline plan was executed. This is not
+claimed as a complete distributed Project rollout.
+
+The `desktop` webspace was then rebuilt from the exact scenario projection.
+All required materialized branches are ready, and the stand source contains
+the separate `select:folder` handlers for Home and Folders views. A bounded
+catalog call returned three playable rows plus an opaque next cursor from the
+68,429-row catalog. A real Harry Potter item produced a one-item bounded queue,
+direct `.30` candidate and root-routed fallback. Agent inspection resolved the
+descriptor to the original `/mnt/disk1/Video` path with
+`storage_mode=reference`; a search under `/root/.adaos` found no MKV, MP4, MP3,
+FLAC or AVI media payload. Coordinator status reports both enrichment and
+agent-sync workers running.
+
+Generic Project deployment still needs an authority-process RPC boundary for
+inventory, remote planning and service convergence. A skill/runtime process
+must not infer removals from an empty process-local `HubLinkManager`, and a
+heartbeat directory must not be promoted into mutation authority. This gap is
+tracked separately as `PROJECT-DEPLOYMENT-AUTHORITY-001`.
+
 ## Update Duration Note
 
 An earlier core slot preparation on the same slow stand took about 239 seconds,
