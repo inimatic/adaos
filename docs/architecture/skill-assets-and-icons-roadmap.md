@@ -258,6 +258,12 @@ Status as of 2026-07-02:
   `role: "i18n"` resources with an explicit `locale`. The Angular
   `I18nService` loads those dictionaries through the same resource resolver and
   merges them over bundled `assets/i18n/*.json` translations.
+- A skill that shares one dictionary between runtime human-readable messages
+  and browser UI keeps it canonically under `<skill>/assets/i18n/<lang>.json`.
+  Core `I18nService` reads that location directly while retaining
+  `<skill>/i18n/<lang>.json` as rolling-upgrade compatibility. Domain strings
+  remain owned and versioned by the skill; core owns only loading, fallback,
+  interpolation, and browser publication.
 - Declarative skill and scenario UI should keep visible fallback text in the
   schema and add adjacent `*_i18n` fields. Runtime localization currently covers
   modal titles and widget configs recursively, including common fields such as

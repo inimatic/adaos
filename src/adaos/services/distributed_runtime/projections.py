@@ -16,6 +16,9 @@ from adaos.domain.distributed_runtime import (
 )
 
 
+OPERATOR_PROJECTION_SCHEMA = "adaos.distributed.operator_projection.v2"
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -23,6 +26,36 @@ def _now() -> datetime:
 def _active(lease: TopologyLease, *, now: datetime) -> bool:
     expires = datetime.fromisoformat(lease.valid_until.replace("Z", "+00:00"))
     return lease.status == "active" and expires > now
+
+
+def _operation_row(operation: TopologyOperation) -> dict:
+    phases = tuple(operation.phases)
+    current = next(
+        (
+            item
+            for item in reversed(phases)
+            if item.state in {"pending", "running", "failed", "uncertain"}
+        ),
+        phases[-1] if phases else None,
+    )
+    return {
+        "operation_id": operation.operation_id,
+        "kind": operation.kind,
+        "target_ref": operation.target_ref,
+        "state": operation.state,
+        "expected_revision": operation.expected_revision,
+        "authority_epoch": operation.authority_epoch,
+        "phase_count": len(phases),
+        "terminal_phase_count": sum(
+            item.state in {"succeeded", "failed", "uncertain", "skipped"}
+            for item in phases
+        ),
+        "current_phase": current.phase if current is not None else None,
+        "current_phase_state": current.state if current is not None else None,
+        "error_code": current.error_code if current is not None else None,
+        "created_at": operation.created_at,
+        "updated_at": operation.updated_at,
+    }
 
 
 def build_distributed_projection(
@@ -73,7 +106,7 @@ def build_distributed_projection(
         operation_values, key=lambda item: item.updated_at, reverse=True
     )[: max(1, min(item_limit, 50))]
     return {
-        "schema": "adaos.distributed.operator_projection.v1",
+        "schema": OPERATOR_PROJECTION_SCHEMA,
         "summary": {
             "groups": len(group_values),
             "ready_groups": sum(item.status == "ready" for item in group_values),
@@ -105,7 +138,7 @@ def build_distributed_projection(
             "observed_values": len(pressures),
             "maximum": max(pressures, default=None),
         },
-        "recent_operations": [item.to_dict() for item in recent_operations],
+        "recent_operations": [_operation_row(item) for item in recent_operations],
         "inventory": {
             "bounded": True,
             "page_limit": 200,
@@ -114,4 +147,4 @@ def build_distributed_projection(
     }
 
 
-__all__ = ["build_distributed_projection"]
+__all__ = ["OPERATOR_PROJECTION_SCHEMA", "build_distributed_projection"]

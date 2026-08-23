@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "project.deployment_projection.v1.schema.json",
+  "title": "AdaOS Project Deployment Projection v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "items", "next_cursor", "partial"],
+  "properties": {
+    "schema": { "const": "adaos.project.deployment_projection.v1" },
+    "items": {
+      "type": "array",
+      "maxItems": 200,
+      "items": { "$ref": "#/$defs/deployment" }
+    },
+    "next_cursor": { "type": ["string", "null"], "maxLength": 4096 },
+    "partial": { "type": "boolean" }
+  },
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "countMap": {
+      "type": "object",
+      "maxProperties": 64,
+      "additionalProperties": { "$ref": "#/$defs/count" }
+    },
+    "latestOperation": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["operation_id", "kind", "state", "uncertain", "updated_at"],
+      "properties": {
+        "operation_id": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "kind": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "state": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "uncertain": { "type": "boolean" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deployment_id", "project_ref", "subnet_id", "desired", "observed"],
+      "properties": {
+        "deployment_id": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "project_ref": { "type": "string", "pattern": "^project:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$" },
+        "subnet_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "desired": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["revision", "release_digest", "status", "components"],
+          "properties": {
+            "revision": { "type": "integer", "minimum": 1 },
+            "release_digest": { "$ref": "#/$defs/digest" },
+            "status": { "enum": ["draft", "planned", "applying", "active", "degraded", "failed", "removing", "removed"] },
+            "components": { "$ref": "#/$defs/count" }
+          }
+        },
+        "observed": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["activation_total", "activation_states", "activation_partial", "operation_total", "operation_states", "operation_partial", "latest_operation"],
+          "properties": {
+            "activation_total": { "$ref": "#/$defs/count" },
+            "activation_states": { "$ref": "#/$defs/countMap" },
+            "activation_partial": { "type": "boolean" },
+            "operation_total": { "$ref": "#/$defs/count" },
+            "operation_states": { "$ref": "#/$defs/countMap" },
+            "operation_partial": { "type": "boolean" },
+            "latest_operation": { "$ref": "#/$defs/latestOperation" }
+          }
+        }
+      }
+    }
+  }
+}

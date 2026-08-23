@@ -15,6 +15,10 @@ from adaos.services.artifact_pipeline.storage import (
     MutationLockTimeout,
     mutation_lock,
 )
+from adaos.services.operational_errors import (
+    SENSITIVE_ERROR_MARKERS,
+    normalized_error_code,
+)
 
 from .authorization import DistributedPrincipal
 from .store import DistributedRuntimeStore
@@ -78,27 +82,18 @@ _APPROVAL_PERMISSIONS = {
     "replica_remove": "distributed.replica.remove",
     "replica_data_delete": "distributed.data.delete",
 }
-_SECRET_WORDS = {"authorization", "cookie", "password", "secret", "token"}
-
-
 def _adapter_error_code(exc: Exception, phase: str) -> str:
-    candidate = str(exc).strip().lower()
-    if (
-        candidate
-        and len(candidate) <= 160
-        and all(
-            char.isascii() and (char.isalnum() or char in "._:-") for char in candidate
-        )
-    ):
-        return candidate
-    return f"adapter_phase_failed:{phase}"
+    return normalized_error_code(exc, fallback=f"adapter_phase_failed:{phase}")
 
 
 def _redact(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {
             str(key): "[redacted]"
-            if any(word in str(key).lower() for word in _SECRET_WORDS)
+            if any(
+                marker in str(key).lower()
+                for marker in SENSITIVE_ERROR_MARKERS
+            )
             else _redact(item)
             for key, item in value.items()
         }
@@ -357,6 +352,7 @@ class TopologyExecutor:
                     finished_at=utc_now(),
                 )
             except UncertainTopologyPhaseError as exc:
+                error_code = _adapter_error_code(exc, phase)
                 result = TopologyPhaseResult(
                     phase=f"{step.step_id}.{phase}",
                     state="uncertain",
@@ -365,7 +361,7 @@ class TopologyExecutor:
                     receipt={},
                     started_at=started_at,
                     finished_at=utc_now(),
-                    error_code=str(exc) or "uncertain_adapter_outcome",
+                    error_code=error_code,
                 )
                 self._append_terminal_phase(operation, result)
                 raise
@@ -373,6 +369,7 @@ class TopologyExecutor:
                 if attempt < max_attempts:
                     self.sleep(min(float(attempt), 5.0))
                     continue
+                error_code = _adapter_error_code(exc, phase)
                 self._append_terminal_phase(
                     operation,
                     TopologyPhaseResult(
@@ -383,10 +380,10 @@ class TopologyExecutor:
                         receipt={},
                         started_at=started_at,
                         finished_at=utc_now(),
-                        error_code=str(exc) or "retry_exhausted",
+                        error_code=error_code,
                     ),
                 )
-                raise TopologyExecutionError(str(exc) or "retry_exhausted") from exc
+                raise TopologyExecutionError(error_code) from exc
             except Exception as exc:
                 error_code = _adapter_error_code(exc, phase)
                 self._append_terminal_phase(

@@ -76,6 +76,7 @@ Current target-state control-plane extensions are documented in:
 - [Event Management](event-management.md): current event envelope and local-bus primer subordinate to the operational event model
 - [Distributed Service and Data Topology](distributed-service-and-data-topology.md): target core service-group, instance, partition, replica, lease, freshness, routing, and domain-adapter boundary
 - [Distributed Service and Data Topology Roadmap](distributed-service-and-data-topology-roadmap.md): implementation and evidence sequence for the reusable distributed runtime control plane
+- [Distributed Topology Production Review - 2026-08-21](distributed-topology-production-review-2026-08-21.md): trusted-subnet security, privacy, resource, rolling-upgrade, recovery and explicit production-decision gates
 - [Subnet Knowledge Fabric Target Architecture](subnet-knowledge-fabric.md): canonical cross-domain resource knowledge, source observations, reusable artifacts, optional versions, aliases, i18n, hybrid/latent retrieval, and actionable UI/dialog/voice boundary
 - [Subnet Knowledge Fabric Roadmap](subnet-knowledge-fabric-roadmap.md): prioritized contracts, implementation, product adoption, and production evidence gates for the shared Knowledge Fabric
 - [Media Core Boundary](media-core-boundary.md): core media plane versus skill-owned catalog/search/product semantics, current Media Server adapter, and media-indexer compatibility rules

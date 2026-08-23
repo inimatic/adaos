@@ -17,6 +17,7 @@ from adaos.domain.distributed_runtime import (
     TransferRecord,
     utc_now,
 )
+from adaos.services.operational_errors import normalized_error_code
 
 from .operations import (
     RetryableTopologyPhaseError,
@@ -665,18 +666,21 @@ class HttpTopologyPhaseTransport:
             body = response.json()
         except ValueError as exc:
             raise TopologyExecutionError("remote_topology_response_invalid") from exc
+        if not isinstance(body, Mapping):
+            raise TopologyExecutionError("remote_topology_response_invalid")
         if response.status_code in {429, 502, 503, 504}:
             raise RetryableTopologyPhaseError(
-                str(body.get("detail") or "remote_topology_busy")
+                normalized_error_code(
+                    body.get("detail"), fallback="remote_topology_busy"
+                )
             )
         if response.status_code >= 400:
             raise TopologyExecutionError(
-                str(
-                    body.get("detail") or f"remote_topology_http_{response.status_code}"
+                normalized_error_code(
+                    body.get("detail"),
+                    fallback=f"remote_topology_http_{response.status_code}",
                 )
             )
-        if not isinstance(body, Mapping):
-            raise TopologyExecutionError("remote_topology_response_invalid")
         if body.get("schema") != TOPOLOGY_PHASE_RESULT_SCHEMA:
             raise TopologyExecutionError("remote_topology_response_schema_invalid")
         return body
@@ -715,18 +719,21 @@ class HttpTopologyPhaseTransport:
             body = response.json()
         except ValueError as exc:
             raise TopologyExecutionError("remote_topology_response_invalid") from exc
+        if not isinstance(body, Mapping):
+            raise TopologyExecutionError("remote_topology_response_invalid")
         if response.status_code in {429, 502, 503, 504}:
             raise RetryableTopologyPhaseError(
-                str(body.get("detail") or "remote_topology_busy")
+                normalized_error_code(
+                    body.get("detail"), fallback="remote_topology_busy"
+                )
             )
         if response.status_code >= 400:
             raise TopologyExecutionError(
-                str(
-                    body.get("detail") or f"remote_topology_http_{response.status_code}"
+                normalized_error_code(
+                    body.get("detail"),
+                    fallback=f"remote_topology_http_{response.status_code}",
                 )
             )
-        if not isinstance(body, Mapping):
-            raise TopologyExecutionError("remote_topology_response_invalid")
         if body.get("schema") != TOPOLOGY_TRANSFER_RESULT_SCHEMA:
             raise TopologyExecutionError("remote_topology_response_schema_invalid")
         return body
@@ -755,16 +762,16 @@ class MemberLinkTopologyPhaseTransport:
             ) from exc
         except RuntimeError as exc:
             reason = str(exc)
-            if any(
-                token in reason
-                for token in (
-                    "member_not_connected",
-                    "member_rpc_busy",
-                    "link_replaced",
-                )
+            for code in (
+                "member_not_connected",
+                "member_rpc_busy",
+                "link_replaced",
             ):
-                raise RetryableTopologyPhaseError(reason) from exc
-            raise TopologyExecutionError(reason) from exc
+                if code in reason:
+                    raise RetryableTopologyPhaseError(code) from exc
+            raise TopologyExecutionError(
+                normalized_error_code(reason, fallback="remote_topology_failed")
+            ) from exc
         if not isinstance(body, Mapping):
             raise TopologyExecutionError("remote_topology_response_invalid")
         if body.get("schema") != TOPOLOGY_PHASE_RESULT_SCHEMA:
@@ -789,16 +796,16 @@ class MemberLinkTopologyPhaseTransport:
             ) from exc
         except RuntimeError as exc:
             reason = str(exc)
-            if any(
-                token in reason
-                for token in (
-                    "member_not_connected",
-                    "member_rpc_busy",
-                    "link_replaced",
-                )
+            for code in (
+                "member_not_connected",
+                "member_rpc_busy",
+                "link_replaced",
             ):
-                raise RetryableTopologyPhaseError(reason) from exc
-            raise TopologyExecutionError(reason) from exc
+                if code in reason:
+                    raise RetryableTopologyPhaseError(code) from exc
+            raise TopologyExecutionError(
+                normalized_error_code(reason, fallback="remote_topology_failed")
+            ) from exc
         if not isinstance(body, Mapping):
             raise TopologyExecutionError("remote_topology_response_invalid")
         if body.get("schema") != TOPOLOGY_TRANSFER_RESULT_SCHEMA:

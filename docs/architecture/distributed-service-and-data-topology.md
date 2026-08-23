@@ -119,6 +119,8 @@ Immutable release-bound declaration containing:
 
 - logical service kind and provided contracts;
 - compatible component/package identities;
+- one desired exact ProjectRelease digest plus a bounded exact-digest overlap
+  allowlist for a reviewed rolling upgrade;
 - singleton or multi-instance topology policy;
 - required node capabilities and trust class;
 - supported dataset/replication adapter contracts;
@@ -154,6 +156,16 @@ lease and preserves the old one. Existing activation-bound instance ids are
 adopted in place during migration. Moving to another node, group, component, or
 protocol creates a different logical instance and requires an explicit topology
 operation. No rollover can inherit an expired authority epoch implicitly.
+
+`ServiceDefinition` v2 writes at most eight `compatible_release_digests` in
+addition to its desired `release_digest`; persisted v1 definitions remain
+readable with an empty overlap. Every admitted instance still proves an exact
+active ComponentActivation and its own ProjectRelease. When a group changes
+definition/release, core requires the previous desired release and every live
+membership release to remain accepted before committing the group revision.
+This permits old and new nodes to overlap during a batch-one rollout without
+turning compatibility into an open version range. A later definition can drop
+the old digest only after no active membership still uses it.
 
 ### Dataset
 
@@ -399,6 +411,12 @@ Bounded projections expose:
 High-cardinality partition details are cursor-backed. High-frequency replica
 metrics use an observability channel and aggregation, not synchronized product
 state.
+
+The subscribed operator projection uses
+`adaos.distributed.operator_projection.v2`. Recent operation rows contain only
+bounded lifecycle fields and phase/error summaries; adapter receipts,
+idempotency keys and payload details remain available only through the
+authorized cursor/detail API and are never copied into the Yjs projection.
 
 ## Media Center Mapping
 

@@ -3210,13 +3210,17 @@ def _media_update_guard_snapshot(*, role: str, runtime: dict[str, Any] | None) -
     attempt = payload.get("attempt") if isinstance(payload.get("attempt"), dict) else {}
     member_browser = payload.get("member_browser_direct") if isinstance(payload.get("member_browser_direct"), dict) else {}
     counts = payload.get("counts") if isinstance(payload.get("counts"), dict) else {}
+    delivery_activity = (
+        payload.get("delivery_activity")
+        if isinstance(payload.get("delivery_activity"), dict)
+        else {}
+    )
 
     connected_browser_session_total = int(
         member_browser.get("connected_browser_session_total")
         or member_browser.get("browser_session_total")
         or 0
     )
-    live_connected_peers = int(counts.get("live_connected_peers") or 0)
     live_tracks_total = sum(
         int(counts.get(key) or 0)
         for key in (
@@ -3228,7 +3232,11 @@ def _media_update_guard_snapshot(*, role: str, runtime: dict[str, Any] | None) -
     )
 
     observed_live_topology: str | None = None
-    if bool(member_browser.get("ready")) and connected_browser_session_total > 0:
+    if bool(delivery_activity.get("active")) and int(
+        delivery_activity.get("active_streams") or 0
+    ) > 0:
+        observed_live_topology = "source_media_delivery"
+    elif bool(member_browser.get("ready")) and connected_browser_session_total > 0:
         observed_live_topology = "member_browser_direct"
     elif live_tracks_total > 0:
         observed_live_topology = "hub_webrtc_loopback"
@@ -3241,7 +3249,13 @@ def _media_update_guard_snapshot(*, role: str, runtime: dict[str, Any] | None) -
     criticality = "idle"
     reason = "no live media session observed"
 
-    if observed_live_topology == "member_browser_direct":
+    if observed_live_topology == "source_media_delivery":
+        member_runtime_update = "defer"
+        hub_runtime_update = "defer"
+        current_support = "ready"
+        criticality = "source_media_delivery"
+        reason = "node is serving an active media byte stream; runtime transition should be deferred"
+    elif observed_live_topology == "member_browser_direct":
         member_runtime_update = "defer"
         hub_runtime_update = "preserve_sidecar"
         hub_sidecar_continuity_required = True
@@ -3273,6 +3287,7 @@ def _media_update_guard_snapshot(*, role: str, runtime: dict[str, Any] | None) -
         "current_support": current_support,
         "criticality": criticality,
         "reason": reason,
+        "delivery_activity": dict(delivery_activity),
     }
 
 
@@ -3301,6 +3316,12 @@ def media_update_guard_runtime_snapshot(*, role: str) -> dict[str, Any]:
         # must be exposed here as an in-memory snapshot too.
         "member_browser_direct": {},
     }
+    try:
+        from adaos.services.media_delivery_activity import media_delivery_activity_snapshot
+
+        runtime["delivery_activity"] = media_delivery_activity_snapshot()
+    except Exception:
+        runtime["delivery_activity"] = {}
     return {
         "available": available,
         "source": "live_session_authority",
@@ -8117,7 +8138,6 @@ def _live_yjs_materialization_snapshot(webspace_id: str | None) -> dict[str, Any
             return None
         ui_map = room.ydoc.get_map("ui")
         data_map = room.ydoc.get_map("data")
-        registry_map = room.ydoc.get_map("registry")
         application = _as_runtime_dict(ui_map.get("application") or {})
         desktop = _as_runtime_dict(application.get("desktop") or {})
         modals = _as_runtime_dict(application.get("modals") or {})

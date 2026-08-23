@@ -444,9 +444,13 @@ injection, resource budgets, and a reviewed production decision.
   fallback, unsupported codec, browser reconnect, and conflicting controllers.
 - [ ] `[must]` `MC7-07` Run local large-library, long-duration, CPU/memory,
   Yjs-pressure, browser-render, and playback-under-indexing tests against the
-  declared budgets. Large-library budgets, a 45-second worker sample and
-  concurrent playback reads passed; long-duration browser/playback soak is
-  still open.
+  declared budgets. The 2026-08-21 enforced server acceptance ran 3,600.063
+  seconds on 20,000 items, applied 307,950 agent deltas without errors, and
+  recorded p95 latencies of 64.079 ms FTS, 57.656 ms catalog page, 33.881 ms
+  playback plan and 120.926 ms delta apply. RSS peaked at 39.02 MiB with 0.793
+  MiB sustained growth; aggregate CPU p95 was 13.533%. The evidence is
+  `.adaos/state/codex/evidence/media-center-server-acceptance-soak-2026-08-21.json`.
+  The one-hour Android TV browser/playback/Yjs-pressure gate is still open.
 - [ ] `[must]` `MC7-08` Deploy the exact ProjectRelease through normal channels
   to the designated stand, execute TV plus controller E2E, and record package
   digests, deployment generation, node activations, catalog/shard revisions,
@@ -455,7 +459,10 @@ injection, resource budgets, and a reviewed production decision.
   exact generation `39` activations, topology generation `15`, replicated
   catalog witnesses and playback route evidence. Separate TV/controller
   browser interaction, screenshots and long reconnect playback evidence remain
-  open.
+  open. Candidate `0.6.45` at registry revision `7119aabac4b74e055755ddff4b6f19175a6efb16`
+  now has two matching independent local builds with release digest
+  `sha256:4bd827fd9f819107c1d20d85dc13d31b4ce5f0f75f18f57a5238a596ec8ddfe0`;
+  publication and exact stand deployment remain open.
 - [x] `[must]` `MC7-09` Perform security/privacy review for remote deployment,
   root containment, route grants, provider egress, shared-screen state, voice,
   logs, derived data and uninstall retention.
@@ -464,7 +471,9 @@ injection, resource budgets, and a reviewed production decision.
   Decision: bounded two-node trusted-subnet technical pilot accepted;
   production acceptance rejected pending MC7-07/08, zero-downtime rolling
   topology upgrade, and operator review. See the
-  [two-node stand receipt](distributed-media-center-stand-validation-2026-08-21.md).
+  [two-node stand receipt](distributed-media-center-stand-validation-2026-08-21.md)
+  and the generic
+  [distributed topology production review](distributed-topology-production-review-2026-08-21.md).
 - [x] `[should]` `MC7-11` Add automatic repair recommendations and reviewed
   reconcile plans for missing agents, stale shards, failed providers and
   incompatible variants.
@@ -551,6 +560,58 @@ must not be marked complete from contract or unit-test coverage alone.
   explicit steady-state CPU, memory-growth, render/update-rate and input-latency
   budgets on representative TV hardware; a desktop-only profile is not
   acceptance evidence.
+
+Local implementation checkpoint (not stand acceptance):
+
+- `MC8-01` is implemented by the generic endpoint-session bridge in client
+  `3ebe27a`/`98745a5` and the Media Center adapter projection in registry
+  `b2490f6`. Cross-browser TV/controller convergence remains to be recorded.
+- `MC8-02` has the fullscreen-safe generic transition overlay in client
+  `4090c74`, including policy-gated update deferral. The physical update and
+  playback recovery proof remains open.
+- The local implementation half of `MC8-03` now includes a generic bounded
+  media-delivery lease in core. Every direct or root-routed HTTP/range stream
+  and direct WebRTC media DataChannel download holds and refreshes an in-memory
+  path-free lease; runtime diagnostics expose only aggregate audio/video counts,
+  and supervisor reschedules hub or member transitions while the source stream
+  is active. Existing agent resource
+  pressure still pauses scan/rendition workers during an explicitly asserted
+  playback pressure state. Physical update-under-playback QoE and disk/CPU
+  evidence remain open.
+- `MC8-04` and `MC8-05` are represented by client `4eeef8c`/`467366c` and
+  registry `745061d`/`86ea4ca`; authoritative post-deployment behavior still
+  requires the stand run.
+- `MC8-06` uses the generic D-pad carousel from client `d988ae5`; `MC8-07` uses
+  the generic adaptive toolbar from client `834d3fd`/`84148f0` and registry
+  `5378ad8`.
+- `MC8-08` is implemented locally in registry `b88c669`: the source-owning
+  agent derives bounded artwork with provenance and the coordinator publishes
+  the sanitized `adaos.media.artwork.v1` projection. Project `0.6.44` must be
+  deployed and observed before acceptance.
+- `MC8-09` dictionaries remain skill-owned in registry `803f99e`; `b88c669`
+  adds UTF-8/Cyrillic integrity coverage and the artwork operation wording.
+- `MC8-10` and `MC8-11` use the external-CDP Android TV harness introduced in
+  client `0b31eaa`. It captures D-pad input, playback progress, Long Tasks,
+  main-thread/process CPU, heap growth, listeners/timers, UI/Yjs mutation
+  rates, dropped frames, bounded failure diagnostics and start/end screenshots.
+  Client `857dd6e` adds bounded failure-artifact commands, guaranteed managed
+  Chrome process-tree teardown, late desktop/scenario navigation, stable
+  semantic selectors, same-origin network attribution, and eight passing
+  harness contract tests. The local restricted-sandbox probe
+  `media-center-local-soak-2026-08-21-steady.json` completed without a hang and
+  recorded 5.681% main-thread CPU, 7.78% renderer CPU, 1.855% GPU-process CPU,
+  negative JS-heap growth, 0.2 ms event-loop p95, 14.9 ms frame p95, 14.2 ms
+  input p95, 40 ms D-pad interaction latency, 4.913 DOM mutations/s, 40 added
+  listeners, and seven active timers. It used software/restricted graphics,
+  exercised no playback, and exceeded the strict idle CPU budget at 6.733%, so
+  it is diagnostic evidence only. A one-hour run on representative Android TV
+  hardware and the update-under-playback evidence remain mandatory.
+- Skill dictionaries remain owned by `media_center_skill` under
+  `assets/i18n/{en,ru}.json`. Core now has local contract coverage for reading
+  that same publishable path with English fallback and legacy-path
+  compatibility; browser publication is verified as a content-addressed JSON
+  resource. This closes the local transport half of `MC8-09`, not the stand UI
+  and long-text evidence.
 
 ## Cross-Domain Dependencies
 

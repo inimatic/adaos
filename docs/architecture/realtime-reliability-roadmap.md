@@ -1838,6 +1838,14 @@ For `browser <-> member` direct media, the signaling contract will also need:
   defer member update, preserve or reject hub runtime restart based on real
   sidecar continuity evidence.
 
+Local bounded checkpoint: runtime-served HTTP/range media and direct WebRTC
+media DataChannel downloads now have a path-free in-memory delivery lease.
+Supervisor defers both hub and member transitions
+while such a stream is active, and diagnostics expose aggregate stream/media
+kind counts. The broader checkbox remains open because sidecar-owned media,
+browser-member direct sessions, and live stand continuity still require their
+own admission and evidence.
+
 ## Phase 7: Skills and scenarios lifecycle hardening
 
 ### Focus

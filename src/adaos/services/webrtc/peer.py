@@ -24,7 +24,7 @@ from typing import Any, Awaitable, Callable
 from pathlib import Path
 
 try:
-    from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, RTCConfiguration, RTCIceServer
+    from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
     from aiortc.contrib.media import MediaRelay
     from aiortc.sdp import candidate_from_sdp
 except ImportError as exc:  # pragma: no cover
@@ -38,6 +38,11 @@ from adaos.services.media_library import (
     ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES,
     guess_media_type,
     media_file_path,
+)
+from adaos.services.media_delivery_activity import (
+    begin_media_delivery,
+    end_media_delivery,
+    touch_media_delivery,
 )
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
@@ -1093,22 +1098,24 @@ class HubPeer:
         async def _stream_download(request_id: str, target: Path) -> None:
             size_bytes = int(target.stat().st_size)
             mime_type = guess_media_type(target.name)
-            await _send({
-                "ch": "media",
-                "t": "download_ready",
-                "requestId": request_id,
-                "filename": target.name,
-                "sizeBytes": size_bytes,
-                "mimeType": mime_type,
-            })
-            sent = 0
+            lease_id = begin_media_delivery(media_type=mime_type)
             try:
+                await _send({
+                    "ch": "media",
+                    "t": "download_ready",
+                    "requestId": request_id,
+                    "filename": target.name,
+                    "sizeBytes": size_bytes,
+                    "mimeType": mime_type,
+                })
+                sent = 0
                 with target.open("rb") as handle:
                     while True:
                         chunk = handle.read(64 * 1024)
                         if not chunk:
                             break
                         channel.send(chunk)
+                        touch_media_delivery(lease_id)
                         sent += len(chunk)
                         await _send({
                             "ch": "media",
@@ -1133,6 +1140,8 @@ class HubPeer:
                     code="media_playback_stream_failed",
                     request_id=request_id,
                 )
+            finally:
+                end_media_delivery(lease_id)
 
         async def _handle_json(msg: dict[str, Any]) -> None:
             kind = str(msg.get("t") or "").strip().lower()

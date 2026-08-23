@@ -16,7 +16,7 @@ import uuid
 from collections import Counter
 from functools import partial
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Iterator, Mapping, Optional
 
 import anyio
 import requests
@@ -39,7 +39,7 @@ from adaos.services.bootstrap import (
 )
 from adaos.services.node_display import node_display_from_config
 from adaos.services.env_policy import env_bool
-from adaos.services.io_web.desktop import WebDesktopInstalled, WebDesktopService, WebDesktopSnapshot
+from adaos.services.io_web.desktop import WebDesktopInstalled, WebDesktopService
 from adaos.services.media_library import (
     ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES,
     ROOT_ROUTED_MEDIA_BODY_LIMIT_BYTES,
@@ -57,6 +57,11 @@ from adaos.services.media_core import (
     parse_media_range,
     resolve_media_reference,
 )
+from adaos.services.media_delivery_activity import (
+    begin_media_delivery,
+    end_media_delivery,
+    touch_media_delivery,
+)
 from adaos.services.media_indexer_library import (
     resolve_media_indexer_resource,
     resolve_media_indexer_resource_by_name,
@@ -69,7 +74,6 @@ from adaos.services.reliability import (
     reliability_snapshot,
     sidecar_runtime_snapshot,
     skill_runtime_migration_update_gate_snapshot,
-    skill_runtime_migration_runtime_snapshot,
     supervisor_channel_runtime_snapshot,
     yjs_sync_runtime_snapshot,
 )
@@ -2082,9 +2086,6 @@ def _compact_runtime_reliability_payload(
     sidecar_runtime = _coerce_dict(runtime.get("sidecar_runtime"))
     sidecar_fields = _compact_sidecar_runtime_fields(sidecar_runtime)
     hardening = _coerce_dict(hub_root_protocol.get("hardening_coverage"))
-    route_tunnel = _coerce_dict(sidecar_runtime.get("route_tunnel_contract"))
-    ws = _coerce_dict(route_tunnel.get("ws"))
-    yws = _coerce_dict(route_tunnel.get("yws"))
     supervisor_runtime = _coerce_dict(runtime.get("supervisor_runtime"))
     connectivity = _coerce_dict(runtime.get("connectivity"))
     required_upstream_link = _coerce_dict(connectivity.get("required_upstream_link"))
@@ -3033,7 +3034,6 @@ def _materialized_payload_to_snapshot(
 ) -> dict[str, Any] | None:
     if not isinstance(payload, Mapping) or not payload:
         return None
-    target_webspace_id = _coerce_node_webspace_id(webspace_id)
     scenario_id = str(payload.get("scenario_id") or "").strip()
     if not scenario_id:
         return None
@@ -6371,6 +6371,21 @@ async def node_yjs_restore(webspace_id: str) -> dict[str, Any]:
     return result
 
 
+def _tracked_media_file_range(
+    resource: MediaResource,
+    *,
+    start: int,
+    end: int,
+) -> Iterator[bytes]:
+    lease_id = begin_media_delivery(media_type=resource.mime_type)
+    try:
+        for chunk in file_range_iter(resource.path, start=start, end=end):
+            touch_media_delivery(lease_id)
+            yield chunk
+    finally:
+        end_media_delivery(lease_id)
+
+
 def _stream_media_resource(resource: MediaResource, request: Request) -> StreamingResponse | Response:
     target = resource.path
     size = int(resource.size_bytes)
@@ -6391,7 +6406,7 @@ def _stream_media_resource(resource: MediaResource, request: Request) -> Streami
         include_content_type=False,
     )
     return StreamingResponse(
-        file_range_iter(target, start=start, end=end),
+        _tracked_media_file_range(resource, start=start, end=end),
         status_code=status_code,
         media_type=resource.mime_type,
         headers=headers,

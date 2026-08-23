@@ -59,6 +59,38 @@ def test_skill_resource_descriptor_materializes_asset_delivery_url(tmp_path: Pat
     assert published[0].read_text(encoding="utf-8") == "<svg></svg>"
 
 
+def test_skill_i18n_descriptor_materializes_browser_dictionary(tmp_path: Path, monkeypatch) -> None:
+    from adaos.services import browser_assets
+
+    runtime_base = tmp_path / "runtime"
+    skill_dir = tmp_path / "skills" / "media_center_skill"
+    asset = skill_dir / "assets" / "i18n" / "ru.json"
+    asset.parent.mkdir(parents=True)
+    asset.write_text('{"runtime.media_center.title":"Media Center RU"}', encoding="utf-8")
+    fake_ctx = SimpleNamespace(paths=SimpleNamespace(base_dir=lambda: runtime_base))
+    monkeypatch.setattr(browser_assets, "get_ctx", lambda: fake_ctx)
+
+    descriptor = webspace_runtime_module._materialize_skill_resource_descriptor(
+        "media_center.i18n.ru",
+        {
+            "kind": "data",
+            "role": "i18n",
+            "locale": "ru",
+            "path": "assets/i18n/ru.json",
+            "mime": "application/json",
+        },
+        skill_name="media_center_skill",
+        skill_dir=skill_dir,
+    )
+
+    assert descriptor["owner"] == "skill:media_center_skill"
+    assert descriptor["role"] == "i18n"
+    assert descriptor["locale"] == "ru"
+    assert descriptor["mime"] == "application/json"
+    assert descriptor["published"] is True
+    assert descriptor["url"].startswith("/assets/blobs/sha256/")
+
+
 def test_external_resource_descriptor_keeps_authored_url_and_manifest(tmp_path: Path, monkeypatch) -> None:
     from adaos.services import browser_assets
 

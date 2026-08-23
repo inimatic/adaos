@@ -121,6 +121,16 @@ class DistributedRuntime:
         self._publish_projection()
         return result
 
+    def get_service_definition(
+        self,
+        definition_id: str,
+        version: str,
+        *,
+        principal: DistributedPrincipal,
+    ) -> ServiceDefinition:
+        principal.require("distributed.topology.inspect")
+        return self.store.get_definition(str(definition_id), str(version))
+
     def invoke_instance(
         self,
         instance_id: str,
@@ -594,9 +604,7 @@ class DistributedRuntime:
             idempotency_key=idempotency_key,
         )
         if operation.state == "succeeded":
-            for partition_id in dict.fromkeys(
-                step.partition_id for step in plan.steps
-            ):
+            for partition_id in dict.fromkeys(step.partition_id for step in plan.steps):
                 partition = self.store.get_partition(partition_id)
                 if partition.status != "moving":
                     continue
@@ -647,6 +655,34 @@ class DistributedRuntime:
                     raise DistributedRuntimeError(
                         "incompatible_service_definition_upgrade"
                     )
+                if (
+                    previous_definition.release_digest != definition.release_digest
+                    and not definition.accepts_release(
+                        previous_definition.release_digest
+                    )
+                ):
+                    raise DistributedRuntimeError(
+                        "service_definition_upgrade_requires_release_overlap"
+                    )
+                active_releases: set[str] = set()
+                now = self.clock()
+                for instance in _all_pages(
+                    self.store.list_instances,
+                    group_id=previous_group.group_id,
+                ):
+                    try:
+                        lease = self.store.get_lease(instance.lease_id)
+                    except FileNotFoundError:
+                        continue
+                    if lease.status == "active" and _utc(lease.valid_until) > now:
+                        active_releases.add(instance.release_digest)
+                if any(
+                    not definition.accepts_release(release_digest)
+                    for release_digest in active_releases
+                ):
+                    raise DistributedRuntimeError(
+                        "service_definition_upgrade_drops_active_release"
+                    )
                 if group.desired_generation <= previous_group.desired_generation:
                     raise DistributedRuntimeError(
                         "service_definition_upgrade_requires_new_generation"
@@ -681,7 +717,7 @@ class DistributedRuntime:
         ):
             raise DistributedRuntimeError("component_activation_identity_mismatch")
         if (
-            definition.release_digest != instance.release_digest
+            not definition.accepts_release(instance.release_digest)
             or instance.component_ref not in definition.compatible_components
             or definition.protocol_version != instance.protocol_version
             or group.desired_generation != instance.topology_generation
@@ -770,7 +806,9 @@ class DistributedRuntime:
             lease_id = _identity(
                 "membership",
                 instance.instance_id,
+                instance.activation_id,
                 instance.runtime_generation,
+                instance.topology_generation,
                 _iso(now),
             )
             lease = TopologyLease(
@@ -1118,9 +1156,7 @@ class DistributedRuntime:
                 30,
                 min(
                     int(
-                        (
-                            _utc(lease.valid_until) - _utc(lease.renew_by)
-                        ).total_seconds()
+                        (_utc(lease.valid_until) - _utc(lease.renew_by)).total_seconds()
                         * 3
                     ),
                     600,

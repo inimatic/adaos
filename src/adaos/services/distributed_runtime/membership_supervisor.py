@@ -73,11 +73,19 @@ class ServiceMembershipSpec:
         if not isinstance(raw_capabilities, list) or len(raw_capabilities) > 100:
             raise ValueError("service.membership.capabilities must be a bounded list")
         capabilities = tuple(
-            sorted({str(item).strip() for item in raw_capabilities if str(item).strip()})
+            sorted(
+                {str(item).strip() for item in raw_capabilities if str(item).strip()}
+            )
         )
         raw_endpoints = value.get("endpoints") or []
-        if not isinstance(raw_endpoints, list) or not raw_endpoints or len(raw_endpoints) > 16:
-            raise ValueError("service.membership.endpoints must contain 1..16 endpoints")
+        if (
+            not isinstance(raw_endpoints, list)
+            or not raw_endpoints
+            or len(raw_endpoints) > 16
+        ):
+            raise ValueError(
+                "service.membership.endpoints must contain 1..16 endpoints"
+            )
         endpoints: list[Mapping[str, Any]] = []
         required = {"endpoint_id", "protocol", "address_ref", "scopes", "metadata"}
         for raw in raw_endpoints:
@@ -85,14 +93,23 @@ class ServiceMembershipSpec:
                 raise ValueError("service.membership endpoint fields are invalid")
             endpoint = dict(raw)
             address_ref = str(endpoint.get("address_ref") or "")
-            allowed_templates = ("{node_id}", "{skill}", "{group_id}", "{activation_id}")
+            allowed_templates = (
+                "{node_id}",
+                "{skill}",
+                "{group_id}",
+                "{activation_id}",
+            )
             remainder = address_ref
             for template in allowed_templates:
                 remainder = remainder.replace(template, "")
             if "{" in remainder or "}" in remainder:
-                raise ValueError("service.membership endpoint address_ref template is invalid")
+                raise ValueError(
+                    "service.membership endpoint address_ref template is invalid"
+                )
             if "{skill}" not in address_ref and skill_name not in address_ref:
-                raise ValueError("service.membership endpoint must identify the owning skill")
+                raise ValueError(
+                    "service.membership endpoint must identify the owning skill"
+                )
             endpoints.append(endpoint)
         return cls(
             group_id=group_id,
@@ -200,7 +217,11 @@ class DistributedServiceMembershipSupervisor:
                 spec.group_id,
                 receipt["error"],
             )
-        state_key = skill if effective_node_id == str(self.ctx.config.node_id) else f"{skill}@{effective_node_id}"
+        state_key = (
+            skill
+            if effective_node_id == str(self.ctx.config.node_id)
+            else f"{skill}@{effective_node_id}"
+        )
         with self._lock:
             self._states[state_key] = dict(receipt)
         return receipt
@@ -263,9 +284,12 @@ class DistributedServiceMembershipSupervisor:
             group.definition_id,
             group.definition_version,
         )
-        if activation.release_digest != definition.release_digest:
+        if not definition.accepts_release(activation.release_digest):
             raise RuntimeError("service_membership_release_not_defined")
-        if spec.protocol_version and spec.protocol_version != definition.protocol_version:
+        if (
+            spec.protocol_version
+            and spec.protocol_version != definition.protocol_version
+        ):
             raise RuntimeError("service_membership_protocol_mismatch")
 
         instance_id = self._instance_id(spec.group_id, node_id, component_ref)
@@ -494,7 +518,11 @@ def ingest_remote_membership_report(
     with _AUTHORITY_SUPERVISOR_LOCK:
         supervisor = _AUTHORITY_SUPERVISOR
     if supervisor is None:
-        return {"ok": False, "state": "waiting", "reason": "membership_authority_unavailable"}
+        return {
+            "ok": False,
+            "state": "waiting",
+            "reason": "membership_authority_unavailable",
+        }
     skill_name = str(payload.get("skill") or "").strip()
     spec = ServiceMembershipSpec.from_mapping(
         skill_name,

@@ -25,6 +25,7 @@ from adaos.services.distributed_runtime.adapters import (
     execute_topology_transfer_request,
 )
 from adaos.services.distributed_runtime.operations import (
+    RetryableTopologyPhaseError,
     TopologyExecutionError,
     TopologyStepContext,
     UncertainTopologyPhaseError,
@@ -606,6 +607,32 @@ def test_http_topology_transport_marks_lost_ack_uncertain(monkeypatch) -> None:
         )
 
 
+def test_http_topology_transport_sanitizes_remote_error_detail(monkeypatch) -> None:
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            status_code=500,
+            json=lambda: {"detail": "authorization:private-token"},
+        ),
+    )
+    transport = HttpTopologyPhaseTransport(
+        endpoint_resolver=lambda _node_id: "http://node-b",
+        token_provider=lambda: "token",
+        source_node_id="node-a",
+    )
+
+    with pytest.raises(
+        TopologyExecutionError, match="remote_topology_http_500"
+    ) as raised:
+        transport.execute_phase(
+            node_id="node-b",
+            payload={"idempotency_key": "phase-private"},
+        )
+
+    assert "private" not in str(raised.value)
+
+
 def test_service_invocation_receiver_validates_target_instance() -> None:
     instance = _instance("documents-node-b", "node-b")
     payload = {
@@ -655,6 +682,73 @@ def test_http_service_invocation_marks_lost_ack_uncertain(monkeypatch) -> None:
             timeout_seconds=20,
             actor_ref="skill:document_coordinator",
         )
+
+
+def test_http_service_invocation_sanitizes_remote_error_detail(monkeypatch) -> None:
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            status_code=500,
+            json=lambda: {"detail": "authorization:private-token"},
+        ),
+    )
+    transport = HttpServiceInvocationTransport(
+        endpoint_resolver=lambda _node_id: "http://node-b",
+        token_provider=lambda: "token",
+        source_node_id="node-a",
+    )
+
+    with pytest.raises(TopologyExecutionError, match="remote_service_http_500") as raised:
+        transport.invoke(
+            instance=_instance("documents-node-b", "node-b"),
+            operation_id="pull_deltas",
+            arguments={"limit": 100},
+            request_id="pull-private",
+            timeout_seconds=20,
+            actor_ref="skill:document_coordinator",
+        )
+
+    assert "private" not in str(raised.value)
+
+
+def test_member_service_invocation_sanitizes_unknown_runtime_error() -> None:
+    def rpc_call(*_args, **_kwargs):
+        raise RuntimeError("authorization:private-token")
+
+    transport = MemberLinkServiceInvocationTransport(
+        rpc_call=rpc_call,
+        source_node_id="node-a",
+    )
+
+    with pytest.raises(TopologyExecutionError, match="remote_service_failed") as raised:
+        transport.invoke(
+            instance=_instance("documents-node-b", "node-b"),
+            operation_id="pull_deltas",
+            arguments={"limit": 100},
+            request_id="pull-private",
+            timeout_seconds=20,
+            actor_ref="skill:document_coordinator",
+        )
+
+    assert "private" not in str(raised.value)
+
+
+def test_member_topology_transport_normalizes_known_runtime_error() -> None:
+    def rpc_call(*_args, **_kwargs):
+        raise RuntimeError("member_not_connected authorization:private-token")
+
+    transport = MemberLinkTopologyPhaseTransport(rpc_call=rpc_call)
+
+    with pytest.raises(
+        RetryableTopologyPhaseError, match="^member_not_connected$"
+    ) as raised:
+        transport.execute_phase(
+            node_id="node-b",
+            payload={"idempotency_key": "phase-private"},
+        )
+
+    assert "private" not in str(raised.value)
 
 
 def test_member_link_transports_use_distinct_core_methods() -> None:

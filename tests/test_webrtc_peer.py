@@ -551,6 +551,82 @@ def test_setup_yjs_channel_replaces_previous_adapter_and_channel(monkeypatch) ->
     asyncio.run(_run())
 
 
+def test_media_datachannel_download_tracks_delivery_activity(monkeypatch, tmp_path: Path) -> None:
+    peer_mod = _load_peer_module(monkeypatch)
+    media_file = tmp_path / "movie.mp4"
+    media_file.write_bytes(b"x" * (64 * 1024 + 17))
+    activity: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(peer_mod, "media_file_path", lambda _name: media_file)
+    monkeypatch.setattr(
+        peer_mod,
+        "begin_media_delivery",
+        lambda *, media_type: activity.append(("begin", media_type)) or "lease-1",
+    )
+    monkeypatch.setattr(
+        peer_mod,
+        "touch_media_delivery",
+        lambda lease_id: activity.append(("touch", lease_id)),
+    )
+    monkeypatch.setattr(
+        peer_mod,
+        "end_media_delivery",
+        lambda lease_id: activity.append(("end", lease_id)),
+    )
+
+    class DummyChannel:
+        readyState = "open"
+
+        def __init__(self) -> None:
+            self.handlers = {}
+            self.sent: list[str | bytes] = []
+
+        def on(self, event):
+            def decorator(fn):
+                self.handlers[event] = fn
+                return fn
+
+            return decorator
+
+        def send(self, payload: str | bytes) -> None:
+            self.sent.append(payload)
+
+    async def send_ice_cb(candidate: dict[str, object]) -> None:
+        return None
+
+    async def _run() -> None:
+        peer = peer_mod.HubPeer("browser-media", "desktop", send_ice_cb)
+        channel = DummyChannel()
+        peer._setup_media_channel(channel)
+        channel.handlers["message"](
+            json.dumps(
+                {
+                    "ch": "media",
+                    "t": "download_start",
+                    "requestId": "request-1",
+                    "filename": "movie.mp4",
+                }
+            )
+        )
+        for _ in range(20):
+            await asyncio.sleep(0)
+            messages = [json.loads(item) for item in channel.sent if isinstance(item, str)]
+            if any(item.get("t") == "download_done" for item in messages):
+                break
+
+        assert activity == [
+            ("begin", "video/mp4"),
+            ("touch", "lease-1"),
+            ("touch", "lease-1"),
+            ("end", "lease-1"),
+        ]
+        chunks = [item for item in channel.sent if isinstance(item, bytes)]
+        assert b"".join(chunks) == media_file.read_bytes()
+        await peer.close()
+
+    asyncio.run(_run())
+
+
 def test_events_webspace_change_closes_existing_yjs_binding(monkeypatch) -> None:
     peer_mod = _load_peer_module(monkeypatch)
     seen_commands: list[dict[str, object]] = []

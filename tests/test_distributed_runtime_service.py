@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 from threading import Event, Lock
 from typing import Any, Callable, Mapping
@@ -68,18 +69,23 @@ class Clock:
         self.value += timedelta(seconds=seconds)
 
 
-def _release() -> ReleasePlan:
+def _release(
+    *,
+    version: str = "1.0.0",
+    package_marker: str = "b",
+    manifest_marker: str = "c",
+) -> ReleasePlan:
     package = ArtifactPackageRef(
         kind="skill",
         artifact_id="media_library_agent",
-        version="1.0.0",
-        digest="sha256:" + "b" * 64,
-        manifest_digest="sha256:" + "c" * 64,
+        version=version,
+        digest="sha256:" + package_marker * 64,
+        manifest_digest="sha256:" + manifest_marker * 64,
         source_ref=_SOURCE,
     )
     release = ProjectRelease(
         project_id="media_center",
-        version="1.0.0",
+        version=version,
         source_ref=_SOURCE,
         components=(package,),
     ).seal()
@@ -92,13 +98,14 @@ def _release() -> ReleasePlan:
 
 
 class ReleaseProvider:
-    def __init__(self, release: ReleasePlan) -> None:
-        self.release = release
+    def __init__(self, *releases: ReleasePlan) -> None:
+        self.releases = {
+            str(release.release.release_digest): release for release in releases
+        }
 
     def get_release(self, project_id: str, release_digest: str) -> ReleasePlan:
         assert project_id == "media_center"
-        assert release_digest == self.release.release.release_digest
-        return self.release
+        return self.releases[release_digest]
 
 
 class InventoryProvider:
@@ -396,6 +403,146 @@ def test_service_definition_upgrade_is_versioned_and_fail_closed(
             principal=_principal(),
         )
     assert runtime.store.get_group("media-library-home") == upgraded
+    assert (
+        runtime.get_service_definition(
+            "media-library-agent",
+            "1.1",
+            principal=_principal(),
+        )
+        == compatible
+    )
+
+
+def test_service_definition_release_overlap_keeps_old_and_new_instances_admitted(
+    tmp_path: Path,
+) -> None:
+    runtime, _, old_release = _runtime(tmp_path)
+    old = runtime.register_instance(
+        _instance(old_release, "node-a"),
+        expected_revision=0,
+        principal=_principal(),
+    )
+    old_lease = runtime.store.get_lease(old.lease_id)
+    new_release = _release(
+        version="1.1.0",
+        package_marker="d",
+        manifest_marker="e",
+    )
+    runtime.releases = ReleaseProvider(old_release, new_release)
+    overlap = ServiceDefinition(
+        definition_id="media-library-agent",
+        version="2",
+        release_digest=str(new_release.release.release_digest),
+        compatible_release_digests=(str(old_release.release.release_digest),),
+        compatible_components=("skill:media_library_agent",),
+        provided_contracts=("media.catalog.v1",),
+        topology_mode="multi_instance",
+        protocol_version="1",
+        required_capabilities=("media.catalog",),
+        adapter_contracts=("adaos.distributed.adapter.v1",),
+    )
+    runtime.define_service(overlap, principal=_principal())
+    group = runtime.store.get_group("media-library-home")
+    runtime.define_group(
+        replace(
+            group,
+            definition_version="2",
+            desired_generation=2,
+            desired_revision=2,
+        ),
+        expected_revision=1,
+        principal=_principal(),
+    )
+
+    bridged = runtime.register_instance(
+        replace(old, topology_generation=2),
+        expected_revision=old.revision,
+        principal=_principal(),
+    )
+    assert bridged.release_digest == old.release_digest
+    assert bridged.status == "ready"
+    assert runtime.store.get_lease(old_lease.lease_id).status == "released"
+    assert runtime.store.get_lease(bridged.lease_id).status == "active"
+
+    runtime.deployment_store.save_deployment(
+        replace(_deployment(new_release), revision=2),
+        expected_revision=1,
+        actor_ref="user:owner",
+        reason="rolling compatible release",
+    )
+    runtime.deployment_store.put_activation(
+        replace(_activation(old_release, "node-a"), status="inactive")
+    )
+    new_activation = replace(
+        _activation(new_release, "node-a", generation=2),
+        activation_id="activation-agent-node-a-v2",
+    )
+    runtime.deployment_store.put_activation(new_activation)
+    rolled = runtime.register_instance(
+        replace(
+            _instance(new_release, "node-a"),
+            instance_id=bridged.instance_id,
+            activation_id=new_activation.activation_id,
+            runtime_generation=2,
+            topology_generation=2,
+            revision=bridged.revision,
+        ),
+        expected_revision=bridged.revision,
+        principal=_principal(),
+    )
+
+    assert rolled.instance_id == old.instance_id
+    assert rolled.release_digest == new_release.release.release_digest
+    assert rolled.runtime_generation == 2
+    assert runtime.store.get_lease(rolled.lease_id).status == "active"
+
+
+def test_service_definition_upgrade_cannot_drop_a_live_release(
+    tmp_path: Path,
+) -> None:
+    runtime, _, old_release = _runtime(tmp_path)
+    current = runtime.register_instance(
+        _instance(old_release, "node-a"),
+        expected_revision=0,
+        principal=_principal(),
+    )
+    new_release = _release(
+        version="1.1.0",
+        package_marker="d",
+        manifest_marker="e",
+    )
+    incompatible = ServiceDefinition(
+        definition_id="media-library-agent",
+        version="2",
+        release_digest=str(new_release.release.release_digest),
+        compatible_components=("skill:media_library_agent",),
+        provided_contracts=("media.catalog.v1",),
+        topology_mode="multi_instance",
+        protocol_version="1",
+        required_capabilities=("media.catalog",),
+        adapter_contracts=("adaos.distributed.adapter.v1",),
+    )
+    runtime.define_service(incompatible, principal=_principal())
+    group = runtime.store.get_group("media-library-home")
+
+    with pytest.raises(
+        DistributedRuntimeError,
+        match="service_definition_upgrade_requires_release_overlap",
+    ):
+        runtime.define_group(
+            replace(
+                group,
+                definition_version="2",
+                desired_generation=2,
+                desired_revision=2,
+            ),
+            expected_revision=1,
+            principal=_principal(),
+        )
+
+    assert runtime.store.get_group(group.group_id) == group
+    assert runtime.store.get_instance(current.instance_id) == current
+    assert runtime.store.get_lease(current.lease_id).status == "active"
 
 
 def test_membership_expiry_is_independent_from_last_health(
@@ -502,7 +649,10 @@ def test_instance_generation_rollover_preserves_logical_identity_and_authority(
     assert rolled.runtime_generation == 2
     assert rolled.topology_generation == 2
     assert runtime.store.get_lease(previous_lease.lease_id).status == "released"
-    assert runtime.store.get_lease(rolled.lease_id).previous_lease_id == previous_lease.lease_id
+    assert (
+        runtime.store.get_lease(rolled.lease_id).previous_lease_id
+        == previous_lease.lease_id
+    )
 
 
 def test_instance_rollover_rejects_non_monotonic_activation_before_releasing_lease(
@@ -1256,6 +1406,49 @@ def test_topology_operation_preserves_bounded_machine_adapter_error(
     assert operation.state == "failed"
     failed = next(phase for phase in operation.phases if phase.state == "failed")
     assert failed.error_code == "service_invocation_activation_missing"
+
+
+@pytest.mark.parametrize(
+    ("failure_type", "expected_state"),
+    (
+        (UncertainTopologyPhaseError, "uncertain"),
+        (RetryableTopologyPhaseError, "failed"),
+    ),
+)
+def test_topology_operation_sanitizes_adapter_error_secrets(
+    tmp_path: Path,
+    failure_type: type[Exception],
+    expected_state: str,
+) -> None:
+    class SecretErrorAdapter(FakeTopologyAdapter):
+        def inspect(self, context) -> Mapping[str, Any]:
+            self.calls.append((context.phase, context.attempt, context.idempotency_key))
+            raise failure_type("authorization:private-token")
+
+    runtime, _, _ = _runtime(tmp_path)
+    _derived_topology(runtime)
+    runtime.topology_adapter = SecretErrorAdapter()
+    plan = runtime.plan_replica_change(
+        "media-catalog:root-a",
+        action="repair",
+        source_instance_id="media-agent-node-a",
+        target_instance_id="media-agent-node-b",
+        replica_role="derived",
+        principal=_principal(),
+    )
+
+    operation = runtime.apply_topology_plan(
+        str(plan.plan_digest),
+        idempotency_key=f"repair-secret-{expected_state}",
+        principal=_principal(),
+    )
+
+    assert operation.state == expected_state
+    terminal = next(
+        phase for phase in operation.phases if phase.state in {"failed", "uncertain"}
+    )
+    assert terminal.error_code == "adapter_phase_failed:inspect"
+    assert "private" not in json.dumps(operation.to_dict())
 
 
 class ChunkSource:

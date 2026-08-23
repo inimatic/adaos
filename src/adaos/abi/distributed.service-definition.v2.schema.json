@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "distributed.service-definition.v2.schema.json",
+  "title": "AdaOS Distributed Service Definition v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "definition_id", "version", "release_digest", "compatible_release_digests", "compatible_components", "provided_contracts", "topology_mode", "protocol_version", "required_capabilities", "trust_class", "adapter_contracts", "health_protocol", "drain_protocol"],
+  "properties": {
+    "schema": { "const": "adaos.distributed.service_definition.v2" },
+    "definition_id": { "$ref": "#/$defs/token" },
+    "version": { "$ref": "#/$defs/token" },
+    "release_digest": { "$ref": "#/$defs/digest" },
+    "compatible_release_digests": { "type": "array", "maxItems": 8, "uniqueItems": true, "items": { "$ref": "#/$defs/digest" } },
+    "compatible_components": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^(skill|scenario):" } },
+    "provided_contracts": { "$ref": "#/$defs/stringSet" },
+    "topology_mode": { "enum": ["singleton", "multi_instance"] },
+    "protocol_version": { "$ref": "#/$defs/token" },
+    "required_capabilities": { "$ref": "#/$defs/stringSet" },
+    "trust_class": { "const": "trusted" },
+    "adapter_contracts": { "$ref": "#/$defs/stringSet" },
+    "health_protocol": { "$ref": "#/$defs/token" },
+    "drain_protocol": { "$ref": "#/$defs/token" }
+  },
+  "$defs": {
+    "token": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "stringSet": { "type": "array", "maxItems": 200, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 300 } }
+  }
+}
