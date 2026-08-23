@@ -3,7 +3,7 @@
 Status: implementation roadmap for the
 [Distributed Media Center Target Architecture](media-center-target-architecture.md).
 
-Last reviewed: 2026-08-21.
+Last reviewed: 2026-08-23.
 
 ## Outcome
 
@@ -100,6 +100,39 @@ still a bounded technical pilot rather than distributed-production acceptance.
 | MC6 Personalization, access, and voice | validated local | validated-stand | identity roadmap, MC4, MC5 |
 | MC7 Enrichment, variants, and production operations | bounded pilot; production rejected | production-accepted | MC2-MC6 |
 | MC8 Post-pilot product hardening | observed on stand; planned | validated-stand | MC4-MC7, updater UX |
+
+The exact `0.6.50` rollout on 2026-08-22 closed immutable Root publication and
+retrieval, repeated a two-node exact deployment, advanced authority to epoch
+`13`, and retained original-source range playback. It also proved the generic
+adaptive-toolbar renderer fix in the published client: client `e8bc3d9`
+normalizes UI-as-data menu options once, uses stable identities and bounds
+cyclic action signatures. Targeted tests, a Node 24 production build, 50 local
+and 100 published open/close cycles remained responsive. This is implementation
+and desktop-browser evidence for `MC8-07`/`MC8-11`, not Android TV acceptance.
+
+Release `0.6.52` at registry revision
+`84914f30b37d3b9c59e34603e7b98b53a5325481` has release digest
+`sha256:895afd1dc002a57bfcdac6ffedd85af733f98847e1a262109537dbbf344f9165`.
+It suppresses unchanged idle catalog publications, starts personal shelves from
+indexed profile state, and maintains a metadata-only folder projection for
+folders-first drill-down. The enforced 20,000-item gate recorded Home p95
+227.967 ms, root-folder p95 14.280 ms and leaf-folder p95 28.246 ms. Client
+`0b6649a` removes a second deterministic renderer loop: closing the full player
+could repeatedly re-register an already attached mini-player and publish a new
+snapshot forever. Client `cab3ffb` adds generic typed collection selection so
+the UI-as-data scenario can navigate folders without Media Center logic in the
+renderer. Deployment operation `deploymentop.01M0NTQ6YVAX4FJ18VGJ7825KA`
+installed the exact release on both `.30` nodes. Published client `3f97355`
+then completed Movies/List/Harry-Potter open, scroll and close with one shell
+media element, `readyState=4` and event-loop p95 of 6 ms; Folders drilled into
+`!Audiobooks` without opening playback. Range delivery returned 206 from the
+original `/mnt/disk1` file with `storage_mode=reference`. This validates the
+desktop playback/folder slice on the stand, not Android TV or cross-surface
+acceptance. Client `3bb15f3` adds idempotent buffering-event publication and 13
+passing focused tests. Published release `0.0.367` (build `474b3b6`) repeated
+the same open, scroll and close path with one mini-player media element,
+`readyState=4`, and event-loop p95/max of 2.1 ms. GitHub Actions run
+`32605061308` built and deployed it successfully on Node 24 actions.
 
 ## Dependency Order
 
@@ -450,6 +483,14 @@ injection, resource budgets, and a reviewed production decision.
   playback plan and 120.926 ms delta apply. RSS peaked at 39.02 MiB with 0.793
   MiB sustained growth; aggregate CPU p95 was 13.533%. The evidence is
   `.adaos/state/codex/evidence/media-center-server-acceptance-soak-2026-08-21.json`.
+  A real 68,429-row/1.1-GiB-index stand probe on Project `0.6.46` returned
+  compact status in 0.803 seconds after removing a full FTS5 token-table count;
+  exact filename catalog search returned in 0.165 seconds. These results close
+  the discovered server-side diagnostics regression but do not replace the
+  hardware browser soak.
+  Candidate `0.6.52` additionally passed the enforced 20,000-item local static
+  gate with Home/folder p95 budgets of 500/150 ms and observed 227.967/28.246
+  ms respectively. The complete 102-test skill/scenario suite and Ruff passed.
   The one-hour Android TV browser/playback/Yjs-pressure gate is still open.
 - [ ] `[must]` `MC7-08` Deploy the exact ProjectRelease through normal channels
   to the designated stand, execute TV plus controller E2E, and record package
@@ -462,7 +503,22 @@ injection, resource budgets, and a reviewed production decision.
   open. Candidate `0.6.45` at registry revision `7119aabac4b74e055755ddff4b6f19175a6efb16`
   now has two matching independent local builds with release digest
   `sha256:4bd827fd9f819107c1d20d85dc13d31b4ce5f0f75f18f57a5238a596ec8ddfe0`;
-  publication and exact stand deployment remain open.
+  exact stand deployment is now complete. Deployment revision `48` and
+  operation `deploymentop.01M0MCVXNM45RR6Q5Q8MCCFSHJ` converged the hub and
+  member to exact release `0.6.45`; topology definition v20 removed the old
+  compatibility digest after both generation-18 instances were ready. A later
+  drain/remove/restore used deployment revision `49` and operation
+  `deploymentop.01M0MEAH08T72VGSX8174PK1Q9`; definition v21/generation `19`
+  returned both exact instances to ready with retained external media and
+  working range playback. Project `0.6.46`, release
+  `sha256:7c2f9b8910d0318bbb06b43c3d052c2331ef563b5578b4360f1f79a34eca856b`,
+  then completed deployment revision `50` and operation
+  `deploymentop.01M0MHYGHXNCXVRA772C4E2G5Z`. Definition v24/generation `22`
+  reports both exact instances ready with `partial=false`; filename search and
+  range playback still use the retained original source. Separate
+  TV/controller browser interaction,
+  screenshots and long reconnect playback evidence remain open, so the task
+  is not closed.
 - [x] `[must]` `MC7-09` Perform security/privacy review for remote deployment,
   root containment, route grants, provider egress, shared-screen state, voice,
   logs, derived data and uninstall retention.
@@ -563,6 +619,23 @@ must not be marked complete from contract or unit-test coverage alone.
 
 Local implementation checkpoint (not stand acceptance):
 
+- Client `e8bc3d9` closes a deterministic hard renderer loop in the compact
+  toolbar. `menuOptions()` had allocated a new option array and objects during
+  every Angular change-detection pass, forcing Ionic menu/icon DOM recreation.
+  In the published bundle 100 profile-menu open/close cycles completed in
+  4.039 seconds and a subsequent CDP ping returned immediately. The remaining
+  `MC8-11` gate still requires representative Android TV hardware and the full
+  browse/playback/reconnect/update soak.
+
+- Client `0b6649a` closes the independent playback-modal lifecycle loop. After
+  a modal released its media element to the shell mini-player, shell host
+  registration wrote the unchanged `viewMode=mini` snapshot; the subscription
+  queued another registration and never yielded. Host attachment is now
+  idempotent and regression coverage asserts repeated registration emits no
+  snapshot. The buffering informer was only present on this path and was not
+  the source of the loop. Client `cab3ffb` routes `select:<item-type>` through
+  the generic list contract for folder drill-down versus media playback.
+
 - `MC8-01` is implemented by the generic endpoint-session bridge in client
   `3ebe27a`/`98745a5` and the Media Center adapter projection in registry
   `b2490f6`. Cross-browser TV/controller convergence remains to be recorded.
@@ -586,8 +659,15 @@ Local implementation checkpoint (not stand acceptance):
   `5378ad8`.
 - `MC8-08` is implemented locally in registry `b88c669`: the source-owning
   agent derives bounded artwork with provenance and the coordinator publishes
-  the sanitized `adaos.media.artwork.v1` projection. Project `0.6.44` must be
-  deployed and observed before acceptance.
+  the sanitized `adaos.media.artwork.v1` projection. On exact stand Project
+  `0.6.45`, folder artwork for source
+  `source_1f3ab7f03be6fb8c8f49dd23b617` completed as a 7,654-byte bounded JPEG,
+  advanced agent delta sequence to `40664`, and appeared in the coordinator as
+  `state=ready` with provider, dimensions, source revision and fingerprint.
+  Missing audio artwork remains an explicit terminal state. Video-frame
+  fallback also correctly reported `artwork_video_backend_unavailable` because
+  ffmpeg is not installed on `.30`; provider coverage and TV rendering remain
+  open acceptance work.
 - `MC8-09` dictionaries remain skill-owned in registry `803f99e`; `b88c669`
   adds UTF-8/Cyrillic integrity coverage and the artwork operation wording.
 - `MC8-10` and `MC8-11` use the external-CDP Android TV harness introduced in
@@ -612,6 +692,14 @@ Local implementation checkpoint (not stand acceptance):
   compatibility; browser publication is verified as a content-addressed JSON
   resource. This closes the local transport half of `MC8-09`, not the stand UI
   and long-text evidence.
+- Project `0.6.46` is exact on both `.30` nodes. Coordinator `0.8.42` removes
+  the unbounded FTS5 row count from compact diagnostics; the 68,429-row stand
+  status probe completed in 0.803 seconds. The deployed Root artifact endpoint
+  still rejects the current release schema as `invalid_project_release`, so
+  this candidate was admitted through the hub's verified content-addressed
+  package and release repositories. Root validator rollout and publication
+  retrieval remain a platform gate, while TV/controller interaction and the
+  one-hour hardware soak remain the Media Center gates.
 
 ## Cross-Domain Dependencies
 

@@ -158,6 +158,11 @@ def test_member_rpc_failure_is_observable_without_argument_values(monkeypatch) -
     )
 
     assert responses[-1]["ok"] is False
+    assert responses[-1]["error"] == {
+        "schema": "adaos.subnet.member_rpc_error.v1",
+        "code": "tool_intent_mismatch",
+        "type": "PermissionError",
+    }
     assert client.snapshot()["rpc"]["failed_total"] == 1
     assert client.snapshot()["rpc"]["last_result"]["error_code"] == "tool_intent_mismatch"
     rendered = "\n".join(warnings)
@@ -354,6 +359,25 @@ def test_member_rpc_dispatches_fail_closed_core_methods(monkeypatch) -> None:
     assert observed == [payload]
     with pytest.raises(PermissionError, match="member_rpc_method_not_allowed"):
         client._run_rpc("system.shell", {}, None, False)
+
+
+def test_member_rpc_exposes_bounded_skill_runtime_status(monkeypatch) -> None:
+    client = mod.MemberLinkClient()
+
+    class Manager:
+        def runtime_status(self, name: str) -> dict[str, object]:
+            return {"name": name, "version": "0.6.20", "ready": True}
+
+    monkeypatch.setattr(mod.MemberLinkClient, "_skill_manager", staticmethod(lambda: Manager()))
+
+    assert client._run_rpc(
+        "skills.runtime.status",
+        {"name": "media_library_agent"},
+        None,
+        False,
+    ) == {"name": "media_library_agent", "version": "0.6.20", "ready": True}
+    with pytest.raises(ValueError, match="skill_name_invalid"):
+        client._run_rpc("skills.runtime.status", {"name": "../secret"}, None, False)
 
 
 def test_member_snapshot_heartbeat_repairs_stale_default_manifest_version(monkeypatch) -> None:

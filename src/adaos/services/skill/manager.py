@@ -67,6 +67,16 @@ _log = logging.getLogger("adaos.skill.manager")
 _SKILL_MANIFEST_NAMES = ("skill.yaml",)
 
 
+def _runtime_preparation_identity() -> dict[str, str]:
+    core_identity = str(BUILD_INFO.git_commit or BUILD_INFO.version or "").strip()
+    return {
+        "schema": "adaos.skill_runtime.preparation_identity.v1",
+        "core_identity": core_identity,
+        "python_implementation": str(sys.implementation.name),
+        "python_cache_tag": str(getattr(sys.implementation, "cache_tag", "") or ""),
+    }
+
+
 def _archive_failed_candidate_test_log(
     *,
     env: SkillRuntimeEnvironment,
@@ -2181,6 +2191,7 @@ class SkillManager:
             "runtime_bucket": env.runtime_bucket(version),
             "resolved_manifest": str(slot.resolved_manifest),
             "source_manifest_digest": source_manifest_digest,
+            "preparation_identity": _runtime_preparation_identity(),
             "installed_at": datetime.now(timezone.utc).isoformat(),
             "tests": {name: result.status for name, result in tests.items()},
             "data_migration": dict(data_migration),
@@ -2274,6 +2285,8 @@ class SkillManager:
         prepared_source_digest = str(slot_meta.get("source_manifest_digest") or "").strip()
         if source_manifest_digest is not None and source_manifest_digest != prepared_source_digest:
             needs_prepare = True
+        if slot_meta.get("preparation_identity") != _runtime_preparation_identity():
+            needs_prepare = True
         if (
             not needs_prepare
             and source_path is not None
@@ -2295,15 +2308,37 @@ class SkillManager:
                     f"slot {target_slot} of version {target_version} is not prepared; "
                     f"run 'adaos skill install {name} --slot={target_slot}' first"
                 )
-            self.prepare_runtime(
-                name,
-                path=source_path,
-                version_override=target_version,
-                run_tests=False,
-                preferred_slot=target_slot,
-                allow_deactivated=_is_runtime_migration_transient_deactivation(previous_deactivation),
-                source_manifest_digest=source_manifest_digest,
-            )
+            try:
+                self.prepare_runtime(
+                    name,
+                    path=source_path,
+                    version_override=target_version,
+                    run_tests=False,
+                    preferred_slot=target_slot,
+                    allow_deactivated=_is_runtime_migration_transient_deactivation(previous_deactivation),
+                    source_manifest_digest=source_manifest_digest,
+                )
+            except SkillCoreCompatibilityError as exc:
+                raise RuntimeError("skill_runtime_core_incompatible") from exc
+            except SkillDependencyIsolationError as exc:
+                raise RuntimeError("skill_runtime_dependency_isolation_failed") from exc
+            except FileNotFoundError as exc:
+                raise RuntimeError("skill_runtime_source_missing") from exc
+            except TimeoutError as exc:
+                raise RuntimeError("skill_runtime_prepare_timeout") from exc
+            except RuntimeError as exc:
+                message = str(exc).lower()
+                if "not enough free disk space" in message:
+                    code = "skill_runtime_dependency_disk_budget_failed"
+                elif "failed to install" in message and "dependenc" in message:
+                    code = "skill_runtime_dependency_install_failed"
+                elif "deactivated" in message:
+                    code = "skill_runtime_deactivated"
+                else:
+                    code = "skill_runtime_prepare_failed"
+                raise RuntimeError(code) from exc
+            except Exception as exc:
+                raise RuntimeError("skill_runtime_prepare_failed") from exc
             metadata = env.read_version_metadata(target_version)
             slot_meta = metadata.get("slots", {}).get(target_slot, {})
             manifest_path = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)

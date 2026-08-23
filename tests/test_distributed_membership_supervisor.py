@@ -285,6 +285,56 @@ def test_membership_supervisor_rolls_activation_under_stable_instance_identity(
     assert runtime.authority_renew_calls == 2
 
 
+def test_membership_supervisor_readmits_drained_instance_for_new_activation(
+    monkeypatch,
+) -> None:
+    runtime = _Runtime()
+    monkeypatch.setattr(membership_module, "get_distributed_runtime", lambda: runtime)
+    supervisor = DistributedServiceMembershipSupervisor(
+        SimpleNamespace(config=SimpleNamespace(node_id="node-a"))
+    )
+    health = {"status": "passing", "ready": True, "http_status": 200}
+    pressure = {"state": "normal", "active_jobs": 0}
+
+    first = supervisor.reconcile(
+        "media_library_agent",
+        _spec(),
+        readiness=True,
+        health=health,
+        pressure=pressure,
+    )
+    runtime.store.instance = replace(
+        runtime.store.instance,
+        status="draining",
+        readiness=False,
+    )
+    unchanged = supervisor.reconcile(
+        "media_library_agent",
+        _spec(),
+        readiness=True,
+        health=health,
+        pressure=pressure,
+    )
+    runtime.deployment_store.generation = 10
+    restored = supervisor.reconcile(
+        "media_library_agent",
+        _spec(),
+        readiness=True,
+        health=health,
+        pressure=pressure,
+    )
+
+    assert first["action"] == "registered"
+    assert unchanged["state"] == "draining"
+    assert "action" not in unchanged
+    assert restored["action"] == "registered"
+    assert restored["state"] == "ready"
+    assert restored["activation_id"] == "activation.media-agent-a-v10"
+    assert restored["runtime_generation"] == 10
+    assert runtime.register_calls == 2
+    assert runtime.authority_renew_calls == 2
+
+
 def test_membership_supervisor_reconciles_expired_leases_periodically(
     monkeypatch,
 ) -> None:

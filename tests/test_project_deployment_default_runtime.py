@@ -126,11 +126,57 @@ def test_skill_component_activation_fails_when_live_handlers_do_not_activate(mon
         },
     )
 
-    with pytest.raises(RuntimeError, match="runtime_safety_validation_failed"):
+    with pytest.raises(RuntimeError, match="skill_handler_reload_failed") as error:
         AdaOSComponentLifecycleHooks(SimpleNamespace()).activate(
             kind="skill",
             component_id="media_center_skill",
             version="0.8.23",
+        )
+    assert isinstance(error.value.__cause__, RuntimeError)
+    assert str(error.value.__cause__) == "runtime_safety_validation_failed"
+
+
+def test_skill_component_activation_reports_runtime_stage(monkeypatch) -> None:
+    class Manager:
+        def activate_runtime(self, *_args, **_kwargs) -> str:
+            raise RuntimeError("candidate smoke import failed")
+
+    monkeypatch.setattr(AdaOSComponentLifecycleHooks, "_skill_manager", lambda _self: Manager())
+    monkeypatch.setattr(default_runtime, "runtime_mutation_lease", lambda *_args, **_kwargs: nullcontext())
+    monkeypatch.setattr(
+        AdaOSComponentLifecycleHooks,
+        "_service_activation_status",
+        staticmethod(lambda _component_id: {"managed": False, "ready": True}),
+    )
+
+    with pytest.raises(RuntimeError, match="skill_runtime_activation_failed") as error:
+        AdaOSComponentLifecycleHooks(SimpleNamespace()).activate(
+            kind="skill",
+            component_id="media_library_agent",
+            version="0.6.20",
+        )
+    assert isinstance(error.value.__cause__, RuntimeError)
+    assert str(error.value.__cause__) == "candidate smoke import failed"
+
+
+def test_skill_component_activation_preserves_specific_runtime_code(monkeypatch) -> None:
+    class Manager:
+        def activate_runtime(self, *_args, **_kwargs) -> str:
+            raise RuntimeError("skill_runtime_dependency_install_failed")
+
+    monkeypatch.setattr(AdaOSComponentLifecycleHooks, "_skill_manager", lambda _self: Manager())
+    monkeypatch.setattr(default_runtime, "runtime_mutation_lease", lambda *_args, **_kwargs: nullcontext())
+    monkeypatch.setattr(
+        AdaOSComponentLifecycleHooks,
+        "_service_activation_status",
+        staticmethod(lambda _component_id: {"managed": False, "ready": True}),
+    )
+
+    with pytest.raises(RuntimeError, match="skill_runtime_dependency_install_failed"):
+        AdaOSComponentLifecycleHooks(SimpleNamespace()).activate(
+            kind="skill",
+            component_id="media_library_agent",
+            version="0.6.20",
         )
 
 
@@ -342,6 +388,35 @@ def test_missing_declared_service_is_not_accepted_as_non_service(
         "managed": True,
         "ready": False,
         "reason": "service_not_discovered",
+    }
+
+
+def test_in_process_skill_status_does_not_run_service_discovery(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    skill_root = tmp_path / "skills" / "media_center_skill"
+    skill_root.mkdir(parents=True)
+    (skill_root / "skill.yaml").write_text(
+        "name: media_center_skill\nversion: 1.0.0\nruntime:\n  python: '3.11'\n",
+        encoding="utf-8",
+    )
+    hooks = AdaOSComponentLifecycleHooks(
+        SimpleNamespace(paths=SimpleNamespace(skills_dir=lambda: tmp_path / "skills"))
+    )
+
+    from adaos.services.skill import service_supervisor
+
+    monkeypatch.setattr(
+        service_supervisor,
+        "get_service_supervisor",
+        lambda: pytest.fail("in-process skills must not run service discovery"),
+    )
+
+    assert hooks._service_activation_status("media_center_skill") == {
+        "managed": False,
+        "ready": True,
+        "reason": "not_a_service_skill",
     }
 
 

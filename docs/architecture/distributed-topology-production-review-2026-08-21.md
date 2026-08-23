@@ -11,7 +11,7 @@ does not authorize cross-subnet placement or a general multi-writer profile.
 
 | Surface | Candidate | Review boundary |
 | --- | --- | --- |
-| AdaOS core | `rev2026` release candidate based on `0.1.917` | service definition v2, exact release overlap, membership, fencing, routes, transfer and deployment control |
+| AdaOS core | `rev2026` through `0.1.926` (`10cb9d9a`) | service definition v2, exact release overlap, membership, replacement readmission, fencing, routes, transfer and deployment control |
 | Media Center Project | `0.6.45` at registry `7119aabac4b74e055755ddff4b6f19175a6efb16`; release `sha256:4bd827fd9f819107c1d20d85dc13d31b4ce5f0f75f18f57a5238a596ec8ddfe0` | representative coordinator plus node-local agents and retained external media |
 | Deployment scope | two trusted physical nodes in one subnet | selected-node staged rollout; separate TV/controller presentations |
 
@@ -31,9 +31,64 @@ reference. The exact package set is:
 | `skill:media_library_agent@0.6.20` | `sha256:8c26a77ae7e40c391eaef1f954ae5e05aad2a26a40e22296ebdf5e356a589be0` |
 | `skill:mediaserver@0.9.15` | `sha256:e225581bd044e94ea09134efdb092e899975b77fcb42d6a072da51e9d6281024` |
 
-This closes local reproducibility only. The release is not a stand candidate
-until that exact registry revision and digest are published through normal
-channels.
+The release was subsequently published and deployed through the normal durable
+Project path on both physical nodes. The exact rolling sequence is recorded in
+the 2026-08-22 addendum to the stand receipt; this closes reproducibility and
+compatible rolling-release admission, not the remaining product and production
+gates.
+
+## Compatible Rolling Release Result - 2026-08-22
+
+Definition v19 admitted the old and candidate exact release digests while the
+batch-one Project rollout was in progress. Failed member activations stayed on
+the ready old release and rolled back without route or external-data loss.
+After the stable disk-admission cause was fixed in core rather than bypassed,
+deployment revision `48` and operation
+`deploymentop.01M0MCVXNM45RR6Q5Q8MCCFSHJ` converged the member to exact agent
+`0.6.20`. Definition v20 removed the old digest only after both physical
+generation-18 instances were ready on release
+`sha256:4bd827fd9f819107c1d20d85dc13d31b4ce5f0f75f18f57a5238a596ec8ddfe0`.
+Topology inspection was non-partial. The later revision-49
+drain/remove/restore run replaced the member activation, retained external
+media and returned both exact instances to ready under definition v21 and
+generation `19`. This closes the compatible rolling-release gate and
+`DS5-04`; it does not substitute for the remaining exact-candidate rejection,
+browser or soak gates below.
+
+## Bounded Diagnostics Follow-up - 2026-08-22
+
+Project `0.6.46`, release
+`sha256:7c2f9b8910d0318bbb06b43c3d052c2331ef563b5578b4360f1f79a34eca856b`,
+was admitted through the hub's verified content-addressed package/release
+repositories and deployed as revision `50`. Operation
+`deploymentop.01M0MHYGHXNCXVRA772C4E2G5Z` succeeded on both nodes. Definitions
+v22 and v23 preserved old/new overlap on each side of the primary-release
+switch; exact-only v24/generation `22` now reports both stable instances ready
+and `partial=false`.
+
+The follow-up removes an FTS5 full-token-table count from coordinator status.
+The real 68,429-row, 1.1 GiB stand catalog returned status in 0.803 seconds,
+exact filename search in 0.165 seconds and bounded topology inspection in 0.292
+seconds. Source identity and range playback were unchanged. The deployed RU
+Root endpoint rejected this current release plan as `invalid_project_release`
+and could not retrieve the already active `0.6.45` record. Current backend
+source contains the stricter release validator, but deployment and a successful
+Root publish/read proof remain required; local artifact admission does not
+close that platform gate.
+
+That platform gate was subsequently closed for the next exact candidate.
+Backend `0.1.183` at commit `926c2de` accepted only the governed Project
+composition-lock shape and published/retrieved `media_center@0.6.50` with exact
+digest
+`sha256:c56a0c2527fb8bf7d9a898beca2dddeb134267a2384d906e682890e4c394e6fa`.
+Deployment revision `54` and operation
+`deploymentop.01M0NHQ3X6F712AP18V4TCHVC1` then converged both physical nodes.
+Definition v28 provided bounded old/new overlap; exact-only v29 and group
+generation `27` removed it after both instances were ready. The authority
+handoff advanced the representative partition to revision `33`, epoch `13`,
+with matching `catalog:40663` witnesses and an authority-eligible route. This
+closes Root publication/retrieval and repeats compatible exact-candidate
+admission; it does not close the physical Android TV soak gate.
 
 ## Security Review
 
@@ -66,9 +121,11 @@ channels.
   deferred. Their threat and conflict models are not inherited from the
   trusted-subnet pilot.
 
-Open security proof: repeat incompatible-release, stale epoch, expired lease,
-revoked instance and unauthorized retention mutation rejection against the
-exact published candidate on the stand. Export sanitized receipts.
+Exact-candidate incompatible-release admission was rejected before mutation;
+the later valid rollout reached exact v24/generation `22`. Open security proof:
+repeat stale epoch, expired lease, revoked instance and unauthorized retention
+mutation rejection against the exact candidate on the stand, then export
+sanitized receipts.
 
 ## Privacy And Retention Review
 
@@ -87,10 +144,12 @@ exact published candidate on the stand. Export sanitized receipts.
   expose byte counts, checkpoints, hashes, retries and phases, but never payload
   contents or credentials.
 
-Open privacy proof: after staged update, drain and removal, record filesystem
-and catalog witnesses showing retained external source bytes, the reviewed
-replica/derived-data decision and absence of source paths in exported
-diagnostics.
+The exact drain/remove/restore run recorded `external_data=retained`; source
+size `57387298`, mtime `1150860693` and inode `89788` were unchanged, member
+storage remained `external_reference` with `media_bytes_copied=false`, and
+range playback still returned `206`. Open privacy proof is narrowed to the
+reviewed replica/derived-data cleanup decision and confirmation that exported
+diagnostics contain no source paths.
 
 ## Resource And Soak Review
 
@@ -174,12 +233,12 @@ definition version, authority epoch or checkpoint cannot be established.
 
 | Gate | Required evidence | Current decision |
 | --- | --- | --- |
-| Compatible rolling release | normal ProjectRelease rollout on two physical nodes; old route retained; all live memberships converge; overlap then removed | open |
+| Compatible rolling release | normal ProjectRelease rollout on two physical nodes; old route retained; all live memberships converge; overlap then removed | accepted on exact `0.6.45`, operation `deploymentop.01M0MCVXNM45RR6Q5Q8MCCFSHJ` |
 | Failure and recovery | planned handoff, unplanned authority loss, stale owner rejection and retained checkpoint on exact candidate | repeat on candidate |
-| Security/privacy | rejection matrix plus sanitized export and retained external-data witness | open |
+| Security/privacy | rejection matrix plus sanitized export and retained external-data witness | external retention and incompatible release accepted; remaining rejection/export matrix open |
 | Resource/soak | passing server and Android TV one-hour gates plus update-under-playback QoE/I/O | server passed; TV/update proof open |
 | Product E2E | separate TV and authorized controller with Now Playing, D-pad/touch, reconnect/resume, i18n and screenshots | open |
-| Operator recovery | runbook executed by operation ids with route/checkpoint evidence and reviewed rollback result | open |
+| Operator recovery | runbook executed by operation ids with route/checkpoint evidence and reviewed rollback result | drain/remove/restore accepted; authority rollback/recovery review open |
 
 Production remains rejected while any row is open. Passing contract tests or a
 single successful deployment cannot change this decision by implication.

@@ -3,7 +3,7 @@
 Status: implementation roadmap for
 [Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md).
 
-Last reviewed: 2026-08-18.
+Last reviewed: 2026-08-22.
 
 ## Outcome
 
@@ -926,9 +926,27 @@ package/release caches; both builds produced release digest
 `sha256:4bd827fd9f819107c1d20d85dc13d31b4ce5f0f75f18f57a5238a596ec8ddfe0`
 and identical verified package archives. The reproducibility receipt is
 `.adaos/state/codex/evidence/media-center-project-release-0.6.45-reproducibility.json`.
-`AP8-12` remains open until the exact release is exercised on two physical
-nodes; the implemented recommendation API does not waive that admission gate
-for `AP8-13`.
+`AP8-12` remains open until the exact release also has separate TV/controller
+placement evidence; the implemented recommendation API does not waive that
+admission gate for `AP8-13`.
+
+The exact two-physical-node deployment half of `AP8-12` is now validated on
+the `.30` stand. Project deployment revision `48`, plan
+`sha256:f244d00fa1c39a726e34c515b89d615968ddbe0765153ec3e67e8e94a15329ad`
+and operation `deploymentop.01M0MCVXNM45RR6Q5Q8MCCFSHJ` retained exact hub
+activations and upgraded the selected member from agent `0.6.18` to exact
+`0.6.20` through fetch, verify, stage, activate, health and commit. Earlier
+failed attempts rolled the member back and retained external data. The
+reviewed drain/remove/restore slice then succeeded through operations
+`deploymentop.01M0ME88HHV3VA46VA97F2AGXA`,
+`deploymentop.01M0ME8TR124KFGA7DJAWBPFWA` and
+`deploymentop.01M0MEAH08T72VGSX8174PK1Q9`. Deployment revision `49` restored
+member activation `activation.c93de6188890381ddaf47a7251993c9e`; definition
+v21/generation `19` reported both exact instances ready and non-partial after
+core `0.1.926` automatically readmitted the replaced instance. The removal
+receipt retained external data, the original file witness was unchanged and
+range playback remained available. The task remains open only for separate
+TV/controller placement evidence.
 
 The 2026-08-20 stand audit found one ready Windows hub in `sn_6acf0c01` and the
 Media Center stand in `sn_92ffc943`. Reassigning the parallel-work hub would

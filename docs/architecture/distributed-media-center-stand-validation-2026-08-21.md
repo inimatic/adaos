@@ -19,6 +19,8 @@ does not treat a successful stand run as production acceptance.
 | Media Center registry | `eb3d2ab` | follower snapshots cannot replace the authority checkpoint; promoted authority can recover from persisted replica state |
 | AdaOS client | `7647943` | a confirmed hub/subnet zone overrides and removes a stale URL `zone` hint |
 | Media Center Project | `0.6.37`, release `sha256:e13832e3cb77b20e110f249c12d5f0d9fc46974696757bcf9e6d62b6e6bd402a` | exact immutable scenario and four-skill compatibility closure |
+| AdaOS core | `0.1.926`, `10cb9d9a` | remote activation diagnostics, practical ordinary-wheel disk admission and drained-instance readmission after replacement |
+| Media Center Project | `0.6.45`, release `sha256:4bd827fd9f819107c1d20d85dc13d31b4ce5f0f75f18f57a5238a596ec8ddfe0` | exact two-node compatible rolling release and exact-only topology convergence |
 
 The Project release was built twice from registry revision
 `eb3d2ab5df1d2ca8f2fbe6bc6ef2c6fe695214ec`. Both builds produced the same
@@ -110,6 +112,187 @@ ineligible because their membership or authority lease is inactive.
 - The client now treats URL `zone` as a bootstrap hint. Once a hub/subnet zone
   is confirmed, it wins over a stale URL value and the URL is normalized.
 
+## Exact 0.6.45 Rolling Upgrade Addendum - 2026-08-22
+
+The exact candidate was exercised through the normal durable Project path,
+not by copying skill sources into either node:
+
+1. Service definition v19 and group generation `17` admitted exact release
+   `sha256:4bd827fd9f819107c1d20d85dc13d31b4ce5f0f75f18f57a5238a596ec8ddfe0`
+   plus the previous live release
+   `sha256:c700d17da1210b961997f27652de0923993fc52061131c3148af79132d9e3cb4`.
+2. Failed member attempts remained durable and rolled back to ready agent
+   `0.6.18`. Revision `47` exposed the exact terminal reason
+   `skill_runtime_dependency_disk_budget_failed`; no compatibility check or
+   disk guard was disabled.
+3. Core commits `3e5474bd`, `2beeb78f`, `6c6525a1` and `fe2c6d69` made stale
+   candidates reprepare, exposed authorized remote runtime state, classified
+   preparation failures and changed the ordinary-wheel reserve from an
+   unrealistic 4 GiB for two small dependencies to 1 GiB. The separate 12 GiB
+   heavy/native dependency threshold remains intact and all thresholds remain
+   operator-configurable.
+4. Both nodes converged to core `0.1.925` (`a3559e14`). Deployment revision
+   `48`, plan
+   `sha256:f244d00fa1c39a726e34c515b89d615968ddbe0765153ec3e67e8e94a15329ad`
+   and operation `deploymentop.01M0MCVXNM45RR6Q5Q8MCCFSHJ` then succeeded.
+   The member completed fetch, verify, stage, activate, health and commit for
+   package
+   `sha256:8c26a77ae7e40c391eaef1f954ae5e05aad2a26a40e22296ebdf5e356a589be0`,
+   and registered activation
+   `activation.71c96bf7af8bf4efb50f646d113d3a7e`.
+5. Definition v20 removed every compatibility digest only after hub instance
+   `service-16d6c176293b22270e7c364bfc74` and member instance
+   `service-af4aa981321519b6bfaf2f50f74a` were ready at topology generation
+   `18` on the exact release. Bounded inspection reported `partial=false`.
+
+Post-deployment product probes observed two configured hub roots, two fresh
+participating agents and `40,663` hub source records. Search matched both the
+real filename `PART006` and Cyrillic folder terms from the audiobook hierarchy.
+Catalog pages remained capped at `30`, the playback queue at `10`, and two
+non-overlapping HTTP range reads returned `206 audio/mpeg` directly from the
+original registered source. An isolated profile favorite advanced through
+revisions `1` and `2` and was visible through the profile-filtered catalog
+between mutations. No original media bytes were copied: the member status
+reported `storage.mode=external_reference` and `media_bytes_copied=false`.
+
+The bounded artwork path was also exercised. A source with adjacent
+`Folder.jpg` produced a 7,654-byte derived JPEG with provider
+`media_library_agent.folder_artwork.v1`; agent delta `40664` made the sanitized
+URL, dimensions, source revision and fingerprint visible in the coordinator,
+and the image route returned HTTP `200 image/jpeg`. A file without artwork
+reported `artwork_not_found`, while video-frame fallback reported
+`artwork_video_backend_unavailable` because ffmpeg is absent on this stand.
+Those are truthful provider limitations, not successful artwork coverage.
+
+## Exact Operator Lifecycle Addendum - 2026-08-22
+
+The exact candidate also completed a destructive-control-plane lifecycle while
+preserving external media:
+
+1. Member instance `service-af4aa981321519b6bfaf2f50f74a` was moved to
+   `draining` by compare-and-switch at topology revision `30`.
+2. Deployment operation `deploymentop.01M0ME88HHV3VA46VA97F2AGXA` cordoned
+   and drained member activation
+   `activation.71c96bf7af8bf4efb50f646d113d3a7e`; operation
+   `deploymentop.01M0ME8TR124KFGA7DJAWBPFWA` then deactivated and removed it.
+   The removal receipt explicitly reported `external_data=retained`.
+3. Deployment revision `49`, plan
+   `sha256:3982f0aeb5d08ade69b0dfea10b57b17005e4e907f2914a446fe538b295b8cc9`
+   and operation `deploymentop.01M0MEAH08T72VGSX8174PK1Q9` restored exact
+   agent `0.6.20` as activation
+   `activation.c93de6188890381ddaf47a7251993c9e` through all installation and
+   service-health phases.
+4. Definition v21 and group generation `19` retained exact-only release
+   admission. Core `0.1.926` (`10cb9d9a`) fixed the generic lifecycle rule so
+   a replacement activation can readmit the same stable instance id after the
+   previous activation was drained. Both nodes updated through the normal
+   hub/member update path, and the member automatically returned to `ready`
+   with its new activation and lease. Inspection with a bounded limit of 100
+   reported both exact instances ready and `partial=false`.
+
+Before removal and after restoration, the original source witness remained
+size `57387298`, mtime `1150860693` and inode `89788`. A non-leading range read
+still returned `206 audio/mpeg` with the expected total size. The restored
+member reported `storage.mode=external_reference` and
+`media_bytes_copied=false`; catalog participation reported both agents fresh,
+and filename search for `PART006` still returned the original item. No source
+file was copied into AdaOS state or removed by component lifecycle operations.
+
+## Large-Library Diagnostics Addendum - 2026-08-22
+
+Project `0.6.46` closes a production defect found by probing the real stand
+catalog. The coordinator database was 1.1 GiB and a compact `status` call
+executed `SELECT COUNT(*) FROM catalog_search`. Because `catalog_search` is an
+FTS5 virtual table, this traversed the full token payload and held the request
+for minutes. Coordinator `0.8.42` derives the search row count from the ordinary
+`catalog_items` table under the enforced one-to-one rowid invariant; regression
+coverage records every executed statement and rejects an FTS count.
+
+The immutable Project release is
+`sha256:7c2f9b8910d0318bbb06b43c3d052c2331ef563b5578b4360f1f79a34eca856b`.
+Deployment revision `50`, plan
+`sha256:c8f4ba3caab178532c278351985f22a5d825441c1c4df8c6103a6c56c46de470`
+and operation `deploymentop.01M0MHYGHXNCXVRA772C4E2G5Z` updated the scenario,
+coordinator, control skill and both node-local agents through all six normal
+activation phases. The rollout used an old-primary/new-compatible definition
+v22, a new-primary/old-compatible definition v23 and exact-only definition v24.
+Group generation `22` then reported both stable instances ready at runtime
+generation `50`, exact release `0.6.46`, with `partial=false`.
+
+On `68,429` catalog rows, post-deployment `status` completed in 0.803 seconds,
+an exact filename catalog search in 0.165 seconds and bounded topology
+inspection in 0.292 seconds. Federated deep search matched `PART006` in the
+coordinator and both agent stages, including its Cyrillic audiobook folder
+metadata. The hub agent's direct technical FTS completed in 0.071 seconds.
+The same non-leading byte range returned `206 audio/mpeg`; the original source
+still had size `57387298`, mtime nanoseconds `1150860693572081600` and inode
+`89788`. Agent diagnostics again reported `storage.mode=external_reference` and
+`media_bytes_copied=false`.
+
+The deployed RU Root artifact endpoint rejected the current release-plan
+schema as `invalid_project_release`; it also did not contain the already active
+`0.6.45` release. For this stand run, archives were transferred to the hub's
+artifact staging area and admitted through `ContentAddressedPackageStore` and
+`ReleaseRepository`: every package and PackageRef was reverified before the
+ordinary Project deployment consumed it. No skill source was copied into an
+active runtime. Aligning the deployed Root artifact validator with the current
+core/backend release schema remains a platform deployment gate; the local
+content-addressed admission is evidence for the candidate, not evidence that
+the Root publication path is healthy.
+
+## Exact 0.6.50 Publication And Handoff Addendum - 2026-08-22
+
+Project `media_center@0.6.50` was published to the RU Root through the normal
+artifact API after backend commit `926c2de` added strict governed
+`composition_lock` validation. Root returned and re-read the exact release
+digest
+`sha256:c56a0c2527fb8bf7d9a898beca2dddeb134267a2384d906e682890e4c394e6fa`;
+the retrieved record was byte-for-byte equal to the local release plan. The
+exact owned packages were scenario `0.6.12`
+(`sha256:22cbf335a04e2b63b3f608075eb2ead45e7f565ab9c2cf771da1af42d1ec1f71`),
+coordinator `0.8.44`
+(`sha256:2b113b7d62be2e745340d5235dd84572c42eb1df4ea950106c892fabb233f590`),
+control `0.2.4`
+(`sha256:ded8da0b2d5fa7976013e78e8487a9e95c6e9c2dcdce7a95b171840b01e4e50d`)
+and agent `0.6.25`
+(`sha256:0104c66eee7e7da936ea1dce5c15f2c88ef3a607105c02603b5a85b86e2d8164`).
+
+The hub imported those immutable records into its verified local cache and
+created deployment revision `54`, plan
+`sha256:585621627afae2966827dd2bb71db61127b246fa4553d5417d4cc3871c396d87`.
+Operation `deploymentop.01M0NHQ3X6F712AP18V4TCHVC1` completed all six normal
+phases on hub and member in 172 seconds with `uncertain=false`. Both agent
+health receipts proved the exact package and a restarted matching service.
+The in-process coordinator activation no longer ran global service discovery;
+core commit `b679d254` reports it as `not_a_service_skill`.
+
+Definition v28 temporarily admitted the previous exact release while both
+agents converged to release `0.6.50`. Definition v29 then removed the overlap;
+both stable exact instances were ready at group generation `27`. A fenced
+handoff to member instance `service-af4aa981321519b6bfaf2f50f74a` completed in
+0.522 seconds by reusing the unchanged persisted snapshot. Replica observations
+then committed partition revision `33`, epoch `13`, member authority and hub
+follower, both at checkpoint `catalog:40663` with `40,663` items. Route explain
+reported `authority_eligible=true`. A unique stale request with revision `31`
+and epoch `12` was rejected as `partition_revision_conflict`.
+
+Post-rollout checks found `/mnt/disk1/Music`, `/mnt/disk1/Video` and one disabled
+fixture tombstone. Filename search for `Wayne Dyer` and folder search for
+`101 Ways to Transform Your Life` each returned the two original audiobook
+files in under 0.5 seconds. Catalog responses remained capped at 30 and
+returned an opaque keyset `next_cursor`. A 1,024-byte read returned `206
+Partial Content`, `audio/mpeg` and the exact total size. Resolving the resource
+internally produced the original
+`/mnt/disk1/Music/!Аудиокниги/101 Ways to Transform Your Life/Wayne Dyer - (1 Of 2).mp3`
+path with `storage_mode=reference`; no managed Media Server copy was involved.
+
+The first two configure attempts also exposed a control-plane atomicity gap:
+`configure_deployment` persisted desired revisions `52` and `53` before
+planning failed because the verified local release cache was not populated.
+CAS correctly rejected stale retries, and revision `54` succeeded after exact
+cache admission, but define-plus-plan should become one atomic operator
+transition or compensate the desired write on planning failure.
+
 ## Defects Found And Closed
 
 1. Expired authority leases previously reset observed epoch to zero during
@@ -125,6 +308,11 @@ ineligible because their membership or authority lease is inactive.
 4. Windows readers could receive a transient `PermissionError` while a
    deployment operation journal was atomically replaced. The store retries only
    bounded sharing violations; malformed JSON still fails immediately.
+5. A stable instance that had been explicitly drained stayed draining after a
+   replacement activation and topology generation were ready. Core now
+   preserves drain only for the same activation, release and generations, and
+   readmits a replacement through the ordinary compare-and-switch registration
+   path. The focused suite proves both preservation and replacement behavior.
 
 ## Local And CI Evidence
 
@@ -135,20 +323,157 @@ ineligible because their membership or authority lease is inactive.
 - Core CI containing membership serialization and deployment read retry: run
   `32458989756`, succeeded.
 - Firebase/client CI for the zone fix: run `32450364469`, succeeded.
+- Core ordinary-dependency disk admission: `22` focused tests and Ruff passed;
+  AdaOS CI run `32564373453` succeeded and published `0.1.925`.
+- Drained-instance replacement: `33` focused core tests and Ruff passed; AdaOS
+  CI run `32566490113` succeeded and published `0.1.926` to both stand nodes.
+- Project `0.6.46`: `157` isolated scenario and skill tests passed; coordinator
+  `82`-test suite and Ruff passed with explicit no-FTS-count SQL tracing.
 
 ## Open Gates
 
-1. A normal ProjectRelease rollout activates the new package before the old
-   topology source is drained. A topology plan that referenced the replaced old
-   activation correctly failed with
-   `topology_skill_activation_identity_mismatch`. Zero-downtime rolling
-   activation/topology ordering remains open (`DS5-04`).
-2. TV and controller browsers still need a recorded cross-surface E2E with
+1. TV and controller browsers still need a recorded cross-surface E2E with
    screenshots, D-pad/touch control, reconnect and resume (`MC7-08`).
-3. Long playback-under-indexing, browser render, CPU/RSS and Yjs pressure soak
+2. Long playback-under-indexing, browser render, CPU/RSS and Yjs pressure soak
    remains open (`MC7-07`, `DS5-05`).
-4. Automatic authority election, cross-subnet placement and native mobile
+3. Complete the remaining exact-candidate stale-epoch, expired-lease, revoked
+   instance and unauthorized-retention rejection matrix, plus sanitized export
+   review (`DS5-05`). Incompatible release rejection and the operator
+   drain/remove/restore retention slice are now recorded.
+4. Deploy the current artifact release validator to Root and prove immutable
+   Project publication plus retrieval before treating Root as a release source.
+5. Automatic authority election, cross-subnet placement and native mobile
    background playback remain deferred by their roadmaps.
+
+## Local 0.6.52 Candidate - 2026-08-23
+
+Registry revision `84914f30b37d3b9c59e34603e7b98b53a5325481` builds exact
+Project `media_center@0.6.52` as
+`sha256:895afd1dc002a57bfcdac6ffedd85af733f98847e1a262109537dbbf344f9165`.
+Its changed components are scenario `0.6.13` and coordinator `0.8.45`.
+
+The complete local skill/scenario suite passed 102 tests and Ruff. The enforced
+20,000-item benchmark passed with FTS p95 36.442 ms, catalog-page p95 18.630
+ms, Home p95 227.967 ms, root-folder p95 14.280 ms and 30-file leaf-folder p95
+28.246 ms. The folder projection stores metadata and counts only; original
+media remains under its registered external path.
+
+Client `0b6649a` makes mini-player host attachment idempotent and prevents the
+hard snapshot loop observed after open, scroll and close. Its focused playback
+and list suites passed 51 tests and the Node 24 production build succeeded.
+Client `cab3ffb` supplies typed declarative list selection for folders versus
+files. Client `3bb15f3` additionally coalesces repeated native `waiting` and
+`stalled` events while playback is already buffering; the focused coordinator
+and transition-overlay suite passed 13 tests. Client release `0.0.367` (build
+`474b3b6`, containing `3bb15f3`) was built and deployed by GitHub Actions run
+`32605061308`; both version bump and Firebase deployment completed successfully
+with the workflow actions running on Node 24.
+
+## Exact 0.6.52 Stand Rollout And Browser Reproduction - 2026-08-23
+
+Deployment revision `58`, plan
+`sha256:a7009daf9b0a922af2ee85b3463bd2b8eac48d12527e8d2b7bc47db8dcaf4133`
+and operation `deploymentop.01M0NTQ6YVAX4FJ18VGJ7825KA` converged both
+physical nodes with `state=succeeded` and `uncertain=false`. The installed
+packages exactly matched Project `0.6.52`: scenario `0.6.13`
+(`sha256:b5088ee429e5b408030dcda1d0b7aaa3c87ce38ef22f8e4f8191d58962055c8c`),
+coordinator `0.8.45`
+(`sha256:0d8454caf0d0a2903cd7ff3628bb3c700a700c94141504079a57c1e2697db89a`),
+control `0.2.4`
+(`sha256:d31dccec62c16900ee90d3ddd1214083a9a521c5e9029fec23eacc7cbabce122`)
+and agent `0.6.26`
+(`sha256:259a5c90c529b379da6f80f5edf82977cf2d4aec2e464ec657c6ae55f5d4b989`).
+
+The coordinator activation took 130.779 seconds because its one-time
+`2026-08-23.1` SQLite migration built folder/profile indexes over a 1.16 GB
+catalog on the slow stand disk. The runtime stayed responsive, the operation
+completed, and subsequent activation phases were normal. Lifecycle migrations
+still need explicit progress/heartbeat evidence so a long but advancing index
+build is distinguishable from a stuck activation.
+
+Published client build `3f97355` reproduced the reported desktop path on a
+fresh Chrome renderer: Movies, List, `Harry Potter`, open, scroll and close.
+The modal opened in 1.151 seconds; after close exactly one media element was
+owned by the shell mini-player, `readyState=4`, and event-loop delay p95 was
+6 ms. A second interaction navigated Folders to `!Audiobooks`; breadcrumbs and
+seven child folders changed without opening a playback modal. The root folder
+view remained cursor-backed at 30 rows and reported page `1 / 178`.
+
+The Harry Potter resource returned `206 Partial Content` for bytes `0-1023`
+of `8,804,736,172` with `video/x-matroska`. Its catalog descriptor retained
+`storage_mode=reference` and resolved to the original
+`/mnt/disk1/Video/share/!Nina/Harry Potter/Harry.Potter.and.the.Prisoner.of.Azkaban.2004.Extended.WEB-DL.1080p.mkv`
+path (folder names transliterated here for a stable ASCII evidence record).
+The only files above 100 MB in Media Center runtime storage were the 1.16 GB
+coordinator and 704 MB agent SQLite databases; no media payload was copied into
+`.adaos`.
+
+Two Chrome tabs that had entered the pre-fix renderer loop could not execute a
+bounded CDP expression and had to be closed. A fresh tab loaded build
+`3f97355`, remained responsive through the exact reproduction above, and is
+the accepted desktop evidence. Existing hung documents cannot hot-recover to a
+new JavaScript bundle. Representative Android TV responsiveness and the
+one-hour playback/indexing/reconnect soak remain open acceptance gates.
+
+After release `0.0.367` reached production, a second fresh Chrome renderer
+repeated Movies, List, `Harry Potter`, open, scroll and close. The modal closed,
+the single media element moved to `data-playback-view=mini` with `readyState=4`,
+and a 20-sample timer probe recorded event-loop delay p95/max of 2.1 ms. This
+also exercised the loading/buffering transition path and found no informer
+writeback loop.
+
+## Project 0.6.53 Single-Node Surface Addendum - 2026-08-23
+
+Registry revision `afad575cd6102154965b15feacf57054c21f771b` defines immutable
+Project `media_center@0.6.53` as
+`sha256:19856947b5f6f58427d4b4729e17df0c2d198bed468881dbe6a8edf2798b2b0e`.
+The changed packages are scenario `0.6.14`
+(`sha256:7594c47cfe9aab18ee0a1d39056c8bd67e11132a6344d1a001b1fa14089b6a09`),
+coordinator `0.8.46`
+(`sha256:5571a3c3270f20a0103a25d3703cb56f6f2f1c8ab976ac5c27c5f51bbdcc8be5`)
+and control skill `0.2.5`
+(`sha256:7a04fc0318b5771273933cf71571cd341c1e2b0aba0563da9c405d744d895370`).
+The unchanged agent `0.6.26` and Media Server `0.9.18` complete the release.
+
+Client `0.0.368` at `81280060305c43cca87ee2affe509315913e20e5`
+makes rail arrows perform an immediate bounded scroll even when native smooth
+scrolling is unavailable, keeps all mini-player controls in one stable shell
+surface, makes Close detach the shell view without issuing Stop, and orders the
+remote as target, now-playing context and transport. The scenario sends typed
+Home selections: folders update folder navigation, while only items,
+collections and playlists open the player. Metadata processing is lazy behind
+the Settings command. The focused client suite passed 44 tests, the Node 24
+production build passed, and local desktop/mobile browser checks observed rail
+movement without overflow or console errors. The scenario/skill suite passed
+88 tests and Ruff.
+
+The `.30` hub runs AdaOS `0.1.929` at `ecbe6c38`. A reviewed local-only batch
+activated scenario `0.6.14`, coordinator `0.8.46` and control `0.2.5`; all
+three committed their exact packages. The agent remained healthy at version
+`0.6.26` with two roots, 40,661 available sources, background discovery
+running, `storage.mode=external_reference` and `media_bytes_copied=false`.
+Its package activation did not commit. The batch operation is intentionally
+recorded as partial: process-local deployment convergence could not observe
+the supervisor-owned agent service and rolled that activation phase back. No
+remote removal from the misleading offline plan was executed. This is not
+claimed as a complete distributed Project rollout.
+
+The `desktop` webspace was then rebuilt from the exact scenario projection.
+All required materialized branches are ready, and the stand source contains
+the separate `select:folder` handlers for Home and Folders views. A bounded
+catalog call returned three playable rows plus an opaque next cursor from the
+68,429-row catalog. A real Harry Potter item produced a one-item bounded queue,
+direct `.30` candidate and root-routed fallback. Agent inspection resolved the
+descriptor to the original `/mnt/disk1/Video` path with
+`storage_mode=reference`; a search under `/root/.adaos` found no MKV, MP4, MP3,
+FLAC or AVI media payload. Coordinator status reports both enrichment and
+agent-sync workers running.
+
+Generic Project deployment still needs an authority-process RPC boundary for
+inventory, remote planning and service convergence. A skill/runtime process
+must not infer removals from an empty process-local `HubLinkManager`, and a
+heartbeat directory must not be promoted into mutation authority. This gap is
+tracked separately as `PROJECT-DEPLOYMENT-AUTHORITY-001`.
 
 ## Update Duration Note
 
@@ -159,3 +484,8 @@ optimization is an immutable dependency layer or wheel cache keyed by
 `uv.lock`, platform, architecture and Python ABI, with a small application
 overlay and prewarm/import validation. This remains an updater optimization,
 not a Media Center workaround.
+
+The `0.1.925` update confirmed the same cost profile: fresh slot preparation
+took about five minutes before prewarm and countdown, while the active runtime
+and member route remained available. This validates the larger timeout but
+strengthens the case for cached immutable dependency layers.

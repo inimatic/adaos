@@ -153,6 +153,70 @@ def test_preferred_activation_slot_skips_stale_patch_slot(tmp_path: Path) -> Non
     assert mgr._preferred_activation_slot(env, "0.1.8", metadata) == "B"
 
 
+def test_activate_runtime_reprepares_slot_from_different_core_identity(
+    monkeypatch, tmp_path: Path
+) -> None:
+    skill_name = "stale_core_skill"
+    skills_root = tmp_path / "skills"
+    skill_dir = skills_root / skill_name
+    (skill_dir / "handlers").mkdir(parents=True)
+    (skill_dir / "handlers" / "main.py").write_text(
+        "def handle(payload=None):\n    return payload or {}\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "skill.yaml").write_text(
+        f"name: {skill_name}\nversion: '1.0.0'\n",
+        encoding="utf-8",
+    )
+    env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=skill_name)
+    env.prepare_version("1.0.0")
+    slot = env.build_slot_paths("1.0.0", "B")
+    staged = slot.src_dir / "skills" / skill_name
+    staged.mkdir(parents=True)
+    slot.resolved_manifest.write_text(
+        json.dumps({"name": skill_name, "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+    metadata = env.read_version_metadata("1.0.0")
+    metadata.setdefault("slots", {})["B"] = {
+        "version": "1.0.0",
+        "resolved_manifest": str(slot.resolved_manifest),
+        "source_manifest_digest": "sha256:" + "1" * 64,
+        "preparation_identity": {
+            "schema": "adaos.skill_runtime.preparation_identity.v1",
+            "core_identity": "previous-core",
+            "python_implementation": "cpython",
+            "python_cache_tag": "cpython-311",
+        },
+    }
+    env.write_version_metadata("1.0.0", metadata)
+
+    mgr = SkillManager(git=SimpleNamespace(), paths=SimpleNamespace(), caps=_Caps())
+    monkeypatch.setattr(mgr, "_runtime_env", lambda _name: env)
+    monkeypatch.setattr(
+        mgr,
+        "_resolve_runtime_update_source",
+        lambda _name, **_kwargs: (skill_dir, "workspace"),
+    )
+
+    class ReprepareExpected(Exception):
+        pass
+
+    def _prepare(*_args, **_kwargs):
+        raise ReprepareExpected
+
+    monkeypatch.setattr(mgr, "prepare_runtime", _prepare)
+
+    with pytest.raises(RuntimeError, match="skill_runtime_prepare_failed") as error:
+        mgr.activate_runtime(
+            skill_name,
+            version="1.0.0",
+            slot="B",
+            source_manifest_digest="sha256:" + "1" * 64,
+        )
+    assert isinstance(error.value.__cause__, ReprepareExpected)
+
+
 def test_activate_dev_runtime_uses_manifest_version_and_reprepares_stale_patch_slot(
     monkeypatch, tmp_path: Path
 ) -> None:

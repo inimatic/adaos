@@ -20,6 +20,7 @@ from adaos.services.operational_errors import (
     SENSITIVE_ERROR_MARKERS,
     normalized_error_code,
 )
+from adaos.services.subnet.rpc_errors import RemoteMemberRpcError
 
 from .adapters import LocalComponentDeploymentAdapter
 from .execution import (
@@ -227,7 +228,7 @@ class MemberLinkNodeDeploymentTransport:
                 "remote_member_link_unavailable"
             ) from exc
         except RuntimeError as exc:
-            reason = str(exc)
+            reason = exc.code if isinstance(exc, RemoteMemberRpcError) else str(exc)
             for code in (
                 "member_not_connected",
                 "member_rpc_busy",

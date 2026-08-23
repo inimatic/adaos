@@ -3,7 +3,7 @@
 Status: implementation roadmap for
 [Distributed Service And Data Topology](distributed-service-and-data-topology.md).
 
-Last reviewed: 2026-08-21.
+Last reviewed: 2026-08-22.
 
 ## Outcome
 
@@ -224,7 +224,7 @@ failover or a product relies on replicated authoritative state.
   two physical nodes with exact epochs and data witnesses.
 - [x] `[should]` `DS5-03` Define recovery point/time objectives and backup versus
   replica semantics for the representative service.
-- [ ] `[should]` `DS5-04` Prove upgrades across compatible adapter versions and
+- [x] `[should]` `DS5-04` Prove upgrades across compatible adapter versions and
   reject incompatible topology changes before data mutation.
 - [ ] `[should]` `DS5-05` Complete security, privacy, resource, soak and operator
   recovery review and record an explicit production decision.
@@ -240,29 +240,71 @@ stale-owner rejection, monotonic recovery through epoch `11`, exact
 physical nodes. It also validates compatible definition admission and
 incompatible definition rejection before mutation.
 
-`DS5-04` remains open. A normal ProjectRelease rollout replaces the old
-ComponentActivation before a topology plan can use that activation as its
-source, so the plan correctly failed closed with
-`topology_skill_activation_identity_mismatch`. The stand was recovered through
-an explicit verified follower and fenced handoff, but zero-downtime rolling
-activation/topology ordering is not yet proven. The one-hour local server gate
-now passes on 20,000 items with zero errors, 39.02 MiB peak RSS and 13.533% CPU
-p95. `DS5-05` remains open for the Android TV browser/playback/Yjs-pressure
-gate, exact-candidate security/privacy repetition, and final operator review. The
+An earlier normal ProjectRelease rollout correctly failed closed with
+`topology_skill_activation_identity_mismatch` after replacing an activation
+that an old topology plan still referenced. The compatible-overlap design and
+the physical closure below resolve that rolling-order gap. The one-hour local
+server gate passes on 20,000 items with zero errors, 39.02 MiB peak RSS and
+13.533% CPU p95. `DS5-05` remains open for the Android TV
+browser/playback/Yjs-pressure gate, exact-candidate security/privacy
+repetition, and final operator review. The
 [production review](distributed-topology-production-review-2026-08-21.md)
 records the security, privacy, resource, rolling upgrade and recovery gates,
-runbooks and explicit rejection decision; physical execution evidence is still
-required before the checkbox can close.
+runbooks and explicit rejection decision; the remaining physical acceptance
+evidence is still required before that checkbox can close.
 
 Local DS5-04 implementation checkpoint: `ServiceDefinition` v2 adds a bounded
 exact-release overlap while retaining v1 read compatibility. Group admission
 requires the previous desired release and every live membership release to
 remain accepted, and membership rollover now gives topology-only generation
 changes a collision-resistant lease identity. Contract, membership, runtime,
-adapter and Project deployment suites pass locally. The checkbox remains open
-until the sequence is exercised through a normal batch-one Project rollout on
-two physical nodes, with one ready old-release route retained while each new
-activation registers and with the old digest removed only after convergence.
+adapter and Project deployment suites pass locally. The required batch-one
+physical sequence is recorded below.
+
+Physical DS5-04 closure was recorded on 2026-08-22 with exact Media Center
+release `sha256:4bd827fd9f819107c1d20d85dc13d31b4ce5f0f75f18f57a5238a596ec8ddfe0`.
+Definition v19 admitted the previous live release during a batch-one Project
+rollout. Four failed member activations remained inspectable and rolled back
+without losing the ready old membership; the stable failure was traced to an
+over-conservative ordinary-wheel disk reserve rather than bypassed. After core
+`0.1.925` (`a3559e14`) reached both physical nodes, deployment operation
+`deploymentop.01M0MCVXNM45RR6Q5Q8MCCFSHJ` activated the exact
+`media_library_agent@0.6.20` package on the member, passed service restart and
+health, and committed activation
+`activation.71c96bf7af8bf4efb50f646d113d3a7e`. Definition v20 then removed
+the compatibility digest. Both generation-18 instances were ready on the
+exact release, and bounded topology inspection reported `partial=false`.
+Incompatible definitions continued to fail before mutation under the existing
+conformance matrix. The stand receipt retains the exact sequence and open
+production gates.
+
+The exact operator lifecycle slice was subsequently completed. The member was
+drained and its exact activation removed by durable operations
+`deploymentop.01M0ME88HHV3VA46VA97F2AGXA` and
+`deploymentop.01M0ME8TR124KFGA7DJAWBPFWA`; the receipt retained external data.
+Deployment revision `49` and operation
+`deploymentop.01M0MEAH08T72VGSX8174PK1Q9` restored exact agent `0.6.20` as
+activation `activation.c93de6188890381ddaf47a7251993c9e`. Core `0.1.926`
+(`10cb9d9a`) then reached both nodes and automatically readmitted the same
+stable member instance under definition v21 and generation `19`. Both exact
+instances were ready, topology inspection was non-partial, the source
+size/mtime/inode witness was unchanged and range playback remained `206`.
+This closes the drain/remove/restore portion of `DS5-05`; the exact security
+matrix, Android TV soak and final production decision remain open.
+
+Project `0.6.46` then exercised a second compatible batch-one transition.
+Deployment revision `50`, plan
+`sha256:c8f4ba3caab178532c278351985f22a5d825441c1c4df8c6103a6c56c46de470`
+and operation `deploymentop.01M0MHYGHXNCXVRA772C4E2G5Z` passed every normal
+activation phase on both nodes. Definitions v22 and v23 retained old/new
+overlap while the primary release changed; definition v24 and group generation
+`22` then removed the old digest. Both stable instances are ready on exact
+release `sha256:7c2f9b8910d0318bbb06b43c3d052c2331ef563b5578b4360f1f79a34eca856b`
+and bounded inspection remains non-partial. This also proved that a 1.1 GiB
+consumer index no longer makes compact diagnostics unbounded. The deployed
+Root artifact endpoint still rejects the current release schema, so Root
+validator rollout and publication/retrieval proof join the remaining `DS5-05`
+platform gates; the stand used verified local content-addressed admission.
 
 ## Evidence Policy
 

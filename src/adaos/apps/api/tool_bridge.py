@@ -1349,6 +1349,19 @@ def _maybe_sync_workspace_runtime(ctx: AgentContext, mgr: SkillManager, skill_na
         return
     if not _workspace_skill_source_exists(ctx, skill_name):
         return
+    try:
+        from adaos.services.project_deployment.materialization import (
+            active_project_component,
+        )
+
+        if active_project_component(ctx, f"skill:{skill_name}"):
+            return
+    except Exception:
+        _log.debug(
+            "project component ownership probe failed for skill=%s",
+            skill_name,
+            exc_info=True,
+        )
     if _workspace_runtime_sync_recent(skill_name):
         return
     if not _runtime_ready(mgr, skill_name):

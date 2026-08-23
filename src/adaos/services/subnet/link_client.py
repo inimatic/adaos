@@ -31,6 +31,7 @@ from adaos.services.node_runtime_state import save_node_runtime_state
 from adaos.services.node_runtime_state import load_member_hub_token
 from adaos.services.capacity import get_local_capacity
 from adaos.services.runtime_lifecycle import is_accepting_new_work, runtime_lifecycle_snapshot
+from adaos.services.subnet.rpc_errors import member_rpc_error_payload, rpc_error_code
 from adaos.services.runtime_topology import (
     DEFAULT_RUNTIME_PORT,
     http_base,
@@ -72,13 +73,6 @@ def _service_supervisor_runtime_payload() -> dict[str, Any]:
             "distributed": [],
         }
     return dict(value) if isinstance(value, dict) else {}
-
-
-def _rpc_error_code(exc: BaseException) -> str:
-    token = str(exc).split(":", 1)[0].strip()
-    if token and len(token) <= 80 and all(char.isalnum() or char in "._-" for char in token):
-        return token
-    return type(exc).__name__
 
 
 def _bounded_json_size(value: Any, *, limit: int) -> tuple[int, bool]:
@@ -1998,6 +1992,7 @@ class MemberLinkClient:
             return
         allowed_methods = {
             "tools.call",
+            "skills.runtime.status",
             "project.deployment.phase",
             "distributed.topology.phase",
             "distributed.topology.transfer",
@@ -2059,7 +2054,7 @@ class MemberLinkClient:
             )
         except Exception as exc:
             duration_s = max(0.0, time.time() - started_at)
-            error_code = _rpc_error_code(exc)
+            error_code = rpc_error_code(exc)
             self._rpc_failed_total += 1
             self._rpc_last_result = {
                 "tool": rpc_name,
@@ -2080,7 +2075,12 @@ class MemberLinkClient:
             )
             await self._send_ws_message(
                 ws,
-                {"t": "rpc.res", "id": rid, "ok": False, "error": f"{type(exc).__name__}: {exc}"},
+                {
+                    "t": "rpc.res",
+                    "id": rid,
+                    "ok": False,
+                    "error": member_rpc_error_payload(exc),
+                },
                 lane="rpc_response",
             )
 
@@ -2132,6 +2132,15 @@ class MemberLinkClient:
                 dev,
                 intent,
             )
+        if method == "skills.runtime.status":
+            name = str(params.get("name") or "").strip()
+            if (
+                not name
+                or len(name) > 128
+                or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-" for character in name)
+            ):
+                raise ValueError("skill_name_invalid")
+            return self._skill_manager().runtime_status(name)
         if method == "project.deployment.phase":
             from adaos.services.project_deployment.transport import (
                 execute_remote_component_phase,
@@ -2159,16 +2168,9 @@ class MemberLinkClient:
         raise PermissionError("member_rpc_method_not_allowed")
 
     @staticmethod
-    def _run_tool(
-        tool: str,
-        arguments: dict[str, Any],
-        timeout: Any,
-        dev: bool,
-        intent: str = "",
-    ) -> Any:
+    def _skill_manager() -> SkillManager:
         ctx = get_ctx()
-        skill_name, public_tool = tool.split(":", 1)
-        mgr = SkillManager(
+        return SkillManager(
             repo=ctx.skills_repo,
             registry=SqliteSkillRegistry(ctx.sql),
             git=ctx.git,
@@ -2177,6 +2179,17 @@ class MemberLinkClient:
             caps=ctx.caps,
             settings=ctx.settings,
         )
+
+    @staticmethod
+    def _run_tool(
+        tool: str,
+        arguments: dict[str, Any],
+        timeout: Any,
+        dev: bool,
+        intent: str = "",
+    ) -> Any:
+        skill_name, public_tool = tool.split(":", 1)
+        mgr = MemberLinkClient._skill_manager()
         accepting_new_work = is_accepting_new_work()
         declared_side_effects = (
             declared_tool_side_effects(

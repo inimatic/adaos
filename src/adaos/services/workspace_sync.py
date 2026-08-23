@@ -8,6 +8,9 @@ from typing import Any
 from adaos.adapters.db import SqliteScenarioRegistry, SqliteSkillRegistry
 from adaos.adapters.git.workspace import SparseWorkspace
 from adaos.services.git.workspace_guard import ensure_clean
+from adaos.services.project_deployment.materialization import (
+    restore_project_owned_materializations,
+)
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 from adaos.services.workspace_registry import (
     load_workspace_registry,
@@ -405,6 +408,9 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
                 ctx.scenarios_repo.install(name)
             except Exception as exc:
                 errors.append(f"scenarios/{name}: {exc}")
+        project_materialization = restore_project_owned_materializations(ctx)
+        if project_materialization.get("ok") is not True:
+            errors.append("project materialization restore failed")
         reconcile_result: dict[str, Any] | None = None
         try:
             reconcile_result = reconcile_workspace_db_to_materialized(ctx)
@@ -422,6 +428,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
             "scenario_required_skills": scenario_required_skills,
             "unresolved_runtime_scenarios": unresolved_runtime_scenarios,
             "fallback_used": fallback_used,
+            "project_materialization": project_materialization,
             "errors": errors,
             "reconcile": reconcile_result,
             "patterns": desired,
@@ -487,6 +494,24 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
             "patterns": desired,
         }
 
+    project_materialization = restore_project_owned_materializations(ctx)
+    if project_materialization.get("ok") is not True:
+        return {
+            "ok": False,
+            "skills": skills,
+            "scenarios": scenarios,
+            "registry_skills": registry_skills,
+            "registry_scenarios": registry_scenarios,
+            "selected_runtime_skills": selected_runtime_skills,
+            "runtime_scenario_refs": runtime_scenario_refs,
+            "scenario_required_skills": scenario_required_skills,
+            "unresolved_runtime_scenarios": unresolved_runtime_scenarios,
+            "fallback_used": fallback_used,
+            "project_materialization": project_materialization,
+            "error": "project materialization restore failed",
+            "patterns": desired,
+        }
+
     try:
         reconcile_result = reconcile_workspace_db_to_materialized(ctx)
     except Exception as exc:
@@ -516,6 +541,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
         "scenario_required_skills": scenario_required_skills,
         "unresolved_runtime_scenarios": unresolved_runtime_scenarios,
         "fallback_used": fallback_used,
+        "project_materialization": project_materialization,
         "reconcile": reconcile_result,
         "patterns": desired,
     }
