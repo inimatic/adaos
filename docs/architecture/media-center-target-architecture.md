@@ -12,6 +12,10 @@ bounded slice remains documented in [Media Center MVP](media-center-mvp.md).
 Generic service groups, instances, partitions, replicas, leases, freshness,
 and route guarantees are owned by
 [Distributed Service And Data Topology](distributed-service-and-data-topology.md).
+Cross-domain canonical resource identity, source observations, reusable
+artifacts, optional versions, aliases, localization, hybrid/latent retrieval,
+and actionable dialog/voice contracts are owned by the
+[Subnet Knowledge Fabric Target Architecture](subnet-knowledge-fabric.md).
 
 ## Decision Summary
 
@@ -689,8 +693,8 @@ changing the main boundaries:
 - trusted federation across several home subnets;
 - native Android/iOS background playback;
 - hardware-accelerated transcoding and adaptive bitrate packaging;
-- embeddings, perceptual duplicates, recommendations, and semantic voice
-  retrieval;
+- advanced embeddings, perceptual duplicate review, recommendations, and
+  semantic voice retrieval beyond the shared Knowledge Fabric baseline;
 - offline controller operations with policy-governed reconciliation.
 
 ## Acceptance Shape
