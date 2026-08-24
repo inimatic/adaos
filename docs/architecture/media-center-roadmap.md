@@ -701,6 +701,21 @@ Local implementation checkpoint (not stand acceptance):
   node/root HTTP fallback with lazy bounded loading. Local Python contracts,
   Angular tests, and production build pass; exact `.30` browser and media-route
   evidence remains the promotion gate.
+- Project `0.6.60` adds the local large-library acceptance closure. On the
+  3716-source UNC library, the agent retained a completed 3721-file,
+  1,958,814,523,139-byte scan receipt with seven bounded per-file errors rather
+  than coupling the action to the 16-minute traversal. The catalog reports the
+  problematic El Dorado AVI as 1,517,715,456 bytes, Recent contains a completed
+  browser playback, and `media_control_skill.now_playing` removes its terminal
+  session. A monotonic profile projection revision fixes cross-browser
+  Favorites/Recent replacement; limit-first collection queries, a forced
+  membership-first representative-artwork lookup, bounded home snapshots and
+  coalesced playback publication reduce the same local `home()` projection from
+  about 27 seconds under enrichment load to about 1.25 seconds. Client
+  `0.0.371` renders the scenario-owned localized identity and resolves artwork
+  into a browser object URL through the AdaOS media plane. Local browser,
+  Python, Angular and production-build evidence passes; `.30` remains the
+  promotion gate.
 - `MC8-10` and `MC8-11` use the external-CDP Android TV harness introduced in
   client `0b31eaa`. It captures D-pad input, playback progress, Long Tasks,
   main-thread/process CPU, heap growth, listeners/timers, UI/Yjs mutation
