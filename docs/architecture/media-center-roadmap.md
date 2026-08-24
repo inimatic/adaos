@@ -622,6 +622,28 @@ must not be marked complete from contract or unit-test coverage alone.
   evidence. Diagnostics must distinguish `wrong_zone` or `subnet_not_found`
   from an actually offline hub and offer a bounded recovery path without
   requiring the user to edit the URL manually.
+- [ ] `[must]` `MC8-13` Make collection artwork representative and bounded.
+  Collection and season cards select a ready member rendition; video artwork
+  samples up to three deterministic positions and rejects low-information or
+  near-black frames. Publish one static resource through the AdaOS media plane;
+  any rotating preview is a client slideshow over existing resources, not a
+  generated GIF required for catalog correctness.
+- [ ] `[must]` `MC8-14` Normalize episodic identity independently of season
+  folder labels. Use a bounded versioned filename parser with deterministic
+  fallback, migrate existing provisional identities once, and treat TMDB or
+  another external database as provenance-bearing claims. Ambiguous provider
+  matches must remain reviewable and must not silently merge works.
+- [ ] `[must]` `MC8-15` Count playback only after an endpoint confirms it.
+  Failed or unsupported loads must leave fullscreen, retain a retryable
+  endpoint/source verdict, and stay out of Recent, resume, and watched history.
+  Mini-player controls expose fullscreen separately from Picture-in-Picture;
+  unsupported PiP controls are not rendered on TV endpoints.
+- [ ] `[should]` `MC8-16` Add a node-local compatibility pipeline with explicit
+  `direct`, `remux`, `transcode`, and `unsupported` decisions. Preserve
+  originals, prefer remux, and store content-addressed derived resources under
+  quotas with cancellation, progress, provenance, retention, and source-
+  revision invalidation. Prove background pre-transcode before admitting
+  real-time transcoding under node-capacity and playback-QoE policy.
 
 Local implementation checkpoint (not stand acceptance):
 
@@ -716,6 +738,17 @@ Local implementation checkpoint (not stand acceptance):
   into a browser object URL through the AdaOS media plane. Local browser,
   Python, Angular and production-build evidence passes; `.30` remains the
   promotion gate.
+- The next single-node candidate implements the local halves of `MC8-13` to
+  `MC8-15`. Collection queries prefer a member with ready artwork. The owning
+  agent evaluates three bounded video samples with luminance, entropy and
+  clipping evidence and invalidates older generated-frame recipes. Episodic
+  filenames use bounded GuessIt evidence plus a one-time identity repair so
+  differently named season folders converge on one series; TMDB remains an
+  optional claim provider. Endpoint observations now distinguish a requested
+  session from confirmed playback, preventing failed loads from entering
+  Recent, while the app-shell mini-player presents independent fullscreen and
+  capability-gated PiP controls. Local validation is complete only after the
+  exact release, browser bundle and stand evidence below are recorded.
 - `MC8-10` and `MC8-11` use the external-CDP Android TV harness introduced in
   client `0b31eaa`. It captures D-pad input, playback progress, Long Tasks,
   main-thread/process CPU, heap growth, listeners/timers, UI/Yjs mutation

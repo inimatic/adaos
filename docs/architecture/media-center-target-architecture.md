@@ -341,6 +341,17 @@ The system distinguishes:
 - derived artifacts, quota-managed and linked to exact source revisions;
 - ephemeral caches, safe to evict and never treated as the only copy.
 
+Derived media stays on the source-owning node whenever that node can perform
+the work. Its identity is content-addressed from the exact source fingerprint,
+the transformation recipe, tool version, and policy revision. Reconnecting a
+root or rebuilding a coordinator can therefore recover valid thumbnails,
+subtitles, embeddings, remuxes, and transcodes without treating any derived
+artifact as the source of truth. A node may keep the bytes beside its managed
+shard state or in a policy-approved sidecar directory on the same storage; the
+catalog and subnet knowledge projections retain only descriptors, provenance,
+availability, and checksums. Derived bytes are quota-managed, evictable, and
+never overwrite the original.
+
 A source path is never used as a public cross-node identifier. Diagnostics may
 show it only to an authorized operator on the owning node.
 
@@ -406,6 +417,14 @@ and confidence; they do not overwrite the canonical record directly. Local
 embedded metadata, folder-derived hints, external databases, user corrections,
 transcription, OCR, and embeddings use the same claim/reconciliation model.
 
+Collection artwork is a bounded projection, not a generated animation. The
+coordinator chooses a ready representative rendition from a child collection
+or member. The source-owning agent evaluates up to three deterministic video
+sample positions and rejects near-black or otherwise low-information frames
+before publishing one static rendition. A client may later rotate several
+existing representatives as a slideshow, but animated GIF generation is not a
+canonical catalog or indexing responsibility.
+
 ## Grouping, Duplicates, And Alternatives
 
 Grouping is a staged process, not filename parsing embedded in the UI:
@@ -415,6 +434,14 @@ Grouping is a staged process, not filename parsing embedded in the UI:
 3. provider matches and confidence-scored structural inference;
 4. duplicate and variant candidates;
 5. canonical merge, split, or user correction with durable provenance.
+
+Episode filename parsing uses a bounded, versioned parser and deterministic
+fallback. External databases such as TMDB contribute localized titles,
+external ids, posters and structural claims; they do not silently merge an
+ambiguous match. A high-confidence external id, an explicit user correction,
+or reviewed reconciliation can promote a claim to canonical identity. This
+keeps multiple season folders in one series without making network provider
+availability a prerequisite for stable browsing.
 
 The model must represent at least:
 
@@ -434,6 +461,17 @@ language, subtitle/audio preferences, resolution, bitrate, endpoint limits,
 network estimate, and user override. Unsupported variants may schedule a
 bounded rendition job owned by a media skill worker; transcoding is not a core
 media responsibility.
+
+Every source/endpoint decision has one explicit result: `direct`, `remux`,
+`transcode`, or `unsupported`. Direct playback is preferred. Lossless remux is
+preferred over codec conversion when only the container is incompatible.
+Transcoding writes a content-addressed derived resource under CPU, memory,
+disk, concurrency, cancellation, progress, and retention budgets. The source
+is never modified. Background pre-transcode is the first production mode;
+real-time transcoding is admitted only after node capacity and playback QoE
+gates are proven. A failed load records a source/endpoint compatibility verdict
+but does not enter Recent, resume, or watched history until the endpoint emits
+a confirmed playback event.
 
 ## Playback And Control
 
