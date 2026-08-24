@@ -27,7 +27,9 @@ not silently switch to a stale active slot. Readiness requires the expected Git
 identity plus a stability window. The initial wait is controlled by
 `ADAOS_API_RESTART_START_TIMEOUT_SEC`; once the replacement binds its port, a
 separate bounded `ADAOS_API_RESTART_READINESS_GRACE_SEC` allows heavy local
-`sys.ready` handlers to finish.
+`sys.ready` handlers to finish. Defaults are 180 seconds for initial startup
+and 120 seconds for observed process/listener progress; both remain bounded and
+may be overridden for unusually large development workspaces.
 
 ## Health and status
 

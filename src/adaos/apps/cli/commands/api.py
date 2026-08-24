@@ -1512,12 +1512,12 @@ def _wait_for_server_start(
 
 
 def _api_restart_start_timeout_seconds() -> float:
-    raw = str(os.getenv("ADAOS_API_RESTART_START_TIMEOUT_SEC") or "90").strip()
+    raw = str(os.getenv("ADAOS_API_RESTART_START_TIMEOUT_SEC") or "180").strip()
     try:
         value = float(raw)
     except (TypeError, ValueError):
-        value = 90.0
-    return max(20.0, min(value, 300.0))
+        value = 180.0
+    return max(30.0, min(value, 600.0))
 
 
 def _api_restart_stability_seconds() -> float:
@@ -1530,12 +1530,12 @@ def _api_restart_stability_seconds() -> float:
 
 
 def _api_restart_readiness_grace_seconds() -> float:
-    raw = str(os.getenv("ADAOS_API_RESTART_READINESS_GRACE_SEC") or "60").strip()
+    raw = str(os.getenv("ADAOS_API_RESTART_READINESS_GRACE_SEC") or "120").strip()
     try:
         value = float(raw)
     except (TypeError, ValueError):
-        value = 60.0
-    return max(0.0, min(value, 120.0))
+        value = 120.0
+    return max(0.0, min(value, 300.0))
 
 
 def _api_restart_expected_git_commit() -> str:

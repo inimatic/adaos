@@ -367,16 +367,16 @@ def test_api_restart_expected_commit_uses_repo_identity(monkeypatch):
 
 def test_api_restart_start_timeout_is_bounded_and_configurable(monkeypatch):
     monkeypatch.delenv("ADAOS_API_RESTART_START_TIMEOUT_SEC", raising=False)
-    assert api_cmd._api_restart_start_timeout_seconds() == 90.0
+    assert api_cmd._api_restart_start_timeout_seconds() == 180.0
 
     monkeypatch.setenv("ADAOS_API_RESTART_START_TIMEOUT_SEC", "90")
     assert api_cmd._api_restart_start_timeout_seconds() == 90.0
 
     monkeypatch.setenv("ADAOS_API_RESTART_START_TIMEOUT_SEC", "1")
-    assert api_cmd._api_restart_start_timeout_seconds() == 20.0
+    assert api_cmd._api_restart_start_timeout_seconds() == 30.0
 
     monkeypatch.setenv("ADAOS_API_RESTART_START_TIMEOUT_SEC", "invalid")
-    assert api_cmd._api_restart_start_timeout_seconds() == 90.0
+    assert api_cmd._api_restart_start_timeout_seconds() == 180.0
 
     monkeypatch.delenv("ADAOS_API_RESTART_STABILITY_SEC", raising=False)
     assert api_cmd._api_restart_stability_seconds() == 10.0
@@ -384,9 +384,9 @@ def test_api_restart_start_timeout_is_bounded_and_configurable(monkeypatch):
     assert api_cmd._api_restart_stability_seconds() == 60.0
 
     monkeypatch.delenv("ADAOS_API_RESTART_READINESS_GRACE_SEC", raising=False)
-    assert api_cmd._api_restart_readiness_grace_seconds() == 60.0
-    monkeypatch.setenv("ADAOS_API_RESTART_READINESS_GRACE_SEC", "300")
     assert api_cmd._api_restart_readiness_grace_seconds() == 120.0
+    monkeypatch.setenv("ADAOS_API_RESTART_READINESS_GRACE_SEC", "300")
+    assert api_cmd._api_restart_readiness_grace_seconds() == 300.0
 
 
 def test_wait_for_server_start_requires_expected_pid_and_ready_health(monkeypatch):
@@ -505,7 +505,7 @@ def test_api_restart_uses_configured_start_timeout_and_reports_launch_log(
     assert result.exit_code == 1
     assert observed == {"timeout": 75.0, "expected_git_commit": "abc123", "expected_pid": 4321}
     assert "base_timeout=75s" in result.stdout
-    assert "readiness_grace=60s" in result.stdout
+    assert "readiness_grace=120s" in result.stdout
     assert "alive=true" in result.stdout
     assert "expected_git_commit=abc123" in result.stdout
     assert str(launch.log_path) in result.stdout
