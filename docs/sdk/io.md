@@ -237,6 +237,17 @@ Skill-facing helpers:
 Compatibility: `media_indexer` remains a legacy producer of `MediaResource`
 descriptors through `playback_id`. It is not the canonical media catalog.
 
+Browser UI-as-data renderers must treat a media descriptor as a transport
+resource, not as an ordinary page-origin image URL. They resolve the descriptor
+through the app-shell media resolver, which prefers the authorized direct media
+channel and falls back to the authenticated node or root-routed HTTP media
+endpoint. A skill may include a root-relative URL for rolling compatibility,
+but a renderer must not bind that value directly to `img.src`: on the hosted
+client that would target the web application origin and bypass AdaOS routing,
+authorization, and P2P selection. Lazy viewport loading and bounded concurrency
+remain client responsibilities; catalog skills should publish descriptors and
+must not inline image bytes into synchronized UI state.
+
 ## Voice (local mock)
 
 - `io.voice.stt.listen(timeout='20s')`

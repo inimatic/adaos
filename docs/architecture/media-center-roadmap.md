@@ -3,7 +3,7 @@
 Status: implementation roadmap for the
 [Distributed Media Center Target Architecture](media-center-target-architecture.md).
 
-Last reviewed: 2026-08-23.
+Last reviewed: 2026-08-24.
 
 ## Outcome
 
@@ -690,6 +690,17 @@ Local implementation checkpoint (not stand acceptance):
   open acceptance work.
 - `MC8-09` dictionaries remain skill-owned in registry `803f99e`; `b88c669`
   adds UTF-8/Cyrillic integrity coverage and the artwork operation wording.
+- The local Project `0.6.59` candidate closes the current single-node
+  observability and convergence gaps. A scan publishes `queued` before worker
+  admission and uses a non-resetting replace-variable sequence; durable
+  progress replays root identity and terminal diagnostics. Endpoint observations
+  feed profile Recent/resume state, explicit mini-player close reconciles
+  `stopped`, and failed media loads leave fullscreen with bounded endpoint-local
+  retry evidence. Artwork now carries a sanitized media resource descriptor;
+  client `0.0.370` resolves it through direct WebRTC media or authenticated
+  node/root HTTP fallback with lazy bounded loading. Local Python contracts,
+  Angular tests, and production build pass; exact `.30` browser and media-route
+  evidence remains the promotion gate.
 - `MC8-10` and `MC8-11` use the external-CDP Android TV harness introduced in
   client `0b31eaa`. It captures D-pad input, playback progress, Long Tasks,
   main-thread/process CPU, heap growth, listeners/timers, UI/Yjs mutation
