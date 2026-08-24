@@ -143,6 +143,12 @@ class ProjectDeploymentStore:
     def _operation_root(self, operation_id: str) -> Path:
         return self.root / "operations" / _token(operation_id)
 
+    def operation_execution_lock_path(self, operation_id: str) -> Path:
+        token = str(operation_id or "").strip()
+        if not token:
+            raise ProjectDeploymentStoreError("operation id is required")
+        return self.root / "operation_execution" / f"{_token(token)}.lock"
+
     def _audit(self, event: str, **details: Any) -> None:
         payload = {
             "schema": "adaos.project.deployment_audit.v1",

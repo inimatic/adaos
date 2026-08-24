@@ -17,6 +17,7 @@ from adaos.domain.project_deployment import (
     utc_now,
 )
 from adaos.services.artifact_pipeline.releases import ReleasePlan
+from adaos.services.artifact_pipeline.storage import MutationLockTimeout, mutation_lock
 
 from .authorization import DeploymentPrincipal
 from .execution import ComponentDeploymentAdapter, ProjectDeploymentExecutor
@@ -199,6 +200,16 @@ class ProjectDeploymentRuntime:
             )
 
     def _resume_submitted(self, operation_id: str) -> DeploymentOperation:
+        try:
+            with mutation_lock(
+                self.store.operation_execution_lock_path(operation_id),
+                timeout_s=0.1,
+            ):
+                return self._resume_submitted_locked(operation_id)
+        except MutationLockTimeout:
+            return self.store.get_operation(operation_id)
+
+    def _resume_submitted_locked(self, operation_id: str) -> DeploymentOperation:
         operation = self.store.get_operation(operation_id)
         authorization = self.store.get_operation_authorization(operation_id)
         principal = DeploymentPrincipal.create(

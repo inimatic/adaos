@@ -585,6 +585,51 @@ def test_executor_rejects_inventory_drift_after_review(tmp_path: Path) -> None:
         )
 
 
+def test_executor_resumes_accepted_operation_after_inventory_generation_changes(
+    tmp_path: Path,
+) -> None:
+    release_plan = _release()
+    desired = _deployment(release_plan)
+    inventory = (_node("node-a", endpoint=True), _node("node-b"))
+    store = ProjectDeploymentStore(state_dir=tmp_path)
+    store.save_deployment(
+        desired,
+        expected_revision=0,
+        actor_ref="user:owner",
+        reason="initial topology",
+    )
+    plan = ProjectDeploymentPlanner().plan(
+        desired,
+        release_plan=release_plan,
+        inventory=inventory,
+        local_node_id="node-a",
+    )
+    principal = _principal(plan.required_approvals)
+    executor = ProjectDeploymentExecutor(
+        store=store,
+        adapter=FakeDeploymentAdapter(),
+    )
+    accepted = executor.accept(
+        plan,
+        desired=desired,
+        release_plan=release_plan,
+        inventory=inventory,
+        principal=principal,
+        idempotency_key="apply:accepted-before-generation-change:1",
+    )
+    changed_inventory = tuple(replace(item, revision=2) for item in inventory)
+
+    completed = executor.resume(
+        accepted.operation_id,
+        desired=desired,
+        release_plan=release_plan,
+        inventory=changed_inventory,
+        principal=principal,
+    )
+
+    assert completed.state == "succeeded"
+
+
 def test_executor_accepts_heartbeat_after_review(tmp_path: Path) -> None:
     release_plan = _release()
     desired = _deployment(release_plan)
@@ -906,6 +951,88 @@ def test_runtime_recovers_durably_accepted_operation(tmp_path: Path) -> None:
     else:
         pytest.fail("accepted deployment was not recovered")
     runtime.shutdown(wait=True)
+
+
+def test_runtime_serializes_recovery_of_one_operation_across_instances(
+    tmp_path: Path,
+) -> None:
+    release_plan = _release((("skill", "media_center_coordinator", "a"),))
+    desired = ProjectDeployment(
+        deployment_id="media-center-home",
+        project_ref="project:media_center",
+        release_digest=str(release_plan.release.release_digest),
+        subnet_id="home",
+        revision=1,
+        placements=(
+            ComponentPlacementPolicy(
+                component_ref="skill:media_center_coordinator",
+                mode="singleton",
+            ),
+        ),
+        compatibility=DeploymentCompatibilityPolicy(
+            required_protocols={"project_activation": "1"}
+        ),
+        status="planned",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    inventory = (_node("node-a"),)
+    store = ProjectDeploymentStore(state_dir=tmp_path)
+    store.save_deployment(
+        desired,
+        expected_revision=0,
+        actor_ref="skill:deployment_test",
+        reason="recovery lock fixture",
+    )
+    plan = ProjectDeploymentPlanner().plan(
+        desired,
+        release_plan=release_plan,
+        inventory=inventory,
+        local_node_id="node-a",
+    )
+    principal = DeploymentPrincipal.create(
+        actor_ref="skill:deployment_test",
+        permissions=("project.deployment.inspect", "project.deployment.apply"),
+    )
+    accepted = ProjectDeploymentExecutor(
+        store=store,
+        adapter=FakeDeploymentAdapter(),
+    ).accept(
+        plan,
+        desired=desired,
+        release_plan=release_plan,
+        inventory=inventory,
+        principal=principal,
+        idempotency_key="runtime:recover-lock:1",
+    )
+    blocking = BlockingDeploymentAdapter()
+    duplicate = FakeDeploymentAdapter()
+    first = ProjectDeploymentRuntime(
+        store=store,
+        releases=StaticReleaseProvider(release_plan),
+        inventory=StaticInventoryProvider(inventory),
+        adapter=blocking,
+        local_node_id="node-a",
+    )
+    second = ProjectDeploymentRuntime(
+        store=store,
+        releases=StaticReleaseProvider(release_plan),
+        inventory=StaticInventoryProvider(inventory),
+        adapter=duplicate,
+        local_node_id="node-a",
+    )
+
+    assert first.recover_incomplete() == (accepted.operation_id,)
+    assert blocking.started.wait(timeout=2)
+    assert second.recover_incomplete() == (accepted.operation_id,)
+    time.sleep(0.05)
+    assert duplicate.calls == []
+    blocking.release.set()
+    first.shutdown(wait=True)
+    second.shutdown(wait=True)
+
+    assert store.get_operation(accepted.operation_id).state == "succeeded"
+    assert duplicate.calls == []
 
 
 def test_subnet_snapshot_inventory_requires_explicit_deployment_capabilities() -> None:

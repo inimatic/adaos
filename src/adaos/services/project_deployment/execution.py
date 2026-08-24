@@ -240,6 +240,7 @@ class ProjectDeploymentExecutor:
             desired=desired,
             release_plan=release_plan,
             inventory=inventory,
+            require_inventory_revision=False,
         )
         if operation.state in {"accepted", "partial"}:
             operation = self.store.update_operation(
@@ -277,6 +278,7 @@ class ProjectDeploymentExecutor:
         desired: ProjectDeployment,
         release_plan: ReleasePlan,
         inventory: Iterable[NodeInventoryRecord],
+        require_inventory_revision: bool = True,
     ) -> dict[str, NodeInventoryRecord]:
         if plan.status != "ready":
             raise ProjectDeploymentExecutionError(
@@ -297,7 +299,10 @@ class ProjectDeploymentExecutor:
                 "ProjectRelease changed after planning"
             )
         records = tuple(inventory)
-        if inventory_revision(records) != plan.inventory_revision:
+        if (
+            require_inventory_revision
+            and inventory_revision(records) != plan.inventory_revision
+        ):
             raise ProjectDeploymentExecutionError(
                 "node inventory changed after planning"
             )
