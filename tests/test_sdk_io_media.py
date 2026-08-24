@@ -75,6 +75,49 @@ def test_sdk_io_media_advertises_endpoint_direct_urls(monkeypatch, tmp_path):
     assert descriptor["delivery"]["preferred_route"] == "hub_direct_http"
 
 
+def test_sdk_io_media_publishes_bounded_package_and_rewrites_manifest(
+    monkeypatch, tmp_path
+):
+    from adaos.sdk.io import media as sdk_media
+
+    package = tmp_path / "hls"
+    package.mkdir()
+    (package / "stream.m3u8").write_text(
+        "#EXTM3U\nvariant-0.m3u8\n",
+        encoding="utf-8",
+    )
+    (package / "variant-0.m3u8").write_text(
+        "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:4,\nsegment-0.m4s\n",
+        encoding="utf-8",
+    )
+    (package / "init.mp4").write_bytes(b"init")
+    (package / "segment-0.m4s").write_bytes(b"segment")
+    media_store = tmp_path / "media"
+    media_store.mkdir()
+    monkeypatch.setattr(
+        sdk_media, "media_file_path", lambda filename: media_store / filename
+    )
+
+    descriptor = sdk_media.publish_media_package(
+        package,
+        manifest="stream.m3u8",
+        content_ref="source:1:hls",
+        namespace="media-library-rendition",
+        variant="browser-hls-v1",
+    )
+
+    manifest_text = Path(descriptor["path"]).read_text(encoding="utf-8")
+    resources = descriptor["metadata"]["resources"]
+    variant = next(item for item in resources if item["filename"].endswith("variant-0.m3u8"))
+    variant_text = Path(variant["path"]).read_text(encoding="utf-8")
+    assert descriptor["metadata"]["storage_mode"] == "derived_package"
+    assert len(resources) == 4
+    assert "variant-0.m3u8" in manifest_text
+    assert "segment-0.m4s" in variant_text
+    assert "media-library-rendition-" in manifest_text
+    assert all(Path(item["path"]).is_file() for item in resources)
+
+
 def test_sdk_io_media_publishes_without_agent_context(monkeypatch, tmp_path):
     from adaos.sdk.io import media as sdk_media
 

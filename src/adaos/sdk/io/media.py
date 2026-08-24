@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import mimetypes
 import os
 import shutil
 import socket
@@ -396,6 +397,176 @@ def publish_media_file(
     return descriptor
 
 
+def publish_media_package(
+    directory: str | Path,
+    *,
+    manifest: str,
+    content_ref: str,
+    namespace: str = "media-package",
+    variant: str = "package",
+    mime: str = "application/vnd.apple.mpegurl",
+    api_token: str | None = None,
+    max_files: int = 256,
+    max_bytes: int = 16 * 1024**3,
+) -> dict[str, Any]:
+    """Publish a bounded flat media package through the normal media routes.
+
+    Package members receive one deterministic prefix. Text manifest references
+    are rewritten to those published names, so relative segment requests keep
+    working through direct node and root-routed media endpoints.
+    """
+
+    source = Path(directory).resolve(strict=True)
+    if not source.is_dir():
+        raise ValueError("media_package_source_not_directory")
+    manifest_name = Path(str(manifest or "")).name
+    if not manifest_name or manifest_name != str(manifest or ""):
+        raise ValueError("media_package_manifest_invalid")
+    manifest_path = source / manifest_name
+    if not manifest_path.is_file():
+        raise ValueError("media_package_manifest_not_found")
+    bounded_files = max(2, min(4096, int(max_files or 256)))
+    bounded_bytes = max(1024, min(1024**4, int(max_bytes or 16 * 1024**3)))
+    members = sorted(
+        (
+            item
+            for item in source.iterdir()
+            if item.is_file() and not item.name.endswith((".partial", ".tmp"))
+        ),
+        key=lambda item: item.name,
+    )
+    if len(members) > bounded_files:
+        raise ValueError("media_package_file_limit_exceeded")
+    total_bytes = sum(int(item.stat().st_size) for item in members)
+    if total_bytes <= 0 or total_bytes > bounded_bytes:
+        raise ValueError("media_package_size_limit_exceeded")
+
+    safe_namespace = _safe_token(namespace) or "media-package"
+    safe_variant = _safe_token(variant) or "package"
+    digest = hashlib.sha256(str(content_ref or source).encode("utf-8")).hexdigest()[:24]
+    prefix = f"{safe_namespace}-{digest}-{safe_variant}"
+    published_names: dict[str, str] = {}
+    for member in members:
+        safe_name = sanitize_media_filename(member.name)
+        target_name = f"{prefix}-{safe_name}"
+        if target_name in published_names.values():
+            raise ValueError("media_package_filename_collision")
+        published_names[member.name] = target_name
+
+    resources: list[dict[str, Any]] = []
+    for member in members:
+        if member.suffix.lower() == ".m3u8":
+            continue
+        target_name = published_names[member.name]
+        target = _media_file_path_for_publish(target_name)
+        if not target.exists() or target.stat().st_size != member.stat().st_size:
+            shutil.copyfile(member, target)
+        resources.append(
+            {
+                "filename": target.name,
+                "path": str(target),
+                "mime_type": mimetypes.guess_type(member.name)[0]
+                or "application/octet-stream",
+                "size_bytes": int(target.stat().st_size),
+                "content_path": media_content_path(target.name, browser=False),
+                "routed_content_path": media_content_path(target.name, browser=True),
+            }
+        )
+
+    published_manifest = Path()
+    for text_manifest in (
+        member for member in members if member.suffix.lower() == ".m3u8"
+    ):
+        manifest_text = text_manifest.read_text(encoding="utf-8")
+        if len(manifest_text.encode("utf-8")) > 1024**2:
+            raise ValueError("media_package_manifest_size_exceeded")
+        for original_name in sorted(published_names, key=len, reverse=True):
+            manifest_text = manifest_text.replace(
+                original_name, published_names[original_name]
+            )
+        target = _media_file_path_for_publish(published_names[text_manifest.name])
+        temporary = target.with_suffix(target.suffix + ".tmp")
+        temporary.write_text(manifest_text, encoding="utf-8", newline="\n")
+        temporary.replace(target)
+        resource = {
+            "filename": target.name,
+            "path": str(target),
+            "mime_type": mime,
+            "size_bytes": int(target.stat().st_size),
+            "content_path": media_content_path(target.name, browser=False),
+            "routed_content_path": media_content_path(target.name, browser=True),
+        }
+        if text_manifest == manifest_path:
+            published_manifest = target
+            resources.insert(0, resource)
+        else:
+            resources.append(resource)
+    if not published_manifest.name:
+        raise ValueError("media_package_manifest_not_published")
+    direct_urls = direct_media_content_urls(
+        published_manifest.name, api_token=api_token
+    )
+    descriptor = media_resource_descriptor(
+        resource_id=published_manifest.name,
+        source="media_server",
+        name=published_manifest.name,
+        mime_type=mime,
+        size_bytes=sum(int(item["size_bytes"]) for item in resources),
+        content_path=media_content_path(published_manifest.name, browser=False),
+        routed_content_path=media_content_path(published_manifest.name, browser=True),
+        source_path=str(published_manifest),
+        metadata={
+            "content_ref": content_ref,
+            "namespace": safe_namespace,
+            "variant": safe_variant,
+            "storage_mode": "derived_package",
+            "package_schema": "adaos.media.package.v1",
+            "manifest": published_manifest.name,
+            "resources": resources,
+        },
+    )
+    descriptor.update(
+        {
+            "ok": True,
+            "filename": published_manifest.name,
+            "path": str(published_manifest),
+            "url": media_content_url(
+                published_manifest.name, api_token=api_token, browser=True
+            ),
+            "node_url": media_content_url(
+                published_manifest.name, api_token=api_token
+            ),
+            "browser_url": media_content_url(
+                published_manifest.name, api_token=api_token, browser=True
+            ),
+            "browser_path": media_content_path(
+                published_manifest.name, browser=True
+            ),
+            "direct_urls": direct_urls,
+            "content_url_candidates": [
+                *direct_urls,
+                media_content_url(published_manifest.name, api_token=api_token),
+            ],
+            "mime": mime,
+            "mime_type": mime,
+            "size_bytes": sum(int(item["size_bytes"]) for item in resources),
+            "content_ref": content_ref,
+            "route": "node_media_package",
+            "browser_route": "hub_browser_media_package",
+            "delivery": {
+                "schema_version": "media-delivery.v1",
+                "preferred_route": (
+                    "hub_direct_http" if direct_urls else "node_media_package"
+                ),
+                "fallback_route": "root_relay_range",
+                "direct_candidate_count": len(direct_urls),
+                "storage_mode": "derived_package",
+            },
+        }
+    )
+    return descriptor
+
+
 def register_media_file(
     path: str | Path,
     *,
@@ -491,6 +662,7 @@ __all__ = [
     "media_resource_content_path",
     "media_resource_descriptor",
     "publish_media_file",
+    "publish_media_package",
     "register_media_file",
     "source_image_cache_dir",
     "unregister_media_references",

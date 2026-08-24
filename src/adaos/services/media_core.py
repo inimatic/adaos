@@ -49,6 +49,11 @@ SUPPORTED_MEDIA_EXTENSIONS = {
     ".gif",
     ".webp",
 }
+SUPPORTED_MEDIA_PACKAGE_EXTENSIONS = {".m3u8", ".m4s", ".ts"}
+SUPPORTED_MEDIA_DELIVERY_EXTENSIONS = {
+    *SUPPORTED_MEDIA_EXTENSIONS,
+    *SUPPORTED_MEDIA_PACKAGE_EXTENSIONS,
+}
 
 _MEDIA_TYPE_OVERRIDES = {
     ".mkv": "video/x-matroska",
@@ -65,6 +70,9 @@ _MEDIA_TYPE_OVERRIDES = {
     ".png": "image/png",
     ".gif": "image/gif",
     ".webp": "image/webp",
+    ".m3u8": "application/vnd.apple.mpegurl",
+    ".m4s": "video/iso.segment",
+    ".ts": "video/mp2t",
 }
 
 
@@ -135,7 +143,7 @@ def sanitize_media_filename(filename: str) -> str:
     suffix = Path(name).suffix.lower()
     if not suffix:
         raise ValueError("missing_extension")
-    if suffix not in SUPPORTED_MEDIA_EXTENSIONS:
+    if suffix not in SUPPORTED_MEDIA_DELIVERY_EXTENSIONS:
         raise ValueError(f"unsupported_extension:{suffix}")
     return name
 
@@ -697,6 +705,8 @@ __all__ = [
     "ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES",
     "ROOT_ROUTED_MEDIA_BODY_LIMIT_BYTES",
     "SUPPORTED_MEDIA_EXTENSIONS",
+    "SUPPORTED_MEDIA_PACKAGE_EXTENSIONS",
+    "SUPPORTED_MEDIA_DELIVERY_EXTENSIONS",
     "MediaResource",
     "file_range_iter",
     "guess_media_type",
