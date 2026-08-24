@@ -1979,10 +1979,9 @@ class SkillManager:
 
     def _current_core_repo_root(self) -> Path | None:
         candidates: list[Path] = []
-        for raw in (os.getenv("ADAOS_SLOT_REPO_ROOT"), os.getenv("ADAOS_REPO_ROOT")):
-            text = str(raw or "").strip()
-            if text:
-                candidates.append(Path(text).expanduser())
+        slot_repo = str(os.getenv("ADAOS_SLOT_REPO_ROOT") or "").strip()
+        if slot_repo:
+            candidates.append(Path(slot_repo).expanduser())
         base_dir = str(os.getenv("ADAOS_BASE_DIR") or "").strip()
         active_slot = str(os.getenv("ADAOS_ACTIVE_CORE_SLOT") or "").strip().upper()
         if base_dir and active_slot in {"A", "B"}:
@@ -1994,6 +1993,9 @@ class SkillManager:
                 / active_slot
                 / "repo"
             )
+        repo_root = str(os.getenv("ADAOS_REPO_ROOT") or "").strip()
+        if repo_root:
+            candidates.append(Path(repo_root).expanduser())
         try:
             candidates.append(Path(__file__).resolve().parents[4])
         except Exception:

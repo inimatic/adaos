@@ -70,8 +70,10 @@ def test_core_repo_root_prefers_active_slot_checkout(monkeypatch, tmp_path: Path
     mgr = _manager()
     slot_repo = tmp_path / "state" / "core_slots" / "slots" / "B" / "repo"
     (slot_repo / ".git").mkdir(parents=True)
+    stale_root = tmp_path / "promoted-root"
+    (stale_root / ".git").mkdir(parents=True)
     monkeypatch.delenv("ADAOS_SLOT_REPO_ROOT", raising=False)
-    monkeypatch.delenv("ADAOS_REPO_ROOT", raising=False)
+    monkeypatch.setenv("ADAOS_REPO_ROOT", str(stale_root))
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_ACTIVE_CORE_SLOT", "B")
 
