@@ -94,3 +94,22 @@ only hashes, technical facts, and route evidence.
    pass.
 5. Browser, local process, and stand evidence must name exact core, client,
    ProjectRelease, skill, and scenario revisions.
+
+## Local Evidence - 2026-08-24
+
+The local single-node functional gate used client `0.0.368`, coordinator
+`0.8.50`, agent `0.6.29`, control `0.2.7`, and scenario `0.6.16`. Playwright
+proved rail movement, root-first folder drill-down, direct media selection,
+modal-to-mini transition, explicit mini-player Close, album navigation without
+implicit playback, grouped remote controls, and zero horizontal overflow at
+412x915. A generated external video and audio track remained reference-backed;
+only a derived 320x180 JPEG was written to managed storage.
+
+The 120-second production-bundle soak reported 0.174 DOM mutations/s, 0.335 MiB
+heap growth, no counted long tasks, 3.873% steady main-thread CPU, event-loop p95
+0.3 ms, frame-delay p95 17.6 ms, and 80.59 MiB maximum renderer private memory.
+Whole-renderer CPU was 5.089% during the first 45-second idle window, 0.089
+percentage points above this profile's strict budget. A separate 30-second
+sampling profile was idle for 29.479 seconds and found no repeating product
+hotspot. Functional acceptance is local-complete, but the idle CPU budget stays
+open for the longer Android TV/stand run; it is not waived by the local result.

@@ -12,6 +12,8 @@ The AdaOS SDK is the Python-facing layer used by skills and higher-level runtime
 - `adaos.sdk.core`: decorators, context access, errors, exporter, and validation
 - `adaos.sdk.distributed`: service membership, opaque dataset topology,
   reviewed operations, routes, and bounded transfer adapter ports
+- `adaos.sdk.deployment`: authoritative Project desired state, immutable plans,
+  durable rollout operations, and bounded node inventory
 
 ## Design goals
 
@@ -26,3 +28,5 @@ The AdaOS SDK is the Python-facing layer used by skills and higher-level runtime
   logical databases with redacted bindings and SQLite/PostgreSQL providers
 - [Distributed Runtime](distributed.md): capability-gated service, topology,
   routing, operation, and transfer interfaces
+- [Project Deployment](deployment.md): authority-routed Project placement,
+  inventory, rollout, drain, and removal interfaces

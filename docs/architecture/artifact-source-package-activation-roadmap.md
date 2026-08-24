@@ -904,7 +904,10 @@ worker without deleting retained domain data.
   receipts; full inventory remains cursor-backed.
 - [x] `[must]` `AP8-09` Expose planning, apply, inspect, drain, remove and
   reconcile through a public SDK/control-plane boundary; skills must not import
-  package store, Workspace, supervisor or node-inventory internals.
+  package store, Workspace, supervisor or node-inventory internals. Every SDK
+  call now crosses the active runtime's loopback-only deployment authority;
+  CLI, skill and candidate-runtime processes cannot authorize a plan from
+  process-local link state, and authority loss fails explicitly.
 - [x] `[must]` `AP8-10` Enforce trusted node identity, exact release admission,
   remote-install permission, retention confirmation, audit and secret-safe
   diagnostics.

@@ -119,25 +119,22 @@ Background behavior must be explicit and inspectable:
 - current resource, queue position, checkpoint age, presentation mode, output
   lease, and last interruption reason are available as bounded runtime status
 
-## Deferred From The Bounded Slice
+## Product Evolution Beyond The First Slice
 
-The MVP deliberately defers production media-center features that need their own
-contracts:
+The original MVP boundary has now been extended without moving product nouns
+into core. The Media Center skill family implements external library roots,
+resumable background scans, bounded metadata/artwork jobs, full-text and local
+semantic search, series/season/episode, album/disc/track and audiobook
+collections, playlists, recommendations, profile-scoped favorites/history,
+durable playback sessions, app-shell mini-player/PiP, remote control, and
+review-only duplicate evidence. Original bytes still remain at their source.
 
-- library roots and scheduled background scans
-- metadata providers for movies, shows, music, books, and photos
-- episode/season/album/person collection models
-- transcoding, subtitle extraction, preview sprites, and remote quality
-  selection
-- recommendations, queues, playlists, continue-watching, and multi-user state
-- parental controls and media-specific authorization policy
-- full-text, embedding, and perceptual duplicate search
-
-These belong in the media-center skill family or future product scenarios. They
-should depend on core media descriptors and routing instead of expanding the
-core media plane. Generic component placement and distributed service/data
-topology are valid core responsibilities, but their contracts remain
-domain-neutral as specified by
+The remaining product gates are exact-revision browser-compatible renditions
+for unsupported codecs, richer subtitles/chapters and provider coverage,
+long-running Android TV resource acceptance, and native Android/iOS background
+playback. Unattended topology recommendations and automatic authority election
+remain deferred. These stay in product skills, scenarios, native shells, or the
+domain-neutral distributed runtime described by
 [Distributed Service And Data Topology](distributed-service-and-data-topology.md).
 
 ## Compatibility Position
