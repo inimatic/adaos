@@ -37,6 +37,9 @@ from adaos.services.project_deployment.adapters import (
     LocalComponentDeploymentAdapter,
     RoutingComponentDeploymentAdapter,
 )
+from adaos.services.project_deployment.authority import (
+    register_project_deployment_authority,
+)
 from adaos.services.project_deployment.bootstrap import configure_project_deployment_runtime
 from adaos.services.project_deployment.inventory import SnapshotNodeInventoryProvider
 from adaos.services.project_deployment.transport import (
@@ -540,6 +543,7 @@ def configure_default_distributed_runtimes(
     ctx: AgentContext | None = None,
     *,
     release_fallback: Any = None,
+    authoritative: bool = True,
 ) -> dict[str, Any]:
     global _configured_key
     current = ctx or get_ctx()
@@ -548,6 +552,13 @@ def configure_default_distributed_runtimes(
     key = f"{state_dir}:{conf.node_id}:{conf.subnet_id}"
     with _configure_lock:
         if _configured_key == key:
+            from adaos.services.project_deployment import get_project_deployment_runtime
+
+            existing = get_project_deployment_runtime()
+            register_project_deployment_authority(
+                existing if authoritative else None,
+                client_only=not authoritative,
+            )
             return {"ok": True, "configured": False, "node_id": str(conf.node_id)}
         artifact_root = state_dir / "artifact_pipeline"
         package_store = ContentAddressedPackageStore(artifact_root / "packages")
@@ -600,6 +611,10 @@ def configure_default_distributed_runtimes(
             state_dir=state_dir,
             local_node_id=str(conf.node_id),
             projection_publisher=_publisher(ctx=current, topic="project.deployment.projection"),
+        )
+        register_project_deployment_authority(
+            deployment if authoritative else None,
+            client_only=not authoritative,
         )
         distributed = configure_distributed_runtime(
             releases=releases,

@@ -312,7 +312,10 @@ class BootstrapBootCoordinator:
                 configure_default_distributed_runtimes,
             )
 
-            configure_default_distributed_runtimes(service.ctx)
+            configure_default_distributed_runtimes(
+                service.ctx,
+                authoritative=not candidate_runtime_mode,
+            )
             _startup_stage_mark(
                 "bootstrap_distributed_runtimes", started=_distributed_started
             )

@@ -1159,6 +1159,7 @@ def test_candidate_runtime_can_be_promoted_to_active(monkeypatch) -> None:
         "_schedule_promoted_runtime_service_start",
         lambda reason: service_start_reasons.append(reason) or {"background": True, "scheduled": True},
     )
+    monkeypatch.setattr(api_server, "_promote_project_deployment_authority", lambda: None)
 
     payload = asyncio.run(
         api_server.admin_runtime_promote_active(
@@ -1375,6 +1376,7 @@ def test_member_candidate_promotion_does_not_claim_hub_root_authority(monkeypatc
         "_schedule_promoted_runtime_service_start",
         lambda _reason: {"background": True, "scheduled": True},
     )
+    monkeypatch.setattr(api_server, "_promote_project_deployment_authority", lambda: None)
 
     payload = asyncio.run(
         api_server.admin_runtime_promote_active(

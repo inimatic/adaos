@@ -1,4 +1,10 @@
 from .authorization import DeploymentPrincipal, ProjectDeploymentAuthorizationError
+from .authority import (
+    ProjectDeploymentAuthorityError,
+    execute_authority_request,
+    invoke_project_deployment_authority,
+    register_project_deployment_authority,
+)
 from .bootstrap import configure_project_deployment_runtime
 from .adapters import (
     CallbackComponentLifecycleHooks,
@@ -52,6 +58,7 @@ __all__ = [
     "LocalComponentDeploymentAdapter",
     "RoutingComponentDeploymentAdapter",
     "ProjectDeploymentAuthorizationError",
+    "ProjectDeploymentAuthorityError",
     "ProjectDeploymentConflictError",
     "ProjectDeploymentExecutionError",
     "ProjectDeploymentExecutor",
@@ -67,7 +74,10 @@ __all__ = [
     "build_project_deployment_projection",
     "configure_project_deployment_runtime",
     "get_project_deployment_runtime",
+    "execute_authority_request",
     "execute_remote_component_phase",
+    "invoke_project_deployment_authority",
     "register_local_deployment_receiver",
+    "register_project_deployment_authority",
     "register_project_deployment_runtime",
 ]

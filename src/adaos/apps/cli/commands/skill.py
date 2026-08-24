@@ -598,7 +598,7 @@ def _configure_skill_run_sdk_runtimes() -> None:
         configure_default_distributed_runtimes,
     )
 
-    configure_default_distributed_runtimes(get_ctx())
+    configure_default_distributed_runtimes(get_ctx(), authoritative=False)
 
 
 def _hub_base_url() -> str:

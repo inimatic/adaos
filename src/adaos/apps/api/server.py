@@ -779,6 +779,15 @@ def _ensure_runtime_update_restart_authority(action: str) -> None:
     )
 
 
+def _promote_project_deployment_authority() -> None:
+    from adaos.services.project_deployment import (
+        get_project_deployment_runtime,
+        register_project_deployment_authority,
+    )
+
+    register_project_deployment_authority(get_project_deployment_runtime())
+
+
 async def _wait_bus_idle(timeout: float) -> bool:
     try:
         waiter = getattr(_get_ctx().bus, "wait_for_idle", None)
@@ -2604,6 +2613,18 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
                     "reconnect": reconnect_result,
                 },
             )
+    try:
+        _promote_project_deployment_authority()
+    except Exception as exc:
+        os.environ["ADAOS_RUNTIME_TRANSITION_ROLE"] = previous_transition_role
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "ok": False,
+                "error": "project_deployment_authority_promotion_failed",
+                "error_type": type(exc).__name__,
+            },
+        ) from exc
     service_start = _schedule_promoted_runtime_service_start(body.reason)
     migration_start = asyncio.create_task(
         _start_post_boot_skill_runtime_migration(
