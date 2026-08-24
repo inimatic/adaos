@@ -701,7 +701,7 @@ Local implementation checkpoint (not stand acceptance):
   node/root HTTP fallback with lazy bounded loading. Local Python contracts,
   Angular tests, and production build pass; exact `.30` browser and media-route
   evidence remains the promotion gate.
-- Project `0.6.60` adds the local large-library acceptance closure. On the
+- Project `0.6.61` adds the local large-library acceptance closure. On the
   3716-source UNC library, the agent retained a completed 3721-file,
   1,958,814,523,139-byte scan receipt with seven bounded per-file errors rather
   than coupling the action to the 16-minute traversal. The catalog reports the
