@@ -1964,8 +1964,12 @@ class SkillManager:
 
     def _current_core_compatibility_snapshot(self) -> dict[str, str]:
         repo_root = self._current_core_repo_root()
-        commit = self._git_text(repo_root, "rev-parse", "HEAD") if repo_root is not None else ""
-        short_commit = self._git_text(repo_root, "rev-parse", "--short", "HEAD") if repo_root is not None else ""
+        commit = str(BUILD_INFO.git_commit or "").strip()
+        if not commit and repo_root is not None:
+            commit = self._git_text(repo_root, "rev-parse", "HEAD")
+        short_commit = commit[:8]
+        if not short_commit and repo_root is not None:
+            short_commit = self._git_text(repo_root, "rev-parse", "--short", "HEAD")
         return {
             "version": str(BUILD_INFO.version or "").strip(),
             "build_date": str(BUILD_INFO.build_date or "").strip(),
@@ -1979,6 +1983,17 @@ class SkillManager:
             text = str(raw or "").strip()
             if text:
                 candidates.append(Path(text).expanduser())
+        base_dir = str(os.getenv("ADAOS_BASE_DIR") or "").strip()
+        active_slot = str(os.getenv("ADAOS_ACTIVE_CORE_SLOT") or "").strip().upper()
+        if base_dir and active_slot in {"A", "B"}:
+            candidates.append(
+                Path(base_dir).expanduser()
+                / "state"
+                / "core_slots"
+                / "slots"
+                / active_slot
+                / "repo"
+            )
         try:
             candidates.append(Path(__file__).resolve().parents[4])
         except Exception:

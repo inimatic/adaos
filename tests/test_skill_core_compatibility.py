@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from adaos.services.agent_context import get_ctx
+import adaos.services.skill.manager as manager_module
 from adaos.services.skill.manager import SkillCoreCompatibilityError, SkillManager
 
 
@@ -40,6 +41,41 @@ def test_skill_push_stamps_current_core_requirement(monkeypatch, tmp_path: Path)
     assert core["min_commit"] == "d17a960cd15567a2840e04a88564ecbc89f109ff"
     assert core["min_short_commit"] == "d17a960c"
     assert core["source"] == "skill_push"
+
+
+def test_core_snapshot_prefers_active_slot_manifest_identity(monkeypatch) -> None:
+    mgr = _manager()
+    monkeypatch.setattr(
+        manager_module,
+        "BUILD_INFO",
+        SimpleNamespace(
+            version="0.1.937+1.6ec1f11",
+            build_date="2026-08-24T00:00:00+00:00",
+            git_commit="6ec1f110ffc010624f0f59326d30a08661b84160",
+        ),
+    )
+    monkeypatch.setattr(
+        mgr,
+        "_git_text",
+        lambda *_args: "e7055633f24ee87dfd927c8fed6fb54c0b1cd80e",
+    )
+
+    snapshot = mgr._current_core_compatibility_snapshot()
+
+    assert snapshot["commit"] == "6ec1f110ffc010624f0f59326d30a08661b84160"
+    assert snapshot["short_commit"] == "6ec1f110"
+
+
+def test_core_repo_root_prefers_active_slot_checkout(monkeypatch, tmp_path: Path) -> None:
+    mgr = _manager()
+    slot_repo = tmp_path / "state" / "core_slots" / "slots" / "B" / "repo"
+    (slot_repo / ".git").mkdir(parents=True)
+    monkeypatch.delenv("ADAOS_SLOT_REPO_ROOT", raising=False)
+    monkeypatch.delenv("ADAOS_REPO_ROOT", raising=False)
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_ACTIVE_CORE_SLOT", "B")
+
+    assert mgr._current_core_repo_root() == slot_repo.resolve()
 
 
 def test_prepare_runtime_rejects_skill_requiring_newer_core(monkeypatch, tmp_path: Path) -> None:
