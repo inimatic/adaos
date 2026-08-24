@@ -216,12 +216,13 @@ tokens, environment values, and unbounded logs are not included.
 
 ### Service-to-runtime event capability
 
-A persistent service has no in-process `AgentContext`. The supervisor issues a
-rotating, per-service capability for a loopback-only event bridge and injects
-its URL/token into the child process. `adaos.sdk.io` uses the bridge for the
-fixed `io.out.*` output topics. `adaos.sdk.data.events.publish()` may also use
-it, but only for exact topics declared by that skill under
-`skill.yaml.events.publish`.
+A persistent service does not share the owner runtime's `AgentContext`. The
+supervisor issues a rotating, per-service capability for a loopback-only event
+bridge and injects its URL/token into the child process. `adaos.sdk.io` uses the
+bridge for the fixed `io.out.*` output topics. `adaos.sdk.data.events.publish()`
+also prefers it whenever that capability exists, including tool invocations
+that initialize a child-process-local SDK context, but only for exact topics
+declared by that skill under `skill.yaml.events.publish`.
 
 The bridge stamps `skill_name`, `owner=skill:<name>`, source authority and a
 `service_bridge` marker. It rejects remote callers, stale tokens, undeclared

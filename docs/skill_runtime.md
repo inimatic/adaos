@@ -302,9 +302,11 @@ also produce `projection.direct_yjs_write` validation warnings.
 For `runtime.kind: service`, the active manifest's exact `events.publish`
 topics also scope the child process's rotating service-event capability.
 `adaos.sdk.io` and `adaos.sdk.data.events.publish()` transparently use that
-loopback bridge when no in-process `AgentContext` exists. The bridge remains
-bounded and output-only; declaring a service does not grant arbitrary bus or
-root-runtime access.
+loopback bridge whenever the supervisor supplies the service capability. This
+also applies when a tool invocation initializes a process-local SDK context:
+that local bus is not the owner runtime bus and must not receive cross-skill
+events. The bridge remains bounded and output-only; declaring a service does
+not grant arbitrary bus or root-runtime access.
 
 ### Runtime lifecycle hooks
 
