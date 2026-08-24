@@ -352,6 +352,25 @@ catalog and subnet knowledge projections retain only descriptors, provenance,
 availability, and checksums. Derived bytes are quota-managed, evictable, and
 never overwrite the original.
 
+The default physical layout is a node-managed, content-addressed derived store,
+separate from user library folders. Logical context does not depend on that
+directory layout: each derived `MediaSource` has a transformation receipt that
+names its exact input source revision, recipe and tool version, and realizes a
+`MediaVariant` of the same `MediaWork`. Remuxing or transcoding therefore does
+not create another movie or episode. Different editions, cuts, languages, or
+content fingerprints remain distinct variants; codec/container/resolution
+representations of one exact input remain renditions of that variant.
+
+One content-addressed output may be referenced by several equivalent sources,
+but every provenance edge remains explicit. A source tombstone moves dependent
+outputs to an orphan grace state. Garbage collection removes bytes only after
+the grace period, when no live source, pinned offline policy, active playback,
+queue, or retained transformation receipt references them. Reappearing content
+with the same strong fingerprint may reclaim the output without recomputation;
+a changed source revision invalidates it. Removing a derived output never
+deletes an original. Writing hidden cache folders into user libraries is an
+opt-in portability policy, not the default and not required for recovery.
+
 A source path is never used as a public cross-node identifier. Diagnostics may
 show it only to an authorized operator on the owning node.
 
@@ -629,6 +648,18 @@ and the separation of focus from activation described by
 - Browse, Search, and Queue as secondary tabs or sheets;
 - compact media cards and drill-down folder navigation;
 - no administration tables in the primary remote flow.
+
+### Now Playing and media details
+
+The primary modal is content-first: artwork/video, title and playback state are
+followed by one stable transport row. Favorite, minimize-to-mini-player,
+fullscreen and capability-gated Picture-in-Picture are peer actions in a
+single secondary toolbar, not vertically stacked forms. Auxiliary technical
+metadata and provenance appear below the content or in a details disclosure.
+Source/rendition, quality, audio, subtitle and compatibility controls are shown
+only when alternatives or an actionable compatibility decision exist. A
+background remux/pre-transcode action reports a durable job and keeps browsing
+usable; it never implies that playback already started.
 
 ### Generic client capabilities
 

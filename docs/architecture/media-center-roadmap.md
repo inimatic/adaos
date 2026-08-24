@@ -640,10 +640,22 @@ must not be marked complete from contract or unit-test coverage alone.
   unsupported PiP controls are not rendered on TV endpoints.
 - [ ] `[should]` `MC8-16` Add a node-local compatibility pipeline with explicit
   `direct`, `remux`, `transcode`, and `unsupported` decisions. Preserve
-  originals, prefer remux, and store content-addressed derived resources under
-  quotas with cancellation, progress, provenance, retention, and source-
-  revision invalidation. Prove background pre-transcode before admitting
-  real-time transcoding under node-capacity and playback-QoE policy.
+  originals, prefer remux, and store content-addressed derived resources in a
+  node-managed store under quotas with cancellation, progress, provenance,
+  retention, source-revision invalidation, reference-aware orphan grace and
+  checksum-based reuse. Keep every rendition attached to its work/variant in
+  the catalog even though its bytes are physically outside the library folder.
+  Prove background pre-transcode before any real-time mode.
+- [ ] `[should]` `MC8-17` Recompose Now Playing and media details around one
+  content-first hierarchy: stable transport row; one peer action toolbar for
+  Favorite, minimize, fullscreen and capability-gated PiP; optional
+  source/rendition, quality, audio and subtitle selectors; compatibility/job
+  status; and auxiliary metadata below the content. Validate D-pad, touch and
+  desktop focus order without growing the compact modal for absent options.
+- [ ] `[deferred]` `MC8-18` Add real-time transcoding only after background
+  remux/pre-transcode, cache lifecycle, node admission, playback priority and
+  QoE budgets are validated on representative hardware. Hardware acceleration
+  and adaptive bitrate packaging remain governed by `MC7-14`.
 
 Local implementation checkpoint (not stand acceptance):
 
@@ -738,17 +750,24 @@ Local implementation checkpoint (not stand acceptance):
   into a browser object URL through the AdaOS media plane. Local browser,
   Python, Angular and production-build evidence passes; `.30` remains the
   promotion gate.
-- The next single-node candidate implements the local halves of `MC8-13` to
-  `MC8-15`. Collection queries prefer a member with ready artwork. The owning
-  agent evaluates three bounded video samples with luminance, entropy and
-  clipping evidence and invalidates older generated-frame recipes. Episodic
-  filenames use bounded GuessIt evidence plus a one-time identity repair so
-  differently named season folders converge on one series; TMDB remains an
-  optional claim provider. Endpoint observations now distinguish a requested
-  session from confirmed playback, preventing failed loads from entering
-  Recent, while the app-shell mini-player presents independent fullscreen and
-  capability-gated PiP controls. Local validation is complete only after the
-  exact release, browser bundle and stand evidence below are recorded.
+- Project `0.6.62` implements the local halves of `MC8-13` to `MC8-15`.
+  Collection queries prefer a member with ready artwork. The owning agent
+  evaluates three bounded video samples with luminance, entropy and clipping
+  evidence and invalidates older generated-frame recipes. Endpoint
+  observations distinguish a requested session from confirmed playback,
+  preventing failed loads from entering Recent, while the app-shell
+  mini-player presents independent fullscreen and capability-gated PiP
+  controls.
+- The `0.6.63` candidate removes execution-context-dependent episode identity:
+  `SxxEyy` filenames use the deterministic basename prefix whether or not an
+  optional parser is importable. Migration revision 2 atomically rebuilds
+  variant memberships, removes stale collection/work records and keeps artwork
+  revisions in the same series. Against an online backup of the local real
+  catalog it produced one six-item Black Mirror series and one 92-item `mlp
+  fim` series, both with ready representative artwork. Claimed scan and
+  rendition jobs now convert unhandled worker exceptions into durable failed
+  diagnostics instead of remaining `running`. Exact release and stand
+  evidence remain required before `MC8-13`/`MC8-14` are checked.
 - `MC8-10` and `MC8-11` use the external-CDP Android TV harness introduced in
   client `0b31eaa`. It captures D-pad input, playback progress, Long Tasks,
   main-thread/process CPU, heap growth, listeners/timers, UI/Yjs mutation
