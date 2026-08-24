@@ -6,7 +6,6 @@ import types
 from pathlib import Path
 from types import SimpleNamespace
 
-import typer
 from typer.testing import CliRunner
 
 if "y_py" not in sys.modules:
@@ -91,6 +90,46 @@ def test_skill_push_without_message_releases_changed_skills(monkeypatch, tmp_pat
     ]
     assert "released skill changes" in result.output
     assert "browsers_skill, infrastate_skill" in result.output
+
+
+def test_skill_push_without_message_honors_no_bump(monkeypatch) -> None:
+    runner = CliRunner()
+    pushed: list[bool] = []
+
+    class _Mgr:
+        def push(self, *_args, bump: bool = True, **_kwargs) -> str:
+            pushed.append(bump)
+            return "rev-demo"
+
+    monkeypatch.setattr(skill_cmd, "_mgr", lambda: _Mgr())
+    monkeypatch.setattr(
+        skill_cmd,
+        "_collect_skill_release_candidates",
+        lambda **_kwargs: {
+            "base_ref": "origin/main",
+            "ahead_count": 1,
+            "behind_count": 0,
+            "skills": [{"name": "demo_skill", "reasons": ["git-ahead"]}],
+        },
+    )
+    monkeypatch.setattr(
+        skill_cmd, "_warn_if_registry_tracking_refresh_failed", lambda: None
+    )
+
+    result = runner.invoke(skill_cmd.app, ["push", "demo_skill", "--no-bump"])
+
+    assert result.exit_code == 0, result.output
+    assert pushed == [False]
+
+
+def test_skill_release_paths_ignore_process_local_state() -> None:
+    assert skill_cmd._skill_names_from_paths(
+        [
+            "skills/demo_skill/handlers/main.py",
+            "skills/demo_skill/.skill_state/db/runtime.sqlite3",
+            "skills/.runtime/cache.json",
+        ]
+    ) == ["demo_skill"]
 
 
 def test_skill_push_without_message_does_not_bump_registry_only_drift(monkeypatch, tmp_path: Path) -> None:

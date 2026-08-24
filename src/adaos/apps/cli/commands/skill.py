@@ -350,7 +350,13 @@ def _skill_names_from_paths(paths: list[str]) -> list[str]:
     names: set[str] = set()
     for path in paths:
         parts = str(path or "").replace("\\", "/").split("/")
-        if len(parts) >= 2 and parts[0] == "skills" and parts[1]:
+        if (
+            len(parts) >= 2
+            and parts[0] == "skills"
+            and parts[1]
+            and not parts[1].startswith(".")
+            and ".skill_state" not in parts[2:]
+        ):
             names.add(parts[1])
     return sorted(names)
 
@@ -467,6 +473,7 @@ def _release_changed_skills(
     remote: str = "origin",
     signoff: bool = False,
     publish_private_models: bool = False,
+    allow_version_bump: bool = True,
 ) -> dict[str, object]:
     candidates = _collect_skill_release_candidates(skill_name=skill_name, remote=remote)
     candidate_items = [item for item in candidates.get("skills") or [] if isinstance(item, dict)]
@@ -494,7 +501,9 @@ def _release_changed_skills(
         # A registry-only drift means the manifest version was already advanced
         # by a previous source change; publishing should catch registry.json up,
         # not allocate another version number.
-        bump = bool(reasons - {"registry-version", "registry-missing"})
+        bump = allow_version_bump and bool(
+            reasons - {"registry-version", "registry-missing"}
+        )
         message = _default_skill_release_message(name)
         revision = mgr.push(
             name,
@@ -1277,6 +1286,7 @@ def push_command(
                 remote=remote,
                 signoff=signoff,
                 publish_private_models=publish_private_models,
+                allow_version_bump=bump,
             )
         except Exception as exc:
             typer.secho(f"push failed: {exc}", fg=typer.colors.RED)
