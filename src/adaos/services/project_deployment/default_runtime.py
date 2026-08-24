@@ -64,6 +64,18 @@ def _sleep(seconds: float) -> None:
     time.sleep(seconds)
 
 
+def _node_config(ctx: AgentContext) -> Any:
+    config = getattr(ctx, "config", None)
+    if config is not None:
+        return config
+
+    from adaos.services.node_config import load_config
+
+    config = load_config(ctx=ctx)
+    object.__setattr__(ctx, "config", config)
+    return config
+
+
 def _labels() -> dict[str, str]:
     raw = str(os.getenv("ADAOS_DEPLOYMENT_LABELS_JSON") or "").strip()
     if not raw:
@@ -99,7 +111,7 @@ def _run_async_from_sync(coro: Any) -> Any:
 
 def deployment_runtime_inventory_payload(ctx: AgentContext | None = None) -> dict[str, Any]:
     current = ctx or get_ctx()
-    conf = current.config
+    conf = _node_config(current)
     base_dir = Path(current.paths.base_dir()).resolve()
     try:
         usage = shutil.disk_usage(base_dir)
@@ -156,7 +168,7 @@ def deployment_runtime_inventory_payload(ctx: AgentContext | None = None) -> dic
 
 def local_node_inventory_record(ctx: AgentContext | None = None) -> NodeInventoryRecord:
     current = ctx or get_ctx()
-    conf = current.config
+    conf = _node_config(current)
     payload = deployment_runtime_inventory_payload(current)
     endpoints = tuple(
         NodeEndpointRecord.from_mapping(item) for item in payload["endpoints"]
@@ -547,7 +559,7 @@ def configure_default_distributed_runtimes(
 ) -> dict[str, Any]:
     global _configured_key
     current = ctx or get_ctx()
-    conf = current.config
+    conf = _node_config(current)
     state_dir = Path(current.paths.state_dir()).resolve()
     key = f"{state_dir}:{conf.node_id}:{conf.subnet_id}"
     with _configure_lock:

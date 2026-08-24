@@ -494,6 +494,25 @@ def test_default_runtimes_share_durable_store_and_publish_local_inventory(monkey
     register_service_invocation_receiver(None)
 
 
+def test_node_config_is_loaded_for_cli_context(monkeypatch) -> None:
+    ctx = get_ctx()
+    previous = getattr(ctx, "config", None)
+    loaded = SimpleNamespace(
+        node_id="node-cli",
+        subnet_id="subnet-cli",
+        role="member",
+        token="test-token",
+    )
+    object.__setattr__(ctx, "config", None)
+    monkeypatch.setattr("adaos.services.node_config.load_config", lambda *, ctx: loaded)
+
+    try:
+        assert default_runtime._node_config(ctx) is loaded
+        assert ctx.config is loaded
+    finally:
+        object.__setattr__(ctx, "config", previous)
+
+
 def test_inventory_capacity_uses_stable_physical_totals(monkeypatch) -> None:
     ctx = get_ctx()
     disk_samples = iter((
