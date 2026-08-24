@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import platform
 import subprocess
 import sys
@@ -68,15 +69,23 @@ def _current_skill_identity(ctx: Any) -> dict[str, str] | None:
 def _current_node_identity(ctx: Any) -> dict[str, str]:
     config = getattr(ctx, "config", None)
     node_id = str(
-        getattr(config, "node_id_value", "") or getattr(config, "node_id", "") or ""
+        getattr(config, "node_id_value", "")
+        or getattr(config, "node_id", "")
+        or os.environ.get("ADAOS_NODE_ID")
+        or ""
     ).strip()
     subnet_id = str(
         getattr(config, "subnet_id_value", "")
         or getattr(config, "subnet_id", "")
         or getattr(getattr(ctx, "settings", None), "subnet_id", "")
+        or os.environ.get("ADAOS_SUBNET_ID")
         or ""
     ).strip()
-    role = str(getattr(config, "role", "") or "").strip().lower()
+    role = str(
+        getattr(config, "role", "")
+        or os.environ.get("ADAOS_NODE_ROLE")
+        or ""
+    ).strip().lower()
     return {"node_id": node_id, "subnet_id": subnet_id, "role": role}
 
 

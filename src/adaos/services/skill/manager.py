@@ -15,6 +15,7 @@ import ssl
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,6 +66,55 @@ import ast
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
 _log = logging.getLogger("adaos.skill.manager")
 _SKILL_MANIFEST_NAMES = ("skill.yaml",)
+
+
+def _skill_owner_identity(ctx: AgentContext) -> dict[str, str]:
+    config = getattr(ctx, "config", None)
+    if config is None:
+        try:
+            from adaos.services.node_config import load_config
+
+            config = load_config(ctx=ctx)
+        except Exception:
+            config = None
+    return {
+        "ADAOS_NODE_ID": str(
+            getattr(config, "node_id_value", "")
+            or getattr(config, "node_id", "")
+            or os.environ.get("ADAOS_NODE_ID")
+            or ""
+        ).strip(),
+        "ADAOS_SUBNET_ID": str(
+            getattr(config, "subnet_id_value", "")
+            or getattr(config, "subnet_id", "")
+            or os.environ.get("ADAOS_SUBNET_ID")
+            or ""
+        ).strip(),
+        "ADAOS_NODE_ROLE": str(
+            getattr(config, "role", "")
+            or os.environ.get("ADAOS_NODE_ROLE")
+            or ""
+        ).strip().lower(),
+    }
+
+
+@contextmanager
+def _bound_skill_owner_identity(ctx: AgentContext):
+    bindings = {
+        key: value
+        for key, value in _skill_owner_identity(ctx).items()
+        if value
+    }
+    previous = {key: os.environ.get(key) for key in bindings}
+    try:
+        os.environ.update(bindings)
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def _runtime_preparation_identity() -> dict[str, str]:
@@ -4324,7 +4374,8 @@ class SkillManager:
             os.environ["ADAOS_SKILL_INTERNAL_DATA_ROOT"] = str(slot.internal_data_dir)
             os.environ["ADAOS_SKILL_INTERNAL_ACTIVE_PATH"] = str(slot.internal_data_dir)
             os.environ["ADAOS_SKILL_INTERNAL_TARGET_PATH"] = str(slot.internal_data_dir)
-            result = _call_tool()
+            with _bound_skill_owner_identity(ctx):
+                result = _call_tool()
         finally:
             ctx.secrets = prev_secrets
             if previous is None:
@@ -4401,7 +4452,8 @@ class SkillManager:
             os.environ["ADAOS_SKILL_INTERNAL_DATA_ROOT"] = str(slot.internal_data_dir)
             os.environ["ADAOS_SKILL_INTERNAL_ACTIVE_PATH"] = str(payload.get("source_internal_dir") or "")
             os.environ["ADAOS_SKILL_INTERNAL_TARGET_PATH"] = str(payload.get("target_internal_dir") or "")
-            result = _call_tool()
+            with _bound_skill_owner_identity(ctx):
+                result = _call_tool()
         finally:
             ctx.secrets = prev_secrets
             if previous is None:
@@ -4468,16 +4520,17 @@ class SkillManager:
             os.environ["ADAOS_SKILL_INTERNAL_DATA_ROOT"] = str(slot.internal_data_dir)
             os.environ["ADAOS_SKILL_INTERNAL_ACTIVE_PATH"] = str(payload.get("source_internal_dir") or "")
             os.environ["ADAOS_SKILL_INTERNAL_TARGET_PATH"] = str(payload.get("target_internal_dir") or "")
-            with isolated_skill_import_state(
-                skill_dir,
-                extra_paths=[Path(src_root), *(Path(item) for item in extra_paths)],
-            ):
-                with use_ctx(ctx):
-                    spec.loader.exec_module(module)
-                    migrate = getattr(module, "migrate", None)
-                    if not callable(migrate):
-                        raise AttributeError(f"data migration file must expose migrate(payload): {migration_file}")
-                    result = migrate(dict(payload))
+            with _bound_skill_owner_identity(ctx):
+                with isolated_skill_import_state(
+                    skill_dir,
+                    extra_paths=[Path(src_root), *(Path(item) for item in extra_paths)],
+                ):
+                    with use_ctx(ctx):
+                        spec.loader.exec_module(module)
+                        migrate = getattr(module, "migrate", None)
+                        if not callable(migrate):
+                            raise AttributeError(f"data migration file must expose migrate(payload): {migration_file}")
+                        result = migrate(dict(payload))
         finally:
             ctx.secrets = prev_secrets
             if previous is None:

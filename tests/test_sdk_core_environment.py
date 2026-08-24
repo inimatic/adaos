@@ -37,3 +37,22 @@ def test_runtime_identity_is_path_free_and_identifies_current_skill(
     assert identity["current_skill"]["version"] == "1.2.3"
     assert identity["current_skill"]["manifest_digest"].startswith("sha256:")
     assert str(root) not in str(identity)
+
+
+def test_runtime_identity_uses_bound_owner_identity_when_config_is_unavailable(
+    _autocontext,
+    monkeypatch,
+) -> None:
+    ctx = _autocontext
+    ctx.config = None
+    monkeypatch.setenv("ADAOS_NODE_ID", "node-bound")
+    monkeypatch.setenv("ADAOS_SUBNET_ID", "subnet-bound")
+    monkeypatch.setenv("ADAOS_NODE_ROLE", "member")
+
+    identity = runtime_identity()
+
+    assert identity["node"] == {
+        "node_id": "node-bound",
+        "subnet_id": "subnet-bound",
+        "role": "member",
+    }

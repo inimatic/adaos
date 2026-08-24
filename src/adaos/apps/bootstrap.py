@@ -190,6 +190,10 @@ class _CtxHolder:
             except Exception:
                 pass
 
+        # NodeConfig path migration uses the process context. At this point the
+        # context is complete, so publish it before loading node.yaml.
+        set_ctx(ctx)
+
         # Attach NodeConfig once; consumers should use ctx.config instead of calling load_config repeatedly
         try:
             object.__setattr__(ctx, "config", load_config(ctx=ctx))

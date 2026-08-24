@@ -1727,6 +1727,11 @@ def test_activate_runtime_does_not_switch_slot_before_smoke_import(monkeypatch) 
 
 def test_activate_runtime_runs_lifecycle_hooks_and_publishes_status(monkeypatch) -> None:
     ctx = get_ctx()
+    ctx.config = SimpleNamespace(
+        node_id_value="node-lifecycle",
+        subnet_id_value="subnet-lifecycle",
+        role="hub",
+    )
     mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
     skill_name = "lifecycle_skill"
     skill_dir = Path(ctx.paths.skills_dir()) / skill_name
@@ -1772,9 +1777,17 @@ def test_activate_runtime_runs_lifecycle_hooks_and_publishes_status(monkeypatch)
     monkeypatch.setattr(mgr, "_smoke_import", lambda **kwargs: None)
 
     calls: list[tuple[str | None, dict[str, object]]] = []
+    owner_bindings: list[tuple[str | None, str | None, str | None]] = []
 
     def _fake_execute_tool(skill_dir_arg, *, module=None, attr=None, payload=None, extra_paths=None):
         calls.append((attr, dict(payload or {})))
+        owner_bindings.append(
+            (
+                os.environ.get("ADAOS_NODE_ID"),
+                os.environ.get("ADAOS_SUBNET_ID"),
+                os.environ.get("ADAOS_NODE_ROLE"),
+            )
+        )
         return {"ok": True, "attr": attr}
 
     monkeypatch.setattr(skill_manager_module, "execute_tool", _fake_execute_tool)
@@ -1793,6 +1806,9 @@ def test_activate_runtime_runs_lifecycle_hooks_and_publishes_status(monkeypatch)
     ]
     assert calls[1][1]["reason"] == "runtime_slot_switch"
     assert calls[1][1]["target_slot"] == "B"
+    assert owner_bindings == [
+        ("node-lifecycle", "subnet-lifecycle", "hub"),
+    ] * 4
     assert status["lifecycle"]["persist"]["ok"] is True
     assert status["lifecycle"]["persist"]["skipped"] is False
     assert status["lifecycle"]["after_activate"]["tool"] == "after_activate_tool"
