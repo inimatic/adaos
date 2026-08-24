@@ -616,6 +616,12 @@ must not be marked complete from contract or unit-test coverage alone.
   explicit steady-state CPU, memory-growth, render/update-rate and input-latency
   budgets on representative TV hardware; a desktop-only profile is not
   acceptance evidence.
+- [ ] `[should]` `MC8-12` Reconcile browser zone selection with the
+  authoritative subnet/node route. Once an authenticated browser knows the
+  node's zone, a stale or incorrect `zone` URL hint must not override that
+  evidence. Diagnostics must distinguish `wrong_zone` or `subnet_not_found`
+  from an actually offline hub and offer a bounded recovery path without
+  requiring the user to edit the URL manually.
 
 Local implementation checkpoint (not stand acceptance):
 
@@ -639,6 +645,13 @@ Local implementation checkpoint (not stand acceptance):
 - `MC8-01` is implemented by the generic endpoint-session bridge in client
   `3ebe27a`/`98745a5` and the Media Center adapter projection in registry
   `b2490f6`. Cross-browser TV/controller convergence remains to be recorded.
+- The next `MC8-01` candidate removes the controller's initialization race:
+  `media_control_skill` now seeds each exact webspace/profile/target
+  subscription immediately and maintains a bounded set of those ready
+  projections after every authoritative session mutation. Media Remote also
+  projects device name, endpoint name, authorization and availability instead
+  of opaque target ids. Unit and local browser acceptance pass; cross-browser
+  TV/controller convergence on the exact published Project remains open.
 - `MC8-02` has the fullscreen-safe generic transition overlay in client
   `4090c74`, including policy-gated update deferral. The physical update and
   playback recovery proof remains open.
@@ -654,6 +667,13 @@ Local implementation checkpoint (not stand acceptance):
 - `MC8-04` and `MC8-05` are represented by client `4eeef8c`/`467366c` and
   registry `745061d`/`86ea4ca`; authoritative post-deployment behavior still
   requires the stand run.
+- The next `MC8-04` candidate carries the effective persisted autoplay and
+  auto-fullscreen policy in the playback plan. The app-shell player applies it
+  to the stable fullscreen modal presentation and makes a best-effort native
+  Fullscreen API request. The same closure adds a generic clearable text input;
+  Media Center uses it to reset both search text and the authoritative catalog
+  query. Local contract and browser checks pass; TV user-activation behavior
+  and the published stand bundle remain to be verified.
 - `MC8-06` uses the generic D-pad carousel from client `d988ae5`; `MC8-07` uses
   the generic adaptive toolbar from client `834d3fd`/`84148f0` and registry
   `5378ad8`.

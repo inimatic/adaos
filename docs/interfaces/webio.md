@@ -1083,6 +1083,17 @@ file paths. Large public assets can use `delivery: "external"` with an authored
 URL; AdaOS keeps that descriptor in the owner manifest but does not copy the
 bytes into `.adaos/assets/public`.
 
+Dynamic skill data uses the same ownership rule. A row or selector option may
+publish a fallback field plus an adjacent `<field>_i18n` descriptor, for
+example `authorization_label: "Authorized"` and
+`authorization_label_i18n: {"key": "runtime.media_control.ui.authorized"}`.
+Generic collection, tree, and selector renderers resolve those descriptors
+against the skill-published dictionaries when data arrives and again after a
+locale revision. The client owns this generic resolution behavior; it must not
+embed the domain key or translated wording. Keep stable ids, user-assigned
+device names, filenames, and other proper names as ordinary values rather than
+translation keys.
+
 ```json
 {
   "resources": {
