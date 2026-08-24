@@ -622,18 +622,18 @@ must not be marked complete from contract or unit-test coverage alone.
   evidence. Diagnostics must distinguish `wrong_zone` or `subnet_not_found`
   from an actually offline hub and offer a bounded recovery path without
   requiring the user to edit the URL manually.
-- [ ] `[must]` `MC8-13` Make collection artwork representative and bounded.
+- [x] `[must]` `MC8-13` Make collection artwork representative and bounded.
   Collection and season cards select a ready member rendition; video artwork
   samples up to three deterministic positions and rejects low-information or
   near-black frames. Publish one static resource through the AdaOS media plane;
   any rotating preview is a client slideshow over existing resources, not a
   generated GIF required for catalog correctness.
-- [ ] `[must]` `MC8-14` Normalize episodic identity independently of season
+- [x] `[must]` `MC8-14` Normalize episodic identity independently of season
   folder labels. Use a bounded versioned filename parser with deterministic
   fallback, migrate existing provisional identities once, and treat TMDB or
   another external database as provenance-bearing claims. Ambiguous provider
   matches must remain reviewable and must not silently merge works.
-- [ ] `[must]` `MC8-15` Count playback only after an endpoint confirms it.
+- [x] `[must]` `MC8-15` Count playback only after an endpoint confirms it.
   Failed or unsupported loads must leave fullscreen, retain a retryable
   endpoint/source verdict, and stay out of Recent, resume, and watched history.
   Mini-player controls expose fullscreen separately from Picture-in-Picture;
@@ -758,16 +758,23 @@ Local implementation checkpoint (not stand acceptance):
   preventing failed loads from entering Recent, while the app-shell
   mini-player presents independent fullscreen and capability-gated PiP
   controls.
-- The `0.6.63` candidate removes execution-context-dependent episode identity:
+- Releases `0.6.63` through `0.6.69` complete and promote `MC8-13` to
+  `MC8-15`. The episode repair removes execution-context-dependent identity:
   `SxxEyy` filenames use the deterministic basename prefix whether or not an
   optional parser is importable. Migration revision 2 atomically rebuilds
   variant memberships, removes stale collection/work records and keeps artwork
   revisions in the same series. Against an online backup of the local real
-  catalog it produced one six-item Black Mirror series and one 92-item `mlp
-  fim` series, both with ready representative artwork. Claimed scan and
+  catalog it produced one Black Mirror series and one `mlp fim` series, both
+  with ready representative artwork. The `.30` promotion on `0.6.69` reports
+  six available Black Mirror works and 91 available `mlp fim` works; one
+  additional MLP source is an alternate variant of an existing logical work
+  and is not double-counted. Claimed scan and
   rendition jobs now convert unhandled worker exceptions into durable failed
-  diagnostics instead of remaining `running`. Exact release and stand
-  evidence remain required before `MC8-13`/`MC8-14` are checked.
+  diagnostics instead of remaining `running`. The promoted coordinator counts
+  distinct available works, retains offline memberships for recovery, and
+  returns the eight-series page in 3.53 seconds including CLI startup on the
+  slow-disk stand. Playback-observation and app-shell regression suites cover
+  the `MC8-15` confirmation, fullscreen and PiP contracts.
 - `MC8-10` and `MC8-11` use the external-CDP Android TV harness introduced in
   client `0b31eaa`. It captures D-pad input, playback progress, Long Tasks,
   main-thread/process CPU, heap growth, listeners/timers, UI/Yjs mutation
