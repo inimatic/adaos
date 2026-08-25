@@ -2944,6 +2944,7 @@ def test_materialized_payload_force_full_state_replaces_ystore_snapshot(monkeypa
             return {"ok": True, "snapshot_bytes": len(snapshot)}
 
     store = _FakeStore()
+    observed_verification: list[bool] = []
 
     def _fake_apply(
         self,
@@ -2953,8 +2954,9 @@ def test_materialized_payload_force_full_state_replaces_ystore_snapshot(monkeypa
         *,
         materialization_identity=None,  # noqa: ARG001
         previous_payload=None,  # noqa: ARG001
-        verify_branch_fingerprints=False,  # noqa: ARG001
+        verify_branch_fingerprints=False,
     ) -> None:
+        observed_verification.append(bool(verify_branch_fingerprints))
         with target_ydoc.begin_transaction() as txn:
             target_ydoc.get_map("ui").set(
                 txn,
@@ -2998,6 +3000,7 @@ def test_materialized_payload_force_full_state_replaces_ystore_snapshot(monkeypa
     assert update
     assert result["ready"] is True
     assert result["force_full_state_update"] is True
+    assert observed_verification == [True]
     assert result["full_state_snapshot_persisted"] is True
     assert store.replace_calls
     assert result["broadcast_update_bytes"] == len(update)

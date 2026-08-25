@@ -7274,7 +7274,10 @@ async def _apply_room_materialized_payload(
                         # turn mere branch presence into proof that the live
                         # room contains the requested scenario.  Other rebuilds
                         # retain the bounded fingerprint fast path.
-                        verify_branch_fingerprints="scenario_switch" in str(reason or "").lower(),
+                        verify_branch_fingerprints=(
+                            bool(force_full_state_update)
+                            or "scenario_switch" in str(reason or "").lower()
+                        ),
                     )
             finally:
                 phase_timings_ms["branch_apply"] = _elapsed_ms_since(stage_started)
