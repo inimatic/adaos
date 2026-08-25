@@ -669,6 +669,12 @@ Local implementation checkpoint (not stand acceptance):
   paths are excluded from discovery and original bytes are never moved. HLS
   package publication, terminal-job retention, orphan-reference grace and
   physical stand migration evidence remain open before `MC8-16` can close.
+- The same candidate closes the missing automatic admission edge in `MC8-03`:
+  confirmed/loading endpoint observations maintain a 120-second lease on the
+  source agent, and pause, stop, end or failure releases it. Scan, artwork,
+  storage migration and conversion read the shared pressure within one second.
+  Lost terminal events fail open when the lease expires, while core media-byte
+  delivery continues to hold the independent update-deferral lease.
 
 - The 2026-08-25 single-node candidate closes the current playback and details
   interaction slice. Client `39acebe`, `e32a7a8`, and `9310ca1` make Ended,
