@@ -5916,7 +5916,7 @@ async def node_yjs_toggle_install(webspace_id: str, payload: WebspaceToggleInsta
             "error": "hub_role_required",
         }
     svc = WebDesktopService()
-    svc.toggle_install_with_live_room(str(payload.type), str(payload.id), target_webspace_id)
+    await svc.toggle_install_async(str(payload.type), str(payload.id), target_webspace_id)
     installed = await svc.get_installed_async(target_webspace_id)
     desktop = await svc.get_snapshot_async(target_webspace_id)
     return {

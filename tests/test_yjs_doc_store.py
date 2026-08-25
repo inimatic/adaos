@@ -1157,6 +1157,17 @@ def test_get_ydoc_stops_store_after_context() -> None:
         reset_ystore_for_webspace(webspace_id)
 
 
+async def test_get_ydoc_rejects_active_loop_without_leaking_coroutine() -> None:
+    webspace_id = _webspace_id("sync-active-loop")
+    try:
+        with pytest.raises(RuntimeError, match="active event loop"):
+            with get_ydoc(webspace_id, read_only=True):
+                pass
+        await asyncio.sleep(0)
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
 async def test_async_get_ydoc_prefers_live_room_when_requested(monkeypatch) -> None:
     class _FakeStore:
         def __init__(self) -> None:

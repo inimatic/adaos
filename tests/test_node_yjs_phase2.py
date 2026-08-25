@@ -651,7 +651,7 @@ def test_node_yjs_toggle_install_endpoint_uses_desktop_service(monkeypatch) -> N
             return {"apps": ["scenario:prompt_engineer_scenario"], "widgets": ["weather"]}
 
     class _DesktopService:
-        def toggle_install_with_live_room(self, item_type: str, item_id: str, webspace_id: str | None = None) -> None:
+        async def toggle_install_async(self, item_type: str, item_id: str, webspace_id: str | None = None) -> None:
             captured.append((item_type, item_id, str(webspace_id or "")))
 
         async def get_installed_async(self, webspace_id: str | None = None) -> _Installed:

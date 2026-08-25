@@ -409,6 +409,9 @@ def _run_blocking(coro: Awaitable[T], *, timeout_s: float | None = None) -> T:
         asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(_await_coro())
+    close = getattr(coro, "close", None)
+    if callable(close):
+        close()
     raise RuntimeError("get_ydoc() cannot be used inside an active event loop; use async_get_ydoc().")
 
 
