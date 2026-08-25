@@ -3,7 +3,7 @@
 Status: implementation roadmap for the
 [Distributed Media Center Target Architecture](media-center-target-architecture.md).
 
-Last reviewed: 2026-08-24.
+Last reviewed: 2026-08-25.
 
 ## Outcome
 
@@ -99,7 +99,7 @@ still a bounded technical pilot rather than distributed-production acceptance.
 | MC5 Adaptive UI and settings | validated local | validated-stand | MC3, MC4 |
 | MC6 Personalization, access, and voice | validated local | validated-stand | identity roadmap, MC4, MC5 |
 | MC7 Enrichment, variants, and production operations | bounded pilot; production rejected | production-accepted | MC2-MC6 |
-| MC8 Post-pilot product hardening | observed on stand; planned | validated-stand | MC4-MC7, updater UX |
+| MC8 Post-pilot product hardening | implemented locally; stand gates open | validated-stand | MC4-MC7, updater UX |
 
 The exact `0.6.50` rollout on 2026-08-22 closed immutable Root publication and
 retrieval, repeated a two-node exact deployment, advanced authority to epoch
@@ -658,6 +658,36 @@ must not be marked complete from contract or unit-test coverage alone.
   and adaptive bitrate packaging remain governed by `MC7-14`.
 
 Local implementation checkpoint (not stand acceptance):
+
+- The 2026-08-25 single-node candidate closes the current playback and details
+  interaction slice. Client `39acebe`, `e32a7a8`, and `9310ca1` make Ended,
+  Previous, and Next use the durable queue even when the modal is absent;
+  restore the active queue item before reopening details; add Fullscreen, PiP,
+  Play On and a fullscreen transport overlay; keep narrow surfaces icon-only;
+  and bound artwork route fallback. Registry `8df34f70`, `29ee1f03`, and
+  `f7e97e85` add atomic playlist actions, reviewed metadata corrections and
+  provider rejection, safe source identity, variant visibility, endpoint
+  handoff, and exact active-item selection when reusing a remote session.
+  Search Reset remains enabled after the editor is manually erased until the
+  committed query is actually cleared.
+- Registry `d88ef302` and `a326ce4b` repair the enrichment admission order for
+  an existing large library. Revisioned embedded-tag scans are admitted before
+  automatic artwork work, while explicit non-artwork renditions retain
+  precedence; MusicBrainz skips recognized audiobook chapter paths rather than
+  spending its one-request-per-second budget on them. On the 53,209-source
+  local UNC library this immediately changed the agent from zero scans to one
+  observable running Music-root scan and advanced the metadata completion
+  count while the coordinator remained `available/fresh`. Genre facets remain
+  data-dependent and are not declared complete until tagged music has passed
+  through this backfill.
+- Local browser evidence covers 1920x1080 and 390x844 layouts with no document
+  horizontal overflow. Existing TMDb artwork loaded from the provider URL and
+  generated artwork loaded through an AdaOS blob resource; cards with no
+  descriptor remained intentionally empty. The details title, safe library
+  path, node, versions, provider provenance, correction actions, conversion
+  diagnostic, and compact controls rendered from UI-as-data. This does not
+  replace Android TV D-pad, auto-advance, cross-browser Play On, or long-run
+  playback acceptance on the stand.
 
 - Client `e8bc3d9` closes a deterministic hard renderer loop in the compact
   toolbar. `menuOptions()` had allocated a new option array and objects during
