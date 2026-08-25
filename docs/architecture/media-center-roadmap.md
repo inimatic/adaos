@@ -659,6 +659,17 @@ must not be marked complete from contract or unit-test coverage alone.
 
 Local implementation checkpoint (not stand acceptance):
 
+- The 2026-08-26 storage candidate implements the source-volume half of
+  `MC8-16`. Every media root has a versioned policy: single-file browser
+  renditions default to a quota-bounded content-addressed `.adaos-media` store
+  beside the root, while artwork defaults to node cache. Publication verifies
+  SHA-256 and source revision before an atomic catalog transition. Existing
+  node-cache outputs move through durable resumable jobs that yield to playback
+  pressure; progress is visible in Settings and Metadata Activity. Managed
+  paths are excluded from discovery and original bytes are never moved. HLS
+  package publication, terminal-job retention, orphan-reference grace and
+  physical stand migration evidence remain open before `MC8-16` can close.
+
 - The 2026-08-25 single-node candidate closes the current playback and details
   interaction slice. Client `39acebe`, `e32a7a8`, and `9310ca1` make Ended,
   Previous, and Next use the durable queue even when the modal is absent;
