@@ -345,6 +345,14 @@ def _is_unqualified_webio_stream_data_event(event_type: str) -> bool:
 
 
 def _should_forward_member_bus_event(event_type: str, payload: Any) -> bool:
+    if str(event_type or "").strip() in {
+        "core.update.status",
+        "hub.core_update.status",
+        "supervisor.update.status.raw",
+    }:
+        # These retained topics describe the node that owns the local bus.
+        # Member update state is propagated in the member runtime snapshot.
+        return False
     if (
         _is_unqualified_webio_stream_data_event(event_type)
         and _payload_source_node_id(payload)

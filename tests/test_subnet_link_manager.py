@@ -84,6 +84,31 @@ def test_member_membership_report_uses_authenticated_link_identity(monkeypatch) 
     assert bus.events[0].payload["_meta"]["subnet_origin_node_id"] == "authenticated-node"
 
 
+def test_member_node_local_status_does_not_replace_hub_status(monkeypatch) -> None:
+    bus = _FakeBus()
+    monkeypatch.setattr(mod, "get_ctx", lambda: _FakeCtx(bus))
+
+    for event_type in (
+        "core.update.status",
+        "hub.core_update.status",
+        "supervisor.update.status.raw",
+    ):
+        asyncio.run(
+            mod.HubLinkManager.ingest_member_bus_event(
+                object(),
+                node_id="member-1",
+                event={
+                    "type": event_type,
+                    "payload": {"state": "failed"},
+                    "source": "member",
+                    "ts": 123.0,
+                },
+            )
+        )
+
+    assert bus.events == []
+
+
 class _FakeCtx:
     def __init__(self, bus) -> None:
         self.bus = bus

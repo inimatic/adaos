@@ -2213,6 +2213,14 @@ class HubLinkManager:
             ts = float(event.get("ts") or time.time())
             if not isinstance(typ, str) or not typ:
                 return
+            if typ in {
+                "core.update.status",
+                "hub.core_update.status",
+                "supervisor.update.status.raw",
+            }:
+                # These topics describe this process' node. Member update state is
+                # already carried by subnet.member.snapshot.changed.
+                return
             if not isinstance(payload, dict):
                 payload = {"value": payload}
             if typ == "distributed.service.membership.reported":

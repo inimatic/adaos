@@ -459,6 +459,44 @@ def test_member_link_client_does_not_forward_unqualified_node_webio_streams(monk
     assert client._out_q.empty()
 
 
+def test_member_link_client_does_not_forward_node_local_status(monkeypatch) -> None:
+    class _FakeBus:
+        def __init__(self) -> None:
+            self.subscriber = None
+
+        def subscribe(self, prefix, handler) -> None:
+            assert prefix == "*"
+            self.subscriber = handler
+
+    fake_bus = _FakeBus()
+    fake_ctx = SimpleNamespace(bus=fake_bus, config=SimpleNamespace(node_id="member-1"))
+    monkeypatch.setattr(mod, "get_ctx", lambda: fake_ctx)
+
+    client = mod.MemberLinkClient()
+    client._connected.set()
+    client._bus_prefixes = None
+    client._ensure_bus_subscription()
+
+    assert fake_bus.subscriber is not None
+    for event_type in (
+        "core.update.status",
+        "hub.core_update.status",
+        "supervisor.update.status.raw",
+    ):
+        fake_bus.subscriber(
+            SimpleNamespace(
+                type=event_type,
+                payload={"state": "failed"},
+                source="member",
+                ts=123.0,
+            )
+        )
+
+    queued = list(client._out_q._queue)
+    assert queued
+    assert all(item.get("t") != "bus.emit" for item in queued)
+
+
 def test_member_link_client_forwards_node_qualified_webio_streams(monkeypatch) -> None:
     class _FakeBus:
         def __init__(self) -> None:

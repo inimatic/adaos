@@ -132,6 +132,16 @@ runtime contract is:
   catalog, and Yjs state refresh
 - `subnet.member.lost`: mark link absence without fabricating member data
 
+Node-local retained status topics never cross the member-to-hub boundary under
+their original names. In particular, `core.update.status`,
+`hub.core_update.status`, and `supervisor.update.status.raw` always describe the
+node that owns the local event bus. A member reports its update state through
+the lightweight `node.status` snapshot, which the hub exposes as
+`subnet.member.snapshot.changed`. In the opposite direction, the member mirrors
+the hub's `core.update.status` as `hub.core_update.status`. This prevents a
+member transition from replacing the hub's retained update state while keeping
+both local and subnet-wide update state observable to skills.
+
 When a member has not yet sent `node.catalog`, the hub may build a display-only
 desktop projection from `capacity.skills` and local web UI declarations for
 known standard skills. That projection is not the source of truth for member
