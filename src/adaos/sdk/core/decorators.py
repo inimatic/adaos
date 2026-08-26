@@ -37,6 +37,7 @@ _TOOLS = tools_registry
 _LOG = logging.getLogger("adaos.sdk.subscriptions")
 _SUBSCRIPTION_DENY_LOG_AT: Dict[str, float] = {}
 _SUBSCRIPTION_DENY_LOG_INTERVAL_S = 5.0
+_SUBSCRIPTION_COMPATIBILITY_REPORT_AT: Dict[str, float] = {}
 _SKILL_SUBSCRIPTION_GENERATIONS: Dict[str, int] = {}
 _REGISTERED_SKILL_SUBSCRIPTIONS: Dict[str, list[tuple[str, Callable]]] = {}
 _STREAM_CONTROL_SUBSCRIPTION_TOPICS = {
@@ -61,6 +62,20 @@ def _stream_receiver_deny_logging_enabled() -> bool:
     except Exception:
         return False
     return raw in {"1", "true", "yes", "on"}
+
+
+def _stream_receiver_compatibility_reporting_enabled() -> bool:
+    try:
+        raw = str(
+            os.getenv(
+                "ADAOS_DEV_TICKET_RUNTIME_COMPATIBILITY",
+                os.getenv("ADAOS_SKILL_SUBSCRIPTION_RECEIVER_DEV_TICKET", "1"),
+            )
+            or "1"
+        ).strip().lower()
+    except Exception:
+        return True
+    return raw not in {"0", "false", "no", "off"}
 
 
 def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
@@ -414,6 +429,75 @@ def _log_subscription_receiver_denied(skill_name: str, topic: str, admission: di
     )
 
 
+def _subscription_event_payload(evt: object) -> dict[str, Any]:
+    if isinstance(evt, dict):
+        payload = evt.get("payload") if "payload" in evt and "type" in evt else evt
+        return dict(payload) if isinstance(payload, dict) else {}
+    payload = getattr(evt, "payload", None)
+    return dict(payload) if isinstance(payload, dict) else {}
+
+
+def _subscription_event_type(evt: object, topic: str) -> str:
+    if isinstance(evt, dict):
+        return str(evt.get("type") or topic or "").strip()
+    return str(getattr(evt, "type", None) or topic or "").strip()
+
+
+def _report_subscription_receiver_policy_missing(
+    skill_name: str | None,
+    topic: str,
+    evt: object,
+    admission: dict[str, Any],
+) -> None:
+    if not _stream_receiver_compatibility_reporting_enabled():
+        return
+    if str(admission.get("reason") or "").strip() != "stream_receiver_policy_missing":
+        return
+    skill = str(skill_name or "").strip()
+    if not skill or skill == "<unknown>":
+        return
+    payload = _subscription_event_payload(evt)
+    receiver = str(
+        admission.get("receiver")
+        or payload.get("receiver")
+        or payload.get("projection_slot")
+        or payload.get("slot")
+        or payload.get("stream")
+        or ""
+    ).strip()
+    report_key = f"{skill}:{topic}:stream_receiver_policy_missing:{receiver or '-'}"
+    now = time.monotonic()
+    interval_s = float(_env_int("ADAOS_DEV_TICKET_RUNTIME_COMPATIBILITY_REPORT_INTERVAL_S", 30, minimum=0))
+    last = float(_SUBSCRIPTION_COMPATIBILITY_REPORT_AT.get(report_key) or 0.0)
+    if interval_s > 0 and now - last < interval_s:
+        return
+    _SUBSCRIPTION_COMPATIBILITY_REPORT_AT[report_key] = now
+    try:
+        try:
+            ctx = require_ctx("sdk.core.decorators.receiver_compatibility")
+        except Exception:
+            ctx = None
+        from adaos.services.development_tickets import DevelopmentTicketService
+
+        DevelopmentTicketService().report_stream_receiver_compatibility_finding(
+            skill_id=skill,
+            admission=admission,
+            topic=topic,
+            event_type=_subscription_event_type(evt, topic),
+            publish_pending_action=True,
+            ctx=ctx,
+            webspace_id=str(payload.get("webspace_id") or "").strip() or None,
+        )
+    except Exception:
+        _LOG.warning(
+            "failed to record receiver compatibility development ticket skill=%s topic=%s receiver=%s",
+            skill,
+            topic,
+            receiver or "-",
+            exc_info=True,
+        )
+
+
 def _load_subscription_activation_policy(skill_name: str | None):
     token = str(skill_name or "").strip()
     if not token or token == "<unknown>":
@@ -761,6 +845,7 @@ async def register_subscriptions(
                 if _skill and not _skill_event_targets_this_node(evt):
                     return None
                 receiver_admission = stream_receiver_event_admission(_receiver_patterns, evt, _topic)
+                _report_subscription_receiver_policy_missing(_skill, _topic, evt, receiver_admission)
                 if not receiver_admission.get("allowed", True):
                     if _skill:
                         _log_subscription_receiver_denied(_skill, _topic, receiver_admission)
@@ -815,6 +900,7 @@ async def register_subscriptions(
                 if _skill and not _skill_event_targets_this_node(evt):
                     return None
                 receiver_admission = stream_receiver_event_admission(_receiver_patterns, evt, _topic)
+                _report_subscription_receiver_policy_missing(_skill, _topic, evt, receiver_admission)
                 if not receiver_admission.get("allowed", True):
                     if _skill:
                         _log_subscription_receiver_denied(_skill, _topic, receiver_admission)

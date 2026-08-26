@@ -17,6 +17,7 @@ from adaos.services.builder.workbench import (
     safe_source_webspace_id,
     source_webspace_id_for,
 )
+from adaos.services.development_tickets import DevelopmentTicketService
 
 
 def test_preview_webspace_id_is_opaque_and_source_ids_are_not_parsed() -> None:
@@ -675,6 +676,41 @@ def test_builder_api_exposes_workbench_endpoints(tmp_path: Path) -> None:
     response = client.get("/api/builder/workbench/development-skills", params={"webspace_id": "desktop"})
     assert response.status_code == 200
     assert response.json()["items"] == []
+
+
+def test_builder_workbench_open_selects_development_ticket_context(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    service = BuilderWorkbenchService(state_dir=state_dir)
+    tickets = DevelopmentTicketService(state_dir=state_dir)
+    signal = tickets.capture_signal(
+        kind="compatibility_finding",
+        summary="Legacy skill misses receiver declarations",
+        target_scope={"type": "skill", "id": "legacy_skill", "source": "installed"},
+        evidence_refs=[{"type": "runtime_guard", "code": "compat.stream_receiver_policy_missing"}],
+    )["signal"]
+    ticket = tickets.ensure_ticket_for_signal(
+        signal,
+        kind="runtime_compatibility_debt",
+        status="accepted",
+    )["ticket"]
+    app = FastAPI()
+    app.include_router(builder_api.router, prefix="/api/builder")
+    app.dependency_overrides[require_token] = lambda: None
+    app.dependency_overrides[builder_api._get_workbench_service] = lambda: service
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/builder/workbench/open",
+        params={"webspace_id": "desktop", "ticket_id": ticket["ticket_id"]},
+    )
+
+    assert response.status_code == 200
+    binding = response.json()["binding"]
+    assert binding["selection"]["object_type"] == "skill"
+    assert binding["selection"]["object_id"] == "legacy_skill"
+    assert binding["development_ticket"]["ticket_id"] == ticket["ticket_id"]
+    assert binding["development_ticket"]["development_source"]["status"] == "needs_materialization"
+    assert "materialize_dev_source" in binding["development_ticket"]["development_source"]["options"]
 
 
 def test_get_workspace_binding_migrates_runtime_dialog_topic(tmp_path: Path) -> None:

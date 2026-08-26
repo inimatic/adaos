@@ -490,6 +490,82 @@ def test_stream_subscription_skips_foreign_declared_receiver(tmp_path: Path, mon
     assert ticket_calls == []
 
 
+def test_stream_subscription_reports_missing_receiver_policy(tmp_path: Path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "skills" / "legacy_skill").mkdir(parents=True)
+
+    class FakeBus:
+        def __init__(self) -> None:
+            self.handlers: list[tuple[str, object]] = []
+
+        def subscribe(self, topic: str, handler):
+            self.handlers.append((topic, handler))
+            return handler
+
+    bus = FakeBus()
+    calls: list[str] = []
+    ticket_calls: list[dict] = []
+
+    class FakeDevelopmentTicketService:
+        def report_stream_receiver_compatibility_finding(self, **kwargs):
+            ticket_calls.append(dict(kwargs))
+            return {"ok": True, "reported": True}
+
+    def handler(evt):
+        payload = evt.payload if hasattr(evt, "payload") else evt
+        calls.append(payload["receiver"])
+
+    monkeypatch.setattr(decorators, "subscriptions", [])
+    decorators.subscribe("webio.stream.snapshot.requested")(handler)
+    monkeypatch.setattr(decorators, "_registered", False)
+    monkeypatch.setattr(decorators, "_SKILL_SUBSCRIPTION_GENERATIONS", {})
+    monkeypatch.setattr(decorators, "_REGISTERED_SKILL_SUBSCRIPTIONS", {})
+    decorators._SUBSCRIPTION_COMPATIBILITY_REPORT_AT.clear()
+    monkeypatch.setattr(decorators, "_infer_skill_name", lambda _fn: "legacy_skill")
+    monkeypatch.setattr(decorators, "_skill_event_targets_this_node", lambda _evt: True)
+    monkeypatch.setattr(decorators, "_admit_skill_subscription_yjs_work", lambda *_args: {"allowed": True})
+    monkeypatch.setattr(decorators, "_maybe_push_skill", lambda *_args: False)
+    monkeypatch.setattr(decorators, "_subscription_log_suffix", lambda _skill: "")
+    monkeypatch.setattr(
+        "adaos.services.development_tickets.DevelopmentTicketService",
+        FakeDevelopmentTicketService,
+    )
+    monkeypatch.setattr(
+        decorators,
+        "require_ctx",
+        lambda _reason: SimpleNamespace(
+            bus=bus,
+            paths=SimpleNamespace(
+                workspace_dir=lambda: workspace,
+                skills_dir=lambda: workspace / "skills",
+            ),
+        ),
+    )
+    monkeypatch.setattr(data_bus, "require_ctx", lambda _reason: SimpleNamespace(bus=bus))
+
+    async def fake_emit(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(decorators, "emit", fake_emit)
+
+    asyncio.run(decorators.register_subscriptions(force=True))
+    wrapped = bus.handlers[0][1]
+    evt = SimpleNamespace(
+        type="webio.stream.snapshot.requested",
+        payload={"webspace_id": "desktop", "receiver": "legacy.panel"},
+    )
+
+    asyncio.run(wrapped(evt))  # type: ignore[misc]
+
+    assert calls == ["legacy.panel"]
+    assert len(ticket_calls) == 1
+    assert ticket_calls[0]["skill_id"] == "legacy_skill"
+    assert ticket_calls[0]["admission"]["reason"] == "stream_receiver_policy_missing"
+    assert ticket_calls[0]["admission"]["receiver"] == "legacy.panel"
+    assert ticket_calls[0]["publish_pending_action"] is True
+    assert ticket_calls[0]["webspace_id"] == "desktop"
+
+
 def test_non_stream_subscription_still_uses_yjs_owner_guard(monkeypatch) -> None:
     calls: list[dict] = []
     fake_guard = ModuleType("adaos.services.yjs.owner_guard")

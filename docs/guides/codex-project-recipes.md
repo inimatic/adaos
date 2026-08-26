@@ -131,6 +131,53 @@ Avoid broad `pytest` while debugging a narrow issue. This repo contains multiple
 integration trees and generated/runtime folders; targeted tests give faster and
 clearer signal.
 
+## Development Tickets
+
+During review, core work, skill development, or scenario development, Codex
+should create managed Dev Tickets for deferred technical debt instead of
+leaving doc TODOs as the backlog. Use docs to explain architecture or accepted
+decisions; use tickets for work that should later be triaged, repaired,
+validated, or closed.
+
+Preferred CLI shape:
+
+```powershell
+$env:PYTHONPATH = "D:\git\inimatic\adaos\src"
+.venv\Scripts\python.exe -m adaos dev ticket new `
+  "Skill legacy_skill needs receiver/data-route declarations" `
+  --kind development_request `
+  --target-type skill `
+  --target-id legacy_skill `
+  --target-source installed `
+  --source codex_review `
+  --evidence runtime_guard:compat.stream_receiver_policy_missing `
+  --evidence file:src/adaos/sdk/core/decorators.py `
+  --evidence test:tests/test_sdk_subscriptions.py::test_stream_subscription_reports_missing_receiver_policy
+```
+
+Use compact evidence refs:
+
+- `file:<path>` for source, manifest, scenario, or config locations;
+- `test:<path>::<test_name>` for reproducible local validation;
+- `runtime_guard:<code>` for deterministic guard findings;
+- `trace:<event-or-request-id>` for pending action, route, log, or runtime
+  evidence.
+
+Resolve only after evidence exists:
+
+```powershell
+.venv\Scripts\python.exe -m adaos dev ticket resolve <ticket-id> `
+  --actor codex `
+  --evidence test:tests/test_sdk_subscriptions.py::test_stream_subscription_reports_missing_receiver_policy `
+  --evidence runtime_guard:compat.stream_receiver_policy_missing `
+  --version <validated-version-or-commit>
+```
+
+Use `close` for duplicate, stale, refused, or not-design-time-fixable records.
+Use `handoff --mode autonomous|interactive` when Builder should own repair.
+Do not create GitHub Issues as the primary object; external trackers may be
+linked later through ticket `external_refs` after redaction and human approval.
+
 ## Angular Client Tests
 
 The AdaOS client uses Angular/Karma, not Jest. From

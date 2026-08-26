@@ -2,7 +2,7 @@
 
 Status: target architecture.
 
-Last reviewed: 2026-08-20.
+Last reviewed: 2026-08-26.
 
 This document defines the AdaOS boundary for user, runtime, review, and
 conversation feedback that may drive software evolution. It sits between raw
@@ -83,6 +83,11 @@ development accepts a problem for tracked execution. Until that Issue layer is
 implemented, workspace-scoped Development Signals may bridge to the existing
 Builder repair and task records.
 
+GitHub Issues are not the primary object for this lifecycle. They may later be
+linked through `external_refs`, draft-exported, or mirrored after redaction and
+human approval, but internal Dev Tickets remain the private source of truth for
+workspace, skill, scenario, runtime, and Builder evolution debt.
+
 ## Dev Tickets
 
 Dev Ticket is the user and Codex control surface over Development Signals.
@@ -119,6 +124,24 @@ The first UI should expose tickets before broad CLI ergonomics:
 Development Signals remain the immutable evidence underneath. Dev Tickets own
 human-readable queue state, dedup grouping, and user/Codex workflow affordance.
 
+Implementation status, 2026-08-26:
+
+- Runtime receiver compatibility guard creates deduplicated
+  `runtime_compatibility_debt` Dev Tickets for missing receiver/data-route
+  declarations and publishes a Pending Action when the finding is user-visible.
+- `/api/development-tickets` exposes list, show, create, respond, defer,
+  handoff, resolve, close, and evidence preview over the same ticket service as
+  `adaos dev ticket`.
+- The AdaOS client exposes a header Dev Tickets button, ticket list/detail,
+  feedback intake, source/materialization options, evidence preview, postpone,
+  Builder handoff, autonomous repair, resolve, and close actions.
+- Builder handoff links the ticket to a repair task, opens the Builder
+  workbench with ticket/target context, and records development-source choices
+  (`use_existing_dev_source`, `materialize_dev_source`, `create_local_fork`,
+  `create_runtime_overlay`, `defer`) when source is absent.
+- Ticket resolution requires validation evidence refs; close without a fix uses
+  the separate `close` lifecycle.
+
 ## Codex Producer Boundary
 
 Codex may create or update Dev Tickets while developing AdaOS core, skills, or
@@ -138,6 +161,20 @@ A Codex-created ticket must include:
 - dedup key;
 - proposed action;
 - acceptance hint or validation expectation.
+
+Use compact evidence refs instead of prose-only TODOs:
+
+```text
+file:src/adaos/sdk/core/decorators.py
+test:tests/test_sdk_subscriptions.py::test_stream_subscription_reports_missing_receiver_policy
+runtime_guard:compat.stream_receiver_policy_missing
+trace:pending_actions.created:development_ticket.runtime_compatibility.review
+```
+
+When Codex finds deferred work during review, core work, skill development, or
+scenario development, it should create or update a Dev Ticket through
+`adaos dev ticket new|defer|handoff|resolve|close` or the SDK/service helper.
+Documentation may explain the decision, but it is not the managed backlog.
 
 Machine-created tickets should start as `captured` or `proposed` unless policy
 or deterministic runtime evidence marks them as accepted blockers. A person or

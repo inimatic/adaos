@@ -426,13 +426,22 @@ async def open_workbench_dev_webspace(
     webspace_id: str | None = None,
     base_url: str | None = None,
     runtime_scenario_id: str | None = None,
+    ticket_id: str | None = None,
+    selected_object_type: str | None = None,
+    selected_object_id: str | None = None,
     service: BuilderWorkbenchService = Depends(_get_workbench_service),
 ) -> dict[str, Any]:
-    return await service.open_dev_webspace_ready(
-        webspace_id,
-        base_url=base_url,
-        runtime_scenario_id=runtime_scenario_id,
-    )
+    try:
+        return await service.open_dev_webspace_ready(
+            webspace_id,
+            base_url=base_url,
+            runtime_scenario_id=runtime_scenario_id,
+            ticket_id=ticket_id,
+            selected_object_type=selected_object_type,
+            selected_object_id=selected_object_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/workbench/dialog-widget")

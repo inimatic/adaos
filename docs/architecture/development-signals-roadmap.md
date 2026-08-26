@@ -2,7 +2,7 @@
 
 Status: proposed cross-domain roadmap.
 
-Last reviewed: 2026-08-20.
+Last reviewed: 2026-08-26.
 
 This roadmap sequences the work needed to make evolution feedback a governed,
 natural AdaOS interface for both people and Codex. It is subordinate to
@@ -44,7 +44,7 @@ signal becomes a Dev Ticket visible to a person and consumable by Codex.
 - [ ] `[must]` `DS0-03` Add artifact-local signal projection for skills,
   scenarios, WebUI surfaces, and components when writable source exists,
   without making the projection the source of truth.
-- [ ] `[must]` `DS0-04` Add dedup and relationship keys for repeated signals,
+- [x] `[must]` `DS0-04` Add dedup and relationship keys for repeated signals,
   supersession, duplicates, stale-after-version-change, and linked repairs.
 - [ ] `[must]` `DS0-05` Store screenshots, logs, transcripts, DOM/context
   snapshots, and test output as artifact refs with digest, media type,
@@ -71,13 +71,14 @@ signal becomes a Dev Ticket visible to a person and consumable by Codex.
   skill, modal/surface, status, blocker flag, source, and target artifact
   version.
 
-Implementation note, 2026-08-20: the first store lives in runtime state under
+Implementation note, 2026-08-26: the first store lives in runtime state under
 `development_tickets/state.json` and is intentionally local/private. It stores
 `adaos.development_signal.v1` records and `adaos.dev_ticket.v1` tickets with
 generic target scopes, so installed, catalog, remote, read-only, and
 not-yet-materialized artifacts can be referenced before source is available.
-Artifact-local projections, rich artifact blob storage, and global UI indexes
-remain open.
+Signals and tickets deduplicate active records, merge evidence refs, and link
+Builder repairs back to ticket history. Artifact-local projections, rich
+artifact blob storage, and global UI indexes remain open.
 
 ## DS1. Feedback Skill Intake
 
@@ -110,14 +111,22 @@ resulting Dev Ticket is visible in the same context.
   ...' when command understanding was wrong."
 - [ ] `[could]` `DS1-08` Add component-level attachment helpers for UI controls
   that can pass a stable semantic component id.
-- [ ] `[must]` `DS1-09` Add a scenario-header ticket affordance that opens a
-  context-filtered list and can create a scenario-scoped ticket.
-- [ ] `[must]` `DS1-10` Add a modal/panel ticket affordance that creates and
+- [x] `[must]` `DS1-09` Add a scenario-header ticket affordance that opens the
+  workspace ticket list and can create a scenario-scoped ticket.
+- [x] `[must]` `DS1-10` Add a modal/panel ticket affordance that creates and
   lists tickets scoped to the active surface.
-- [ ] `[must]` `DS1-11` Add a ticket detail view with summary, status, scope,
+- [x] `[must]` `DS1-11` Add a ticket detail view with summary, status, scope,
   target version, evidence refs, screenshots, source, dedup links, and actions.
-- [ ] `[should]` `DS1-12` Keep the ticket UI separate from Builder while
+- [x] `[should]` `DS1-12` Keep the ticket UI separate from Builder while
   providing explicit "open Builder" and "repair autonomously" actions.
+
+Implementation note, 2026-08-26: the first human UI lives in the AdaOS client
+owner chrome rather than a standalone Feedback Skill. It adds a header entry,
+ticket list/detail, feedback text intake, active modal/surface scope detection,
+a screenshot capture hook that hides and restores the ticket panel, evidence
+preview, and state actions. Full artifact upload/storage for screenshots and
+component-level modal buttons remain open. Context-filtered list indexes remain
+covered by `DS0-12`.
 
 ## DS2. Conversational Failure Triage
 
@@ -213,12 +222,15 @@ interactive Builder options.
   affected skill.
 - [ ] `[could]` `DS4-08` Add batch triage for low-risk descriptor debt.
 
-Implementation note, 2026-08-20: the first runtime producer is the
+Implementation note, 2026-08-26: the first runtime producer is the
 stream/Yjs receiver admission guard. It reports
 `compat.stream_receiver_policy_missing` and
 `compat.stream_receiver_not_declared` into the ticket store, deduplicates by
 skill/reason/receiver, and publishes a Pending Action for user-visible review.
-Broader validation, projection-rule, and route-pressure producers remain open.
+The active runtime hook reports only the legacy policy-missing receiver case to
+avoid false positives for well-declared skills receiving foreign events.
+Broader validation, invalid data-route, projection-rule, route/projection
+mismatch, activation/validation, and route-pressure producers remain open.
 
 ## DS5. Builder Handoff And Closure
 
@@ -229,7 +241,7 @@ Exit proof: both "repair autonomously" and "open Builder" create the same
 typed Builder context; completion links the result back to the originating Dev
 Ticket and signals, and closes only with evidence.
 
-- [ ] `[must]` `DS5-01` Define the handoff packet from Development Signal to
+- [x] `[must]` `DS5-01` Define the handoff packet from Development Signal to
   `builder.task.v1`, `builder.repair_task.v1`, or `builder.realize_request.v1`.
 - [x] `[must]` `DS5-02` Add Pending Action response handlers for
   `start_autonomous_repair` and `open_builder`.
@@ -264,11 +276,14 @@ Ticket and signals, and closes only with evidence.
   Tickets for the current artifact without flooding Builder with unrelated
   workspace debt.
 
-Implementation note, 2026-08-20: `adaos dev ticket` now covers create, list,
+Implementation note, 2026-08-26: `adaos dev ticket` now covers create, list,
 show, defer, handoff, resolve, and close. Pending Action responses can choose
 postpone, open Builder, or autonomous repair; Builder repair tasks link back to
-the Dev Ticket and source Development Signals. Resolution requires evidence
-refs. Client ticket UI and delayed completion notifications remain open.
+the Dev Ticket and source Development Signals. The Builder workbench open path
+accepts `ticket_id`, selects the target skill/scenario, stores a
+`development_ticket` context in the durable workbench binding, and exposes
+source options when dev source is absent. Resolution requires evidence refs.
+Delayed completion notifications remain open.
 
 ## DS6. Analytics, Campaigns, And Policy Hardening
 
