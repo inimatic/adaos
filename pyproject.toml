@@ -8,7 +8,7 @@ license = {text = "MIT"}
 name = "adaos"
 readme = "README.md"
 requires-python = ">=3.11.9,<3.12"
-version = "0.1.941"
+version = "0.1.943"
 
 authors = [
   {name = "AdaOS Team"},
@@ -106,3 +106,8 @@ testpaths = [
   "tests", # SDK/API tests
   "src/adaos/skills/**/tests", # packaged skill tests
 ]
+
+[tool.uv.sources]
+# Repository development intentionally builds the fork from source. User-facing
+# bootstraps bypass this override and install the release wheels listed above.
+y-py = {path = "vendor/y-py"}
