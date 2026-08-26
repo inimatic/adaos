@@ -22,6 +22,8 @@ StrOrPath = Union[str, Path]
 _log = logging.getLogger(__name__)
 _REPO_LOCKS: dict[str, threading.RLock] = {}
 _REPO_LOCKS_GUARD = threading.Lock()
+_REMOTE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_BRANCH_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*$")
 
 
 def _git_command_timeout_s() -> float:
@@ -730,6 +732,62 @@ class CliGitClient(GitClient):
                         # Keep an existing local checkout usable while its remote
                         # branch is temporarily unavailable.
                         pass
+
+    def align_to_remote_branch(
+        self,
+        dir: StrOrPath,
+        *,
+        remote: str = "origin",
+        branch: str = "main",
+        local_branch: Optional[str] = None,
+    ) -> dict[str, str]:
+        remote_name = str(remote or "").strip()
+        branch_name = str(branch or "").strip().strip("/")
+        if not _REMOTE_NAME_RE.fullmatch(remote_name):
+            raise GitError(f"invalid git remote name: {remote_name or '-'}")
+        if not _BRANCH_NAME_RE.fullmatch(branch_name) or ".." in branch_name or branch_name.endswith("."):
+            raise GitError(f"invalid git branch name: {branch_name or '-'}")
+
+        runtime_branch = str(local_branch or "").strip()
+        if not runtime_branch:
+            suffix = re.sub(r"[^A-Za-z0-9_.-]+", "-", f"{remote_name}-{branch_name}").strip("-.")
+            runtime_branch = f"adaos/runtime-{suffix[:180]}"
+        if not _BRANCH_NAME_RE.fullmatch(runtime_branch) or ".." in runtime_branch or runtime_branch.endswith("."):
+            raise GitError(f"invalid local git branch name: {runtime_branch or '-'}")
+
+        remote_ref = f"refs/remotes/{remote_name}/{branch_name}"
+        remote_tracking = f"{remote_name}/{branch_name}"
+        refspec = f"+refs/heads/{branch_name}:{remote_ref}"
+        previous_branch = _safe_git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]) or "HEAD"
+        previous_revision = _safe_git(dir, ["rev-parse", "HEAD"]) or ""
+        fetch_args = ["fetch", "--prune", remote_name]
+        if self._depth > 0:
+            fetch_args.append(f"--depth={self._depth}")
+        fetch_args.append(refspec)
+        _run_git(fetch_args, cwd=dir)
+        _run_git(["rev-parse", "--verify", remote_ref], cwd=dir)
+        _run_git(["checkout", "-B", runtime_branch, remote_ref], cwd=dir)
+        _run_git(["branch", "--set-upstream-to", remote_tracking, runtime_branch], cwd=dir)
+        revision = _run_git(["rev-parse", "HEAD"], cwd=dir)
+
+        _log.info(
+            "git aligned managed workspace branch repo=%s source=%s local=%s revision=%s previous=%s/%s",
+            str(Path(dir)),
+            remote_tracking,
+            runtime_branch,
+            revision,
+            previous_branch,
+            previous_revision,
+        )
+        return {
+            "remote": remote_name,
+            "branch": branch_name,
+            "remote_ref": remote_tracking,
+            "local_branch": runtime_branch,
+            "revision": revision,
+            "previous_branch": previous_branch,
+            "previous_revision": previous_revision,
+        }
 
     def pull(self, dir: StrOrPath) -> None:
         try:

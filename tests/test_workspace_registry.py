@@ -1086,6 +1086,82 @@ def test_sparse_sync_keeps_runtime_scenarios_and_materializes_required_skills(tm
     assert git.pulls == 1
 
 
+def test_production_workspace_sync_aligns_configured_registry_branch_before_read(
+    tmp_path: Path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    write_workspace_registry(workspace, {"version": 2, "skills": [], "scenarios": []})
+    sql = _Sql(tmp_path / "adaos.db")
+
+    class _Git:
+        def __init__(self):
+            self.alignments = []
+
+        def align_to_remote_branch(self, root, *, remote, branch, local_branch=None):
+            self.alignments.append((root, remote, branch, local_branch))
+            return {
+                "remote": remote,
+                "branch": branch,
+                "local_branch": "adaos/runtime-origin-stable",
+                "revision": "release-revision",
+            }
+
+        def changed_files(self, _root):
+            return []
+
+        def pull(self, _root):
+            raise AssertionError("aligned production source must not be pulled a second time")
+
+    class _Sparse:
+        def __init__(self, _git, _root):
+            pass
+
+        def read_patterns(self):
+            return ["registry.json"]
+
+        def update(self, *, add=(), remove=()):
+            return [item for item in add if item not in remove]
+
+    git = _Git()
+    ctx = SimpleNamespace(
+        paths=SimpleNamespace(workspace_dir=lambda: workspace),
+        sql=sql,
+        git=git,
+        settings=SimpleNamespace(
+            base_dir=tmp_path,
+            skills_monorepo_branch="stable",
+            scenarios_monorepo_branch="stable",
+        ),
+    )
+    monkeypatch.setenv("ENV_TYPE", "prod")
+    monkeypatch.delenv("ADAOS_WORKSPACE_REGISTRY_BRANCH", raising=False)
+    monkeypatch.setattr(workspace_sync_module, "SparseWorkspace", _Sparse)
+    monkeypatch.setattr(workspace_sync_module, "runtime_required_scenario_refs", lambda: [])
+    monkeypatch.setattr(workspace_sync_module, "selected_runtime_skill_names", lambda _ctx: [])
+    monkeypatch.setattr(
+        workspace_sync_module,
+        "reconcile_workspace_db_to_materialized",
+        lambda _ctx: {"ok": True},
+    )
+    monkeypatch.setattr(
+        workspace_sync_module,
+        "restore_project_owned_materializations",
+        lambda _ctx: {"ok": True},
+    )
+    monkeypatch.setattr(
+        "adaos.services.git.availability.get_git_availability",
+        lambda **_kwargs: SimpleNamespace(enabled=True),
+    )
+
+    result = sync_workspace_sparse_to_registry(ctx)
+
+    assert result["ok"] is True
+    assert result["source_alignment"]["revision"] == "release-revision"
+    assert git.alignments == [(str(workspace), "origin", "stable", None)]
+
+
 def test_selected_runtime_skill_names_requires_valid_selection(tmp_path: Path):
     skills_root = tmp_path / "workspace" / "skills"
     runtime_root = skills_root / ".runtime"
@@ -1207,6 +1283,34 @@ def test_reconcile_workspace_db_to_materialized_updates_sqlite(tmp_path: Path):
     assert skill_rows["weather_skill"].active_version == "1.2.3"
     assert list(scenario_rows) == ["greet_on_boot"]
     assert scenario_rows["greet_on_boot"].active_version == "0.4.0"
+
+
+def test_reconcile_workspace_db_skips_unchanged_registry_rows(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    skill_dir = workspace / "skills" / "weather_skill"
+    scenario_dir = workspace / "scenarios" / "greet_on_boot"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "skill.yaml").write_text("id: weather_skill\nversion: '1.2.3'\n", encoding="utf-8")
+    (scenario_dir / "scenario.yaml").write_text("id: greet_on_boot\nversion: '0.4.0'\n", encoding="utf-8")
+
+    sql = _Sql(tmp_path / "adaos.db")
+    skill_registry = SqliteSkillRegistry(sql)
+    scenario_registry = SqliteScenarioRegistry(sql)
+    skill_registry.register("weather_skill", active_version="1.2.3")
+    scenario_registry.register("greet_on_boot", active_version="0.4.0")
+    skill_updated_at = skill_registry.get("weather_skill").last_updated
+    scenario_updated_at = scenario_registry.get("greet_on_boot").last_updated
+    ctx = SimpleNamespace(paths=SimpleNamespace(workspace_dir=lambda: workspace), sql=sql)
+
+    result = reconcile_workspace_db_to_materialized(ctx)
+
+    assert result["skills_registered"] == []
+    assert result["skills_unchanged"] == ["weather_skill"]
+    assert result["scenarios_registered"] == []
+    assert result["scenarios_unchanged"] == ["greet_on_boot"]
+    assert skill_registry.get("weather_skill").last_updated == skill_updated_at
+    assert scenario_registry.get("greet_on_boot").last_updated == scenario_updated_at
 
 
 def test_reconcile_preserves_sqlite_install_with_selected_runtime(tmp_path: Path):

@@ -31,6 +31,24 @@ class SecureGitClient(GitClient):
         self.net.require_url(url)
         self.base.ensure_repo(dir, url, branch)
 
+    def align_to_remote_branch(
+        self,
+        dir: str,
+        *,
+        remote: str = "origin",
+        branch: str = "main",
+        local_branch: Optional[str] = None,
+    ) -> dict[str, str]:
+        url = self._origin_url(dir)
+        if url:
+            self.net.require_url(url)
+        return self.base.align_to_remote_branch(
+            dir,
+            remote=remote,
+            branch=branch,
+            local_branch=local_branch,
+        )
+
     def pull(self, dir: str) -> None:
         url = self._origin_url(dir)
         if url:

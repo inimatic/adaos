@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,38 @@ from adaos.services.workspace_registry import (
 _LOG = logging.getLogger("adaos.workspace_sync")
 _ARTIFACT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _BOOTSTRAP_SCENARIOS = ("web_desktop",)
+
+
+def _environment_type() -> str:
+    return str(os.getenv("ENV_TYPE") or os.getenv("ADAOS_ENV_TYPE") or "prod").strip().lower()
+
+
+def _configured_workspace_branch(ctx) -> str:
+    override = str(os.getenv("ADAOS_WORKSPACE_REGISTRY_BRANCH") or "").strip()
+    if override:
+        return override
+    settings = getattr(ctx, "settings", None)
+    skills_branch = str(getattr(settings, "skills_monorepo_branch", None) or "").strip()
+    scenarios_branch = str(getattr(settings, "scenarios_monorepo_branch", None) or "").strip()
+    configured = {value for value in (skills_branch, scenarios_branch) if value}
+    if len(configured) > 1:
+        raise RuntimeError(
+            "shared workspace requires the same skills and scenarios registry branch: "
+            f"skills={skills_branch} scenarios={scenarios_branch}"
+        )
+    return next(iter(configured), "main")
+
+
+def _align_production_workspace_source(ctx, workspace_root: Path) -> dict[str, Any]:
+    if _environment_type() == "dev":
+        return {"ok": True, "skipped": True, "reason": "development_workspace"}
+    align = getattr(ctx.git, "align_to_remote_branch", None)
+    if not callable(align):
+        return {"ok": True, "skipped": True, "reason": "git_adapter_unsupported"}
+    remote = str(os.getenv("ADAOS_WORKSPACE_SYNC_REMOTE") or "origin").strip() or "origin"
+    branch = _configured_workspace_branch(ctx)
+    result = align(str(workspace_root), remote=remote, branch=branch)
+    return {"ok": True, "skipped": False, **dict(result or {})}
 
 
 def runtime_required_scenario_refs() -> list[str]:
@@ -294,14 +327,30 @@ def reconcile_workspace_db_to_materialized(ctx) -> dict[str, Any]:
         if name:
             materialized_scenarios[name] = dict(entry)
 
+    skills_unchanged: list[str] = []
+    skills_registered: list[str] = []
     for name, entry in materialized_skills.items():
-        skill_registry.register(name, active_version=str(entry.get("version") or "").strip() or None)
+        active_version = str(entry.get("version") or "").strip() or None
+        current = current_skills.get(name)
+        if current is not None and (active_version is None or current.active_version == active_version):
+            skills_unchanged.append(name)
+            continue
+        skill_registry.register(name, active_version=active_version)
+        skills_registered.append(name)
     removed_skills = set(current_skills) - set(materialized_skills) - selected_runtime_skills
     for name in sorted(removed_skills):
         skill_registry.unregister(name)
 
+    scenarios_unchanged: list[str] = []
+    scenarios_registered: list[str] = []
     for name, entry in materialized_scenarios.items():
-        scenario_registry.register(name, active_version=str(entry.get("version") or "").strip() or None)
+        active_version = str(entry.get("version") or "").strip() or None
+        current = current_scenarios.get(name)
+        if current is not None and (active_version is None or current.active_version == active_version):
+            scenarios_unchanged.append(name)
+            continue
+        scenario_registry.register(name, active_version=active_version)
+        scenarios_registered.append(name)
     for name in sorted(set(current_scenarios) - set(materialized_scenarios)):
         scenario_registry.unregister(name)
 
@@ -333,11 +382,15 @@ def reconcile_workspace_db_to_materialized(ctx) -> dict[str, Any]:
         "ok": True,
         "skills": sorted(materialized_skills),
         "scenarios": sorted(materialized_scenarios),
+        "skills_registered": sorted(skills_registered),
+        "skills_unchanged": sorted(skills_unchanged),
         "skills_removed": sorted(removed_skills),
         "skills_preserved_by_runtime": sorted(
             (set(current_skills) - set(materialized_skills)) & selected_runtime_skills
         ),
         "scenarios_removed": sorted(set(current_scenarios) - set(materialized_scenarios)),
+        "scenarios_registered": sorted(scenarios_registered),
+        "scenarios_unchanged": sorted(scenarios_unchanged),
         "registry_updated_at": payload.get("updated_at"),
         "registry_persisted": not registry_is_authoritative,
         "registry_authority": "git" if registry_is_authoritative else "materialized_workspace",
@@ -352,6 +405,24 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
     """
 
     workspace_root = Path(ctx.paths.workspace_dir())
+    source_alignment: dict[str, Any] = {"ok": True, "skipped": True, "reason": "git_unavailable"}
+    try:
+        from adaos.services.git.availability import get_git_availability
+
+        av = get_git_availability(base_dir=ctx.settings.base_dir)
+    except Exception:
+        av = None
+
+    if av is None or av.enabled:
+        try:
+            source_alignment = _align_production_workspace_source(ctx, workspace_root)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": f"workspace source alignment failed: {exc}",
+                "source_alignment": {"ok": False, "error": str(exc)},
+            }
+
     skill_rows = SqliteSkillRegistry(ctx.sql).list()
     scenario_rows = SqliteScenarioRegistry(ctx.sql).list()
     registry_skills = installed_names(skill_rows)
@@ -389,13 +460,6 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
     if scenarios_fallback:
         fallback_used["scenarios"] = scenarios
 
-    try:
-        from adaos.services.git.availability import get_git_availability
-
-        av = get_git_availability(base_dir=ctx.settings.base_dir)
-    except Exception:
-        av = None
-
     if av is not None and not av.enabled:
         errors: list[str] = []
         for name in skills:
@@ -432,6 +496,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
             "errors": errors,
             "reconcile": reconcile_result,
             "patterns": desired,
+            "source_alignment": source_alignment,
         }
 
     sparse = SparseWorkspace(ctx.git, workspace_root)
@@ -441,7 +506,8 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
     ensure_clean(ctx.git, str(workspace_root), desired)
     sparse.update(add=desired, remove=to_remove)
     try:
-        ctx.git.pull(str(workspace_root))
+        if bool(source_alignment.get("skipped")):
+            ctx.git.pull(str(workspace_root))
     except Exception as exc:
         return {
             "ok": False,
@@ -456,6 +522,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
             "fallback_used": fallback_used,
             "error": str(exc),
             "patterns": desired,
+            "source_alignment": source_alignment,
         }
 
     # Pull may advance registry.json. Recompute aliases and dependency closure
@@ -544,6 +611,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
         "project_materialization": project_materialization,
         "reconcile": reconcile_result,
         "patterns": desired,
+        "source_alignment": source_alignment,
     }
 
 

@@ -160,7 +160,7 @@ def monorepo(tmp_path) -> Path:
 
 
 @pytest.fixture
-def paths(tmp_path) -> TestPaths:
+def paths(tmp_path) -> _MiniPaths:
     return _make_paths(tmp_path)
 
 
@@ -263,7 +263,34 @@ def test_install_missing_remote_path(monkeypatch, monorepo, paths):
     assert _git_status_clean(paths.workspace_dir())
 
 
-def test_skill_install_surfaces_pull_failure(monkeypatch, monorepo, paths):
+def test_align_to_remote_branch_uses_managed_runtime_branch(monorepo, paths):
+    remote_branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=monorepo)
+    remote_revision = _run_git(["rev-parse", "HEAD"], cwd=monorepo)
+    git = CliGitClient(depth=0)
+    git.ensure_repo(str(paths.workspace_dir()), str(monorepo), branch=remote_branch)
+    _run_git(["config", "user.email", "adaos-tests@example.com"], cwd=paths.workspace_dir())
+    _run_git(["config", "user.name", "AdaOS Tests"], cwd=paths.workspace_dir())
+    _run_git(["checkout", "-b", "operator/experiment"], cwd=paths.workspace_dir())
+    marker = paths.workspace_dir() / "operator-note.txt"
+    marker.write_text("local experiment\n", encoding="utf-8")
+    _run_git(["add", "operator-note.txt"], cwd=paths.workspace_dir())
+    _run_git(["commit", "-m", "operator experiment"], cwd=paths.workspace_dir())
+
+    result = git.align_to_remote_branch(
+        str(paths.workspace_dir()),
+        remote="origin",
+        branch=remote_branch,
+    )
+
+    assert result["revision"] == remote_revision
+    assert result["previous_branch"] == "operator/experiment"
+    assert _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=paths.workspace_dir()) == result["local_branch"]
+    assert _run_git(["rev-parse", "@{upstream}"], cwd=paths.workspace_dir()) == remote_revision
+    assert not marker.exists()
+    assert _run_git(["rev-parse", "operator/experiment"], cwd=paths.workspace_dir()) != remote_revision
+
+
+def test_skill_install_uses_materialized_source_when_pull_fails(monkeypatch, monorepo, paths):
     monkeypatch.setenv("ADAOS_TESTING", "0")
     repo = _make_skill_repo(paths, monorepo)
     repo.install("weather_skill")
@@ -273,8 +300,10 @@ def test_skill_install_surfaces_pull_failure(monkeypatch, monorepo, paths):
 
     monkeypatch.setattr(repo.git, "pull", _fail_pull)
 
-    with pytest.raises(RuntimeError, match="registry pull failed"):
-        repo.install("news_skill")
+    installed = repo.install("news_skill")
+
+    assert installed.id.value == "news_skill"
+    assert (paths.skills_dir() / "news_skill" / "skill.yaml").is_file()
 
 
 def test_sparse_checkout_scope(monkeypatch, monorepo, paths):
