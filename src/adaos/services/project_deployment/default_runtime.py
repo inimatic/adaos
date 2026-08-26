@@ -635,6 +635,12 @@ def configure_default_distributed_runtimes(
             deployment_store=deployment.store,
             projection_publisher=_publisher(ctx=current, topic="distributed.topology.projection"),
         )
+        deployment.admission_policy = lambda desired, release_plan: (
+            distributed.project_release_admission_warnings(
+                release_digest=desired.release_digest,
+                component_refs=(item.key for item in release_plan.release.components),
+            )
+        )
         deployment.recover_incomplete()
 
         def execute_topology_tool(

@@ -293,6 +293,33 @@ def _register_both(runtime: DistributedRuntime, release: ReleasePlan) -> None:
         )
 
 
+def test_project_release_admission_is_bound_to_active_service_definition(
+    tmp_path: Path,
+) -> None:
+    runtime, _clock, current_release = _runtime(tmp_path)
+    next_release = _release(
+        version="1.1.0",
+        package_marker="d",
+        manifest_marker="e",
+    )
+
+    assert runtime.project_release_admission_warnings(
+        release_digest=str(current_release.release.release_digest),
+        component_refs=("skill:media_library_agent",),
+    ) == ()
+    assert runtime.project_release_admission_warnings(
+        release_digest=str(next_release.release.release_digest),
+        component_refs=("skill:unrelated",),
+    ) == ()
+    assert runtime.project_release_admission_warnings(
+        release_digest=str(next_release.release.release_digest),
+        component_refs=("skill:media_library_agent",),
+    ) == (
+        "blocked:skill:media_library_agent:distributed_release_not_admitted:"
+        "media-library-home@1",
+    )
+
+
 def _external_topology(runtime: DistributedRuntime) -> None:
     runtime.define_dataset(
         Dataset(

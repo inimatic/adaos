@@ -486,6 +486,7 @@ def test_default_runtimes_share_durable_store_and_publish_local_inventory(monkey
     assert payload["protocols"]["distributed_topology"] == "1"
     assert isinstance(distributed.topology_adapter, SkillToolTopologyAdapter)
     assert distributed.service_invoker is not None
+    assert deployment.admission_policy is not None
 
     register_project_deployment_runtime(None)
     register_distributed_runtime(None)

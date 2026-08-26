@@ -139,6 +139,7 @@ class ProjectDeploymentPlanner:
         inventory: Iterable[NodeInventoryRecord],
         activations: Iterable[ComponentActivation] = (),
         local_node_id: str | None = None,
+        admission_warnings: Iterable[str] = (),
     ) -> DeploymentPlan:
         release = release_plan.release
         release_digest = release.release_digest or release.computed_digest()
@@ -167,7 +168,11 @@ class ProjectDeploymentPlanner:
             )
         inventory_digest = inventory_revision(nodes.values())
         current = _latest_activations(activations, desired.deployment_id)
-        warnings: list[str] = []
+        warnings = [
+            warning
+            for item in admission_warnings
+            if (warning := str(item or "").strip())
+        ]
         approvals: set[str] = set()
         targets: dict[str, tuple[str, ...]] = {}
         reservations: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))

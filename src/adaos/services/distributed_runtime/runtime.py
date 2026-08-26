@@ -131,6 +131,45 @@ class DistributedRuntime:
         principal.require("distributed.topology.inspect")
         return self.store.get_definition(str(definition_id), str(version))
 
+    def project_release_admission_warnings(
+        self,
+        *,
+        release_digest: str,
+        component_refs: Iterable[str],
+    ) -> tuple[str, ...]:
+        """Return blockers for project components governed by active service groups."""
+
+        components = {
+            str(item or "").strip()
+            for item in component_refs
+            if str(item or "").strip()
+        }
+        if not components:
+            return ()
+        warnings: list[str] = []
+        for group in _all_pages(self.store.list_groups):
+            try:
+                definition = self.store.get_definition(
+                    group.definition_id,
+                    group.definition_version,
+                )
+            except FileNotFoundError:
+                warnings.append(
+                    "blocked:distributed_service_group:"
+                    f"{group.group_id}:definition_missing"
+                )
+                continue
+            governed = sorted(components.intersection(definition.compatible_components))
+            if not governed or definition.accepts_release(release_digest):
+                continue
+            warnings.extend(
+                "blocked:"
+                f"{component_ref}:distributed_release_not_admitted:"
+                f"{group.group_id}@{definition.version}"
+                for component_ref in governed
+            )
+        return tuple(sorted(set(warnings)))
+
     def invoke_instance(
         self,
         instance_id: str,

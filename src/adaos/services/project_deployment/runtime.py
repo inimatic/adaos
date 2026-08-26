@@ -34,6 +34,14 @@ class NodeInventoryProvider(Protocol):
     def list_nodes(self, subnet_id: str) -> Iterable[NodeInventoryRecord]: ...
 
 
+class ProjectDeploymentAdmissionPolicy(Protocol):
+    def __call__(
+        self,
+        desired: ProjectDeployment,
+        release_plan: ReleasePlan,
+    ) -> Iterable[str]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class DeploymentInspection:
     desired: ProjectDeployment
@@ -61,6 +69,7 @@ class ProjectDeploymentRuntime:
     adapter: ComponentDeploymentAdapter
     local_node_id: str | None = None
     projection_publisher: Callable[[Mapping[str, Any]], Any] | None = None
+    admission_policy: ProjectDeploymentAdmissionPolicy | None = None
     _worker: ThreadPoolExecutor = field(init=False, repr=False)
     _worker_lock: RLock = field(init=False, repr=False)
     _futures: dict[str, Future[DeploymentOperation]] = field(init=False, repr=False)
@@ -99,12 +108,18 @@ class ProjectDeploymentRuntime:
         release_plan = self._release(desired)
         inventory = tuple(self.inventory.list_nodes(desired.subnet_id))
         activations = self._all_activations(deployment_id)
+        admission_warnings = (
+            tuple(self.admission_policy(desired, release_plan))
+            if self.admission_policy is not None
+            else ()
+        )
         plan = ProjectDeploymentPlanner().plan(
             desired,
             release_plan=release_plan,
             inventory=inventory,
             activations=activations,
             local_node_id=self.local_node_id,
+            admission_warnings=admission_warnings,
         )
         saved = self.store.put_plan(plan)
         self._publish_projection()

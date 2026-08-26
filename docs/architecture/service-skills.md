@@ -107,6 +107,14 @@ supervisor renews that lease in the authority plane. Renewal stops immediately
 when the instance is unready or unavailable, so failover remains bounded by the
 authority lease instead of a skill-specific heartbeat.
 
+Project planning uses the same admission rule before changing component
+activations. For an existing group, advance desired Project state first, then
+publish a reviewed immutable definition that names the new exact release and
+retains the active release in its bounded compatibility overlap. Advance the
+group to that definition before submitting the rollout. A skipped topology
+step produces a blocked deployment plan instead of a post-activation
+`service_membership_release_not_defined` state.
+
 The health response may expose bounded membership observations as
 `distributed.health` and `distributed.pressure`; the service does not call the
 distributed SDK or run a private heartbeat. An explicitly draining instance is

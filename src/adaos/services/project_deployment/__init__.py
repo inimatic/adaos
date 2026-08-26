@@ -27,6 +27,7 @@ from .projections import build_project_deployment_projection
 from .runtime import (
     DeploymentInspection,
     NodeInventoryProvider,
+    ProjectDeploymentAdmissionPolicy,
     ProjectDeploymentRuntime,
     ProjectReleaseProvider,
     get_project_deployment_runtime,
@@ -58,6 +59,7 @@ __all__ = [
     "LocalComponentDeploymentAdapter",
     "RoutingComponentDeploymentAdapter",
     "ProjectDeploymentAuthorizationError",
+    "ProjectDeploymentAdmissionPolicy",
     "ProjectDeploymentAuthorityError",
     "ProjectDeploymentConflictError",
     "ProjectDeploymentExecutionError",

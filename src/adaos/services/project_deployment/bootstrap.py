@@ -6,6 +6,7 @@ from typing import Any, Callable, Mapping
 from .execution import ComponentDeploymentAdapter
 from .runtime import (
     NodeInventoryProvider,
+    ProjectDeploymentAdmissionPolicy,
     ProjectDeploymentRuntime,
     ProjectReleaseProvider,
     register_project_deployment_runtime,
@@ -21,6 +22,7 @@ def configure_project_deployment_runtime(
     state_dir: Path | None = None,
     local_node_id: str | None = None,
     projection_publisher: Callable[[Mapping[str, Any]], Any] | None = None,
+    admission_policy: ProjectDeploymentAdmissionPolicy | None = None,
 ) -> ProjectDeploymentRuntime:
     """Install one process-wide runtime from explicit trusted infrastructure ports."""
 
@@ -31,6 +33,7 @@ def configure_project_deployment_runtime(
         adapter=adapter,
         local_node_id=local_node_id,
         projection_publisher=projection_publisher,
+        admission_policy=admission_policy,
     )
     register_project_deployment_runtime(runtime)
     return runtime

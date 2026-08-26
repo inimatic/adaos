@@ -72,6 +72,20 @@ def test_deployment_error_receipts_do_not_publish_sensitive_text() -> None:
     }
 
 
+def test_deployment_error_receipts_retain_bounded_operator_detail() -> None:
+    error = _safe_error(
+        RuntimeError("scenario source manifest does not match package receipt"),
+        code="adapter_phase_failed",
+    )
+
+    assert error == {
+        "code": "adapter_phase_failed",
+        "type": "RuntimeError",
+        "message": "adapter_phase_failed",
+        "detail": "scenario source manifest does not match package receipt",
+    }
+
+
 def _digest(character: str) -> str:
     return "sha256:" + character * 64
 
@@ -370,6 +384,26 @@ def test_planner_reports_capacity_and_trust_blocks_without_mutation() -> None:
     assert plan.status == "blocked"
     assert any("capacity_insufficient:cpu_millicores" in item for item in plan.warnings)
     assert any("node_untrusted" in item for item in plan.warnings)
+
+
+def test_planner_preserves_external_admission_blockers() -> None:
+    release_plan = _release()
+    desired = _deployment(release_plan)
+    blocker = (
+        "blocked:skill:media_library_agent:distributed_release_not_admitted:"
+        "media-library-home@31"
+    )
+
+    plan = ProjectDeploymentPlanner().plan(
+        desired,
+        release_plan=release_plan,
+        inventory=(_node("node-a", endpoint=True), _node("node-b")),
+        local_node_id="node-a",
+        admission_warnings=(blocker,),
+    )
+
+    assert plan.status == "blocked"
+    assert blocker in plan.warnings
 
 
 def test_planner_emits_noop_update_and_explicit_remove() -> None:

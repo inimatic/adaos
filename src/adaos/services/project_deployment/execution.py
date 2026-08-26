@@ -104,11 +104,15 @@ def _safe_payload(value: Any, *, depth: int = 0) -> Any:
 
 
 def _safe_error(exc: BaseException, *, code: str) -> dict[str, Any]:
-    return {
+    error = {
         "code": code,
         "type": type(exc).__name__,
         "message": normalized_error_code(exc, fallback=code),
     }
+    detail = _safe_payload(str(exc))
+    if detail and detail != "<redacted>" and detail != error["message"]:
+        error["detail"] = detail
+    return error
 
 
 def _component_state(values: Iterable[DeploymentComponentResult]) -> tuple[str, bool]:

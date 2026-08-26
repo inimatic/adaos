@@ -44,6 +44,31 @@ callers observe the durable operation with `get_operation(...)`. Synchronous
 `apply(...)` is reserved for bounded operator flows that deliberately own the
 complete RPC lifetime.
 
+## Distributed Release Admission
+
+An active distributed `ServiceGroup` is an admission boundary for every
+Project component named by its immutable `ServiceDefinition`. Before a plan is
+ready, core verifies that the definition accepts the desired exact
+`ProjectRelease` digest. A missing definition or a release outside the current
+definition's bounded overlap produces a `blocked` plan; component activation
+does not begin.
+
+The required rolling-upgrade order is:
+
+1. compare-and-switch the desired `ProjectDeployment` to the new release;
+2. publish a reviewed immutable service definition for that release, retaining
+   the currently active release in `compatible_release_digests`;
+3. advance the service group to the new definition revision;
+4. plan and submit the Project rollout;
+5. remove the old overlap only after all required instances report the new
+   release.
+
+Core does not silently mutate the allowlist. This keeps service compatibility
+an operator-reviewed topology decision and prevents a valid Project package
+from leaving a distributed service alive but unrouteable after activation.
+Deployment phase errors retain a bounded, secret-redacted `detail` when it is
+more specific than the stable machine error code.
+
 ## Capability Rules
 
 Inspection requires `project.deployment.inspect`. Desired-state changes require

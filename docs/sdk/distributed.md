@@ -20,6 +20,13 @@ Every function requires an active skill context and its declared distributed
 capability. Authority handoff, removal, and data deletion remain separate
 permissions and approvals.
 
+Service definitions are immutable and release-bound. Version 2 may admit up to
+eight exact prior `ProjectRelease` digests for a reviewed rolling upgrade. The
+Project deployment planner consults active groups before activation and emits a
+blocking warning when a governed component's target release is not admitted.
+The distributed runtime never auto-expands this overlap from observed package
+state.
+
 ## Adapter Interfaces
 
 Domain adapters implement `TopologyAdapter` phase callbacks and return bounded
