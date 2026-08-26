@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from adaos.apps.api.auth import require_token
@@ -200,16 +201,101 @@ def _evidence_view(ticket: dict[str, Any], signals: list[dict[str, Any]]) -> dic
     }
 
 
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _append_filter_tokens(tokens: set[str], value: Any, *, expand_ref_tail: bool = True) -> None:
+    if value is None:
+        return
+    if isinstance(value, Mapping):
+        scope_type = _text(value.get("type") or value.get("kind"))
+        scope_id = _text(value.get("id") or value.get("name"))
+        for key in (
+            "ref",
+            "canonical_ref",
+            "target_ref",
+            "project_ref",
+            "scenario_ref",
+            "skill_ref",
+            "project_id",
+            "scenario_id",
+            "skill_id",
+        ):
+            _append_filter_tokens(tokens, value.get(key), expand_ref_tail=expand_ref_tail)
+        if scope_id:
+            tokens.add(scope_id)
+            if scope_type:
+                tokens.add(f"{scope_type}:{scope_id}")
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            _append_filter_tokens(tokens, item, expand_ref_tail=expand_ref_tail)
+        return
+    text = _text(value)
+    if not text or text == ":" or "$" in text:
+        return
+    tokens.add(text)
+    if expand_ref_tail and ":" in text:
+        tail = text.rsplit(":", 1)[-1].strip()
+        if tail:
+            tokens.add(tail)
+
+
+def _query_filter_tokens(request: Request, *names: str, expand_ref_tail: bool = True) -> set[str]:
+    tokens: set[str] = set()
+    for name in names:
+        for raw in request.query_params.getlist(name):
+            for part in str(raw or "").split(","):
+                _append_filter_tokens(tokens, part, expand_ref_tail=expand_ref_tail)
+    return tokens
+
+
+def _ticket_target_tokens(ticket: Mapping[str, Any]) -> set[str]:
+    tokens: set[str] = set()
+    target = ticket.get("target_scope")
+    if isinstance(target, Mapping):
+        _append_filter_tokens(tokens, target)
+        for key in (
+            "component_refs",
+            "components",
+            "target_refs",
+            "affected_refs",
+            "scope_refs",
+            "related_refs",
+        ):
+            _append_filter_tokens(tokens, target.get(key))
+    return tokens
+
+
 @router.get("")
 def list_tickets(
+    request: Request,
     status_filter: str | None = Query(default=None, alias="status"),
     target_id: str | None = None,
+    target_ref: str | None = None,
     kind: str | None = None,
     service: DevelopmentTicketService = Depends(_get_service),
 ) -> dict[str, Any]:
-    tickets = service.list_tickets(status=status_filter, target_id=target_id)
-    if kind:
-        tickets = [ticket for ticket in tickets if ticket.get("kind") == kind]
+    target_tokens = _query_filter_tokens(request, "target_id", "target_ids")
+    ref_tokens = _query_filter_tokens(
+        request,
+        "target_ref",
+        "target_refs",
+        "scope_ref",
+        "scope_refs",
+        expand_ref_tail=False,
+    )
+    _append_filter_tokens(target_tokens, target_id)
+    _append_filter_tokens(ref_tokens, target_ref, expand_ref_tail=False)
+    kind_tokens = _query_filter_tokens(request, "kind", "kinds")
+    _append_filter_tokens(kind_tokens, kind)
+    tickets = service.list_tickets(status=status_filter)
+    if target_tokens or ref_tokens:
+        wanted = target_tokens | ref_tokens
+        tickets = [ticket for ticket in tickets if _ticket_target_tokens(ticket) & wanted]
+    if kind_tokens:
+        tickets = [ticket for ticket in tickets if _text(ticket.get("kind")) in kind_tokens]
     return {"ok": True, "tickets": tickets, "items": tickets, "count": len(tickets)}
 
 

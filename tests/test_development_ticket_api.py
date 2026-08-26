@@ -94,6 +94,64 @@ def test_development_ticket_api_create_accepts_signal_kind_with_ticket_kind(tmp_
     ]
 
 
+def test_development_ticket_api_lists_project_and_component_scope(tmp_path: Path) -> None:
+    client = _client(DevelopmentTicketService(state_dir=tmp_path))
+
+    project = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "kind": "feedback",
+            "summary": "Project level feedback",
+            "target_scope": {
+                "type": "project",
+                "id": "recipes",
+                "ref": "project:recipes",
+                "component_refs": ["scenario:recipes", "skill:recipes_worker"],
+            },
+        },
+    )
+    skill = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "kind": "review_debt",
+            "summary": "Skill component feedback",
+            "target_scope": {
+                "type": "skill",
+                "id": "recipes_worker",
+                "ref": "skill:recipes_worker",
+                "project_ref": "project:recipes",
+            },
+        },
+    )
+    unrelated = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "kind": "feedback",
+            "summary": "Unrelated feedback",
+            "target_scope": {"type": "scenario", "id": "clock", "ref": "scenario:clock"},
+        },
+    )
+    assert project.status_code == 201, project.text
+    assert skill.status_code == 201, skill.text
+    assert unrelated.status_code == 201, unrelated.text
+
+    listed = client.get(
+        "/api/development-tickets"
+        "?target_ref=project:recipes"
+        "&target_ref=skill:recipes_worker"
+        "&kind=feedback"
+        "&kind=review_debt",
+        headers=_headers(),
+    )
+
+    assert listed.status_code == 200, listed.text
+    summaries = {item["summary"] for item in listed.json()["tickets"]}
+    assert summaries == {"Project level feedback", "Skill component feedback"}
+
+
 def test_development_ticket_api_handoff_and_resolution_require_evidence(tmp_path: Path) -> None:
     client = _client(DevelopmentTicketService(state_dir=tmp_path))
 
