@@ -2385,6 +2385,14 @@
           }
         },
         {
+          "if": { "properties": { "type": { "const": "openDevTickets" } } },
+          "then": {
+            "properties": {
+              "params": { "$ref": "#/$defs/openDevTicketsActionParams" }
+            }
+          }
+        },
+        {
           "if": { "properties": { "type": { "const": "mutateState" } } },
           "then": {
             "required": ["params"],
@@ -2394,6 +2402,23 @@
           }
         }
       ]
+    },
+
+    "openDevTicketsActionParams": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "source": { "type": "string", "minLength": 1 },
+        "surface": { "type": "string", "minLength": 1 },
+        "target_scope": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "origin_scope": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
     },
 
     "mutateStateActionParams": {
