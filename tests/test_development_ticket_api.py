@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -92,6 +93,50 @@ def test_development_ticket_api_create_accepts_signal_kind_with_ticket_kind(tmp_
     assert payload["detail"]["evidence"]["artifact_refs"] == [
         {"type": "screenshot", "uri": "artifact://shot.png"},
     ]
+
+
+def test_development_ticket_api_uploads_screenshot_artifact(tmp_path: Path) -> None:
+    client = _client(DevelopmentTicketService(state_dir=tmp_path))
+    content = b"\x89PNG\r\n\x1a\nfake screenshot"
+
+    uploaded = client.post(
+        "/api/development-tickets/artifacts",
+        headers=_headers(),
+        json={
+            "kind": "screenshot",
+            "content_type": "image/png",
+            "content_base64": base64.b64encode(content).decode("ascii"),
+            "filename": "feedback.png",
+            "origin_scope": {"type": "client", "surface": "dev_tickets_panel_screenshot"},
+            "target_scope": {"type": "scenario", "id": "builder"},
+        },
+    )
+
+    assert uploaded.status_code == 201, uploaded.text
+    ref = uploaded.json()["artifact_ref"]
+    assert ref["type"] == "screenshot"
+    assert ref["content_api_path"].startswith("/api/development-tickets/artifacts/")
+    assert ref["sha256"].startswith("sha256:")
+
+    content_response = client.get(ref["content_api_path"], headers=_headers())
+    assert content_response.status_code == 200
+    assert content_response.content == content
+
+    created = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "kind": "feedback_note",
+            "summary": "Screenshot feedback",
+            "source": "client_feedback",
+            "target_scope": {"type": "scenario", "id": "builder", "source": "workspace"},
+            "artifact_refs": [ref],
+            "evidence_refs": [{"type": "trace", "source": "client_feedback_ui"}],
+        },
+    )
+
+    assert created.status_code == 201, created.text
+    assert created.json()["detail"]["evidence"]["artifact_refs"] == [ref]
 
 
 def test_development_ticket_api_lists_project_and_component_scope(tmp_path: Path) -> None:

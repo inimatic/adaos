@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from adaos.apps.api.auth import require_token
@@ -13,6 +18,7 @@ from adaos.services.development_tickets import (
     DevelopmentTicketService,
     development_source_options,
 )
+from adaos.services.id_gen import new_id
 
 
 router = APIRouter(tags=["development-tickets"], dependencies=[Depends(require_token)])
@@ -43,6 +49,16 @@ class DevTicketCreateRequest(BaseModel):
     artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     policy: dict[str, Any] = Field(default_factory=dict)
+
+
+class DevTicketArtifactUploadRequest(BaseModel):
+    kind: str = "screenshot"
+    content_type: str = "image/png"
+    content_base64: str = Field(..., min_length=1, max_length=8 * 1024 * 1024)
+    filename: str | None = None
+    origin_scope: dict[str, Any] = Field(default_factory=dict)
+    target_scope: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class DevTicketResponseRequest(BaseModel):
@@ -98,6 +114,12 @@ SIGNAL_KIND_TO_TICKET_KIND = {
 }
 TICKET_KINDS = set(TICKET_KIND_TO_SIGNAL_KIND)
 SIGNAL_KINDS = set(SIGNAL_KIND_TO_TICKET_KIND)
+ARTIFACT_CONTENT_TYPES = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/webp": "webp",
+}
+MAX_ARTIFACT_BYTES = 6 * 1024 * 1024
 
 
 def _clean_kind(value: str | None) -> str:
@@ -268,6 +290,73 @@ def _ticket_target_tokens(ticket: Mapping[str, Any]) -> set[str]:
     return tokens
 
 
+def _safe_artifact_id(value: str) -> str:
+    token = _text(value)
+    if not token or "/" in token or "\\" in token or ".." in token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid_artifact_id",
+        )
+    if any(not (ch.isalnum() or ch in ".-_") for ch in token):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid_artifact_id",
+        )
+    return token
+
+
+def _artifact_content_type(value: str) -> str:
+    token = _text(value).split(";", 1)[0].lower() or "image/png"
+    if token not in ARTIFACT_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="unsupported_artifact_content_type",
+        )
+    return token
+
+
+def _artifact_payload(body: DevTicketArtifactUploadRequest) -> tuple[str, bytes]:
+    content_type = _artifact_content_type(body.content_type)
+    encoded = _text(body.content_base64)
+    if encoded.startswith("data:"):
+        header, _, payload = encoded.partition(",")
+        encoded = payload.strip()
+        if ";" in header:
+            content_type = _artifact_content_type(header.removeprefix("data:").split(";", 1)[0])
+    try:
+        data = base64.b64decode(encoded.encode("ascii"), validate=True)
+    except (binascii.Error, UnicodeEncodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid_artifact_base64",
+        ) from exc
+    if not data:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="empty_artifact")
+    if len(data) > MAX_ARTIFACT_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="artifact_too_large",
+        )
+    return content_type, data
+
+
+def _artifact_filename(value: str | None, *, artifact_id: str, extension: str) -> str:
+    raw = _text(value) or f"{artifact_id}.{extension}"
+    name = "".join(ch if ch.isalnum() or ch in ".-_" else "_" for ch in raw).strip("._")
+    if not name:
+        name = f"{artifact_id}.{extension}"
+    if "." not in name:
+        name = f"{name}.{extension}"
+    return name[:120]
+
+
+def _artifact_manifest_path(service: DevelopmentTicketService, artifact_id: str) -> tuple[Path, Path]:
+    artifact_dir = service.root / "artifacts"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    token = _safe_artifact_id(artifact_id)
+    return artifact_dir, artifact_dir / f"{token}.json"
+
+
 @router.get("")
 def list_tickets(
     request: Request,
@@ -342,6 +431,95 @@ def create_ticket(
         }
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/artifacts", status_code=status.HTTP_201_CREATED)
+def upload_artifact(
+    body: DevTicketArtifactUploadRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    content_type, data = _artifact_payload(body)
+    artifact_id = f"dartifact.{new_id()}"
+    extension = ARTIFACT_CONTENT_TYPES[content_type]
+    artifact_dir, manifest_path = _artifact_manifest_path(service, artifact_id)
+    file_name = f"{artifact_id}.{extension}"
+    file_path = artifact_dir / file_name
+    digest = hashlib.sha256(data).hexdigest()
+    file_path.write_bytes(data)
+    manifest = {
+        "schema": "adaos.dev_ticket.artifact.v1",
+        "artifact_id": artifact_id,
+        "kind": _text(body.kind) or "artifact",
+        "content_type": content_type,
+        "filename": _artifact_filename(
+            body.filename,
+            artifact_id=artifact_id,
+            extension=extension,
+        ),
+        "file_name": file_name,
+        "size_bytes": len(data),
+        "sha256": f"sha256:{digest}",
+        "origin_scope": body.origin_scope or {},
+        "target_scope": body.target_scope or {},
+        "metadata": body.metadata or {},
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    ref = {
+        "type": manifest["kind"],
+        "artifact_id": artifact_id,
+        "uri": f"dev-ticket-artifact:{artifact_id}",
+        "content_api_path": f"/api/development-tickets/artifacts/{artifact_id}/content",
+        "content_type": content_type,
+        "filename": manifest["filename"],
+        "size_bytes": manifest["size_bytes"],
+        "sha256": manifest["sha256"],
+    }
+    return {"ok": True, "artifact": ref, "artifact_ref": ref}
+
+
+@router.get("/artifacts/{artifact_id}/content")
+def get_artifact_content(
+    artifact_id: str,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> FileResponse:
+    artifact_dir, manifest_path = _artifact_manifest_path(service, artifact_id)
+    if not manifest_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"artifact_not_found:{artifact_id}",
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="artifact_manifest_invalid",
+        ) from exc
+    file_name = _safe_artifact_id(_text(manifest.get("file_name")))
+    file_path = (artifact_dir / file_name).resolve()
+    root = artifact_dir.resolve()
+    if root not in file_path.parents:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="artifact_path_invalid",
+        )
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"artifact_content_not_found:{artifact_id}",
+        )
+    return FileResponse(
+        file_path,
+        media_type=_artifact_content_type(_text(manifest.get("content_type"))),
+        filename=_artifact_filename(
+            _text(manifest.get("filename")),
+            artifact_id=_safe_artifact_id(artifact_id),
+            extension=file_path.suffix.lstrip(".") or "bin",
+        ),
+    )
 
 
 @router.get("/{ticket_id}")
