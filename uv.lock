@@ -41,10 +41,7 @@ dependencies = [
     { name = "uvicorn" },
     { name = "watchdog" },
     { name = "websockets" },
-    { name = "y-py", version = "0.6.2+adaos.1", source = { url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-macosx_10_15_x86_64.whl" }, marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
-    { name = "y-py", version = "0.6.2+adaos.1", source = { url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-macosx_11_0_arm64.whl" }, marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
-    { name = "y-py", version = "0.6.2+adaos.1", source = { url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "y-py", version = "0.6.2+adaos.1", source = { url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-win_amd64.whl" }, marker = "platform_machine == 'AMD64' and sys_platform == 'win32'" },
+    { name = "y-py", source = { directory = "vendor/y-py" }, marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
     { name = "ypy-websocket" },
 ]
 
@@ -100,10 +97,10 @@ requires-dist = [
     { name = "vosk", marker = "extra == 'offline-stt'", specifier = ">=0.3.45" },
     { name = "watchdog", specifier = ">=4.0.1" },
     { name = "websockets", specifier = ">=11.0" },
-    { name = "y-py", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-macosx_11_0_arm64.whl" },
-    { name = "y-py", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'", url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-macosx_10_15_x86_64.whl" },
-    { name = "y-py", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
-    { name = "y-py", marker = "platform_machine == 'AMD64' and sys_platform == 'win32'", url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-win_amd64.whl" },
+    { name = "y-py", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", directory = "vendor/y-py" },
+    { name = "y-py", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'", directory = "vendor/y-py" },
+    { name = "y-py", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", directory = "vendor/y-py" },
+    { name = "y-py", marker = "platform_machine == 'AMD64' and sys_platform == 'win32'", directory = "vendor/y-py" },
     { name = "ypy-websocket", specifier = ">=0.12.4" },
 ]
 provides-extras = ["dev", "offline-stt", "postgres"]
@@ -4218,6 +4215,16 @@ wheels = [
 
 [[package]]
 name = "y-py"
+source = { directory = "vendor/y-py" }
+resolution-markers = [
+    "platform_machine == 'x86_64' and sys_platform == 'linux'",
+    "platform_machine == 'AMD64' and sys_platform == 'win32'",
+    "platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "platform_machine == 'x86_64' and sys_platform == 'darwin'",
+]
+
+[[package]]
+name = "y-py"
 version = "0.6.2"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
@@ -4235,50 +4242,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/9f/fc/79e1bc21400d111cce64417c0db1b1e3844484086dcdf9054448c3c68421/y_py-0.6.2-cp311-cp311-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:35fcb9def6ce137540fdc0e91b08729677548b9c393c0151a6359fd199da3bd7", size = 1759685, upload-time = "2023-10-05T05:58:27.937Z" },
     { url = "https://files.pythonhosted.org/packages/66/7f/235d923bcf3fca6ddffe5ffa69d593be4c0b7b258f69a9e3f5919669f64b/y_py-0.6.2-cp311-none-win32.whl", hash = "sha256:86422c6090f34906c062fd3e4fdfdccf3934f2922021e979573ae315050b4288", size = 521409, upload-time = "2023-10-05T05:58:30.448Z" },
     { url = "https://files.pythonhosted.org/packages/a2/87/a81ae35a5d8ee94866b99211cd163dc09318f37bab97f1b05e2619f56a66/y_py-0.6.2-cp311-none-win_amd64.whl", hash = "sha256:6c2f2831c5733b404d2f2da4bfd02bb4612ae18d0822e14ae79b0b92436b816d", size = 550361, upload-time = "2023-10-05T05:58:32.271Z" },
-]
-
-[[package]]
-name = "y-py"
-version = "0.6.2+adaos.1"
-source = { url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-macosx_10_15_x86_64.whl" }
-resolution-markers = [
-    "platform_machine == 'x86_64' and sys_platform == 'darwin'",
-]
-wheels = [
-    { url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-macosx_10_15_x86_64.whl", hash = "sha256:08dda6bae793a561456e4b6172b2a2ba461555e10ce61347a99442f7037e24d0" },
-]
-
-[[package]]
-name = "y-py"
-version = "0.6.2+adaos.1"
-source = { url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-macosx_11_0_arm64.whl" }
-resolution-markers = [
-    "platform_machine == 'arm64' and sys_platform == 'darwin'",
-]
-wheels = [
-    { url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:049abeb28943f21caea9b84b5e732e954e509feb40b2705fdd7f19c19ee85247" },
-]
-
-[[package]]
-name = "y-py"
-version = "0.6.2+adaos.1"
-source = { url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
-resolution-markers = [
-    "platform_machine == 'x86_64' and sys_platform == 'linux'",
-]
-wheels = [
-    { url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:62d5f04a97a35786dd8abed06e662cf8b0fc5ffc1d74f35dd195907852105a1c" },
-]
-
-[[package]]
-name = "y-py"
-version = "0.6.2+adaos.1"
-source = { url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-win_amd64.whl" }
-resolution-markers = [
-    "platform_machine == 'AMD64' and sys_platform == 'win32'",
-]
-wheels = [
-    { url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-win_amd64.whl", hash = "sha256:f38974c3b8b2e6fb6a560faa48714a943d3e5ca1cad023ab76acabdf8cdcdc40" },
 ]
 
 [[package]]
@@ -4320,11 +4283,8 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "anyio" },
+    { name = "y-py", source = { directory = "vendor/y-py" }, marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
     { name = "y-py", version = "0.6.2", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (platform_machine != 'x86_64' and sys_platform == 'linux') or (platform_machine != 'AMD64' and sys_platform == 'win32') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
-    { name = "y-py", version = "0.6.2+adaos.1", source = { url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-macosx_10_15_x86_64.whl" }, marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
-    { name = "y-py", version = "0.6.2+adaos.1", source = { url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-macosx_11_0_arm64.whl" }, marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
-    { name = "y-py", version = "0.6.2+adaos.1", source = { url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "y-py", version = "0.6.2+adaos.1", source = { url = "https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-win_amd64.whl" }, marker = "platform_machine == 'AMD64' and sys_platform == 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/68/d1/a49775fddf5d1e0c967e8dee21d6eee6f88e4280762e6099f0914cf58491/ypy_websocket-0.12.4.tar.gz", hash = "sha256:cbbf5fdaa9a301a0b5f9455f1f29478b7c05b62773b2dd2a65c6502b4e10afa1", size = 17046, upload-time = "2023-10-04T14:48:06.597Z" }
 wheels = [
