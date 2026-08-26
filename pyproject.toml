@@ -106,8 +106,3 @@ testpaths = [
   "tests", # SDK/API tests
   "src/adaos/skills/**/tests", # packaged skill tests
 ]
-
-[tool.uv.sources]
-# Repository development intentionally builds the fork from source. User-facing
-# bootstraps bypass this override and install the release wheels listed above.
-y-py = {path = "vendor/y-py"}
