@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Iterable
 
 import anyio
+import yaml
 
 from adaos.sdk.core.decorators import subscribe
 from adaos.domain.project_events import PROJECT_CONTENT_CHANGED, ProjectEventIdentity
@@ -914,7 +915,7 @@ class ScenarioWorkflowRuntime:
                     data_map.set(txn, "prompt", payload)
 
     def _project_root(self, object_type: Optional[str], object_id: Optional[str]) -> Optional[Path]:
-        kind = (object_type or "").strip().lower()
+        kind = (object_type or "").strip().lower().rstrip("s")
         if not object_id or not kind:
             return None
         ctx = self.ctx
@@ -922,38 +923,78 @@ class ScenarioWorkflowRuntime:
             base = ctx.paths.dev_skills_dir()
         elif kind == "scenario":
             base = ctx.paths.dev_scenarios_dir()
+        elif kind == "project":
+            base = ctx.paths.dev_projects_dir()
         else:
             return None
         base = base() if callable(base) else base
         root = (Path(base) / str(object_id)).resolve()
         return root
 
+    def _component_root(self, kind: str, object_id: str) -> Optional[Path]:
+        return self._project_root(kind, object_id)
+
+    def _project_component_refs(self, root: Path) -> List[str]:
+        try:
+            manifest = yaml.safe_load((root / "project.yaml").read_text(encoding="utf-8-sig")) or {}
+        except Exception:
+            return []
+        if not isinstance(manifest, dict):
+            return []
+        components = manifest.get("components") if isinstance(manifest.get("components"), dict) else {}
+        refs: List[str] = []
+        for item in components.get("owned") or []:
+            if not isinstance(item, dict):
+                continue
+            ref = str(item.get("ref") or "").strip()
+            if ref and ref not in refs:
+                refs.append(ref)
+        return refs
+
     def _build_files_list(self, object_type: str, object_id: str) -> List[Dict[str, Any]]:
         """
-        Build a flat file listing for the prompt project rooted at dev skills/scenarios.
+        Build a flat file listing for the prompt project rooted at DEV artifacts.
         """
+        kind = (object_type or "").strip().lower().rstrip("s")
         root = self._project_root(object_type, object_id)
         if root is None or not root.exists():
             return []
 
         exts = {".py", ".json", ".yml", ".yaml", ".md"}
         items: List[Dict[str, Any]] = []
-        for path in sorted(root.rglob("*")):
-            if not path.is_file():
-                continue
-            if path.suffix.lower() not in exts:
-                continue
-            rel = path.relative_to(root).as_posix()
-            items.append(
-                {
-                    "id": rel,
-                    "label": rel,
-                    "path": rel,
-                    "kind": "file",
-                    "object_type": object_type,
-                    "object_id": object_id,
-                }
-            )
+
+        def add_files(source_root: Path, *, prefix: str = "") -> None:
+            for path in sorted(source_root.rglob("*")):
+                if not path.is_file():
+                    continue
+                if path.suffix.lower() not in exts:
+                    continue
+                rel = path.relative_to(source_root).as_posix()
+                item_path = f"{prefix}/{rel}" if prefix else rel
+                items.append(
+                    {
+                        "id": item_path,
+                        "label": item_path,
+                        "path": item_path,
+                        "kind": "file",
+                        "object_type": kind,
+                        "object_id": object_id,
+                    }
+                )
+
+        add_files(root)
+        if kind == "project":
+            for ref in self._project_component_refs(root):
+                component_kind, separator, component_id = ref.partition(":")
+                if separator != ":" or component_kind not in {"skill", "scenario"} or not component_id:
+                    continue
+                component_root = self._component_root(component_kind, component_id)
+                if component_root is None or not component_root.exists():
+                    continue
+                add_files(
+                    component_root,
+                    prefix=f"components/{component_kind}/{component_id}",
+                )
         return items
 
     def _sync_prompt_project_snapshots(
@@ -964,7 +1005,7 @@ class ScenarioWorkflowRuntime:
     ) -> None:
         kind = str(object_type or "").strip().lower()
         item_id = str(object_id or "").strip()
-        if kind not in {"skill", "scenario"} or not item_id:
+        if kind not in {"project", "skill", "scenario"} or not item_id:
             prompt_section.setdefault("files", {})
             prompt_section.setdefault("tz_state", self._empty_tz_state(kind, item_id))
             return

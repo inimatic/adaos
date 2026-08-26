@@ -11,7 +11,7 @@ BUILDER_PREVIEW_OBSERVED = "builder.preview.observed"
 BUILDER_PREVIEW_TRANSITIONED = "builder.preview.transitioned"
 PROJECT_CONTENT_CHANGED = "project.content.changed"
 
-ProjectKind = Literal["scenario", "skill"]
+ProjectKind = Literal["project", "scenario", "skill"]
 
 _LEGACY_SELECTION_REASONS = {
     "builder_project_created",
@@ -23,7 +23,7 @@ _LEGACY_SELECTION_REASONS = {
 
 def normalize_project_kind(value: Any) -> ProjectKind | None:
     token = str(value or "").strip().lower().rstrip("s")
-    if token in {"scenario", "skill"}:
+    if token in {"project", "scenario", "skill"}:
         return token  # type: ignore[return-value]
     return None
 

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from adaos.sdk.developer import projects
+from adaos.sdk.developer import compositions, projects
 
 _MAX_CONTEXT_BYTES = 512 * 1024
 _MAX_TEXT_BYTES = 128 * 1024
@@ -19,8 +19,55 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _root(kind: str, project_id: str) -> Path:
+    token = str(kind or "").strip().lower().rstrip("s")
+    if token == "project":
+        return compositions.resolve_root(project_id)
+    return projects._root(token, project_id)  # noqa: SLF001
+
+
+def _project_file(root: Path, relative_path: str) -> tuple[str, Path]:
+    raw = str(relative_path or "").strip().replace("\\", "/")
+    if not raw:
+        raise projects.DeveloperProjectError("path is required")
+    relative = Path(raw)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise projects.DeveloperProjectError("path is outside project root")
+    full = (root / relative).resolve()
+    try:
+        full.relative_to(root)
+    except ValueError as exc:
+        raise projects.DeveloperProjectError("path is outside project root") from exc
+    return relative.as_posix(), full
+
+
+def _read_root_file(kind: str, project_id: str, relative_path: str) -> str:
+    if str(kind or "").strip().lower().rstrip("s") != "project":
+        return str(projects.read_file(kind, project_id, relative_path)["content"])
+    _relative, full = _project_file(_root(kind, project_id), relative_path)
+    if not full.is_file():
+        raise projects.DeveloperProjectError("project file was not found")
+    return full.read_text(encoding="utf-8-sig")
+
+
+def _write_root_file(kind: str, project_id: str, relative_path: str, text: str, *, max_bytes: int) -> None:
+    if str(kind or "").strip().lower().rstrip("s") != "project":
+        projects.write_file(kind, project_id, relative_path, text, max_bytes=max_bytes)
+        return
+    relative, full = _project_file(_root(kind, project_id), relative_path)
+    raw = str(text).encode("utf-8")
+    if len(raw) > max_bytes:
+        raise projects.DeveloperProjectError(f"project file exceeds {max_bytes} bytes")
+    if Path(relative).suffix.lower() not in {".md", ".txt", ".json", ".yaml", ".yml"}:
+        raise projects.DeveloperProjectError("project file is not an editable text context file")
+    full.parent.mkdir(parents=True, exist_ok=True)
+    temporary = full.with_name(f".{full.name}.tmp")
+    temporary.write_bytes(raw)
+    temporary.replace(full)
+
+
 def _state_path(kind: str, project_id: str) -> Path:
-    return projects._root(kind, project_id) / "prompt_state.json"  # noqa: SLF001
+    return _root(kind, project_id) / "prompt_state.json"
 
 
 def _default(kind: str, project_id: str) -> dict[str, Any]:
@@ -54,8 +101,8 @@ def _read(kind: str, project_id: str) -> dict[str, Any]:
             state.update(dict(raw))
     if not str(state.get("base_tz") or ""):
         try:
-            state["base_tz"] = projects.read_file(kind, project_id, "tz/base_tz.md")["content"]
-        except projects.DeveloperProjectError:
+            state["base_tz"] = _read_root_file(kind, project_id, "tz/base_tz.md")
+        except Exception:
             pass
     return state
 
@@ -84,7 +131,7 @@ def save_base(kind: str, project_id: str, text: str) -> dict[str, Any]:
     value = str(text)
     if len(value.encode("utf-8")) > _MAX_TEXT_BYTES:
         raise projects.DeveloperProjectError("base technical specification is too large")
-    projects.write_file(kind, project_id, "tz/base_tz.md", value, max_bytes=_MAX_TEXT_BYTES)
+    _write_root_file(kind, project_id, "tz/base_tz.md", value, max_bytes=_MAX_TEXT_BYTES)
     state = _read(kind, project_id)
     state["base_tz"] = value
     state["updated_at"] = _now()

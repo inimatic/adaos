@@ -248,7 +248,7 @@ def test_preview_policy_respects_legacy_draft_review_override(tmp_path: Path) ->
     assert preview["summary"]["review_decision"] == "human_review_required"
 
 
-def test_preview_policy_blocks_external_io_for_auto_apply(tmp_path: Path) -> None:
+def test_preview_policy_blocks_network_io_for_auto_apply(tmp_path: Path) -> None:
     service = _service(tmp_path)
     result = service.create_draft(
         kind="skill",
@@ -266,7 +266,7 @@ def test_preview_policy_blocks_external_io_for_auto_apply(tmp_path: Path) -> Non
 
     classes = {item["class"] for item in preview["review_policy"]["mandatory_classes"]}
     blocks = {item["code"] for item in preview["review_policy"]["policy_blocks"]}
-    assert "external_io" in classes
+    assert "network" in classes
     assert "mandatory_review_class" in blocks
     assert preview["review_policy"]["auto_apply_eligible"] is False
     assert preview["summary"]["human_review_required"] is True
@@ -594,6 +594,24 @@ def test_root_dev_scenario_manifest_update_only_updates_scenario_yaml(tmp_path: 
     assert yaml_payload["updated_at"] == metadata["updated_at"]
     json_payload = json.loads((target / "scenario.json").read_text(encoding="utf-8"))
     assert json_payload == {"id": "builder_scene", "name": "builder_scene", "version": "0.1.0", "ui": {"application": {}}}
+
+
+def test_root_dev_list_artifacts_skips_dot_directories(tmp_path: Path) -> None:
+    workspace = tmp_path / "dev"
+    skill_dir = workspace / "skills" / "builder_skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "skill.yaml").write_text(
+        "name: builder_skill\nversion: 0.2.0\nupdated_at: '2026-06-04T00:00:00Z'\n",
+        encoding="utf-8",
+    )
+    (workspace / "skills" / ".runtime" / "builder_skill").mkdir(parents=True)
+
+    service = object.__new__(RootDeveloperService)
+    service._prepare_workspace = lambda _cfg, owner: workspace
+
+    items = service._list_artifacts(SimpleNamespace(owner_id="owner-1"), "skills")
+
+    assert [item.name for item in items] == ["builder_skill"]
 
 
 def test_root_dev_skill_manifest_update_keeps_conversational_version_atomic(tmp_path: Path) -> None:

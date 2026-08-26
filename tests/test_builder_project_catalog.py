@@ -105,6 +105,72 @@ def test_project_catalog_api_forwards_bounded_query() -> None:
     ]
 
 
+def test_project_catalog_includes_composition_projects(tmp_path: Path) -> None:
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    root = projects / "root_mgmnt"
+    root.mkdir()
+    (root / "project.yaml").write_text(
+        "\n".join(
+            [
+                "schema: adaos.project.v1",
+                "kind: project",
+                "id: root_mgmnt",
+                "version: 0.1.0",
+                "profiles:",
+                "  - adaos.root_mgmnt.operator.v1",
+                "components:",
+                "  owned:",
+                "    - ref: scenario:root_mgmnt_ops",
+                "      role: primary",
+                "    - ref: skill:root_mgmnt",
+                "      role: implementation",
+                "  dependencies: []",
+                "entrypoints:",
+                "  - id: ops",
+                "    presentation: scenario:root_mgmnt_ops",
+                "    default: true",
+                "catalog:",
+                "  title: Root Management",
+                "  description: Private operator plane",
+                "  categories: [ops]",
+                "  tags: [root]",
+                "lifecycle:",
+                "  uninstall:",
+                "    components: retain",
+                "    runtime_data: retain",
+                "    source_artifacts: retain",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    service = BuilderProjectCatalogService(
+        skills_root=tmp_path / "skills",
+        scenarios_root=tmp_path / "scenarios",
+        state_dir=tmp_path / "state",
+        projects_root=projects,
+    )
+
+    items = service.list_projects(
+        kind="project",
+        selected_object_type="project",
+        selected_object_id="root_mgmnt",
+    )
+
+    assert len(items) == 1
+    item = items[0]
+    assert item["id"] == "project:root_mgmnt"
+    assert item["title"] == "Root Management"
+    assert item["description"] == "Private operator plane"
+    assert item["type"] == "Project"
+    assert item["type_i18n"] == {"key": "builder.project_type.project"}
+    assert item["primary_ref"] == "scenario:root_mgmnt_ops"
+    assert item["component_refs"] == ["scenario:root_mgmnt_ops", "skill:root_mgmnt"]
+    assert item["entrypoints"][0]["id"] == "ops"
+    assert item["current"] is True
+
+
 def test_project_catalog_hides_archived_projects_unless_requested(tmp_path: Path) -> None:
     scenarios = tmp_path / "scenarios"
     project = scenarios / "archived_scene"

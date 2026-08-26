@@ -266,8 +266,8 @@ def _replace_path(source: Path, target: Path) -> None:
 
 def _kind(value: Any) -> str:
     token = str(value or "").strip().lower().rstrip("s")
-    if token not in {"scenario", "skill"}:
-        raise BuilderWorkflowError("object_type must be scenario or skill")
+    if token not in {"project", "scenario", "skill"}:
+        raise BuilderWorkflowError("object_type must be project, scenario or skill")
     return token
 
 
@@ -280,6 +280,88 @@ def _project_id(value: Any) -> str:
 
 def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _manifest_name(kind: str) -> str:
+    return {
+        "project": "project.yaml",
+        "scenario": "scenario.yaml",
+        "skill": "skill.yaml",
+    }[_kind(kind)]
+
+
+def _project_manifest_metadata_from_value(
+    manifest: Mapping[str, Any],
+    *,
+    kind: str,
+    object_id: str,
+) -> dict[str, Any]:
+    catalog = _mapping(manifest.get("catalog"))
+    return {
+        "title": str(
+            catalog.get("title")
+            or manifest.get("title")
+            or manifest.get("name")
+            or manifest.get("id")
+            or object_id
+        ).strip()
+        or object_id,
+        "description": str(
+            catalog.get("description") or manifest.get("description") or ""
+        ).strip()
+        or None,
+        "version": str(manifest.get("version") or "").strip() or None,
+        "manifest_name": _manifest_name(kind),
+    }
+
+
+def _project_component_refs_from_manifest(manifest: Mapping[str, Any]) -> list[str]:
+    components = _mapping(manifest.get("components"))
+    owned = [
+        str(item.get("ref") or "").strip()
+        for item in components.get("owned") or []
+        if isinstance(item, Mapping) and str(item.get("ref") or "").strip()
+    ]
+    return list(dict.fromkeys(owned))
+
+
+def _project_dependency_edges_from_manifest(
+    manifest: Mapping[str, Any],
+    *,
+    project_ref: str,
+) -> list[dict[str, str]]:
+    components = _mapping(manifest.get("components"))
+    refs = [
+        *_project_component_refs_from_manifest(manifest),
+        *[
+            str(item.get("ref") or "").strip()
+            for item in components.get("dependencies") or []
+            if isinstance(item, Mapping) and str(item.get("ref") or "").strip()
+        ],
+    ]
+    edges: list[dict[str, str]] = []
+    for ref in dict.fromkeys(refs):
+        edges.append({"from_ref": project_ref, "to_ref": ref, "kind": "requires"})
+    return edges
+
+
+def _default_project_entrypoint(manifest: Mapping[str, Any]) -> dict[str, Any] | None:
+    entrypoints = [
+        dict(item)
+        for item in manifest.get("entrypoints") or []
+        if isinstance(item, Mapping)
+    ]
+    if not entrypoints:
+        return None
+    return next((item for item in entrypoints if item.get("default") is True), entrypoints[0])
+
+
+def _scenario_id_from_ref(value: Any) -> str | None:
+    token = str(value or "").strip()
+    if not token.startswith("scenario:"):
+        return None
+    scenario_id = token.split(":", 1)[1].strip()
+    return scenario_id or None
 
 
 def _bounded_text(value: Any, *, field: str, max_length: int) -> str:
@@ -928,6 +1010,7 @@ class BuilderWorkflowService:
     state_dir: Path | None = None
     event_sink: Any = None
     workspace_root: Path | None = None
+    dev_projects_root: Path | None = None
     require_active_builder_package: bool | None = None
     _active_package_digest: str | None = field(init=False, default=None)
     _active_binding_digest: str | None = field(init=False, default=None)
@@ -935,6 +1018,11 @@ class BuilderWorkflowService:
     def __post_init__(self) -> None:
         self.dev_skills_root = Path(self.dev_skills_root)
         self.dev_scenarios_root = Path(self.dev_scenarios_root)
+        self.dev_projects_root = (
+            Path(self.dev_projects_root)
+            if self.dev_projects_root is not None
+            else Path(self.dev_scenarios_root).parent / "projects"
+        )
         self.state_dir = Path(self.state_dir or current_state_dir())
         self.workspace_root = (
             Path(self.workspace_root).expanduser().resolve()
@@ -955,6 +1043,7 @@ class BuilderWorkflowService:
             state_dir=current_state_dir(),
             event_sink=cls._publish,
             workspace_root=Path(ctx.paths.workspace_dir()),
+            dev_projects_root=Path(ctx.paths.dev_projects_dir()),
         )
 
     @staticmethod
@@ -976,7 +1065,10 @@ class BuilderWorkflowService:
     def project_root(self, object_type: str, object_id: str) -> Path:
         kind = _kind(object_type)
         project_id = _project_id(object_id)
-        root = (self.dev_scenarios_root if kind == "scenario" else self.dev_skills_root) / project_id
+        if kind == "project":
+            root = Path(self.dev_projects_root) / project_id
+        else:
+            root = (self.dev_scenarios_root if kind == "scenario" else self.dev_skills_root) / project_id
         if not root.is_dir():
             raise FileNotFoundError(f"DEV {kind} project not found: {project_id}")
         return root
@@ -1080,6 +1172,7 @@ class BuilderWorkflowService:
         return artifact.compiled
 
     def _workflow_inspection(self, object_type: str, object_id: str) -> dict[str, Any]:
+        kind = _kind(object_type)
         definition = self._governed_definition()
         process = copy.deepcopy(
             _inspect_workflow_definition(
@@ -1087,13 +1180,23 @@ class BuilderWorkflowService:
                 "builder_skill/workflow.json",
             )
         )
-        root = self.project_root(object_type, object_id)
-        manifest_name = "scenario.yaml" if object_type == "scenario" else "skill.yaml"
+        root = self.project_root(kind, object_id)
+        manifest_name = _manifest_name(kind)
+        if kind == "project":
+            project = {
+                "schema": "adaos.workflow.inspection.v1",
+                "source": f"{object_id}/{manifest_name}",
+                "status": "not_declared",
+                "validation": {"valid": True, "diagnostics": []},
+                "binding": None,
+                "composition": {"declared": True},
+            }
+            return {"process": process, "project": project}
         try:
             artifact = load_manifest_bound_workflow(
                 root,
                 manifest_name=manifest_name,
-                allow_legacy_inline=object_type == "scenario",
+                allow_legacy_inline=kind == "scenario",
             )
         except WorkflowArtifactError as exc:
             project: dict[str, Any] = {
@@ -1121,7 +1224,7 @@ class BuilderWorkflowService:
                         f"{object_id}/workflow.json",
                     )
                 )
-            elif object_type == "scenario":
+            elif kind == "scenario":
                 try:
                     manifest = yaml.safe_load(
                         (root / manifest_name).read_text(encoding="utf-8")
@@ -1492,7 +1595,7 @@ class BuilderWorkflowService:
     def _project_version(self, object_type: str, object_id: str) -> str | None:
         kind = _kind(object_type)
         root = self.project_root(kind, object_id)
-        path = root / ("scenario.yaml" if kind == "scenario" else "skill.yaml")
+        path = root / _manifest_name(kind)
         try:
             value = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
         except (OSError, ValueError, yaml.YAMLError):
@@ -1502,21 +1605,51 @@ class BuilderWorkflowService:
     def _project_manifest_metadata(self, object_type: str, object_id: str) -> dict[str, Any]:
         kind = _kind(object_type)
         root = self.project_root(kind, object_id)
-        path = root / ("scenario.yaml" if kind == "scenario" else "skill.yaml")
+        path = root / _manifest_name(kind)
         try:
             value = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
         except (OSError, ValueError, yaml.YAMLError):
             value = {}
         manifest = dict(value) if isinstance(value, Mapping) else {}
+        return _project_manifest_metadata_from_value(
+            manifest,
+            kind=kind,
+            object_id=object_id,
+        )
+
+    def _project_presentation(self, object_type: str, object_id: str) -> dict[str, Any] | None:
+        kind = _kind(object_type)
+        if kind != "project":
+            return None
+        root = self.project_root(kind, object_id)
+        try:
+            manifest = yaml.safe_load((root / "project.yaml").read_text(encoding="utf-8-sig")) or {}
+        except (OSError, ValueError, yaml.YAMLError):
+            return None
+        if not isinstance(manifest, Mapping):
+            return None
+        entrypoint = _default_project_entrypoint(manifest)
+        if entrypoint is None:
+            return None
+        scenario_id = _scenario_id_from_ref(entrypoint.get("presentation"))
         return {
-            "title": str(manifest.get("title") or manifest.get("name") or object_id).strip()
-            or object_id,
-            "description": str(manifest.get("description") or "").strip() or None,
-            "version": str(manifest.get("version") or "").strip() or None,
+            "source": "project",
+            "project_ref": f"project:{object_id}",
+            "scenario_id": scenario_id,
+            **dict(entrypoint),
         }
 
     def current_prototype_revision(self, object_type: str, object_id: str) -> str | None:
         kind = _kind(object_type)
+        if kind == "project":
+            presentation = self._project_presentation(kind, object_id)
+            scenario_id = str((presentation or {}).get("scenario_id") or "").strip()
+            if scenario_id:
+                try:
+                    return self.current_prototype_revision("scenario", scenario_id)
+                except (FileNotFoundError, BuilderWorkflowError):
+                    return self._project_version(kind, object_id)
+            return self._project_version(kind, object_id)
         if kind != "scenario":
             return self._project_version(kind, object_id)
         revision_dir = self.project_root(kind, object_id) / "ui_revisions"
@@ -1670,8 +1803,60 @@ class BuilderWorkflowService:
             normalized,
         )
         manifest_metadata = self._project_manifest_metadata(object_type, object_id)
+        project_state = _mapping(raw.get("project"))
+        presentation = self._project_presentation(object_type, object_id)
+        if presentation is not None:
+            normalized["presentation"] = presentation
+        if _kind(object_type) == "project":
+            try:
+                manifest = yaml.safe_load(
+                    (self.project_root(object_type, object_id) / "project.yaml").read_text(
+                        encoding="utf-8-sig"
+                    )
+                ) or {}
+            except (OSError, ValueError, yaml.YAMLError):
+                manifest = {}
+            if isinstance(manifest, Mapping):
+                project_ref = f"project:{_project_id(object_id)}"
+                component_refs = [
+                    project_ref,
+                    *_project_component_refs_from_manifest(manifest),
+                ]
+                project_state["component_refs"] = list(
+                    dict.fromkeys(
+                        [
+                            *[
+                                str(item).strip()
+                                for item in project_state.get("component_refs") or []
+                                if str(item).strip()
+                            ],
+                            *component_refs,
+                        ]
+                    )
+                )
+                existing_edges = [
+                    dict(item)
+                    for item in project_state.get("dependencies") or []
+                    if isinstance(item, Mapping)
+                ]
+                project_edges = _project_dependency_edges_from_manifest(
+                    manifest,
+                    project_ref=project_ref,
+                )
+                by_key = {
+                    (
+                        str(item.get("from_ref") or ""),
+                        str(item.get("to_ref") or ""),
+                        str(item.get("kind") or ""),
+                    ): item
+                    for item in [*existing_edges, *project_edges]
+                    if str(item.get("from_ref") or "")
+                    and str(item.get("to_ref") or "")
+                    and str(item.get("kind") or "")
+                }
+                project_state["dependencies"] = list(by_key.values())
         normalized["project"] = normalize_project(
-            raw.get("project"),
+            project_state,
             object_type=_kind(object_type),
             object_id=_project_id(object_id),
             archived=bool(state.get("archived")),
@@ -1709,7 +1894,7 @@ class BuilderWorkflowService:
             and active == "automation"
             and automation_status == "completed"
             and delivery_status == "accepted",
-            "can_preview_prototype": object_type == "scenario",
+            "can_preview_prototype": object_type in {"project", "scenario"},
             "can_preview_automation": object_type == "scenario" and automation_previewable,
             "can_preview_publication": object_type == "scenario"
             and str(_mapping(workflow.get("publication")).get("status") or "") == "published",
@@ -2339,9 +2524,32 @@ class BuilderWorkflowService:
             parent_ref = change_ref
         else:
             parent_ref = project_ref
+        if object_type == "project":
+            for component_ref in project.get("component_refs") or []:
+                ref = str(component_ref or "").strip()
+                if not ref or ref == project_ref or ":" not in ref:
+                    continue
+                component_kind, _, component_id = ref.partition(":")
+                if component_kind not in {"scenario", "skill"} or not component_id:
+                    continue
+                nodes.append(
+                    {
+                        "ref": ref,
+                        "kind": component_kind,
+                        "parent_ref": project_ref,
+                        "label": ref,
+                        "status": "owned",
+                        "source_ref": project_ref,
+                    }
+                )
         prototype_revision = str(prototype.get("head_revision") or "").strip()
         prototype_ref = f"prototype:{object_id}:{prototype_revision or 'current'}"
-        if object_type == "scenario":
+        preview_scenario_id = object_id
+        if object_type == "project":
+            preview_scenario_id = str(
+                _mapping(workflow.get("presentation")).get("scenario_id") or ""
+            ).strip()
+        if object_type in {"project", "scenario"} and preview_scenario_id:
             nodes.append(
                 {
                     "ref": prototype_ref,
@@ -2349,7 +2557,7 @@ class BuilderWorkflowService:
                     "parent_ref": parent_ref,
                     "label": f"Prototype {prototype_revision or 'current'}",
                     "status": str(prototype.get("status") or "working"),
-                    "preview": f"proto:{object_id}:{prototype_revision or 'current'}",
+                    "preview": f"proto:{preview_scenario_id}:{prototype_revision or 'current'}",
                 }
             )
             parent_ref = prototype_ref
@@ -3734,6 +3942,17 @@ class BuilderWorkflowService:
                 token = str(item).strip()
                 if token and token not in dependencies:
                     dependencies.append(token)
+            if kind == "project":
+                components = _mapping(manifest.get("components"))
+                for item in [
+                    *list(components.get("owned") or []),
+                    *list(components.get("dependencies") or []),
+                ]:
+                    if not isinstance(item, Mapping):
+                        continue
+                    token = str(item.get("ref") or "").strip()
+                    if token and token not in dependencies:
+                        dependencies.append(token)
             selected_paths = [
                 str(item).replace("\\", "/").strip().lstrip("/")
                 for item in allowed_paths or [manifest_name, "prompt_state.json", "webui.json"]
@@ -3775,7 +3994,16 @@ class BuilderWorkflowService:
                     semantic_refs.append(ref)
             webui: dict[str, Any] = {}
             webui_digest = None
-            webui_path = root / "webui.json"
+            webui_root = root
+            if kind == "project":
+                presentation = self._project_presentation(kind, project_id)
+                scenario_id = str((presentation or {}).get("scenario_id") or "").strip()
+                if scenario_id:
+                    try:
+                        webui_root = self.project_root("scenario", scenario_id)
+                    except (FileNotFoundError, BuilderWorkflowError):
+                        webui_root = root
+            webui_path = webui_root / "webui.json"
             if webui_path.is_file():
                 try:
                     webui_raw = webui_path.read_bytes()

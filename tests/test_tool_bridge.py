@@ -1527,7 +1527,7 @@ def test_canonical_local_target_does_not_proxy_from_hub() -> None:
     )
 
 
-@pytest.mark.parametrize("alias", ["local", "self", "current", "current_node"])
+@pytest.mark.parametrize("alias", ["local", "self", "current", "current_node", "home"])
 def test_local_target_alias_resolves_to_runtime_node(alias: str) -> None:
     assert tool_bridge_module._resolve_target_node_id(
         {"target_node_id": alias},

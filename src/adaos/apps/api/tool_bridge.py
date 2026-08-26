@@ -1072,7 +1072,7 @@ def _resolve_target_node_id(
         or ""
     )
     local_token = node_identity_token(local_node_id)
-    if local_token and target_node_id.lower() in {"local", "self", "current", "current_node"}:
+    if local_token and target_node_id.lower() in {"local", "self", "current", "current_node", "home"}:
         return local_token
     return target_node_id
 

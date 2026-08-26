@@ -38,8 +38,8 @@ def _digest(value: bytes) -> str:
 def _safe_project(kind: str, project_id: str) -> tuple[str, str]:
     normalized_kind = str(kind or "").strip().lower().rstrip("s")
     normalized_id = str(project_id or "").strip().lower()
-    if normalized_kind not in {"skill", "scenario"}:
-        raise ValueError("project kind must be skill or scenario")
+    if normalized_kind not in {"project", "skill", "scenario"}:
+        raise ValueError("project kind must be project, skill or scenario")
     if not _ID_RE.fullmatch(normalized_id):
         raise ValueError("project_id must match ^[a-z0-9_.-]+$")
     return normalized_kind, normalized_id

@@ -242,6 +242,54 @@ def test_preview_facade_resolves_skill_presentation_without_reusing_stale_previe
     assert service.selections[0]["object_id"] == "builder_skill"
 
 
+def test_preview_facade_resolves_project_presentation(monkeypatch) -> None:
+    service = _PreviewService()
+    monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(
+        "adaos.sdk.developer.compositions.get",
+        lambda _project_id: {
+            "id": "root_mgmnt",
+            "version": "0.1.0",
+            "catalog": {
+                "title": "Root Management",
+                "description": "Private operator project",
+            },
+            "components": {
+                "owned": [
+                    {"ref": "scenario:root_mgmnt_ops", "role": "primary"},
+                    {"ref": "skill:root_mgmnt", "role": "implementation"},
+                ]
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "adaos.sdk.developer.compositions.resolve_presentation",
+        lambda _ref, **_kwargs: {
+            "source": "project",
+            "project_ref": "project:root_mgmnt",
+            "id": "ops",
+            "presentation": "scenario:root_mgmnt_ops",
+            "bindings": {"operator_scope": "root"},
+        },
+    )
+
+    result = preview.select_project("project", "root_mgmnt", publish_event=False)
+
+    assert result["selected"] is True
+    assert result["object_type"] == "project"
+    assert result["object_id"] == "root_mgmnt"
+    assert result["runtime_scenario_id"] == "root_mgmnt_ops"
+    assert result["preview_state"]["selected_project_ref"] == "project:root_mgmnt"
+    assert result["preview_state"]["selected_component_refs"] == [
+        "scenario:root_mgmnt_ops",
+        "skill:root_mgmnt",
+    ]
+    assert service.active_drafts[0]["runtime_scenario_id"] == "root_mgmnt_ops"
+    assert service.ensure_calls[0]["preview_state"]["bindings"]["operator_scope"] == "root"
+    assert service.selections[0]["object_type"] == "project"
+    assert service.selections[0]["object_id"] == "root_mgmnt"
+
+
 def test_preview_facade_never_blocks_event_driven_selection_on_rebuild(monkeypatch) -> None:
     service = _PreviewService()
     events: list[tuple[str, dict]] = []

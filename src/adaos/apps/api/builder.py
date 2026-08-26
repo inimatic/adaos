@@ -96,7 +96,7 @@ class BuilderActiveDraftRequest(BaseModel):
 
 
 class BuilderAutomationStartRequest(BaseModel):
-    object_type: str = Field(..., pattern="^(skill|scenario)$")
+    object_type: str = Field(..., pattern="^(skill|scenario|project)$")
     object_id: str = Field(..., min_length=1)
     implementation_brief: str = Field(..., min_length=1)
     webspace_id: str = "desktop"
@@ -106,13 +106,13 @@ class BuilderAutomationStartRequest(BaseModel):
 
 class BuilderAutomationTurnRequest(BaseModel):
     text: str = Field(..., min_length=1)
-    object_type: str | None = Field(default=None, pattern="^(skill|scenario)$")
+    object_type: str | None = Field(default=None, pattern="^(skill|scenario|project)$")
     object_id: str | None = None
     webspace_id: str | None = None
 
 
 class BuilderWorkflowTransitionRequest(BaseModel):
-    object_type: str = Field(..., pattern="^(skill|scenario)$")
+    object_type: str = Field(..., pattern="^(skill|scenario|project)$")
     object_id: str = Field(..., min_length=1)
     action: str = Field(..., min_length=1)
     actor: str = "builder.api"

@@ -15,15 +15,15 @@
   "properties": {
     "schema": { "const": "adaos.builder.project.v1" },
     "project_id": { "type": "string", "minLength": 1, "maxLength": 160 },
-    "project_ref": { "type": "string", "pattern": "^(scenario|skill):[^/\\\\]+$" },
-    "object_type": { "enum": ["scenario", "skill"] },
+    "project_ref": { "type": "string", "pattern": "^(project|scenario|skill):[^/\\\\]+$" },
+    "object_type": { "enum": ["project", "scenario", "skill"] },
     "identity": {
       "type": "object",
       "required": ["stable_id", "kind", "project_ref", "title", "description"],
       "properties": {
         "stable_id": { "type": "string", "minLength": 1, "maxLength": 160 },
-        "kind": { "enum": ["scenario", "skill"] },
-        "project_ref": { "type": "string", "pattern": "^(scenario|skill):[^/\\\\]+$" },
+        "kind": { "enum": ["project", "scenario", "skill"] },
+        "project_ref": { "type": "string", "pattern": "^(project|scenario|skill):[^/\\\\]+$" },
         "title": { "type": "string", "minLength": 1, "maxLength": 500 },
         "description": { "type": ["string", "null"], "maxLength": 4000 }
       },

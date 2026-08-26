@@ -165,6 +165,12 @@ def _read(path: Path) -> dict[str, Any]:
     return validate(value)
 
 
+def _manifest_digest(payload: Mapping[str, Any]) -> str:
+    return "sha256:" + hashlib.sha256(
+        json.dumps(dict(payload), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def _write(path: Path, value: Mapping[str, Any]) -> None:
     payload = validate(value)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -176,13 +182,10 @@ def _write(path: Path, value: Mapping[str, Any]) -> None:
 def get(project_id: str) -> dict[str, Any]:
     root = resolve_root(project_id)
     payload = _read(root / "project.yaml")
-    manifest_digest = "sha256:" + hashlib.sha256(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
     return {
         **payload,
         "ref": f"project:{payload['id']}",
-        "manifest_digest": manifest_digest,
+        "manifest_digest": _manifest_digest(payload),
         "source_path": str(root),
     }
 
@@ -200,6 +203,7 @@ def list_projects(*, profile: str | None = None, limit: int = 500) -> list[dict[
         primary = next(item for item in project["components"]["owned"] if item["role"] == "primary")
         result.append(
             {
+                **project,
                 "id": project["id"],
                 "ref": f"project:{project['id']}",
                 "version": project["version"],
@@ -210,7 +214,7 @@ def list_projects(*, profile: str | None = None, limit: int = 500) -> list[dict[
                 "tags": list(project["catalog"]["tags"]),
                 "primary_ref": primary["ref"],
                 "source_path": str(manifest_path.parent.resolve()),
-                "manifest_digest": get(str(project["id"]))["manifest_digest"],
+                "manifest_digest": _manifest_digest(project),
             }
         )
         if len(result) >= maximum:

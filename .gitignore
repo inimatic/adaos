@@ -27,6 +27,9 @@ artifacts/client-debug/
 artifacts/y-py/
 artifacts/android-node/*.apk
 artifacts/android-node/*.idsig
+e2e/artifacts/
+e2e/stand/browser/node_modules/
+e2e/stand/browser/tmp-check-builder-*.mjs
 vendor/y-py/target/
 src/adaos/integrations/rasa-backup/
 tmp/

@@ -98,6 +98,8 @@ def test_project_manifest_lists_by_profile_and_resolves_entrypoint(project_space
     assert created["manifest_digest"].startswith("sha256:")
     assert listed[0]["manifest_digest"] == created["manifest_digest"]
     assert listed[0]["primary_ref"] == "skill:tlp_direction"
+    assert listed[0]["components"] == created["components"]
+    assert listed[0]["entrypoints"] == created["entrypoints"]
     assert presentation == {
         "source": "project",
         "project_ref": "project:tlp_research",

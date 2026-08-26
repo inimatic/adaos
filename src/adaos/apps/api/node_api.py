@@ -3668,6 +3668,13 @@ async def node_status(
     return NodeStatus(**payload)
 
 
+@router.get("/economic/status", dependencies=[Depends(require_token)])
+async def node_economic_status() -> dict[str, Any]:
+    from adaos.services.economic_policy import current_subnet_economic_status
+
+    return await asyncio.to_thread(current_subnet_economic_status)
+
+
 @router.get("/voice/listening", dependencies=[Depends(require_token)])
 async def node_voice_listening() -> dict[str, Any]:
     from adaos.services.voice_runtime import (

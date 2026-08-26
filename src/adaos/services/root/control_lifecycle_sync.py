@@ -20,6 +20,7 @@ from adaos.services.root.client import RootHttpClient
 from adaos.services.runtime_identity import runtime_identity_snapshot, runtime_instance_id, runtime_transition_role
 from adaos.services.root_mcp.infra_access_skill import build_operational_surface
 from adaos.services.runtime_lifecycle import runtime_lifecycle_snapshot
+from adaos.services.zone_hosts import canonical_zone_id
 
 _CONTROL_LIFECYCLE_FLOW_ID = "hub_root.control.lifecycle"
 _LOG = logging.getLogger("adaos.startup")
@@ -103,8 +104,26 @@ def _environment(conf) -> str:
 
 
 def _zone(conf) -> str | None:
-    token = str(os.getenv("ADAOS_ROOT_ZONE") or "").strip()
-    return token or None
+    for value in (os.getenv("ADAOS_ROOT_ZONE"), os.getenv("ADAOS_ZONE_ID"), getattr(conf, "zone_id", None)):
+        token = str(value or "").strip().lower()
+        if token:
+            return canonical_zone_id(token) or token
+    return None
+
+
+def _economic_status_for_report() -> dict[str, Any]:
+    try:
+        from adaos.services.economic_policy import compact_economic_status_for_control_report
+
+        return compact_economic_status_for_control_report()
+    except Exception as exc:
+        return {
+            "schema": "adaos.subnet.economic_status.v1",
+            "source": "local_runtime_error",
+            "entitlement_state": "unknown",
+            "disabled_resource_count": 0,
+            "error": type(exc).__name__,
+        }
 
 
 def _infra_access_operational_surface() -> dict[str, Any]:
@@ -591,6 +610,8 @@ def build_control_lifecycle_report(conf) -> dict[str, Any]:
     assessment = strategy.get("assessment") if isinstance(strategy.get("assessment"), dict) else {}
     slot_manifest = active_slot_manifest() or {}
     identity = runtime_identity_snapshot()
+    zone_id = _zone(conf)
+    economic = _economic_status_for_report()
 
     return {
         "target_id": f"hub:{str(getattr(conf, 'subnet_id', '') or '').strip() or 'unknown_hub'}",
@@ -600,7 +621,9 @@ def build_control_lifecycle_report(conf) -> dict[str, Any]:
         "runtime_instance_id": str(identity.get("runtime_instance_id") or ""),
         "transition_role": str(identity.get("transition_role") or "active"),
         "environment": _environment(conf),
-        "zone": _zone(conf),
+        "zone_id": zone_id,
+        "zone": zone_id,
+        "economic": economic,
         "lifecycle": {
             "node_state": str(lifecycle.get("node_state") or "unknown"),
             "reason": str(lifecycle.get("reason") or ""),

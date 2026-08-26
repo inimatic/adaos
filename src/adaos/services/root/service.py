@@ -2860,7 +2860,7 @@ class RootDeveloperService:
         items: list[ArtifactListItem] = []
         if artifacts_dir.exists():
             for entry in artifacts_dir.iterdir():
-                if not entry.is_dir():
+                if not entry.is_dir() or entry.name.startswith("."):
                     continue
                 name, version, updated_at = self._artifact_manifest_info(entry, kind)
                 items.append(
