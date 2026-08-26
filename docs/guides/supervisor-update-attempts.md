@@ -22,6 +22,12 @@ The goal is to keep update intent and outcome readable even while the runtime is
 - `scheduled_for`: when a planned update is expected to begin.
 - `updated_at`: when the persisted payload was last rewritten by supervisor.
 - `completed_at`: when the attempt reached a terminal state.
+- `prepare_timeout_sec`: maximum inactive-slot preparation time; the default is
+  one hour and may be raised for unusually slow deployment media.
+- `prepare_timed_out`: `true` when supervisor revoked the owned prepare lease
+  after that deadline instead of treating progress heartbeats as unbounded work.
+- `prepare_lease_revocation`: durable evidence that the worker lease was revoked
+  and the shared skill-runtime migration gate was released.
 
 ## Reason fields
 

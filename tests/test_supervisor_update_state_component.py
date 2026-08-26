@@ -56,7 +56,7 @@ def test_supervisor_update_timeouts_allow_slow_deployment_environments(
     config = SupervisorRuntimeConfig()
 
     assert config.update_attempt_timeout_sec() == 900.0
-    assert config.update_prepare_timeout_sec() == 900.0
+    assert config.update_prepare_timeout_sec() == 3600.0
 
     monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "1200")
     monkeypatch.setenv("ADAOS_SUPERVISOR_PREPARE_TIMEOUT_SEC", "600")

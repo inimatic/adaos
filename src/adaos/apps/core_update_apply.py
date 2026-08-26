@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import os
 import shutil
@@ -728,6 +729,29 @@ def _uv_locked_enabled() -> bool:
     return str(os.getenv("ADAOS_CORE_UPDATE_UV_LOCKED", "1") or "1").strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _uv_runtime_no_sources_enabled(checkout_dir: Path) -> bool:
+    if not _env_flag("ADAOS_CORE_UPDATE_UV_RUNTIME_NO_SOURCES", "1"):
+        return False
+    pyproject_path = checkout_dir / "pyproject.toml"
+    try:
+        project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    tool = project.get("tool") if isinstance(project, dict) else None
+    uv = tool.get("uv") if isinstance(tool, dict) else None
+    sources = uv.get("sources") if isinstance(uv, dict) else None
+    return isinstance(sources, dict) and bool(sources)
+
+
+def _restore_development_lock(path: Path, payload: bytes) -> None:
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        temporary.write_bytes(payload)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _uv_link_mode_snapshot(*, uv: str, venv_dir: Path) -> dict[str, object]:
     requested = str(os.getenv("UV_LINK_MODE") or "").strip().lower()
     if requested:
@@ -782,26 +806,72 @@ def _install_slot_project(
         link_mode = _uv_link_mode_snapshot(uv=uv, venv_dir=venv_dir)
         if str(link_mode.get("mode") or ""):
             env["UV_LINK_MODE"] = str(link_mode["mode"])
-        cmd = [uv, "sync", "--no-dev", "--python", sys.executable]
-        if _uv_locked_enabled():
-            cmd.insert(2, "--locked")
-        run_cmd = _low_priority_io_command(cmd)
-        if str(prepare_lease_path or "").strip():
-            completed = _run_prepare_subprocess(
-                run_cmd,
-                cwd=checkout_dir,
-                env=env,
-                prepare_lease_path=prepare_lease_path,
-                prepare_lease_token=prepare_lease_token,
-            )
-        else:
-            completed = subprocess.run(
-                run_cmd,
-                cwd=str(checkout_dir),
-                env=env,
-                capture_output=True,
-                text=True,
-            )
+        lock_path = checkout_dir / "uv.lock"
+        development_lock: bytes | None = None
+        runtime_lock: dict[str, object] | None = None
+        use_runtime_lock = _uv_runtime_no_sources_enabled(checkout_dir)
+        try:
+            if use_runtime_lock:
+                development_lock = lock_path.read_bytes()
+                lock_cmd = _low_priority_io_command([uv, "lock", "--no-sources"])
+                if str(prepare_lease_path or "").strip():
+                    lock_result = _run_prepare_subprocess(
+                        lock_cmd,
+                        cwd=checkout_dir,
+                        env=env,
+                        prepare_lease_path=prepare_lease_path,
+                        prepare_lease_token=prepare_lease_token,
+                    )
+                else:
+                    lock_result = subprocess.run(
+                        lock_cmd,
+                        cwd=str(checkout_dir),
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                    )
+                runtime_lock = {
+                    "enabled": True,
+                    "command": lock_cmd,
+                    "returncode": int(lock_result.returncode),
+                    "stdout_tail": (lock_result.stdout or "")[-4000:],
+                    "stderr_tail": (lock_result.stderr or "")[-4000:],
+                }
+                if lock_result.returncode == 0:
+                    runtime_lock["digest"] = "sha256:" + hashlib.sha256(
+                        lock_path.read_bytes()
+                    ).hexdigest()
+                else:
+                    use_runtime_lock = False
+                    _restore_development_lock(lock_path, development_lock)
+                    development_lock = None
+                attempts.append({"installer": "uv_runtime_lock", **runtime_lock})
+
+            cmd = [uv, "sync", "--no-dev", "--python", sys.executable]
+            if _uv_locked_enabled():
+                cmd.insert(2, "--locked")
+            if use_runtime_lock:
+                cmd.insert(2, "--no-sources")
+            run_cmd = _low_priority_io_command(cmd)
+            if str(prepare_lease_path or "").strip():
+                completed = _run_prepare_subprocess(
+                    run_cmd,
+                    cwd=checkout_dir,
+                    env=env,
+                    prepare_lease_path=prepare_lease_path,
+                    prepare_lease_token=prepare_lease_token,
+                )
+            else:
+                completed = subprocess.run(
+                    run_cmd,
+                    cwd=str(checkout_dir),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                )
+        finally:
+            if development_lock is not None:
+                _restore_development_lock(lock_path, development_lock)
         attempts.append(
             {
                 "installer": "uv",
@@ -811,6 +881,7 @@ def _install_slot_project(
                 "stdout_tail": (completed.stdout or "")[-4000:],
                 "stderr_tail": (completed.stderr or "")[-4000:],
                 "link_mode": link_mode,
+                "runtime_lock": runtime_lock,
             }
         )
         if completed.returncode == 0:

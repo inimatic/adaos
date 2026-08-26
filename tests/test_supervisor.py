@@ -2609,6 +2609,60 @@ def test_supervisor_prepare_emits_progress_heartbeat(monkeypatch, tmp_path) -> N
     assert "worker active" in str(heartbeats[-1]["message"])
 
 
+def test_supervisor_prepare_timeout_revokes_worker_lease_and_releases_gate(
+    monkeypatch, tmp_path
+) -> None:
+    from adaos.apps.supervisor_runtime import update_execution
+
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MIN_UPDATE_PERIOD_SEC", "0")
+    monkeypatch.setattr(update_execution, "PREPARE_HEARTBEAT_SEC", 0.01)
+    monkeypatch.setattr(supervisor, "_update_prepare_timeout_sec", lambda: 0.02)
+
+    def _slow_prepare(plan):
+        lease_path = Path(str(plan["prepare_lease_path"]))
+        while True:
+            lease = json.loads(lease_path.read_text(encoding="utf-8"))
+            if lease.get("state") != "active":
+                return {
+                    "state": "failed",
+                    "phase": "prepare",
+                    "message": "prepare lease revoked",
+                    "target_slot": "B",
+                    "plan": {"target_slot": "B"},
+                }
+            time.sleep(0.005)
+
+    monkeypatch.setattr(supervisor, "prepare_pending_update", _slow_prepare)
+    manager = supervisor.SupervisorManager(
+        runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token"
+    )
+
+    async def _exercise() -> None:
+        result = await manager.start_update(
+            action="update",
+            target_rev="rev2026",
+            target_version="1.2.3",
+            reason="test.prepare.timeout",
+            countdown_sec=0.0,
+            drain_timeout_sec=10.0,
+            signal_delay_sec=0.25,
+        )
+        assert result["accepted"] is True
+        assert manager._update_task is not None
+        await manager._update_task
+
+    asyncio.run(_exercise())
+
+    status = read_status()
+    assert status["state"] == "failed"
+    assert status["prepare_timed_out"] is True
+    lease = json.loads(Path(status["prepare_lease_path"]).read_text(encoding="utf-8"))
+    assert lease["state"] == "revoked"
+    assert lease["revoked_reason"] == "supervisor.prepare_timeout"
+    assert manager._skill_runtime_migration_gate_lease is None
+
+
 def test_prepare_worker_writes_prepared_restart_plan_and_reenables_runtime(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setattr(

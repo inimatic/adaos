@@ -522,6 +522,50 @@ def test_install_slot_project_applies_cache_hardlink_mode(monkeypatch, tmp_path:
     assert result["attempts"][0]["link_mode"]["mode"] == "hardlink"
 
 
+def test_install_slot_project_uses_source_free_runtime_lock_and_restores_checkout(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    development_lock = b"development-lock"
+    runtime_lock = b"runtime-lock"
+    (checkout / "uv.lock").write_bytes(development_lock)
+    (checkout / "pyproject.toml").write_text(
+        "[project]\nname='fixture'\nversion='1.0.0'\n"
+        "[tool.uv.sources]\ny-py={path='vendor/y-py'}\n",
+        encoding="utf-8",
+    )
+    venv = tmp_path / "venv"
+    commands: list[list[str]] = []
+    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+    monkeypatch.setattr(mod, "_low_priority_io_command", lambda cmd: list(cmd))
+    monkeypatch.setattr(mod, "_uv_link_mode_snapshot", lambda **_kwargs: {"mode": "hardlink"})
+
+    def _fake_run(cmd, **_kwargs):
+        command = list(cmd)
+        commands.append(command)
+        if "lock" in command:
+            (checkout / "uv.lock").write_bytes(runtime_lock)
+            return subprocess.CompletedProcess(command, 0, stdout="locked", stderr="")
+        assert (checkout / "uv.lock").read_bytes() == runtime_lock
+        return subprocess.CompletedProcess(command, 0, stdout="synced", stderr="")
+
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run)
+
+    result = mod._install_slot_project(
+        checkout_dir=checkout, venv_dir=venv, seed={"seeded": False}
+    )
+
+    assert commands[0] == ["/usr/bin/uv", "lock", "--no-sources"]
+    assert "--no-sources" in commands[1]
+    assert "--locked" in commands[1]
+    assert (checkout / "uv.lock").read_bytes() == development_lock
+    assert result["attempts"][0]["installer"] == "uv_runtime_lock"
+    assert result["attempts"][1]["runtime_lock"]["digest"].startswith("sha256:")
+
+
 def test_install_slot_project_uses_deferred_seed_when_locked_uv_fails(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 

@@ -545,6 +545,24 @@ Target flow:
     rolls back only the state that was actually committed and records failure;
     a pre-cutover failure keeps the active slot and skill runtimes unchanged
 
+Production dependency preparation must not inherit development-only local source
+overrides. When the repository declares `[tool.uv.sources]`, the slot preparer
+derives a temporary source-free runtime `uv.lock`, performs a locked
+`uv sync --no-sources`, records the runtime-lock digest in the install receipt,
+and restores the repository's development lock before publishing the slot. This
+keeps local editable/vendor workflows intact while production installs use the
+exact platform wheels selected by the source-free lock. Failure to derive that
+lock falls back to the existing locked source path and remains visible in the
+installer attempts.
+
+Inactive-slot preparation owns a renewable worker lease. Progress heartbeats do
+not extend the configured deadline indefinitely: the supervisor revokes the
+lease when `ADAOS_SUPERVISOR_PREPARE_TIMEOUT_SEC` expires, waits for the owned
+worker tree to stop, releases the global skill-runtime migration gate, and
+persists `prepare_timed_out=true`. The default is one hour so slow disks remain
+supported while genuinely stuck native builds still converge to an attributable
+terminal result.
+
 Important invariants:
 
 - the attempt record is not cleared before validation succeeds

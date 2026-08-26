@@ -218,6 +218,7 @@ class SupervisorUpdateExecution:
         install_installer = None
         venv_seed_source = None
         venv_seeded = False
+        prepare_timed_out = False
         try:
             prepare_started_at = time.time()
             prepare_task = asyncio.create_task(
@@ -246,6 +247,39 @@ class SupervisorUpdateExecution:
                         break
                     heartbeat_at = time.time()
                     elapsed_s = max(0.0, heartbeat_at - prepare_started_at)
+                    timeout_s = max(0.0, float(prepare_timeout_sec or 0.0))
+                    if timeout_s and elapsed_s >= timeout_s:
+                        prepare_timed_out = True
+                        operations.revoke_prepare_lease(
+                            status={
+                                "prepare_lease_path": prepare_lease_path,
+                                "prepare_lease_token": prepare_lease_token,
+                            },
+                            attempt=None,
+                            reason="supervisor.prepare_timeout",
+                        )
+                        operations.write_core_update_status(
+                            {
+                                "state": "preparing",
+                                "phase": "prepare",
+                                "action": action,
+                                "target_rev": target_rev,
+                                "target_version": target_version,
+                                "reason": reason,
+                                "message": (
+                                    "inactive slot preparation exceeded its timeout; "
+                                    "stopping the worker"
+                                ),
+                                "prepare_elapsed_s": round(elapsed_s, 3),
+                                "prepare_heartbeat_at": heartbeat_at,
+                                "prepare_timeout_sec": timeout_s,
+                                "prepare_timed_out": True,
+                                "prepare_lease_path": prepare_lease_path or None,
+                                "prepare_lease_token": prepare_lease_token or None,
+                            }
+                        )
+                        prepare_result = await prepare_task
+                        break
                     operations.write_core_update_status(
                         {
                             "state": "preparing",
@@ -269,7 +303,11 @@ class SupervisorUpdateExecution:
                         "prepare_lease_token": prepare_lease_token,
                     },
                     attempt=None,
-                    reason="supervisor.prepare_failed",
+                    reason=(
+                        "supervisor.prepare_timeout"
+                        if prepare_timed_out
+                        else "supervisor.prepare_failed"
+                    ),
                 )
                 status = operations.write_core_update_status(
                     {
@@ -281,6 +319,7 @@ class SupervisorUpdateExecution:
                         "prepare_lease_path": prepare_lease_path or None,
                         "prepare_lease_token": prepare_lease_token or None,
                         "prepare_timeout_sec": prepare_timeout_sec,
+                        "prepare_timed_out": prepare_timed_out,
                         "prepare_lease_revocation": prepare_lease_revocation,
                     }
                 )
