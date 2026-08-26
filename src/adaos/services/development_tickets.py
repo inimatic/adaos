@@ -102,6 +102,35 @@ def _project_id_from_target(target_scope: Mapping[str, Any]) -> str:
     return token or _text(target.get("type")) or "unknown"
 
 
+def development_source_options(target_scope: Mapping[str, Any]) -> dict[str, Any]:
+    target = _mapping(target_scope)
+    source = _text(target.get("source")).lower()
+    target_type = _text(target.get("type")) or "unknown"
+    target_id = _text(target.get("id") or target.get("name"))
+    if source in {"dev", "workspace", "local", "source"}:
+        return {
+            "status": "source_available",
+            "source": source or "workspace",
+            "target_type": target_type,
+            "target_id": target_id or None,
+            "options": ["use_existing_dev_source"],
+            "default_option": "use_existing_dev_source",
+        }
+    return {
+        "status": "needs_materialization",
+        "source": source or "unknown",
+        "target_type": target_type,
+        "target_id": target_id or None,
+        "options": [
+            "materialize_dev_source",
+            "create_local_fork",
+            "create_runtime_overlay",
+            "defer",
+        ],
+        "default_option": "materialize_dev_source",
+    }
+
+
 def _merge_refs(current: Sequence[Mapping[str, Any]], incoming: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -740,6 +769,7 @@ class DevelopmentTicketService:
                     "handoff_mode": mode,
                 },
                 "target_scope": target,
+                "development_source": development_source_options(target),
                 "compatibility": _mapping(ticket.get("metadata")),
                 "policy": _mapping(ticket.get("policy")),
                 "acceptance": {

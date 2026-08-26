@@ -15,6 +15,7 @@ def runtime_routers() -> tuple[RuntimeRouter, ...]:
     """Resolve runtime routers lazily after the AgentContext is available."""
     from adaos.apps.api import (
         builder,
+        development_tickets,
         distributed_topology,
         distributed_service,
         io_webhooks,
@@ -45,6 +46,7 @@ def runtime_routers() -> tuple[RuntimeRouter, ...]:
         RuntimeRouter(subnet_api.router, "/api"),
         RuntimeRouter(nlu_teacher_api.router, "/api"),
         RuntimeRouter(builder.router, "/api/builder"),
+        RuntimeRouter(development_tickets.router, "/api/development-tickets"),
         RuntimeRouter(node_api.router, "/api/node"),
         RuntimeRouter(join_api.router, "/api"),
         RuntimeRouter(personalization.router, "/api"),

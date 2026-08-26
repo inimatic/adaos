@@ -108,6 +108,17 @@ def _binding_semantic_equal(left: Mapping[str, Any], right: Mapping[str, Any]) -
     return all(left.get(key) == right.get(key) for key in keys)
 
 
+def _latest_ticket_repair_id(ticket: Mapping[str, Any]) -> str:
+    refs = ticket.get("builder_refs") if isinstance(ticket.get("builder_refs"), list) else []
+    for raw in reversed(refs):
+        if not isinstance(raw, Mapping):
+            continue
+        repair_id = str(raw.get("repair_id") or "").strip()
+        if repair_id:
+            return repair_id
+    return ""
+
+
 def _project_selection(
     object_type: Any,
     object_id: Any,
@@ -789,6 +800,71 @@ class BuilderWorkbenchService:
             self.publish_projection_sync(source_id)
         return updated
 
+    def set_development_ticket_context(
+        self,
+        *,
+        source_webspace_id: str | None = None,
+        context: Mapping[str, Any],
+        persist_projection: bool = False,
+    ) -> dict[str, Any]:
+        source_id = self.resolve_source_webspace_id(source_webspace_id)
+        binding = self.get_workspace_binding(source_id)
+        normalized = dict(context) if isinstance(context, Mapping) else {}
+        updated = {**binding, "development_ticket": normalized, "updated_at": _now()}
+        _write_json(self.binding_path(source_id), updated)
+        if persist_projection:
+            self.publish_projection_sync(source_id)
+        return updated
+
+    def select_development_ticket(
+        self,
+        *,
+        source_webspace_id: str | None = None,
+        ticket_id: str,
+        object_type: str | None = None,
+        object_id: str | None = None,
+        persist_projection: bool = False,
+    ) -> dict[str, Any]:
+        from adaos.services.development_tickets import DevelopmentTicketService, development_source_options
+
+        ticket_token = str(ticket_id or "").strip()
+        if not ticket_token:
+            raise ValueError("ticket_id is required")
+        ticket = DevelopmentTicketService(state_dir=self.state_dir).get_ticket(ticket_token)
+        if not ticket:
+            raise ValueError(f"development ticket not found: {ticket_token}")
+        target = ticket.get("target_scope") if isinstance(ticket.get("target_scope"), Mapping) else {}
+        target_type = str(object_type or target.get("type") or "").strip().lower().rstrip("s") or "scenario"
+        target_id = str(object_id or target.get("id") or target.get("name") or "").strip()
+        if not target_id:
+            raise ValueError(f"development ticket target is missing id: {ticket_token}")
+        binding = self.set_selected_project(
+            source_webspace_id=source_webspace_id,
+            object_type=target_type,
+            object_id=target_id,
+            title=str(ticket.get("summary") or target_id).strip() or target_id,
+            description=f"Development ticket {ticket_token}",
+            persist_projection=False,
+        )
+        context = {
+            "schema": "adaos.builder.development_ticket_context.v1",
+            "ticket_id": ticket_token,
+            "kind": ticket.get("kind"),
+            "status": ticket.get("status"),
+            "summary": ticket.get("summary"),
+            "target_scope": dict(target),
+            "development_source": development_source_options(target),
+            "builder_refs": list(ticket.get("builder_refs") or []),
+            "latest_repair_id": _latest_ticket_repair_id(ticket) or None,
+            "evidence_refs": list(ticket.get("evidence_refs") or []),
+            "policy": dict(ticket.get("policy") or {}),
+        }
+        return self.set_development_ticket_context(
+            source_webspace_id=binding.get("source_webspace_id") or source_webspace_id,
+            context=context,
+            persist_projection=persist_projection,
+        )
+
     def set_preview_target(
         self,
         *,
@@ -819,6 +895,9 @@ class BuilderWorkbenchService:
         base_url: str | None = None,
         active_draft_id: str | None = None,
         runtime_scenario_id: str | None = None,
+        ticket_id: str | None = None,
+        selected_object_type: str | None = None,
+        selected_object_id: str | None = None,
     ) -> dict[str, Any]:
         existing = self.get_workspace_binding(source_webspace_id)
         binding = await self.ensure_dev_webspace(
@@ -826,6 +905,15 @@ class BuilderWorkbenchService:
             active_draft_id=active_draft_id if active_draft_id is not None else existing.get("active_draft_id"),
             runtime_scenario_id=runtime_scenario_id or existing.get("runtime_scenario_id"),
         )
+        ticket_token = str(ticket_id or "").strip()
+        if ticket_token:
+            binding = self.select_development_ticket(
+                source_webspace_id=binding.get("source_webspace_id") or source_webspace_id,
+                ticket_id=ticket_token,
+                object_type=selected_object_type,
+                object_id=selected_object_id,
+                persist_projection=False,
+            )
         return {
             **self.open_dev_webspace(source_webspace_id, base_url=base_url),
             "binding": binding,
