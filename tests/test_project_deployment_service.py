@@ -853,6 +853,84 @@ def test_runtime_submit_returns_before_background_component_phases(
     runtime.shutdown(wait=True)
 
 
+def test_runtime_reconcile_returns_before_background_component_phases(
+    tmp_path: Path,
+) -> None:
+    release_plan = _release((("skill", "media_center_coordinator", "a"),))
+    desired = ProjectDeployment(
+        deployment_id="media-center-home",
+        project_ref="project:media_center",
+        release_digest=str(release_plan.release.release_digest),
+        subnet_id="home",
+        revision=1,
+        placements=(
+            ComponentPlacementPolicy(
+                component_ref="skill:media_center_coordinator",
+                mode="singleton",
+            ),
+        ),
+        compatibility=DeploymentCompatibilityPolicy(
+            required_protocols={"project_activation": "1"}
+        ),
+        status="planned",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    inventory = (_node("node-a"),)
+    store = ProjectDeploymentStore(state_dir=tmp_path)
+    adapter = BlockingDeploymentAdapter()
+    runtime = ProjectDeploymentRuntime(
+        store=store,
+        releases=StaticReleaseProvider(release_plan),
+        inventory=StaticInventoryProvider(inventory),
+        adapter=adapter,
+        local_node_id="node-a",
+    )
+    principal = DeploymentPrincipal.create(
+        actor_ref="skill:deployment_test",
+        permissions=(
+            "project.deployment.manage",
+            "project.deployment.inspect",
+            "project.deployment.apply",
+            "project.deployment.reconcile",
+        ),
+    )
+    runtime.define(
+        desired,
+        expected_revision=0,
+        principal=principal,
+        reason="async reconcile fixture",
+    )
+
+    started_at = time.monotonic()
+    reconciled = runtime.reconcile(
+        desired.deployment_id,
+        principal=principal,
+        idempotency_key="runtime:reconcile:1",
+    )
+    elapsed = time.monotonic() - started_at
+
+    assert elapsed < 1
+    assert reconciled.kind == "reconcile"
+    assert reconciled.state in {"accepted", "running"}
+    assert adapter.started.wait(timeout=2)
+    authorization = store.get_operation_authorization(reconciled.operation_id)
+    assert authorization["actor_ref"] == principal.actor_ref
+    adapter.release.set()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        completed = runtime.get_operation(
+            reconciled.operation_id,
+            principal=principal,
+        )
+        if completed.state == "succeeded":
+            break
+        time.sleep(0.02)
+    else:
+        pytest.fail("reconciled deployment did not complete")
+    runtime.shutdown(wait=True)
+
+
 def test_store_retries_transient_reader_contention(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

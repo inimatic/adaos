@@ -2089,6 +2089,17 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
             current = ""
         if current == marker:
             return
+        if self._dependency_markers_equivalent(current, marker):
+            try:
+                marker_path.write_text(marker, encoding="utf-8")
+            except Exception:
+                _log.warning(
+                    "failed to normalize service dependency marker skill=%s path=%s",
+                    spec.skill,
+                    marker_path,
+                    exc_info=True,
+                )
+            return
         ensure_dependency_disk_budget(
             venv_dir,
             spec.dependencies,
@@ -2102,22 +2113,43 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
             _log.warning("failed to write service dependency marker skill=%s path=%s", spec.skill, marker_path, exc_info=True)
 
     def _dependency_marker(self, spec: ServiceSpec) -> str:
-        requirement: dict[str, Any] | None = None
+        requirement_sha256: str | None = None
         if spec.requirements_file:
             try:
                 raw = spec.requirements_file.read_bytes()
-                requirement = {
-                    "path": str(spec.requirements_file.resolve()),
-                    "sha256": hashlib.sha256(raw).hexdigest(),
-                }
+                requirement_sha256 = hashlib.sha256(raw).hexdigest()
             except Exception:
-                requirement = {"path": str(spec.requirements_file)}
+                requirement_sha256 = "unreadable"
         payload = {
-            "skill_root": str(spec.skill_root.resolve()),
+            "schema": "adaos.skill_service.dependencies.v2",
             "dependencies": list(spec.dependencies),
-            "requirements_file": requirement,
+            "requirements_sha256": requirement_sha256,
         }
         return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+    @staticmethod
+    def _dependency_markers_equivalent(current: str, expected: str) -> bool:
+        try:
+            current_payload = json.loads(current)
+            expected_payload = json.loads(expected)
+        except (TypeError, ValueError):
+            return False
+        if not isinstance(current_payload, dict) or not isinstance(expected_payload, dict):
+            return False
+
+        def identity(payload: Mapping[str, Any]) -> tuple[tuple[str, ...], str | None]:
+            requirements = payload.get("requirements_file")
+            if isinstance(requirements, Mapping):
+                requirement_sha256 = str(requirements.get("sha256") or "") or None
+            else:
+                raw_digest = payload.get("requirements_sha256")
+                requirement_sha256 = None if raw_digest is None else str(raw_digest or "") or None
+            return (
+                tuple(str(item) for item in list(payload.get("dependencies") or ())),
+                requirement_sha256,
+            )
+
+        return identity(current_payload) == identity(expected_payload)
 
     @staticmethod
     def _build_command(python: Path, argv: list[str]) -> list[str]:

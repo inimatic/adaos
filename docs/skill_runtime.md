@@ -108,6 +108,10 @@ Important architectural note:
   the installed skill so event handlers and tool entry points converge on the
   same active slot
 - service skills are explicitly restarted by the runtime lifecycle
+- a service bucket venv is shared by its A/B slots; its dependency marker is
+  content-based, so an identical slot switch does not run package installation
+  again. A requirements digest or declared dependency change still invalidates
+  the marker and refreshes the venv
 - durable migration authority belongs to persisted bucket data under `v<major>.<minor>/data`, while derived caches/projections should be rebuilt after activation
 
 Operational signal:

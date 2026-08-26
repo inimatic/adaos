@@ -270,7 +270,7 @@ class ProjectDeploymentRuntime:
         desired = self.store.get_deployment(deployment_id)
         operation = ProjectDeploymentExecutor(
             store=self.store, adapter=self.adapter
-        ).execute(
+        ).accept(
             plan,
             desired=desired,
             release_plan=self._release(desired),
@@ -279,8 +279,10 @@ class ProjectDeploymentRuntime:
             idempotency_key=idempotency_key,
             kind="reconcile",
         )
+        if operation.state in {"accepted", "running"}:
+            self._schedule(operation.operation_id)
         self._publish_projection()
-        return operation
+        return self.store.get_operation(operation.operation_id)
 
     def inspect(
         self,

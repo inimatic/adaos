@@ -31,14 +31,18 @@ instead of planning against an empty subnet.
   bounded read-side progress and desired/observed state.
 - `list_nodes(...)` returns `NodeInventoryPage`; it is the same authority-owned
   inventory in API, skill, and CLI contexts.
-- `reconcile(...)`, `drain(...)`, and `remove(...)` are journaled mutations with
-  explicit capabilities, approvals, and idempotency keys.
+- `reconcile(...)` accepts a fresh authority-owned plan into the durable worker
+  and returns an operation immediately. `drain(...)` and `remove(...)` are
+  journaled mutations with explicit capabilities, approvals, and idempotency
+  keys.
 - `recommend_nodes(...)` is a bounded dry-run ranking and grants no placement
   authority.
 
-`submit(...)` is preferred for slow disks and multi-node rollout. Interactive
-tool timeouts do not define the operation lifetime; callers observe the durable
-operation with `get_operation(...)`.
+`submit(...)` and `reconcile(...)` are safe for slow disks and multi-node
+rollout. Interactive tool timeouts do not define the operation lifetime;
+callers observe the durable operation with `get_operation(...)`. Synchronous
+`apply(...)` is reserved for bounded operator flows that deliberately own the
+complete RPC lifetime.
 
 ## Capability Rules
 
