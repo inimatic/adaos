@@ -260,6 +260,7 @@ It supports:
 - superseding stale queued work for selected topic/key combinations
 - slow handler and crash incident reporting
 - backlog snapshots for diagnostics
+- bounded retained snapshots for explicitly configured state topics
 
 Default bounded topics include stream/Yjs control events, stream publishes,
 browser session changes, status-card changes, projection lifecycle changes, and
@@ -326,6 +327,22 @@ bus.subscribe("adaos.status.card.", handle_status_card_event)
 
 Avoid subscribing to all events in production handlers unless the handler is a
 bounded diagnostics collector.
+
+State-like topics that must support late consumers can be retained by core. A
+skill declares immediate replay and reads the same snapshot through the SDK:
+
+```python
+from adaos.sdk.core.decorators import subscribe
+from adaos.sdk.status import current_update_status
+
+@subscribe("core.update.status", replay_latest=True)
+async def on_update_status(event):
+    status = current_update_status()
+```
+
+Retained delivery is in-memory and bounded to exact allowlisted topics. Durable
+recovery remains the producer's responsibility; consumers must not read the
+producer's files directly.
 
 Handlers should:
 

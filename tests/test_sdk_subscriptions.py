@@ -201,6 +201,65 @@ def test_register_subscriptions_replaces_skill_generation(monkeypatch) -> None:
     assert calls == ["old", "new"]
 
 
+def test_register_subscriptions_replays_retained_status_to_late_skill(monkeypatch) -> None:
+    retained = SimpleNamespace(
+        type="core.update.status",
+        payload={"state": "preparing", "prepare_elapsed_s": 42.0},
+        source="supervisor.event_bridge",
+        ts=10.0,
+    )
+
+    class FakeBus:
+        def __init__(self) -> None:
+            self.handlers: list[tuple[str, object]] = []
+
+        def subscribe(self, topic: str, handler):
+            self.handlers.append((topic, handler))
+
+        def latest_event(self, topic: str):
+            return retained if topic == "core.update.status" else None
+
+    bus = FakeBus()
+    seen: list[dict[str, object]] = []
+
+    def handler(payload):
+        seen.append(dict(payload))
+
+    monkeypatch.setattr(decorators, "subscriptions", [])
+    decorators.subscribe("core.update.status", replay_latest=True)(handler)
+    monkeypatch.setattr(decorators, "_registered", False)
+    monkeypatch.setattr(decorators, "_SKILL_SUBSCRIPTION_GENERATIONS", {})
+    monkeypatch.setattr(decorators, "_REGISTERED_SKILL_SUBSCRIPTIONS", {})
+    monkeypatch.setattr(decorators, "_infer_skill_name", lambda _fn: "infrastate_skill")
+    monkeypatch.setattr(decorators, "_skill_event_targets_this_node", lambda _evt: True)
+    monkeypatch.setattr(
+        decorators,
+        "_admit_skill_activation_policy",
+        lambda *_args: {"allowed": True},
+    )
+    monkeypatch.setattr(decorators, "_admit_skill_subscription_yjs_work", lambda *_args: {"allowed": True})
+    monkeypatch.setattr(decorators, "_maybe_push_skill", lambda *_args: False)
+    monkeypatch.setattr(decorators, "_subscription_log_suffix", lambda _skill: "")
+    monkeypatch.setattr(decorators, "require_ctx", lambda _reason: SimpleNamespace(bus=bus))
+    monkeypatch.setattr(data_bus, "require_ctx", lambda _reason: SimpleNamespace(bus=bus))
+
+    async def fake_emit(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(decorators, "emit", fake_emit)
+
+    asyncio.run(decorators.register_subscriptions(force=True))
+
+    assert seen[0]["state"] == "preparing"
+    assert seen[0]["prepare_elapsed_s"] == 42.0
+    assert seen[0]["_meta"] == {
+        "event_type": "core.update.status",
+        "event_source": "supervisor.event_bridge",
+        "event_ts": 10.0,
+    }
+    assert len(bus.handlers) == 1
+
+
 def test_stream_control_subscriptions_bypass_yjs_owner_guard(monkeypatch) -> None:
     fake_guard = ModuleType("adaos.services.yjs.owner_guard")
 

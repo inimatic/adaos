@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 import uuid
+import weakref
 from collections import deque
 from pathlib import Path
 from string import Formatter
@@ -46,6 +47,7 @@ from adaos.apps.supervisor_runtime import (
     SupervisorMonitoringOperations,
     SupervisorMonitoringService,
     SupervisorRuntimeConfig,
+    SupervisorRuntimeEventPublisher,
     SupervisorStatusOperations,
     SupervisorStatusService,
     SupervisorUpdateExecution,
@@ -82,7 +84,7 @@ from adaos.services.core_update import read_plan as read_core_update_plan
 from adaos.services.core_update import read_status as read_core_update_status
 from adaos.services.core_update import resolved_root_promotion_requirement
 from adaos.services.core_update import write_plan as write_core_update_plan
-from adaos.services.core_update import write_status as write_core_update_status
+from adaos.services.core_update import write_status as _persist_core_update_status
 from adaos.services.core_update_policy import (
     SKIP_PENDING_CORE_UPDATE_ENV,
     core_update_reactions_disabled_reason,
@@ -152,6 +154,36 @@ _UPDATE_TRANSITION_LOCKS_GUARD = threading.Lock()
 _MEMORY_PROFILING = MemoryProfilingService()
 _RUNTIME_CONFIG = SupervisorRuntimeConfig()
 _WATCHDOG_STATUS = WatchdogStatusCompactor()
+_CORE_UPDATE_STATUS_SINK: weakref.ReferenceType[Any] | None = None
+_CORE_UPDATE_STATUS_SINK_LOCK = threading.Lock()
+
+
+def _register_core_update_status_sink(sink: Any | None) -> None:
+    global _CORE_UPDATE_STATUS_SINK
+    with _CORE_UPDATE_STATUS_SINK_LOCK:
+        if sink is None:
+            _CORE_UPDATE_STATUS_SINK = None
+        elif getattr(sink, "__self__", None) is not None:
+            _CORE_UPDATE_STATUS_SINK = weakref.WeakMethod(sink)
+        else:
+            _CORE_UPDATE_STATUS_SINK = weakref.ref(sink)
+
+
+def write_core_update_status(
+    payload: dict[str, Any],
+    *,
+    publish_events: bool = True,
+) -> dict[str, Any]:
+    persisted = _persist_core_update_status(payload, publish_events=publish_events)
+    with _CORE_UPDATE_STATUS_SINK_LOCK:
+        sink_ref = _CORE_UPDATE_STATUS_SINK
+    sink = sink_ref() if sink_ref is not None else None
+    if sink is not None:
+        try:
+            sink(dict(persisted))
+        except Exception:
+            _LOG.debug("failed to enqueue core update status for runtime", exc_info=True)
+    return persisted
 
 
 def _update_reconciliation_operations() -> UpdateReconciliationOperations:
@@ -2274,6 +2306,10 @@ class SupervisorManager:
         self._monitoring = SupervisorMonitoringService()
         self._status_service = SupervisorStatusService()
         self._update_execution = SupervisorUpdateExecution()
+        self._runtime_event_publisher = SupervisorRuntimeEventPublisher(
+            self._deliver_runtime_event,
+            logger=_LOG,
+        )
         self._update_state_machine = UpdateStateMachine()
         self._update_state_machine.bind_persistence(
             write_status=write_core_update_status,
@@ -4765,6 +4801,17 @@ class SupervisorManager:
         finally:
             with contextlib.suppress(Exception):
                 session.close()
+
+    def _deliver_runtime_event(self, envelope: dict[str, Any]) -> dict[str, Any]:
+        return self._runtime_request_json(
+            path="/api/node/internal/supervisor-events",
+            method="POST",
+            payload=envelope,
+            timeout=1.0,
+        )
+
+    def _publish_core_update_status(self, payload: dict[str, Any]) -> bool:
+        return self._runtime_event_publisher.publish("core.update.status", payload)
 
     def _runtime_reliability_payload(self, *, timeout: float = 2.0) -> dict[str, Any]:
         path = "/api/node/reliability/supervisor-channel"
@@ -8093,16 +8140,21 @@ class SupervisorManager:
                     await asyncio.sleep(1.0)
 
     async def start(self) -> None:
+        self._runtime_event_publisher.start()
+        _register_core_update_status_sink(self._publish_core_update_status)
         try:
             await self.ensure_sidecar_started()
         except Exception:
             _LOG.warning("failed to start adaos-realtime sidecar", exc_info=True)
         await self.ensure_started(reason="supervisor.start")
+        self._publish_core_update_status(read_core_update_status())
         self._process_supervisor.start_monitor(self.monitor_forever)
 
     async def close(self) -> None:
         self._stopping = True
         await self._update_state_machine.cancel_task(mode="cancelled")
+        await self._runtime_event_publisher.close()
+        _register_core_update_status_sink(None)
         self._release_skill_runtime_migration_gate(reason="supervisor_close")
         await self._process_supervisor.stop_monitor()
         preserve_managed_children = self._service_restart_pending
@@ -8159,6 +8211,7 @@ class SupervisorManager:
             "durable_state_updated_at": durable_updated_at,
         }
         payload["update_task_running"] = self._update_state_machine.task_running()
+        payload["runtime_event_publisher"] = self._runtime_event_publisher.snapshot()
         payload["workload_admission"] = {
             "core_update_holds_skill_migration_gate": self._skill_runtime_migration_gate_lease is not None,
             "skill_migration_lease_path": self._skill_runtime_migration_lease_path,

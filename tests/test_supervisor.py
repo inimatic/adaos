@@ -2622,7 +2622,11 @@ def test_supervisor_prepare_timeout_revokes_worker_lease_and_releases_gate(
     def _slow_prepare(plan):
         lease_path = Path(str(plan["prepare_lease_path"]))
         while True:
-            lease = json.loads(lease_path.read_text(encoding="utf-8"))
+            try:
+                lease = json.loads(lease_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                time.sleep(0.005)
+                continue
             if lease.get("state") != "active":
                 return {
                     "state": "failed",

@@ -11,7 +11,7 @@ from typing import Any, Awaitable, Callable
 
 from adaos.sdk.core._ctx import require_ctx
 
-__all__ = ["emit", "on", "get_meta", "BusNotAvailable"]
+__all__ = ["emit", "on", "latest_event", "get_meta", "BusNotAvailable"]
 
 
 class BusNotAvailable(RuntimeError):
@@ -37,6 +37,16 @@ def _positional_params(fn: Callable[..., Any]) -> int:
 
 def get_meta(payload: dict) -> dict:
     return payload.get("_meta", {}) if isinstance(payload, dict) else {}
+
+
+def latest_event(topic: str) -> Any | None:
+    """Read the retained snapshot for an exact topic from the local bus."""
+
+    bus = _bus()
+    reader = getattr(bus, "latest_event", None)
+    if not callable(reader):
+        return None
+    return reader(str(topic or "").strip())
 
 
 def _payload_with_event_meta(ev: Any, data: Any) -> Any:

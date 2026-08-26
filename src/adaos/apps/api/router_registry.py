@@ -34,6 +34,7 @@ def runtime_routers() -> tuple[RuntimeRouter, ...]:
         skills,
         stt_api,
         subnet_api,
+        supervisor_event_bridge_api,
         tool_bridge,
     )
     from adaos.services.subnet.link_ws import router as subnet_link_router
@@ -58,6 +59,10 @@ def runtime_routers() -> tuple[RuntimeRouter, ...]:
         RuntimeRouter(
             service_event_bridge_api.router,
             "/api/node/internal/service-events",
+        ),
+        RuntimeRouter(
+            supervisor_event_bridge_api.router,
+            "/api/node/internal/supervisor-events",
         ),
         RuntimeRouter(service_ui.router, "/api"),
         RuntimeRouter(stt_api.router, "/api"),

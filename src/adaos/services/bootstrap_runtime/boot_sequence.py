@@ -79,7 +79,6 @@ class BootstrapBootOperations:
     bus: Any
     chat_output_event_type: Any
     chat_output_message_type: Any
-    core_update_waits_for_supervisor_convergence: Any
     ensure_managed_nlu_service_skills: Any
     get_service_supervisor: Any
     json_module: Any
@@ -99,7 +98,6 @@ class BootstrapBootOperations:
     status_watchdog_service: Any
     telegram_sender_type: Any
     telemetry: Any
-    watch_supervisor_core_update_convergence: Any
 
 
 class BootstrapBootCoordinator:
@@ -520,15 +518,6 @@ class BootstrapBootCoordinator:
                 source="lifecycle",
                 actor="system",
             )
-            if operations.core_update_waits_for_supervisor_convergence(initial_core_update_status):
-                service._start_boot_task_once(
-                    "adaos-core-update-supervisor-convergence",
-                    lambda: operations.watch_supervisor_core_update_convergence(
-                        operations.bus,
-                        read_status=_read_core_update_status,
-                        initial_status=initial_core_update_status,
-                    ),
-                )
         except Exception:
             _finalize_runtime_boot_status = None
             service._log.debug("failed to emit initial core.update.status", exc_info=True)

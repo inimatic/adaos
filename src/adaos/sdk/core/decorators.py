@@ -467,7 +467,12 @@ def _admit_skill_activation_policy(policy: Any, skill_name: str | None, topic: s
     return admission
 
 
-def subscribe(topic: str, *, receivers: Iterable[str] | str | None = None):
+def subscribe(
+    topic: str,
+    *,
+    receivers: Iterable[str] | str | None = None,
+    replay_latest: bool = False,
+):
     """Регистрирует обработчик; фактическая подписка делает register_subscriptions()."""
 
     raw_patterns = (receivers,) if isinstance(receivers, str) else tuple(receivers or ())
@@ -478,6 +483,10 @@ def subscribe(topic: str, *, receivers: Iterable[str] | str | None = None):
     def deco(fn: Callable):
         if receiver_patterns:
             setattr(fn, "_adaos_receiver_patterns", receiver_patterns)
+        if replay_latest:
+            replay_topics = set(getattr(fn, "_adaos_replay_latest_topics", ()) or ())
+            replay_topics.add(str(topic or "").strip())
+            setattr(fn, "_adaos_replay_latest_topics", frozenset(replay_topics))
         subscriptions.append((topic, fn))
         return fn
 
@@ -883,6 +892,23 @@ async def register_subscriptions(
             _REGISTERED_SKILL_SUBSCRIPTIONS.setdefault(skill_name, []).append(
                 (topic, registered_handler if callable(registered_handler) else _wrap)
             )
+        replay_topics = set(getattr(fn, "_adaos_replay_latest_topics", ()) or ())
+        if topic in replay_topics and callable(registered_handler):
+            try:
+                from adaos.sdk.data.bus import latest_event
+
+                retained = latest_event(topic)
+                if retained is not None:
+                    replay_result = registered_handler(retained)
+                    if inspect.isawaitable(replay_result):
+                        await replay_result
+            except Exception:
+                _LOG.warning(
+                    "failed to replay retained subscription handler=%s topic=%s",
+                    handler_name,
+                    topic,
+                    exc_info=True,
+                )
         try:
             await emit(
                 "skill.subscription.registered",

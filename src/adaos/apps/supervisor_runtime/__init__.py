@@ -1,5 +1,6 @@
 from .api import SupervisorApiAdapter, SupervisorRoute, create_supervisor_app
 from .config import SupervisorRuntimeConfig
+from .event_publisher import SupervisorRuntimeEventPublisher
 from .memory import MemoryProfilingOperations, MemoryProfilingService
 from .monitoring import SupervisorMonitoringOperations, SupervisorMonitoringService
 from .process import AdoptedProcess, ProcessSupervisor, ProcessSupervisorOperations
@@ -24,6 +25,7 @@ __all__ = [
     "RuntimeRecoveryPolicy",
     "SupervisorApiAdapter",
     "SupervisorRuntimeConfig",
+    "SupervisorRuntimeEventPublisher",
     "SupervisorUpdateExecution",
     "SupervisorUpdateExecutionOperations",
     "UpdateReconciliationOperations",

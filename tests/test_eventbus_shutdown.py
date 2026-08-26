@@ -143,6 +143,22 @@ def test_browser_session_changed_is_bounded_by_default(monkeypatch):
     assert "hub.core_update.status" in snapshot["bounded_topics"]
 
 
+def test_core_update_status_is_retained_for_late_snapshot_consumers(monkeypatch):
+    monkeypatch.delenv("ADAOS_EVENTBUS_RETAINED_TOPICS", raising=False)
+    bus = LocalEventBus()
+    status = Event(
+        type="core.update.status",
+        payload={"state": "preparing", "prepare_elapsed_s": 42.0},
+        source="supervisor.event_bridge",
+        ts=10.0,
+    )
+
+    bus.publish(status)
+
+    assert bus.latest_event("core.update.status") is status
+    assert bus.latest_event("unretained.topic") is None
+
+
 @pytest.mark.asyncio
 async def test_browser_session_changed_supersedes_queued_handler_work(monkeypatch):
     monkeypatch.delenv("ADAOS_EVENTBUS_BOUNDED_TOPICS", raising=False)

@@ -563,6 +563,25 @@ persists `prepare_timed_out=true`. The default is one hour so slow disks remain
 supported while genuinely stuck native builds still converge to an attributable
 terminal result.
 
+Supervisor persists each transition first, then submits its latest status to a
+bounded, coalescing runtime-event publisher. The publisher uses the authenticated
+loopback control channel and never blocks the status writer or supervisor event
+loop on HTTP. Runtime admits only allowlisted supervisor topics and republishes
+`core.update.status` plus `supervisor.update.status.raw` on its EventBus. Skills
+therefore consume update progress through their normal SDK subscriptions; Infra
+State shows `preparing`, elapsed/timeout evidence and terminal results without
+browser polling or periodic status-file reads. The status file remains the
+durable authority and is read once during runtime boot so a restart cannot lose
+the latest transition. Intermediate heartbeats may be coalesced under pressure,
+but the most recent state for each topic is retained.
+
+`core.update.status` is a retained EventBus topic. A skill that can be activated
+after runtime boot uses `@subscribe("core.update.status", replay_latest=True)`
+and reads the current snapshot through
+`adaos.sdk.status.current_update_status()`. Registration therefore receives the
+latest known transition immediately and then follows push events; it never waits
+for another heartbeat and does not need access to supervisor files.
+
 Important invariants:
 
 - the attempt record is not cleared before validation succeeds

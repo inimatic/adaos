@@ -168,6 +168,23 @@ def _bounded_event_queue_limit() -> int:
     return max(1, min(value, 100000))
 
 
+def _retained_event_topics() -> tuple[str, ...]:
+    raw = str(
+        os.getenv(
+            "ADAOS_EVENTBUS_RETAINED_TOPICS",
+            "core.update.status,hub.core_update.status,supervisor.update.status.raw",
+        )
+        or ""
+    ).strip()
+    return tuple(
+        dict.fromkeys(
+            str(item or "").strip()
+            for item in raw.split(",")
+            if str(item or "").strip()
+        )
+    )
+
+
 async def _run_coro_with_timing(
     coro: Awaitable[Any],
     handler: Handler,
@@ -261,6 +278,8 @@ class LocalEventBus(EventBus):
         self._bounded_queue_peak = 0
         self._bounded_handler_timing: dict[str, dict[str, Any]] = {}
         self._webio_stream_control_stats: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+        self._retained_topics = frozenset(_retained_event_topics())
+        self._retained_events: dict[str, Event] = {}
 
     def _bounded_topic_key(self, event_type: str) -> str | None:
         for spec in self._bounded_topics:
@@ -944,6 +963,15 @@ class LocalEventBus(EventBus):
         if _trace_subscribe_enabled():
             _log.debug("bus.subscribe prefix=%r handler=%s", type_prefix, _handler_label(handler))
 
+    def latest_event(self, event_type: str) -> Event | None:
+        """Return the latest retained exact-topic event without I/O."""
+
+        topic = str(event_type or "").strip()
+        if not topic:
+            return None
+        with self._lock:
+            return self._retained_events.get(topic)
+
     def unsubscribe(self, type_prefix: str, handler: Handler) -> bool:
         with self._lock:
             handlers = self._subs.get(type_prefix)
@@ -1004,6 +1032,8 @@ class LocalEventBus(EventBus):
         with self._lock:
             self._incoming_total += 1
             self._incoming_by_type[event_type] += 1
+            if event_type in self._retained_topics:
+                self._retained_events[event_type] = event
             self._record_webio_stream_control_locked(event_type, event, "incoming")
             pairs = [(p, hs[:]) for p, hs in self._subs.items()]
 

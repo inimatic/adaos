@@ -56,7 +56,6 @@ from adaos.services.bootstrap_runtime import (
     RootTransportReconnectOperations,
     RootTransportService,
 )
-from adaos.services.bootstrap_runtime import core_update_convergence as _core_update_convergence
 from adaos.services.bootstrap_runtime import status_policy as _status_policy
 from adaos.services.bootstrap_runtime.nats_root_runtime import start_nats_root_transport
 from adaos.services.skill import runtime_shutdown_runtime as _runtime_shutdown_runtime  # ensure skill shutdown subscriptions
@@ -278,9 +277,6 @@ class BootstrapService:
             bus=bus,
             chat_output_event_type=ChatOutputEvent,
             chat_output_message_type=ChatOutputMessage,
-            core_update_waits_for_supervisor_convergence=(
-                _core_update_convergence._core_update_waits_for_supervisor_convergence
-            ),
             ensure_managed_nlu_service_skills=_ensure_managed_nlu_service_skills,
             get_service_supervisor=get_service_supervisor,
             json_module=_json,
@@ -300,9 +296,6 @@ class BootstrapService:
             status_watchdog_service=BootstrapStatusWatchdogService,
             telegram_sender_type=TelegramSender,
             telemetry=tm,
-            watch_supervisor_core_update_convergence=(
-                _core_update_convergence._watch_supervisor_core_update_convergence
-            ),
         )
 
     # Compatibility facades for callers and tests that still inspect the

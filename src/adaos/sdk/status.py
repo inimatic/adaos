@@ -8,7 +8,25 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit
 from adaos.services.status.cards import StatusCard, normalize_status_card
 
-__all__ = ["publish_status", "publish_status_many", "publish_status_stream"]
+__all__ = [
+    "current_update_status",
+    "publish_status",
+    "publish_status_many",
+    "publish_status_stream",
+]
+
+
+def current_update_status() -> Mapping[str, Any]:
+    """Return the latest runtime-retained core update status snapshot."""
+
+    try:
+        from adaos.sdk.data.bus import latest_event
+
+        event = latest_event("core.update.status")
+        payload = getattr(event, "payload", None)
+        return dict(payload) if isinstance(payload, Mapping) else {"state": "idle"}
+    except Exception:
+        return {"state": "idle"}
 
 
 def _current_owner(owner: str | None = None) -> str:
