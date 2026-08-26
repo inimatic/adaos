@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -27,6 +28,8 @@ def _repair_service_for(service: DevelopmentTicketService) -> BuilderRepairServi
 class DevTicketCreateRequest(BaseModel):
     summary: str = Field(..., min_length=1)
     kind: str = "development_request"
+    ticket_kind: str | None = None
+    signal_kind: str | None = None
     target_scope: dict[str, Any] = Field(default_factory=lambda: {"type": "unknown"})
     owner_scope: dict[str, Any] | None = None
     origin_scope: dict[str, Any] | None = None
@@ -34,6 +37,7 @@ class DevTicketCreateRequest(BaseModel):
     blocking: bool = False
     source: str = "ui_feedback"
     status: str = "proposed"
+    dedup_key: str | None = None
     evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
     artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -73,16 +77,59 @@ class DevTicketCloseRequest(BaseModel):
     evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
 
 
-def _signal_kind_for_ticket(kind: str) -> str:
-    return {
-        "feedback": "feedback_note",
-        "development_request": "development_request",
-        "runtime_compatibility_debt": "compatibility_finding",
-        "runtime_failure": "runtime_failure",
-        "review_debt": "review_comment",
-        "nlu_repair": "nlu_failure",
-        "user_adaptation": "user_adaptation_request",
-    }.get(str(kind or "").strip(), "development_request")
+TICKET_KIND_TO_SIGNAL_KIND = {
+    "feedback": "feedback_note",
+    "development_request": "development_request",
+    "runtime_compatibility_debt": "compatibility_finding",
+    "runtime_failure": "runtime_failure",
+    "review_debt": "review_comment",
+    "nlu_repair": "nlu_failure",
+    "user_adaptation": "user_adaptation_request",
+}
+SIGNAL_KIND_TO_TICKET_KIND = {
+    "feedback_note": "feedback",
+    "development_request": "development_request",
+    "compatibility_finding": "runtime_compatibility_debt",
+    "runtime_failure": "runtime_failure",
+    "review_comment": "review_debt",
+    "nlu_failure": "nlu_repair",
+    "user_adaptation_request": "user_adaptation",
+}
+TICKET_KINDS = set(TICKET_KIND_TO_SIGNAL_KIND)
+SIGNAL_KINDS = set(SIGNAL_KIND_TO_TICKET_KIND)
+
+
+def _clean_kind(value: str | None) -> str:
+    return str(value or "").strip()
+
+
+def _ticket_kind_for_create(kind: str, explicit_ticket_kind: str | None = None) -> str:
+    explicit = _clean_kind(explicit_ticket_kind)
+    if explicit:
+        return explicit
+    token = _clean_kind(kind)
+    if token in TICKET_KINDS:
+        return token
+    if token in SIGNAL_KINDS:
+        return SIGNAL_KIND_TO_TICKET_KIND[token]
+    return token or "development_request"
+
+
+def _signal_kind_for_create(
+    kind: str,
+    explicit_signal_kind: str | None = None,
+    ticket_kind: str | None = None,
+) -> str:
+    explicit = _clean_kind(explicit_signal_kind)
+    if explicit:
+        return explicit
+    token = _clean_kind(kind)
+    if token in SIGNAL_KINDS:
+        return token
+    ticket = _clean_kind(ticket_kind)
+    if ticket in TICKET_KINDS:
+        return TICKET_KIND_TO_SIGNAL_KIND[ticket]
+    return TICKET_KIND_TO_SIGNAL_KIND.get(token, "development_request")
 
 
 def _not_found(ticket_id: str) -> HTTPException:
@@ -104,23 +151,47 @@ def _ticket_detail(service: DevelopmentTicketService, ticket: dict[str, Any]) ->
     }
 
 
+def _merged_refs(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in group:
+            if not isinstance(item, dict):
+                continue
+            try:
+                key = json.dumps(item, sort_keys=True, ensure_ascii=False, default=str)
+            except Exception:
+                key = repr(sorted(item.items()))
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+    return merged
+
+
 def _evidence_view(ticket: dict[str, Any], signals: list[dict[str, Any]]) -> dict[str, Any]:
+    ticket_evidence_refs = list(ticket.get("evidence_refs") or [])
+    ticket_artifact_refs = list(ticket.get("artifact_refs") or [])
+    signal_evidence_refs = [
+        item
+        for signal in signals
+        for item in (signal.get("evidence_refs") or [])
+        if isinstance(item, dict)
+    ]
+    signal_artifact_refs = [
+        item
+        for signal in signals
+        for item in (signal.get("artifact_refs") or [])
+        if isinstance(item, dict)
+    ]
     return {
         "ticket_id": ticket.get("ticket_id"),
-        "ticket_evidence_refs": list(ticket.get("evidence_refs") or []),
-        "ticket_artifact_refs": list(ticket.get("artifact_refs") or []),
-        "signal_evidence_refs": [
-            item
-            for signal in signals
-            for item in (signal.get("evidence_refs") or [])
-            if isinstance(item, dict)
-        ],
-        "signal_artifact_refs": [
-            item
-            for signal in signals
-            for item in (signal.get("artifact_refs") or [])
-            if isinstance(item, dict)
-        ],
+        "evidence_refs": _merged_refs(ticket_evidence_refs, signal_evidence_refs),
+        "artifact_refs": _merged_refs(ticket_artifact_refs, signal_artifact_refs),
+        "ticket_evidence_refs": ticket_evidence_refs,
+        "ticket_artifact_refs": ticket_artifact_refs,
+        "signal_evidence_refs": signal_evidence_refs,
+        "signal_artifact_refs": signal_artifact_refs,
         "pending_action_refs": list(ticket.get("pending_action_refs") or []),
         "builder_refs": list(ticket.get("builder_refs") or []),
         "external_refs": list(ticket.get("external_refs") or []),
@@ -139,7 +210,7 @@ def list_tickets(
     tickets = service.list_tickets(status=status_filter, target_id=target_id)
     if kind:
         tickets = [ticket for ticket in tickets if ticket.get("kind") == kind]
-    return {"ok": True, "tickets": tickets}
+    return {"ok": True, "tickets": tickets, "items": tickets, "count": len(tickets)}
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -148,8 +219,10 @@ def create_ticket(
     service: DevelopmentTicketService = Depends(_get_service),
 ) -> dict[str, Any]:
     try:
+        ticket_kind = _ticket_kind_for_create(body.kind, body.ticket_kind)
+        signal_kind = _signal_kind_for_create(body.kind, body.signal_kind, ticket_kind)
         signal_result = service.capture_signal(
-            kind=_signal_kind_for_ticket(body.kind),
+            kind=signal_kind,
             summary=body.summary,
             owner_scope=body.owner_scope or {"type": "workspace", "id": "local"},
             origin_scope=body.origin_scope or {"type": "ui", "surface": "development_tickets"},
@@ -157,6 +230,7 @@ def create_ticket(
             severity=body.severity,
             blocking=body.blocking,
             source=body.source,
+            dedup_key=body.dedup_key,
             artifact_refs=body.artifact_refs,
             evidence_refs=body.evidence_refs,
             policy=body.policy,
@@ -164,9 +238,10 @@ def create_ticket(
         )
         ticket_result = service.ensure_ticket_for_signal(
             signal_result["signal"],
-            kind=body.kind,
+            kind=ticket_kind,
             status=body.status,
             source=body.source,
+            dedup_key=body.dedup_key,
             metadata=body.metadata,
             policy=body.policy,
         )

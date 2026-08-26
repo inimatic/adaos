@@ -43,7 +43,10 @@ def test_development_ticket_api_create_list_show_evidence_and_defer(tmp_path: Pa
         headers=_headers(),
     )
     assert listed.status_code == 200
-    assert [item["ticket_id"] for item in listed.json()["tickets"]] == [ticket_id]
+    listed_payload = listed.json()
+    assert [item["ticket_id"] for item in listed_payload["tickets"]] == [ticket_id]
+    assert [item["ticket_id"] for item in listed_payload["items"]] == [ticket_id]
+    assert listed_payload["count"] == 1
 
     shown = client.get(f"/api/development-tickets/{ticket_id}", headers=_headers())
     assert shown.status_code == 200
@@ -51,7 +54,9 @@ def test_development_ticket_api_create_list_show_evidence_and_defer(tmp_path: Pa
 
     evidence = client.get(f"/api/development-tickets/{ticket_id}/evidence", headers=_headers())
     assert evidence.status_code == 200
-    assert evidence.json()["evidence"]["ticket_evidence_refs"] == [{"type": "ui", "id": "header.feedback"}]
+    evidence_payload = evidence.json()["evidence"]
+    assert evidence_payload["ticket_evidence_refs"] == [{"type": "ui", "id": "header.feedback"}]
+    assert evidence_payload["evidence_refs"] == [{"type": "ui", "id": "header.feedback"}]
 
     deferred = client.post(
         f"/api/development-tickets/{ticket_id}/respond",
@@ -60,6 +65,33 @@ def test_development_ticket_api_create_list_show_evidence_and_defer(tmp_path: Pa
     )
     assert deferred.status_code == 200
     assert deferred.json()["ticket"]["status"] == "deferred"
+
+
+def test_development_ticket_api_create_accepts_signal_kind_with_ticket_kind(tmp_path: Path) -> None:
+    client = _client(DevelopmentTicketService(state_dir=tmp_path))
+
+    created = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "kind": "feedback_note",
+            "ticket_kind": "feedback",
+            "status": "captured",
+            "summary": "Screenshot feedback from header panel",
+            "source": "client_feedback",
+            "target_scope": {"type": "scenario", "id": "builder", "source": "workspace"},
+            "artifact_refs": [{"type": "screenshot", "uri": "artifact://shot.png"}],
+            "evidence_refs": [{"type": "trace", "source": "client_feedback_ui"}],
+        },
+    )
+
+    assert created.status_code == 201, created.text
+    payload = created.json()
+    assert payload["signal"]["kind"] == "feedback_note"
+    assert payload["ticket"]["kind"] == "feedback"
+    assert payload["detail"]["evidence"]["artifact_refs"] == [
+        {"type": "screenshot", "uri": "artifact://shot.png"},
+    ]
 
 
 def test_development_ticket_api_handoff_and_resolution_require_evidence(tmp_path: Path) -> None:
