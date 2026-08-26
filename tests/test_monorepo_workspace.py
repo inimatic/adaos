@@ -275,6 +275,10 @@ def test_align_to_remote_branch_uses_managed_runtime_branch(monorepo, paths):
     marker.write_text("local experiment\n", encoding="utf-8")
     _run_git(["add", "operator-note.txt"], cwd=paths.workspace_dir())
     _run_git(["commit", "-m", "operator experiment"], cwd=paths.workspace_dir())
+    tracked_overlay = paths.workspace_dir() / "registry.json"
+    tracked_overlay.write_text('{"version": "stale-project-overlay"}\n', encoding="utf-8")
+    untracked_overlay = paths.workspace_dir() / "obsolete.schema.json"
+    untracked_overlay.write_text("{}\n", encoding="utf-8")
 
     result = git.align_to_remote_branch(
         str(paths.workspace_dir()),
@@ -287,6 +291,10 @@ def test_align_to_remote_branch_uses_managed_runtime_branch(monorepo, paths):
     assert _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=paths.workspace_dir()) == result["local_branch"]
     assert _run_git(["rev-parse", "@{upstream}"], cwd=paths.workspace_dir()) == remote_revision
     assert not marker.exists()
+    restored_registry = tracked_overlay.read_text(encoding="utf-8")
+    assert "stale-project-overlay" not in restored_registry
+    assert "weather_skill" in restored_registry
+    assert not untracked_overlay.exists()
     assert _run_git(["rev-parse", "operator/experiment"], cwd=paths.workspace_dir()) != remote_revision
 
 

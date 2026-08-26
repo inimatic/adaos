@@ -20,7 +20,10 @@ Production workspace synchronization reads `registry.json` from the configured
 remote branch, not from whichever local branch was previously checked out. It
 fetches that branch and checks it out as an AdaOS-managed local branch named
 `adaos/runtime-<remote>-<branch>`. Existing operator and development branches
-remain available and are not rewritten.
+remain available and are not rewritten. Tracked and untracked files in the
+production working tree are reset to that authoritative revision because the
+tree contains derived ProjectRelease materializations; runtime state under
+ignored directories is retained.
 
 - `ADAOS_WORKSPACE_SYNC_REMOTE` selects the Git remote (`origin` by default).
 - `ADAOS_WORKSPACE_REGISTRY_BRANCH` overrides the configured registry branch.

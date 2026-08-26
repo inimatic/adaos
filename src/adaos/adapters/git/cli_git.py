@@ -766,7 +766,10 @@ class CliGitClient(GitClient):
         fetch_args.append(refspec)
         _run_git(fetch_args, cwd=dir)
         _run_git(["rev-parse", "--verify", remote_ref], cwd=dir)
-        _run_git(["checkout", "-B", runtime_branch, remote_ref], cwd=dir)
+        _run_git(["checkout", "--force", "-B", runtime_branch, remote_ref], cwd=dir)
+        # Production workspaces are derived materializations. Project releases
+        # may leave files that do not exist in the registry revision anymore.
+        _run_git(["clean", "-fd"], cwd=dir)
         _run_git(["branch", "--set-upstream-to", remote_tracking, runtime_branch], cwd=dir)
         revision = _run_git(["rev-parse", "HEAD"], cwd=dir)
 
