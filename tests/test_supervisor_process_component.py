@@ -84,3 +84,29 @@ async def test_process_supervisor_owns_bounded_termination_ladder() -> None:
 
     assert process.terminated is True
     assert stages == ["forced_terminate"]
+
+
+@pytest.mark.anyio
+async def test_process_supervisor_allows_io_bound_process_to_reap_after_kill(monkeypatch) -> None:
+    owner = ProcessSupervisor(None)
+    process = SimpleNamespace(pid=42, poll=lambda: None)
+    waits: list[tuple[float, float]] = []
+    results = iter((False, False, True))
+    signals: list[int] = []
+
+    async def _wait(_process, timeout_sec: float, *, interval_sec: float) -> bool:
+        waits.append((timeout_sec, interval_sec))
+        return next(results)
+
+    monkeypatch.setenv("ADAOS_SUPERVISOR_FORCED_KILL_WAIT_SEC", "30")
+    monkeypatch.setattr(owner, "_wait_for_exit", _wait)
+
+    await owner.terminate_process(
+        process,
+        graceful_wait_sec=8.0,
+        terminate_wait_sec=5.0,
+        signal_process=lambda _process, signal_number: signals.append(signal_number),
+    )
+
+    assert waits == [(8.0, 0.2), (5.0, 0.1), (30.0, 0.1)]
+    assert len(signals) == 2

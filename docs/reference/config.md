@@ -31,6 +31,11 @@ ignored directories is retained.
   monorepo branch because they share one workspace checkout.
 - `ENV_TYPE=dev` preserves the currently checked-out development branch.
 
+`ADAOS_SUPERVISOR_FORCED_KILL_WAIT_SEC` controls the bounded post-`SIGKILL`
+reap window for a runtime process (30 seconds by default, 5-120 seconds). This
+is separate from graceful shutdown and `SIGTERM` timeouts so I/O-bound process
+exit does not cause a false cutover rollback.
+
 ## Prepare
 
 `prepare_environment()`:

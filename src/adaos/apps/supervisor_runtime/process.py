@@ -91,6 +91,16 @@ class ProcessSupervisor:
             await asyncio.sleep(interval_sec)
         return process.poll() is not None
 
+    @staticmethod
+    def forced_kill_wait_sec(terminate_wait_sec: float) -> float:
+        try:
+            configured = float(
+                str(os.getenv("ADAOS_SUPERVISOR_FORCED_KILL_WAIT_SEC") or "30").strip()
+            )
+        except (TypeError, ValueError):
+            configured = 30.0
+        return max(float(terminate_wait_sec), min(120.0, max(5.0, configured)))
+
     async def terminate_process(
         self,
         process: Any,
@@ -114,7 +124,8 @@ class ProcessSupervisor:
         if before_signal is not None:
             before_signal("forced_kill")
         signaler(process, getattr(signal, "SIGKILL", 9))
-        if await self._wait_for_exit(process, terminate_wait_sec, interval_sec=0.1):
+        kill_wait_sec = self.forced_kill_wait_sec(terminate_wait_sec)
+        if await self._wait_for_exit(process, kill_wait_sec, interval_sec=0.1):
             return
         raise RuntimeError("process did not exit after forced kill")
 
