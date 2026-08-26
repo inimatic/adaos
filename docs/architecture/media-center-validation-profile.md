@@ -2,12 +2,13 @@
 
 Status: acceptance budgets for the one-subnet household Media Center.
 
-Last reviewed: 2026-08-20.
+Last reviewed: 2026-08-26.
 
 This profile turns roadmap resource and compatibility statements into explicit
-gates. It applies to the representative 20,000-source fixture and to stand
-evidence. A smaller development machine may run functional tests, but it may
-not be used to claim these production budgets.
+gates. Static scale evidence covers 50,000 and 200,000 sources; sustained
+acceptance uses at least 50,000 sources for one hour and remains paired with
+stand evidence. A smaller development machine may run functional tests, but it
+may not be used to claim these production budgets.
 
 ## Supported Baseline
 
@@ -52,7 +53,8 @@ not be used to claim these production budgets.
 | Catalog page | at most 30 rows and 512 KiB encoded response | contract and 20k fixture test |
 | Player/short queue | at most 10 rows | contract test |
 | Durable queue snapshot | at most 500 source refs | contract test |
-| Coordinator FTS, 20k | p95 <= 150 ms after warmup | local/stand benchmark |
+| Coordinator FTS, 50k/200k static | p95 <= 150 ms after warmup | local/stand benchmark |
+| Coordinator FTS, 50k concurrent | p95 <= 200 ms for one hour beside agent deltas | acceptance soak |
 | Deep-search local discovery | at most 5,000 candidates by default, 20,000 hard maximum; p95 <= 500 ms | local benchmark |
 | Agent search | at most 100 rows per call and four agents by default | contract test |
 | Folder/catalog UI | first useful render <= 1 s; no long task above 100 ms | browser trace |
@@ -113,3 +115,31 @@ percentage points above this profile's strict budget. A separate 30-second
 sampling profile was idle for 29.479 seconds and found no repeating product
 hotspot. Functional acceptance is local-complete, but the idle CPU budget stays
 open for the longer Android TV/stand run; it is not waived by the local result.
+
+## Local Evidence - 2026-08-26
+
+The static Windows gates passed at 50,000 and 200,000 generated catalog items.
+At 200,000 items, p95 was 130.630 ms for FTS, 35.105 ms for cursor pages,
+113.563 ms for Home, 11.879 ms for root folders, 3.956 ms for leaf folders, and
+385.059 ms for bounded fuzzy discovery. RSS was 37.82 MiB. The streamed search
+and metadata projection backfills took 91.541 and 72.368 seconds; the bounded
+50,000-item identity migration took 26.888 seconds.
+
+The enforced one-hour server soak passed with 50,000 items, 289,875 concurrent
+agent deltas, and no operation errors. P95 was 80.441 ms for FTS, 73.586 ms for
+catalog pages, 38.874 ms for playback plans, and 142.322 ms for delta apply.
+RSS peaked at 40.523 MiB with 0.668 MiB sustained growth, aggregate CPU p95 was
+15.633%, and WAL retention ended at zero bytes.
+
+During that workload, a one-hour desktop production-bundle run stayed inside
+every resource budget: idle CPU 4.498%, steady main-thread CPU 5.473%, renderer
+private-memory p95 201.914 MiB, JS heap growth 2.46 MiB, 1.407 DOM mutations/s,
+input-delay p95 13.3 ms, and zero dropped frames. It observed eight long tasks
+(0.133/min, maximum 832 ms). The original harness result was formally failed by
+a locale-dependent playback selector and an expected handled reliability
+projection fallback. The repaired selector and explicit compatible-fixture
+probe subsequently advanced playback by 29.883 seconds with error code zero and
+preserved one shell-owned media element across modal-to-mini transition. These
+results close the local desktop performance investigation. They do not replace
+the mandatory one-hour physical Android TV/CDP run, which remains open because
+no Android TV debugging endpoint was attached to this development machine.

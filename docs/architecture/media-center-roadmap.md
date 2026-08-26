@@ -491,7 +491,15 @@ injection, resource budgets, and a reviewed production decision.
   Candidate `0.6.52` additionally passed the enforced 20,000-item local static
   gate with Home/folder p95 budgets of 500/150 ms and observed 227.967/28.246
   ms respectively. The complete 102-test skill/scenario suite and Ruff passed.
-  The one-hour Android TV browser/playback/Yjs-pressure gate is still open.
+  On 2026-08-26 the expanded 50,000-item one-hour server gate passed with
+  289,875 agent deltas, no errors, FTS/page/playback-plan/delta p95 of
+  80.441/73.586/38.874/142.322 ms, RSS maximum 40.523 MiB, sustained growth
+  0.668 MiB, CPU p95 15.633%, and zero retained WAL bytes. Static 200,000-item
+  FTS p95 was 130.630 ms with 37.82 MiB RSS. A concurrent one-hour desktop
+  production renderer stayed inside every resource budget; the repaired
+  compatible-fixture probe advanced playback 29.883 seconds with no media
+  error. The one-hour physical Android TV browser/playback/Yjs-pressure gate
+  is still open.
 - [ ] `[must]` `MC7-08` Deploy the exact ProjectRelease through normal channels
   to the designated stand, execute TV plus controller E2E, and record package
   digests, deployment generation, node activations, catalog/shard revisions,
@@ -838,6 +846,16 @@ Local implementation checkpoint (not stand acceptance):
   exercised no playback, and exceeded the strict idle CPU budget at 6.733%, so
   it is diagnostic evidence only. A one-hour run on representative Android TV
   hardware and the update-under-playback evidence remain mandatory.
+- The 2026-08-26 production-bundle desktop run adds a full-hour reference:
+  idle CPU 4.498%, steady main-thread CPU 5.473%, renderer private-memory p95
+  201.914 MiB, heap growth 2.46 MiB, 1.407 DOM mutations/s, input-delay p95
+  13.3 ms, zero dropped frames, and eight long tasks (0.133/min, maximum 832
+  ms). Client `83921b3` removes locale-dependent toolbar selection, exposes
+  stable generic command/option IDs, permits an explicit compatible playback
+  fixture, and distinguishes an expected handled reliability projection
+  fallback from node unavailability. This is desktop reference evidence only;
+  `MC8-11` remains open until the same hour is captured from physical Android
+  TV CDP with real D-pad input and playback.
 - Skill dictionaries remain owned by `media_center_skill` under
   `assets/i18n/{en,ru}.json`. Core now has local contract coverage for reading
   that same publishable path with English fallback and legacy-path
