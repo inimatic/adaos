@@ -143,3 +143,27 @@ preserved one shell-owned media element across modal-to-mini transition. These
 results close the local desktop performance investigation. They do not replace
 the mandatory one-hour physical Android TV/CDP run, which remains open because
 no Android TV debugging endpoint was attached to this development machine.
+
+The final production-bundle fixture probes removed the locale-dependent
+fallback completely. A 90-second run advanced compatible playback by 1.841
+seconds, reported media error code zero, retained mini-player playback after
+modal close, used 4.319% steady main-thread CPU, and changed heap by -1.447
+MiB. A separate 45-second confirmation reported 3.117% idle renderer CPU,
+4.954% steady main-thread CPU, no long tasks, 0.282 DOM mutations/s, no listener
+growth, 12.9 ms input-delay p95, and 40 ms interaction p95.
+
+The local coordinator then consumed 14,304 ordered agent changes in bounded
+500-row pages and reached sequence 226,202 with `has_more=false`, fresh agent
+participation, and no page-size backoff. Warm FTS for `Black` returned 30 rows
+in 1.898 seconds while the unfiltered reset page returned in 0.964 seconds.
+The live API worker remained running during the catch-up, resumed background
+admission after queue maintenance, and exposed ready MusicBrainz/TMDb provider
+state plus bounded artwork and rendition activity.
+
+On the `.30` catalog, the previous hidden minimum turned a requested five-row
+delta-history compaction page into 500 rows and held SQLite for 48.446 seconds.
+The exact sequence-cursor implementation processed and removed five rows in
+1.233 seconds, and the paced worker advanced exactly five more rows on its next
+cycle. This validates the bounded algorithm on the real database; physical
+space reclamation remains a separate operator-controlled maintenance step and
+was not run during playback-capable service.
