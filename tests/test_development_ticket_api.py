@@ -139,6 +139,73 @@ def test_development_ticket_api_uploads_screenshot_artifact(tmp_path: Path) -> N
     assert created.json()["detail"]["evidence"]["artifact_refs"] == [ref]
 
 
+def test_development_ticket_api_updates_summary_and_keeps_artifact_refs(tmp_path: Path) -> None:
+    client = _client(DevelopmentTicketService(state_dir=tmp_path))
+
+    created = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "kind": "feedback_note",
+            "ticket_kind": "feedback",
+            "status": "captured",
+            "summary": "Screenshot for Capabilities",
+            "source": "client_feedback",
+            "target_scope": {"type": "scenario", "id": "web_desktop", "source": "workspace"},
+            "artifact_refs": [{"type": "screenshot", "uri": "dev-ticket-artifact:shot"}],
+            "evidence_refs": [{"type": "trace", "source": "client_feedback_ui"}],
+        },
+    )
+    assert created.status_code == 201, created.text
+    ticket_id = created.json()["ticket"]["ticket_id"]
+
+    updated = client.patch(
+        f"/api/development-tickets/{ticket_id}",
+        headers=_headers(),
+        json={
+            "summary": "Unify Dev Tickets icon in scenario header and skill modal",
+            "actor": "user:owner",
+        },
+    )
+
+    assert updated.status_code == 200, updated.text
+    payload = updated.json()
+    assert payload["ticket"]["summary"] == "Unify Dev Tickets icon in scenario header and skill modal"
+    assert payload["evidence"]["artifact_refs"] == [{"type": "screenshot", "uri": "dev-ticket-artifact:shot"}]
+    assert payload["ticket"]["history"][-1]["kind"] == "summary_updated"
+    assert payload["ticket"]["history"][-1]["previous_summary"] == "Screenshot for Capabilities"
+
+    listed = client.get("/api/development-tickets", headers=_headers())
+    assert listed.status_code == 200
+    assert listed.json()["tickets"][0]["summary"] == "Unify Dev Tickets icon in scenario header and skill modal"
+
+
+def test_development_ticket_api_rejects_terminal_summary_update(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    client = _client(service)
+
+    created = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "kind": "feedback",
+            "summary": "Already closed",
+            "target_scope": {"type": "scenario", "id": "web_desktop"},
+        },
+    )
+    ticket_id = created.json()["ticket"]["ticket_id"]
+    service.close_ticket(ticket_id, reason="stale", actor="test")
+
+    updated = client.patch(
+        f"/api/development-tickets/{ticket_id}",
+        headers=_headers(),
+        json={"summary": "Edited after close", "actor": "test"},
+    )
+
+    assert updated.status_code == 400
+    assert "terminal Dev Ticket cannot be edited" in updated.text
+
+
 def test_development_ticket_api_lists_project_and_component_scope(tmp_path: Path) -> None:
     client = _client(DevelopmentTicketService(state_dir=tmp_path))
 

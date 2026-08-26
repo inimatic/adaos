@@ -649,6 +649,44 @@ class DevelopmentTicketService:
             evidence_refs=evidence_refs,
         )
 
+    def update_ticket_summary(
+        self,
+        ticket_id: str,
+        *,
+        summary: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        text = _text(summary)
+        if not text:
+            raise ValueError("ticket summary is required")
+        actor_token = _text(actor) or "system"
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                raise KeyError(ticket_id)
+            if _text(ticket.get("status")) in TERMINAL_TICKET_STATES:
+                raise ValueError("terminal Dev Ticket cannot be edited")
+            previous = _text(ticket.get("summary"))
+            if previous == text:
+                return _clone(ticket)
+            now = _now()
+            ticket["summary"] = text
+            ticket["updated_at"] = now
+            self._append_history(
+                ticket,
+                {
+                    "kind": "summary_updated",
+                    "actor": actor_token,
+                    "previous_summary": previous,
+                    "summary": text,
+                    "recorded_at": now,
+                },
+            )
+            self._validate_ticket(ticket)
+            self._write(state)
+            return _clone(ticket)
+
     def record_resolution(
         self,
         ticket_id: str,

@@ -61,6 +61,11 @@ class DevTicketArtifactUploadRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class DevTicketUpdateRequest(BaseModel):
+    summary: str | None = Field(default=None, min_length=1)
+    actor: str = Field(default="ui", min_length=1)
+
+
 class DevTicketResponseRequest(BaseModel):
     response_action_id: str = Field(..., min_length=1)
     pending_action_id: str | None = None
@@ -531,6 +536,27 @@ def get_ticket(
     if not ticket:
         raise _not_found(ticket_id)
     return {"ok": True, **_ticket_detail(service, ticket)}
+
+
+@router.patch("/{ticket_id}")
+def update_ticket(
+    ticket_id: str,
+    body: DevTicketUpdateRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    if body.summary is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="summary is required")
+    try:
+        ticket = service.update_ticket_summary(
+            ticket_id,
+            summary=body.summary,
+            actor=body.actor,
+        )
+        return {"ok": True, **_ticket_detail(service, ticket)}
+    except KeyError as exc:
+        raise _not_found(ticket_id) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get("/{ticket_id}/evidence")
