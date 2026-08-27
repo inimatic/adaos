@@ -117,6 +117,11 @@ The first production-oriented milestones do not require:
     reporting stale data as fresh.
 12. **Skills use public SDK planes.** Media skills do not call internal package
     managers, node stores, route tables, or Yjs implementation helpers.
+13. **Playback endpoints are present before playback.** A UI-as-data
+    `adaos.playback.endpoint_provider.v1` adapter lets the persistent app shell
+    register an idle browser/TV, consume targeted assignment events, and seed or
+    recover the latest assignment through a bounded inbox. Product skills own
+    the adapter methods; the client owns no Media Center skill name.
 
 ## Plane Model
 

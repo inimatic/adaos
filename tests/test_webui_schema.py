@@ -98,6 +98,39 @@ def test_webui_schema_accepts_safe_state_mutations_and_membership_filter() -> No
     Draft202012Validator(schema).validate(payload)
 
 
+def test_webui_schema_accepts_app_shell_playback_endpoint_provider() -> None:
+    schema = _load_schema()
+    payload = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "media",
+                        "layout": {"type": "single", "areas": [{"id": "main"}]},
+                        "widgets": [],
+                        "playbackEndpoint": {
+                            "schema": "adaos.playback.endpoint_provider.v1",
+                            "adapter": {
+                                "skill": "media_control_skill",
+                                "inbox_method": "endpoint_inbox",
+                                "open_session_method": "open_endpoint_session",
+                                "pull_commands_method": "pull_commands",
+                                "reconcile_method": "reconcile_endpoint",
+                            },
+                            "heartbeat_interval_ms": 15000,
+                            "command_poll_interval_ms": 3000,
+                            "queue_window_limit": 30,
+                        },
+                    }
+                }
+            }
+        },
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
 def test_webui_schema_accepts_singleton_widget_actions_and_tags() -> None:
     schema = _load_schema()
     payload = {

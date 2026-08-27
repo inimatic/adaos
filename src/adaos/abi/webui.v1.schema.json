@@ -997,6 +997,31 @@
       "additionalProperties": { "$ref": "#/$defs/widgetCatalogEntry" }
     },
 
+    "playbackEndpointProvider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "adapter"],
+      "properties": {
+        "schema": { "const": "adaos.playback.endpoint_provider.v1" },
+        "adapter": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["skill", "inbox_method", "open_session_method", "pull_commands_method", "reconcile_method"],
+          "properties": {
+            "skill": { "$ref": "#/$defs/id" },
+            "inbox_method": { "$ref": "#/$defs/id" },
+            "open_session_method": { "$ref": "#/$defs/id" },
+            "pull_commands_method": { "$ref": "#/$defs/id" },
+            "reconcile_method": { "$ref": "#/$defs/id" }
+          }
+        },
+        "heartbeat_interval_ms": { "type": "integer", "minimum": 5000, "maximum": 60000 },
+        "command_poll_interval_ms": { "type": "integer", "minimum": 1000, "maximum": 30000 },
+        "queue_window_limit": { "type": "integer", "minimum": 1, "maximum": 30 }
+      },
+      "description": "Skill-owned endpoint inbox adapter used by the persistent app-shell media element while its surface is idle."
+    },
+
     "pageSchema": {
       "type": "object",
       "additionalProperties": true,
@@ -1009,6 +1034,7 @@
         "load": { "$ref": "#/$defs/loadHint" },
         "loading": { "$ref": "#/$defs/loadingBehavior" },
         "interaction": { "$ref": "#/$defs/interactionBehavior" },
+        "playbackEndpoint": { "$ref": "#/$defs/playbackEndpointProvider" },
         "interface": { "$ref": "#/$defs/modalInterface" },
         "initialState": {
           "type": "object",

@@ -741,6 +741,14 @@ Local implementation checkpoint (not stand acceptance):
   projects device name, endpoint name, authorization and availability instead
   of opaque target ids. Unit and local browser acceptance pass; cross-browser
   TV/controller convergence on the exact published Project remains open.
+- The idle-endpoint closure adds the missing half of `MC8-01`. The page-level
+  `adaos.playback.endpoint_provider.v1` contract registers a TV before local
+  media exists, `media_control.playback.assigned` wakes the exact endpoint, and
+  `endpoint_inbox` provides an immediate/recovery snapshot with at most 30
+  queue entries around the active item. Command pulls are single-flight and
+  targets age to unavailable after 120 seconds without heartbeat. Local
+  contract and browser tests pass; physical Android TV acceptance remains the
+  promotion gate.
 - `MC8-02` has the fullscreen-safe generic transition overlay in client
   `4090c74`, including policy-gated update deferral. The physical update and
   playback recovery proof remains open.
