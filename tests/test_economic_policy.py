@@ -55,7 +55,10 @@ def test_economic_status_reads_root_entitlement_snapshot(monkeypatch, tmp_path) 
                         }
                     ],
                 },
-                "usage": {"llm.requests": {"used_24h": 3}},
+                "usage": {
+                    "llm.requests": {"used_24h": 3},
+                    "codex.api.tokens": {"used_30d": 1000, "quota_remaining": 9000},
+                },
             }
         ),
         encoding="utf-8",
@@ -72,6 +75,37 @@ def test_economic_status_reads_root_entitlement_snapshot(monkeypatch, tmp_path) 
     assert status["plan_id"] == "developer"
     assert status["disabled_resource_count"] == 1
     assert compact["usage"]["llm.requests"]["used_24h"] == 3
+    assert compact["usage"]["codex.api.tokens"]["quota_remaining"] == 9000
+
+
+def test_economic_status_accepts_root_entitlement_api_wrapper(monkeypatch, tmp_path) -> None:
+    snapshot_path = tmp_path / "entitlement-wrapper.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "subnet_id": "sn_test",
+                "entitlement": {
+                    "schema": "adaos.root_mgmnt.economic_entitlement.v1",
+                    "mode": "observe",
+                    "subscription": {"state": "active", "plan_id": "builder"},
+                    "entitlement": {"state": "enabled", "disabled_resources": []},
+                    "usage": {"llm.requests": {"used_24h": 7}},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(economic_policy, "load_config", lambda: _config())
+    monkeypatch.setenv("ADAOS_ECONOMIC_ENTITLEMENT_SNAPSHOT", str(snapshot_path))
+    monkeypatch.delenv("ADAOS_ZONE_ID", raising=False)
+
+    status = economic_policy.current_subnet_economic_status()
+
+    assert status["subscription_state"] == "active"
+    assert status["plan_id"] == "builder"
+    assert status["entitlement_state"] == "enabled"
+    assert status["usage"]["llm.requests"]["used_24h"] == 7
 
 
 def test_economic_status_observes_nlu_teacher_llm_usage(monkeypatch, tmp_path) -> None:

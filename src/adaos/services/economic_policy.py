@@ -193,6 +193,13 @@ def _snapshot_entitlement(raw: Mapping[str, Any]) -> Mapping[str, Any]:
     return entitlement if isinstance(entitlement, Mapping) else {}
 
 
+def _unwrap_entitlement_snapshot(raw: Mapping[str, Any]) -> dict[str, Any]:
+    nested = raw.get("entitlement")
+    if isinstance(nested, Mapping) and nested.get("schema") == ECONOMIC_ENTITLEMENT_SNAPSHOT_SCHEMA:
+        return dict(nested)
+    return dict(raw)
+
+
 def _state_dir_for_usage(base_dir: Path) -> Path:
     try:
         return current_state_dir()
@@ -332,7 +339,7 @@ def current_subnet_economic_status() -> dict[str, Any]:
     configured_root_base = _root_base_url(conf)
     global_root_base = _global_root_base_url()
     path = entitlement_snapshot_path(base_dir=base_dir)
-    raw_snapshot = _read_json_file(path)
+    raw_snapshot = _unwrap_entitlement_snapshot(_read_json_file(path))
     subscription = _snapshot_subscription(raw_snapshot)
     entitlement = _snapshot_entitlement(raw_snapshot)
     loaded = bool(raw_snapshot)
@@ -402,6 +409,11 @@ def compact_economic_status_for_control_report() -> dict[str, Any]:
     status = current_subnet_economic_status()
     usage = status.get("usage")
     usage_payload = usage if isinstance(usage, Mapping) else {}
+    compact_usage = {
+        resource: dict(usage_payload.get(resource))
+        for resource in ROOT_GOVERNED_RESOURCES
+        if isinstance(usage_payload.get(resource), Mapping)
+    }
     return {
         "schema": status["schema"],
         "generated_at": status["generated_at"],
@@ -415,7 +427,7 @@ def compact_economic_status_for_control_report() -> dict[str, Any]:
         "enforcement_active": status["enforcement_active"],
         "disabled_resource_count": status["disabled_resource_count"],
         "disabled_resources": list(status.get("disabled_resources") or [])[:40],
-        "usage": {"llm.requests": usage_payload.get("llm.requests", {})},
+        "usage": compact_usage,
         "management_authority": status["management_authority"],
         "entitlement_snapshot": status["entitlement_snapshot"],
     }
