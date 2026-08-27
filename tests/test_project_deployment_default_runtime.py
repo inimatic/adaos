@@ -23,6 +23,7 @@ from adaos.services.project_deployment import default_runtime
 from adaos.services.project_deployment.default_runtime import (
     AdaOSComponentLifecycleHooks,
     CachedReleaseProvider,
+    LazyReleaseProvider,
     configure_default_distributed_runtimes,
     deployment_runtime_inventory_payload,
     local_node_inventory_record,
@@ -72,6 +73,60 @@ def test_cached_release_provider_fetches_and_verifies_missing_packages() -> None
     assert provider.get_release("demo", "sha256:" + "b" * 64) is plan
     assert provider.read_package(package.digest) == b"verified-package"
     assert provider.fetch_package(package) == b"verified-package"
+
+
+def test_lazy_release_provider_retries_factory_after_startup_failure() -> None:
+    attempts = 0
+    remote = SimpleNamespace(
+        get_release=lambda project_id, digest: (project_id, digest),
+        fetch_package=lambda package: package,
+    )
+
+    def factory():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("credentials are not ready")
+        return remote
+
+    provider = LazyReleaseProvider(factory)
+
+    with pytest.raises(RuntimeError, match="credentials are not ready"):
+        provider.get_release("demo", "sha256:" + "b" * 64)
+
+    assert provider.get_release("demo", "sha256:" + "b" * 64) == (
+        "demo",
+        "sha256:" + "b" * 64,
+    )
+    assert attempts == 2
+
+
+def test_default_release_fallback_defers_root_registry_initialization(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+    remote = SimpleNamespace(
+        get_release=lambda project_id, digest: (project_id, digest),
+        fetch_package=lambda package: package,
+    )
+
+    class RootService:
+        def __init__(self, *, ctx):
+            calls.append(("service", ctx))
+
+        def artifact_release_repository(self, *, role, config):
+            calls.append((role, config))
+            return remote
+
+    ctx = SimpleNamespace(config=SimpleNamespace(node_id="node-home"))
+    monkeypatch.setattr("adaos.services.root.service.RootDeveloperService", RootService)
+
+    provider = default_runtime._default_release_fallback(ctx)
+
+    assert calls == []
+    assert provider.get_release("demo", "sha256:" + "c" * 64) == (
+        "demo",
+        "sha256:" + "c" * 64,
+    )
+    assert calls == [("service", ctx), ("hub", ctx.config)]
 
 
 def test_async_bridge_runs_when_activation_is_called_from_an_event_loop() -> None:

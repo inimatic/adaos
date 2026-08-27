@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import RLock, Thread
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import yaml
 
@@ -243,15 +243,34 @@ class CachedReleaseProvider:
         return self.fetch_package(package)
 
 
-def _default_release_fallback(ctx: AgentContext) -> Any:
-    try:
+@dataclass(slots=True)
+class LazyReleaseProvider:
+    factory: Callable[[], Any]
+    _provider: Any = field(default=None, init=False, repr=False)
+    _lock: RLock = field(default_factory=RLock, init=False, repr=False)
+
+    def _resolve(self) -> Any:
+        with self._lock:
+            if self._provider is None:
+                self._provider = self.factory()
+            return self._provider
+
+    def get_release(self, project_id: str, release_digest: str) -> ReleasePlan:
+        return self._resolve().get_release(project_id, release_digest)
+
+    def fetch_package(self, package: ArtifactPackageRef) -> bytes:
+        return self._resolve().fetch_package(package)
+
+
+def _default_release_fallback(ctx: AgentContext) -> LazyReleaseProvider:
+    def create() -> Any:
         from adaos.services.root.service import RootDeveloperService
 
         return RootDeveloperService(ctx=ctx).artifact_release_repository(
             role="hub", config=_node_config(ctx)
         )
-    except Exception:
-        return None
+
+    return LazyReleaseProvider(create)
 
 
 @dataclass(slots=True)
@@ -598,6 +617,7 @@ def _publisher(ctx: AgentContext, topic: str):
 
 _configure_lock = RLock()
 _configured_key = ""
+_configured_authoritative = False
 
 
 def configure_default_distributed_runtimes(
@@ -606,19 +626,19 @@ def configure_default_distributed_runtimes(
     release_fallback: Any = None,
     authoritative: bool = True,
 ) -> dict[str, Any]:
-    global _configured_key
+    global _configured_authoritative, _configured_key
     current = ctx or get_ctx()
     conf = _node_config(current)
     state_dir = Path(current.paths.state_dir()).resolve()
     key = f"{state_dir}:{conf.node_id}:{conf.subnet_id}"
     with _configure_lock:
-        if _configured_key == key:
+        if _configured_key == key and (not authoritative or _configured_authoritative):
             from adaos.services.project_deployment import get_project_deployment_runtime
 
             existing = get_project_deployment_runtime()
             register_project_deployment_authority(
-                existing if authoritative else None,
-                client_only=not authoritative,
+                existing if _configured_authoritative else None,
+                client_only=not _configured_authoritative,
             )
             return {"ok": True, "configured": False, "node_id": str(conf.node_id)}
         artifact_root = state_dir / "artifact_pipeline"
@@ -822,6 +842,7 @@ def configure_default_distributed_runtimes(
             node_id=str(conf.node_id),
         )
         _configured_key = key
+        _configured_authoritative = bool(authoritative)
         return {
             "ok": True,
             "configured": True,
@@ -837,6 +858,7 @@ def configure_default_distributed_runtimes(
 __all__ = [
     "AdaOSComponentLifecycleHooks",
     "CachedReleaseProvider",
+    "LazyReleaseProvider",
     "configure_default_distributed_runtimes",
     "deployment_runtime_inventory_payload",
     "local_node_inventory_record",
