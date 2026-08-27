@@ -43,7 +43,8 @@ def _fake_request(
 
 
 class _FakeMap(dict):
-    pass
+    def set(self, txn, key: str, value: object) -> None:  # noqa: ARG002
+        self[key] = value
 
 
 class _FakeDoc:
@@ -194,6 +195,44 @@ def test_node_yjs_materialization_repair_rejects_stale_scenario(monkeypatch) -> 
     assert result["accepted"] is False
     assert result["error"] == "authoritative_scenario_mismatch"
     assert result["authoritative_scenario"] == "media_center"
+
+
+def test_node_yjs_projection_bridge_applies_data_projection(monkeypatch) -> None:
+    state: dict[str, _FakeMap] = {"data": _FakeMap()}
+    calls: list[dict[str, object]] = []
+
+    async def _fake_submit(webspace_id: str, mutator, **kwargs) -> dict[str, object]:
+        changed = bool(mutator(_FakeDoc(state), object()))
+        calls.append({"webspace_id": webspace_id, **kwargs, "changed": changed})
+        return {
+            "accepted": True,
+            "applied": True,
+            "changed": changed,
+            "reason": "applied" if changed else "unchanged",
+            "mutator_result": changed,
+            "update_bytes": 128 if changed else 0,
+        }
+
+    monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setattr("adaos.services.yjs.doc.submit_live_room_mutation", _fake_submit)
+
+    result = asyncio.run(
+        node_api_module.node_yjs_webspace_projection(
+            "desktop-dev",
+            node_api_module.WebspaceYjsProjectionRequest(
+                path="data/root_mgmnt",
+                value={"fleet": {"items": [{"subnet_id": "sn_test"}]}},
+                owner="skill:root_mgmnt",
+            ),
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["room_applied"] is True
+    assert state["data"]["root_mgmnt"]["fleet"]["items"][0]["subnet_id"] == "sn_test"
+    assert calls[0]["webspace_id"] == "desktop-dev"
+    assert calls[0]["root_names"] == ["data"]
+    assert calls[0]["owner"] == "skill:root_mgmnt"
 
 
 def test_materialization_repair_coalesces_concurrent_room_broadcasts(monkeypatch) -> None:

@@ -28,6 +28,7 @@ def _reset_projection_runtime_diagnostics(monkeypatch: pytest.MonkeyPatch) -> No
     projection_service_module._YJS_PROJECTION_GUARD_STATS.clear()
     projection_service_module._YJS_PROJECTION_SOFT_OVERAGE_STATE.clear()
     projection_service_module._PROJECTION_RULE_MISS_STATS.clear()
+    monkeypatch.setattr(projection_service_module, "_YJS_PROJECTION_LOCAL_BRIDGE_ENABLED", False)
     yield
     projection_service_module._PRIMARY_DOC_THROTTLE_NEXT_ALLOWED_AT.clear()
     projection_service_module._PRIMARY_DOC_GOVERNANCE_STATS.clear()
@@ -275,6 +276,29 @@ def test_projection_service_retries_live_room_handoff_after_detached_race(monkey
 
     assert live_calls == 2
     assert fake_state["data"]["weather"] == {"city": "Moscow"}
+
+
+def test_projection_service_uses_local_bridge_before_detached_fallback(monkeypatch) -> None:
+    target = SimpleNamespace(backend="yjs", path="data/root_mgmnt", webspace_id=None)
+    registry = SimpleNamespace(resolve=lambda scope, slot: [target])  # noqa: ARG005
+    service = projection_service_module.ProjectionService(ctx=SimpleNamespace(), registry=registry)
+    bridge_calls: list[tuple[str, str, object]] = []
+
+    async def _bridge(webspace_id: str, path: str, value: object, **_kwargs):
+        bridge_calls.append((webspace_id, path, value))
+        return {"ok": True, "room_applied": True, "reason": "applied"}
+
+    async def _detached(*_args, **_kwargs):
+        raise AssertionError("detached fallback should not run after bridge apply")
+
+    monkeypatch.setattr(projection_service_module, "_YJS_PROJECTION_LOCAL_BRIDGE_ENABLED", True)
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
+    monkeypatch.setattr(projection_service_module, "_try_local_projection_bridge", _bridge)
+    monkeypatch.setattr(projection_service_module, "run_detached_ydoc_mutation", _detached)
+
+    asyncio.run(service.apply("current_user", "root_mgmnt.snapshot", {"ok": True}, webspace_id="desktop-dev"))
+
+    assert bridge_calls == [("desktop-dev", "data/root_mgmnt", {"ok": True})]
 
 
 def test_projection_service_skips_identical_flat_yjs_update(monkeypatch) -> None:

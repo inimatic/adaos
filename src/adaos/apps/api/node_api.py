@@ -3442,6 +3442,49 @@ class WebspaceMaterializationRepairRequest(BaseModel):
     request_source: str | None = Field(default=None, max_length=256)
 
 
+class WebspaceYjsProjectionRequest(BaseModel):
+    path: str = Field(..., min_length=1, max_length=512)
+    value: Any = None
+    owner: str | None = Field(default=None, max_length=256)
+    source: str | None = Field(default=None, max_length=256)
+    channel: str | None = Field(default=None, max_length=256)
+
+
+def _yjs_projection_bridge_max_payload_bytes() -> int:
+    try:
+        return max(1024, int(str(os.getenv("ADAOS_YJS_PROJECTION_BRIDGE_MAX_PAYLOAD_BYTES") or "262144").strip()))
+    except Exception:
+        return 262144
+
+
+def _projection_bridge_payload_size(value: Any) -> int:
+    try:
+        return len(
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        )
+    except Exception:
+        return _yjs_projection_bridge_max_payload_bytes() + 1
+
+
+def _normalize_yjs_projection_bridge_path(path: str) -> tuple[str, str]:
+    clean = str(path or "").strip().strip("/")
+    parts = [part for part in clean.split("/") if part]
+    if len(parts) < 2:
+        raise HTTPException(status_code=400, detail="projection_path_requires_root_and_key")
+    if any(part in {".", ".."} for part in parts):
+        raise HTTPException(status_code=400, detail="projection_path_contains_invalid_segment")
+    root_name = parts[0]
+    if root_name != "data":
+        raise HTTPException(status_code=400, detail="projection_bridge_only_accepts_data_paths")
+    return "/".join(parts), root_name
+
+
 _YJS_MATERIALIZATION_REPAIR_LOCK = threading.RLock()
 _YJS_MATERIALIZATION_REPAIR_INFLIGHT: dict[
     str,
@@ -5776,6 +5819,73 @@ async def node_yjs_webspace_materialization_repair(
         scenario_id=authoritative_scenario or None,
     )
     return result
+
+
+@router.post("/yjs/webspaces/{webspace_id}/projection", dependencies=[Depends(require_token)])
+async def node_yjs_webspace_projection(
+    webspace_id: str,
+    payload: WebspaceYjsProjectionRequest,
+) -> dict[str, Any]:
+    """Apply a bounded skill projection to the active browser Yjs room."""
+
+    conf = load_config()
+    target_webspace_id = _coerce_node_webspace_id(webspace_id)
+    if str(getattr(conf, "role", "") or "").strip().lower() != "hub":
+        return {
+            "ok": False,
+            "accepted": False,
+            "webspace_id": target_webspace_id,
+            "error": "hub_role_required",
+        }
+
+    path, root_name = _normalize_yjs_projection_bridge_path(payload.path)
+    payload_bytes = _projection_bridge_payload_size(payload.value)
+    max_payload_bytes = _yjs_projection_bridge_max_payload_bytes()
+    if payload_bytes > max_payload_bytes:
+        return {
+            "ok": False,
+            "accepted": False,
+            "webspace_id": target_webspace_id,
+            "path": path,
+            "payload_bytes": payload_bytes,
+            "max_payload_bytes": max_payload_bytes,
+            "error": "projection_payload_too_large",
+        }
+
+    from adaos.services.scenario.projection_service import (  # pylint: disable=import-outside-toplevel
+        apply_yjs_projection_value_to_doc,
+    )
+    from adaos.services.yjs.doc import submit_live_room_mutation  # pylint: disable=import-outside-toplevel
+
+    owner = str(payload.owner or "skill:unknown").strip()[:256] or "skill:unknown"
+    source = str(payload.source or "node_api.projection_bridge").strip()[:256] or "node_api.projection_bridge"
+    channel = str(payload.channel or "projection.yjs.live_room.http_bridge").strip()[:256]
+
+    def _mutator(doc: Any, txn: Any) -> bool:
+        return apply_yjs_projection_value_to_doc(doc, txn, path, payload.value)
+
+    live_room = await submit_live_room_mutation(
+        target_webspace_id,
+        _mutator,
+        root_names=[root_name],
+        source=source,
+        owner=owner,
+        channel=channel,
+        governed=True,
+    )
+    applied = bool(live_room.get("applied"))
+    return {
+        "ok": applied,
+        "accepted": True,
+        "webspace_id": target_webspace_id,
+        "path": path,
+        "payload_bytes": payload_bytes,
+        "max_payload_bytes": max_payload_bytes,
+        "room_applied": applied,
+        "room_changed": bool(live_room.get("changed")),
+        "reason": str(live_room.get("reason") or "unknown"),
+        "live_room": live_room,
+    }
 
 
 @router.patch("/yjs/webspaces/{webspace_id}", dependencies=[Depends(require_token)])

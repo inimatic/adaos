@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import threading
 import time
+from urllib.parse import quote
 
 from adaos.sdk.data.context import get_current_skill
 from adaos.services.agent_context import AgentContext, get_ctx
@@ -78,6 +79,14 @@ _YJS_PROJECTION_SOFT_OVERAGE_WINDOW_SEC = _float_env(
     "ADAOS_YJS_PROJECTION_SOFT_OVERAGE_WINDOW_SEC",
     10.0,
     0.0,
+)
+_YJS_PROJECTION_LOCAL_BRIDGE_ENABLED = str(
+    os.getenv("ADAOS_YJS_PROJECTION_LOCAL_BRIDGE_ENABLE") or "1"
+).strip().lower() in {"1", "true", "yes", "on"}
+_YJS_PROJECTION_LOCAL_BRIDGE_TIMEOUT_S = _float_env(
+    "ADAOS_YJS_PROJECTION_LOCAL_BRIDGE_TIMEOUT_S",
+    2.5,
+    0.1,
 )
 _YJS_PROJECTION_SOFT_OVERAGE_MAX_ENTRIES = _int_env(
     "ADAOS_YJS_PROJECTION_SOFT_OVERAGE_MAX_ENTRIES",
@@ -1489,6 +1498,107 @@ def _set_nested_y_map_path(
         return None
 
 
+def apply_yjs_projection_value_to_doc(
+    doc: Any,
+    txn: Any,
+    path: str,
+    value: Any,
+    *,
+    write_context: dict[str, int] | None = None,
+) -> bool:
+    segments = [s for s in str(path or "").split("/") if s]
+    if len(segments) < 2:
+        return False
+    root = doc.get_map(segments[0])
+    if len(segments) == 2:
+        changed, _mode = set_map_value_if_changed(root, txn, segments[1], value)
+        return bool(changed)
+
+    changed_y_map = _set_nested_y_map_path(
+        root,
+        txn,
+        segments[1:],
+        value,
+        write_context=write_context,
+    )
+    if changed_y_map is not None:
+        return bool(changed_y_map)
+
+    top_key = segments[1]
+    current_top = root.get(top_key)
+    changed, merged = _merge_nested_path(current_top, segments[2:], value)
+    if not changed:
+        return False
+    root.set(txn, top_key, merged)
+    return True
+
+
+def _projection_local_bridge_base_and_token() -> tuple[str, str] | None:
+    try:
+        from adaos.apps.cli.active_control import (  # pylint: disable=import-outside-toplevel
+            resolve_control_base_url,
+            resolve_control_token,
+        )
+
+        base = str(resolve_control_base_url(prefer_local=True) or "").strip().rstrip("/")
+        token = str(resolve_control_token(base_url=base) or "").strip()
+    except Exception:
+        base = str(os.getenv("ADAOS_CONTROL_URL") or os.getenv("ADAOS_LOCAL_CONTROL_URL") or "").strip().rstrip("/")
+        token = str(os.getenv("ADAOS_TOKEN") or "").strip()
+    if not base or not token:
+        return None
+    if not (base.startswith("http://127.0.0.1") or base.startswith("http://localhost")):
+        return None
+    return base, token
+
+
+async def _try_local_projection_bridge(
+    webspace_id: str,
+    path: str,
+    value: Any,
+    *,
+    owner: str,
+    channel: str,
+) -> Mapping[str, Any]:
+    if not _YJS_PROJECTION_LOCAL_BRIDGE_ENABLED:
+        return {"applied": False, "reason": "local_projection_bridge_disabled"}
+    resolved = _projection_local_bridge_base_and_token()
+    if resolved is None:
+        return {"applied": False, "reason": "local_projection_bridge_unavailable"}
+    base, token = resolved
+
+    def _post() -> Mapping[str, Any]:
+        import requests  # pylint: disable=import-outside-toplevel
+
+        response = requests.post(
+            f"{base}/api/node/yjs/webspaces/{quote(webspace_id, safe='')}/projection",
+            headers={"X-AdaOS-Token": token},
+            json={
+                "path": path,
+                "value": value,
+                "owner": owner,
+                "source": "projection_service.local_bridge",
+                "channel": channel,
+            },
+            timeout=_YJS_PROJECTION_LOCAL_BRIDGE_TIMEOUT_S,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, Mapping) else {}
+
+    try:
+        result = await asyncio.to_thread(_post)
+    except Exception as exc:
+        _log.debug(
+            "local projection bridge failed webspace=%s path=%s reason=%s",
+            webspace_id,
+            path,
+            f"{type(exc).__name__}: {exc}",
+        )
+        return {"applied": False, "reason": "local_projection_bridge_failed"}
+    return result
+
+
 @dataclass(slots=True)
 class ProjectionService:
     """
@@ -1770,40 +1880,13 @@ class ProjectionService:
                 detached_compaction_needed = True
 
         def _mutator(doc, txn) -> None:
-            root = doc.get_map(root_name)
-
-            # For simple two-segment paths like ``data/status`` keep the
-            # legacy flat ``data["status"]`` behaviour so existing widgets
-            # continue to work. For longer paths such as ``data/infra/status``
-            # merge into the existing top-level subtree so sibling branches
-            # like other user ids are preserved.
-            if len(segments) == 2:
-                key = segments[1]
-                # Scenario materialization stores top-level application data
-                # as attached YMaps. Replacing such a branch detaches the
-                # complete CRDT subtree and turns a small skill snapshot into
-                # a very large Yjs update. Reconcile mapping payloads in-place
-                # so only changed leaves are encoded and projection guard does
-                # not suppress the next legitimate snapshot.
-                set_map_value_if_changed(root, txn, key, projected_value)
-                return
-
-            changed_y_map = _set_nested_y_map_path(
-                root,
+            return apply_yjs_projection_value_to_doc(
+                doc,
                 txn,
-                segments[1:],
+                path,
                 projected_value,
                 write_context=write_context,
             )
-            if changed_y_map is not None:
-                return
-
-            top_key = segments[1]
-            current_top = root.get(top_key)
-            changed, merged = _merge_nested_path(current_top, segments[2:], projected_value)
-            if not changed:
-                return
-            root.set(txn, top_key, merged)
 
         async def _try_live_room_projection() -> Mapping[str, Any]:
             return await submit_live_room_mutation(
@@ -1821,12 +1904,22 @@ class ProjectionService:
             live_result = await _try_live_room_projection()
             if bool(live_result.get("applied")):
                 return
+            bridge_result = await _try_local_projection_bridge(
+                ws_id,
+                path,
+                projected_value,
+                owner=owner,
+                channel=f"projection.{str(target.backend or 'yjs')}.live_room.http_bridge",
+            )
+            if bool(bridge_result.get("ok")) and bool(bridge_result.get("room_applied")):
+                return
             _log.debug(
                 "live-room projection unavailable; using durable YStore fallback "
-                "webspace=%s path=%s reason=%s",
+                "webspace=%s path=%s reason=%s bridge_reason=%s",
                 ws_id,
                 path,
                 str(live_result.get("reason") or "not_applied"),
+                str(bridge_result.get("reason") or bridge_result.get("error") or "not_applied"),
             )
         try:
             def _mutate_detached(ydoc: Any) -> None:
@@ -1899,6 +1992,7 @@ class ProjectionService:
 
 __all__ = [
     "ProjectionService",
+    "apply_yjs_projection_value_to_doc",
     "primary_doc_governance_snapshot",
     "projection_rule_miss_snapshot",
     "reset_projection_rule_miss_diagnostics",
