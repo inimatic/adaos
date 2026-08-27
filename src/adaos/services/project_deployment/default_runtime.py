@@ -644,7 +644,7 @@ def configure_default_distributed_runtimes(
         artifact_root = state_dir / "artifact_pipeline"
         package_store = ContentAddressedPackageStore(artifact_root / "packages")
         fallback = release_fallback
-        if fallback is None and authoritative:
+        if fallback is None:
             fallback = _default_release_fallback(current)
         releases = CachedReleaseProvider(
             ReleaseRepository(artifact_root / "release-cache"),

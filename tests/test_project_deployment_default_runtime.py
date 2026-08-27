@@ -17,6 +17,7 @@ from adaos.services.distributed_runtime import (
 from adaos.services.project_deployment import (
     get_project_deployment_runtime,
     register_local_deployment_receiver,
+    register_project_deployment_authority,
     register_project_deployment_runtime,
 )
 from adaos.services.project_deployment import default_runtime
@@ -571,8 +572,14 @@ def test_default_runtimes_share_durable_store_and_publish_local_inventory(monkey
         ),
     )
     monkeypatch.setenv("ADAOS_NODE_DEPLOYMENT_URL", "http://192.0.2.10:8778")
+    release_fallback = SimpleNamespace()
+    monkeypatch.setattr(
+        default_runtime,
+        "_default_release_fallback",
+        lambda _ctx: release_fallback,
+    )
 
-    configured = configure_default_distributed_runtimes(ctx)
+    configured = configure_default_distributed_runtimes(ctx, authoritative=False)
     deployment = get_project_deployment_runtime()
     distributed = get_distributed_runtime()
     payload = deployment_runtime_inventory_payload(ctx)
@@ -588,7 +595,9 @@ def test_default_runtimes_share_durable_store_and_publish_local_inventory(monkey
     assert isinstance(distributed.topology_adapter, SkillToolTopologyAdapter)
     assert distributed.service_invoker is not None
     assert deployment.admission_policy is not None
+    assert deployment.releases.fallback is release_fallback
 
+    register_project_deployment_authority(None)
     register_project_deployment_runtime(None)
     register_distributed_runtime(None)
     register_local_deployment_receiver(None)
