@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
 
 from adaos.services.bootstrap import load_config
-from adaos.services.runtime_paths import current_base_dir
+from adaos.services.runtime_paths import current_base_dir, current_state_dir
 from adaos.services.zone_hosts import (
     DEFAULT_PUBLIC_ROOT_BASE_URL,
     canonical_zone_id,
@@ -45,6 +46,14 @@ def _env_bool(name: str, *, default: bool = False) -> bool:
     if not raw:
         return default
     return raw in {"1", "true", "yes", "on"}
+
+
+def _int_value(value: Any) -> int:
+    try:
+        parsed = int(float(str(value)))
+    except Exception:
+        return 0
+    return parsed if parsed > 0 else 0
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:
@@ -184,6 +193,138 @@ def _snapshot_entitlement(raw: Mapping[str, Any]) -> Mapping[str, Any]:
     return entitlement if isinstance(entitlement, Mapping) else {}
 
 
+def _state_dir_for_usage(base_dir: Path) -> Path:
+    try:
+        return current_state_dir()
+    except Exception:
+        return (base_dir / "state").resolve()
+
+
+def _timestamp_s(value: Any) -> float:
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+        return numeric / 1000.0 if numeric > 10_000_000_000 else numeric
+    text = _text(value)
+    if not text:
+        return 0.0
+    try:
+        numeric = float(text)
+        return numeric / 1000.0 if numeric > 10_000_000_000 else numeric
+    except Exception:
+        pass
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
+def _iso_from_timestamp(ts: float) -> str:
+    if ts <= 0:
+        return ""
+    try:
+        return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    except Exception:
+        return ""
+
+
+def _observed_llm_request_usage(base_dir: Path, *, now_ts: float | None = None) -> dict[str, Any]:
+    state_dir = _state_dir_for_usage(base_dir)
+    teacher_root = state_dir / "skills" / "nlu_teacher"
+    if not teacher_root.exists():
+        return {}
+    now = float(now_ts or time.time())
+    windows = {
+        "used_24h": 24 * 60 * 60,
+        "used_7d": 7 * 24 * 60 * 60,
+        "used_30d": 30 * 24 * 60 * 60,
+    }
+    counts = {key: 0 for key in windows}
+    status_counts: dict[str, int] = {}
+    seen: set[str] = set()
+    latest_ts = 0.0
+    latest_model = ""
+    latest_status = ""
+    try:
+        paths = sorted(teacher_root.glob("*.json"))[:100]
+    except Exception:
+        return {}
+    for path in paths:
+        payload = _read_json_file(path)
+        logs = payload.get("llm_logs")
+        if not isinstance(logs, list):
+            continue
+        for log in logs:
+            if not isinstance(log, Mapping):
+                continue
+            event_id = _text(log.get("id") or log.get("log_id") or log.get("request_id"))
+            if not event_id:
+                event_id = _text(log.get("ts")) + ":" + _text(log.get("model"))
+            if not event_id or event_id in seen:
+                continue
+            seen.add(event_id)
+            ts = max(
+                _timestamp_s(log.get("ts")),
+                _timestamp_s(log.get("created_at")),
+                _timestamp_s(log.get("started_at")),
+                _timestamp_s(log.get("finished_at")),
+            )
+            if ts <= 0:
+                continue
+            age_s = now - ts
+            if age_s < 0:
+                age_s = 0
+            if age_s > windows["used_30d"]:
+                continue
+            status = _text(log.get("status")).lower() or "observed"
+            if status in {"retrying", "queued"}:
+                continue
+            status_counts[status] = status_counts.get(status, 0) + 1
+            for key, window_s in windows.items():
+                if age_s <= window_s:
+                    counts[key] += 1
+            if ts >= latest_ts:
+                latest_ts = ts
+                latest_model = _text(log.get("model"))
+                latest_status = status
+    if not any(counts.values()):
+        return {}
+    return {
+        "observed": True,
+        **counts,
+        "last_seen_at": _iso_from_timestamp(latest_ts),
+        "last_model": latest_model,
+        "last_status": latest_status,
+        "source": "nlu_teacher.llm_logs",
+        "status_counts": status_counts,
+    }
+
+
+def _merge_llm_request_usage(usage_payload: dict[str, Any], observed: Mapping[str, Any]) -> dict[str, Any]:
+    if not observed:
+        return usage_payload
+    current = usage_payload.get("llm.requests")
+    current_payload = dict(current) if isinstance(current, Mapping) else {}
+    for key in ("used_24h", "used_7d", "used_30d", "denied_30d"):
+        observed_value = _int_value(observed.get(key))
+        current_value = _int_value(current_payload.get(key))
+        if observed_value > current_value:
+            current_payload[key] = observed_value
+    for key in ("last_seen_at", "last_model", "last_status"):
+        if _text(observed.get(key)) and not _text(current_payload.get(key)):
+            current_payload[key] = _text(observed.get(key))
+    current_payload["observed"] = True
+    sources = current_payload.get("sources")
+    source_values = [_text(item) for item in sources] if isinstance(sources, list) else []
+    if _text(observed.get("source")) and _text(observed.get("source")) not in source_values:
+        source_values.append(_text(observed.get("source")))
+    if source_values:
+        current_payload["sources"] = source_values
+    if isinstance(observed.get("status_counts"), Mapping):
+        current_payload["status_counts"] = dict(observed["status_counts"])
+    usage_payload["llm.requests"] = current_payload
+    return usage_payload
+
+
 def current_subnet_economic_status() -> dict[str, Any]:
     base_dir = current_base_dir()
     conf = _load_config_best_effort(base_dir)
@@ -220,6 +361,7 @@ def current_subnet_economic_status() -> dict[str, Any]:
         mode = "observe"
     usage = raw_snapshot.get("usage")
     usage_payload = dict(usage) if isinstance(usage, Mapping) else {}
+    usage_payload = _merge_llm_request_usage(usage_payload, _observed_llm_request_usage(base_dir))
     global_report_enabled = _env_bool("ADAOS_GLOBAL_ROOT_MGMNT_REPORT_ENABLED", default=False)
     zone_root_base = zone_public_base_url(zone_id) if zone_id else ""
 

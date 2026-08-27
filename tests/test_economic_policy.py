@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from types import SimpleNamespace
 
 from adaos.services import economic_policy
@@ -71,6 +72,41 @@ def test_economic_status_reads_root_entitlement_snapshot(monkeypatch, tmp_path) 
     assert status["plan_id"] == "developer"
     assert status["disabled_resource_count"] == 1
     assert compact["usage"]["llm.requests"]["used_24h"] == 3
+
+
+def test_economic_status_observes_nlu_teacher_llm_usage(monkeypatch, tmp_path) -> None:
+    state_dir = tmp_path / "state"
+    teacher_dir = state_dir / "skills" / "nlu_teacher"
+    teacher_dir.mkdir(parents=True)
+    now = time.time()
+    (teacher_dir / "desktop.json").write_text(
+        json.dumps(
+            {
+                "llm_logs": [
+                    {"id": "llm.recent", "ts": now - 60, "status": "succeeded", "model": "gpt-4o-mini"},
+                    {"id": "llm.week-old", "ts": now - 8 * 24 * 60 * 60, "status": "error", "model": "gpt-4o-mini"},
+                    {"id": "llm.old", "ts": now - 40 * 24 * 60 * 60, "status": "succeeded", "model": "gpt-4o-mini"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(economic_policy, "load_config", lambda: _config())
+    monkeypatch.setattr(economic_policy, "current_base_dir", lambda: tmp_path)
+    monkeypatch.setattr(economic_policy, "current_state_dir", lambda: state_dir)
+    monkeypatch.delenv("ADAOS_ECONOMIC_ENTITLEMENT_SNAPSHOT", raising=False)
+    monkeypatch.delenv("ADAOS_ZONE_ID", raising=False)
+
+    status = economic_policy.current_subnet_economic_status()
+    compact = economic_policy.compact_economic_status_for_control_report()
+
+    usage = status["usage"]["llm.requests"]
+    assert usage["used_24h"] == 1
+    assert usage["used_7d"] == 1
+    assert usage["used_30d"] == 2
+    assert usage["last_model"] == "gpt-4o-mini"
+    assert usage["sources"] == ["nlu_teacher.llm_logs"]
+    assert compact["usage"]["llm.requests"]["used_24h"] == 1
 
 
 def test_control_lifecycle_zone_uses_node_config(monkeypatch) -> None:
