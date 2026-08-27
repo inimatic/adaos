@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any, Mapping
 
 from adaos.services.bootstrap import load_config
+from adaos.services.root.client import RootHttpClient
 from adaos.services.runtime_paths import current_base_dir, current_state_dir
 from adaos.services.zone_hosts import (
     DEFAULT_PUBLIC_ROOT_BASE_URL,
@@ -124,6 +125,68 @@ def _root_base_url(conf: Any) -> str:
     return _text(getattr(getattr(conf, "root_settings", None), "base_url", None)).rstrip("/")
 
 
+def _config_path(
+    conf: Any,
+    *,
+    method_name: str,
+    settings_path: tuple[str, ...],
+    fallback: str,
+    base_dir: Path,
+) -> Path:
+    method = getattr(conf, method_name, None)
+    if callable(method):
+        try:
+            value = method()
+            if value:
+                return Path(value).expanduser().resolve()
+        except Exception:
+            pass
+
+    value: Any = conf
+    for part in settings_path:
+        value = getattr(value, part, None)
+        if value is None:
+            break
+    raw = _text(value) or fallback
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = base_dir / path
+    return path.resolve()
+
+
+def _economic_root_http_client(conf: Any, *, base_dir: Path, root_base_url: str | None = None) -> RootHttpClient:
+    base_url = _text(root_base_url).rstrip("/") or _root_base_url(conf)
+    if not base_url:
+        raise RuntimeError("root base_url is not configured")
+    cert_path = _config_path(
+        conf,
+        method_name="hub_cert_path",
+        settings_path=("subnet_settings", "hub", "cert"),
+        fallback="keys/hub_cert.pem",
+        base_dir=base_dir,
+    )
+    key_path = _config_path(
+        conf,
+        method_name="hub_key_path",
+        settings_path=("subnet_settings", "hub", "key"),
+        fallback="keys/hub_private.pem",
+        base_dir=base_dir,
+    )
+    if not cert_path.exists() or not key_path.exists():
+        raise RuntimeError("hub mTLS certificate or key is missing")
+    ca_path = _config_path(
+        conf,
+        method_name="ca_cert_path",
+        settings_path=("root_settings", "ca_cert"),
+        fallback="keys/ca.cert",
+        base_dir=base_dir,
+    )
+    verify: str | bool = True
+    if os.getenv("ADAOS_ROOT_VERIFY_CA", "0") == "1" and ca_path.exists():
+        verify = str(ca_path)
+    return RootHttpClient(base_url=base_url, verify=verify, cert=(str(cert_path), str(key_path)))
+
+
 def _global_root_base_url() -> str:
     return _text(os.getenv("ADAOS_GLOBAL_ROOT_MGMNT_BASE_URL")).rstrip("/") or DEFAULT_PUBLIC_ROOT_BASE_URL
 
@@ -198,6 +261,38 @@ def _unwrap_entitlement_snapshot(raw: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(nested, Mapping) and nested.get("schema") == ECONOMIC_ENTITLEMENT_SNAPSHOT_SCHEMA:
         return dict(nested)
     return dict(raw)
+
+
+def refresh_entitlement_snapshot_from_root(
+    root_base_url: str | None = None,
+    *,
+    timeout: float = 10.0,
+) -> dict[str, Any]:
+    base_dir = current_base_dir()
+    conf = _load_config_best_effort(base_dir)
+    client = _economic_root_http_client(conf, base_dir=base_dir, root_base_url=root_base_url)
+    payload = client.request("GET", "/v1/hub/economic/entitlement", timeout=timeout)
+    if not isinstance(payload, Mapping):
+        raise RuntimeError("root returned invalid entitlement payload")
+    entitlement = _unwrap_entitlement_snapshot(payload)
+    if entitlement.get("schema") != ECONOMIC_ENTITLEMENT_SNAPSHOT_SCHEMA:
+        raise RuntimeError("root returned invalid entitlement schema")
+    path = entitlement_snapshot_path(base_dir=base_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stored = dict(payload)
+    stored["retrieved_at"] = _now_iso()
+    stored["root_base_url"] = client.base_url
+    path.write_text(json.dumps(stored, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    return {
+        "ok": True,
+        "path": str(path),
+        "root_base_url": client.base_url,
+        "subnet_id": _text(getattr(conf, "subnet_id", None)),
+        "subscription_state": _text(_snapshot_subscription(entitlement).get("state")),
+        "plan_id": _text(_snapshot_subscription(entitlement).get("plan_id")),
+        "entitlement_state": _text(_snapshot_entitlement(entitlement).get("state")),
+        "retrieved_at": stored["retrieved_at"],
+    }
 
 
 def _state_dir_for_usage(base_dir: Path) -> Path:
@@ -439,4 +534,5 @@ __all__ = [
     "compact_economic_status_for_control_report",
     "current_subnet_economic_status",
     "entitlement_snapshot_path",
+    "refresh_entitlement_snapshot_from_root",
 ]

@@ -108,6 +108,49 @@ def test_economic_status_accepts_root_entitlement_api_wrapper(monkeypatch, tmp_p
     assert status["usage"]["llm.requests"]["used_24h"] == 7
 
 
+def test_refresh_entitlement_snapshot_from_root(monkeypatch, tmp_path) -> None:
+    class FakeRootClient:
+        base_url = "https://ru.api.inimatic.com"
+
+        def request(self, method, path, **kwargs):
+            assert method == "GET"
+            assert path == "/v1/hub/economic/entitlement"
+            assert kwargs["timeout"] == 4
+            return {
+                "ok": True,
+                "subnet_id": "sn_test",
+                "entitlement": {
+                    "schema": "adaos.root_mgmnt.economic_entitlement.v1",
+                    "mode": "observe",
+                    "subscription": {"state": "active", "plan_id": "builder"},
+                    "entitlement": {"state": "enabled", "disabled_resources": []},
+                    "usage": {
+                        "llm.requests": {"used_24h": 2, "quota_remaining": 19998},
+                        "codex.api.tokens": {"used_30d": 100, "quota_remaining": 19999900},
+                    },
+                },
+            }
+
+    monkeypatch.setattr(economic_policy, "load_config", lambda: _config())
+    monkeypatch.setattr(economic_policy, "current_base_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        economic_policy,
+        "_economic_root_http_client",
+        lambda conf, *, base_dir, root_base_url=None: FakeRootClient(),
+    )
+    monkeypatch.delenv("ADAOS_ECONOMIC_ENTITLEMENT_SNAPSHOT", raising=False)
+    monkeypatch.delenv("ADAOS_ZONE_ID", raising=False)
+
+    refresh = economic_policy.refresh_entitlement_snapshot_from_root(timeout=4)
+    status = economic_policy.current_subnet_economic_status()
+
+    assert refresh["ok"] is True
+    assert refresh["plan_id"] == "builder"
+    assert status["source"] == "root_entitlement_snapshot"
+    assert status["subscription_state"] == "active"
+    assert status["usage"]["codex.api.tokens"]["quota_remaining"] == 19999900
+
+
 def test_economic_status_observes_nlu_teacher_llm_usage(monkeypatch, tmp_path) -> None:
     state_dir = tmp_path / "state"
     teacher_dir = state_dir / "skills" / "nlu_teacher"
