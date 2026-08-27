@@ -75,9 +75,12 @@ It must not silently become a second steady-state transport.
 After an expected scenario switch, the browser gives the live Yjs document a
 short bounded convergence window before requesting an essential HTTP
 materialization snapshot. Snapshot recovery is single-flight and permits one
-request per webspace, expected scenario, sync state, and Yjs materialization
-fingerprint. Retries require new Yjs or connection evidence. A selector change
-must not trigger a parallel, periodic, or transaction-driven snapshot fanout.
+initial request per webspace, expected scenario, sync state, and Yjs
+materialization fingerprint. When that request races a background scenario
+rebuild and returns not-ready or the previous scenario, the same bounded wait
+may make one retry after a short cooldown. Further retries require new Yjs or
+connection evidence. A selector change must not trigger a parallel, periodic,
+or transaction-driven snapshot fanout.
 
 ### 4. Enforce safety at the kernel boundary
 
