@@ -64,6 +64,11 @@ manually. The Windows full-suite control run remains nightly or opt-in through
 `include_windows`; neither full run is on the normal development critical path.
 
 Runtime slots record the human-readable build version in their slot manifest.
+Remote update checkouts may start shallow, but slot preparation completes the
+commit history with blob filtering before calculating the Git revision count.
+Preparation fails closed if the checkout remains shallow; publishing a value
+such as `+1.<sha>` would break monotonic skill/core compatibility checks after
+the slot's VCS metadata is removed.
 Use these commands on a node:
 
 ```bash

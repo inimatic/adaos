@@ -1563,6 +1563,24 @@ def _checkout_build_version(repo_dir: Path) -> str:
     return f"{base}{suffix}"
 
 
+def _ensure_complete_history_for_build_identity(repo_dir: Path) -> dict[str, object]:
+    shallow_path = repo_dir / ".git" / "shallow"
+    if not shallow_path.exists():
+        return {"state": "complete", "was_shallow": False}
+    git = shutil.which("git")
+    if not git:
+        raise RuntimeError("git is required to complete shallow core update history")
+    _run(
+        [git, "fetch", "--unshallow", "--filter=blob:none", "origin"],
+        cwd=repo_dir,
+    )
+    if shallow_path.exists():
+        raise RuntimeError(
+            "core update checkout remains shallow; refusing to publish a non-monotonic build identity"
+        )
+    return {"state": "complete", "was_shallow": True, "filter": "blob:none"}
+
+
 def _checkout_build_date(repo_dir: Path) -> str:
     return _git_text(repo_dir, "show", "-s", "--format=%cI", "HEAD")
 
@@ -1704,6 +1722,7 @@ def prepare_slot(
         else:
             source_kind = str(checkout_result)
             source_checkout = {"kind": source_kind, "attempts": []}
+        source_history = _ensure_complete_history_for_build_identity(checkout_tmp)
         venv_tmp = prepared_slot / "venv"
         venv_seed = _prepare_seed_venv(
             venv_dir=venv_tmp,
@@ -1744,6 +1763,7 @@ def prepare_slot(
             "root_repo_root": str(repo_root_dir) if repo_root_dir is not None else "",
             "source_kind": source_kind,
             "source_checkout": source_checkout,
+            "source_history": source_history,
             "source_repo_root": str(source_repo_dir) if source_repo_dir is not None else "",
             "repo_url": repo_url,
             "repo_dir": str(final_repo_dir),

@@ -1001,6 +1001,45 @@ def test_checkout_build_version_env_override_wins(monkeypatch, tmp_path: Path) -
     assert mod._checkout_build_version(tmp_path) == "2026.5.22"
 
 
+def test_complete_history_for_build_identity_unshallows_without_blobs(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    shallow_path = tmp_path / ".git" / "shallow"
+    shallow_path.parent.mkdir(parents=True)
+    shallow_path.write_text("deadbeef\n", encoding="utf-8")
+    calls: list[tuple[list[str], Path | None]] = []
+
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: "git")
+
+    def _fake_run(cmd, *, cwd=None):
+        calls.append((list(cmd), cwd))
+        shallow_path.unlink()
+
+    monkeypatch.setattr(mod, "_run", _fake_run)
+
+    result = mod._ensure_complete_history_for_build_identity(tmp_path)
+
+    assert result == {"state": "complete", "was_shallow": True, "filter": "blob:none"}
+    assert calls == [
+        (["git", "fetch", "--unshallow", "--filter=blob:none", "origin"], tmp_path)
+    ]
+
+
+def test_complete_history_for_build_identity_rejects_still_shallow_checkout(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    shallow_path = tmp_path / ".git" / "shallow"
+    shallow_path.parent.mkdir(parents=True)
+    shallow_path.write_text("deadbeef\n", encoding="utf-8")
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: "git")
+    monkeypatch.setattr(mod, "_run", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="remains shallow"):
+        mod._ensure_complete_history_for_build_identity(tmp_path)
+
+
 def test_strip_repo_vcs_metadata_removes_git_dir(tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 
