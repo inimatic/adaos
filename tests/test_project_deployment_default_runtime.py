@@ -22,10 +22,56 @@ from adaos.services.project_deployment import (
 from adaos.services.project_deployment import default_runtime
 from adaos.services.project_deployment.default_runtime import (
     AdaOSComponentLifecycleHooks,
+    CachedReleaseProvider,
     configure_default_distributed_runtimes,
     deployment_runtime_inventory_payload,
     local_node_inventory_record,
 )
+
+
+def test_cached_release_provider_fetches_and_verifies_missing_packages() -> None:
+    package = SimpleNamespace(digest="sha256:" + "a" * 64, key="skill:demo")
+    plan = SimpleNamespace(packages=(package,))
+
+    class Repository:
+        cached = None
+
+        def get_release(self, _project_id: str, _release_digest: str):
+            if self.cached is None:
+                raise FileNotFoundError
+            return self.cached
+
+        def put_release(self, value):
+            self.cached = value
+
+    class PackageStore:
+        data = None
+
+        def read(self, _digest: str) -> bytes:
+            if self.data is None:
+                raise FileNotFoundError
+            return self.data
+
+        def put(self, data: bytes, *, expected_digest: str):
+            assert expected_digest == package.digest
+            self.data = data
+            return SimpleNamespace(ref=package)
+
+    class Remote:
+        def get_release(self, _project_id: str, _release_digest: str):
+            return plan
+
+        def fetch_package(self, requested):
+            assert requested is package
+            return b"verified-package"
+
+    provider = CachedReleaseProvider(
+        Repository(), fallback=Remote(), package_store=PackageStore()
+    )
+
+    assert provider.get_release("demo", "sha256:" + "b" * 64) is plan
+    assert provider.read_package(package.digest) == b"verified-package"
+    assert provider.fetch_package(package) == b"verified-package"
 
 
 def test_async_bridge_runs_when_activation_is_called_from_an_event_loop() -> None:

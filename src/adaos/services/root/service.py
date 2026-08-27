@@ -2210,13 +2210,24 @@ class RootDeveloperService:
         hub_id = cfg.subnet_id or "pending_hub"
         return (self.ctx.paths.base_dir() / "dev" / hub_id).resolve()
 
-    def _artifact_publication_service(self, cfg: NodeConfig) -> ArtifactPublicationService:
-        cert_path, key_path, verify = self._mtls_material_for_role(cfg, "hub")
-        remote = RemoteReleaseRepository(
+    def artifact_release_repository(
+        self,
+        *,
+        role: Literal["hub", "node"] = "hub",
+        config: NodeConfig | None = None,
+    ) -> RemoteReleaseRepository:
+        """Return the authenticated immutable-artifact registry port."""
+
+        cfg = config or self._load_config()
+        cert_path, key_path, verify = self._mtls_material_for_role(cfg, role)
+        return RemoteReleaseRepository(
             self._client(cfg),
             verify=verify,
             cert=(cert_path, key_path),
         )
+
+    def _artifact_publication_service(self, cfg: NodeConfig) -> ArtifactPublicationService:
+        remote = self.artifact_release_repository(role="hub", config=cfg)
         state_root = Path(self.ctx.paths.state_dir()) / "artifact_pipeline"
         trust = compose_artifact_trust_runtime(
             state_root=state_root,

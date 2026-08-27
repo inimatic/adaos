@@ -549,6 +549,14 @@ closure, writes package bytes to the content-addressed store, then commits the
 immutable `ReleasePlan` to the release cache. `release-inspect` reads that exact
 digest back through the same repository contract.
 
+`adaos project push <project-id>` performs the same deterministic build and,
+by default, uploads every verified package followed by the immutable
+ProjectRelease record to the authenticated Root artifact registry. Use
+`--local-only` only for an intentionally unpublished local build. A deployment
+authority resolves the exact release on demand and lazily fills its verified
+local release/package caches before planning or forwarding a package to another
+node; source checkout copying is not part of deployment.
+
 The command requires an immutable source revision. A missing mandatory source,
 component identity mismatch, unresolved dependency, changed mapping for an
 existing Project version, malformed composition, or Project-to-Project

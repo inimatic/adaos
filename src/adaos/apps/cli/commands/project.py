@@ -109,7 +109,6 @@ def _publish_project_release(
 ) -> dict[str, object]:
     """Publish a locally verified ProjectRelease and all of its packages."""
 
-    from adaos.services.artifact_pipeline.remote import RemoteReleaseRepository
     from adaos.services.root.service import RootDeveloperService
 
     _, artifact_root = _roots(workspace_root)
@@ -126,13 +125,7 @@ def _publish_project_release(
     }
 
     service = RootDeveloperService()
-    config = service._load_config()
-    cert_path, key_path, verify = service._mtls_material_for_role(config, "hub")
-    remote = RemoteReleaseRepository(
-        service._client(config),
-        verify=verify,
-        cert=(cert_path, key_path),
-    )
+    remote = service.artifact_release_repository(role="hub")
     remote.put_release(plan, archives)
     return {
         "published": True,

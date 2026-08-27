@@ -7,7 +7,7 @@ import os
 import platform
 import shutil
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from threading import RLock, Thread
 from typing import Any, Mapping
@@ -16,6 +16,7 @@ import yaml
 
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.build_info import BUILD_INFO
+from adaos.domain.artifact_release import ArtifactPackageRef
 from adaos.domain.project_deployment import NodeEndpointRecord, NodeInventoryRecord
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.artifact_pipeline.channels import ReleaseRepository
@@ -193,16 +194,64 @@ def local_node_inventory_record(ctx: AgentContext | None = None) -> NodeInventor
 class CachedReleaseProvider:
     repository: ReleaseRepository
     fallback: Any = None
+    package_store: ContentAddressedPackageStore | None = None
+    _packages_by_digest: dict[str, ArtifactPackageRef] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _lock: RLock = field(default_factory=RLock, init=False, repr=False)
 
     def get_release(self, project_id: str, release_digest: str) -> ReleasePlan:
         try:
-            return self.repository.get_release(project_id, release_digest)
+            plan = self.repository.get_release(project_id, release_digest)
         except FileNotFoundError:
             if self.fallback is None:
                 raise
             plan = self.fallback.get_release(project_id, release_digest)
             self.repository.put_release(plan)
-            return plan
+        with self._lock:
+            self._packages_by_digest.update(
+                {package.digest: package for package in plan.packages}
+            )
+        return plan
+
+    def fetch_package(self, package: ArtifactPackageRef) -> bytes:
+        store = self.package_store
+        if store is None:
+            raise FileNotFoundError(f"package cache is unavailable: {package.digest}")
+        try:
+            return store.read(package.digest)
+        except FileNotFoundError:
+            if self.fallback is None:
+                raise
+        archive = self.fallback.fetch_package(package)
+        verified = store.put(archive, expected_digest=package.digest)
+        if verified.ref != package:
+            raise ValueError(f"remote package identity mismatch: {package.key}")
+        return store.read(package.digest)
+
+    def read_package(self, digest: str) -> bytes:
+        store = self.package_store
+        if store is None:
+            raise FileNotFoundError(f"package cache is unavailable: {digest}")
+        try:
+            return store.read(digest)
+        except FileNotFoundError:
+            with self._lock:
+                package = self._packages_by_digest.get(str(digest))
+            if package is None:
+                raise
+        return self.fetch_package(package)
+
+
+def _default_release_fallback(ctx: AgentContext) -> Any:
+    try:
+        from adaos.services.root.service import RootDeveloperService
+
+        return RootDeveloperService(ctx=ctx).artifact_release_repository(
+            role="hub", config=_node_config(ctx)
+        )
+    except Exception:
+        return None
 
 
 @dataclass(slots=True)
@@ -574,9 +623,13 @@ def configure_default_distributed_runtimes(
             return {"ok": True, "configured": False, "node_id": str(conf.node_id)}
         artifact_root = state_dir / "artifact_pipeline"
         package_store = ContentAddressedPackageStore(artifact_root / "packages")
+        fallback = release_fallback
+        if fallback is None and authoritative:
+            fallback = _default_release_fallback(current)
         releases = CachedReleaseProvider(
             ReleaseRepository(artifact_root / "release-cache"),
-            fallback=release_fallback,
+            fallback=fallback,
+            package_store=package_store,
         )
         inventory = SnapshotNodeInventoryProvider(
             _snapshot,
@@ -587,7 +640,7 @@ def configure_default_distributed_runtimes(
             workspace_root=Path(current.paths.workspace_dir()),
             state_root=state_dir,
             package_store=package_store,
-            fetch_package=lambda package: package_store.read(package.digest),
+            fetch_package=releases.fetch_package,
             hooks=AdaOSComponentLifecycleHooks(current),
         )
 
@@ -609,7 +662,7 @@ def configure_default_distributed_runtimes(
 
         remote = MemberLinkNodeDeploymentTransport(
             rpc_call=member_rpc,
-            package_reader=package_store.read,
+            package_reader=releases.read_package,
             source_node_id=str(conf.node_id),
         )
         deployment = configure_project_deployment_runtime(
