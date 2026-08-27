@@ -102,6 +102,46 @@ def _echo_project_release(payload: dict[str, object], *, json_output: bool) -> N
     )
 
 
+def _publish_project_release(
+    payload: dict[str, object],
+    *,
+    workspace_root: Path | None,
+) -> dict[str, object]:
+    """Publish a locally verified ProjectRelease and all of its packages."""
+
+    from adaos.services.artifact_pipeline.remote import RemoteReleaseRepository
+    from adaos.services.root.service import RootDeveloperService
+
+    _, artifact_root = _roots(workspace_root)
+    project_id = str(payload["project_id"])
+    release_digest = str(payload["release_digest"])
+    plan = ReleaseRepository(artifact_root / "release-cache").get_release(
+        project_id,
+        release_digest,
+    )
+    package_store = ContentAddressedPackageStore(artifact_root / "packages")
+    archives = {
+        package.digest: package_store.read(package.digest)
+        for package in plan.packages
+    }
+
+    service = RootDeveloperService()
+    config = service._load_config()
+    cert_path, key_path, verify = service._mtls_material_for_role(config, "hub")
+    remote = RemoteReleaseRepository(
+        service._client(config),
+        verify=verify,
+        cert=(cert_path, key_path),
+    )
+    remote.put_release(plan, archives)
+    return {
+        "published": True,
+        "project_id": project_id,
+        "release_digest": release_digest,
+        "packages": len(plan.packages),
+    }
+
+
 @app.command("release-build")
 def release_build(
     project_id: str = typer.Argument(
@@ -141,6 +181,11 @@ def push(
     ),
     forge: str = typer.Option("github", "--forge"),
     workspace_root: Path | None = typer.Option(None, "--workspace-root"),
+    local_only: bool = typer.Option(
+        False,
+        "--local-only",
+        help="Build the immutable release locally without publishing it to Root.",
+    ),
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
     workspace, _ = _roots(workspace_root)
@@ -152,6 +197,11 @@ def push(
         workspace_root=workspace_root,
         builder="adaos.project.push",
     )
+    if not local_only:
+        payload["publication"] = _publish_project_release(
+            payload,
+            workspace_root=workspace_root,
+        )
     _echo_project_release(payload, json_output=json_output)
 
 
