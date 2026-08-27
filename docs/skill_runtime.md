@@ -368,6 +368,12 @@ Supervisor-facing validation status and operator projections now also surface a 
 
 Secrets are stored under `skills/.runtime/<name>/v<major>.<minor>/data/files/secrets.json` and are never copied into the source tree. Runtime execution injects secrets at process start and keeps placeholders (`${secret:NAME}`) inside `resolved.manifest.json`.
 
+SDK secret operations resolve that store from the context-local active skill
+runtime. Process environment variables remain a compatibility mechanism for an
+isolated worker only; they are not ownership authority for concurrent
+in-process skill calls. This prevents one skill invocation from transiently
+reading another skill's secret backend.
+
 Use the CLI to manage secrets either globally or per skill:
 
 ```

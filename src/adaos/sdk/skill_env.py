@@ -13,6 +13,7 @@ from adaos.sdk.data.skill_env import (
     read_env,
     set_env,
     skill_data_root,
+    skill_data_root_path,
     skill_env_path,
     write_env,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "read_env",
     "set_env",
     "skill_data_root",
+    "skill_data_root_path",
     "skill_env_path",
     "write_env",
 ]

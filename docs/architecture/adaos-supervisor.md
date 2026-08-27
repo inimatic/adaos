@@ -582,6 +582,13 @@ and reads the current snapshot through
 latest known transition immediately and then follows push events; it never waits
 for another heartbeat and does not need access to supervisor files.
 
+The event is node-wide, while UI data is partitioned by webspace. A projecting
+consumer such as Infra State fans each replayed or live update into every
+webspace with active projection demand. Publishing only into the default
+webspace would leave already-open desktop, TV, or mobile sessions on an
+unrelated first-paint value even though the retained EventBus snapshot is
+current.
+
 Important invariants:
 
 - the attempt record is not cleared before validation succeeds

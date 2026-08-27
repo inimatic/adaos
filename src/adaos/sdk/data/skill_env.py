@@ -21,6 +21,7 @@ __all__ = [
     "write_env",
     "skill_env_path",
     "skill_data_root",
+    "skill_data_root_path",
     "async_get_env",
     "async_set_env",
     "async_delete_env",
@@ -54,11 +55,15 @@ _IO_GUARD_RUNTIME: dict[str, Any] = {
 
 def _current_skill_name() -> str | None:
     _ctx, current = _current_ctx_and_skill()
-    token = str(getattr(current, "name", "") or "").strip() if current is not None else ""
+    token = (
+        str(getattr(current, "name", "") or "").strip() if current is not None else ""
+    )
     return token or None
 
 
-def _reject_blocking_io_on_event_loop(operation: str, *, async_alternative: str) -> None:
+def _reject_blocking_io_on_event_loop(
+    operation: str, *, async_alternative: str
+) -> None:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
@@ -88,7 +93,9 @@ def _reject_blocking_io_on_event_loop(operation: str, *, async_alternative: str)
 def skill_env_io_guard_snapshot() -> dict[str, Any]:
     with _IO_GUARD_LOCK:
         snapshot = dict(_IO_GUARD_RUNTIME)
-        snapshot["rejected_by_operation"] = dict(_IO_GUARD_RUNTIME.get("rejected_by_operation") or {})
+        snapshot["rejected_by_operation"] = dict(
+            _IO_GUARD_RUNTIME.get("rejected_by_operation") or {}
+        )
     return snapshot
 
 
@@ -102,22 +109,26 @@ def _record_skill_env_io(
     now = time.time()
     with _IO_GUARD_LOCK:
         if operation == "read":
-            _IO_GUARD_RUNTIME["read_total"] = int(_IO_GUARD_RUNTIME.get("read_total") or 0) + 1
+            _IO_GUARD_RUNTIME["read_total"] = (
+                int(_IO_GUARD_RUNTIME.get("read_total") or 0) + 1
+            )
         if write_bytes > 0:
-            _IO_GUARD_RUNTIME["write_total"] = int(_IO_GUARD_RUNTIME.get("write_total") or 0) + 1
+            _IO_GUARD_RUNTIME["write_total"] = (
+                int(_IO_GUARD_RUNTIME.get("write_total") or 0) + 1
+            )
             _IO_GUARD_RUNTIME["write_bytes_total"] = int(
                 _IO_GUARD_RUNTIME.get("write_bytes_total") or 0
             ) + int(write_bytes)
             _IO_GUARD_RUNTIME["last_write_at"] = now
             _IO_GUARD_RUNTIME["last_write_bytes"] = int(write_bytes)
         if skipped:
-            _IO_GUARD_RUNTIME["write_skipped_total"] = int(
-                _IO_GUARD_RUNTIME.get("write_skipped_total") or 0
-            ) + 1
+            _IO_GUARD_RUNTIME["write_skipped_total"] = (
+                int(_IO_GUARD_RUNTIME.get("write_skipped_total") or 0) + 1
+            )
         if legacy_merge:
-            _IO_GUARD_RUNTIME["legacy_merge_total"] = int(
-                _IO_GUARD_RUNTIME.get("legacy_merge_total") or 0
-            ) + 1
+            _IO_GUARD_RUNTIME["legacy_merge_total"] = (
+                int(_IO_GUARD_RUNTIME.get("legacy_merge_total") or 0) + 1
+            )
 
 
 def reset_skill_env_io_guard_runtime() -> None:
@@ -231,7 +242,9 @@ def _runtime_env_path_from_root(root: Path, skill_name: str) -> Path:
     version = None
     if marker.exists():
         version = marker.read_text(encoding="utf-8").strip() or None
-    return runtime_root / _runtime_bucket_name(version) / "data" / "db" / "skill_env.json"
+    return (
+        runtime_root / _runtime_bucket_name(version) / "data" / "db" / "skill_env.json"
+    )
 
 
 def _runtime_env_path_from_ctx() -> Path | None:
@@ -282,15 +295,21 @@ def _runtime_env_path_from_ctx() -> Path | None:
 
 
 def skill_env_path() -> Path:
-    _reject_blocking_io_on_event_loop("skill_env_path", async_alternative="an async skill-env operation")
+    _reject_blocking_io_on_event_loop(
+        "skill_env_path", async_alternative="an async skill-env operation"
+    )
     path = _runtime_env_path_from_ctx()
     if path is None:
-        override = os.getenv("ADAOS_SKILL_ENV_PATH") or os.getenv("ADAOS_SKILL_MEMORY_PATH")
+        override = os.getenv("ADAOS_SKILL_ENV_PATH") or os.getenv(
+            "ADAOS_SKILL_MEMORY_PATH"
+        )
         if override:
             path = Path(override)
         else:
             current_dir = _current_skill_dir()
-            path = _runtime_env_path_from_skill_dir(current_dir) or (current_dir / ".skill_env.json")
+            path = _runtime_env_path_from_skill_dir(current_dir) or (
+                current_dir / ".skill_env.json"
+            )
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -306,13 +325,46 @@ def skill_data_root() -> Path:
     buckets deliberately have different physical layouts.
     """
 
+    root = skill_data_root_path()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def skill_data_root_path() -> Path:
+    """Resolve the current skill's mutable data root without creating it.
+
+    This path-only variant is used by SDK services that need to bind their
+    backend to the context-local skill before performing any file I/O.
+    """
+
+    # In-process skill calls share ``os.environ``.  The manager still binds
+    # compatibility variables around each call, so a concurrent call can
+    # transiently expose another skill's value here.  A prepared runtime slot
+    # in the ContextVar is owner-scoped and therefore takes precedence.
+    try:
+        direct = _runtime_env_path_from_skill_dir(_current_skill_dir())
+    except Exception:
+        direct = None
+    if direct is not None:
+        return direct.expanduser().resolve().parent.parent
+
     explicit = str(os.getenv("ADAOS_SKILL_INTERNAL_DATA_ROOT") or "").strip()
     if explicit:
-        root = Path(explicit).expanduser().resolve()
-        root.mkdir(parents=True, exist_ok=True)
-        return root
+        return Path(explicit).expanduser().resolve()
+    path = _runtime_env_path_from_ctx()
+    if path is None:
+        override = os.getenv("ADAOS_SKILL_ENV_PATH") or os.getenv(
+            "ADAOS_SKILL_MEMORY_PATH"
+        )
+        if override:
+            path = Path(override)
+        else:
+            current_dir = _current_skill_dir()
+            path = _runtime_env_path_from_skill_dir(current_dir) or (
+                current_dir / ".skill_env.json"
+            )
     # The canonical env store is always ``<data-root>/db/skill_env.json``.
-    return skill_env_path().parent.parent
+    return path.expanduser().resolve().parent.parent
 
 
 def _legacy_paths(target: Path) -> list[Path]:
@@ -336,7 +388,10 @@ def _legacy_paths(target: Path) -> list[Path]:
             if legacy != target and legacy not in candidates:
                 candidates.append(legacy)
     if current_dir is not None:
-        for legacy in (current_dir / ".skill_memory.json", current_dir / ".skill_env.json"):
+        for legacy in (
+            current_dir / ".skill_memory.json",
+            current_dir / ".skill_env.json",
+        ):
             if legacy != target and legacy not in candidates:
                 candidates.append(legacy)
     return candidates
@@ -357,7 +412,9 @@ def _write_json_object(path: Path, payload: Mapping[str, Any]) -> None:
 
 def _write_json_object_unlocked(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp")
+    tmp = path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp"
+    )
     raw = json.dumps(dict(payload), ensure_ascii=False, indent=2)
     tmp.write_text(raw, encoding="utf-8")
     delay_s = 0.01
@@ -401,7 +458,9 @@ def read_env() -> dict[str, Any]:
 
 
 def write_env(payload: Mapping[str, Any]) -> None:
-    _reject_blocking_io_on_event_loop("write_env", async_alternative="async_write_env()")
+    _reject_blocking_io_on_event_loop(
+        "write_env", async_alternative="async_write_env()"
+    )
     target = skill_env_path()
     with _path_lock(target):
         current = _read_json_object(target) if target.exists() else {}
@@ -429,7 +488,9 @@ def set_env(key: str, value: Any) -> None:
 
 
 def delete_env(key: str) -> None:
-    _reject_blocking_io_on_event_loop("delete_env", async_alternative="async_delete_env()")
+    _reject_blocking_io_on_event_loop(
+        "delete_env", async_alternative="async_delete_env()"
+    )
     target = skill_env_path()
     with _path_lock(target):
         payload = read_env()
