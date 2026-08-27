@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import yaml
+from packaging.specifiers import SpecifierSet
+from packaging.version import InvalidVersion, Version
 
 from adaos.domain.artifact_release import ArtifactSourceRef
 from adaos.sdk.developer.compositions import normalized_definition
@@ -17,6 +19,7 @@ from .releases import (
     PackageCatalog,
     ReleasePlan,
     build_project_release,
+    normalize_version_spec,
     parse_artifact_requirements,
 )
 
@@ -72,14 +75,42 @@ def _component_ref(value: str) -> tuple[str, str]:
     return kind, artifact_id
 
 
+def _component_manifest_name(kind: str) -> str:
+    return "skill.yaml" if kind == "skill" else "scenario.yaml"
+
+
+def _component_manifest_id(root: Path, kind: str) -> str:
+    manifest = _read_yaml(root / _component_manifest_name(kind))
+    return str(manifest.get("id") or manifest.get("name") or root.name)
+
+
 def _component_root(workspace_root: Path, ref: str) -> Path:
     kind, artifact_id = _component_ref(ref)
-    root = (
-        workspace_root
-        / ("skills" if kind == "skill" else "scenarios")
-        / artifact_id
-    ).resolve()
+    collection_root = workspace_root / ("skills" if kind == "skill" else "scenarios")
+    root = (collection_root / artifact_id).resolve()
     if workspace_root not in root.parents or not root.is_dir():
+        matches: list[Path] = []
+        for candidate in sorted(collection_root.glob("*")):
+            if not candidate.is_dir() or candidate.name.startswith("."):
+                continue
+            manifest_path = candidate / _component_manifest_name(kind)
+            if not manifest_path.is_file():
+                continue
+            try:
+                manifest_id = _component_manifest_id(candidate, kind)
+            except ProjectReleaseBuildError:
+                continue
+            if manifest_id == artifact_id:
+                resolved = candidate.resolve()
+                if workspace_root in resolved.parents:
+                    matches.append(resolved)
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise ProjectReleaseBuildError(
+                f"component source is ambiguous for {ref}: "
+                + ", ".join(str(item) for item in matches)
+            )
         raise ProjectReleaseBuildError(f"component source is unavailable: {ref}")
     return root
 
@@ -91,6 +122,46 @@ def _source_ref(base: ArtifactSourceRef, scope: str) -> ArtifactSourceRef:
         revision=base.revision,
         path_scope=(scope,),
     )
+
+
+def _resolve_project_dependency_locks(
+    project_dependencies: list[dict[str, Any]],
+    release_repository: ReleaseRepository,
+) -> tuple[dict[str, str], ...]:
+    locks: list[dict[str, str]] = []
+    for dependency in project_dependencies:
+        ref = str(dependency.get("ref") or "").strip()
+        _, _, project_id = ref.partition(":")
+        version_spec = str(dependency.get("version") or "").strip()
+        normalized_spec = normalize_version_spec(version_spec)
+        try:
+            versions = release_repository._release_digests_by_version(project_id)
+        except Exception as exc:
+            raise ProjectReleaseBuildError(
+                f"cannot resolve Project dependency lock for {ref}: {exc}"
+            ) from exc
+        candidates: list[tuple[Version, str, str]] = []
+        for version, digest in versions.items():
+            try:
+                parsed = Version(version)
+            except InvalidVersion:
+                continue
+            if normalized_spec and parsed not in SpecifierSet(normalized_spec):
+                continue
+            candidates.append((parsed, version, digest))
+        if not candidates:
+            raise ProjectReleaseBuildError(
+                f"no local release satisfies Project dependency {ref} {version_spec or '*'}"
+            )
+        _parsed, _version, digest = sorted(candidates, key=lambda item: item[0])[-1]
+        locks.append(
+            {
+                "project_ref": ref,
+                "version_spec": version_spec,
+                "release_digest": digest,
+            }
+        )
+    return tuple(sorted(locks, key=lambda item: item["project_ref"]))
 
 
 def build_workspace_project_release(
@@ -116,10 +187,10 @@ def build_workspace_project_release(
         for item in definition["components"]["dependencies"]
         if str(item.get("ref") or "").startswith("project:")
     ]
-    if project_dependencies:
-        raise ProjectReleaseBuildError(
-            "Project dependencies require exact ProjectDependencyLock inputs"
-        )
+    project_dependency_locks = _resolve_project_dependency_locks(
+        project_dependencies,
+        release_repository,
+    )
 
     owned_refs = tuple(
         str(item["ref"]) for item in definition["components"]["owned"]
@@ -154,7 +225,7 @@ def build_workspace_project_release(
                 f"component identity differs from Project ref: {ref}"
             )
         built_by_ref[ref] = built
-        manifest_name = "skill.yaml" if kind == "skill" else "scenario.yaml"
+        manifest_name = _component_manifest_name(kind)
         requirements = parse_artifact_requirements(
             _read_yaml(root / manifest_name), kind=kind  # type: ignore[arg-type]
         )
@@ -162,10 +233,17 @@ def build_workspace_project_release(
         pending.extend((item.key, item.optional) for item in requirements)
 
     primary_ref = next(
-        str(item["ref"])
-        for item in definition["components"]["owned"]
-        if item.get("role") == "primary"
+        (
+            str(item["ref"])
+            for item in definition["components"]["owned"]
+            if item.get("role") == "primary"
+        ),
+        "",
     )
+    if not primary_ref:
+        raise ProjectReleaseBuildError(
+            "Project release requires one primary owned component"
+        )
     primary = built_by_ref[primary_ref]
     declared_requirements = list(
         requirements_by_digest.get(primary.ref.digest, ())
@@ -196,6 +274,7 @@ def build_workspace_project_release(
         requirements_by_package=requirements_by_digest,
         validation_evidence=validation_evidence,
         project_definition=definition,
+        project_dependency_locks=project_dependency_locks,
     )
     selected = {item.digest for item in plan.packages}
     package_paths: list[Path] = []

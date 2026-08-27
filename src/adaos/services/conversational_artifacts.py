@@ -1110,7 +1110,15 @@ def _cross_check_package(
             if given_proposal.get("kind") == "skill_invocation":
                 skill_id = str(given_proposal.get("skill_id") or "")
                 operation_id = str(given_proposal.get("operation_id") or "")
-                if skill_id not in normalized_catalog or operation_id not in normalized_catalog.get(skill_id, set()):
+                if skill_id not in normalized_catalog and require_operation_catalog:
+                    diagnostics.append(
+                        _diagnostic(
+                            "conversational.story.operation_unknown",
+                            f"{path_label}.steps[{step_index}].given.proposal",
+                            f"story invokes undeclared operation {skill_id}.{operation_id}",
+                        )
+                    )
+                elif skill_id in normalized_catalog and operation_id not in normalized_catalog[skill_id]:
                     diagnostics.append(
                         _diagnostic(
                             "conversational.story.operation_unknown",

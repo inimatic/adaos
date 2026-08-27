@@ -441,6 +441,57 @@ def test_conversational_package_validates_and_runs_story_with_mocked_activity(tm
     assert timeline[0]["output"]["response_envelope_ref"] is None
 
 
+def test_conversational_story_allows_external_skill_when_catalog_is_optional(tmp_path: Path) -> None:
+    _write_package(tmp_path)
+    story_path = tmp_path / "conversational" / "tests" / "stories" / "approve.yaml"
+    story = yaml.safe_load(story_path.read_text(encoding="utf-8"))
+    story["story_kind"] = "skill"
+    story["workflow_type"] = None
+    story["start"] = None
+    proposal = story["steps"][0]["given"]["proposal"]
+    proposal.update(
+        {
+            "kind": "skill_invocation",
+            "command": None,
+            "skill_id": "external_skill",
+            "operation_id": "describe",
+            "action_policy": {
+                "schema": "adaos.conversation.action_policy.v1",
+                "risk_class": "read",
+                "side_effect": "none",
+                "confirmation": "none",
+            },
+        }
+    )
+    story["steps"][0]["given"]["skill_result"] = None
+    story["steps"][0]["expect"].update(
+        {
+            "proposal": {
+                "kind": "skill_invocation",
+                "command": None,
+                "confidence_at_least": 0.9,
+            },
+            "command": None,
+            "transition_id": None,
+            "state": None,
+        }
+    )
+    _write_yaml(story_path, story)
+
+    result = validate_conversational_package(
+        tmp_path,
+        manifest_name="skill.yaml",
+        operation_catalog={},
+        require_operation_catalog=False,
+        run_stories=False,
+    )
+
+    assert "conversational.story.operation_unknown" not in {
+        item["code"] for item in result.report["diagnostics"]
+    }
+    assert result.report["valid"] is True
+
+
 def test_conversational_package_rejects_component_version_drift(tmp_path: Path) -> None:
     _write_package(tmp_path)
     manifest_path = tmp_path / "conversational" / "manifest.yaml"

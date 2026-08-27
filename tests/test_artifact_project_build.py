@@ -8,6 +8,7 @@ from adaos.domain.artifact_release import ArtifactSourceRef
 from adaos.services.artifact_pipeline.channels import ReleaseRepository
 from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
 from adaos.services.artifact_pipeline.project_build import (
+    ProjectReleaseBuildError,
     build_workspace_project_release,
 )
 
@@ -42,7 +43,7 @@ def test_workspace_project_build_persists_exact_dependency_closure(
     handler.parent.mkdir(parents=True)
     handler.write_text("def run(**_):\n    return {'ok': True}\n", encoding="utf-8")
     _write_yaml(
-        workspace / "scenarios" / "viewer" / "scenario.yaml",
+        workspace / "scenarios" / "viewer_ui" / "scenario.yaml",
         {
             "id": "viewer",
             "name": "viewer",
@@ -53,7 +54,7 @@ def test_workspace_project_build_persists_exact_dependency_closure(
             "runtime": {"skills": {"required": ["worker"], "optional": []}},
         },
     )
-    (workspace / "scenarios" / "viewer" / "webui.json").write_text(
+    (workspace / "scenarios" / "viewer_ui" / "webui.json").write_text(
         '{"schema":"adaos.webui.v1","pages":[]}', encoding="utf-8"
     )
     project_dir = workspace / "projects" / "viewer"
@@ -151,3 +152,153 @@ def test_workspace_project_build_persists_exact_dependency_closure(
     )
     assert stored == first.plan
     assert first.plan.release.composition_lock is not None
+
+
+def test_workspace_project_build_rejects_empty_builder_draft(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    project_dir = workspace / "projects" / "draft"
+    _write_yaml(
+        project_dir / "project.yaml",
+        {
+            "schema": "adaos.project.v1",
+            "kind": "project",
+            "id": "draft",
+            "version": "0.1.0",
+            "profiles": [],
+            "components": {"owned": [], "dependencies": []},
+            "entrypoints": [],
+            "catalog": {
+                "title": "Draft",
+                "description": "",
+                "categories": [],
+                "tags": [],
+            },
+            "lifecycle": {
+                "uninstall": {
+                    "components": "retain",
+                    "runtime_data": "retain",
+                    "source_artifacts": "retain",
+                }
+            },
+        },
+    )
+
+    try:
+        build_workspace_project_release(
+            project_dir=project_dir,
+            workspace_root=workspace,
+            source_ref=ArtifactSourceRef(
+                forge="github",
+                repository="example/projects",
+                revision="a" * 40,
+                path_scope=("projects/draft/",),
+            ),
+            package_store=ContentAddressedPackageStore(tmp_path / "packages"),
+            release_repository=ReleaseRepository(tmp_path / "releases"),
+        )
+    except ProjectReleaseBuildError as exc:
+        assert "primary owned component" in str(exc)
+    else:
+        raise AssertionError("empty Builder draft must not produce a release")
+
+
+def test_workspace_project_build_locks_local_project_dependencies(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    _write_yaml(
+        workspace / "skills" / "platform_skill" / "skill.yaml",
+        {
+            "name": "platform_skill",
+            "version": "1.2.0",
+            "entry": "handlers.main:run",
+        },
+    )
+    (workspace / "skills" / "platform_skill" / "handlers").mkdir(parents=True)
+    (workspace / "skills" / "platform_skill" / "handlers" / "main.py").write_text(
+        "def run(**_):\n    return {'ok': True}\n",
+        encoding="utf-8",
+    )
+    _write_yaml(
+        workspace / "skills" / "dependent_skill" / "skill.yaml",
+        {
+            "name": "dependent_skill",
+            "version": "0.1.0",
+            "entry": "handlers.main:run",
+        },
+    )
+    (workspace / "skills" / "dependent_skill" / "handlers").mkdir(parents=True)
+    (workspace / "skills" / "dependent_skill" / "handlers" / "main.py").write_text(
+        "def run(**_):\n    return {'ok': True}\n",
+        encoding="utf-8",
+    )
+    base_project = {
+        "schema": "adaos.project.v1",
+        "kind": "project",
+        "version": "0.1.0",
+        "profiles": ["test.v1"],
+        "entrypoints": [],
+        "catalog": {
+            "title": "Test",
+            "description": "",
+            "categories": [],
+            "tags": [],
+        },
+        "lifecycle": {
+            "uninstall": {
+                "components": "retain",
+                "runtime_data": "retain",
+                "source_artifacts": "retain",
+            }
+        },
+    }
+    _write_yaml(
+        workspace / "projects" / "platform" / "project.yaml",
+        {
+            **base_project,
+            "id": "platform",
+            "version": "1.2.0",
+            "components": {
+                "owned": [{"ref": "skill:platform_skill", "role": "primary"}],
+                "dependencies": [],
+            },
+        },
+    )
+    _write_yaml(
+        workspace / "projects" / "dependent" / "project.yaml",
+        {
+            **base_project,
+            "id": "dependent",
+            "components": {
+                "owned": [{"ref": "skill:dependent_skill", "role": "primary"}],
+                "dependencies": [{"ref": "project:platform", "version": "^1.0"}],
+            },
+        },
+    )
+    package_store = ContentAddressedPackageStore(tmp_path / "packages")
+    releases = ReleaseRepository(tmp_path / "releases")
+    source = ArtifactSourceRef(
+        forge="github",
+        repository="example/projects",
+        revision="a" * 40,
+        path_scope=("projects/test/",),
+    )
+
+    platform = build_workspace_project_release(
+        project_dir=workspace / "projects" / "platform",
+        workspace_root=workspace,
+        source_ref=source,
+        package_store=package_store,
+        release_repository=releases,
+    )
+    dependent = build_workspace_project_release(
+        project_dir=workspace / "projects" / "dependent",
+        workspace_root=workspace,
+        source_ref=source,
+        package_store=package_store,
+        release_repository=releases,
+    )
+
+    locks = dependent.plan.release.composition_lock.project_dependencies
+    assert len(locks) == 1
+    assert locks[0].project_ref == "project:platform"
+    assert locks[0].version_spec == "^1.0"
+    assert locks[0].release_digest == platform.plan.release.release_digest

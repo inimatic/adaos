@@ -160,6 +160,8 @@ def test_package_build_is_deterministic_and_excludes_dev_state(tmp_path: Path) -
     (scenario / ".skill_state" / "runtime.json").write_text(
         '{"local": true}\n', encoding="utf-8"
     )
+    (scenario / "ml" / "weights").mkdir(parents=True)
+    (scenario / "ml" / "weights" / "model.pt").write_bytes(b"model-weights")
 
     first = build_artifact_package(scenario, kind="scenario", source_ref=_source())
     os.utime(scenario / "scenario.yaml", (1_900_000_000, 1_900_000_000))
@@ -176,6 +178,7 @@ def test_package_build_is_deterministic_and_excludes_dev_state(tmp_path: Path) -
     assert "prompt_state.json" not in verified.file_names
     assert "builder_memory.md" not in verified.file_names
     assert not any(item.startswith("artifacts/") for item in verified.file_names)
+    assert not any(item.startswith("ml/weights/") for item in verified.file_names)
     assert not any(item.startswith("tests/") for item in verified.file_names)
     assert not any(item.startswith("ui_revisions/") for item in verified.file_names)
     assert not any("__pycache__" in item for item in verified.file_names)
@@ -444,6 +447,41 @@ def test_package_release_reference_locks_exact_governed_workflow(
     assert restored_lock.components[0].workflow_adapter_locks == (
         built.ref.workflow_adapter_locks
     )
+
+
+def test_package_release_can_checkpoint_unbound_governed_workflow(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(tmp_path)
+    definition = builder_change_definition()
+    definition["workflow_type"] = "research.pipeline"
+    definition["aggregate_type"] = "research.pipeline"
+    definition["definition_version"] = "0.1.0"
+    definition["transitions"][0]["guards"][0]["id"] = "research.experimental_guard"
+    (scenario / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.2.3\nworkflow:\n  manifest: workflow.json\n",
+        encoding="utf-8",
+    )
+    (scenario / "workflow.json").write_text(
+        json.dumps(definition, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    built = build_artifact_package(scenario, kind="scenario", source_ref=_source())
+    verified = verify_artifact_package(built.archive_bytes)
+
+    assert built.ref.workflow_lock is not None
+    assert built.ref.workflow_lock.lock_id == "workflow:research.pipeline@0.1.0"
+    assert built.ref.workflow_validation_lock is None
+    assert built.ref.workflow_adapter_locks == ()
+    assert built.ref.workflow_binding_digest is None
+    assert built.ref.workflow_role_policy_digest is None
+    assert built.package_manifest["workflow_lock"] == built.ref.workflow_lock.to_dict()
+    assert "workflow_validation_lock" not in built.package_manifest
+    assert "workflow_adapter_locks" not in built.package_manifest
+    assert "workflow_binding_digest" not in built.package_manifest
+    assert "workflow_role_policy_digest" not in built.package_manifest
+    assert verified.ref == built.ref
 
 
 def test_package_verifier_rejects_bound_workflow_without_exact_lock() -> None:

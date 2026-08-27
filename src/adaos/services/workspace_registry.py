@@ -24,7 +24,7 @@ from adaos.domain.workspace_manifest import (
 
 REGISTRY_FILE_NAME = "registry.json"
 REGISTRY_FORMAT_VERSION = 2
-RegistryKind = Literal["skills", "scenarios"]
+RegistryKind = Literal["skills", "scenarios", "projects"]
 _LOG = logging.getLogger("adaos.workspace_registry")
 _SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+][0-9A-Za-z.-]+)?$")
 _INSTALL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -32,14 +32,17 @@ _COMPATIBILITY_SCHEMA = "adaos.workspace.artifact_compatibility.v1"
 _REQUIRED_MANIFEST_BY_KIND: dict[RegistryKind, str] = {
     "skills": "skill.yaml",
     "scenarios": "scenario.yaml",
+    "projects": "project.yaml",
 }
 _NON_CANONICAL_MANIFESTS_BY_KIND: dict[RegistryKind, tuple[str, ...]] = {
     "skills": ("skill.yml", "manifest.yaml", "manifest.yml", "skill.json", "manifest.json", "adaos.skill.yaml"),
     "scenarios": ("scenario.yml", "scenario.json"),
+    "projects": ("project.yml", "project.json"),
 }
 _DERIVED_RUNTIME_MANIFESTS_BY_KIND: dict[RegistryKind, tuple[str, ...]] = {
     "skills": (),
     "scenarios": ("scenario.json",),
+    "projects": (),
 }
 
 
@@ -150,8 +153,9 @@ def rebuild_workspace_registry(workspace_root: Path) -> dict[str, Any]:
         "updated_at": _now_iso(),
         "skills": [],
         "scenarios": [],
+        "projects": [],
     }
-    for kind in ("skills", "scenarios"):
+    for kind in ("skills", "scenarios", "projects"):
         entries: list[dict[str, Any]] = []
         kind_root = root / kind
         if kind_root.exists():
@@ -315,7 +319,7 @@ def list_workspace_registry_entries(
     fallback_to_scan: bool = True,
 ) -> list[dict[str, Any]]:
     payload = load_workspace_registry(workspace_root, fallback_to_scan=fallback_to_scan)
-    kinds = (kind,) if kind else ("skills", "scenarios")
+    kinds = (kind,) if kind else ("skills", "scenarios", "projects")
     results: list[dict[str, Any]] = []
     wanted_name = (name or "").strip().lower()
     for current_kind in kinds:
@@ -440,6 +444,14 @@ def resolve_registry_payload_install_name(
     return install_name or str(name_or_id or "").strip(), entry
 
 
+def _registry_kind_noun(kind: RegistryKind) -> str:
+    if kind == "skills":
+        return "skill"
+    if kind == "scenarios":
+        return "scenario"
+    return "project"
+
+
 def format_registry_payload_not_found(
     payload: dict[str, Any],
     *,
@@ -447,7 +459,7 @@ def format_registry_payload_not_found(
     name_or_id: str,
     limit: int = 8,
 ) -> str:
-    noun = "skill" if kind == "skills" else "scenario"
+    noun = _registry_kind_noun(kind)
     requested = str(name_or_id or "").strip()
     normalized = _normalize_registry_payload(payload)
     entries = [item for item in normalized.get(kind) or [] if isinstance(item, dict)]
@@ -468,7 +480,7 @@ def format_workspace_registry_not_found(
     fallback_to_scan: bool = False,
     limit: int = 8,
 ) -> str:
-    noun = "skill" if kind == "skills" else "scenario"
+    noun = _registry_kind_noun(kind)
     requested = str(name_or_id or "").strip()
     entries = list_workspace_registry_entries(
         workspace_root,
@@ -564,7 +576,7 @@ def build_registry_entry(kind: RegistryKind, artifact_dir: Path) -> dict[str, An
         tools = manifest.get("tools")
         if isinstance(tools, list):
             entry["tools_count"] = len(tools)
-    else:
+    elif kind == "scenarios":
         scenario_id = _clean_text(manifest.get("id"))
         if scenario_id and scenario_id != artifact_name:
             entry["manifest_id"] = scenario_id
@@ -584,6 +596,57 @@ def build_registry_entry(kind: RegistryKind, artifact_dir: Path) -> dict[str, An
                     io_entry[key] = [str(item) for item in value]
             if io_entry:
                 entry["io"] = io_entry
+    else:
+        catalog = manifest.get("catalog")
+        if isinstance(catalog, dict):
+            catalog_title = _clean_text(catalog.get("title"))
+            catalog_description = _clean_text(catalog.get("description"))
+            categories = _clean_tags(catalog.get("categories"))
+            catalog_tags = _clean_tags(catalog.get("tags"))
+            if catalog_title:
+                entry["title"] = catalog_title
+            if catalog_description:
+                entry["description"] = catalog_description
+            if categories:
+                entry["categories"] = categories
+            if catalog_tags:
+                entry["tags"] = catalog_tags
+        publication = manifest.get("publication")
+        if isinstance(publication, dict):
+            publication_entry = {
+                str(key): value
+                for key, value in publication.items()
+                if value is not None
+            }
+            if publication_entry:
+                entry["publication"] = publication_entry
+            for field in ("stage", "visibility", "channel"):
+                token = _clean_text(publication.get(field))
+                if token:
+                    entry[field] = token
+        install = manifest.get("install")
+        if isinstance(install, dict):
+            entry["install_default"] = bool(install.get("default") is True)
+            features = install.get("features")
+            if isinstance(features, list):
+                entry["features"] = [
+                    dict(item)
+                    for item in features
+                    if isinstance(item, dict)
+                ]
+        components = manifest.get("components")
+        owned = components.get("owned") if isinstance(components, dict) else None
+        if isinstance(owned, list):
+            refs = [
+                str(item.get("ref") or "").strip()
+                for item in owned
+                if isinstance(item, dict) and str(item.get("ref") or "").strip()
+            ]
+            entry["components"] = refs
+            entry["components_count"] = len(refs)
+        profiles = manifest.get("profiles")
+        if isinstance(profiles, list):
+            entry["profiles"] = [str(item) for item in profiles if str(item).strip()]
 
     return entry
 
@@ -605,6 +668,11 @@ def _normalize_registry_payload(
         "scenarios": _normalize_entries(
             "scenarios",
             data.get("scenarios"),
+            workspace_root=workspace_root,
+        ),
+        "projects": _normalize_entries(
+            "projects",
+            data.get("projects"),
             workspace_root=workspace_root,
         ),
     }
@@ -714,6 +782,16 @@ def _enrich_registry_entry_from_canonical_manifest(
         "skills",
         "trigger",
         "io",
+        "categories",
+        "publication",
+        "stage",
+        "visibility",
+        "channel",
+        "install_default",
+        "features",
+        "components",
+        "components_count",
+        "profiles",
     ):
         if field in canonical:
             enriched[field] = canonical[field]

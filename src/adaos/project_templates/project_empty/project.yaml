@@ -1,0 +1,27 @@
+schema: adaos.project.v1
+kind: project
+id: new_project
+version: 0.1.0
+profiles: []
+components:
+  owned: []
+  dependencies: []
+entrypoints: []
+catalog:
+  title: New Project
+  description: Empty Builder Project draft.
+  categories: []
+  tags: []
+publication:
+  stage: alpha
+  visibility: unlisted
+  channel: alpha
+install:
+  default: false
+  features: []
+lifecycle:
+  uninstall:
+    components: retain
+    runtime_data: retain
+    source_artifacts: retain
+created_by: AdaOS Builder

@@ -147,6 +147,72 @@ def test_rebuild_workspace_registry_reads_skill_and_scenario_manifests(tmp_path:
     assert payload["scenarios"][0]["io"]["output"] == ["text", "voice"]
 
 
+def test_rebuild_workspace_registry_reads_project_manifests(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    project_dir = workspace / "projects" / "web_desktop"
+    project_dir.mkdir(parents=True)
+    (project_dir / "project.yaml").write_text(
+        "\n".join(
+            [
+                "schema: adaos.project.v1",
+                "kind: project",
+                "id: web_desktop",
+                "version: 0.3.12",
+                "profiles: [adaos.default_install.v1]",
+                "components:",
+                "  owned:",
+                "  - ref: scenario:web_desktop",
+                "    role: primary",
+                "  - ref: skill:web_desktop_skill",
+                "    role: implementation",
+                "  dependencies: []",
+                "entrypoints: []",
+                "catalog:",
+                "  title: Web Desktop",
+                "  description: Default shell.",
+                "  categories: [system, desktop]",
+                "  tags: [default-install]",
+                "publication:",
+                "  stage: beta",
+                "  visibility: listed",
+                "  channel: stable",
+                "install:",
+                "  default: true",
+                "  features:",
+                "  - id: shell",
+                "    title: Desktop shell",
+                "    default: true",
+                "    optional: false",
+                "    components: [scenario:web_desktop, skill:web_desktop_skill]",
+                "lifecycle:",
+                "  uninstall:",
+                "    components: retain",
+                "    runtime_data: retain",
+                "    source_artifacts: retain",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = rebuild_workspace_registry(workspace)
+
+    assert payload["projects"][0]["kind"] == "project"
+    assert payload["projects"][0]["name"] == "web_desktop"
+    assert payload["projects"][0]["id"] == "web_desktop"
+    assert payload["projects"][0]["title"] == "Web Desktop"
+    assert payload["projects"][0]["categories"] == ["system", "desktop"]
+    assert payload["projects"][0]["stage"] == "beta"
+    assert payload["projects"][0]["visibility"] == "listed"
+    assert payload["projects"][0]["install_default"] is True
+    assert payload["projects"][0]["components_count"] == 2
+    assert payload["projects"][0]["install"] == {
+        "kind": "project",
+        "name": "web_desktop",
+        "id": "web_desktop",
+    }
+
+
 def test_rebuild_workspace_registry_prefers_scenario_yaml_title_and_i18n(tmp_path: Path):
     workspace = tmp_path / "workspace"
     scenario_dir = workspace / "scenarios" / "prototype_app"

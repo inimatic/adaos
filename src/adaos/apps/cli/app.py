@@ -244,6 +244,8 @@ _STATE_CHANGING_COMMANDS = {
     ("node", "member-refresh"),
     ("node", "member-update"),
     ("node", "role"),
+    ("project", "push"),
+    ("project", "release-build"),
     ("scenario", "create"),
     ("scenario", "install"),
     ("scenario", "push"),

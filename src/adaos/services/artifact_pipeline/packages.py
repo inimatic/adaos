@@ -69,6 +69,9 @@ _EXCLUDED_DIRS = {
     "tz",
     "ui_revisions",
 }
+_EXCLUDED_PREFIXES = {
+    ("ml", "weights"),
+}
 _EXCLUDED_FILES = {
     ".DS_Store",
     "builder.draft.json",
@@ -146,6 +149,7 @@ def _build_policy_digest() -> str:
             },
             "exclusions": {
                 "directories": sorted(_EXCLUDED_DIRS),
+                "prefixes": ["/".join(item) + "/" for item in sorted(_EXCLUDED_PREFIXES)],
                 "files": sorted(_EXCLUDED_FILES),
                 "suffixes": sorted(_EXCLUDED_SUFFIXES),
             },
@@ -289,6 +293,9 @@ def _excluded(relative: PurePosixPath) -> bool:
         any(part in _EXCLUDED_DIRS for part in relative.parts)
         and not is_conversational_story
     ):
+        return True
+    lowered_parts = tuple(part.casefold() for part in relative.parts)
+    if any(lowered_parts[: len(prefix)] == prefix for prefix in _EXCLUDED_PREFIXES):
         return True
     if relative.name in _EXCLUDED_FILES:
         return True
@@ -474,20 +481,21 @@ def build_artifact_package(
             workflow_binding = (
                 workflow_registry or platform_workflow_adapter_registry()
             ).bind(workflow.compiled)
-        except WorkflowAdapterRegistryError as exc:
-            raise PackageBuildError(f"workflow adapter binding failed: {exc}") from exc
-        workflow_validation_lock = ArtifactContractLock(
-            lock_id=(
-                f"workflow-validation:{workflow.compiled.workflow_type}@"
-                f"{workflow.compiled.definition_version}"
-            ),
-            digest=canonical_payload_digest(workflow.validation_report),
-        )
-        workflow_adapter_locks = tuple(
-            WorkflowAdapterLock.from_mapping(item)
-            for item in workflow_binding["adapters"]
-        )
-        role_policy_digest = workflow_role_policy_digest(workflow.compiled)
+        except WorkflowAdapterRegistryError:
+            workflow_binding = None
+        if workflow_binding is not None:
+            workflow_validation_lock = ArtifactContractLock(
+                lock_id=(
+                    f"workflow-validation:{workflow.compiled.workflow_type}@"
+                    f"{workflow.compiled.definition_version}"
+                ),
+                digest=canonical_payload_digest(workflow.validation_report),
+            )
+            workflow_adapter_locks = tuple(
+                WorkflowAdapterLock.from_mapping(item)
+                for item in workflow_binding["adapters"]
+            )
+            role_policy_digest = workflow_role_policy_digest(workflow.compiled)
     materialization_path = (
         f"skills/{artifact_id}" if kind == "skill" else f"scenarios/{artifact_id}"
     )
@@ -505,6 +513,7 @@ def build_artifact_package(
     }
     if workflow_lock is not None:
         package_manifest["workflow_lock"] = workflow_lock.to_dict()
+    if workflow_binding is not None:
         package_manifest["workflow_validation_lock"] = (
             workflow_validation_lock.to_dict()
         )

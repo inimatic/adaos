@@ -98,6 +98,69 @@ def test_webui_schema_accepts_safe_state_mutations_and_membership_filter() -> No
     Draft202012Validator(schema).validate(payload)
 
 
+def test_webui_schema_accepts_singleton_widget_actions_and_tags() -> None:
+    schema = _load_schema()
+    payload = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "builder-files",
+                        "layout": {"type": "single", "areas": [{"id": "main"}]},
+                        "widgets": [
+                            {
+                                "id": "file-toolbar",
+                                "type": "ui.actions",
+                                "area": "main",
+                                "inputs": {"buttons": {"id": "choose-file", "label": "Choose file"}},
+                                "actions": {
+                                    "on": "click:choose-file",
+                                    "type": "openModal",
+                                    "params": {"modalId": "file-picker"},
+                                },
+                            },
+                            {
+                                "id": "artifact-workbench",
+                                "type": "item.textEditor",
+                                "area": "main",
+                                "dataSource": {
+                                    "kind": "skill",
+                                    "name": "builder_sdk_control_skill.read_project_file",
+                                    "invalidationTags": "builder.project.files",
+                                },
+                                "actions": {
+                                    "on": "save",
+                                    "type": "callSkill",
+                                    "target": "builder_sdk_control_skill.save_project_file",
+                                    "invalidates": "builder.project.files",
+                                },
+                            },
+                            {
+                                "id": "preview-actions",
+                                "type": "ui.actions",
+                                "area": "main",
+                                "inputs": {"buttons": {"id": "open-dev-link", "label": "Open preview"}},
+                                "actions": {
+                                    "on": "click:open-dev-link",
+                                    "type": "callSkill",
+                                    "target": "builder_sdk_control_skill.get_preview",
+                                    "params": {"_meta": {"current_scenario": "builder"}},
+                                    "openResultUrl": True,
+                                    "resultUrlPath": "preview_url",
+                                    "resultPreferCurrentOrigin": True,
+                                },
+                            },
+                        ],
+                    }
+                }
+            }
+        },
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
 def test_webui_schema_requires_interval_for_auto_actions() -> None:
     schema = _load_schema()
     payload = {

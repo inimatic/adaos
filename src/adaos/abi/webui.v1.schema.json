@@ -829,7 +829,7 @@
         "area": { "type": "string", "description": "Optional default area when pinned as a widget." },
         "dataSource": { "$ref": "#/$defs/dataSource" },
         "inputs": { "type": "object", "additionalProperties": true },
-        "actions": { "type": "array", "items": { "$ref": "#/$defs/action" } },
+        "actions": { "$ref": "#/$defs/actionList" },
         "load": { "$ref": "#/$defs/loadHint" },
         "loading": { "$ref": "#/$defs/loadingBehavior" },
         "interaction": { "$ref": "#/$defs/interactionBehavior" }
@@ -1147,7 +1147,7 @@
         "title": { "type": "string" },
         "dataSource": { "$ref": "#/$defs/dataSource" },
         "inputs": { "type": "object", "additionalProperties": true },
-        "actions": { "type": "array", "items": { "$ref": "#/$defs/action" } },
+        "actions": { "$ref": "#/$defs/actionList" },
         "load": { "$ref": "#/$defs/loadHint" },
         "loading": { "$ref": "#/$defs/loadingBehavior" },
         "interaction": { "$ref": "#/$defs/interactionBehavior" }
@@ -1235,9 +1235,14 @@
           "description": "Runtime read cache lifetime. Zero keeps the semantic read until explicit invalidation."
         },
         "invalidationTags": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 },
-          "uniqueItems": true,
+          "oneOf": [
+            { "type": "string", "minLength": 1 },
+            {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true
+            }
+          ],
           "description": "Addressable tags that can invalidate this runtime read."
         },
         "preserveLastValue": {
@@ -1605,14 +1610,21 @@
       }
     },
 
+    "actionButtonList": {
+      "oneOf": [
+        { "$ref": "#/$defs/actionButton" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/$defs/actionButton" }
+        }
+      ]
+    },
+
     "actionsInputs": {
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "buttons": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/actionButton" }
-        },
+        "buttons": { "$ref": "#/$defs/actionButtonList" },
         "variant": {
           "type": "string",
           "enum": ["tabs", "segmented", "toolbar", "stack", "header"]
@@ -2299,6 +2311,16 @@
       }
     },
 
+    "actionList": {
+      "oneOf": [
+        { "$ref": "#/$defs/action" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/$defs/action" }
+        }
+      ]
+    },
+
     "action": {
       "type": "object",
       "additionalProperties": true,
@@ -2325,11 +2347,43 @@
         "target": { "type": "string" },
         "params": { "type": "object", "additionalProperties": true },
         "invalidates": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 },
-          "uniqueItems": true,
+          "oneOf": [
+            { "type": "string", "minLength": 1 },
+            {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true
+            }
+          ],
           "description": "Addressable runtime data-source tags invalidated after a successful callSkill mutation."
         },
+        "openResultUrl": {
+          "type": "boolean",
+          "description": "For callSkill actions, open a URL returned by the successful skill result."
+        },
+        "open_result_url": { "type": "boolean" },
+        "resultOpenUrl": { "type": "boolean" },
+        "result_open_url": { "type": "boolean" },
+        "resultUrlPath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Result path used as the URL source when openResultUrl is enabled."
+        },
+        "result_url_path": { "type": "string", "minLength": 1 },
+        "resultUrlTarget": {
+          "type": "string",
+          "description": "Browser window target for the URL opened from a skill result."
+        },
+        "result_url_target": { "type": "string" },
+        "resultDownload": { "type": "boolean" },
+        "result_download": { "type": "boolean" },
+        "resultWithAuth": { "type": "boolean" },
+        "result_with_auth": { "type": "boolean" },
+        "resultPreferCurrentOrigin": {
+          "type": "boolean",
+          "description": "Rebase app-navigation URLs returned by a skill result to the current browser app origin."
+        },
+        "result_prefer_current_origin": { "type": "boolean" },
         "allowOffline": {
           "type": "boolean",
           "default": false,

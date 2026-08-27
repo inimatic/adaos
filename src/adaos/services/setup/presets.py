@@ -8,10 +8,15 @@ class InstallPreset:
     name: str
     scenarios: tuple[str, ...]
     skills: tuple[str, ...]
+    projects: tuple[str, ...] = ()
 
 
 DEFAULT_PRESET = InstallPreset(
     name="default",
+    projects=(
+        "web_desktop",
+        "default_app_bundle",
+    ),
     scenarios=(
         "web_desktop",
         "prompt_engineer_scenario",

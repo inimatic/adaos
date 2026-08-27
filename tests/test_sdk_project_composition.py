@@ -118,6 +118,20 @@ def test_project_requires_one_primary_component(project_space) -> None:
         compositions.create(value)
 
 
+def test_project_source_can_start_as_empty_builder_draft(project_space) -> None:
+    value = _project("draft_project", "one")
+    value["components"]["owned"] = []
+    value["components"]["dependencies"] = []
+    value["entrypoints"] = []
+    value["compatibility"] = {"required_entrypoints": []}
+
+    created = compositions.create(value)
+    listed = compositions.list_projects()
+
+    assert created["components"]["owned"] == []
+    assert listed[0]["primary_ref"] is None
+
+
 def test_project_composition_expands_release_defaults_without_rewriting_source(project_space) -> None:
     _skill(project_space["skills"], "candidate_skill")
     value = _project("candidate_project", "candidate_skill")
@@ -143,9 +157,27 @@ def test_project_composition_expands_release_defaults_without_rewriting_source(p
         "required_contracts": ["adaos.research.manager.v1"],
         "validation_profiles": ["project.conformance"],
     }
+    value["publication"] = {
+        "stage": "beta",
+        "visibility": "listed",
+        "channel": "beta",
+    }
+    value["install"] = {
+        "default": True,
+        "features": [
+            {
+                "id": "research-console",
+                "title": "Research console",
+                "default": True,
+                "optional": False,
+                "components": ["scenario:research_console", "skill:candidate_skill"],
+            }
+        ],
+    }
 
     created = compositions.create(value)
     normalized = compositions.normalized_definition(created)
+    listed = compositions.list_projects()
 
     assert created["components"]["owned"][0]["exposure"] == "project_only"
     candidate = next(
@@ -155,7 +187,41 @@ def test_project_composition_expands_release_defaults_without_rewriting_source(p
     )
     assert candidate["relations"] == ["realizes", "uses"]
     assert normalized["components"]["dependencies"][0]["lifecycle"] == "shared"
+    assert normalized["publication"] == {
+        "stage": "beta",
+        "visibility": "listed",
+        "channel": "beta",
+    }
+    assert normalized["install"]["default"] is True
+    assert normalized["install"]["features"] == [
+        {
+            "id": "research-console",
+            "title": "Research console",
+            "default": True,
+            "optional": False,
+            "components": ["scenario:research_console", "skill:candidate_skill"],
+        }
+    ]
     assert normalized["compatibility"]["required_entrypoints"] == ["research"]
+    assert listed[0]["stage"] == "beta"
+    assert listed[0]["visibility"] == "listed"
+    assert listed[0]["default_install"] is True
+
+
+def test_project_rejects_install_feature_for_non_owned_component(project_space) -> None:
+    value = _project("invalid", "one")
+    value["install"] = {
+        "features": [
+            {
+                "id": "external",
+                "title": "External component",
+                "components": ["skill:two"],
+            }
+        ]
+    }
+
+    with pytest.raises(compositions.ProjectCompositionError, match="owned members"):
+        compositions.create(value)
 
 
 def test_project_rejects_undeclared_required_entrypoint(project_space) -> None:

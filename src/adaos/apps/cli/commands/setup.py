@@ -50,6 +50,7 @@ from adaos.services.skill.manager import SkillManager
 from adaos.services.nlu.neural_skill_installer import ensure_neural_service_skill_installed
 from adaos.services.nlu.rasa_skill_installer import ensure_rasa_service_skill_installed
 from adaos.services.nlu.rasa_training_bridge import train_rasa_nlu_once
+from adaos.services.project_install import default_install_project_ids, install_workspace_project
 from adaos.services.yjs.bootstrap import ensure_webspace_seeded_from_scenario
 from adaos.services.yjs.store import get_ystore_for_webspace
 from adaos.services.yjs.webspace import default_webspace_id
@@ -102,6 +103,21 @@ def _effective_registry_names(ctx, registry_names: list[str], workspace_root, ki
 
 def _sync_workspace_sparse_to_registry(ctx) -> dict:
     return _workspace_sync_sparse_to_registry(ctx)
+
+
+def _env_type() -> str:
+    return str(os.getenv("ENV_TYPE") or os.getenv("ADAOS_ENV_TYPE") or "prod").strip().lower()
+
+
+def _legacy_component_install_enabled() -> bool:
+    return _env_type() == "dev" and str(os.getenv("ADAOS_INSTALL_LEGACY_COMPONENTS") or "").strip() == "1"
+
+
+def _project_ids_for_preset(ctx, chosen) -> list[str]:
+    project_ids = [str(item).strip() for item in getattr(chosen, "projects", ()) if str(item).strip()]
+    if not project_ids:
+        project_ids = list(default_install_project_ids(Path(ctx.paths.workspace_dir())))
+    return sorted(dict.fromkeys(project_ids))
 
 
 def _notify_live_skill_runtime_activated(skill_name: str, *, webspace_id: str) -> dict:
@@ -227,11 +243,11 @@ def install(
     ),
     neural_nlu: bool = typer.Option(False, "--neural-nlu/--no-neural-nlu", help="prepare optional Neural NLU service-skill"),
     rasa_nlu: bool = typer.Option(True, "--rasa-nlu/--no-rasa-nlu", help="prepare optional Rasa NLU service-skill"),
-    train_nlu: bool = typer.Option(True, "--train-nlu/--no-train-nlu", help="train Rasa NLU after installing scenarios/skills"),
+    train_nlu: bool = typer.Option(True, "--train-nlu/--no-train-nlu", help="train Rasa NLU after installing default projects"),
     json_output: bool = typer.Option(False, "--json", help=_("cli.option.json")),
 ) -> None:
     """
-    Install default scenarios/skills into the local workspace.
+    Install default Projects into the local workspace.
 
     Assumes the runtime environment is already bootstrapped (e.g. via tools/bootstrap_uv.ps1).
     """
@@ -242,34 +258,62 @@ def install(
     scenario_mgr = _scenario_mgr()
     skill_mgr = _skill_mgr()
 
-    installed = {"scenarios": [], "skills": [], "warnings": []}
+    installed = {"projects": [], "scenarios": [], "skills": [], "warnings": []}
 
-    for scenario_id in chosen.scenarios:
+    project_ids = _project_ids_for_preset(ctx, chosen)
+    for project_id in project_ids:
         try:
-            meta = scenario_mgr.install_with_deps(scenario_id, webspace_id=target_webspace)
-            installed["scenarios"].append({"id": meta.id.value, "version": getattr(meta, "version", None)})
+            result = install_workspace_project(
+                project_id,
+                ctx=ctx,
+                scenario_mgr=scenario_mgr,
+                skill_mgr=skill_mgr,
+                webspace_id=target_webspace,
+                setup_skills=setup_skills,
+            )
+            installed["projects"].append(
+                {
+                    "id": result["id"],
+                    "version": result.get("version"),
+                    "components": result.get("components") or [],
+                }
+            )
+            installed["scenarios"].extend(result.get("scenarios") or [])
+            installed["skills"].extend(result.get("skills") or [])
+            installed["warnings"].extend(
+                f"project {project_id}: {warning}" for warning in result.get("warnings") or []
+            )
         except Exception as exc:
-            installed["warnings"].append(f"scenario {scenario_id}: {exc}")
+            installed["warnings"].append(f"project {project_id}: {exc}")
 
-    for skill_id in chosen.skills:
-        try:
-            skill_mgr.install(skill_id, validate=False)
-            runtime = None
+    if _legacy_component_install_enabled() and (chosen.scenarios or chosen.skills):
+        installed["legacy_components"] = {"enabled": True, "reason": "ENV_TYPE=dev"}
+        for scenario_id in chosen.scenarios:
             try:
-                runtime = skill_mgr.prepare_runtime(skill_id, run_tests=False)
-            except Exception:
+                meta = scenario_mgr.install_with_deps(scenario_id, webspace_id=target_webspace)
+                installed["scenarios"].append({"id": meta.id.value, "version": getattr(meta, "version", None)})
+            except Exception as exc:
+                installed["warnings"].append(f"scenario {scenario_id}: {exc}")
+
+        for skill_id in chosen.skills:
+            try:
+                skill_mgr.install(skill_id, validate=False)
                 runtime = None
-            version = getattr(runtime, "version", None) if runtime else None
-            slot = getattr(runtime, "slot", None) if runtime else None
-            skill_mgr.activate_for_space(skill_id, version=version, slot=slot, space="default", webspace_id=target_webspace)
-            if setup_skills:
                 try:
-                    skill_mgr.setup_skill(skill_id)
-                except Exception as exc:
-                    installed["warnings"].append(f"skill setup {skill_id}: {exc}")
-            installed["skills"].append({"id": skill_id, "version": version, "slot": slot})
-        except Exception as exc:
-            installed["warnings"].append(f"skill {skill_id}: {exc}")
+                    runtime = skill_mgr.prepare_runtime(skill_id, run_tests=False)
+                except Exception:
+                    runtime = None
+                version = getattr(runtime, "version", None) if runtime else None
+                slot = getattr(runtime, "slot", None) if runtime else None
+                skill_mgr.activate_for_space(skill_id, version=version, slot=slot, space="default", webspace_id=target_webspace)
+                if setup_skills:
+                    try:
+                        skill_mgr.setup_skill(skill_id)
+                    except Exception as exc:
+                        installed["warnings"].append(f"skill setup {skill_id}: {exc}")
+                installed["skills"].append({"id": skill_id, "version": version, "slot": slot})
+            except Exception as exc:
+                installed["warnings"].append(f"skill {skill_id}: {exc}")
 
     # Persist native IO availability (voice/TTS) into the local capacity projection
     # so the system can avoid offering non-working IO paths on servers.
@@ -282,7 +326,11 @@ def install(
 
     # Ensure the webspace has at least some UI/application seeded.
     try:
-        default_scenario = chosen.scenarios[0] if chosen.scenarios else "web_desktop"
+        default_scenario = (
+            str(installed["scenarios"][0]["id"])
+            if installed["scenarios"]
+            else (chosen.scenarios[0] if chosen.scenarios else "web_desktop")
+        )
         ystore = get_ystore_for_webspace(target_webspace)
         asyncio.run(ensure_webspace_seeded_from_scenario(ystore, target_webspace, default_scenario_id=default_scenario))
     except Exception as exc:
@@ -324,6 +372,8 @@ def install(
         return
 
     typer.secho(f"[AdaOS] installed preset '{chosen.name}' into webspace '{target_webspace}'", fg=typer.colors.GREEN)
+    for item in installed["projects"]:
+        typer.echo(f"project: {item['id']} ({item.get('version') or 'unknown'})")
     for item in installed["scenarios"]:
         typer.echo(f"scenario: {item['id']} ({item.get('version') or 'unknown'})")
     for item in installed["skills"]:

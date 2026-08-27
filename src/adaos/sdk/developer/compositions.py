@@ -31,6 +31,15 @@ _MEMBER_DEFAULTS = {
     "lifecycle": "bound",
     "relations": ("uses",),
 }
+_PUBLICATION_DEFAULTS = {
+    "stage": "alpha",
+    "visibility": "unlisted",
+    "channel": "stable",
+}
+_INSTALL_DEFAULTS = {
+    "default": False,
+    "features": (),
+}
 
 
 class ProjectCompositionError(SdkError):
@@ -85,8 +94,8 @@ def validate(value: Mapping[str, Any]) -> dict[str, Any]:
     if len(owned_refs) != len(set(owned_refs)):
         raise ProjectCompositionError("project owned component refs must be unique")
     primaries = [item for item in payload["components"]["owned"] if item.get("role") == "primary"]
-    if len(primaries) != 1:
-        raise ProjectCompositionError("project must declare exactly one primary owned component")
+    if owned_refs and len(primaries) != 1:
+        raise ProjectCompositionError("project with owned components must declare exactly one primary")
     defaults = [item for item in payload.get("entrypoints") or [] if item.get("default") is True]
     if len(defaults) > 1:
         raise ProjectCompositionError("project may declare at most one default entrypoint")
@@ -102,6 +111,17 @@ def validate(value: Mapping[str, Any]) -> dict[str, Any]:
     if missing_entrypoints:
         raise ProjectCompositionError(
             f"required Project entrypoints are not declared: {missing_entrypoints}"
+        )
+    install = payload.get("install") or {}
+    feature_refs = {
+        str(ref)
+        for feature in install.get("features") or []
+        for ref in feature.get("components") or []
+    }
+    unknown_feature_refs = sorted(feature_refs.difference(owned_refs))
+    if unknown_feature_refs:
+        raise ProjectCompositionError(
+            f"Project install feature components must be owned members: {unknown_feature_refs}"
         )
     return payload
 
@@ -136,6 +156,21 @@ def normalized_definition(value: Mapping[str, Any]) -> dict[str, Any]:
         item.setdefault("relations", ["uses"])
         item["relations"] = sorted(item["relations"])
         dependencies.append(item)
+    publication = {**_PUBLICATION_DEFAULTS, **dict(payload.get("publication") or {})}
+    install = {**_INSTALL_DEFAULTS, **dict(payload.get("install") or {})}
+    install["features"] = sorted(
+        (
+            {
+                **dict(item),
+                "default": bool(item.get("default", False)),
+                "optional": bool(item.get("optional", False)),
+                "components": sorted(str(ref) for ref in item.get("components") or []),
+            }
+            for item in install.get("features") or []
+        ),
+        key=lambda item: item["id"],
+    )
+    catalog = dict(payload["catalog"])
     return {
         "schema": payload["schema"],
         "kind": payload["kind"],
@@ -150,6 +185,14 @@ def normalized_definition(value: Mapping[str, Any]) -> dict[str, Any]:
             (dict(item) for item in payload.get("entrypoints") or []),
             key=lambda item: item["id"],
         ),
+        "catalog": {
+            "title": str(catalog.get("title") or payload["id"]),
+            "description": str(catalog.get("description") or ""),
+            "categories": sorted(str(item) for item in catalog.get("categories") or []),
+            "tags": sorted(str(item) for item in catalog.get("tags") or []),
+        },
+        "publication": publication,
+        "install": install,
         "compatibility": dict(payload.get("compatibility") or {}),
         "lifecycle": dict(payload["lifecycle"]),
     }
@@ -200,7 +243,10 @@ def list_projects(*, profile: str | None = None, limit: int = 500) -> list[dict[
         project = _read(manifest_path)
         if profile and str(profile) not in set(project.get("profiles") or []):
             continue
-        primary = next(item for item in project["components"]["owned"] if item["role"] == "primary")
+        primary = next(
+            (item for item in project["components"]["owned"] if item["role"] == "primary"),
+            {},
+        )
         result.append(
             {
                 **project,
@@ -212,7 +258,12 @@ def list_projects(*, profile: str | None = None, limit: int = 500) -> list[dict[
                 "profiles": list(project["profiles"]),
                 "categories": list(project["catalog"]["categories"]),
                 "tags": list(project["catalog"]["tags"]),
-                "primary_ref": primary["ref"],
+                "publication": dict(project.get("publication") or {}),
+                "install": dict(project.get("install") or {}),
+                "stage": str((project.get("publication") or {}).get("stage") or "alpha"),
+                "visibility": str((project.get("publication") or {}).get("visibility") or "unlisted"),
+                "default_install": bool((project.get("install") or {}).get("default") is True),
+                "primary_ref": primary.get("ref"),
                 "source_path": str(manifest_path.parent.resolve()),
                 "manifest_digest": _manifest_digest(project),
             }

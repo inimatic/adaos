@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import typer
@@ -26,21 +27,44 @@ def _roots(workspace_root: Path | None) -> tuple[Path, Path]:
     return workspace, artifact_root
 
 
-@app.command("release-build")
-def release_build(
-    project_id: str = typer.Argument(
-        ..., help="Project id under Workspace projects/."
-    ),
-    revision: str = typer.Option(
-        ..., "--revision", help="Exact immutable source revision."
-    ),
-    repository: str = typer.Option(
-        ..., "--repository", help="Source repository identity."
-    ),
-    forge: str = typer.Option("github", "--forge"),
-    workspace_root: Path | None = typer.Option(None, "--workspace-root"),
-    json_output: bool = typer.Option(False, "--json"),
-) -> None:
+def _git_text(workspace: Path, *args: str) -> str:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(workspace), *args],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+        )
+    except OSError:
+        return ""
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def _default_revision(workspace: Path) -> str:
+    revision = _git_text(workspace, "rev-parse", "HEAD")
+    if not revision:
+        raise typer.BadParameter("revision is required outside a git checkout", param_hint="--revision")
+    return revision
+
+
+def _default_repository(workspace: Path) -> str:
+    repository = _git_text(workspace, "config", "--get", "remote.origin.url")
+    if repository:
+        return repository
+    return workspace.name
+
+
+def _build_project_release(
+    project_id: str,
+    *,
+    revision: str,
+    repository: str,
+    forge: str,
+    workspace_root: Path | None,
+    builder: str,
+) -> dict[str, object]:
     workspace, artifact_root = _roots(workspace_root)
     result = build_workspace_project_release(
         project_dir=workspace / "projects" / project_id,
@@ -61,11 +85,14 @@ def release_build(
             {
                 "schema": "adaos.artifact.project_release_build_evidence.v1",
                 "source_revision": revision,
-                "builder": "adaos.project.release-build",
+                "builder": builder,
             },
         ),
     )
-    payload = result.to_dict()
+    return result.to_dict()
+
+
+def _echo_project_release(payload: dict[str, object], *, json_output: bool) -> None:
     if json_output:
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
         return
@@ -73,6 +100,59 @@ def release_build(
         f"{payload['project_id']}@{payload['version']} "
         f"{payload['release_digest']} packages={len(payload['packages'])}"
     )
+
+
+@app.command("release-build")
+def release_build(
+    project_id: str = typer.Argument(
+        ..., help="Project id under Workspace projects/."
+    ),
+    revision: str = typer.Option(
+        ..., "--revision", help="Exact immutable source revision."
+    ),
+    repository: str = typer.Option(
+        ..., "--repository", help="Source repository identity."
+    ),
+    forge: str = typer.Option("github", "--forge"),
+    workspace_root: Path | None = typer.Option(None, "--workspace-root"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    payload = _build_project_release(
+        project_id,
+        revision=revision,
+        repository=repository,
+        forge=forge,
+        workspace_root=workspace_root,
+        builder="adaos.project.release-build",
+    )
+    _echo_project_release(payload, json_output=json_output)
+
+
+@app.command("push")
+def push(
+    project_id: str = typer.Argument(
+        ..., help="Project id under Workspace projects/."
+    ),
+    revision: str | None = typer.Option(
+        None, "--revision", help="Exact immutable source revision; defaults to current git HEAD."
+    ),
+    repository: str | None = typer.Option(
+        None, "--repository", help="Source repository identity; defaults to git remote.origin.url."
+    ),
+    forge: str = typer.Option("github", "--forge"),
+    workspace_root: Path | None = typer.Option(None, "--workspace-root"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    workspace, _ = _roots(workspace_root)
+    payload = _build_project_release(
+        project_id,
+        revision=revision or _default_revision(workspace),
+        repository=repository or _default_repository(workspace),
+        forge=forge,
+        workspace_root=workspace_root,
+        builder="adaos.project.push",
+    )
+    _echo_project_release(payload, json_output=json_output)
 
 
 @app.command("release-inspect")

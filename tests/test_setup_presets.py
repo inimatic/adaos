@@ -8,9 +8,10 @@ from adaos.apps.cli.commands import setup as setup_cmd
 from adaos.services.setup.presets import get_preset
 
 
-def test_default_preset_includes_infrastate_skill() -> None:
+def test_default_preset_installs_default_projects() -> None:
     preset = get_preset("default")
-    assert "infrastate_skill" in preset.skills
+    assert preset.projects == ("web_desktop", "default_app_bundle")
+    assert "web_desktop" in preset.scenarios
 
 
 def test_workspace_only_update_skips_runtime_refresh_and_yjs_sync(monkeypatch, capsys) -> None:
