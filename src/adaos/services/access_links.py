@@ -552,8 +552,10 @@ _ENTITY_LIFECYCLE_FIELDS = {
     "labels",
     "last_webspace_id",
     "node_names",
+    "online",
     "os_name",
     "admission_policy",
+    "connection_state",
     "revoked",
     "user_agent",
 }
@@ -633,6 +635,34 @@ def _emit_entity_registry_changed(
                 reason=reason,
             )
         )
+        previous_online = bool(previous_view.get("online"))
+        current_online = bool(current_view.get("online"))
+        previous_connection = str(previous_view.get("connection_state") or "").strip() or None
+        current_connection = str(current_view.get("connection_state") or "").strip() or None
+        if previous_online != current_online or previous_connection != current_connection:
+            from adaos.services.device_presence import DEVICE_PRESENCE_CHANGED
+
+            events.append(
+                {
+                    "topic": DEVICE_PRESENCE_CHANGED,
+                    "payload": {
+                        "schema": "adaos.device_presence.changed.v1",
+                        "device_ref": f"{kind}:{entry_id}",
+                        "device_id": entry_id,
+                        "kind": kind,
+                        "webspace_id": webspace_id or None,
+                        "previous": {
+                            "online": previous_online,
+                            "connection_state": previous_connection,
+                        },
+                        "current": {
+                            "online": current_online,
+                            "connection_state": current_connection,
+                        },
+                        "reason": reason,
+                    },
+                }
+            )
         if registry_changed:
             payload = named_entities.entity_event_payload(
                 entity_ref=f"device:{kind}:{entry_id}",

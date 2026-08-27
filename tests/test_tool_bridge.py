@@ -1298,6 +1298,101 @@ def test_call_tool_allows_approved_runtime_pending_action_retry(monkeypatch) -> 
     assert calls.count("files_skill:write_file") == 1
 
 
+def test_scoped_runtime_action_approval_becomes_a_durable_target_grant(
+    monkeypatch, tmp_path
+) -> None:
+    pending_by_id: dict[str, dict[str, object]] = {}
+    monkeypatch.setenv(
+        "ADAOS_RUNTIME_ACTION_GRANTS_PATH", str(tmp_path / "runtime-grants.json")
+    )
+
+    async def _list_pending_actions(
+        *, webspace_id: str | None = None, include_terminal: bool = True
+    ) -> dict[str, object]:
+        return {"by_id": pending_by_id, "active_items": [], "active": []}
+
+    async def _publish_pending_action(**kwargs) -> dict[str, object]:
+        action = {
+            "id": kwargs.get("action_id") or "pa.runtime.media",
+            "kind": kwargs.get("kind"),
+            "status": "pending",
+            "webspace_id": kwargs.get("webspace_id"),
+            "domain_ref": kwargs.get("domain_ref"),
+        }
+        pending_by_id[str(action["id"])] = action
+        return action
+
+    monkeypatch.setattr(
+        tool_bridge_module, "list_pending_actions_async", _list_pending_actions
+    )
+    monkeypatch.setattr(
+        tool_bridge_module, "publish_pending_action_async", _publish_pending_action
+    )
+    body = tool_bridge_module.ToolCall(
+        tool="media_center_skill:play_on",
+        arguments={
+            "target_id": "target-tv",
+            "webspace_id": "homepoint",
+            "_meta": {
+                "action_source": "operator_ui",
+                "controller_device_id": "device-phone",
+            },
+        },
+    )
+    scope = {
+        "name": "media.playback.control",
+        "resource_argument": "target_id",
+        "principal_meta_key": "controller_device_id",
+        "ttl_seconds": 3600,
+    }
+
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(
+            tool_bridge_module._enforce_runtime_action_gate(
+                body=body,
+                skill_name="media_center_skill",
+                public_tool="play_on",
+                payload=dict(body.arguments),
+                forced_side_effect_class="external_write",
+                approval_scope=scope,
+                ctx=_fake_ctx(),
+            )
+        )
+
+    pending_id = excinfo.value.detail["pending_action_id"]
+    pending_by_id[pending_id]["status"] = "responded"
+    pending_by_id[pending_id]["response"] = {
+        "response_action_id": "approve",
+        "responder": {"type": "user", "user_id": "owner"},
+    }
+    accepted = asyncio.run(
+        tool_bridge_module._enforce_runtime_action_gate(
+            body=body,
+            skill_name="media_center_skill",
+            public_tool="play_on",
+            payload=dict(body.arguments),
+            forced_side_effect_class="external_write",
+            approval_scope=scope,
+            ctx=_fake_ctx(),
+        )
+    )
+    pending_by_id.clear()
+    reused = asyncio.run(
+        tool_bridge_module._enforce_runtime_action_gate(
+            body=body,
+            skill_name="media_center_skill",
+            public_tool="play_on",
+            payload=dict(body.arguments),
+            forced_side_effect_class="external_write",
+            approval_scope=scope,
+            ctx=_fake_ctx(),
+        )
+    )
+
+    assert accepted["approval"]["durable_grant_id"].startswith("grant.runtime.")
+    assert reused["approval"]["source"] == "durable_grant"
+
+
 def test_call_tool_keeps_prompt_project_selection_local_and_approval_free(monkeypatch) -> None:
     calls: list[str] = []
     payloads: list[dict[str, object]] = []

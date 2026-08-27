@@ -1627,6 +1627,32 @@
         "enabledIf": { "type": "string", "minLength": 1 },
         "value": {},
         "stateKey": { "type": "string", "minLength": 1 },
+        "selectedStateKey": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Page-state key containing the selected option value for a menu-style action."
+        },
+        "options": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true },
+          "description": "Static options for a menu-style action. Dynamic options may be supplied by optionsDataSource."
+        },
+        "optionsDataSource": {
+          "$ref": "#/$defs/dataSource",
+          "description": "Runtime data source used to populate a menu-style action without materializing options in the page descriptor."
+        },
+        "optionLabelPath": { "$ref": "#/$defs/fieldPath" },
+        "optionValuePath": { "$ref": "#/$defs/fieldPath" },
+        "optionIconPath": { "$ref": "#/$defs/fieldPath" },
+        "optionIcon": { "type": "string" },
+        "persistFallback": {
+          "type": "boolean",
+          "description": "Persist the first available option when the selected state is absent or no longer valid."
+        },
+        "refreshOptionsOnOpen": {
+          "type": "boolean",
+          "description": "Refresh dynamic options when a menu opens. Dynamic option sources refresh on open by default."
+        },
         "selected": { "type": "boolean" },
         "connected": { "type": "boolean" },
         "node_status": { "type": "string" },
@@ -1653,7 +1679,7 @@
         "buttons": { "$ref": "#/$defs/actionButtonList" },
         "variant": {
           "type": "string",
-          "enum": ["tabs", "segmented", "toolbar", "stack", "header"]
+          "enum": ["tabs", "segmented", "toolbar", "adaptiveToolbar", "stack", "header"]
         },
         "size": {
           "type": "string",

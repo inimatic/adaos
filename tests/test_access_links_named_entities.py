@@ -66,8 +66,10 @@ def test_browser_session_metadata_updates_emit_named_entity_invalidation(monkeyp
         connection_state="closed",
         online=False,
     )
-    assert events == []
+    assert len(events) == 1
+    assert events[0]["registry_changed"] is False
 
+    events.clear()
     access_links.touch_browser_session(
         "dev-browser",
         webspace_id="desktop",
@@ -441,6 +443,41 @@ def test_access_links_emits_specific_lifecycle_events_before_registry_invalidati
         named_entities.ENTITY_REGISTRY_CHANGED,
     ]
     assert emitted[1][1]["current"]["draft_name"] == "Edge on Windows"
+
+
+def test_access_links_emits_device_presence_transition(monkeypatch) -> None:
+    emitted: list[tuple[str, dict[str, object]]] = []
+
+    monkeypatch.setattr("adaos.services.agent_context.get_ctx", lambda: SimpleNamespace(bus=object()))
+    monkeypatch.setattr(
+        "adaos.services.eventbus.emit",
+        lambda _bus, topic, payload, source=None: emitted.append((topic, dict(payload))),
+    )
+
+    access_links._emit_entity_registry_changed(
+        "browser",
+        {
+            "id": "dev-browser",
+            "kind": "browser",
+            "online": True,
+            "connection_state": "connected",
+        },
+        {
+            "id": "dev-browser",
+            "kind": "browser",
+            "online": False,
+            "connection_state": "closed",
+            "last_webspace_id": "desktop",
+        },
+        reason="browser_session.changed",
+        registry_changed=False,
+    )
+
+    topic, payload = emitted[-1]
+    assert topic == "device.presence.changed"
+    assert payload["device_ref"] == "browser:dev-browser"
+    assert payload["previous"]["online"] is True
+    assert payload["current"]["online"] is False
 
 
 def test_transport_metadata_emits_lifecycle_without_registry_invalidation(monkeypatch) -> None:

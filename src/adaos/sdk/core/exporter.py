@@ -90,6 +90,7 @@ def export(level: str = "std") -> Dict[str, Any]:
                 "stability": meta.get("stability", "experimental"),
                 "idempotent": meta.get("idempotent"),
                 "side_effects": meta.get("side_effects"),
+                "approval_scope": meta.get("approval_scope"),
                 "since": meta.get("since"),
                 "version": meta.get("version"),
             },

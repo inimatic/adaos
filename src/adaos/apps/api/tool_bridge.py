@@ -23,8 +23,13 @@ from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.eventbus import emit
 from adaos.services.pending_actions import list_pending_actions_async, publish_pending_action_async
 from adaos.services.runtime_lifecycle import is_accepting_new_work
+from adaos.services.runtime_action_grants import (
+    find_runtime_action_grant,
+    remember_runtime_action_grant,
+)
 from adaos.services.skill.manager import SkillManager
 from adaos.services.skill.tool_contract import (
+    declared_tool_approval_scope as _declared_tool_approval_scope,
     declared_tool_side_effects as _declared_tool_side_effects,
     side_effects_are_read_only as _declared_side_effects_are_read_only,
 )
@@ -682,6 +687,44 @@ def _runtime_action_pending_action_id(domain_ref: Dict[str, Any]) -> str:
     return f"pa.runtime_action.{fingerprint}"
 
 
+def _runtime_action_grant_ref(
+    declaration: Mapping[str, Any] | None,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    spec = dict(declaration) if isinstance(declaration, Mapping) else {}
+    scope = _first_text(spec.get("name"), spec.get("scope"))
+    resource_argument = _first_text(spec.get("resource_argument"))
+    if not scope or not resource_argument:
+        return {}
+    meta = _mapping(payload.get("_meta"))
+    principal_key = _first_text(spec.get("principal_meta_key")) or "controller_device_id"
+    controller = _first_text(meta.get(principal_key), payload.get("controller_id"))
+    if controller:
+        subject = f"controller:{controller}"
+    else:
+        profile = _first_text(payload.get("profile_id"))
+        if not profile:
+            return {}
+        subject = f"profile:{profile}"
+    resource = _first_text(payload.get(resource_argument))
+    if not resource:
+        return {}
+    try:
+        requested_ttl = int(spec.get("ttl_seconds") or 30 * 24 * 60 * 60)
+    except (TypeError, ValueError):
+        requested_ttl = 30 * 24 * 60 * 60
+    return {
+        "subject": subject,
+        "scope": scope,
+        "resource": resource,
+        "webspace_id": _resolve_tool_webspace_id(dict(payload)),
+        "ttl_seconds": max(
+            300,
+            min(365 * 24 * 60 * 60, requested_ttl),
+        ),
+    }
+
+
 def _pending_action_domain_matches(action: Dict[str, Any], domain_ref: Dict[str, Any]) -> bool:
     candidate = _mapping(action.get("domain_ref"))
     if not candidate:
@@ -810,6 +853,7 @@ async def _enforce_runtime_action_gate(
     target_node_id: str = "",
     local_node_id: str = "",
     forced_side_effect_class: str = "",
+    approval_scope: Mapping[str, Any] | None = None,
     ctx: AgentContext | None = None,
 ) -> Dict[str, Any]:
     action_risk = _runtime_action_risk(
@@ -823,10 +867,42 @@ async def _enforce_runtime_action_gate(
     )
     if not _runtime_action_gate_enabled() or not bool(action_risk.get("approval_required")):
         return action_risk
+    grant_ref = _runtime_action_grant_ref(approval_scope, payload)
+    if grant_ref:
+        grant = await asyncio.to_thread(
+            find_runtime_action_grant,
+            ctx or get_ctx(),
+            **{
+                key: grant_ref[key]
+                for key in ("subject", "scope", "resource", "webspace_id")
+            },
+        )
+        if grant:
+            return {
+                **action_risk,
+                "approval": {
+                    "status": "approve",
+                    "source": "durable_grant",
+                    "approval_id": grant["id"],
+                    "approved_by": grant.get("approved_by"),
+                    "scope": grant.get("scope"),
+                    "resource": grant.get("resource"),
+                },
+            }
     for approval in _approval_sources(payload, body.context):
         if _approval_allows_runtime_action(approval, action_risk):
-            return {**action_risk, "approval": {k: v for k, v in approval.items() if k != "secret"}}
-    operator_approval = _runtime_operator_ui_approval(
+            accepted = {k: v for k, v in approval.items() if k != "secret"}
+            if grant_ref:
+                grant = await asyncio.to_thread(
+                    remember_runtime_action_grant,
+                    ctx or get_ctx(),
+                    **grant_ref,
+                    approval_id=_first_text(approval.get("approval_id")),
+                    approved_by=_approval_identity(approval),
+                )
+                accepted["durable_grant_id"] = grant["id"]
+            return {**action_risk, "approval": accepted}
+    operator_approval = None if grant_ref else _runtime_operator_ui_approval(
         payload=payload,
         context=body.context,
         action_risk=action_risk,
@@ -848,6 +924,15 @@ async def _enforce_runtime_action_gate(
         )
         approval = _pending_action_approval(pending_action, action_risk)
         if approval:
+            if grant_ref:
+                grant = await asyncio.to_thread(
+                    remember_runtime_action_grant,
+                    ctx or get_ctx(),
+                    **grant_ref,
+                    approval_id=_first_text(approval.get("pending_action_id")),
+                    approved_by=_approval_identity(approval),
+                )
+                approval = {**approval, "durable_grant_id": grant["id"]}
             return {**action_risk, "approval": approval}
     except Exception as exc:
         pending_action_error = f"{type(exc).__name__}: {exc}"
@@ -1619,9 +1704,17 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
     # always be authorized from the active resolved manifest.
     if accepting_new_work and body.intent != "read" and _looks_readonly_tool(public_tool):
         declared_side_effects = ""
+        declared_approval_scope: dict[str, Any] = {}
     else:
         declared_side_effects = await asyncio.to_thread(
             _declared_tool_side_effects,
+            mgr,
+            skill_name=skill_name,
+            public_tool=public_tool,
+            dev=bool(body.dev),
+        )
+        declared_approval_scope = await asyncio.to_thread(
+            _declared_tool_approval_scope,
             mgr,
             skill_name=skill_name,
             public_tool=public_tool,
@@ -1692,6 +1785,7 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
         target_node_id=target_node_id,
         local_node_id=local_node_id,
         forced_side_effect_class=declared_side_effects,
+        approval_scope=declared_approval_scope,
         ctx=ctx,
     )
     mutating_call = _action_risk_may_mutate(action_risk)
@@ -1832,6 +1926,7 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
                 if trusted_read_only or _looks_readonly_tool(public_tool)
                 else ("" if _is_readonly_snapshot_tool(body.tool) else "cross_node")
             ),
+            approval_scope=declared_approval_scope,
             ctx=ctx,
         )
 

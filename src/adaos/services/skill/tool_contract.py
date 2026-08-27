@@ -48,3 +48,24 @@ def declared_tool_side_effects(
         ).strip()
     except Exception:
         return ""
+
+
+def declared_tool_approval_scope(
+    manager: Any,
+    *,
+    skill_name: str,
+    public_tool: str,
+    dev: bool,
+) -> dict[str, Any]:
+    """Return a trusted, manifest-declared reusable approval scope."""
+
+    try:
+        status = manager.dev_runtime_status(skill_name) if dev else manager.runtime_status(skill_name)
+        manifest_path = Path(str(status.get("resolved_manifest") or ""))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        tools = manifest.get("tools") if isinstance(manifest, dict) else {}
+        spec = tools.get(public_tool) if isinstance(tools, dict) else {}
+        scope = spec.get("approval_scope") if isinstance(spec, dict) else None
+        return dict(scope) if isinstance(scope, dict) else {}
+    except Exception:
+        return {}

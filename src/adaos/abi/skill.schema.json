@@ -679,9 +679,38 @@
         "output_schema": {
           "$ref": "#/$defs/jsonSchema",
           "description": "JSON Schema describing tool result shape."
+        },
+        "approval_scope": {
+          "$ref": "#/$defs/approvalScope",
+          "description": "Optional durable approval scope for repeated controller-to-resource actions."
         }
       },
       "required": ["name"]
+    },
+
+    "approvalScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "resource_argument"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.-]{0,127}$"
+        },
+        "resource_argument": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "principal_meta_key": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "ttl_seconds": {
+          "type": "integer",
+          "minimum": 300,
+          "maximum": 31536000
+        }
+      }
     },
 
     "skillActivationPolicy": {

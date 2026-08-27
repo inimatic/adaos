@@ -448,6 +448,27 @@ def test_scenario_schema_accepts_runtime_skill_bindings() -> None:
     Draft7Validator(schema).validate(payload)
 
 
+def test_skill_schema_accepts_durable_tool_approval_scope() -> None:
+    schema = _load_schema("skill.schema.json")
+    payload = {
+        "name": "media_center_skill",
+        "version": "0.8.0",
+        "tools": [
+            {
+                "name": "play_on",
+                "approval_scope": {
+                    "name": "media.playback.control",
+                    "resource_argument": "target_id",
+                    "principal_meta_key": "controller_device_id",
+                    "ttl_seconds": 31536000,
+                },
+            }
+        ],
+    }
+
+    Draft7Validator(schema).validate(payload)
+
+
 def test_scenario_schema_accepts_builder_authoring_hints() -> None:
     schema = _load_schema("scenario.schema.json")
     payload = {
@@ -517,6 +538,31 @@ def test_webui_schema_accepts_builder_nlu_hints() -> None:
     }
 
     Draft202012Validator(schema).validate(payload)
+
+
+def test_webui_action_button_accepts_dynamic_options() -> None:
+    schema = _load_schema("webui.v1.schema.json")
+    action_button_schema = {
+        "$schema": schema["$schema"],
+        "$defs": schema["$defs"],
+        "$ref": "#/$defs/actionButton",
+    }
+    payload = {
+        "id": "target",
+        "label": "Playback device",
+        "selectedStateKey": "selectedPlaybackTargetId",
+        "optionsDataSource": {
+            "kind": "skill",
+            "name": "media_control_skill.list_targets",
+            "params": {"include_unavailable": True},
+        },
+        "optionLabelPath": "display_name",
+        "optionValuePath": "target_id",
+        "optionIconPath": "icon",
+        "persistFallback": True,
+    }
+
+    Draft202012Validator(action_button_schema).validate(payload)
 
 
 def test_builder_task_schema_accepts_teacher_handoff_packet() -> None:

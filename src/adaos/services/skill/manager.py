@@ -1281,7 +1281,7 @@ class SkillManager:
                     if retries is not None and existing.get("retries") != retries:
                         existing["retries"] = retries
                         changed = True
-                    for meta_key in ("side_effects", "read_only", "yjs_governance"):
+                    for meta_key in ("side_effects", "read_only", "yjs_governance", "approval_scope"):
                         if meta_key in entry and existing.get(meta_key) != entry.get(meta_key):
                             existing[meta_key] = entry.get(meta_key)
                             changed = True
@@ -1307,7 +1307,7 @@ class SkillManager:
                 "permissions": base_permissions,
                 "secrets": base_secrets,
             }
-            for meta_key in ("side_effects", "read_only", "yjs_governance"):
+            for meta_key in ("side_effects", "read_only", "yjs_governance", "approval_scope"):
                 if meta_key in entry:
                     tools[tool_name][meta_key] = entry.get(meta_key)
             added.append(tool_name)
@@ -5455,7 +5455,7 @@ class SkillManager:
                 "permissions": item.get("permissions") or manifest.get("permissions"),
                 "secrets": self._preserve_secret_placeholders(item.get("secrets", [])),
             }
-            for meta_key in ("side_effects", "read_only", "yjs_governance"):
+            for meta_key in ("side_effects", "read_only", "yjs_governance", "approval_scope"):
                 if meta_key in item:
                     tools[tool_name][meta_key] = item.get(meta_key)
 

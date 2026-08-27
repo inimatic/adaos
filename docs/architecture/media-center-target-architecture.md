@@ -514,6 +514,13 @@ It contains:
 Commands use expected revisions or idempotency keys. Stale phone controls must
 not overwrite a newer TV queue or seek.
 
+Command acknowledgement is cumulative only across a contiguous prefix whose
+expected active item and transport state match the endpoint observation. A
+`play` command is not acknowledged until the media element reports confirmed
+playback for that exact item. A stale, failed, or wrong-item observation keeps
+the command pending for bounded replay instead of advancing the durable
+session optimistically.
+
 ### Persistent endpoint coordinator
 
 The application shell owns one `PlaybackCoordinator` and persistent media
@@ -548,6 +555,29 @@ and acquires or shares a policy-governed control lease. It can play, pause,
 seek, change volume/tracks, edit the queue, stop, or hand off to another target.
 The data route remains source node to target endpoint even when the command
 originates from a phone.
+
+Device liveness is a core device-registry concern shared by media, Drive, and
+future distributed skills. The registry projects raw heartbeat and connection
+witnesses into `online`, bounded `grace`, or `offline` presence and emits a
+transition event for subscribers. A domain skill may keep a stricter
+service-specific heartbeat, but it must not invent a second durable device
+registry. Media Control joins core presence with playback capabilities and
+excludes an offline device from target planning. Brief disconnects remain in
+the core grace state to avoid selector churn; expired legacy endpoints are
+still removed even when they predate registry linkage.
+
+The target advertises a versioned capability profile before queue planning.
+Container, MIME, codec, dimensions, bitrate, HDR, tracks and browser evidence
+are hard admission inputs, not ranking hints. The coordinator selects only a
+ready direct/remux/prepared rendition; when none is ready it returns an
+explicit rendition-required decision. The selected item is never silently
+replaced by another playable queue member.
+
+The first cross-device control request creates a Pending Action scoped to the
+controller device, webspace, action class and playback target. Approval creates
+a revocable durable grant for that exact tuple. Later commands reuse the grant;
+changing controller or target requires a separate decision. Skills declare the
+scope through the public SDK and never read or write the core grant store.
 
 After a node or channel interruption, the endpoint retains its local checkpoint
 and bounded queue snapshot. Reconnection reconciles session generation,

@@ -101,6 +101,19 @@ def get_device(device_ref: str) -> dict[str, Any] | None:
         raise
 
 
+def get_device_presence(
+    device_ref: str,
+    *,
+    grace_seconds: int = 60,
+) -> dict[str, Any] | None:
+    device = get_device(device_ref)
+    if device is None:
+        return None
+    from adaos.services.device_presence import project_device_presence
+
+    return project_device_presence(device, grace_seconds=grace_seconds)
+
+
 def inspect_device(device_ref: str) -> dict[str, Any] | None:
     token = str(device_ref or "")
     try:

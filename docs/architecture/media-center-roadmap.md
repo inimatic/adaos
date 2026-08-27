@@ -746,9 +746,35 @@ Local implementation checkpoint (not stand acceptance):
   media exists, `media_control.playback.assigned` wakes the exact endpoint, and
   `endpoint_inbox` provides an immediate/recovery snapshot with at most 30
   queue entries around the active item. Command pulls are single-flight and
-  targets age to unavailable after 120 seconds without heartbeat. Local
+  targets age to unavailable after 60 seconds without heartbeat. Local
   contract and browser tests pass; physical Android TV acceptance remains the
   promotion gate.
+- The 2026-08-27 playback-control candidate tightens that closure. Endpoint
+  command acknowledgement now requires the exact expected queue item,
+  compatible transport state, and media-element confirmation for Play;
+  assignment and observation continuations are generation-fenced. `Play on`
+  reads the selected endpoint capability profile before queue construction and
+  refuses an unprepared selected source instead of silently choosing another
+  item. The controller-target approval is a core-owned durable, revocable grant
+  declared through SDK `approval_scope`. The adaptive toolbar and compact
+  desktop widget select the active target, while the widget's Now Playing row
+  is immediately seeded and then maintained by `media_control.now_playing`
+  events. Native video controls remain disabled; both modal and shell
+  fullscreen surfaces retain custom Previous, Play/Pause, Next, Details, PiP,
+  Stop and Close controls. Python contracts, focused Angular tests and the
+  production client build pass locally. Cross-browser Android TV playback,
+  durable-grant reuse and D-pad evidence remain the promotion gate.
+- Core device-registry presence is now the shared liveness authority. Registry
+  writes project `online`, `grace`, or `offline` through
+  `adaos.sdk.data.devices.get_device_presence()` and emit
+  `device.presence.changed` only when that projected state changes. Media
+  Control retains its own bounded endpoint heartbeat as playback evidence, but
+  a linked core device reported offline cannot remain a selectable target.
+  Legacy endpoints without a registry identity also expire after the same
+  60-second window, preventing accumulated browser sessions from filling the
+  selector. Dynamic target options refresh whenever the menu opens. Local
+  browser acceptance confirms one current Android TV target and a successful
+  empty Now Playing state without the former HTTP 500.
 - `MC8-02` has the fullscreen-safe generic transition overlay in client
   `4090c74`, including policy-gated update deferral. The physical update and
   playback recovery proof remains open.

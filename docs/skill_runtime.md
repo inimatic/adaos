@@ -364,6 +364,48 @@ Supervisor-facing validation status and operator projections now also surface a 
 
 `adaos skill run <name> [<tool>]` reads the active slot’s `resolved.manifest.json`, adds the staged source directory to `sys.path`, and executes the tool callable with per-invocation timeouts. `adaos skill test <name>` reuses the same active slot to execute `src/skills/<name>/tests` without preparing a new build. If a skill declares a `setup` tool it is available via `adaos skill setup <name>` **only after activation**; attempting to run setup while the version is pending reports a clear error instructing the operator to activate first.
 
+### Durable action approval scopes
+
+Repeated device or resource actions may declare a reusable approval boundary in
+the public SDK:
+
+```python
+@tool(
+    side_effects="external_write",
+    approval_scope={
+        "name": "media.playback.control",
+        "resource_argument": "target_id",
+        "principal_meta_key": "controller_device_id",
+        "ttl_seconds": 31_536_000,
+    },
+)
+def play_on(target_id: str, **kwargs): ...
+```
+
+Core reads this declaration from the resolved manifest, not from caller
+arguments. The first approved Pending Action creates a durable grant scoped to
+subject, action name, resource and webspace. Later matching calls may reuse it;
+another controller, resource, webspace or expired/revoked grant requires a new
+approval. The grant store and policy remain core-owned. Skills receive only the
+normal approval result and must not persist authorization copies themselves.
+Grant I/O is moved off the API event loop.
+
+### Device presence projection
+
+Core device registry owns the reusable liveness model. Registry entities keep
+their raw heartbeat and connection witnesses; consumers obtain the normalized
+projection through `adaos.sdk.data.devices.get_device_presence(device_ref,
+grace_seconds=...)`. The result distinguishes `online`, `grace`, and `offline`
+and includes bounded age and availability fields.
+
+When a registry mutation changes projected presence, core emits
+`device.presence.changed` with the device reference plus previous and current
+projections. Skills subscribe to that transition when they need reactive
+placement or UI updates. A skill may add a shorter service heartbeat or a
+capability profile, but it must not persist a competing general-purpose device
+online registry. Reads still return the current projection immediately, so a
+new subscriber does not need to wait for the next heartbeat event.
+
 ## Secrets management
 
 Secrets are stored under `skills/.runtime/<name>/v<major>.<minor>/data/files/secrets.json` and are never copied into the source tree. Runtime execution injects secrets at process start and keeps placeholders (`${secret:NAME}`) inside `resolved.manifest.json`.
