@@ -171,6 +171,16 @@ def normalized_definition(value: Mapping[str, Any]) -> dict[str, Any]:
         key=lambda item: item["id"],
     )
     catalog = dict(payload["catalog"])
+    catalog_payload = {
+        "title": str(catalog.get("title") or payload["id"]),
+        "description": str(catalog.get("description") or ""),
+        "categories": sorted(str(item) for item in catalog.get("categories") or []),
+        "tags": sorted(str(item) for item in catalog.get("tags") or []),
+    }
+    for field in ("title_i18n", "description_i18n"):
+        value = catalog.get(field)
+        if isinstance(value, Mapping):
+            catalog_payload[field] = dict(value)
     return {
         "schema": payload["schema"],
         "kind": payload["kind"],
@@ -185,12 +195,7 @@ def normalized_definition(value: Mapping[str, Any]) -> dict[str, Any]:
             (dict(item) for item in payload.get("entrypoints") or []),
             key=lambda item: item["id"],
         ),
-        "catalog": {
-            "title": str(catalog.get("title") or payload["id"]),
-            "description": str(catalog.get("description") or ""),
-            "categories": sorted(str(item) for item in catalog.get("categories") or []),
-            "tags": sorted(str(item) for item in catalog.get("tags") or []),
-        },
+        "catalog": catalog_payload,
         "publication": publication,
         "install": install,
         "compatibility": dict(payload.get("compatibility") or {}),
@@ -247,27 +252,30 @@ def list_projects(*, profile: str | None = None, limit: int = 500) -> list[dict[
             (item for item in project["components"]["owned"] if item["role"] == "primary"),
             {},
         )
-        result.append(
-            {
-                **project,
-                "id": project["id"],
-                "ref": f"project:{project['id']}",
-                "version": project["version"],
-                "title": project["catalog"]["title"],
-                "description": project["catalog"]["description"],
-                "profiles": list(project["profiles"]),
-                "categories": list(project["catalog"]["categories"]),
-                "tags": list(project["catalog"]["tags"]),
-                "publication": dict(project.get("publication") or {}),
-                "install": dict(project.get("install") or {}),
-                "stage": str((project.get("publication") or {}).get("stage") or "alpha"),
-                "visibility": str((project.get("publication") or {}).get("visibility") or "unlisted"),
-                "default_install": bool((project.get("install") or {}).get("default") is True),
-                "primary_ref": primary.get("ref"),
-                "source_path": str(manifest_path.parent.resolve()),
-                "manifest_digest": _manifest_digest(project),
-            }
-        )
+        item = {
+            **project,
+            "id": project["id"],
+            "ref": f"project:{project['id']}",
+            "version": project["version"],
+            "title": project["catalog"]["title"],
+            "description": project["catalog"]["description"],
+            "profiles": list(project["profiles"]),
+            "categories": list(project["catalog"]["categories"]),
+            "tags": list(project["catalog"]["tags"]),
+            "publication": dict(project.get("publication") or {}),
+            "install": dict(project.get("install") or {}),
+            "stage": str((project.get("publication") or {}).get("stage") or "alpha"),
+            "visibility": str((project.get("publication") or {}).get("visibility") or "unlisted"),
+            "default_install": bool((project.get("install") or {}).get("default") is True),
+            "primary_ref": primary.get("ref"),
+            "source_path": str(manifest_path.parent.resolve()),
+            "manifest_digest": _manifest_digest(project),
+        }
+        for field in ("title_i18n", "description_i18n"):
+            value = project["catalog"].get(field)
+            if isinstance(value, Mapping):
+                item[field] = dict(value)
+        result.append(item)
         if len(result) >= maximum:
             break
     return result

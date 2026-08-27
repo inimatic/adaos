@@ -163,13 +163,14 @@ def record_project_install(
     project_id = str(definition.get("id") or "").strip()
     if not project_id:
         raise ProjectInstallError("Project id is empty")
+    catalog = definition.get("catalog") if isinstance(definition.get("catalog"), Mapping) else {}
     record = {
         "id": project_id,
         "version": str(definition.get("version") or ""),
-        "title": str(((definition.get("catalog") or {}).get("title")) or project_id),
-        "description": str(((definition.get("catalog") or {}).get("description")) or ""),
-        "categories": list((definition.get("catalog") or {}).get("categories") or []),
-        "tags": list((definition.get("catalog") or {}).get("tags") or []),
+        "title": str(catalog.get("title") or project_id),
+        "description": str(catalog.get("description") or ""),
+        "categories": list(catalog.get("categories") or []),
+        "tags": list(catalog.get("tags") or []),
         "publication": dict(definition.get("publication") or {}),
         "install": dict(definition.get("install") or {}),
         "component_refs": [str(ref) for ref in component_refs],
@@ -178,6 +179,10 @@ def record_project_install(
         "status": "installed",
         "source": "workspace",
     }
+    for field in ("title_i18n", "description_i18n"):
+        value = catalog.get(field)
+        if isinstance(value, Mapping):
+            record[field] = {str(key): item for key, item in value.items() if item is not None}
     remaining = [
         item
         for item in items
@@ -221,6 +226,11 @@ def install_workspace_project(
         "skills": [],
         "warnings": [],
     }
+    catalog = definition.get("catalog") if isinstance(definition.get("catalog"), Mapping) else {}
+    for field in ("title_i18n", "description_i18n"):
+        value = catalog.get(field)
+        if isinstance(value, Mapping):
+            result[field] = {str(key): item for key, item in value.items() if item is not None}
 
     for ref in component_refs:
         kind, _, artifact_id = ref.partition(":")

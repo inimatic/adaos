@@ -132,7 +132,13 @@ def test_project_catalog_includes_composition_projects(tmp_path: Path) -> None:
                 "    default: true",
                 "catalog:",
                 "  title: Root Management",
+                "  title_i18n:",
+                "    en: Root Management",
+                "    ru: \u0423\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435 Root",
                 "  description: Private operator plane",
+                "  description_i18n:",
+                "    en: Private operator plane",
+                "    ru: \u0417\u0430\u043a\u0440\u044b\u0442\u044b\u0439 \u043e\u043f\u0435\u0440\u0430\u0442\u043e\u0440\u0441\u043a\u0438\u0439 \u043a\u043e\u043d\u0442\u0443\u0440",
                 "  categories: [ops]",
                 "  tags: [root]",
                 "lifecycle:",
@@ -162,7 +168,16 @@ def test_project_catalog_includes_composition_projects(tmp_path: Path) -> None:
     item = items[0]
     assert item["id"] == "project:root_mgmnt"
     assert item["title"] == "Root Management"
+    assert item["title_i18n"] == {
+        "en": "Root Management",
+        "ru": "\u0423\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435 Root",
+    }
     assert item["description"] == "Private operator plane"
+    assert item["description_i18n"] == {
+        "en": "Private operator plane",
+        "ru": "\u0417\u0430\u043a\u0440\u044b\u0442\u044b\u0439 \u043e\u043f\u0435\u0440\u0430\u0442\u043e\u0440\u0441\u043a\u0438\u0439 \u043a\u043e\u043d\u0442\u0443\u0440",
+    }
+    assert item["subtitle_i18n"] == item["description_i18n"]
     assert item["type"] == "Project"
     assert item["type_i18n"] == {"key": "builder.project_type.project"}
     assert item["primary_ref"] == "scenario:root_mgmnt_ops"

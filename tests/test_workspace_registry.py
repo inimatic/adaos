@@ -169,7 +169,13 @@ def test_rebuild_workspace_registry_reads_project_manifests(tmp_path: Path):
                 "entrypoints: []",
                 "catalog:",
                 "  title: Web Desktop",
+                "  title_i18n:",
+                "    en: Web Desktop",
+                "    ru: \u0412\u0435\u0431-\u0440\u0430\u0431\u043e\u0447\u0438\u0439 \u0441\u0442\u043e\u043b",
                 "  description: Default shell.",
+                "  description_i18n:",
+                "    en: Default shell.",
+                "    ru: \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f \u043e\u0431\u043e\u043b\u043e\u0447\u043a\u0430.",
                 "  categories: [system, desktop]",
                 "  tags: [default-install]",
                 "publication:",
@@ -201,7 +207,15 @@ def test_rebuild_workspace_registry_reads_project_manifests(tmp_path: Path):
     assert payload["projects"][0]["name"] == "web_desktop"
     assert payload["projects"][0]["id"] == "web_desktop"
     assert payload["projects"][0]["title"] == "Web Desktop"
+    assert payload["projects"][0]["title_i18n"] == {
+        "en": "Web Desktop",
+        "ru": "\u0412\u0435\u0431-\u0440\u0430\u0431\u043e\u0447\u0438\u0439 \u0441\u0442\u043e\u043b",
+    }
     assert payload["projects"][0]["categories"] == ["system", "desktop"]
+    assert payload["projects"][0]["description_i18n"] == {
+        "en": "Default shell.",
+        "ru": "\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f \u043e\u0431\u043e\u043b\u043e\u0447\u043a\u0430.",
+    }
     assert payload["projects"][0]["stage"] == "beta"
     assert payload["projects"][0]["visibility"] == "listed"
     assert payload["projects"][0]["install_default"] is True

@@ -251,9 +251,11 @@ class BuilderProjectCatalogService:
                     or manifest.get("name")
                     or project_id
                 ).strip() or project_id
+                title_i18n = catalog.get("title_i18n") or manifest.get("title_i18n")
                 description = str(
                     catalog.get("description") or manifest.get("description") or ""
                 ).strip()
+                description_i18n = catalog.get("description_i18n") or manifest.get("description_i18n")
                 if needle and needle not in f"{project_id} {title} {description}".casefold():
                     continue
                 state = _prompt_summary(root)
@@ -284,61 +286,65 @@ class BuilderProjectCatalogService:
                 ]
                 if current_kind != "project":
                     dependency_refs = list(manifest.get("depends") or [])
-                items.append(
-                    {
-                        "kind": current_kind,
-                        "id": f"{current_kind}:{project_id}",
-                        "object_type": current_kind,
-                        "object_id": project_id,
-                        "name": str(manifest.get("name") or project_id),
-                        "title": title,
-                        "description": description,
-                        "subtitle": description or f"{current_kind} - {version}",
-                        "type": (
-                            "Project"
-                            if current_kind == "project"
-                            else "Scenario"
-                            if current_kind == "scenario"
-                            else "Skill"
-                        ),
-                        "type_i18n": {"key": f"builder.project_type.{current_kind}"},
-                        "stage": "Archive" if archived else "Prototype",
-                        "stage_i18n": {
-                            "key": "builder.project_stage.archive" if archived else "builder.project_stage.prototype"
-                        },
-                        "version": version,
-                        "stable": version or "-",
-                        "space": preview_id,
-                        "sync": "Current" if current else "Available in DEV",
-                        "sync_i18n": {
-                            "key": "builder.project_sync.current" if current else "builder.project_sync.available_dev"
-                        },
-                        "updated": state["updated_at"] or "DEV",
-                        "current": current,
-                        "archived": archived,
-                        "builder_llm_model": state["builder_llm_model"],
-                        "depends": dependency_refs,
-                        "manifest": manifest_path.name if manifest_path else None,
-                        "profiles": list(manifest.get("profiles") or []) if current_kind == "project" else [],
-                        "primary_ref": (
-                            str(primary.get("ref") or "").strip()
-                            if isinstance(primary, Mapping)
-                            else None
-                        ),
-                        "component_refs": [
-                            str(item.get("ref") or "").strip()
-                            for item in owned
-                            if str(item.get("ref") or "").strip()
-                        ],
-                        "entrypoints": [
-                            dict(item)
-                            for item in manifest.get("entrypoints") or []
-                            if isinstance(item, Mapping)
-                        ]
+                item = {
+                    "kind": current_kind,
+                    "id": f"{current_kind}:{project_id}",
+                    "object_type": current_kind,
+                    "object_id": project_id,
+                    "name": str(manifest.get("name") or project_id),
+                    "title": title,
+                    "description": description,
+                    "subtitle": description or f"{current_kind} - {version}",
+                    "type": (
+                        "Project"
                         if current_kind == "project"
-                        else [],
-                    }
-                )
+                        else "Scenario"
+                        if current_kind == "scenario"
+                        else "Skill"
+                    ),
+                    "type_i18n": {"key": f"builder.project_type.{current_kind}"},
+                    "stage": "Archive" if archived else "Prototype",
+                    "stage_i18n": {
+                        "key": "builder.project_stage.archive" if archived else "builder.project_stage.prototype"
+                    },
+                    "version": version,
+                    "stable": version or "-",
+                    "space": preview_id,
+                    "sync": "Current" if current else "Available in DEV",
+                    "sync_i18n": {
+                        "key": "builder.project_sync.current" if current else "builder.project_sync.available_dev"
+                    },
+                    "updated": state["updated_at"] or "DEV",
+                    "current": current,
+                    "archived": archived,
+                    "builder_llm_model": state["builder_llm_model"],
+                    "depends": dependency_refs,
+                    "manifest": manifest_path.name if manifest_path else None,
+                    "profiles": list(manifest.get("profiles") or []) if current_kind == "project" else [],
+                    "primary_ref": (
+                        str(primary.get("ref") or "").strip()
+                        if isinstance(primary, Mapping)
+                        else None
+                    ),
+                    "component_refs": [
+                        str(item.get("ref") or "").strip()
+                        for item in owned
+                        if str(item.get("ref") or "").strip()
+                    ],
+                    "entrypoints": [
+                        dict(item)
+                        for item in manifest.get("entrypoints") or []
+                        if isinstance(item, Mapping)
+                    ]
+                    if current_kind == "project"
+                    else [],
+                }
+                if isinstance(title_i18n, Mapping):
+                    item["title_i18n"] = dict(title_i18n)
+                if isinstance(description_i18n, Mapping):
+                    item["description_i18n"] = dict(description_i18n)
+                    item["subtitle_i18n"] = dict(description_i18n)
+                items.append(item)
                 if len(items) >= bounded_limit:
                     break
             if len(items) >= bounded_limit:

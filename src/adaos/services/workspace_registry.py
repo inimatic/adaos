@@ -548,6 +548,9 @@ def build_registry_entry(kind: RegistryKind, artifact_dir: Path) -> dict[str, An
         entry["title_i18n"] = {str(key): value for key, value in title_i18n.items() if value is not None}
     if description:
         entry["description"] = description
+    description_i18n = manifest.get("description_i18n")
+    if isinstance(description_i18n, dict):
+        entry["description_i18n"] = {str(key): value for key, value in description_i18n.items() if value is not None}
     if tags:
         entry["tags"] = tags
     if compatibility is not None:
@@ -601,12 +604,22 @@ def build_registry_entry(kind: RegistryKind, artifact_dir: Path) -> dict[str, An
         if isinstance(catalog, dict):
             catalog_title = _clean_text(catalog.get("title"))
             catalog_description = _clean_text(catalog.get("description"))
+            catalog_title_i18n = catalog.get("title_i18n")
+            catalog_description_i18n = catalog.get("description_i18n")
             categories = _clean_tags(catalog.get("categories"))
             catalog_tags = _clean_tags(catalog.get("tags"))
             if catalog_title:
                 entry["title"] = catalog_title
+            if isinstance(catalog_title_i18n, dict):
+                entry["title_i18n"] = {
+                    str(key): value for key, value in catalog_title_i18n.items() if value is not None
+                }
             if catalog_description:
                 entry["description"] = catalog_description
+            if isinstance(catalog_description_i18n, dict):
+                entry["description_i18n"] = {
+                    str(key): value for key, value in catalog_description_i18n.items() if value is not None
+                }
             if categories:
                 entry["categories"] = categories
             if catalog_tags:
@@ -774,6 +787,7 @@ def _enrich_registry_entry_from_canonical_manifest(
         "title",
         "title_i18n",
         "description",
+        "description_i18n",
         "tags",
         "entry",
         "runtime_python",

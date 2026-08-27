@@ -3,6 +3,20 @@
   "$id": "adaos.project.v1",
   "title": "AdaOS distributable project source manifest",
   "type": "object",
+  "$defs": {
+    "i18nText": {
+      "type": "object",
+      "properties": {
+        "key": {"type": "string", "minLength": 1, "maxLength": 300},
+        "fallback": {"type": "string", "maxLength": 4000},
+        "params": {"type": "object", "maxProperties": 50}
+      },
+      "patternProperties": {
+        "^[a-z]{2}(?:[-_][A-Za-z]{2})?$": {"type": "string", "maxLength": 4000}
+      },
+      "additionalProperties": false
+    }
+  },
   "required": ["schema", "kind", "id", "version", "profiles", "components", "entrypoints", "catalog", "lifecycle"],
   "properties": {
     "schema": {"const": "adaos.project.v1"},
@@ -67,7 +81,9 @@
       "type": "object", "required": ["title", "description", "categories", "tags"],
       "properties": {
         "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "title_i18n": {"$ref": "#/$defs/i18nText"},
         "description": {"type": "string", "maxLength": 4000},
+        "description_i18n": {"$ref": "#/$defs/i18nText"},
         "categories": {"type": "array", "maxItems": 50, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 80}},
         "tags": {"type": "array", "maxItems": 100, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 80}}
       },
@@ -96,7 +112,9 @@
             "properties": {
               "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,79}$"},
               "title": {"type": "string", "minLength": 1, "maxLength": 300},
+              "title_i18n": {"$ref": "#/$defs/i18nText"},
               "description": {"type": "string", "maxLength": 2000},
+              "description_i18n": {"$ref": "#/$defs/i18nText"},
               "default": {"type": "boolean"},
               "optional": {"type": "boolean"},
               "components": {

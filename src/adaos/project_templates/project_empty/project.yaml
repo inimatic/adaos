@@ -9,7 +9,13 @@ components:
 entrypoints: []
 catalog:
   title: New Project
+  title_i18n:
+    en: New Project
+    ru: "\u041d\u043e\u0432\u044b\u0439 \u043f\u0440\u043e\u0435\u043a\u0442"
   description: Empty Builder Project draft.
+  description_i18n:
+    en: Empty Builder Project draft.
+    ru: "\u041f\u0443\u0441\u0442\u043e\u0439 \u0447\u0435\u0440\u043d\u043e\u0432\u0438\u043a Builder Project."
   categories: []
   tags: []
 publication:
