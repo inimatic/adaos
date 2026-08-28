@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import tomllib
 from pathlib import Path
 
@@ -7,16 +8,23 @@ from pathlib import Path
 def test_packaged_runtime_resolves_patched_y_py_release_wheels() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     project = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-    requirements = [str(item) for item in project["dependencies"] if str(item).startswith("y-py @ ")]
+    requirements = [str(item) for item in project["dependencies"] if str(item).startswith("y-py")]
+    wheel_index = (repo_root / "vendor" / "y-py" / "release-wheels.html").read_text(encoding="utf-8")
+    wheel_dir = repo_root / "vendor" / "y-py" / "wheels"
+    wheels = sorted(wheel_dir.glob("*.whl"))
 
-    assert len(requirements) == 4
-    assert all("/releases/download/y-py-v0.6.2-adaos.1/" in item for item in requirements)
-    assert all("y_py-0.6.2%2Badaos.1-cp311-cp311-" in item for item in requirements)
-    assert any("sys_platform == 'linux' and platform_machine == 'x86_64'" in item for item in requirements)
-    assert any("sys_platform == 'win32' and platform_machine == 'AMD64'" in item for item in requirements)
-    assert any("sys_platform == 'darwin' and platform_machine == 'arm64'" in item for item in requirements)
-    assert any("sys_platform == 'darwin' and platform_machine == 'x86_64'" in item for item in requirements)
-    assert any("macosx_10_15_x86_64.whl" in item for item in requirements)
+    assert requirements == ["y-py==0.6.2+adaos.1"]
+    assert wheel_index.count("/releases/download/y-py-v0.6.2-adaos.1/") == 4
+    assert wheel_index.count("y_py-0.6.2%2Badaos.1-cp311-cp311-") == 4
+    assert "manylinux_2_17_x86_64.manylinux2014_x86_64.whl" in wheel_index
+    assert "win_amd64.whl" in wheel_index
+    assert "macosx_11_0_arm64.whl" in wheel_index
+    assert "macosx_10_15_x86_64.whl" in wheel_index
+    assert wheel_index.count("#sha256=") == 4
+    assert len(wheels) == 4
+    for wheel in wheels:
+        digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+        assert f"{wheel.name.replace('+', '%2B')}#sha256={digest}" in wheel_index
 
 
 def test_catalina_intel_uses_legacy_compatible_webrtc_stack() -> None:
@@ -44,8 +52,10 @@ def test_repository_default_does_not_override_release_y_py_wheels() -> None:
     runtime_lock = (repo_root / "uv.lock").read_text(encoding="utf-8")
 
     assert "sources" not in config.get("tool", {}).get("uv", {})
+    assert config["tool"]["uv"]["find-links"] == ["vendor/y-py/wheels"]
     assert 'source = { directory = "vendor/y-py" }' not in runtime_lock
-    assert "y-py-v0.6.2-adaos.1" in runtime_lock
+    assert 'source = { registry = "vendor/y-py/wheels" }' in runtime_lock
+    assert "y_py-0.6.2+adaos.1-cp311-cp311-manylinux_2_17_x86_64" in runtime_lock
 
 
 def test_user_install_does_not_require_vosk_or_dev_dependencies() -> None:

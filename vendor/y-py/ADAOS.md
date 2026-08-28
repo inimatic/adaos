@@ -43,8 +43,12 @@ On PowerShell, set `$env:CARGO_TARGET_DIR = ".cache/y-py-target"` before the
 `maturin` command. Keeping Cargo output outside this directory prevents Python
 editable-build metadata discovery from traversing Rust build artifacts.
 
-Normal AdaOS development, installation, and core updates resolve the published
-platform wheel declared in `pyproject.toml`; they do not build this directory.
+Normal AdaOS development, installation, and core updates resolve a checked-in
+copy of the published platform wheel through the wheelhouse declared in
+`pyproject.toml`; they do not build this directory or require GitHub release
+asset access from the node. The adjacent flat index records the canonical
+release URLs and SHA-256 digests. Release automation must update both the
+published assets and these verified distribution copies together.
 Use the bootstrap `--build-vendored-y-py`/`-BuildVendoredYPy` option only when
 developing the fork itself. Release wheels are built by
 `.github/workflows/y-py-wheels.yml` for Windows, Linux, and macOS.
