@@ -7,7 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from adaos.apps.api.auth import require_token
 from adaos.services.project_deployment import (
+    ProjectDeploymentAuthorizationError,
+    ProjectDeploymentConflictError,
     ProjectDeploymentExecutionError,
+    ProjectDeploymentPlanningError,
     RetryableDeploymentPhaseError,
     execute_remote_component_phase,
     observe_remote_component_phase,
@@ -22,6 +25,18 @@ from adaos.services.project_deployment.transport import MAX_REMOTE_PACKAGE_BYTES
 router = APIRouter(tags=["project-deployment"], dependencies=[Depends(require_token)])
 _MAX_REQUEST_BYTES = MAX_REMOTE_PACKAGE_BYTES * 4 // 3 + 2 * 1024 * 1024
 _MAX_AUTHORITY_REQUEST_BYTES = 512 * 1024
+
+
+def _authority_error_detail(exc: Exception, *, fallback: str) -> dict[str, str]:
+    codes = {
+        "blocked deployment plan cannot be applied": "deployment_plan_blocked",
+        "deployment desired revision changed after planning": (
+            "desired_revision_changed_after_planning"
+        ),
+        "node inventory changed after planning": "inventory_changed_after_planning",
+        "ProjectRelease changed after planning": "release_changed_after_planning",
+    }
+    return {"error": codes.get(str(exc), fallback)}
 
 
 def _require_loopback(request: Request) -> None:
@@ -63,6 +78,26 @@ async def project_deployment_authority(request: Request) -> dict[str, Any]:
             503 if "unavailable" in str(exc) or "candidate" in str(exc) else 400
         )
         raise HTTPException(status_code=status_code, detail=str(exc)[:500]) from exc
+    except ProjectDeploymentAuthorizationError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=_authority_error_detail(exc, fallback="deployment_forbidden"),
+        ) from exc
+    except RetryableDeploymentPhaseError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=_authority_error_detail(exc, fallback="deployment_retryable"),
+        ) from exc
+    except (ProjectDeploymentConflictError, ProjectDeploymentExecutionError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=_authority_error_detail(exc, fallback="deployment_conflict"),
+        ) from exc
+    except ProjectDeploymentPlanningError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=_authority_error_detail(exc, fallback="deployment_plan_invalid"),
+        ) from exc
 
 
 @router.post("/phase")

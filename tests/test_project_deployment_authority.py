@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
@@ -17,6 +18,7 @@ from adaos.services.project_deployment.authority import (
     invoke_project_deployment_authority,
     register_project_deployment_authority,
 )
+from adaos.services.project_deployment.execution import ProjectDeploymentExecutionError
 
 
 def _node() -> NodeInventoryRecord:
@@ -167,3 +169,76 @@ def test_authority_http_endpoint_is_token_protected_and_local(monkeypatch) -> No
             SimpleNamespace(client=SimpleNamespace(host="192.0.2.10"))
         )
     assert error.value.status_code == 403
+
+
+def test_authority_http_endpoint_preserves_inventory_conflict_code(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_TOKEN", "test-token")
+
+    def reject_stale_inventory(payload):
+        raise ProjectDeploymentExecutionError(
+            "node inventory changed after planning"
+        )
+
+    monkeypatch.setattr(
+        project_deployment_api,
+        "execute_authority_request",
+        reject_stale_inventory,
+    )
+    app = FastAPI()
+    app.include_router(
+        project_deployment_api.router,
+        prefix="/api/node/project-deployment",
+    )
+
+    response = TestClient(app).post(
+        "/api/node/project-deployment/authority",
+        headers={"X-AdaOS-Token": "test-token"},
+        json=_request("submit", {"plan_digest": "sha256:stale"}),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "error": "inventory_changed_after_planning"
+    }
+
+
+def test_authority_http_client_preserves_rejected_error_code(monkeypatch) -> None:
+    from adaos.apps.cli import active_control
+    from adaos.services.project_deployment import authority
+
+    class RejectedResponse:
+        def raise_for_status(self) -> None:
+            raise requests.HTTPError(response=self)
+
+        @staticmethod
+        def json() -> dict:
+            return {"detail": {"error": "inventory_changed_after_planning"}}
+
+    class RejectedSession:
+        trust_env = True
+
+        @staticmethod
+        def post(*args, **kwargs):
+            return RejectedResponse()
+
+        @staticmethod
+        def close() -> None:
+            return None
+
+    monkeypatch.setattr(
+        active_control,
+        "resolve_control_base_url",
+        lambda **kwargs: "http://127.0.0.1:8778",
+    )
+    monkeypatch.setattr(
+        active_control,
+        "resolve_control_token",
+        lambda **kwargs: "test-token",
+    )
+    monkeypatch.setattr(authority.requests, "Session", RejectedSession)
+
+    with pytest.raises(
+        ProjectDeploymentAuthorityError,
+        match="inventory_changed_after_planning",
+    ):
+        authority._invoke_http(_request("submit", {"plan_digest": "sha256:stale"}))

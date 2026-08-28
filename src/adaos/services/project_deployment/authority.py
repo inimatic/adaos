@@ -7,6 +7,7 @@ from typing import Any, Mapping
 import requests
 
 from adaos.domain.project_deployment import ProjectDeployment
+from adaos.services.operational_errors import normalized_error_code
 from adaos.services.runtime_identity import (
     runtime_identity_snapshot,
     runtime_transition_role,
@@ -253,6 +254,20 @@ def _invoke_http(request: Mapping[str, Any]) -> dict[str, Any]:
         )
         response.raise_for_status()
         payload = response.json()
+    except requests.HTTPError as exc:
+        code = "deployment_authority_rejected"
+        try:
+            error_payload = exc.response.json() if exc.response is not None else {}
+            detail = error_payload.get("detail") if isinstance(error_payload, Mapping) else None
+            if isinstance(detail, Mapping):
+                code = normalized_error_code(
+                    detail.get("error"), fallback=code
+                )
+            elif detail:
+                code = normalized_error_code(detail, fallback=code)
+        except (TypeError, ValueError, requests.RequestException):
+            pass
+        raise ProjectDeploymentAuthorityError(code) from exc
     except Exception as exc:
         raise ProjectDeploymentAuthorityError(
             f"deployment_authority_unavailable:{type(exc).__name__}"
