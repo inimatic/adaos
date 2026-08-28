@@ -19,6 +19,7 @@ from adaos.services.zone_hosts import (
 
 ECONOMIC_STATUS_SCHEMA = "adaos.subnet.economic_status.v1"
 ECONOMIC_ENTITLEMENT_SNAPSHOT_SCHEMA = "adaos.root_mgmnt.economic_entitlement.v1"
+CODEX_USAGE_EVENT_SCHEMA = "adaos.root_mgmnt.codex_usage_event.v1"
 ROOT_GOVERNED_RESOURCES: tuple[str, ...] = (
     "llm.requests",
     "llm.tokens.input",
@@ -55,6 +56,17 @@ def _int_value(value: Any) -> int:
     except Exception:
         return 0
     return parsed if parsed > 0 else 0
+
+
+def estimate_codex_tokens_from_text(*parts: Any) -> int:
+    """
+    Conservative local fallback for Codex CLI runs that do not expose provider
+    usage. Provider-reported usage must replace this estimate when available.
+    """
+    payload = "\n".join(_text(part) for part in parts if _text(part))
+    if not payload:
+        return 0
+    return max(1, (len(payload.encode("utf-8", errors="replace")) + 3) // 4)
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:
@@ -295,6 +307,27 @@ def refresh_entitlement_snapshot_from_root(
     }
 
 
+def report_codex_usage_to_root(
+    event: Mapping[str, Any],
+    root_base_url: str | None = None,
+    *,
+    timeout: float = 4.0,
+) -> dict[str, Any]:
+    base_dir = current_base_dir()
+    conf = _load_config_best_effort(base_dir)
+    client = _economic_root_http_client(conf, base_dir=base_dir, root_base_url=root_base_url)
+    payload = dict(event)
+    payload.setdefault("schema", CODEX_USAGE_EVENT_SCHEMA)
+    payload.setdefault("subnet_id", _text(getattr(conf, "subnet_id", None)))
+    payload.setdefault("node_id", _text(getattr(conf, "node_id", None)))
+    payload.setdefault("zone_id", _configured_zone_id(conf))
+    payload.setdefault("source", "codex_cli")
+    result = client.request("POST", "/v1/hub/economic/codex/usage", json=payload, timeout=timeout)
+    if not isinstance(result, Mapping):
+        raise RuntimeError("root returned invalid Codex usage response")
+    return dict(result)
+
+
 def _state_dir_for_usage(base_dir: Path) -> Path:
     try:
         return current_state_dir()
@@ -529,10 +562,13 @@ def compact_economic_status_for_control_report() -> dict[str, Any]:
 
 
 __all__ = [
+    "CODEX_USAGE_EVENT_SCHEMA",
     "ECONOMIC_STATUS_SCHEMA",
     "ROOT_GOVERNED_RESOURCES",
     "compact_economic_status_for_control_report",
     "current_subnet_economic_status",
     "entitlement_snapshot_path",
+    "estimate_codex_tokens_from_text",
+    "report_codex_usage_to_root",
     "refresh_entitlement_snapshot_from_root",
 ]

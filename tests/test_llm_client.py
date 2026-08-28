@@ -140,6 +140,49 @@ def test_list_llm_models_passes_development_scope_as_query_params(monkeypatch: p
     assert requests[0]["kwargs"]["params"] == {"scope": "development"}  # type: ignore[index]
 
 
+def test_report_codex_usage_uses_hub_economic_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    from adaos.sdk.llm import llm_client as llm
+
+    _clear_llm_env(monkeypatch)
+    fake_ctx = SimpleNamespace(
+        settings=SimpleNamespace(api_base="https://ru.api.inimatic.com", subnet_id="sn_settings"),
+        config=SimpleNamespace(subnet_id="sn_test", node_id="node_test"),
+    )
+    requests: list[dict[str, object]] = []
+
+    class FakeRootHttpClient:
+        def __init__(self, base_url, verify=True, cert=None, default_headers=None):
+            self.base_url = base_url
+            self.verify = verify
+            self.cert = cert
+
+        def request(self, method, path, **kwargs):
+            requests.append({"base_url": self.base_url, "method": method, "path": path, "kwargs": kwargs})
+            return {"ok": True, "duplicate": False, "event": {"event_id": "codex_usage_1"}}
+
+    monkeypatch.setattr(llm, "_current_ctx", lambda: fake_ctx)
+    monkeypatch.setattr(llm, "RootHttpClient", FakeRootHttpClient)
+
+    result = llm.report_codex_usage(
+        {
+            "idempotency_key": "builder:req-1:codex_usage",
+            "total_tokens": 123,
+            "accuracy": "reported",
+        },
+        root_base_url="https://api.inimatic.com",
+        timeout=3,
+    )
+
+    assert result["ok"] is True
+    assert requests[0]["base_url"] == "https://api.inimatic.com"
+    assert requests[0]["method"] == "POST"
+    assert requests[0]["path"] == "/v1/hub/economic/codex/usage"
+    kwargs = requests[0]["kwargs"]  # type: ignore[index]
+    assert kwargs["timeout"] == 3
+    assert kwargs["headers"] == {"X-AdaOS-Subnet-Id": "sn_test", "X-AdaOS-Node-Id": "node_test"}
+    assert kwargs["json"]["schema"] == "adaos.root_mgmnt.codex_usage_event.v1"  # type: ignore[index]
+
+
 def test_llm_root_payload_uses_profile_scope_without_forcing_a_model(monkeypatch: pytest.MonkeyPatch) -> None:
     from adaos.sdk.llm import llm_client as llm
 

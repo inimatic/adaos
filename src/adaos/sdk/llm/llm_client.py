@@ -39,6 +39,13 @@ def _json_size_bytes(value: Any) -> int:
         return len(str(value).encode("utf-8", errors="replace"))
 
 
+def estimate_token_count_from_text(*parts: Any) -> int:
+    payload = "\n".join(str(part or "").strip() for part in parts if str(part or "").strip())
+    if not payload:
+        return 0
+    return max(1, (len(payload.encode("utf-8", errors="replace")) + 3) // 4)
+
+
 def _env_float(name: str, default: float, *, minimum: float, maximum: float) -> float:
     raw = str(os.getenv(name) or "").strip()
     try:
@@ -556,6 +563,36 @@ def _llm_proxy_protocol(data: Dict[str, Any], *, base_url: str, fallback: bool, 
             "fallback": fallback,
             "attempts": list(attempts),
         }
+
+
+def report_codex_usage(
+    event: Mapping[str, Any],
+    *,
+    root_base_url: str | None = None,
+    timeout: float | None = None,
+) -> Dict[str, Any]:
+    """
+    Report Codex/Builder token usage to the root economic plane.
+
+    The caller should pass provider-reported tokens when available. Estimated
+    token counts are accepted, but must be marked with accuracy="estimated".
+    """
+    ctx = _current_ctx()
+    primary, cfg = _root_http_client(ctx)
+    headers = _identity_headers(ctx, cfg)
+    primary_base_url = _normalize_root_base_url(getattr(primary, "base_url", None))
+    target_base_url = _normalize_root_base_url(root_base_url) or primary_base_url
+    http = _root_http_for_base(primary, primary_base_url, target_base_url, 0)
+    payload = dict(event)
+    payload.setdefault("schema", "adaos.root_mgmnt.codex_usage_event.v1")
+    raw = http.request(
+        "POST",
+        "/v1/hub/economic/codex/usage",
+        json=payload,
+        headers=headers or None,
+        timeout=timeout or 4.0,
+    )
+    return dict(raw) if isinstance(raw, Mapping) else {"ok": True, "result": raw}
 
 
 def send_response(

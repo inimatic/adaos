@@ -173,6 +173,50 @@ def test_refresh_entitlement_snapshot_from_root(monkeypatch, tmp_path) -> None:
     assert status["usage"]["codex.api.tokens"]["quota_remaining"] == 19999900
 
 
+def test_estimate_codex_tokens_from_text_uses_utf8_bytes() -> None:
+    assert economic_policy.estimate_codex_tokens_from_text("") == 0
+    assert economic_policy.estimate_codex_tokens_from_text("abcd") == 1
+    assert economic_policy.estimate_codex_tokens_from_text("привет") >= 3
+
+
+def test_report_codex_usage_to_root_uses_mtls_route(monkeypatch, tmp_path) -> None:
+    calls = []
+
+    class FakeRootClient:
+        base_url = "https://ru.api.inimatic.com"
+
+        def request(self, method, path, **kwargs):
+            calls.append((method, path, kwargs))
+            return {"ok": True, "duplicate": False, "event": {"event_id": "codex_usage_1"}}
+
+    monkeypatch.setattr(economic_policy, "load_config", lambda: _config())
+    monkeypatch.setattr(economic_policy, "current_base_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        economic_policy,
+        "_economic_root_http_client",
+        lambda conf, *, base_dir, root_base_url=None: FakeRootClient(),
+    )
+
+    result = economic_policy.report_codex_usage_to_root(
+        {
+            "idempotency_key": "builder:job-1",
+            "total_tokens": 123,
+            "accuracy": "reported",
+        },
+        timeout=3,
+    )
+
+    assert result["ok"] is True
+    method, path, kwargs = calls[0]
+    assert method == "POST"
+    assert path == "/v1/hub/economic/codex/usage"
+    assert kwargs["timeout"] == 3
+    assert kwargs["json"]["schema"] == economic_policy.CODEX_USAGE_EVENT_SCHEMA
+    assert kwargs["json"]["subnet_id"] == "sn_test"
+    assert kwargs["json"]["node_id"] == "node-test"
+    assert kwargs["json"]["zone_id"] == "ru"
+
+
 def test_economic_status_observes_nlu_teacher_llm_usage(monkeypatch, tmp_path) -> None:
     state_dir = tmp_path / "state"
     teacher_dir = state_dir / "skills" / "nlu_teacher"
