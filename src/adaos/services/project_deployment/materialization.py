@@ -13,6 +13,10 @@ from .adapters import (
 from .store import ProjectDeploymentStore
 
 
+class ProjectOwnedComponentMutationError(RuntimeError):
+    """Raised when a standalone lifecycle tries to mutate a project component."""
+
+
 def _context_paths(ctx: Any) -> tuple[Path, Path, str] | None:
     paths = getattr(ctx, "paths", None)
     state_dir = getattr(paths, "state_dir", None)
@@ -41,6 +45,22 @@ def active_project_component(ctx: Any, component_ref: str) -> bool:
             return True
         if cursor is None:
             return False
+
+
+def ensure_standalone_component_mutation_allowed(
+    ctx: Any,
+    component_ref: str,
+    *,
+    operation: str,
+) -> None:
+    component_ref = str(component_ref or "").strip()
+    if not component_ref or not active_project_component(ctx, component_ref):
+        return
+    raise ProjectOwnedComponentMutationError(
+        "project_owned_component: "
+        f"{component_ref} is managed by an active project deployment; "
+        f"use the project deployment lifecycle instead of standalone {operation}"
+    )
 
 
 def restore_project_owned_materializations(ctx: Any) -> dict[str, Any]:
@@ -145,6 +165,8 @@ def restore_project_owned_materializations(ctx: Any) -> dict[str, Any]:
 
 
 __all__ = [
+    "ProjectOwnedComponentMutationError",
     "active_project_component",
+    "ensure_standalone_component_mutation_allowed",
     "restore_project_owned_materializations",
 ]

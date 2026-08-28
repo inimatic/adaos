@@ -746,6 +746,17 @@ class SkillManager:
     def get(self, skill_id: str) -> Optional[SkillMeta]:
         return self.ctx.skills_repo.get(skill_id)
 
+    def ensure_standalone_mutation_allowed(self, name: str, *, operation: str) -> None:
+        from adaos.services.project_deployment.materialization import (
+            ensure_standalone_component_mutation_allowed,
+        )
+
+        ensure_standalone_component_mutation_allowed(
+            self.ctx,
+            f"skill:{str(name or '').strip()}",
+            operation=operation,
+        )
+
     def sync(self, *, force: bool | None = None) -> None:
         self.caps.require("core", "skills.manage", "net.git")
         self.ctx.skills_repo.ensure()
@@ -803,6 +814,7 @@ class SkillManager:
         name = name.strip()
         if not _name_re.match(name):
             raise ValueError("invalid skill name")
+        self.ensure_standalone_mutation_allowed(name, operation="skill install")
         test_mode = os.getenv("ADAOS_TESTING") == "1"
         if not test_mode:
             resolver = getattr(self.ctx.skills_repo, "resolve_install_name", None)
@@ -1565,6 +1577,7 @@ class SkillManager:
         name = name.strip()
         if not _name_re.match(name):
             raise ValueError("invalid skill name")
+        self.ensure_standalone_mutation_allowed(name, operation="skill uninstall")
         # если записи нет — считаем idempotent
         rec = self.reg.get(name)
         if not rec:

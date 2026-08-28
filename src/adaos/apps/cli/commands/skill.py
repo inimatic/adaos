@@ -1489,6 +1489,9 @@ def cmd_install(
     runtime_source_path: Path | None = None
     if source_mode == "registry":
         try:
+            preflight = getattr(mgr, "ensure_standalone_mutation_allowed", None)
+            if callable(preflight):
+                preflight(name, operation="skill install")
             mgr.sync()
             result = mgr.install(name, validate=True, strict=True, safe=safe)
         except Exception as exc:

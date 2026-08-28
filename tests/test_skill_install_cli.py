@@ -220,3 +220,28 @@ def test_registry_install_does_not_activate_failed_validation(monkeypatch) -> No
 
     assert result.exit_code == 1
     assert calls == ["sync", "install"]
+
+
+def test_registry_install_rejects_project_owned_skill_before_sync(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _Manager:
+        def ensure_standalone_mutation_allowed(self, name: str, *, operation: str) -> None:
+            calls.append(f"preflight:{name}:{operation}")
+            raise RuntimeError(
+                "project_owned_component: skill:demo_skill is managed by an active project deployment"
+            )
+
+        def sync(self):
+            calls.append("sync")
+
+    monkeypatch.setattr(skill_cmd, "_mgr", lambda: _Manager())
+
+    result = CliRunner().invoke(
+        skill_cmd.app,
+        ["install", "demo_skill", "--source", "registry", "--local", "--silent"],
+    )
+
+    assert result.exit_code == 1
+    assert "project_owned_component" in result.output
+    assert calls == ["preflight:demo_skill:skill install"]

@@ -156,6 +156,14 @@ and skips it even when migration was requested with `force`. Core updates may
 restart or rehydrate the selected service process, but they must not replace the
 Project-selected slot with a workspace/GitHub runtime.
 
+Standalone `skill install`, `skill update`, and `skill uninstall` reject an
+actively Project-owned component with `project_owned_component`. Install
+preflight runs before workspace Git synchronization, so it cannot replace an
+immutable package materialization with a registry checkout or spend time
+preparing a runtime that Project reconciliation will restore. Operators must
+change the `ProjectRelease` or deployment plan instead; `force` does not cross
+this ownership boundary.
+
 Drift or a failed Project-owned runtime is repaired through Project deployment
 reconciliation: drain/remove the affected activation when required, compute a
 new desired/observed deployment plan, and activate the exact immutable package

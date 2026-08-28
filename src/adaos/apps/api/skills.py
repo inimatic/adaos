@@ -543,6 +543,12 @@ async def sync(body: SyncReq | None = None, mgr: SkillManager = Depends(_get_man
 
 
 def _install_skill_sync(body: InstallReq, mgr: SkillManager, webspace_id: str) -> Dict[str, Any]:
+    preflight = getattr(mgr, "ensure_standalone_mutation_allowed", None)
+    if callable(preflight):
+        try:
+            preflight(body.name, operation="skill install")
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     # Best-effort sync to ensure monorepo workspace exists
     sync_error: Exception | None = None
     try:

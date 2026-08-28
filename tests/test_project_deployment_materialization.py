@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from adaos.domain.artifact_release import ArtifactSourceRef
 from adaos.domain.project_deployment import ComponentActivation
 from adaos.services.artifact_pipeline.packages import (
@@ -10,7 +12,9 @@ from adaos.services.artifact_pipeline.packages import (
     build_artifact_package,
 )
 from adaos.services.project_deployment.materialization import (
+    ProjectOwnedComponentMutationError,
     active_project_component,
+    ensure_standalone_component_mutation_allowed,
     restore_project_owned_materializations,
 )
 from adaos.services.project_deployment.store import ProjectDeploymentStore
@@ -89,3 +93,14 @@ def test_restore_project_owned_materialization_removes_workspace_sync_drift(
     assert second["repaired"] == []
     assert active_project_component(ctx, "scenario:media_center") is True
     assert active_project_component(ctx, "skill:media_center_skill") is False
+    with pytest.raises(ProjectOwnedComponentMutationError, match="project_owned_component"):
+        ensure_standalone_component_mutation_allowed(
+            ctx,
+            "scenario:media_center",
+            operation="scenario install",
+        )
+    ensure_standalone_component_mutation_allowed(
+        ctx,
+        "skill:media_center_skill",
+        operation="skill install",
+    )

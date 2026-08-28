@@ -185,6 +185,15 @@ class SkillUpdateService:
     ctx: AgentContext
 
     def request_update(self, skill_id: str, *, dry_run: bool = False, force: bool | None = None) -> SkillUpdateResult:
+        from adaos.services.project_deployment.materialization import (
+            ensure_standalone_component_mutation_allowed,
+        )
+
+        ensure_standalone_component_mutation_allowed(
+            self.ctx,
+            f"skill:{str(skill_id or '').strip()}",
+            operation="skill update",
+        )
         repo = self.ctx.skills_repo
         meta = repo.get(skill_id)
         if meta is None:

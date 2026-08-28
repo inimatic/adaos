@@ -259,6 +259,24 @@ def test_skill_api_install_reports_runtime_preparation_failure() -> None:
     assert "missing torch dependency" in resp.json()["detail"]
 
 
+def test_skill_api_install_rejects_project_owned_skill_before_sync() -> None:
+    class _ProjectOwnedSkillManager(_FakeSkillManager):
+        def ensure_standalone_mutation_allowed(self, name: str, *, operation: str) -> None:
+            self.calls.append(f"preflight:{name}:{operation}")
+            raise RuntimeError(
+                "project_owned_component: skill:demo is managed by an active project deployment"
+            )
+
+    manager = _ProjectOwnedSkillManager()
+    client = _make_client(manager, _FakeScenarioManager())
+
+    response = client.post("/api/skills/install", json={"name": "demo"})
+
+    assert response.status_code == 409
+    assert "project_owned_component" in response.json()["detail"]
+    assert manager.calls == ["preflight:demo:skill install"]
+
+
 def test_skill_api_install_rejects_strict_validation_before_runtime_prepare() -> None:
     class _InvalidSkillManager(_FakeSkillManager):
         def install(self, name: str, **kwargs: Any):
