@@ -489,3 +489,67 @@ The `0.1.925` update confirmed the same cost profile: fresh slot preparation
 took about five minutes before prewarm and countdown, while the active runtime
 and member route remained available. This validates the larger timeout but
 strengthens the case for cached immutable dependency layers.
+
+## Exact 0.6.98 Playback Ownership Addendum - 2026-08-28
+
+Registry source revision `3acb9c85f48b4d9bbce46e7aa16137f1afb8fcd3`
+publishes immutable Project `media_center@0.6.98` as
+`sha256:ddf2206f198e8147dee1767f6084f7fadfcd8679c63542cd9fc8de0672414a88`.
+Its control package is `media_control_skill@0.2.19` with digest
+`sha256:74b9296b9c581eb4cc4aea11700e4c4b60e22105413e12e265802d1a68902484`.
+Client revision `77ae410f9f5a75d3c73815189668e5ec28e1e479` was deployed directly to
+Firebase Hosting while hosted CI quota was unavailable. Public
+`version.json` reports client `0.0.375`, build
+`local-1787929426496`, built at `2026-08-28T15:03:46.496Z`.
+
+The playback authority now enforces one attached session per physical target.
+Creating or reattaching a session atomically marks competing attached sessions
+as `superseded`; startup schema reconciliation repairs legacy duplicates.
+Endpoint observations carry the authoritative queue revision. A stale endpoint
+cannot replace the server-selected item and receives a bounded `load` command
+for the current item and queue instead. The client re-adopts an existing
+session when its queue revision changes and immediately refreshes its inbox
+after a reconciliation mismatch. This is the contract fix for the observed TV
+oscillation and for Media Remote rendering two titles for one Android TV.
+
+The isolated control-skill suite passed `39` tests and Ruff. The focused client
+endpoint-session suite passed `7` tests. A Node 24 production build completed
+successfully with hash `6373cfc635f82e46`; the Firebase build completed with
+hash `cfde537d89d676d2`. Only the existing initial-bundle, component-style and
+CommonJS warnings remain. Local activation of control version `0.2.19` repaired
+`170` legacy rows to `superseded`, after which no target had more than one
+attached session.
+
+The stand runs core revision `efc54324a` as
+`0.1.950+5764.efc54324`. Its updater consumes a bundled, hash-verified y-py
+wheel instead of building Rust on the node. On this stand the y-py install step
+fell from `498.617` to `3.463` seconds and complete slot preparation fell from
+`653.778` to `125.878` seconds. Remaining preparation time is dominated by
+repository and environment work, not Rust compilation.
+
+Project revision `88` for release `0.6.97` succeeded on the `.30` coordinator
+but remained explicitly `partial`: selected node
+`adb099fe-32db-4252-addb-4a060e0834b4` failed activation and rollback with
+`remote_member_link_unavailable`. The selected placement was retained. For
+release `0.6.98`, service definition and group revision `42` admit the new
+release while retaining the previous release in the compatibility overlap.
+Deployment revision `90`, plan
+`sha256:b64741c319ed99a73c7ccbc4e194259a6eaaba07da8742fecf6ba47bc514d0cf`
+and operation `deploymentop.01M14EYDYNT2Z1PC0QRJYJQJSY` are the reviewed
+stand rollout identifiers. The operation reached `succeeded` with
+`uncertain=false`: scenario, coordinator, control and agent committed on node
+`9161e4df-772a-4795-a6b3-1c4b95158802`, and the agent committed on selected
+node `adb099fe-32db-4252-addb-4a060e0834b4`. Every terminal phase completed on
+its first attempt. The `.30` runtime reports control version `0.2.19`.
+
+Post-activation database reconciliation on `.30` marked `25` historical
+sessions `superseded`; no target retained more than one attached session. A
+bounded `now_playing` read returned zero rows while no browser endpoint was
+fresh, rather than returning the three stale stopped/playing rows retained for
+resume. Live Android TV switching remains a separate browser acceptance test.
+
+Open acceptance work remains a live Android TV switch test proving that a
+stale tab cannot restore the old queue, the one-hour TV soak, update and scan
+under playback, unavailable-disk and unsupported-codec injection, second-node
+link recovery, updater child-process cancellation cleanup, and reducing the
+remaining client bundle/style budget warnings.

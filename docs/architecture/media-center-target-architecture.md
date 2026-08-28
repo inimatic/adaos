@@ -730,6 +730,25 @@ A file chooser used as a short playlist requests at most 10 records. It cannot
 be the primary catalog transport. Card dimensions and focused scale reserve
 space so focus cannot overlap adjacent content.
 
+### Cross-scenario activity surface
+
+The app shell owns one generic persistent activity surface for work that must
+remain controllable after scenario navigation. Playback is its first consumer,
+but the contract is not Media Center-specific. A domain publishes a bounded
+activity descriptor with identity, status, compact presentation, generic
+commands, optional domain commands, and a typed navigation intent. The shell
+renders the floating bar and keeps the media element alive; it does not fetch a
+Media Center page or duplicate the domain detail model.
+
+The common playback vocabulary includes transport, position, volume, target,
+fullscreen, Picture-in-Picture, and minimize. Details and Favorite remain
+domain extensions. The Details action carries a navigation intent containing
+the target webspace, scenario, modal, and opaque state patch. The client first
+activates the scenario, waits for its materialized UI data, then applies the
+state and opens the modal. This permits the mini-player to work over any
+scenario without moving the full Now Playing implementation into the shell or
+embedding a Media Center skill name in client code.
+
 ## Settings Information Architecture
 
 Settings are presented in a modal or dedicated operator route, grouped as:
