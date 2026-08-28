@@ -108,6 +108,28 @@ def test_economic_status_accepts_root_entitlement_api_wrapper(monkeypatch, tmp_p
     assert status["usage"]["llm.requests"]["used_24h"] == 7
 
 
+def test_economic_status_preserves_shadow_enforce_mode(monkeypatch, tmp_path) -> None:
+    snapshot_path = tmp_path / "entitlement-shadow.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "mode": "shadow_enforce",
+                "subscription": {"state": "active", "plan_id": "builder"},
+                "entitlement": {"state": "enabled", "disabled_resources": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(economic_policy, "load_config", lambda: _config())
+    monkeypatch.setenv("ADAOS_ECONOMIC_ENTITLEMENT_SNAPSHOT", str(snapshot_path))
+    monkeypatch.delenv("ADAOS_ZONE_ID", raising=False)
+
+    status = economic_policy.current_subnet_economic_status()
+
+    assert status["enforcement_mode"] == "shadow_enforce"
+    assert status["enforcement_active"] is False
+
+
 def test_refresh_entitlement_snapshot_from_root(monkeypatch, tmp_path) -> None:
     class FakeRootClient:
         base_url = "https://ru.api.inimatic.com"

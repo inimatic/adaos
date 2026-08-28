@@ -459,7 +459,7 @@ def current_subnet_economic_status() -> dict[str, Any]:
         or ("disabled_observed" if disabled_resources else "enabled")
     )
     mode = _text(raw_snapshot.get("mode") or raw_snapshot.get("enforcement_mode") or "observe").lower()
-    if mode not in {"observe", "enforce"}:
+    if mode not in {"observe", "shadow_enforce", "enforce"}:
         mode = "observe"
     usage = raw_snapshot.get("usage")
     usage_payload = dict(usage) if isinstance(usage, Mapping) else {}
