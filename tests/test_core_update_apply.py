@@ -1001,7 +1001,7 @@ def test_checkout_build_version_env_override_wins(monkeypatch, tmp_path: Path) -
     assert mod._checkout_build_version(tmp_path) == "2026.5.22"
 
 
-def test_complete_history_for_build_identity_unshallows_without_blobs(monkeypatch, tmp_path: Path) -> None:
+def test_complete_history_for_build_identity_unshallows_standard_clone(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 
     shallow_path = tmp_path / ".git" / "shallow"
@@ -1019,9 +1019,9 @@ def test_complete_history_for_build_identity_unshallows_without_blobs(monkeypatc
 
     result = mod._ensure_complete_history_for_build_identity(tmp_path)
 
-    assert result == {"state": "complete", "was_shallow": True, "filter": "blob:none"}
+    assert result == {"state": "complete", "was_shallow": True, "fetch_mode": "unshallow"}
     assert calls == [
-        (["git", "fetch", "--unshallow", "--filter=blob:none", "origin"], tmp_path)
+        (["git", "fetch", "--unshallow", "origin"], tmp_path)
     ]
 
 

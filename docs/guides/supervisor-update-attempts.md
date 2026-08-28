@@ -70,6 +70,11 @@ When diagnosing a live rollout, check fields in this order:
 
 If `authority=supervisor` and the runtime is temporarily unavailable, the supervisor surfaces should still be treated as the source of truth for the active update attempt.
 
+Slot preparation completes shallow history with a plain `git fetch --unshallow origin`.
+The update checkout is a standard shallow clone, not necessarily a partial clone;
+adding a fetch filter to that repository is invalid on Git versions that require
+`extensions.partialClone` and will fail the attempt during `phase=prepare`.
+
 Browser delivery now has two layers:
 
 - `supervisor.update.status.raw`: browser-safe raw supervisor transition payload. Clients should prefer this for live transition UI because it keeps the supervisor-owned shape (`status`, `attempt`, `runtime`) intact.

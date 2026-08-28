@@ -1571,14 +1571,14 @@ def _ensure_complete_history_for_build_identity(repo_dir: Path) -> dict[str, obj
     if not git:
         raise RuntimeError("git is required to complete shallow core update history")
     _run(
-        [git, "fetch", "--unshallow", "--filter=blob:none", "origin"],
+        [git, "fetch", "--unshallow", "origin"],
         cwd=repo_dir,
     )
     if shallow_path.exists():
         raise RuntimeError(
             "core update checkout remains shallow; refusing to publish a non-monotonic build identity"
         )
-    return {"state": "complete", "was_shallow": True, "filter": "blob:none"}
+    return {"state": "complete", "was_shallow": True, "fetch_mode": "unshallow"}
 
 
 def _checkout_build_date(repo_dir: Path) -> str:
