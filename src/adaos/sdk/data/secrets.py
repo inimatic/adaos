@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from adaos.sdk.core._cap import require_cap
@@ -25,7 +26,11 @@ def _active_secrets_service(ctx):
             return service
         current = ctx.skill_ctx.get()
         current_path = getattr(current, "path", None) if current is not None else None
-        if current_path is None:
+        isolated_data_root = str(
+            os.getenv("ADAOS_SKILL_INTERNAL_DATA_ROOT") or ""
+        ).strip()
+        isolated_skill_name = str(os.getenv("ADAOS_SKILL_NAME") or "").strip()
+        if current_path is None and not (isolated_data_root and isolated_skill_name):
             return service
 
         from adaos.sdk.data.skill_env import skill_data_root_path

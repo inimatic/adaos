@@ -42,6 +42,7 @@ from .transport import (
     HttpNodeDeploymentTransport,
     MemberLinkNodeDeploymentTransport,
     execute_remote_component_phase,
+    observe_remote_component_phase,
     register_local_deployment_receiver,
 )
 
@@ -78,6 +79,7 @@ __all__ = [
     "get_project_deployment_runtime",
     "execute_authority_request",
     "execute_remote_component_phase",
+    "observe_remote_component_phase",
     "invoke_project_deployment_authority",
     "register_local_deployment_receiver",
     "register_project_deployment_authority",

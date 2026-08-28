@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from adaos.adapters.db.sqlite_store import SQLite
+from adaos.adapters.db.sqlite_store import (
+    SQLite,
+    SQLiteKV,
+    sqlite_connection_diagnostics_snapshot,
+)
 from adaos.services.registry.subnet_repo import SubnetRepo
 
 
@@ -12,6 +16,19 @@ class _FakePaths:
 
     def state_dir(self) -> Path:
         return self._root
+
+
+def test_reopening_current_schemas_does_not_issue_ddl(tmp_path: Path) -> None:
+    sql = SQLite(_FakePaths(tmp_path))
+    SQLiteKV(sql)
+    SubnetRepo(sql)
+    before = sqlite_connection_diagnostics_snapshot()["write_statement_total"]
+
+    SQLiteKV(sql)
+    SubnetRepo(sql)
+
+    after = sqlite_connection_diagnostics_snapshot()["write_statement_total"]
+    assert after == before
 
 
 def test_touch_heartbeat_does_not_rewrite_unchanged_capacity(tmp_path: Path) -> None:

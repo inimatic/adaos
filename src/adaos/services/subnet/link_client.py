@@ -2002,6 +2002,7 @@ class MemberLinkClient:
             "tools.call",
             "skills.runtime.status",
             "project.deployment.phase",
+            "project.deployment.phase.status",
             "distributed.topology.phase",
             "distributed.topology.transfer",
             "distributed.service.invoke",
@@ -2155,6 +2156,12 @@ class MemberLinkClient:
             )
 
             return execute_remote_component_phase(params)
+        if method == "project.deployment.phase.status":
+            from adaos.services.project_deployment.transport import (
+                observe_remote_component_phase,
+            )
+
+            return observe_remote_component_phase(params)
         if method == "distributed.topology.phase":
             from adaos.services.distributed_runtime.adapters import (
                 execute_registered_topology_phase,

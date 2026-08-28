@@ -98,3 +98,27 @@ def test_sdk_secrets_follow_context_local_skill_runtime(tmp_path: Path) -> None:
         / "files"
         / "secrets.json"
     ).exists()
+
+
+def test_sdk_secrets_follow_isolated_service_data_root_without_call_context(
+    tmp_path: Path, monkeypatch
+) -> None:
+    caps = _AllowAllCaps()
+    skill_ctx = InprocSkillContext()
+    skill_ctx.clear()
+    shared_store = tmp_path / "shared" / "secrets.json"
+    isolated_root = tmp_path / "media-center-data"
+    monkeypatch.setenv("ADAOS_SKILL_NAME", "media_center_skill")
+    monkeypatch.setenv("ADAOS_SKILL_INTERNAL_DATA_ROOT", str(isolated_root))
+    ctx = SimpleNamespace(
+        caps=caps,
+        skill_ctx=skill_ctx,
+        secrets=SecretsService(SkillSecretsBackend(shared_store), caps),
+    )
+
+    with use_ctx(ctx):
+        secrets.set("TMDB_API_KEY", "isolated-token")
+        assert secrets.get("TMDB_API_KEY") == "isolated-token"
+
+    assert not shared_store.exists()
+    assert (isolated_root / "files" / "secrets.json").is_file()

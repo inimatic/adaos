@@ -664,6 +664,10 @@ class SQLiteKV(KV):
 
     def _ensure(self) -> None:
         with self.sql.connect() as con:
+            if con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='kv'"
+            ).fetchone():
+                return
             con.execute(
                 """
                 CREATE TABLE IF NOT EXISTS kv (

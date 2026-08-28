@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Iterable
 
@@ -26,6 +27,81 @@ def _now() -> datetime:
 def _active(lease: TopologyLease, *, now: datetime) -> bool:
     expires = datetime.fromisoformat(lease.valid_until.replace("Z", "+00:00"))
     return lease.status == "active" and expires > now
+
+
+def observe_service_groups(
+    groups: Iterable[ServiceGroup],
+    instances: Iterable[ServiceInstance],
+    leases: Iterable[TopologyLease],
+    *,
+    now: datetime | None = None,
+) -> tuple[ServiceGroup, ...]:
+    """Derive group convergence from authoritative instance leases."""
+
+    observed_at = now or _now()
+    instance_values = tuple(instances)
+    lease_by_id = {
+        item.lease_id: item
+        for item in leases
+        if item.kind == "membership" and _active(item, now=observed_at)
+    }
+    by_group: dict[str, list[ServiceInstance]] = defaultdict(list)
+    for instance in instance_values:
+        lease = lease_by_id.get(instance.lease_id)
+        if (
+            lease is None
+            or lease.owner_instance_id != instance.instance_id
+            or lease.scope_ref != f"service_group:{instance.group_id}"
+        ):
+            continue
+        by_group[instance.group_id].append(instance)
+
+    result: list[ServiceGroup] = []
+    for group in groups:
+        if group.status == "removed":
+            result.append(group)
+            continue
+        active = by_group.get(group.group_id, [])
+        current = [
+            item
+            for item in active
+            if item.topology_generation == group.desired_generation
+            and item.status not in {"draining", "expired", "failed"}
+        ]
+        ready = [
+            item for item in current if item.status == "ready" and item.readiness
+        ]
+        if len(ready) >= group.desired_instances:
+            status = "ready"
+            observed_revision = group.desired_revision
+        elif ready:
+            status = "degraded"
+            observed_revision = min(
+                group.observed_revision, max(0, group.desired_revision - 1)
+            )
+        elif current or active:
+            status = "reconciling"
+            observed_revision = min(
+                group.observed_revision, max(0, group.desired_revision - 1)
+            )
+        elif any(item.group_id == group.group_id for item in instance_values):
+            status = "unavailable"
+            observed_revision = min(
+                group.observed_revision, max(0, group.desired_revision - 1)
+            )
+        else:
+            status = "pending"
+            observed_revision = min(
+                group.observed_revision, max(0, group.desired_revision - 1)
+            )
+        result.append(
+            replace(
+                group,
+                status=status,
+                observed_revision=observed_revision,
+            )
+        )
+    return tuple(result)
 
 
 def _operation_row(operation: TopologyOperation) -> dict:
@@ -73,9 +149,15 @@ def build_distributed_projection(
     """Build a bounded operator projection; detailed inventories stay cursor-backed."""
 
     now = _now()
-    group_values = tuple(groups)
+    raw_group_values = tuple(groups)
     instance_values = tuple(instances)
     lease_values = tuple(leases)
+    group_values = observe_service_groups(
+        raw_group_values,
+        instance_values,
+        lease_values,
+        now=now,
+    )
     dataset_values = tuple(datasets)
     partition_values = tuple(partitions)
     replica_values = tuple(replicas)
@@ -147,4 +229,8 @@ def build_distributed_projection(
     }
 
 
-__all__ = ["OPERATOR_PROJECTION_SCHEMA", "build_distributed_projection"]
+__all__ = [
+    "OPERATOR_PROJECTION_SCHEMA",
+    "build_distributed_projection",
+    "observe_service_groups",
+]

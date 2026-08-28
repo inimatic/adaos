@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import time
 from dataclasses import dataclass, replace
 from threading import RLock
 from typing import Any, Callable, Mapping
@@ -34,6 +35,8 @@ from .store import ProjectDeploymentStore
 
 REMOTE_PHASE_SCHEMA = "adaos.project.remote_component_phase.v1"
 REMOTE_PHASE_RESULT_SCHEMA = "adaos.project.remote_component_phase_result.v1"
+REMOTE_PHASE_STATUS_SCHEMA = "adaos.project.remote_component_phase_status.v1"
+REMOTE_PHASE_STATUS_RESULT_SCHEMA = "adaos.project.remote_component_phase_status_result.v1"
 MAX_REMOTE_PACKAGE_BYTES = 64 * 1024 * 1024
 MAX_MEMBER_LINK_PACKAGE_BYTES = 1024 * 1024
 
@@ -123,6 +126,39 @@ def _remote_phase_receipt(body: Any) -> dict[str, Any]:
     return dict(sanitized)
 
 
+def _remote_phase_status_payload(
+    *,
+    node_id: str,
+    source_node_id: str,
+    kwargs: Mapping[str, Any],
+) -> dict[str, Any]:
+    package: ArtifactPackageRef | None = kwargs.get("package")
+    return {
+        "schema": REMOTE_PHASE_STATUS_SCHEMA,
+        "source_node_id": source_node_id,
+        "target_node_id": node_id,
+        "phase": str(kwargs["phase"]),
+        "change": kwargs["change"].to_dict(),
+        "package": package.to_dict() if package is not None else None,
+        "idempotency_key": str(kwargs["idempotency_key"]),
+    }
+
+
+def _observed_remote_phase_receipt(body: Any) -> dict[str, Any] | None:
+    if (
+        not isinstance(body, Mapping)
+        or body.get("schema") != REMOTE_PHASE_STATUS_RESULT_SCHEMA
+    ):
+        return None
+    if body.get("state") != "succeeded":
+        return None
+    receipt = body.get("receipt")
+    if not isinstance(receipt, Mapping):
+        return None
+    sanitized = _safe_receipt(receipt)
+    return dict(sanitized) if isinstance(sanitized, Mapping) else None
+
+
 @dataclass(slots=True)
 class HttpNodeDeploymentTransport:
     endpoint_resolver: Callable[[str], str]
@@ -131,6 +167,44 @@ class HttpNodeDeploymentTransport:
     source_node_id: str
     connect_timeout_seconds: float = 10.0
     operation_timeout_seconds: float = 600.0
+    late_receipt_timeout_seconds: float = 180.0
+    receipt_poll_interval_seconds: float = 2.0
+
+    def _observe_late_receipt(
+        self,
+        *,
+        endpoint: str,
+        headers: Mapping[str, str],
+        node_id: str,
+        kwargs: Mapping[str, Any],
+    ) -> Mapping[str, Any] | None:
+        payload = _remote_phase_status_payload(
+            node_id=node_id,
+            source_node_id=self.source_node_id,
+            kwargs=kwargs,
+        )
+        deadline = time.monotonic() + max(0.0, self.late_receipt_timeout_seconds)
+        first = True
+        while first or time.monotonic() < deadline:
+            first = False
+            try:
+                response = httpx.post(
+                    f"{endpoint}/api/node/project-deployment/phase/status",
+                    json=payload,
+                    headers=dict(headers),
+                    timeout=httpx.Timeout(10.0, connect=max(1.0, self.connect_timeout_seconds)),
+                )
+                if response.status_code == 200:
+                    receipt = _observed_remote_phase_receipt(response.json())
+                    if receipt is not None:
+                        return receipt
+            except (httpx.RequestError, ValueError):
+                pass
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(max(0.05, self.receipt_poll_interval_seconds), remaining))
+        return None
 
     def execute_component_phase(
         self, *, node_id: str, **kwargs: Any
@@ -164,6 +238,14 @@ class HttpNodeDeploymentTransport:
         except httpx.ConnectError as exc:
             raise RetryableDeploymentPhaseError("remote_node_connect_failed") from exc
         except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as exc:
+            receipt = self._observe_late_receipt(
+                endpoint=endpoint,
+                headers=headers,
+                node_id=node_id,
+                kwargs=kwargs,
+            )
+            if receipt is not None:
+                return receipt
             raise UncertainDeploymentPhaseError(
                 "remote component phase timed out after dispatch",
                 details={"node_id": node_id, "phase": kwargs.get("phase")},
@@ -200,6 +282,38 @@ class MemberLinkNodeDeploymentTransport:
     package_reader: Callable[[str], bytes]
     source_node_id: str
     operation_timeout_seconds: float = 600.0
+    late_receipt_timeout_seconds: float = 180.0
+    receipt_poll_interval_seconds: float = 2.0
+
+    def _observe_late_receipt(
+        self, *, node_id: str, kwargs: Mapping[str, Any]
+    ) -> Mapping[str, Any] | None:
+        payload = _remote_phase_status_payload(
+            node_id=node_id,
+            source_node_id=self.source_node_id,
+            kwargs=kwargs,
+        )
+        deadline = time.monotonic() + max(0.0, self.late_receipt_timeout_seconds)
+        first = True
+        while first or time.monotonic() < deadline:
+            first = False
+            try:
+                body = self.rpc_call(
+                    node_id,
+                    method="project.deployment.phase.status",
+                    params=payload,
+                    timeout=10.0,
+                )
+                receipt = _observed_remote_phase_receipt(body)
+                if receipt is not None:
+                    return receipt
+            except (TimeoutError, ConnectionError, RuntimeError):
+                pass
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(max(0.05, self.receipt_poll_interval_seconds), remaining))
+        return None
 
     def execute_component_phase(
         self, *, node_id: str, **kwargs: Any
@@ -219,6 +333,9 @@ class MemberLinkNodeDeploymentTransport:
                 timeout=max(30.0, float(self.operation_timeout_seconds)),
             )
         except TimeoutError as exc:
+            receipt = self._observe_late_receipt(node_id=node_id, kwargs=kwargs)
+            if receipt is not None:
+                return receipt
             raise UncertainDeploymentPhaseError(
                 "remote component phase timed out after dispatch",
                 details={"node_id": node_id, "phase": kwargs.get("phase")},
@@ -527,6 +644,44 @@ def execute_remote_component_phase(payload: Mapping[str, Any]) -> dict[str, Any]
     }
 
 
+def observe_remote_component_phase(payload: Mapping[str, Any]) -> dict[str, Any]:
+    with _receiver_lock:
+        adapter = _receiver_adapter
+        local_node_id = _receiver_node_id
+    if adapter is None or not local_node_id:
+        raise ProjectDeploymentExecutionError(
+            "local_deployment_receiver_not_configured"
+        )
+    if payload.get("schema") != REMOTE_PHASE_STATUS_SCHEMA:
+        raise ProjectDeploymentExecutionError("remote_phase_status_schema_invalid")
+    if str(payload.get("target_node_id") or "").strip() != local_node_id:
+        raise ProjectDeploymentExecutionError("remote_phase_target_identity_mismatch")
+    raw_change = payload.get("change")
+    if not isinstance(raw_change, Mapping):
+        raise ProjectDeploymentExecutionError("remote_phase_contract_missing")
+    change = DeploymentPlanChange.from_mapping(raw_change)
+    raw_package = payload.get("package")
+    package = (
+        ArtifactPackageRef.from_mapping(raw_package)
+        if isinstance(raw_package, Mapping)
+        else None
+    )
+    phase = str(payload.get("phase") or "")
+    receipt = adapter.observed_phase_receipt(
+        phase=phase,
+        change=change,
+        package=package,
+        idempotency_key=str(payload.get("idempotency_key") or ""),
+    )
+    return {
+        "schema": REMOTE_PHASE_STATUS_RESULT_SCHEMA,
+        "target_node_id": local_node_id,
+        "phase": phase,
+        "state": "succeeded" if receipt is not None else "pending",
+        "receipt": _safe_receipt(receipt) if receipt is not None else None,
+    }
+
+
 __all__ = [
     "HttpNodeDeploymentTransport",
     "MemberLinkNodeDeploymentTransport",
@@ -534,6 +689,9 @@ __all__ = [
     "MAX_REMOTE_PACKAGE_BYTES",
     "REMOTE_PHASE_RESULT_SCHEMA",
     "REMOTE_PHASE_SCHEMA",
+    "REMOTE_PHASE_STATUS_RESULT_SCHEMA",
+    "REMOTE_PHASE_STATUS_SCHEMA",
     "execute_remote_component_phase",
+    "observe_remote_component_phase",
     "register_local_deployment_receiver",
 ]

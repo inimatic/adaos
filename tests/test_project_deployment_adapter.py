@@ -29,6 +29,7 @@ from adaos.services.project_deployment import (
     RoutingComponentDeploymentAdapter,
     UncertainDeploymentPhaseError,
     execute_remote_component_phase,
+    observe_remote_component_phase,
     register_local_deployment_receiver,
 )
 from adaos.services.project_deployment.execution import component_activation_id
@@ -321,6 +322,19 @@ def test_remote_receiver_revalidates_identity_and_package_digest(
     assert result["schema"] == "adaos.project.remote_component_phase_result.v1"
     assert result["target_node_id"] == "node-b"
     assert store.verify(package.ref.digest).ref == package.ref
+    observed_fetch = observe_remote_component_phase(
+        {
+            "schema": "adaos.project.remote_component_phase_status.v1",
+            "source_node_id": "node-a",
+            "target_node_id": "node-b",
+            "phase": "fetch",
+            "change": change.to_dict(),
+            "package": package.ref.to_dict(),
+            "idempotency_key": "remote:test-worker:fetch",
+        }
+    )
+    assert observed_fetch["state"] == "succeeded"
+    assert observed_fetch["receipt"]["package_digest"] == package.ref.digest
 
     committed = None
     for phase in ("verify", "stage", "activate", "health", "commit"):
@@ -397,6 +411,7 @@ def test_http_transport_sends_exact_contract_and_marks_lost_ack_uncertain(
         token_provider=lambda: "subnet-token",
         package_reader=lambda digest: package.archive_bytes,
         source_node_id="node-a",
+        late_receipt_timeout_seconds=0.0,
     )
     receipt = transport.execute_component_phase(
         node_id="node-b",
@@ -502,6 +517,59 @@ def test_http_transport_sanitizes_remote_error_detail(
     assert receipt == {"detail": "<redacted>"}
 
 
+def test_http_transport_recovers_late_phase_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package = _package(tmp_path)
+    release = _release(package)
+    change = replace_node(_change("install", package), "node-b")
+    calls: list[str] = []
+
+    def late_receipt(url: str, **_kwargs: Any) -> httpx.Response:
+        calls.append(url)
+        if url.endswith("/phase"):
+            raise httpx.ReadTimeout(
+                "ack lost", request=httpx.Request("POST", url)
+            )
+        return httpx.Response(
+            200,
+            json={
+                "schema": "adaos.project.remote_component_phase_status_result.v1",
+                "target_node_id": "node-b",
+                "phase": "health",
+                "state": "succeeded",
+                "receipt": {"ready": True},
+            },
+        )
+
+    monkeypatch.setattr(httpx, "post", late_receipt)
+    transport = HttpNodeDeploymentTransport(
+        endpoint_resolver=lambda _node_id: "http://node-b:8778",
+        token_provider=lambda: "subnet-token",
+        package_reader=lambda _digest: package.archive_bytes,
+        source_node_id="node-a",
+        late_receipt_timeout_seconds=0.1,
+        receipt_poll_interval_seconds=0.01,
+    )
+
+    receipt = transport.execute_component_phase(
+        node_id="node-b",
+        phase="health",
+        node=_node("node-b"),
+        change=change,
+        desired=_desired(release),
+        release_plan=release,
+        package=package.ref,
+        current_activation=None,
+        idempotency_key="remote:test-worker:health-late",
+        attempt=1,
+    )
+
+    assert receipt == {"ready": True}
+    assert calls[-1].endswith("/phase/status")
+
+
 def test_member_link_transport_sends_exact_contract_and_marks_lost_ack_uncertain(
     tmp_path: Path,
 ) -> None:
@@ -523,6 +591,7 @@ def test_member_link_transport_sends_exact_contract_and_marks_lost_ack_uncertain
         rpc_call=rpc_call,
         package_reader=lambda _digest: package.archive_bytes,
         source_node_id="node-a",
+        late_receipt_timeout_seconds=0.0,
     )
     receipt = transport.execute_component_phase(
         node_id="node-b",
@@ -592,6 +661,53 @@ def test_member_link_transport_normalizes_known_runtime_error(tmp_path: Path) ->
         )
 
     assert "private" not in str(raised.value)
+
+
+def test_member_link_transport_recovers_late_phase_receipt(tmp_path: Path) -> None:
+    package = _package(tmp_path)
+    release = _release(package)
+    change = replace_node(_change("install", package), "node-b")
+    calls: list[str] = []
+
+    def rpc_call(_node_id: str, **kwargs: Any) -> Mapping[str, Any]:
+        method = str(kwargs.get("method") or "")
+        calls.append(method)
+        if method == "project.deployment.phase":
+            raise TimeoutError("lost ack")
+        return {
+            "schema": "adaos.project.remote_component_phase_status_result.v1",
+            "target_node_id": "node-b",
+            "phase": "activate",
+            "state": "succeeded",
+            "receipt": {"active": True},
+        }
+
+    transport = MemberLinkNodeDeploymentTransport(
+        rpc_call=rpc_call,
+        package_reader=lambda _digest: package.archive_bytes,
+        source_node_id="node-a",
+        late_receipt_timeout_seconds=0.1,
+        receipt_poll_interval_seconds=0.01,
+    )
+
+    receipt = transport.execute_component_phase(
+        node_id="node-b",
+        phase="activate",
+        node=_node("node-b"),
+        change=change,
+        desired=_desired(release),
+        release_plan=release,
+        package=package.ref,
+        current_activation=None,
+        idempotency_key="member:test-worker:activate-late",
+        attempt=1,
+    )
+
+    assert receipt == {"active": True}
+    assert calls == [
+        "project.deployment.phase",
+        "project.deployment.phase.status",
+    ]
 
 
 def test_member_link_transport_preserves_structured_remote_error(tmp_path: Path) -> None:

@@ -154,8 +154,77 @@ class SubnetRepo:
         self._scenario_capacity_cache.clear()
 
     # -------------------- schema --------------------
+    _SCHEMA_COLUMNS = {
+        "subnet_nodes": {
+            "node_id",
+            "subnet_id",
+            "roles_json",
+            "hostname",
+            "base_url",
+            "node_state",
+            "last_seen",
+            "display_index",
+            "accent_index",
+            "created_at",
+            "updated_at",
+        },
+        "subnet_capacity_io": {
+            "node_id",
+            "io_type",
+            "capabilities_json",
+            "priority",
+            "id_hint",
+            "updated_at",
+        },
+        "subnet_capacity_skills": {
+            "node_id",
+            "name",
+            "version",
+            "active",
+            "updated_at",
+            "dev",
+        },
+        "subnet_capacity_scenarios": {
+            "node_id",
+            "name",
+            "version",
+            "active",
+            "updated_at",
+            "dev",
+        },
+        "subnet_runtime_projection": {
+            "node_id",
+            "captured_at",
+            "node_names_json",
+            "primary_node_name",
+            "ready",
+            "node_state",
+            "route_mode",
+            "connected_to_hub",
+            "build_json",
+            "update_status_json",
+            "last_result_json",
+            "hub_control_request_json",
+            "snapshot_json",
+            "updated_at",
+        },
+    }
+
+    @classmethod
+    def _schema_is_current(cls, con) -> bool:
+        for table, required in cls._SCHEMA_COLUMNS.items():
+            columns = {
+                str(row[1])
+                for row in con.execute(f'PRAGMA table_info("{table}")').fetchall()
+            }
+            if not required.issubset(columns):
+                return False
+        return True
+
     def _ensure_schema(self) -> None:
         with self.sql.connect() as con:
+            if self._schema_is_current(con):
+                return
             con.execute(
                 """
                 CREATE TABLE IF NOT EXISTS subnet_nodes (

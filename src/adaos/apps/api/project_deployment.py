@@ -10,6 +10,7 @@ from adaos.services.project_deployment import (
     ProjectDeploymentExecutionError,
     RetryableDeploymentPhaseError,
     execute_remote_component_phase,
+    observe_remote_component_phase,
 )
 from adaos.services.project_deployment.authority import (
     ProjectDeploymentAuthorityError,
@@ -92,6 +93,27 @@ async def project_deployment_phase(request: Request) -> dict[str, Any]:
         )
     except RetryableDeploymentPhaseError as exc:
         raise HTTPException(status_code=503, detail=str(exc)[:500]) from exc
+    except ProjectDeploymentExecutionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)[:500]) from exc
+
+
+@router.post("/phase/status")
+async def project_deployment_phase_status(request: Request) -> dict[str, Any]:
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail="remote_phase_status_json_invalid"
+        ) from exc
+    if not isinstance(payload, Mapping):
+        raise HTTPException(
+            status_code=400, detail="remote_phase_status_body_must_be_object"
+        )
+    try:
+        return await anyio.to_thread.run_sync(
+            observe_remote_component_phase,
+            dict(payload),
+        )
     except ProjectDeploymentExecutionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)[:500]) from exc
 

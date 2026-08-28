@@ -326,6 +326,27 @@ class LocalComponentDeploymentAdapter:
             atomic_write_json(state_path, state)
             return receipt
 
+    def observed_phase_receipt(
+        self,
+        *,
+        phase: str,
+        change: DeploymentPlanChange,
+        package: ArtifactPackageRef | None,
+        idempotency_key: str,
+    ) -> Mapping[str, Any] | None:
+        token = _operation_token(idempotency_key)
+        root = (self.operations_root / token).resolve()
+        if self.operations_root.resolve() not in root.parents:
+            raise ProjectDeploymentExecutionError(
+                "component operation path escaped state root"
+            )
+        state = _read(root / "state.json")
+        if not state:
+            return None
+        self._validate_state(state, change=change, package=package)
+        receipt = dict(state.get("phases") or {}).get(str(phase or ""))
+        return dict(receipt) if isinstance(receipt, Mapping) else None
+
     def _validate_state(
         self,
         state: Mapping[str, Any],

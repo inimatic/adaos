@@ -24,7 +24,7 @@ from adaos.services.artifact_pipeline.releases import ReleasePlan
 from adaos.services.project_deployment.store import ProjectDeploymentStore
 
 from .authorization import DistributedPrincipal
-from .projections import build_distributed_projection
+from .projections import build_distributed_projection, observe_service_groups
 from .operations import TopologyAdapter, TopologyExecutor
 from .service_invocation import ServiceInvocationAdapter
 from .store import DistributedRuntimeStore
@@ -1376,6 +1376,12 @@ class DistributedRuntime:
         groups, group_cursor = self.store.list_groups(
             cursor=cursors.get("groups"), limit=limit
         )
+        observed_groups = observe_service_groups(
+            groups,
+            _all_pages(self.store.list_instances),
+            _all_pages(self.store.list_leases),
+            now=self.clock(),
+        )
         instances, instance_cursor = self.store.list_instances(
             cursor=cursors.get("instances"), limit=limit
         )
@@ -1395,7 +1401,7 @@ class DistributedRuntime:
             cursor=cursors.get("operations"), limit=limit
         )
         return DistributedInspection(
-            groups=groups,
+            groups=observed_groups,
             instances=instances,
             leases=leases,
             datasets=datasets,
