@@ -553,3 +553,49 @@ stale tab cannot restore the old queue, the one-hour TV soak, update and scan
 under playback, unavailable-disk and unsupported-codec injection, second-node
 link recovery, updater child-process cancellation cleanup, and reducing the
 remaining client bundle/style budget warnings.
+
+## Endpoint Idle Loop And Browser Contract Addendum - 2026-08-28
+
+Client revision `5841168d12c16b74ed769e3e2de3c00901d5d831` removes a
+feedback loop between endpoint heartbeat registration and playback-surface
+identity publication. `endpoint_inbox` registered the current target, while
+`registerTarget` unconditionally re-emitted the unchanged identity; its
+subscriber immediately requested another inbox refresh. A production-bundle
+browser run measured `125` inbox calls and `10.686%` steady main-thread CPU.
+After identity publication became change-sensitive, the same bounded run made
+`9` inbox calls in 75.866 seconds, matching immediate registration plus the
+declared 15-second heartbeat. Steady main-thread CPU fell to `4.068%`, heap
+growth was `0.615 MB`, event-loop delay p95 was `0.2 ms`, frame delay p95 was
+`12.6 ms`, and the steady window recorded no long tasks, actionable HTTP
+errors, console errors, overlap, or unresolved state tokens. All 54 Home cards
+rendered. The surface-identity and endpoint-session suites passed `4` and `7`
+tests respectively.
+
+Firebase Hosting version `bdd5115b62b76937` publishes client `0.0.375`, build
+`local-1787932052228`, and `main.f49e270f4f03c360.js`. The public
+`version.json` and index were fetched without cache after release and matched
+those identifiers.
+
+The post-release `.30` control database contains one `playing`, two `stopped`,
+and 25 `superseded` historical sessions. No physical target has more than one
+non-superseded attached session. The retained rows are durable resume/history
+state; freshness filtering prevents stale endpoints from entering Now Playing.
+This is server-side evidence for single ownership, but it does not replace the
+remaining live Android TV old-queue rejection test.
+
+Two unrelated UI data-contract defects found by the browser run were released
+separately. `infrastate_skill@0.75.90` now publishes skill-owned `ru/en`
+resources through the immutable asset-blob contract instead of browser-relative
+`i18n/*.json` paths. `subscription_status_skill@0.1.12` reads its maintained
+`data/subscription_status` Yjs projection instead of invoking `local_write`
+tools as declarative read sources. Their focused suites passed 152 and 11
+tests, and local browser validation no longer produced the former 404 and 409.
+
+Activation of those two standalone skills on `.30` remains deferred. The
+stand reported sustained full I/O pressure above 64%, and registry install
+correctly stopped when sparse-workspace auto-stash could not reconcile the
+dirty exact-Project materialization. The failed attempt did not replace active
+Media Center packages. Core lifecycle debt is to make forced sparse-workspace
+migration transactional, bounded, observable, and independent of materialized
+Project test/state exclusions; repeated auto-stashes are not an acceptable
+steady-state deployment mechanism.
