@@ -178,6 +178,12 @@ class ProjectDeploymentPlanner:
         reservations: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
         placements = {item.component_ref: item for item in desired.placements}
+        retained_pairs = {
+            (placement.component_ref, node_id)
+            for placement in desired.placements
+            if placement.mode == "selected_nodes"
+            for node_id in placement.selected_node_ids
+        }
         missing = sorted(set(package_by_ref).difference(placements))
         extra = sorted(set(placements).difference(package_by_ref))
         warnings.extend(f"blocked:{item}:missing_placement" for item in missing)
@@ -278,7 +284,11 @@ class ProjectDeploymentPlanner:
                 )
 
         for pair, observed in sorted(current.items()):
-            if pair in target_pairs or observed.status == "removed":
+            if (
+                pair in target_pairs
+                or pair in retained_pairs
+                or observed.status == "removed"
+            ):
                 continue
             approvals.add("component_remove")
             changes.append(

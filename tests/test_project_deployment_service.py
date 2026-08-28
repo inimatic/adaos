@@ -467,6 +467,57 @@ def test_planner_emits_noop_update_and_explicit_remove() -> None:
     assert "component_remove" in plan.required_approvals
 
 
+def test_planner_preserves_activation_on_unavailable_selected_node() -> None:
+    release_plan = _release((("skill", "media_library_agent", "b"),))
+    desired = ProjectDeployment(
+        deployment_id="media-center-home",
+        project_ref="project:media_center",
+        release_digest=str(release_plan.release.release_digest),
+        subnet_id="home",
+        revision=2,
+        placements=(
+            ComponentPlacementPolicy(
+                component_ref="skill:media_library_agent",
+                mode="selected_nodes",
+                selected_node_ids=("node-b",),
+                required_capabilities=("media.catalog",),
+            ),
+        ),
+        compatibility=DeploymentCompatibilityPolicy(
+            architectures=("x86_64",),
+            required_protocols={"project_activation": "1"},
+        ),
+        status="planned",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    activation = ComponentActivation(
+        activation_id="agent-on-temporarily-offline-node",
+        deployment_id=desired.deployment_id,
+        component_ref="skill:media_library_agent",
+        node_id="node-b",
+        release_digest=_digest("8"),
+        package_digest=_digest("9"),
+        generation=1,
+        status="active",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+    plan = ProjectDeploymentPlanner().plan(
+        desired,
+        release_plan=release_plan,
+        inventory=(replace(_node("node-b"), online=False),),
+        activations=(activation,),
+        local_node_id="node-a",
+    )
+
+    assert plan.status == "blocked"
+    assert "blocked:skill:media_library_agent:node_offline" in plan.warnings
+    assert not any(change.action == "remove" for change in plan.changes)
+    assert "component_remove" not in plan.required_approvals
+
+
 def test_executor_journals_multi_component_nodes_retries_and_is_idempotent(
     tmp_path: Path,
 ) -> None:

@@ -69,6 +69,13 @@ from leaving a distributed service alive but unrouteable after activation.
 Deployment phase errors retain a bounded, secret-redacted `detail` when it is
 more specific than the stable machine error code.
 
+`selected_nodes` is durable placement intent, not a snapshot of currently
+eligible nodes. If a selected node is temporarily offline, untrusted, or lacks
+reported capacity, the plan is blocked and any existing activation on that
+node is retained. Removing an activation requires removing its node from the
+desired selected set and approving `component_remove`; transient inventory
+state never implies destructive reconciliation.
+
 ## Capability Rules
 
 Inspection requires `project.deployment.inspect`. Desired-state changes require
