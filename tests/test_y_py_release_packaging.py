@@ -38,11 +38,14 @@ def test_catalina_intel_uses_legacy_compatible_webrtc_stack() -> None:
     ]
 
 
-def test_repository_development_keeps_vendored_y_py_override() -> None:
+def test_repository_default_does_not_override_release_y_py_wheels() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     config = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
+    runtime_lock = (repo_root / "uv.lock").read_text(encoding="utf-8")
 
-    assert config["tool"]["uv"]["sources"]["y-py"] == {"path": "vendor/y-py"}
+    assert "sources" not in config.get("tool", {}).get("uv", {})
+    assert 'source = { directory = "vendor/y-py" }' not in runtime_lock
+    assert "y-py-v0.6.2-adaos.1" in runtime_lock
 
 
 def test_user_install_does_not_require_vosk_or_dev_dependencies() -> None:

@@ -43,9 +43,11 @@ On PowerShell, set `$env:CARGO_TARGET_DIR = ".cache/y-py-target"` before the
 `maturin` command. Keeping Cargo output outside this directory prevents Python
 editable-build metadata discovery from traversing Rust build artifacts.
 
-AdaOS resolves `y-py` from this directory through `tool.uv.sources`. Release
-wheels are built by `.github/workflows/y-py-wheels.yml` for Windows, Linux,
-and macOS.
+Normal AdaOS development, installation, and core updates resolve the published
+platform wheel declared in `pyproject.toml`; they do not build this directory.
+Use the bootstrap `--build-vendored-y-py`/`-BuildVendoredYPy` option only when
+developing the fork itself. Release wheels are built by
+`.github/workflows/y-py-wheels.yml` for Windows, Linux, and macOS.
 
 The published binary set is available from the GitHub release
 [`y-py-v0.6.2-adaos.1`](https://github.com/inimatic/adaos/releases/tag/y-py-v0.6.2-adaos.1).
