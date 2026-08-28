@@ -410,6 +410,21 @@ def test_prepare_seed_venv_prefers_fresh_locked_uv_environment(monkeypatch, tmp_
     }
 
 
+def test_uv_executable_finds_standard_install_outside_service_path(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    uv = tmp_path / "usr" / "local" / "bin" / "uv"
+    uv.parent.mkdir(parents=True)
+    uv.write_text("#!/bin/sh\n", encoding="utf-8")
+    uv.chmod(0o755)
+    monkeypatch.delenv("ADAOS_CORE_UPDATE_UV_BIN", raising=False)
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(mod, "_UV_FALLBACK_PATHS", (uv,))
+    monkeypatch.setattr(mod.sys, "executable", str(tmp_path / "python"))
+
+    assert mod._uv_executable() == str(uv.resolve())
+
+
 def test_prepare_seed_venv_can_restore_copy_fallback_for_locked_uv(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 

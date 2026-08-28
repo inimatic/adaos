@@ -32,6 +32,11 @@ _LOCAL_SOURCE_COPY_IGNORES = (
     "node_modules",
 )
 
+_UV_FALLBACK_PATHS = (
+    Path("/usr/local/bin/uv"),
+    Path("/usr/bin/uv"),
+)
+
 
 def _is_probably_git_sha(value: str) -> bool:
     token = str(value or "").strip()
@@ -674,7 +679,7 @@ def _prepare_seed_venv(
     candidates.sort(key=lambda item: not bool(item[2].get("ready")))
     fresh_uv_enabled = _env_flag("ADAOS_CORE_UPDATE_FRESH_UV_ENVIRONMENT", "1")
     locked_checkout = checkout_dir is not None and (checkout_dir / "uv.lock").is_file()
-    uv = shutil.which("uv") if fresh_uv_enabled and locked_checkout and _uv_install_enabled() else None
+    uv = _uv_executable() if fresh_uv_enabled and locked_checkout and _uv_install_enabled() else None
     if uv:
         payload: dict[str, object] = {
             "ok": True,
@@ -723,6 +728,23 @@ def _prepare_seed_venv(
 
 def _uv_install_enabled() -> bool:
     return str(os.getenv("ADAOS_CORE_UPDATE_UV", "1") or "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _uv_executable() -> str | None:
+    configured = str(os.getenv("ADAOS_CORE_UPDATE_UV_BIN", "") or "").strip()
+    discovered = shutil.which(configured or "uv")
+    if discovered:
+        return str(discovered)
+
+    executable_name = "uv.exe" if os.name == "nt" else "uv"
+    candidates = [Path(sys.executable).resolve().parent / executable_name]
+    if configured:
+        candidates.append(Path(configured).expanduser())
+    candidates.extend(_UV_FALLBACK_PATHS)
+    for candidate in candidates:
+        if candidate.is_file() and (os.name == "nt" or os.access(candidate, os.X_OK)):
+            return str(candidate.resolve())
+    return None
 
 
 def _uv_locked_enabled() -> bool:
@@ -798,7 +820,7 @@ def _install_slot_project(
     prepare_lease_token: str = "",
 ) -> dict[str, object]:
     started_at = time.time()
-    uv = shutil.which("uv") if _uv_install_enabled() else None
+    uv = _uv_executable() if _uv_install_enabled() else None
     attempts: list[dict[str, object]] = []
     if uv and (checkout_dir / "uv.lock").exists():
         env = dict(os.environ)
