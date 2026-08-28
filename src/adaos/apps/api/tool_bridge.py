@@ -62,6 +62,7 @@ _DECLARED_SIDE_EFFECT_RISK_CLASS: dict[str, str] = {
     "local_write": "local_write",
     "runtime_write": "local_write",
     "external_write": "network",
+    "device_control": "device_control",
 }
 
 
@@ -725,6 +726,52 @@ def _runtime_action_grant_ref(
     }
 
 
+def _runtime_action_targets_local_resource(
+    declaration: Mapping[str, Any] | None,
+    payload: Mapping[str, Any],
+) -> bool:
+    spec = dict(declaration) if isinstance(declaration, Mapping) else {}
+    resource_argument = _first_text(spec.get("local_resource_argument"))
+    if not resource_argument:
+        return False
+    meta = _mapping(payload.get("_meta"))
+    principal_key = _first_text(spec.get("local_principal_meta_key")) or "controller_endpoint_id"
+    principal = _first_text(meta.get(principal_key), payload.get(principal_key))
+    resource = _first_text(payload.get(resource_argument))
+    return bool(principal and resource and principal == resource)
+
+
+def _runtime_action_approval_presentation(
+    declaration: Mapping[str, Any] | None,
+    payload: Mapping[str, Any],
+    *,
+    tool_name: str,
+    risk_class: str,
+) -> dict[str, Any]:
+    spec = dict(declaration) if isinstance(declaration, Mapping) else {}
+    presentation = _mapping(spec.get("presentation"))
+    target_label = _first_text(payload.get("target_label"), payload.get("target_id"))
+    params = {
+        "tool": tool_name,
+        "risk_class": risk_class,
+        "target": target_label,
+        "target_label": target_label,
+    }
+    title = _first_text(presentation.get("title")) or "Action approval required"
+    summary = _first_text(presentation.get("summary")) or f"Approve {tool_name} ({risk_class}) before it runs."
+    title_key = _first_text(presentation.get("title_i18n_key")) or "pending_actions.runtime.action_approval_title"
+    summary_key = _first_text(presentation.get("summary_i18n_key")) or "pending_actions.runtime.action_approval_summary"
+    waiting_key = _first_text(presentation.get("waiting_i18n_key")) or summary_key
+    return {
+        "title": title,
+        "title_i18n": {"key": title_key, "params": params},
+        "summary": summary,
+        "summary_i18n": {"key": summary_key, "params": params},
+        "waiting_i18n": {"key": waiting_key, "params": params},
+        "params": params,
+    }
+
+
 def _pending_action_domain_matches(action: Dict[str, Any], domain_ref: Dict[str, Any]) -> bool:
     candidate = _mapping(action.get("domain_ref"))
     if not candidate:
@@ -780,6 +827,7 @@ async def _ensure_runtime_action_pending_action(
     action_risk: Dict[str, Any],
     target_node_id: str,
     local_node_id: str,
+    approval_scope: Mapping[str, Any] | None = None,
     ctx: AgentContext | None = None,
 ) -> Dict[str, Any]:
     webspace_id = _resolve_tool_webspace_id(payload)
@@ -802,19 +850,22 @@ async def _ensure_runtime_action_pending_action(
         return existing
     risk_class = str(action_risk.get("risk_class") or "runtime").strip() or "runtime"
     tool_name = str(body.tool or "").strip()
+    presentation = _runtime_action_approval_presentation(
+        approval_scope,
+        payload,
+        tool_name=tool_name,
+        risk_class=risk_class,
+    )
     try:
         return await publish_pending_action_async(
             ctx=ctx or get_ctx(),
             webspace_id=webspace_id,
             action_id=action_id,
             kind=_RUNTIME_ACTION_APPROVAL_KIND,
-            title="Action approval required",
-            title_i18n={"key": "pending_actions.runtime.action_approval_title"},
-            summary=f"Approve {tool_name} ({risk_class}) before it runs.",
-            summary_i18n={
-                "key": "pending_actions.runtime.action_approval_summary",
-                "params": {"tool": tool_name, "risk_class": risk_class},
-            },
+            title=presentation["title"],
+            title_i18n=presentation["title_i18n"],
+            summary=presentation["summary"],
+            summary_i18n=presentation["summary_i18n"],
             producer={"type": "system", "system_id": "tool_bridge"},
             owner_scope=_without_empty({"webspace_id": webspace_id, "node_id": local_node_id}),
             domain_ref=domain_ref,
@@ -856,6 +907,7 @@ async def _enforce_runtime_action_gate(
     approval_scope: Mapping[str, Any] | None = None,
     ctx: AgentContext | None = None,
 ) -> Dict[str, Any]:
+    local_resource = _runtime_action_targets_local_resource(approval_scope, payload)
     action_risk = _runtime_action_risk(
         body=body,
         skill_name=skill_name,
@@ -863,7 +915,7 @@ async def _enforce_runtime_action_gate(
         payload=payload,
         target_node_id=target_node_id,
         local_node_id=local_node_id,
-        forced_side_effect_class=forced_side_effect_class,
+        forced_side_effect_class="local_write" if local_resource else forced_side_effect_class,
     )
     if not _runtime_action_gate_enabled() or not bool(action_risk.get("approval_required")):
         return action_risk
@@ -920,6 +972,7 @@ async def _enforce_runtime_action_gate(
             action_risk=action_risk,
             target_node_id=target_node_id,
             local_node_id=local_node_id,
+            approval_scope=approval_scope,
             ctx=ctx,
         )
         approval = _pending_action_approval(pending_action, action_risk)
@@ -946,6 +999,18 @@ async def _enforce_runtime_action_gate(
             "pending_action_id": str(pending_action.get("id") or ""),
             "pending_action_status": str(pending_action.get("status") or ""),
             "approval_contract": _approval_contract(),
+            "human_message": _runtime_action_approval_presentation(
+                approval_scope,
+                payload,
+                tool_name=str(body.tool or ""),
+                risk_class=str(action_risk.get("risk_class") or "runtime"),
+            )["summary"],
+            "human_message_i18n": _runtime_action_approval_presentation(
+                approval_scope,
+                payload,
+                tool_name=str(body.tool or ""),
+                risk_class=str(action_risk.get("risk_class") or "runtime"),
+            )["waiting_i18n"],
             **({"pending_action_error": pending_action_error} if pending_action_error else {}),
         },
     )

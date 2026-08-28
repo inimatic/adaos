@@ -514,6 +514,22 @@ It contains:
 Commands use expected revisions or idempotency keys. Stale phone controls must
 not overwrite a newer TV queue or seek.
 
+Playback identity has three non-interchangeable levels:
+
+- core `Device Registry` identifies the physical/authorized device and owns its
+  heartbeat-derived presence;
+- a `PlaybackSurface` identifies one concrete app-shell endpoint: browser tab
+  or native surface plus its authoritative webspace and capability profile;
+- `PlaybackSession` identifies one durable queue and transport state assigned
+  to exactly one playback surface.
+
+Two tabs on one PC are therefore one device but two independently observable
+surfaces. Controllers carry both target and endpoint identities. UI target
+lists show device, webspace, endpoint, authorization, presence, and active
+session summary, and mark the caller's exact surface as `This tab`. Starting on
+that exact surface is local; controlling another surface uses a core durable
+approval grant scoped by controller device, target, and webspace.
+
 Command acknowledgement is cumulative only across a contiguous prefix whose
 expected active item and transport state match the endpoint observation. A
 `play` command is not acknowledged until the media element reports confirmed

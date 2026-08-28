@@ -705,6 +705,25 @@
           "type": "string",
           "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
         },
+        "local_resource_argument": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "local_principal_meta_key": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "presentation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "title": { "type": "string", "minLength": 1 },
+            "summary": { "type": "string", "minLength": 1 },
+            "title_i18n_key": { "type": "string", "minLength": 1 },
+            "summary_i18n_key": { "type": "string", "minLength": 1 },
+            "waiting_i18n_key": { "type": "string", "minLength": 1 }
+          }
+        },
         "ttl_seconds": {
           "type": "integer",
           "minimum": 300,

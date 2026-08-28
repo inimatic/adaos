@@ -1393,6 +1393,68 @@ def test_scoped_runtime_action_approval_becomes_a_durable_target_grant(
     assert reused["approval"]["source"] == "durable_grant"
 
 
+def test_runtime_action_gate_treats_the_controller_surface_as_local() -> None:
+    endpoint_id = "browser:device-1:surface:tab-1:webspace:desktop"
+    body = tool_bridge_module.ToolCall(
+        tool="media_center_skill:play_on",
+        arguments={
+            "target_id": "target-current-tab",
+            "target_endpoint_id": endpoint_id,
+            "_meta": {"controller_endpoint_id": endpoint_id},
+        },
+    )
+    result = asyncio.run(
+        tool_bridge_module._enforce_runtime_action_gate(
+            body=body,
+            skill_name="media_center_skill",
+            public_tool="play_on",
+            payload=dict(body.arguments),
+            forced_side_effect_class="device_control",
+            approval_scope={
+                "name": "media.playback.control",
+                "resource_argument": "target_id",
+                "principal_meta_key": "controller_device_id",
+                "local_resource_argument": "target_endpoint_id",
+                "local_principal_meta_key": "controller_endpoint_id",
+            },
+            ctx=_fake_ctx(),
+        )
+    )
+
+    assert result["risk_class"] == "local_write"
+    assert result["approval_required"] is False
+
+
+def test_runtime_action_approval_presentation_is_skill_owned() -> None:
+    presentation = tool_bridge_module._runtime_action_approval_presentation(
+        {
+            "presentation": {
+                "title": "Allow playback control",
+                "summary": "Allow playback on the selected device.",
+                "title_i18n_key": "runtime.media_center.approval.play_on.title",
+                "summary_i18n_key": "runtime.media_center.approval.play_on.summary",
+                "waiting_i18n_key": "runtime.media_center.approval.play_on.waiting",
+            }
+        },
+        {"target_id": "target-tv", "target_label": "Android TV"},
+        tool_name="media_center_skill:play_on",
+        risk_class="device_control",
+    )
+
+    assert presentation["title_i18n"]["key"] == (
+        "runtime.media_center.approval.play_on.title"
+    )
+    assert presentation["waiting_i18n"] == {
+        "key": "runtime.media_center.approval.play_on.waiting",
+        "params": {
+            "tool": "media_center_skill:play_on",
+            "risk_class": "device_control",
+            "target": "Android TV",
+            "target_label": "Android TV",
+        },
+    }
+
+
 def test_call_tool_keeps_prompt_project_selection_local_and_approval_free(monkeypatch) -> None:
     calls: list[str] = []
     payloads: list[dict[str, object]] = []

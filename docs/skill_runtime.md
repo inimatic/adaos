@@ -371,15 +371,22 @@ the public SDK:
 
 ```python
 @tool(
-    side_effects="external_write",
+    side_effects="device_control",
     approval_scope={
         "name": "media.playback.control",
         "resource_argument": "target_id",
         "principal_meta_key": "controller_device_id",
+        "local_resource_argument": "target_endpoint_id",
+        "local_principal_meta_key": "controller_endpoint_id",
         "ttl_seconds": 31_536_000,
+        "presentation": {
+            "title_i18n_key": "runtime.media.approval.title",
+            "summary_i18n_key": "runtime.media.approval.summary",
+            "waiting_i18n_key": "runtime.media.approval.waiting",
+        },
     },
 )
-def play_on(target_id: str, **kwargs): ...
+def play_on(target_id: str, target_endpoint_id: str, **kwargs): ...
 ```
 
 Core reads this declaration from the resolved manifest, not from caller
@@ -389,6 +396,15 @@ another controller, resource, webspace or expired/revoked grant requires a new
 approval. The grant store and policy remain core-owned. Skills receive only the
 normal approval result and must not persist authorization copies themselves.
 Grant I/O is moved off the API event loop.
+
+`local_resource_argument` is an optional exact self-target boundary. Core
+compares it with the trusted caller metadata named by
+`local_principal_meta_key`; an exact match is classified as a local write and
+does not ask a person to approve control of the surface they are already using.
+The skill must still resolve the resource and reject an endpoint mismatch
+before producing any remote effect. Approval wording and i18n keys are declared
+by the owning skill, while Pending Actions, durable grants, and retry policy
+remain generic core/client responsibilities.
 
 ### Device presence projection
 

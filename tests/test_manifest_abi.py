@@ -460,7 +460,16 @@ def test_skill_schema_accepts_durable_tool_approval_scope() -> None:
                     "name": "media.playback.control",
                     "resource_argument": "target_id",
                     "principal_meta_key": "controller_device_id",
+                    "local_resource_argument": "target_endpoint_id",
+                    "local_principal_meta_key": "controller_endpoint_id",
                     "ttl_seconds": 31536000,
+                    "presentation": {
+                        "title": "Allow playback control",
+                        "summary": "Allow this controller to start playback.",
+                        "title_i18n_key": "runtime.media.approval.title",
+                        "summary_i18n_key": "runtime.media.approval.summary",
+                        "waiting_i18n_key": "runtime.media.approval.waiting",
+                    },
                 },
             }
         ],
