@@ -65,8 +65,9 @@ signal becomes a Dev Ticket visible to a person and consumable by Codex.
   Tickets local/private by default and links each ticket to its source signals.
 - [x] `[must]` `DS0-11` Define ticket lifecycle states:
   `captured`, `proposed`, `accepted`, `deferred`, `waiting_for_user`,
-  `ready_for_builder`, `in_builder`, `resolved`, `closed`, `superseded`, and
-  `stale`.
+  `ready_for_builder`, `in_builder`, `claimed`, `in_progress`, `resolved`,
+  `verified`, `closed`, `superseded`, and `stale`; define `reopen` as a
+  lifecycle operation that returns the ticket to an active state.
 - [ ] `[should]` `DS0-12` Add ticket projection indexes by current scenario,
   skill, modal/surface, status, blocker flag, source, and target artifact
   version.
@@ -252,7 +253,7 @@ Ticket and signals, and closes only with evidence.
 - [ ] `[must]` `DS5-04` Include Development Signal context in Builder packets:
   original words, scopes, versions, digests, evidence refs, NLU refs, privacy
   constraints, and acceptance expectations.
-- [ ] `[must]` `DS5-05` Close signals only through resolved version, resolved
+- [ ] `[must]` `DS5-05` Close signals only through verified version, verified
   overlay, acceptance evidence, explicit rejection, supersession, stale
   revalidation, or not-design-time-fixable state.
 - [ ] `[should]` `DS5-06` Add delayed completion notifications that deep-link to
@@ -275,6 +276,12 @@ Ticket and signals, and closes only with evidence.
 - [ ] `[should]` `DS5-12` Add Builder context filters that surface active Dev
   Tickets for the current artifact without flooding Builder with unrelated
   workspace debt.
+- [ ] `[must]` `DS5-13` Add ticket lifecycle operations for `claim`,
+  `in_progress`, `comment`, `verify`, `reopen`, `duplicate`, and `related`
+  across API, CLI, client UI, Builder, and Codex-facing helpers.
+- [ ] `[must]` `DS5-14` Keep `resolve` non-terminal: a resolved ticket must show
+  candidate fix evidence, but normal closure requires verification evidence
+  and an explicit `verified` or `close` transition.
 
 Implementation note, 2026-08-26: `adaos dev ticket` now covers create, list,
 show, defer, handoff, resolve, and close. Pending Action responses can choose

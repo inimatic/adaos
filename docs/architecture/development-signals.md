@@ -104,12 +104,18 @@ adaos dev ticket show <id>
 adaos dev ticket defer <id>
 adaos dev ticket handoff <id> --mode autonomous|interactive
 adaos dev ticket resolve <id> --evidence <ref> --version <artifact-version>
+adaos dev ticket verify <id> --evidence <ref>
 adaos dev ticket close <id> --reason duplicate|stale|refused|not-design-time-fixable
+adaos dev ticket reopen <id> --reason <reason> --evidence <ref>
 ```
 
-`resolve` means the ticket was closed by validation evidence, usually tied to
-a version, overlay, or Builder repair result. `close` means the ticket reached
-a terminal state without an implemented fix.
+`resolve` means that a candidate fix or decision exists and evidence has been
+attached, usually tied to a version, overlay, Builder repair result, or
+not-design-time-fixable decision. It is not terminal acceptance. `verify`
+means the required validation or human acceptance evidence has passed. `close`
+is the terminal state for the current ticket lineage. `reopen` creates a new
+lifecycle event and returns the ticket to an active state when regression,
+insufficient evidence, or changed scope is found.
 
 The first UI should expose tickets before broad CLI ergonomics:
 
@@ -118,8 +124,8 @@ The first UI should expose tickets before broad CLI ergonomics:
 - a context-filtered ticket list;
 - a ticket detail view showing summary, scope, status, target version,
   evidence refs, screenshots, related signals, and available actions;
-- actions for postpone, open Builder, start autonomous repair, close, and
-  preview evidence.
+- actions for postpone, open Builder, start autonomous repair, resolve, verify,
+  close, reopen, and preview evidence.
 
 Development Signals remain the immutable evidence underneath. Dev Tickets own
 human-readable queue state, dedup grouping, and user/Codex workflow affordance.
@@ -139,8 +145,24 @@ Implementation status, 2026-08-26:
   workbench with ticket/target context, and records development-source choices
   (`use_existing_dev_source`, `materialize_dev_source`, `create_local_fork`,
   `create_runtime_overlay`, `defer`) when source is absent.
-- Ticket resolution requires validation evidence refs; close without a fix uses
-  the separate `close` lifecycle.
+- Ticket resolution currently requires evidence refs; the target verification
+  split above keeps final acceptance as a separate `verify`/`closed` step.
+  Close without a fix uses the separate `close` lifecycle.
+
+Target lifecycle, 2026-08-30:
+
+```text
+captured/proposed
+  -> accepted
+  -> claimed/in_progress
+  -> resolved
+  -> verified
+  -> closed
+```
+
+`reopen` is an operation, not a permanent status. It appends regression or
+insufficiency evidence and returns the ticket to `accepted`, `claimed`, or
+`in_progress` according to owner policy.
 
 ## Codex Producer Boundary
 
