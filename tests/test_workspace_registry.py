@@ -339,6 +339,20 @@ def test_rebuild_workspace_registry_skips_empty_sparse_placeholder_dirs(tmp_path
     assert "required declaration is missing" not in caplog.text
 
 
+def test_rebuild_workspace_registry_skips_cache_only_artifact_dirs(tmp_path: Path, caplog, monkeypatch):
+    monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
+    caplog.set_level(logging.ERROR, logger="adaos.workspace_registry")
+    workspace = tmp_path / "workspace"
+    cache_dir = workspace / "skills" / "stale_skill" / "handlers" / "__pycache__"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "main.cpython-311.pyc").write_bytes(b"stale")
+
+    payload = rebuild_workspace_registry(workspace)
+
+    assert payload["skills"] == []
+    assert "required declaration is missing" not in caplog.text
+
+
 def test_build_registry_entry_skips_non_materialized_catalog_path(tmp_path: Path, caplog, monkeypatch):
     monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
     caplog.set_level(logging.ERROR, logger="adaos.workspace_registry")
@@ -654,6 +668,41 @@ def test_runtime_required_scenarios_include_bootstrap_home_current_and_reference
         "remote_dashboard",
         "web_desktop",
     ]
+
+
+def test_runtime_requirement_status_limits_startup_blockers_to_opted_in_scenarios():
+    registry = {
+        "scenarios": [
+            {"id": "web_desktop", "name": "web_desktop", "skills": {"required": ["desktop_skill"]}},
+            {"id": "preview", "name": "preview"},
+            {
+                "id": "operations",
+                "name": "operations",
+                "activation": {"startup_allowed": True},
+                "skills": {"required": ["operations_skill"]},
+            },
+        ]
+    }
+    original = workspace_sync_module.runtime_required_scenario_refs
+    workspace_sync_module.runtime_required_scenario_refs = lambda: [  # type: ignore[assignment]
+        "web_desktop",
+        "preview",
+        "operations",
+    ]
+    try:
+        result = workspace_sync_module._runtime_requirement_status(  # type: ignore[attr-defined]
+            Path("workspace"),
+            materialized_skills={"desktop_skill"},
+            materialized_scenarios={"web_desktop"},
+            registry_payload=registry,
+        )
+    finally:
+        workspace_sync_module.runtime_required_scenario_refs = original  # type: ignore[assignment]
+
+    assert result["missing_scenarios"] == ["operations", "preview"]
+    assert result["startup_scenario_refs"] == ["operations", "web_desktop"]
+    assert result["startup_missing_scenarios"] == ["operations"]
+    assert result["startup_missing_skills"] == ["operations_skill"]
 
 
 def test_scenario_requirements_resolve_aliases_and_required_skill_closure():

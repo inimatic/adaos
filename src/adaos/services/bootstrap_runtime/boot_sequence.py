@@ -847,10 +847,27 @@ class BootstrapBootCoordinator:
                 _missing_scenarios = list(_runtime_requirements.get("missing_scenarios") or [])
                 _missing_skills = list(_runtime_requirements.get("missing_skills") or [])
                 _unresolved_scenarios = list(_runtime_requirements.get("unresolved_scenarios") or [])
-                if _missing_scenarios or _missing_skills or _unresolved_scenarios:
+                _startup_missing_scenarios = list(
+                    _runtime_requirements.get("startup_missing_scenarios", _missing_scenarios) or []
+                )
+                _startup_missing_skills = list(
+                    _runtime_requirements.get("startup_missing_skills", _missing_skills) or []
+                )
+                _unresolved_startup_scenarios = list(
+                    _runtime_requirements.get("unresolved_startup_scenarios", _unresolved_scenarios) or []
+                )
+                if _startup_missing_scenarios or _startup_missing_skills or _unresolved_startup_scenarios:
                     service._log.error(
                         "workspace runtime requirements unavailable missing_scenarios=%s "
                         "missing_skills=%s unresolved_scenarios=%s; run `adaos setup update`",
+                        _startup_missing_scenarios,
+                        _startup_missing_skills,
+                        _unresolved_startup_scenarios,
+                    )
+                elif _missing_scenarios or _missing_skills or _unresolved_scenarios:
+                    service._log.info(
+                        "inactive workspace requirements deferred missing_scenarios=%s "
+                        "missing_skills=%s unresolved_scenarios=%s",
                         _missing_scenarios,
                         _missing_skills,
                         _unresolved_scenarios,

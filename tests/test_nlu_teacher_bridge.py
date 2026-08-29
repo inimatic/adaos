@@ -449,6 +449,34 @@ async def test_teacher_store_runtime_removes_legacy_event_projection_on_ready(mo
     assert "events_by_candidate" not in saves[0]
 
 
+@pytest.mark.anyio
+async def test_teacher_store_runtime_rehydrates_only_on_matching_yjs_demand(monkeypatch):
+    from adaos.services.nlu import teacher_store_runtime
+
+    calls: list[tuple[str, bool]] = []
+
+    async def _rehydrate(evt, *, reconcile_ledger: bool = False) -> None:
+        calls.append((evt["webspace_id"], reconcile_ledger))
+
+    monkeypatch.setattr(teacher_store_runtime, "_rehydrate_teacher_projection", _rehydrate)
+    teacher_store_runtime._demand_rehydrated_at.clear()  # type: ignore[attr-defined]
+
+    await teacher_store_runtime._on_yjs_snapshot_requested(  # type: ignore[attr-defined]
+        {"webspace_id": "desktop", "path": "data/infrastate/summary"}
+    )
+    await teacher_store_runtime._on_yjs_snapshot_requested(  # type: ignore[attr-defined]
+        {
+            "type": "webio.yjs.snapshot.requested",
+            "payload": {"webspace_id": "desktop", "path": "data/nlu_teacher/events"},
+        }
+    )
+    await teacher_store_runtime._on_yjs_subscription_changed(  # type: ignore[attr-defined]
+        {"webspace_id": "desktop", "path": "data/nlu_teacher/events"}
+    )
+
+    assert calls == [("desktop", True)]
+
+
 def test_teacher_durable_projection_is_bounded_and_keeps_newest_threads():
     from adaos.services.nlu import teacher_events
 

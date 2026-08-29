@@ -35,11 +35,13 @@ def _nlu_teacher_store_write_meta():
 
 _pending: dict[str, asyncio.Task] = {}
 _rehydrate_lock = asyncio.Lock()
+_demand_rehydrated_at: dict[str, float] = {}
 
 
 def _payload(evt: Any) -> dict[str, Any]:
     if isinstance(evt, dict):
-        return evt
+        payload = evt.get("payload") if "payload" in evt and "type" in evt else evt
+        return payload if isinstance(payload, dict) else {}
     if hasattr(evt, "payload"):
         p = getattr(evt, "payload")
         return p if isinstance(p, dict) else {}
@@ -302,14 +304,47 @@ async def _rehydrate_teacher_projection(evt: Any, *, reconcile_ledger: bool = Fa
             _log.debug("rehydrate failed webspace=%s", webspace_id, exc_info=True)
 
 
-@subscribe("sys.ready")
 async def _on_sys_ready(evt: Any) -> None:
     await _rehydrate_teacher_projection(evt, reconcile_ledger=True)
 
 
-@subscribe("scenarios.synced")
 async def _on_scenarios_synced(evt: Any) -> None:
     await _rehydrate_teacher_projection(evt)
+
+
+def _is_teacher_projection_demand(payload: Mapping[str, Any]) -> bool:
+    path = str(payload.get("path") or payload.get("projection_path") or "").strip()
+    if path == "data/nlu_teacher" or path.startswith("data/nlu_teacher/"):
+        return True
+    slot = str(payload.get("slot") or payload.get("projection") or "").strip()
+    if slot in {"nlu_teacher", "nlu_teacher.snapshot"}:
+        return True
+    topic = str(payload.get("topic") or "").strip()
+    return topic.endswith(".nlu_teacher") or topic.endswith(".nlu_teacher.snapshot")
+
+
+async def _rehydrate_teacher_projection_on_demand(evt: Any) -> None:
+    payload = _payload(evt)
+    if not _is_teacher_projection_demand(payload):
+        return
+    if str(payload.get("action") or "").strip().lower() == "unsubscribed":
+        return
+    webspace_id = _resolve_webspace_id(payload)
+    now = time.monotonic()
+    if now - float(_demand_rehydrated_at.get(webspace_id) or 0.0) < 30.0:
+        return
+    await _rehydrate_teacher_projection(payload, reconcile_ledger=True)
+    _demand_rehydrated_at[webspace_id] = time.monotonic()
+
+
+@subscribe("webio.yjs.snapshot.requested")
+async def _on_yjs_snapshot_requested(evt: Any) -> None:
+    await _rehydrate_teacher_projection_on_demand(evt)
+
+
+@subscribe("webio.yjs.subscription.changed")
+async def _on_yjs_subscription_changed(evt: Any) -> None:
+    await _rehydrate_teacher_projection_on_demand(evt)
 
 
 # Persist on all meaningful teacher mutations.

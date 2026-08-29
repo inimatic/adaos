@@ -4384,6 +4384,7 @@ def test_materialization_source_prewarm_returns_mode_summary(monkeypatch) -> Non
 def test_startup_materialization_hydrates_every_registered_webspace(monkeypatch) -> None:
     calls: list[dict[str, object]] = []
     monkeypatch.setenv("ADAOS_WEBSPACE_STARTUP_HYDRATION_CONCURRENCY", "1")
+    monkeypatch.setenv("ADAOS_WEBSPACE_STARTUP_HYDRATION_MODE", "all")
     monkeypatch.setattr(webspace_runtime_module, "default_webspace_id", lambda: "desktop")
     monkeypatch.setattr(
         webspace_runtime_module.workspace_index,
@@ -4419,6 +4420,68 @@ def test_startup_materialization_hydrates_every_registered_webspace(monkeypatch)
     assert result["webspace_total"] == 3
     assert result["ready_total"] == 2
     assert result["failed_total"] == 1
+
+
+def test_startup_materialization_defers_scenarios_without_opt_in(monkeypatch) -> None:
+    rebuilds: list[str] = []
+    statuses: list[dict[str, object]] = []
+    monkeypatch.delenv("ADAOS_WEBSPACE_STARTUP_HYDRATION_MODE", raising=False)
+    monkeypatch.setattr(webspace_runtime_module, "default_webspace_id", lambda: "desktop")
+    monkeypatch.setattr(
+        webspace_runtime_module.workspace_index,
+        "list_workspaces",
+        lambda: [
+            SimpleNamespace(workspace_id="desktop", home_scenario="startup_scene"),
+            SimpleNamespace(workspace_id="orphaned-preview", home_scenario="missing_scene"),
+            SimpleNamespace(workspace_id="preview", home_scenario="preview_scene"),
+        ],
+    )
+
+    def _read_manifest(scenario_id: str, **_kwargs) -> dict[str, object]:
+        if scenario_id == "missing_scene":
+            raise FileNotFoundError(scenario_id)
+        return {
+            "runtime": {
+                "activation": {
+                    "startup_allowed": scenario_id == "startup_scene",
+                }
+            }
+        }
+
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "read_manifest",
+        _read_manifest,
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_set_webspace_rebuild_status",
+        lambda webspace_id, **kwargs: statuses.append({"webspace_id": webspace_id, **kwargs}),
+    )
+
+    async def _fake_rebuild(webspace_id: str, **_kwargs) -> dict[str, object]:
+        rebuilds.append(webspace_id)
+        return {
+            "ok": True,
+            "accepted": True,
+            "scenario_id": "startup_scene",
+            "error": None,
+            "materialization": {"ready": True},
+        }
+
+    monkeypatch.setattr(webspace_runtime_module, "rebuild_webspace_from_sources", _fake_rebuild)
+
+    result = asyncio.run(webspace_runtime_module.hydrate_webspace_materialization_statuses())
+
+    assert rebuilds == ["desktop"]
+    assert [item["webspace_id"] for item in statuses] == ["orphaned-preview", "preview"]
+    assert all(item["status"] == "deferred" for item in statuses)
+    assert result["ok"] is True
+    assert result["mode"] == "opt_in"
+    assert result["webspace_total"] == 3
+    assert result["ready_total"] == 1
+    assert result["deferred_total"] == 2
+    assert result["failed_total"] == 0
 
 
 def test_startup_materialization_uses_isolated_payload_without_live_mutation(monkeypatch) -> None:

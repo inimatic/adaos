@@ -7980,24 +7980,103 @@ def _startup_materialization_hydration_concurrency() -> int:
     return max(1, min(value, 8))
 
 
+def _startup_materialization_hydration_mode() -> str:
+    value = str(os.getenv("ADAOS_WEBSPACE_STARTUP_HYDRATION_MODE") or "opt_in").strip().lower()
+    if value in {"all", "none", "opt_in"}:
+        return value
+    return "opt_in"
+
+
+def _startup_materialization_scenario(row: Any) -> tuple[str, str]:
+    overlay = getattr(row, "workspace_overlay", None)
+    if not isinstance(overlay, Mapping):
+        overlay = {}
+    scenario_id = str(
+        overlay.get("currentScenario")
+        or overlay.get("current_scenario")
+        or getattr(row, "effective_home_scenario", None)
+        or getattr(row, "home_scenario", None)
+        or ""
+    ).strip()
+    source_mode = str(
+        getattr(row, "effective_source_mode", None)
+        or getattr(row, "source_mode", None)
+        or "workspace"
+    ).strip()
+    return scenario_id, source_mode if source_mode in {"workspace", "dev"} else "workspace"
+
+
+def _startup_materialization_allowed(row: Any) -> tuple[bool, str, str]:
+    mode = _startup_materialization_hydration_mode()
+    scenario_id, source_mode = _startup_materialization_scenario(row)
+    if mode == "all":
+        return True, scenario_id, "compatibility_all"
+    if mode == "none":
+        return False, scenario_id, "disabled"
+    if not scenario_id:
+        return False, scenario_id, "scenario_unknown"
+    try:
+        manifest = scenarios_loader.read_manifest(scenario_id, space=source_mode)
+    except Exception:
+        return False, scenario_id, "manifest_unavailable"
+    runtime = manifest.get("runtime") if isinstance(manifest, Mapping) else None
+    activation = runtime.get("activation") if isinstance(runtime, Mapping) else None
+    allowed = isinstance(activation, Mapping) and activation.get("startup_allowed") is True
+    return allowed, scenario_id, "manifest_opt_in" if allowed else "manifest_not_opted_in"
+
+
 async def hydrate_webspace_materialization_statuses() -> dict[str, Any]:
-    """Rebuild process-local materialization status without reseeding YDocs."""
+    """Hydrate explicitly opted-in scenarios and defer inactive webspaces."""
     started = time.perf_counter()
     rows = await asyncio.to_thread(workspace_index.list_workspaces)
     default_id = default_webspace_id()
-    webspace_ids = sorted(
-        {
-            str(getattr(row, "workspace_id", "") or "").strip()
-            for row in rows
-            if str(getattr(row, "workspace_id", "") or "").strip()
-        },
-        key=lambda item: (item != default_id, item),
-    )
+    rows_by_id = {
+        str(getattr(row, "workspace_id", "") or "").strip(): row
+        for row in rows
+        if str(getattr(row, "workspace_id", "") or "").strip()
+    }
+    webspace_ids = sorted(rows_by_id, key=lambda item: (item != default_id, item))
     concurrency = _startup_materialization_hydration_concurrency()
     semaphore = asyncio.Semaphore(concurrency)
 
     async def _hydrate(webspace_id: str) -> dict[str, Any]:
         item_started = time.perf_counter()
+        row = rows_by_id[webspace_id]
+        allowed, scenario_id, admission_reason = await asyncio.to_thread(
+            _startup_materialization_allowed,
+            row,
+        )
+        if not allowed:
+            materialization = _pending_materialization_snapshot(
+                webspace_id,
+                scenario_id=scenario_id or None,
+                snapshot_source="startup_hydration:deferred",
+            )
+            _set_webspace_rebuild_status(
+                webspace_id,
+                status="deferred",
+                pending=True,
+                background=False,
+                action="startup_materialization_hydration",
+                source_of_truth="startup_runtime",
+                scenario_id=scenario_id or None,
+                requested_at=time.time(),
+                started_at=None,
+                finished_at=None,
+                error=None,
+                materialization=materialization,
+            )
+            return {
+                "webspace_id": webspace_id,
+                "ok": True,
+                "accepted": False,
+                "ready": False,
+                "deferred": True,
+                "scenario_id": scenario_id or None,
+                "admission_reason": admission_reason,
+                "error": None,
+                "duration_ms": _elapsed_ms(item_started),
+            }
         try:
             async with semaphore:
                 result = await rebuild_webspace_from_sources(
@@ -8052,18 +8131,24 @@ async def hydrate_webspace_materialization_statuses() -> dict[str, Any]:
             "ok": bool(result.get("ok")),
             "accepted": bool(result.get("accepted")),
             "ready": bool(materialization.get("ready")),
+            "deferred": False,
             "scenario_id": str(result.get("scenario_id") or "").strip() or None,
+            "admission_reason": admission_reason,
             "error": str(result.get("error") or "").strip() or None,
             "duration_ms": _elapsed_ms(item_started),
         }
 
     items = list(await asyncio.gather(*(_hydrate(webspace_id) for webspace_id in webspace_ids)))
     ready_total = sum(1 for item in items if item["ok"] and item["ready"])
+    deferred_total = sum(1 for item in items if item.get("deferred"))
+    failed_total = sum(1 for item in items if not item["ok"])
     summary = {
-        "ok": ready_total == len(items),
+        "ok": failed_total == 0,
+        "mode": _startup_materialization_hydration_mode(),
         "webspace_total": len(items),
         "ready_total": ready_total,
-        "failed_total": len(items) - ready_total,
+        "deferred_total": deferred_total,
+        "failed_total": failed_total,
         "concurrency": concurrency,
         "duration_ms": _elapsed_ms(started),
         "webspaces": items,

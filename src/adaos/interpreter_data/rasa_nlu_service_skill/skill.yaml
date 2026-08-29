@@ -4,6 +4,10 @@ description: Local Rasa NLU-only service for AdaOS intent detection
 supported_locales: ["en", "ru"]
 runtime:
   kind: service
+  activation:
+    mode: lazy
+    startup_allowed: true
+    background_refresh: true
   env:
     mode: venv
     python: "3.11"

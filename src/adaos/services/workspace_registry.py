@@ -590,6 +590,14 @@ def build_registry_entry(kind: RegistryKind, artifact_dir: Path) -> dict[str, An
         skills_payload = skills.to_dict()
         if skills_payload:
             entry["skills"] = skills_payload
+        runtime = manifest.get("runtime")
+        activation = runtime.get("activation") if isinstance(runtime, dict) else None
+        if isinstance(activation, dict):
+            entry["activation"] = {
+                str(key): value
+                for key, value in activation.items()
+                if key in {"mode", "startup_allowed", "background_refresh"}
+            }
         io_meta = manifest.get("io")
         if isinstance(io_meta, dict):
             io_entry: dict[str, Any] = {}
@@ -969,7 +977,21 @@ def _is_sparse_placeholder_dir(directory: Path) -> bool:
         return False
     if not entries:
         return True
-    return all(entry.is_file() and entry.name == ".gitignore" for entry in entries)
+    ignored_dirs = {"__pycache__", ".pytest_cache"}
+    ignored_files = {".gitignore", ".gitkeep"}
+    try:
+        for entry in directory.rglob("*"):
+            relative = entry.relative_to(directory)
+            if any(part in ignored_dirs for part in relative.parts):
+                continue
+            if entry.is_dir():
+                continue
+            if entry.name in ignored_files or entry.suffix.lower() in {".pyc", ".pyo"}:
+                continue
+            return False
+    except Exception:
+        return False
+    return True
 
 
 def _clean_text(value: Any) -> str | None:

@@ -148,6 +148,23 @@ def _runtime_requirement_status(
         registry_payload,
         runtime_scenario_refs,
     )
+    startup_scenario_refs: list[str] = []
+    for raw in runtime_scenario_refs:
+        ref = str(raw or "").strip()
+        resolved, entry = resolve_registry_payload_install_name(
+            registry_payload,
+            kind="scenarios",
+            name_or_id=ref,
+        )
+        activation = entry.get("activation") if isinstance(entry, dict) else None
+        if ref in _BOOTSTRAP_SCENARIOS or (
+            isinstance(activation, dict) and activation.get("startup_allowed") is True
+        ):
+            startup_scenario_refs.append(str(resolved or ref).strip())
+    startup_scenarios, startup_required_skills, unresolved_startup_scenarios = resolve_scenario_requirements(
+        registry_payload,
+        sorted(set(startup_scenario_refs)),
+    )
     return {
         "scenario_refs": runtime_scenario_refs,
         "scenarios": runtime_scenarios,
@@ -155,6 +172,12 @@ def _runtime_requirement_status(
         "unresolved_scenarios": unresolved_runtime_scenarios,
         "missing_scenarios": sorted(set(runtime_scenarios) - materialized_scenarios),
         "missing_skills": sorted(set(runtime_required_skills) - materialized_skills),
+        "startup_scenario_refs": sorted(set(startup_scenario_refs)),
+        "startup_scenarios": startup_scenarios,
+        "startup_scenario_skills": startup_required_skills,
+        "unresolved_startup_scenarios": unresolved_startup_scenarios,
+        "startup_missing_scenarios": sorted(set(startup_scenarios) - materialized_scenarios),
+        "startup_missing_skills": sorted(set(startup_required_skills) - materialized_skills),
         "workspace_root": str(workspace_root),
     }
 

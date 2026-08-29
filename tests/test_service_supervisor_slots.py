@@ -373,6 +373,32 @@ def test_service_supervisor_start_all_attributes_each_service_result(monkeypatch
     assert any("service skill startup summary attempted=2 failed=1" in line for line in logged)
 
 
+def test_service_supervisor_start_all_requires_explicit_manifest_opt_in(monkeypatch):
+    from adaos.services.skill import service_supervisor as mod
+
+    supervisor = mod.ServiceSkillSupervisor()
+    calls: list[str] = []
+
+    async def _refresh_discovered(*, force: bool = False) -> None:  # noqa: ARG001
+        return None
+
+    async def _ensure_started(name, spec, *, force: bool) -> None:  # noqa: ANN001, ARG001
+        calls.append(name)
+
+    supervisor._specs = {  # type: ignore[assignment]
+        "autostart_service": SimpleNamespace(startup_allowed=True, distributed_membership=None),
+        "demand_service": SimpleNamespace(startup_allowed=False, distributed_membership=None),
+    }
+    supervisor.refresh_discovered = _refresh_discovered  # type: ignore[method-assign]
+    supervisor.ensure_started = _ensure_started  # type: ignore[method-assign]
+    supervisor._ensure_background_tasks = lambda: None  # type: ignore[method-assign]
+
+    asyncio.run(supervisor.start_all())
+
+    assert calls == ["autostart_service"]
+    assert supervisor._activated_services == {"autostart_service"}
+
+
 def test_service_supervisor_starts_distributed_memberships_first():
     from adaos.services.skill import service_supervisor as mod
 

@@ -117,6 +117,7 @@ class ServiceSpec:
     publish_topics: tuple[str, ...] = ()
     distributed_membership: ServiceMembershipSpec | None = None
     startup_ready_timeout_s: float = 10.0
+    startup_allowed: bool = False
 
     @property
     def base_url(self) -> str:
@@ -207,6 +208,11 @@ def _resolve_service_spec(skill_name: str, skill_root: Path, manifest: Mapping[s
     kind = runtime.get("kind") or "module"
     if kind != "service":
         return None
+
+    activation = runtime.get("activation") or {}
+    if not isinstance(activation, Mapping):
+        activation = {}
+    startup_allowed = activation.get("startup_allowed") is True
 
     service = manifest.get("service") or {}
     if not isinstance(service, Mapping):
@@ -435,6 +441,7 @@ def _resolve_service_spec(skill_name: str, skill_root: Path, manifest: Mapping[s
         publish_topics=publish_topics,
         distributed_membership=distributed_membership,
         startup_ready_timeout_s=startup_ready_timeout_s,
+        startup_allowed=startup_allowed,
     )
 
 
@@ -863,6 +870,7 @@ class ServiceSkillSupervisor:
             maximum=3600.0,
         )
         self._manifest_state: dict[str, tuple[Any, ...]] = {}
+        self._activated_services: set[str] = set()
         self._shutdown_requested = False
 
     # ------------------------------------------------------------------ public
@@ -1205,10 +1213,12 @@ class ServiceSkillSupervisor:
         spec = self._specs.get(name)
         if not spec:
             raise KeyError(name)
+        self._activated_services.add(name)
         await self.ensure_started(name, spec, force=True)
         self._ensure_background_tasks()
 
     async def stop(self, name: str, *, timeout_s: float = 3.0) -> None:
+        self._activated_services.discard(name)
         async with self._operation_lock(name):
             await self._stop_owned(name, timeout_s=timeout_s)
 
@@ -1318,6 +1328,7 @@ class ServiceSkillSupervisor:
         spec = self._specs.get(name)
         if not spec:
             raise KeyError(name)
+        self._activated_services.add(name)
         async with self._operation_lock(name):
             await self._stop_owned(name)
             await self._ensure_started_owned(name, spec, force=True)
@@ -1422,7 +1433,14 @@ class ServiceSkillSupervisor:
         await self.refresh_discovered(force=True)
         attempted = 0
         failed: list[str] = []
-        specs = list(self._specs.items())
+        discovered_specs = list(self._specs.items())
+        specs = [
+            (name, spec)
+            for name, spec in discovered_specs
+            if bool(getattr(spec, "startup_allowed", True))
+        ]
+        skipped = len(discovered_specs) - len(specs)
+        self._activated_services.update(name for name, _spec in specs)
         specs.sort(
             key=lambda item: 0
             if getattr(item[1], "distributed_membership", None) is not None
@@ -1464,9 +1482,10 @@ class ServiceSkillSupervisor:
         self._ensure_background_tasks()
         _log.log(
             logging.WARNING if failed else logging.INFO,
-            "service skill startup summary attempted=%s failed=%s duration_s=%.3f failed_skills=%s",
+            "service skill startup summary attempted=%s failed=%s skipped=%s duration_s=%.3f failed_skills=%s",
             attempted,
             len(failed),
+            skipped,
             time.perf_counter() - started_at,
             failed,
         )
@@ -2306,6 +2325,8 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
             for name, spec in list(self._specs.items()):
                 if self._shutdown_requested:
                     return
+                if name not in self._activated_services:
+                    continue
                 proc = self._procs.get(name)
                 observed = process_states.get(name)
                 if proc and observed and observed[0] == id(proc) and observed[1] is None:
@@ -2384,6 +2405,8 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
             for name, spec in list(self._specs.items()):
                 if self._shutdown_requested:
                     return
+                if name not in self._activated_services:
+                    continue
                 budget = dict(spec.resource_budget or {})
                 try:
                     resource_interval_s = float(budget.get("sample_interval_seconds") or 10.0)

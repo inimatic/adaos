@@ -37,9 +37,33 @@ def load_skill_activation_policy(
         name_or_id=token,
         fallback_to_scan=fallback_to_scan,
     )
-    if not isinstance(entry, dict):
-        return None
-    return SkillActivationPolicy.from_mapping(entry.get("activation"))
+    if fallback_to_scan:
+        for skill_root in _candidate_skill_roots(Path(workspace_root), token):
+            manifest_path = skill_root / "skill.yaml"
+            if not manifest_path.is_file():
+                continue
+            try:
+                manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(manifest, dict):
+                continue
+            runtime = manifest.get("runtime")
+            activation = runtime.get("activation") if isinstance(runtime, dict) else None
+            policy = SkillActivationPolicy.from_mapping(activation)
+            if policy is not None:
+                return policy
+            # Importing a handler is cheap compared with running its startup work.
+            # Legacy manifests therefore remain event-compatible but must opt in to
+            # sys.ready explicitly before doing background projection/materialization.
+            return SkillActivationPolicy(
+                mode="lazy",
+                startup_allowed=False,
+                background_refresh=True,
+            )
+    if isinstance(entry, dict):
+        return SkillActivationPolicy.from_mapping(entry.get("activation"))
+    return None
 
 
 def _clean_receiver(value: Any) -> str:
@@ -56,6 +80,49 @@ def _append_receiver_pattern(patterns: list[str], value: Any) -> None:
         patterns.append(token)
 
 
+def _active_runtime_skill_roots(base: Path, skill_name: str) -> list[Path]:
+    root = Path(base)
+    token = str(skill_name or "").strip()
+    if not token:
+        return []
+    skills_roots = [root] if root.name == "skills" else [root / "skills", root]
+    result: list[Path] = []
+    for skills_root in skills_roots:
+        runtime_root = skills_root / ".runtime" / token
+        selection_path = runtime_root / "current_runtime.json"
+        try:
+            selection = json.loads(selection_path.read_text(encoding="utf-8"))
+        except Exception:
+            selection = {}
+        if not isinstance(selection, dict):
+            selection = {}
+        version = str(selection.get("version") or "").strip()
+        bucket = str(selection.get("runtime_bucket") or "").strip()
+        slot = str(selection.get("slot") or "").strip().upper()
+        if not bucket and version:
+            bucket = version if (runtime_root / version).is_dir() else ""
+        if not bucket:
+            try:
+                active_version = (runtime_root / "current_version").read_text(encoding="utf-8").strip()
+            except Exception:
+                active_version = ""
+            if active_version:
+                version = version or active_version
+                bucket = active_version if (runtime_root / active_version).is_dir() else ""
+        if not bucket:
+            continue
+        bucket_root = runtime_root / bucket
+        if slot not in {"A", "B"}:
+            try:
+                slot = (bucket_root / "active").read_text(encoding="utf-8").strip().upper()
+            except Exception:
+                slot = ""
+        if slot not in {"A", "B"}:
+            continue
+        result.append(bucket_root / "slots" / slot / "src" / "skills" / token)
+    return result
+
+
 def _candidate_skill_roots(base: Path, skill_name: str) -> list[Path]:
     root = Path(base)
     token = str(skill_name or "").strip()
@@ -63,8 +130,9 @@ def _candidate_skill_roots(base: Path, skill_name: str) -> list[Path]:
         return []
     candidates = [
         root / token,
-        root / ".runtime" / token,
         root / "skills" / token,
+        *_active_runtime_skill_roots(root, token),
+        root / ".runtime" / token,
         root / "skills" / ".runtime" / token,
     ]
     seen: set[str] = set()
@@ -237,9 +305,10 @@ def allows_background_refresh(
 ) -> bool:
     if policy is None:
         return True
-    if startup and policy.startup_allowed is False:
-        return False
-    if policy.background_refresh is False:
+    if startup:
+        if policy.mode != "eager" and policy.startup_allowed is not True:
+            return False
+    elif policy.background_refresh is False:
         return False
 
     when = policy.when
@@ -327,14 +396,14 @@ def subscription_event_admission(
     }
     ui_control_request = _is_ui_control_event_type(event_type)
     startup = event_type in {"sys.ready", "runtime.ready", "adaos.runtime.ready"}
-    if startup and policy.startup_allowed is False:
+    if startup and policy.startup_allowed is not True:
         return {
             "allowed": False,
             "governed": True,
-            "reason": "startup_not_allowed",
+            "reason": "startup_not_opted_in",
             "mode": policy.mode,
         }
-    if policy.background_refresh is False and not ui_control_request:
+    if not startup and policy.background_refresh is False and not ui_control_request:
         return {
             "allowed": False,
             "governed": True,

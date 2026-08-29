@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from adaos.services.skill.activation import (
@@ -45,6 +46,59 @@ def test_load_skill_activation_policy_uses_registry_metadata(tmp_path: Path) -> 
     assert policy.when.client_presence is True
     assert policy.when.webspace_scope == "active"
     assert subscription_strategy_for_policy(policy) == "early_cheap_handlers"
+
+
+def test_load_skill_activation_policy_reads_selected_runtime_slot(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    runtime_root = workspace / "skills" / ".runtime" / "root_mgmnt"
+    skill_dir = runtime_root / "v0.5" / "slots" / "A" / "src" / "skills" / "root_mgmnt"
+    skill_dir.mkdir(parents=True)
+    (runtime_root / "current_runtime.json").write_text(
+        json.dumps({"version": "0.5.22", "runtime_bucket": "v0.5", "slot": "A"}),
+        encoding="utf-8",
+    )
+    (skill_dir / "skill.yaml").write_text(
+        "\n".join(
+            [
+                "name: root_mgmnt",
+                "runtime:",
+                "  activation:",
+                "    mode: lazy",
+                "    startup_allowed: false",
+                "    background_refresh: false",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    policy = load_skill_activation_policy(workspace, "root_mgmnt")
+
+    assert policy is not None
+    assert policy.mode == "lazy"
+    assert policy.startup_allowed is False
+    assert policy.background_refresh is False
+
+
+def test_legacy_manifest_requires_explicit_startup_opt_in(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    skill_dir = workspace / "skills" / "legacy_skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "skill.yaml").write_text("name: legacy_skill\n", encoding="utf-8")
+
+    policy = load_skill_activation_policy(workspace, "legacy_skill")
+    admission = subscription_event_admission(
+        policy,
+        {"type": "sys.ready", "payload": {"ts": 1.0}},
+        "sys.ready",
+    )
+
+    assert policy is not None
+    assert policy.mode == "lazy"
+    assert policy.startup_allowed is False
+    assert policy.background_refresh is True
+    assert admission["allowed"] is False
+    assert admission["reason"] == "startup_not_opted_in"
 
 
 def test_load_stream_receivers_includes_nested_yjs_data_sources(tmp_path: Path) -> None:
