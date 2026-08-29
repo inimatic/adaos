@@ -52,6 +52,29 @@ rendered without custom per-resource browser code.
   record indexes, operation ledger, events, relations, artifacts, and traces.
 - [ ] `[could]` `DRW0-08` Add a compatibility generator that drafts resource
   definitions from existing skill tool manifests for human review.
+- [ ] `[must]` `DRW0-09` Add i18n fields to resource definitions for resource,
+  field, operation, status, validation, empty, loading, stale, degraded, and
+  permission-denied text.
+- [ ] `[must]` `DRW0-10` Add locale resolution and fallback rules that compose
+  request, conversation/channel, user profile, browser, workspace, resource,
+  and English/default fallback.
+- [ ] `[must]` `DRW0-11` Add access declarations for resource read, row scope,
+  field visibility, artifact visibility, operation capabilities, risk,
+  approvals, and evidence gates.
+- [ ] `[must]` `DRW0-12` Add actor/subject/delegation fields to operation,
+  event, and trace envelopes.
+- [ ] `[must]` `DRW0-13` Add privacy, sensitivity, retention, and external
+  export policy fields for records, artifacts, traces, and conversation
+  evidence.
+- [ ] `[should]` `DRW0-14` Add accessibility and user-preference view hints for
+  focus, keyboard behavior, announcements, density, high contrast, reduced
+  motion, locale formatting, and compact layout.
+- [ ] `[should]` `DRW0-15` Add a common readiness vocabulary for ready, stale,
+  read-only, offline, permission denied, provider unavailable, unsupported
+  query, validation error, conflict, rate limited, and degraded states.
+- [ ] `[should]` `DRW0-16` Add named-entity integration for localized labels,
+  aliases, canonical refs, and locale-aware search without creating a second
+  identity namespace.
 
 ## DRW1. Dev Tickets As The First Real Resource
 
@@ -78,6 +101,17 @@ with evidence and trace visible.
   model.
 - [ ] `[must]` `DRW1-06` Add scenario, skill, modal, component, severity,
   blocking, source, owner, and updated-time filters.
+- [ ] `[must]` `DRW1-11` Extend `adaos.dev_ticket.v1` for the target lifecycle:
+  `claimed`, `in_progress`, `verified`, non-terminal `resolved`, and `reopen`
+  lifecycle events or operation history.
+- [ ] `[must]` `DRW1-12` Add field and artifact access policy for ticket
+  summary, original input, screenshots, logs, traces, local paths, Builder refs,
+  NLU refs, and external issue exports.
+- [ ] `[must]` `DRW1-13` Preserve original ticket/report locale and expose
+  localized status/action labels as derived views.
+- [ ] `[must]` `DRW1-14` Add access-decision trace to ticket operations,
+  including actor, subject, delegated context, required capability, policy
+  digest, and denial reason.
 - [ ] `[should]` `DRW1-07` Add relevance ranking by active Builder project,
   current scenario, current modal, selected files, commit diff, and recent
   runtime evidence.
@@ -106,10 +140,17 @@ surface, synthetic CRUD, validation errors, event log, and trace inspector.
   definitions rather than a custom hand-written grid.
 - [ ] `[must]` `DRW2-05` Add fixture states for empty, normal, validation
   failure, unavailable provider, long text, and RU/EN labels.
+- [ ] `[must]` `DRW2-09` Add owner/admin/member/guest role fixtures that prove
+  hidden, disabled, allowed, and denied operation states.
+- [ ] `[must]` `DRW2-10` Add i18n fixture coverage for fields, operations,
+  statuses, validation messages, empty states, and permission denials.
 - [ ] `[should]` `DRW2-06` Add visual regression and browser E2E tests for the
   demo workbench surface.
 - [ ] `[should]` `DRW2-07` Show query, operation, event, and render traces in a
   read-only inspector.
+- [ ] `[should]` `DRW2-11` Add accessibility fixture checks for keyboard
+  navigation, focus return, announcement text, compact layout, long labels, and
+  high-contrast rendering.
 - [ ] `[could]` `DRW2-08` Add a compact/mobile renderer profile after desktop
   behavior is stable.
 
@@ -133,6 +174,14 @@ delivery, provider diagnostics, and source availability choices.
 - [ ] `[must]` `DRW3-05` Show event delivery and projection state for emitted
   and subscribed resource events.
 - [ ] `[must]` `DRW3-06` Link artifact/evidence refs to preview/open commands.
+- [ ] `[must]` `DRW3-10` Show localization traces: requested locale, resolved
+  locale, fallback chain, missing message keys, and named-entity matches.
+- [ ] `[must]` `DRW3-11` Show access traces: subject, actor, delegated context,
+  role preset, required capabilities, policy digest, decision, and denial
+  reason.
+- [ ] `[must]` `DRW3-12` Show readiness/degraded-mode traces for stale data,
+  read-only operation mode, provider failure, unsupported filters, queued work,
+  and missing authority.
 - [ ] `[should]` `DRW3-07` Add relevance queries for "tickets/resources related
   to this project, scenario, skill, modal, open file set, and current diff".
 - [ ] `[should]` `DRW3-08` Add autonomous-repair cost estimates and risk labels
@@ -156,6 +205,10 @@ views and operations backed by the current notebook skill tools.
   not as note domain truth.
 - [ ] `[must]` `DRW4-04` Replace one Notebook custom list/detail/form path with
   a workbench-rendered path behind a compatibility flag.
+- [ ] `[must]` `DRW4-08` Add localized note UI labels and validation messages
+  while preserving note text in its original language.
+- [ ] `[must]` `DRW4-09` Add read/write/delete access rules for note records and
+  attachment artifacts using role presets only as capability sources.
 - [ ] `[should]` `DRW4-05` Add revision/conflict handling for note edits.
 - [ ] `[should]` `DRW4-06` Add events for note created, updated, deleted, and
   attachment changed.
@@ -179,10 +232,19 @@ domain command surface.
   first, with favorites as a typed operation.
 - [ ] `[must]` `DRW5-04` Declare `media.metadata_claim` as a provenance and
   evidence-backed resource with accept/reject/comment operations.
+- [ ] `[must]` `DRW5-08` Apply profile/household role and capability policy to
+  catalog visibility, playlist mutation, roots administration, metadata edits,
+  and playback-control commands.
+- [ ] `[must]` `DRW5-09` Add localized display fields and aliases for media
+  collections, playlists, profile labels, metadata claim status, and action
+  confirmations.
 - [ ] `[should]` `DRW5-05` Add query filters for profile, collection, favorite,
   provider, media type, status, and text search.
 - [ ] `[should]` `DRW5-06` Add relation views between catalog item, playlist,
   collection, metadata claim, source, and rendition operation.
+- [ ] `[should]` `DRW5-10` Add privacy and retention rules for household media
+  names, local paths, external metadata provider evidence, screenshots, and
+  playback traces.
 - [ ] `[could]` `DRW5-07` Use Media Center to validate large-list paging,
   cursor stability, and query relevance under real data volume.
 
@@ -203,8 +265,14 @@ by research workflows.
   operations bound to workflow authority.
 - [ ] `[must]` `DRW6-04` Expose attempts, artifacts, evidence bundles, and claim
   decisions as read/evidence resources.
+- [ ] `[must]` `DRW6-07` Preserve source, protocol, review, evidence, and claim
+  text locale while keeping scientific identifiers and resource refs canonical.
+- [ ] `[must]` `DRW6-08` Bind research workflow transitions to explicit role,
+  capability, approval, isolation, and evidence policies.
 - [ ] `[should]` `DRW6-05` Add trace links from resource operations to workflow
   metrics evidence and research tracker receipts.
+- [ ] `[should]` `DRW6-09` Add access-scoped views for unpublished evidence,
+  blinded/unblinded states, reviewer comments, and external publication drafts.
 - [ ] `[could]` `DRW6-06` Add Builder prototype generation of synthetic research
   workbench resources before real execution providers are wired.
 
@@ -228,10 +296,17 @@ with traceable classification and scope.
 - [ ] `[must]` `DRW7-04` Add bounded clarification when the channel classifier
   cannot distinguish immediate action, correction, feedback, development, or
   personal adaptation.
+- [ ] `[must]` `DRW7-08` Include locale, channel, subject, actor, delegated
+  context, and access-decision refs in `resource_operation_intent`.
+- [ ] `[must]` `DRW7-09` Route permission denial and missing capability outcomes
+  back to conversational explanation without creating surprise Builder work.
 - [ ] `[should]` `DRW7-05` Add RU/EN/STT-noisy conversation-story tests for
   resource operation intents.
 - [ ] `[should]` `DRW7-06` Teach stable phrases in context, such as "record an
   improvement" for feedback and "No, I meant ..." for understanding repair.
+- [ ] `[should]` `DRW7-10` Add conversational stories for role-dependent
+  operation availability, delegated Builder action, and localized entity
+  aliases.
 - [ ] `[could]` `DRW7-07` Add per-channel compact renderers for resource forms
   and action confirmations.
 
@@ -252,12 +327,21 @@ resource families.
   provider adapter.
 - [ ] `[must]` `DRW8-04` Add privacy/redaction checks for screenshots, logs,
   voice transcripts, DOM snapshots, local paths, and external exports.
+- [ ] `[must]` `DRW8-09` Add locale indexes for translated labels, aliases,
+  normalized text, original-language evidence, and canonical ref matching.
+- [ ] `[must]` `DRW8-10` Add indexed access metadata for row, field, artifact,
+  trace, external-export, and delegation decisions.
+- [ ] `[must]` `DRW8-11` Add audit queries for who saw, changed, exported,
+  verified, closed, or reopened a resource and under which policy digest.
 - [ ] `[should]` `DRW8-05` Add signed or tamper-evident event receipts for
   cross-node, support, and Builder acceptance contexts.
 - [ ] `[should]` `DRW8-06` Add import/migration tools for hand-written CRUD
   surfaces to resource declarations.
 - [ ] `[should]` `DRW8-07` Add performance budgets for paging, filtering,
   evidence preview, and event delivery under Media Center-like volume.
+- [ ] `[should]` `DRW8-12` Add quota and rate-limit traces for expensive
+  queries, artifact previews, LLM classification, and autonomous repair cost
+  estimation.
 - [ ] `[could]` `DRW8-08` Add analytics over operation latency, validation
   failure rate, unsupported filter rate, stale revision rate, and autonomous
   repair cost.
@@ -273,16 +357,20 @@ resource families.
 - [ ] `[deferred]` `DRW-D04` Full visual workflow studio generation waits until
   workflow-bound resources are validated in Research Workbench or another
   second complex domain.
+- [ ] `[deferred]` `DRW-D05` Fine-grained encrypted private-field storage waits
+  for the next Personalization/Identity/Access privacy milestone; the workbench
+  still records field sensitivity and visibility policy now.
 
 ## Recommended First Slice
 
 ```text
 Dev Ticket resource definition
+  -> i18n/access/privacy fields in the resource ABI
   -> unified query/list/show/action model
   -> resolved/verified/closed/reopen lifecycle
   -> artifact open/preview
-  -> Builder Resource Inspector
-  -> Demo Metrics synthetic workbench surface
+  -> Builder Resource Inspector with localization/access/readiness traces
+  -> Demo Metrics synthetic workbench surface with RU/EN and role fixtures
   -> Notebook note declaration behind a compatibility flag
 ```
 

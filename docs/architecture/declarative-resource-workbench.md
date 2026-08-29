@@ -86,6 +86,25 @@ Minimum conceptual shape:
     "source_of_truth": "workspace_inbox"
   },
   "record_schema_ref": "abi:dev_ticket.v1",
+  "i18n": {
+    "title_i18n": {"key": "resources.dev_ticket.title"},
+    "description_i18n": {"key": "resources.dev_ticket.description"},
+    "status_i18n_prefix": "resources.dev_ticket.status.",
+    "default_locale": "en",
+    "locales": ["en", "ru"]
+  },
+  "access": {
+    "read": {"required_capabilities": ["dev_ticket.read"]},
+    "fields": {
+      "summary": {"visibility": "workspace"},
+      "evidence_refs": {"visibility": "owner_or_builder", "sensitivity": "mixed"}
+    },
+    "operations": {
+      "resolve": {"required_capabilities": ["dev_ticket.resolve"]},
+      "verify": {"required_capabilities": ["dev_ticket.verify"]},
+      "close": {"required_capabilities": ["dev_ticket.close"]}
+    }
+  },
   "query": {
     "default": "open",
     "filters": ["status_group", "scenario_id", "skill_id", "surface_id", "severity", "blocking", "owner", "updated_since", "search"],
@@ -111,8 +130,8 @@ Minimum conceptual shape:
 
 The definition is the authoritative declarative header. It owns identity,
 version, scope, authority, operation contracts, query affordances, UI affordance
-hints, event expectations, privacy flags, and lifecycle links. Domain payloads
-may stay in existing skill stores or services.
+hints, localization, access policy, event expectations, privacy flags, and
+lifecycle links. Domain payloads may stay in existing skill stores or services.
 
 ### Resource Record
 
@@ -128,6 +147,8 @@ Minimum indexed fields:
 - title, summary, status, status group, severity, blocking flag;
 - created, updated, actor, assignee or owner hints;
 - version, digest, revision, and stale markers when relevant;
+- locale, language-neutral canonical labels, localized label refs, and original
+  text locale where relevant;
 - relation refs;
 - artifact and evidence refs;
 - search text and tags when policy permits.
@@ -148,9 +169,10 @@ Operation kinds:
 - `subscribe`, `refresh`, `rebuild_projection`.
 
 Every operation declares input schema, output schema, idempotency policy,
-authority, risk, privacy, optimistic revision behavior, expected events, and
-trace fields. The provider executes the operation; the workbench standardizes
-how it is rendered, invoked, observed, and validated.
+authority, required capabilities, risk, privacy, localization, optimistic
+revision behavior, expected events, and trace fields. The provider executes the
+operation; the workbench standardizes how it is rendered, invoked, observed,
+and validated.
 
 ### Resource Query
 
@@ -163,6 +185,8 @@ The query shape should support:
 - relation filters: related-to, duplicate-of, parent, child, depends-on,
   blocks, derived-from, produced-by;
 - text search over policy-approved indexed fields;
+- locale-aware search over localized labels and aliases while returning only
+  canonical refs for dispatch;
 - relevance ranking by current Builder task, open files, active scenario,
   current modal, current conversation, commit diff, and recent evidence;
 - time filters and sorting;
@@ -194,6 +218,187 @@ Common view kinds:
 
 The Web UI renderer decides the concrete toolkit. The definition decides which
 fields, operations, states, and constraints exist.
+
+## Localization, Naming, And Search
+
+Resource workbench surfaces must be locale-aware from the first ABI slice.
+AdaOS already has global and skill-owned i18n dictionaries, WebUI
+`label_i18n`, conversational locale packages, user profile language
+preferences, and named-entity labels/aliases. The workbench should compose
+those mechanisms rather than invent a parallel translation system.
+
+Resource definitions should include locale-independent message refs for:
+
+- resource title and description;
+- field labels, descriptions, placeholders, and help text;
+- operation labels, tooltips, confirmation text, and result messages;
+- status labels and status-group labels;
+- validation, empty, loading, unavailable, permission-denied, stale, degraded,
+  conflict, and rate-limit messages;
+- conversational examples and short channel-specific confirmations.
+
+Canonical resource ids, operation ids, field ids, status ids, capability ids,
+and relation ids remain language-neutral. Localized labels help people, NLU,
+search, and Builder explanation; they do not become routing identity.
+
+Locale selection should be deterministic:
+
+```text
+explicit request locale
+  -> conversation or channel locale
+  -> user profile preference
+  -> browser/client preference
+  -> workspace default
+  -> resource default locale
+  -> English or declared fallback
+```
+
+Original user text, voice transcripts, review comments, ticket summaries, and
+evidence captions retain their original locale. Translations are derived views
+with provenance; they must not replace the original evidence.
+
+Search should use policy-approved localized labels, aliases, normalized text,
+and named-entity indexes, then return canonical resource refs with matched
+locale evidence. This keeps "найди тикеты по медиацентру" and "show media
+center tickets" as equivalent user experiences while preserving stable
+dispatch identities.
+
+The named-entity layer remains authoritative for display names, observed names,
+aliases, localized labels, and canonical refs. Resource definitions may expose
+entity fields and query filters, but they must not create a second naming
+namespace.
+
+## Roles, Capabilities, And Access
+
+Role-based behavior must be modeled through the existing AdaOS access approach:
+roles are human-facing presets, while capabilities, constraints, approvals, and
+audit are the enforcement vocabulary.
+
+Resource definitions therefore declare access at several levels:
+
+- resource/query read capability;
+- row-level scope and ownership constraints;
+- field-level visibility and redaction policy;
+- artifact-level visibility, retention, and export policy;
+- operation-level required capabilities, risk, approval, and evidence gates;
+- delegation metadata for Builder, Codex, service skills, and channel agents.
+
+Examples of useful capability names:
+
+```text
+resources.query
+resources.inspect
+resources.trace.read
+resources.artifact.open
+dev_ticket.read
+dev_ticket.create
+dev_ticket.comment
+dev_ticket.claim
+dev_ticket.resolve
+dev_ticket.verify
+dev_ticket.close
+dev_ticket.reopen
+builder.repair.start
+```
+
+The exact capability vocabulary should be standardized by ABI and policy, but
+the model is fail-closed: a role preset can grant capabilities, a skill
+manifest can declare requested capabilities, and node policy can narrow grants;
+no UI declaration can grant authority by itself.
+
+The browser workbench may hide, disable, or explain unavailable operations, but
+provider/API enforcement is mandatory. A hidden button is not an access
+control. Permission denials are normal observable outcomes and should appear in
+resource traces with subject, actor, scope, operation, required capability,
+decision, reason, and policy digest.
+
+Actor and subject should remain distinct:
+
+- `subject_ref`: the user, service, or agent identity whose grant is checked;
+- `actor_ref`: the process or channel that submitted the operation;
+- `on_behalf_of_ref`: optional delegated user context for Builder/Codex/skill
+  automation;
+- `approval_ref`: Pending Action, runtime action grant, or review decision that
+  authorized a privileged operation.
+
+Unknown roles, unknown capabilities, stale memberships, revoked grants, and
+unverified delegation fail closed. Self-assigned role changes are rejected
+unless an owner/admin authority explicitly approved the transition.
+
+## Privacy, Sensitivity, And Retention
+
+Resource records and artifacts often contain mixed-sensitivity data. A Dev
+Ticket may have a harmless summary, a private screenshot, a local file path in
+a trace, a voice transcript, and a Builder run ref. Media Center may expose
+household media names. Research Workbench may expose unpublished evidence.
+
+Every resource definition should classify:
+
+- record fields as public, workspace, owner, actor-private, Builder-only,
+  secret-derived, or external-export-blocked;
+- artifacts by media type, source, sensitivity, retention, redaction, digest,
+  and preview policy;
+- trace fields by local-only, support-exportable, redacted, or aggregate-only;
+- conversational evidence by transcript/audio retention and consent policy;
+- external issue fields by safe-to-export, redact-first, or never-export.
+
+Retention and export policy must travel with artifact refs. GitHub Issues,
+support bundles, telemetry, and public examples must be derived from redacted
+views, not from raw resource payloads.
+
+## Accessibility And Preferences
+
+Declarative resource views are still product UI. They need an accessibility and
+preference contract so generated or workbench-rendered surfaces remain usable
+across desktop, mobile, voice, and assistive technology.
+
+Resource views should declare:
+
+- initial focus and focus return behavior;
+- keyboard navigation for lists, grids, action rails, forms, dialogs, and
+  artifact previews;
+- accessible labels and descriptions, preferably through the same i18n refs as
+  visible labels;
+- confirmation and error announcement behavior;
+- compact, comfortable, and dense display modes;
+- reduced motion, high contrast, text scale, timezone, date/time, and number
+  formatting behavior;
+- mobile/compact fallback for large grids, relation graphs, and trace panels.
+
+User preferences should be read as presentation inputs. They must not rewrite
+resource truth, lifecycle state, or access grants.
+
+## Degraded, Offline, And Stale Modes
+
+Resource queries and operations must report readiness precisely. A resource
+view can be useful even when the provider, route, subscription, or authority
+path is degraded.
+
+Minimum resource readiness states:
+
+- `ready`;
+- `loading`;
+- `refreshing`;
+- `stale`;
+- `read_only`;
+- `offline`;
+- `permission_denied`;
+- `provider_unavailable`;
+- `unsupported_query`;
+- `validation_error`;
+- `conflict`;
+- `rate_limited`;
+- `degraded`.
+
+Readiness is not one boolean. A list can show stale cached rows while mutating
+operations are disabled. A local hub may allow workspace-local Dev Ticket
+editing while external issue export is unavailable. A Builder prototype may run
+synthetic CRUD while live implementation bindings remain missing.
+
+Operation results should say whether work completed, was denied, was queued,
+requires approval, needs refreshed authority, or only changed a local
+projection. The trace must make degraded behavior inspectable by Builder and
+Codex.
 
 ### Resource Event
 
@@ -317,6 +522,10 @@ The first read-only Builder inspector should expose:
   superseded deliveries, and projection invalidations;
 - render trace: selected resource view, renderer, missing fields, component
   refs, validation errors, and degraded mode;
+- localization trace: requested locale, resolved locale, fallback chain, missing
+  message keys, and named-entity matches;
+- access trace: subject, actor, delegated context, role preset, required
+  capabilities, policy digest, decision, and denial reason;
 - evidence: screenshots, test refs, runtime guard refs, log refs, trace refs,
   and artifact preview status.
 
@@ -450,13 +659,22 @@ gives all of them a common resource route without merging their state machines.
 
 - Resource definitions are versioned and digest-addressable.
 - Resource operations are typed, validated, authorized, and observable.
+- Roles are presentation presets; capabilities, constraints, approvals, and
+  audit enforce access.
+- UI availability is not security. Providers and APIs fail closed.
+- Canonical refs and operation ids are language-neutral; localized labels,
+  aliases, and messages are views.
+- Original-language evidence is retained; translations are derived views.
 - Provider-specific behavior must be explicit in capabilities and traces.
 - Yjs and streams are projections/delivery, not the source of truth.
 - Screenshots, logs, audio, DOM snapshots, and traces are artifact refs with
   sensitivity and retention metadata.
+- Resource views respect accessibility and user preference contracts without
+  mutating domain truth.
+- Degraded, stale, read-only, permission-denied, and unsupported-query states
+  are explicit user-visible and trace-visible outcomes.
 - The UI can render a useful read-only view before mutating operations exist.
 - Builder can inspect why a resource view or operation behaved as it did.
 - Domain services keep domain logic; the workbench standardizes the control
   surface.
 - External issue trackers are optional projections with redaction and approval.
-
