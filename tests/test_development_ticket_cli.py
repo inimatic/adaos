@@ -83,6 +83,39 @@ def test_dev_ticket_cli_lifecycle(tmp_path: Path) -> None:
     assert resolved["ticket"]["status"] == "resolved"
     assert resolved["closure"]["resolved_by_version"] == "legacy_skill@1.0.1"
 
+    verified = _payload(
+        runner.invoke(
+            dev_cmd.ticket_app,
+            [
+                "verify",
+                ticket_id,
+                "--evidence",
+                "runtime_guard:receiver_contract_after_fix",
+                "--actor",
+                "validation:test",
+                *state_arg,
+                "--json",
+            ],
+        )
+    )
+    assert verified["ticket"]["status"] == "verified"
+
+    closed = _payload(
+        runner.invoke(
+            dev_cmd.ticket_app,
+            ["close", ticket_id, "--reason", "closed", "--actor", "validation:test", *state_arg, "--json"],
+        )
+    )
+    assert closed["ticket"]["status"] == "closed"
+
+    reopened = _payload(
+        runner.invoke(
+            dev_cmd.ticket_app,
+            ["reopen", ticket_id, "--reason", "runtime regression", "--actor", "codex:test", *state_arg, "--json"],
+        )
+    )
+    assert reopened["ticket"]["status"] == "in_progress"
+
 
 def test_dev_ticket_cli_dedups_and_defers(tmp_path: Path) -> None:
     runner = CliRunner()

@@ -44,8 +44,11 @@
         "deferred",
         "waiting_for_user",
         "ready_for_builder",
+        "claimed",
+        "in_progress",
         "in_builder",
         "resolved",
+        "verified",
         "closed",
         "superseded",
         "stale"

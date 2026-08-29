@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/resource.event.v1.schema.json",
+  "title": "AdaOS Resource Event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "event_id",
+    "resource_type",
+    "semantic_type",
+    "occurred_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.resource.event.v1" },
+    "event_id": { "type": "string", "minLength": 1 },
+    "resource_type": { "type": "string", "minLength": 1 },
+    "semantic_type": { "type": "string", "minLength": 1 },
+    "record_ref": { "type": "string" },
+    "operation_id": { "type": "string" },
+    "actor": { "type": "object", "additionalProperties": true },
+    "subject": { "type": "object", "additionalProperties": true },
+    "payload": { "type": "object", "additionalProperties": true },
+    "occurred_at": { "type": "string", "format": "date-time" }
+  }
+}

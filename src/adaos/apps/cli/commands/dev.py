@@ -57,12 +57,14 @@ mcp_app = typer.Typer(help="Root MCP bridge and Codex / VS Code integration util
 skill_app = typer.Typer(help="Manage owner skills in the local Forge workspace.")
 scenario_app = typer.Typer(help="Manage owner scenarios in the local Forge workspace.")
 ticket_app = typer.Typer(help="Manage local development tickets.")
+ticket_artifact_app = typer.Typer(help="Inspect Dev Ticket artifacts.")
 
 app.add_typer(root_app, name="root")
 root_app.add_typer(mcp_app, name="mcp")
 app.add_typer(skill_app, name="skill")
 app.add_typer(scenario_app, name="scenario")
 app.add_typer(ticket_app, name="ticket")
+ticket_app.add_typer(ticket_artifact_app, name="artifact")
 
 
 def _run_safe(func):
@@ -354,11 +356,47 @@ def dev_ticket_new(
 @_run_safe
 def dev_ticket_list(
     status: str = typer.Option("", "--status", help="filter by status"),
+    status_group: str = typer.Option("", "--status-group", help="filter by status group: open, triage, work, review, closed"),
     target_id: str = typer.Option("", "--target-id", help="filter by target id"),
+    target_ref: List[str] = typer.Option([], "--target-ref", help="filter by target ref, e.g. scenario:web_desktop"),
+    project_id: str = typer.Option("", "--project-id", help="filter by project id/ref"),
+    scenario_id: str = typer.Option("", "--scenario-id", help="filter by scenario id/ref"),
+    skill_id: str = typer.Option("", "--skill-id", help="filter by skill id/ref"),
+    modal_id: str = typer.Option("", "--modal-id", help="filter by modal id/ref"),
+    component: str = typer.Option("", "--component", help="filter by component id/ref"),
+    kind: str = typer.Option("", "--kind", help="filter by ticket kind"),
+    severity: str = typer.Option("", "--severity", help="filter by severity"),
+    blocking: Optional[bool] = typer.Option(None, "--blocking/--non-blocking", help="filter by blocking flag"),
+    source: str = typer.Option("", "--source", help="filter by source"),
+    owner: str = typer.Option("", "--owner", help="filter by owner/assignee token"),
+    updated_since: str = typer.Option("", "--updated-since", help="filter by ISO updated_at lower bound"),
+    search: str = typer.Option("", "--search", help="full-text search over indexed ticket fields"),
+    limit: Optional[int] = typer.Option(None, "--limit", min=0, max=1000, help="limit result count"),
     state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
     json_output: bool = typer.Option(False, "--json", help="machine readable output"),
 ) -> None:
-    tickets = _ticket_service(state_dir).list_tickets(status=status or None, target_id=target_id or None)
+    tokens = [
+        *target_ref,
+        project_id,
+        scenario_id,
+        skill_id,
+        modal_id,
+        component,
+    ]
+    tickets = _ticket_service(state_dir).list_tickets(
+        status=status or None,
+        status_group=status_group or None,
+        target_id=target_id or None,
+        target_tokens=[item for item in tokens if str(item or "").strip()],
+        kind=kind or None,
+        severity=severity or None,
+        blocking=blocking,
+        source=source or None,
+        owner=owner or None,
+        updated_since=updated_since or None,
+        search=search or None,
+        limit=limit,
+    )
     if json_output:
         typer.echo(json.dumps({"ok": True, "tickets": tickets}, ensure_ascii=False, indent=2))
         return
@@ -374,12 +412,66 @@ def dev_ticket_list(
 def dev_ticket_show(
     ticket_id: str = typer.Argument(..., help="ticket id"),
     state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
 ) -> None:
     ticket = _ticket_service(state_dir).get_ticket(ticket_id)
     if not ticket:
         typer.secho(f"ticket not found: {ticket_id}", fg=typer.colors.RED)
         raise typer.Exit(1)
     typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
+
+
+@ticket_app.command("claim")
+@_run_safe
+def dev_ticket_claim(
+    ticket_id: str = typer.Argument(..., help="ticket id"),
+    owner: str = typer.Option("", "--owner", help="owner/assignee token; defaults to actor"),
+    actor: str = typer.Option("cli", "--actor", help="actor id"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    ticket = _ticket_service(state_dir).claim_ticket(ticket_id, actor=actor, owner=owner or None)
+    if json_output:
+        typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
+        return
+    _print_ticket_summary(ticket)
+
+
+@ticket_app.command("start")
+@_run_safe
+def dev_ticket_start(
+    ticket_id: str = typer.Argument(..., help="ticket id"),
+    actor: str = typer.Option("cli", "--actor", help="actor id"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    ticket = _ticket_service(state_dir).start_ticket(ticket_id, actor=actor)
+    if json_output:
+        typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
+        return
+    _print_ticket_summary(ticket)
+
+
+@ticket_app.command("comment")
+@_run_safe
+def dev_ticket_comment(
+    ticket_id: str = typer.Argument(..., help="ticket id"),
+    body: str = typer.Argument(..., help="comment body"),
+    evidence: List[str] = typer.Option([], "--evidence", help="evidence ref, optionally type:id"),
+    actor: str = typer.Option("cli", "--actor", help="actor id"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    ticket = _ticket_service(state_dir).comment_ticket(
+        ticket_id,
+        body=body,
+        actor=actor,
+        evidence_refs=_ticket_evidence_refs(evidence),
+    )
+    if json_output:
+        typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
+        return
+    _print_ticket_summary(ticket)
 
 
 @ticket_app.command("defer")
@@ -450,6 +542,30 @@ def dev_ticket_resolve(
     _print_ticket_summary(result["ticket"])
 
 
+@ticket_app.command("verify")
+@_run_safe
+def dev_ticket_verify(
+    ticket_id: str = typer.Argument(..., help="ticket id"),
+    evidence: List[str] = typer.Option(..., "--evidence", help="required verification evidence ref, optionally type:id"),
+    repair_id: str = typer.Option("", "--repair-id", help="linked Builder repair id"),
+    notes: str = typer.Option("", "--notes", help="verification notes"),
+    actor: str = typer.Option("cli", "--actor", help="actor id"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    result = _ticket_service(state_dir).verify_ticket(
+        ticket_id,
+        evidence_refs=_ticket_evidence_refs(evidence),
+        actor=actor,
+        repair_id=repair_id or None,
+        notes=notes,
+    )
+    if json_output:
+        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    _print_ticket_summary(result["ticket"])
+
+
 @ticket_app.command("close")
 @_run_safe
 def dev_ticket_close(
@@ -470,6 +586,125 @@ def dev_ticket_close(
         typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
         return
     _print_ticket_summary(ticket)
+
+
+@ticket_app.command("reopen")
+@_run_safe
+def dev_ticket_reopen(
+    ticket_id: str = typer.Argument(..., help="ticket id"),
+    reason: str = typer.Option(..., "--reason", help="why this ticket must return to active work"),
+    evidence: List[str] = typer.Option([], "--evidence", help="evidence ref, optionally type:id"),
+    actor: str = typer.Option("cli", "--actor", help="actor id"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    ticket = _ticket_service(state_dir).reopen_ticket(
+        ticket_id,
+        actor=actor,
+        reason=reason,
+        evidence_refs=_ticket_evidence_refs(evidence),
+    )
+    if json_output:
+        typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
+        return
+    _print_ticket_summary(ticket)
+
+
+@ticket_app.command("related")
+@_run_safe
+def dev_ticket_related(
+    ticket_id: str = typer.Argument(..., help="ticket id"),
+    related_ticket_id: str = typer.Argument(..., help="related ticket id"),
+    relation: str = typer.Option("related", "--relation", help="relation kind"),
+    actor: str = typer.Option("cli", "--actor", help="actor id"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    ticket = _ticket_service(state_dir).relate_ticket(
+        ticket_id,
+        related_ticket_id=related_ticket_id,
+        relation=relation,
+        actor=actor,
+    )
+    if json_output:
+        typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
+        return
+    _print_ticket_summary(ticket)
+
+
+@ticket_app.command("duplicate")
+@_run_safe
+def dev_ticket_duplicate(
+    ticket_id: str = typer.Argument(..., help="ticket id"),
+    duplicate_of: str = typer.Argument(..., help="canonical ticket id"),
+    actor: str = typer.Option("cli", "--actor", help="actor id"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    ticket = _ticket_service(state_dir).duplicate_ticket(ticket_id, duplicate_of=duplicate_of, actor=actor)
+    if json_output:
+        typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
+        return
+    _print_ticket_summary(ticket)
+
+
+@ticket_artifact_app.command("list")
+@_run_safe
+def dev_ticket_artifact_list(
+    ticket_id: str = typer.Option("", "--ticket-id", help="filter artifacts by ticket id"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    artifacts = _ticket_service(state_dir).list_artifacts(ticket_id=ticket_id or None)
+    if json_output:
+        typer.echo(json.dumps({"ok": True, "artifacts": artifacts}, ensure_ascii=False, indent=2))
+        return
+    if not artifacts:
+        typer.echo("No Dev Ticket artifacts found.")
+        return
+    for artifact in artifacts:
+        typer.echo(
+            f"{artifact.get('artifact_id')} {artifact.get('kind')} "
+            f"{artifact.get('content_type')} {artifact.get('filename')}"
+        )
+
+
+@ticket_artifact_app.command("show")
+@_run_safe
+def dev_ticket_artifact_show(
+    artifact_id: str = typer.Argument(..., help="artifact id"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    artifact = _ticket_service(state_dir).get_artifact(artifact_id)
+    if not artifact:
+        typer.secho(f"artifact not found: {artifact_id}", fg=typer.colors.RED)
+        raise typer.Exit(1)
+    if json_output:
+        typer.echo(json.dumps({"ok": True, "artifact": artifact}, ensure_ascii=False, indent=2))
+        return
+    typer.echo(artifact.get("path") or artifact.get("manifest_path") or artifact_id)
+
+
+@ticket_artifact_app.command("open")
+@_run_safe
+def dev_ticket_artifact_open(
+    artifact_id: str = typer.Argument(..., help="artifact id"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    artifact = _ticket_service(state_dir).get_artifact(artifact_id)
+    if not artifact:
+        typer.secho(f"artifact not found: {artifact_id}", fg=typer.colors.RED)
+        raise typer.Exit(1)
+    path = str(artifact.get("path") or "").strip()
+    if json_output:
+        typer.echo(json.dumps({"ok": True, "artifact": artifact, "path": path}, ensure_ascii=False, indent=2))
+        return
+    if not path:
+        typer.secho(f"artifact content path is missing: {artifact_id}", fg=typer.colors.RED)
+        raise typer.Exit(1)
+    typer.launch(path)
 
 
 @root_app.command("init")

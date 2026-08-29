@@ -162,12 +162,45 @@ def test_ticket_resolution_requires_evidence_and_closes_linked_repair(tmp_path: 
 
     assert resolved["ticket"]["status"] == "resolved"
     assert resolved["ticket"]["closure"]["resolved_by_version"] == "legacy_skill@1.0.1"
+    assert resolved["ticket"]["status_group"] == "review"
     assert service.get_signal(report["signal"]["signal_id"])["status"] == "resolved_by_version"
 
     repair = next(item for item in repair_service.list() if item["repair_id"] == handoff["repair"]["repair_id"])
     assert repair["status"] == "resolved"
     assert repair["acceptance"]["capability_works"] is True
     assert repair["acceptance"]["regression_free"] is True
+
+    with pytest.raises(ValueError, match="verified status"):
+        service.close_ticket(
+            report["ticket"]["ticket_id"],
+            reason="closed",
+            actor="validation:test",
+        )
+
+    verified = service.verify_ticket(
+        report["ticket"]["ticket_id"],
+        evidence_refs=[{"type": "runtime_guard", "id": "receiver_contract_after_fix", "status": "passed"}],
+        actor="validation:test",
+    )
+    assert verified["ticket"]["status"] == "verified"
+    assert verified["ticket"]["verification"]["evidence_refs"][0]["status"] == "passed"
+
+    closed = service.close_ticket(
+        report["ticket"]["ticket_id"],
+        reason="closed",
+        actor="validation:test",
+    )
+    assert closed["status"] == "closed"
+
+    reopened = service.reopen_ticket(
+        report["ticket"]["ticket_id"],
+        actor="user:test",
+        reason="regression reproduced",
+        evidence_refs=[{"type": "trace", "id": "runtime.trace.2"}],
+    )
+    assert reopened["status"] == "in_progress"
+    assert reopened["status_group"] == "work"
+    assert reopened["history"][-1]["kind"] == "reopened"
 
 
 def test_postponed_ticket_does_not_create_builder_repair(tmp_path: Path) -> None:

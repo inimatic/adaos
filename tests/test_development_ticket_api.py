@@ -323,3 +323,42 @@ def test_development_ticket_api_handoff_and_resolution_require_evidence(tmp_path
     assert resolved.status_code == 200, resolved.text
     assert resolved.json()["ticket"]["status"] == "resolved"
     assert resolved.json()["closure"]["resolved_by_version"] == "legacy_skill@1.0.1"
+
+    close_too_early = client.post(
+        f"/api/development-tickets/{ticket_id}/close",
+        headers=_headers(),
+        json={"reason": "closed", "actor": "user:owner"},
+    )
+    assert close_too_early.status_code == 400
+    assert "verified status" in close_too_early.text
+
+    verified = client.post(
+        f"/api/development-tickets/{ticket_id}/verify",
+        headers=_headers(),
+        json={
+            "evidence_refs": [{"type": "runtime_guard", "id": "receiver_contract_after_fix", "status": "passed"}],
+            "actor": "validation:test",
+        },
+    )
+    assert verified.status_code == 200, verified.text
+    assert verified.json()["ticket"]["status"] == "verified"
+
+    closed = client.post(
+        f"/api/development-tickets/{ticket_id}/close",
+        headers=_headers(),
+        json={"reason": "closed", "actor": "user:owner"},
+    )
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["ticket"]["status"] == "closed"
+
+    reopened = client.post(
+        f"/api/development-tickets/{ticket_id}/reopen",
+        headers=_headers(),
+        json={
+            "reason": "smoke failed on runtime",
+            "actor": "user:owner",
+            "evidence_refs": [{"type": "trace", "id": "runtime.trace.after-close"}],
+        },
+    )
+    assert reopened.status_code == 200, reopened.text
+    assert reopened.json()["ticket"]["status"] == "in_progress"

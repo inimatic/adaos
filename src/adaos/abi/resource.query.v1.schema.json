@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/resource.query.v1.schema.json",
+  "title": "AdaOS Resource Query v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "resource_type"],
+  "properties": {
+    "schema": { "const": "adaos.resource.query.v1" },
+    "resource_type": { "type": "string", "minLength": 1 },
+    "filters": { "type": "object", "additionalProperties": true },
+    "relation_filters": { "type": "object", "additionalProperties": true },
+    "search": { "type": "string" },
+    "relevance_context": { "type": "object", "additionalProperties": true },
+    "sort": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          { "type": "string" },
+          { "type": "object", "additionalProperties": true }
+        ]
+      }
+    },
+    "cursor": { "type": ["string", "null"] },
+    "limit": { "type": "integer", "minimum": 0, "maximum": 1000 },
+    "include": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "locale": { "type": "string" },
+    "actor": { "type": "object", "additionalProperties": true },
+    "subject": { "type": "object", "additionalProperties": true }
+  }
+}

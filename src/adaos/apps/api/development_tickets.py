@@ -99,6 +99,41 @@ class DevTicketCloseRequest(BaseModel):
     evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class DevTicketClaimRequest(BaseModel):
+    actor: str = "ui"
+    owner: str | None = None
+
+
+class DevTicketCommentRequest(BaseModel):
+    body: str = Field(..., min_length=1)
+    actor: str = "ui"
+    evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class DevTicketVerifyRequest(BaseModel):
+    evidence_refs: list[dict[str, Any]] = Field(..., min_length=1)
+    actor: str = Field(default="ui", min_length=1)
+    repair_id: str | None = None
+    notes: str = ""
+
+
+class DevTicketReopenRequest(BaseModel):
+    reason: str = Field(..., min_length=1)
+    actor: str = "ui"
+    evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class DevTicketDuplicateRequest(BaseModel):
+    duplicate_of: str = Field(..., min_length=1)
+    actor: str = "ui"
+
+
+class DevTicketRelatedRequest(BaseModel):
+    related_ticket_id: str = Field(..., min_length=1)
+    relation: str = "related"
+    actor: str = "ui"
+
+
 TICKET_KIND_TO_SIGNAL_KIND = {
     "feedback": "feedback_note",
     "development_request": "development_request",
@@ -295,6 +330,17 @@ def _ticket_target_tokens(ticket: Mapping[str, Any]) -> set[str]:
     return tokens
 
 
+def _bool_query(value: str | None) -> bool | None:
+    token = _text(value).lower()
+    if not token:
+        return None
+    if token in {"1", "true", "yes", "y", "on"}:
+        return True
+    if token in {"0", "false", "no", "n", "off"}:
+        return False
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"invalid_bool:{value}")
+
+
 def _safe_artifact_id(value: str) -> str:
     token = _text(value)
     if not token or "/" in token or "\\" in token or ".." in token:
@@ -366,9 +412,21 @@ def _artifact_manifest_path(service: DevelopmentTicketService, artifact_id: str)
 def list_tickets(
     request: Request,
     status_filter: str | None = Query(default=None, alias="status"),
+    status_group: str | None = None,
     target_id: str | None = None,
     target_ref: str | None = None,
     kind: str | None = None,
+    scenario_id: str | None = None,
+    skill_id: str | None = None,
+    modal_id: str | None = None,
+    component: str | None = None,
+    severity: str | None = None,
+    blocking: str | None = None,
+    source: str | None = None,
+    owner: str | None = None,
+    updated_since: str | None = None,
+    search: str | None = None,
+    limit: int | None = Query(default=None, ge=0, le=1000),
     service: DevelopmentTicketService = Depends(_get_service),
 ) -> dict[str, Any]:
     target_tokens = _query_filter_tokens(request, "target_id", "target_ids")
@@ -384,10 +442,27 @@ def list_tickets(
     _append_filter_tokens(ref_tokens, target_ref, expand_ref_tail=False)
     kind_tokens = _query_filter_tokens(request, "kind", "kinds")
     _append_filter_tokens(kind_tokens, kind)
-    tickets = service.list_tickets(status=status_filter)
+    scoped_tokens = set()
+    for name in ("project_id", "project_ids", "scenario_id", "scenario_ids", "skill_id", "skill_ids", "modal_id", "modal_ids", "component", "components"):
+        scoped_tokens.update(_query_filter_tokens(request, name))
+    for value in (scenario_id, skill_id, modal_id, component):
+        _append_filter_tokens(scoped_tokens, value)
+    tickets = service.list_tickets(
+        status=status_filter,
+        status_group=status_group,
+        severity=severity,
+        blocking=_bool_query(blocking),
+        source=source,
+        owner=owner,
+        updated_since=updated_since,
+        search=search,
+        limit=limit,
+    )
     if target_tokens or ref_tokens:
         wanted = target_tokens | ref_tokens
         tickets = [ticket for ticket in tickets if _ticket_target_tokens(ticket) & wanted]
+    if scoped_tokens:
+        tickets = [ticket for ticket in tickets if _ticket_target_tokens(ticket) & scoped_tokens]
     if kind_tokens:
         tickets = [ticket for ticket in tickets if _text(ticket.get("kind")) in kind_tokens]
     return {"ok": True, "tickets": tickets, "items": tickets, "count": len(tickets)}
@@ -485,6 +560,32 @@ def upload_artifact(
     return {"ok": True, "artifact": ref, "artifact_ref": ref}
 
 
+@router.get("/artifacts")
+def list_artifacts(
+    ticket_id: str | None = None,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        artifacts = service.list_artifacts(ticket_id=ticket_id)
+    except KeyError as exc:
+        raise _not_found(str(exc).strip("'")) from exc
+    return {"ok": True, "artifacts": artifacts, "items": artifacts, "count": len(artifacts)}
+
+
+@router.get("/artifacts/{artifact_id}")
+def get_artifact(
+    artifact_id: str,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    artifact = service.get_artifact(artifact_id)
+    if not artifact:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"artifact_not_found:{artifact_id}",
+        )
+    return {"ok": True, "artifact": artifact}
+
+
 @router.get("/artifacts/{artifact_id}/content")
 def get_artifact_content(
     artifact_id: str,
@@ -574,6 +675,56 @@ def get_ticket_evidence(
         if signal
     ]
     return {"ok": True, "evidence": _evidence_view(ticket, signals)}
+
+
+@router.post("/{ticket_id}/claim")
+def claim_ticket(
+    ticket_id: str,
+    body: DevTicketClaimRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        ticket = service.claim_ticket(ticket_id, actor=body.actor, owner=body.owner)
+        return {"ok": True, "ticket": ticket, "detail": _ticket_detail(service, ticket)}
+    except KeyError as exc:
+        raise _not_found(ticket_id) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/{ticket_id}/start")
+def start_ticket(
+    ticket_id: str,
+    body: DevTicketClaimRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        ticket = service.start_ticket(ticket_id, actor=body.actor)
+        return {"ok": True, "ticket": ticket, "detail": _ticket_detail(service, ticket)}
+    except KeyError as exc:
+        raise _not_found(ticket_id) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/{ticket_id}/comment")
+def comment_ticket(
+    ticket_id: str,
+    body: DevTicketCommentRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        ticket = service.comment_ticket(
+            ticket_id,
+            body=body.body,
+            actor=body.actor,
+            evidence_refs=body.evidence_refs,
+        )
+        return {"ok": True, "ticket": ticket, "detail": _ticket_detail(service, ticket)}
+    except KeyError as exc:
+        raise _not_found(ticket_id) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.post("/{ticket_id}/respond")
@@ -672,5 +823,81 @@ def close_ticket(
         return {"ok": True, "ticket": ticket, "detail": _ticket_detail(service, ticket)}
     except KeyError as exc:
         raise _not_found(ticket_id) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/{ticket_id}/verify")
+def verify_ticket(
+    ticket_id: str,
+    body: DevTicketVerifyRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        result = service.verify_ticket(
+            ticket_id,
+            evidence_refs=body.evidence_refs,
+            actor=body.actor,
+            repair_id=body.repair_id,
+            notes=body.notes,
+        )
+        return {"ok": True, **result, "detail": _ticket_detail(service, result["ticket"])}
+    except KeyError as exc:
+        raise _not_found(ticket_id) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/{ticket_id}/reopen")
+def reopen_ticket(
+    ticket_id: str,
+    body: DevTicketReopenRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        ticket = service.reopen_ticket(
+            ticket_id,
+            actor=body.actor,
+            reason=body.reason,
+            evidence_refs=body.evidence_refs,
+        )
+        return {"ok": True, "ticket": ticket, "detail": _ticket_detail(service, ticket)}
+    except KeyError as exc:
+        raise _not_found(ticket_id) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/{ticket_id}/duplicate")
+def duplicate_ticket(
+    ticket_id: str,
+    body: DevTicketDuplicateRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        ticket = service.duplicate_ticket(ticket_id, duplicate_of=body.duplicate_of, actor=body.actor)
+        return {"ok": True, "ticket": ticket, "detail": _ticket_detail(service, ticket)}
+    except KeyError as exc:
+        raise _not_found(str(exc).strip("'")) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/{ticket_id}/related")
+def related_ticket(
+    ticket_id: str,
+    body: DevTicketRelatedRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        ticket = service.relate_ticket(
+            ticket_id,
+            related_ticket_id=body.related_ticket_id,
+            relation=body.relation,
+            actor=body.actor,
+        )
+        return {"ok": True, "ticket": ticket, "detail": _ticket_detail(service, ticket)}
+    except KeyError as exc:
+        raise _not_found(str(exc).strip("'")) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/resource.trace.v1.schema.json",
+  "title": "AdaOS Resource Trace v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "trace_id",
+    "resource_type",
+    "semantic_type",
+    "status",
+    "started_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.resource.trace.v1" },
+    "trace_id": { "type": "string", "minLength": 1 },
+    "resource_type": { "type": "string", "minLength": 1 },
+    "semantic_type": { "type": "string", "minLength": 1 },
+    "operation_id": { "type": "string" },
+    "query_id": { "type": "string" },
+    "status": {
+      "enum": [
+        "ready",
+        "completed",
+        "validation_error",
+        "permission_denied",
+        "unsupported_query",
+        "conflict",
+        "provider_unavailable",
+        "degraded",
+        "failed"
+      ]
+    },
+    "actor": { "type": "object", "additionalProperties": true },
+    "subject": { "type": "object", "additionalProperties": true },
+    "access_decision": { "type": "object", "additionalProperties": true },
+    "readiness": { "type": "object", "additionalProperties": true },
+    "request": { "type": "object", "additionalProperties": true },
+    "result": { "type": "object", "additionalProperties": true },
+    "started_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" }
+  }
+}

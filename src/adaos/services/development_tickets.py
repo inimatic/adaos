@@ -42,9 +42,22 @@ ACTIVE_TICKET_STATES = {
     "deferred",
     "waiting_for_user",
     "ready_for_builder",
+    "claimed",
+    "in_progress",
     "in_builder",
+    "resolved",
+    "verified",
 }
-TERMINAL_TICKET_STATES = {"resolved", "closed", "superseded", "stale"}
+TERMINAL_TICKET_STATES = {"closed", "superseded", "stale"}
+TICKET_STATUS_GROUPS = {
+    "open": ACTIVE_TICKET_STATES,
+    "active": ACTIVE_TICKET_STATES,
+    "triage": {"captured", "proposed", "accepted", "waiting_for_user", "ready_for_builder"},
+    "work": {"claimed", "in_progress", "in_builder"},
+    "review": {"resolved", "verified"},
+    "terminal": TERMINAL_TICKET_STATES,
+    "closed": TERMINAL_TICKET_STATES,
+}
 RECEIVER_COMPATIBILITY_REASONS = {
     "stream_receiver_policy_missing",
     "stream_receiver_not_declared",
@@ -100,6 +113,23 @@ def _project_id_from_target(target_scope: Mapping[str, Any]) -> str:
     target = _mapping(target_scope)
     token = _text(target.get("id") or target.get("name"))
     return token or _text(target.get("type")) or "unknown"
+
+
+def ticket_status_group(status: str) -> str:
+    token = _text(status)
+    if token in {"claimed", "in_progress", "in_builder"}:
+        return "work"
+    if token in {"resolved", "verified"}:
+        return "review"
+    if token in TERMINAL_TICKET_STATES:
+        return "closed"
+    return "triage"
+
+
+def _normalized_ticket(ticket: Mapping[str, Any]) -> dict[str, Any]:
+    out = dict(ticket)
+    out["status_group"] = ticket_status_group(_text(out.get("status")))
+    return _clone(out)
 
 
 def development_source_options(target_scope: Mapping[str, Any]) -> dict[str, Any]:
@@ -163,6 +193,95 @@ def _event_payload(evt: Any) -> dict[str, Any]:
     if isinstance(evt, Mapping):
         return dict(evt)
     return {}
+
+
+def _collect_scope_tokens(tokens: set[str], value: Any) -> None:
+    if value is None:
+        return
+    if isinstance(value, Mapping):
+        scope_type = _text(value.get("type") or value.get("kind"))
+        scope_id = _text(value.get("id") or value.get("name"))
+        if scope_id:
+            tokens.add(scope_id)
+            if scope_type:
+                tokens.add(f"{scope_type}:{scope_id}")
+        for key in (
+            "ref",
+            "canonical_ref",
+            "target_ref",
+            "project_ref",
+            "scenario_ref",
+            "skill_ref",
+            "modal_ref",
+            "component_ref",
+            "project_id",
+            "scenario_id",
+            "skill_id",
+            "modal_id",
+            "component_id",
+            "surface",
+        ):
+            _collect_scope_tokens(tokens, value.get(key))
+        for key in (
+            "component_refs",
+            "components",
+            "target_refs",
+            "affected_refs",
+            "scope_refs",
+            "related_refs",
+        ):
+            _collect_scope_tokens(tokens, value.get(key))
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            _collect_scope_tokens(tokens, item)
+        return
+    token = _text(value)
+    if not token or token == ":" or "$" in token:
+        return
+    tokens.add(token)
+    if ":" in token:
+        tail = token.rsplit(":", 1)[-1].strip()
+        if tail:
+            tokens.add(tail)
+
+
+def _ticket_scope_tokens(ticket: Mapping[str, Any]) -> set[str]:
+    tokens: set[str] = set()
+    _collect_scope_tokens(tokens, ticket.get("target_scope"))
+    _collect_scope_tokens(tokens, _mapping(ticket.get("metadata")).get("invocation_context"))
+    return tokens
+
+
+def _ticket_owner_tokens(ticket: Mapping[str, Any]) -> set[str]:
+    tokens: set[str] = set()
+    _collect_scope_tokens(tokens, ticket.get("owner_scope"))
+    metadata = _mapping(ticket.get("metadata"))
+    _collect_scope_tokens(tokens, metadata.get("claimed_by"))
+    return tokens
+
+
+def _ticket_search_text(ticket: Mapping[str, Any]) -> str:
+    chunks = [
+        _text(ticket.get("ticket_id")),
+        _text(ticket.get("kind")),
+        _text(ticket.get("status")),
+        _text(ticket.get("summary")),
+        _text(ticket.get("source")),
+        json.dumps(ticket.get("target_scope") or {}, ensure_ascii=False, sort_keys=True, default=str),
+        json.dumps(ticket.get("metadata") or {}, ensure_ascii=False, sort_keys=True, default=str),
+    ]
+    return "\n".join(chunks).lower()
+
+
+def _artifact_id_from_ref(ref: Mapping[str, Any]) -> str:
+    direct = _text(ref.get("artifact_id"))
+    if direct:
+        return direct
+    uri = _text(ref.get("uri"))
+    if uri.startswith("dev-ticket-artifact:"):
+        return uri.split(":", 1)[1].strip()
+    return ""
 
 
 @dataclass(slots=True)
@@ -308,7 +427,7 @@ class DevelopmentTicketService:
                     )
                     self._validate_ticket(ticket)
                     self._write(state)
-                    return {"ok": True, "duplicate": True, "ticket": _clone(ticket)}
+                    return {"ok": True, "duplicate": True, "ticket": _normalized_ticket(ticket)}
             now = _now()
             ticket_id = f"dticket.{new_id()}"
             ticket = {
@@ -339,7 +458,7 @@ class DevelopmentTicketService:
             self._validate_ticket(ticket)
             state["tickets"][ticket_id] = ticket
             self._write(state)
-            return {"ok": True, "duplicate": False, "ticket": _clone(ticket)}
+            return {"ok": True, "duplicate": False, "ticket": _normalized_ticket(ticket)}
 
     def report_compatibility_finding(
         self,
@@ -669,7 +788,7 @@ class DevelopmentTicketService:
                 raise ValueError("terminal Dev Ticket cannot be edited")
             previous = _text(ticket.get("summary"))
             if previous == text:
-                return _clone(ticket)
+                return _normalized_ticket(ticket)
             now = _now()
             ticket["summary"] = text
             ticket["updated_at"] = now
@@ -685,7 +804,92 @@ class DevelopmentTicketService:
             )
             self._validate_ticket(ticket)
             self._write(state)
-            return _clone(ticket)
+            return _normalized_ticket(ticket)
+
+    def claim_ticket(
+        self,
+        ticket_id: str,
+        *,
+        actor: str,
+        owner: str | None = None,
+    ) -> dict[str, Any]:
+        actor_token = _text(actor) or "system"
+        owner_token = _text(owner) or actor_token
+        return self._update_ticket(
+            ticket_id,
+            status="claimed",
+            metadata={
+                **_mapping((self.get_ticket(ticket_id) or {}).get("metadata")),
+                "claimed_by": owner_token,
+            },
+            history_item={
+                "kind": "claimed",
+                "actor": actor_token,
+                "owner": owner_token,
+            },
+        )
+
+    def start_ticket(
+        self,
+        ticket_id: str,
+        *,
+        actor: str,
+    ) -> dict[str, Any]:
+        return self._update_ticket(
+            ticket_id,
+            status="in_progress",
+            history_item={
+                "kind": "in_progress",
+                "actor": _text(actor) or "system",
+            },
+        )
+
+    def comment_ticket(
+        self,
+        ticket_id: str,
+        *,
+        body: str,
+        actor: str,
+        evidence_refs: Sequence[Mapping[str, Any]] = (),
+    ) -> dict[str, Any]:
+        text = _text(body)
+        if not text:
+            raise ValueError("ticket comment is required")
+        actor_token = _text(actor) or "system"
+        refs = _sequence_of_mappings(evidence_refs)
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                raise KeyError(ticket_id)
+            if _text(ticket.get("status")) in TERMINAL_TICKET_STATES:
+                raise ValueError("terminal Dev Ticket cannot be commented")
+            now = _now()
+            comment = {
+                "id": f"dcomment.{new_id()}",
+                "body": text,
+                "actor": actor_token,
+                "evidence_refs": refs,
+                "created_at": now,
+            }
+            comments = [dict(item) for item in ticket.get("comments") or [] if isinstance(item, Mapping)]
+            comments.append(comment)
+            ticket["comments"] = comments[-100:]
+            if refs:
+                ticket["evidence_refs"] = _merge_refs(ticket.get("evidence_refs") or [], refs)
+            ticket["updated_at"] = now
+            self._append_history(
+                ticket,
+                {
+                    "kind": "commented",
+                    "comment_id": comment["id"],
+                    "actor": actor_token,
+                    "recorded_at": now,
+                },
+            )
+            self._validate_ticket(ticket)
+            self._write(state)
+            return _normalized_ticket(ticket)
 
     def record_resolution(
         self,
@@ -756,7 +960,188 @@ class DevelopmentTicketService:
                 self._validate_signal(signal)
             self._validate_ticket(stored)
             self._write(state)
-            return {"ok": True, "ticket": _clone(stored), "closure": _clone(closure)}
+            return {"ok": True, "ticket": _normalized_ticket(stored), "closure": _clone(closure)}
+
+    def verify_ticket(
+        self,
+        ticket_id: str,
+        *,
+        evidence_refs: Sequence[Mapping[str, Any]],
+        actor: str,
+        repair_id: str | None = None,
+        notes: str = "",
+    ) -> dict[str, Any]:
+        refs = _sequence_of_mappings(evidence_refs)
+        if not refs:
+            raise ValueError("ticket verification requires evidence_refs")
+        actor_token = _text(actor)
+        if not actor_token:
+            raise ValueError("ticket verification requires actor")
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                raise KeyError(ticket_id)
+            if _text(ticket.get("status")) != "resolved":
+                raise ValueError("ticket verification requires resolved status")
+            now = _now()
+            verification = {
+                "kind": "verified",
+                "actor": actor_token,
+                "evidence_refs": refs,
+                "repair_id": _text(repair_id) or self._latest_repair_id(ticket) or None,
+                "notes": _text(notes) or None,
+                "recorded_at": now,
+            }
+            ticket["status"] = "verified"
+            ticket["verification"] = verification
+            ticket["evidence_refs"] = _merge_refs(ticket.get("evidence_refs") or [], refs)
+            ticket["updated_at"] = now
+            self._append_history(ticket, {"kind": "verified", "actor": actor_token, "recorded_at": now})
+            for signal_id in ticket.get("signal_ids") or []:
+                signal = state["signals"].get(signal_id)
+                if signal:
+                    signal["evidence_refs"] = _merge_refs(signal.get("evidence_refs") or [], refs)
+                    signal["updated_at"] = now
+                    self._validate_signal(signal)
+            self._validate_ticket(ticket)
+            self._write(state)
+            return {"ok": True, "ticket": _normalized_ticket(ticket), "verification": _clone(verification)}
+
+    def reopen_ticket(
+        self,
+        ticket_id: str,
+        *,
+        actor: str,
+        reason: str,
+        evidence_refs: Sequence[Mapping[str, Any]] = (),
+    ) -> dict[str, Any]:
+        reason_token = _text(reason)
+        if not reason_token:
+            raise ValueError("ticket reopen requires reason")
+        actor_token = _text(actor) or "system"
+        refs = _sequence_of_mappings(evidence_refs)
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                raise KeyError(ticket_id)
+            previous_status = _text(ticket.get("status"))
+            now = _now()
+            ticket["status"] = "in_progress" if ticket.get("builder_refs") else "accepted"
+            ticket["reopened_at"] = now
+            if refs:
+                ticket["evidence_refs"] = _merge_refs(ticket.get("evidence_refs") or [], refs)
+            ticket["updated_at"] = now
+            self._append_history(
+                ticket,
+                {
+                    "kind": "reopened",
+                    "actor": actor_token,
+                    "reason": reason_token,
+                    "previous_status": previous_status or None,
+                    "recorded_at": now,
+                },
+            )
+            for signal_id in ticket.get("signal_ids") or []:
+                signal = state["signals"].get(signal_id)
+                if signal:
+                    signal["status"] = "in_progress"
+                    if refs:
+                        signal["evidence_refs"] = _merge_refs(signal.get("evidence_refs") or [], refs)
+                    signal["updated_at"] = now
+                    self._validate_signal(signal)
+            self._validate_ticket(ticket)
+            self._write(state)
+            return _normalized_ticket(ticket)
+
+    def relate_ticket(
+        self,
+        ticket_id: str,
+        *,
+        related_ticket_id: str,
+        relation: str = "related",
+        actor: str,
+    ) -> dict[str, Any]:
+        related = _text(related_ticket_id)
+        if not related:
+            raise ValueError("related_ticket_id is required")
+        relation_token = _text(relation) or "related"
+        actor_token = _text(actor) or "system"
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                raise KeyError(ticket_id)
+            if related not in state["tickets"]:
+                raise KeyError(related)
+            ref = {"type": "dev_ticket", "ticket_id": related, "relation": relation_token}
+            ticket["related_refs"] = _merge_refs(ticket.get("related_refs") or [], [ref])
+            ticket["updated_at"] = _now()
+            self._append_history(
+                ticket,
+                {
+                    "kind": "related",
+                    "actor": actor_token,
+                    "related_ticket_id": related,
+                    "relation": relation_token,
+                    "recorded_at": ticket["updated_at"],
+                },
+            )
+            self._validate_ticket(ticket)
+            self._write(state)
+            return _normalized_ticket(ticket)
+
+    def duplicate_ticket(
+        self,
+        ticket_id: str,
+        *,
+        duplicate_of: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        duplicate_target = _text(duplicate_of)
+        if not duplicate_target:
+            raise ValueError("duplicate_of is required")
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            if duplicate_target not in state["tickets"]:
+                raise KeyError(duplicate_target)
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                raise KeyError(ticket_id)
+            ticket["related_refs"] = _merge_refs(
+                ticket.get("related_refs") or [],
+                [{"type": "dev_ticket", "ticket_id": duplicate_target, "relation": "duplicate_of"}],
+            )
+            now = _now()
+            ticket["status"] = "superseded"
+            ticket["closure"] = {
+                "kind": "closed",
+                "reason": "duplicate",
+                "actor": _text(actor) or "system",
+                "duplicate_of": duplicate_target,
+                "evidence_refs": [],
+                "recorded_at": now,
+            }
+            ticket["updated_at"] = now
+            self._append_history(
+                ticket,
+                {
+                    "kind": "duplicated",
+                    "actor": _text(actor) or "system",
+                    "duplicate_of": duplicate_target,
+                    "recorded_at": now,
+                },
+            )
+            for signal_id in ticket.get("signal_ids") or []:
+                signal = state["signals"].get(signal_id)
+                if signal:
+                    signal["status"] = "superseded"
+                    signal["updated_at"] = now
+                    self._validate_signal(signal)
+            self._validate_ticket(ticket)
+            self._write(state)
+            return _normalized_ticket(ticket)
 
     def get_signal(self, signal_id: str) -> dict[str, Any] | None:
         signal = self._read()["signals"].get(_text(signal_id))
@@ -764,12 +1149,38 @@ class DevelopmentTicketService:
 
     def get_ticket(self, ticket_id: str) -> dict[str, Any] | None:
         ticket = self._read()["tickets"].get(_text(ticket_id))
-        return _clone(ticket) if ticket else None
+        return _normalized_ticket(ticket) if ticket else None
 
-    def list_tickets(self, *, status: str | None = None, target_id: str | None = None) -> list[dict[str, Any]]:
+    def list_tickets(
+        self,
+        *,
+        status: str | None = None,
+        status_group: str | None = None,
+        target_id: str | None = None,
+        target_tokens: Sequence[str] = (),
+        kind: str | None = None,
+        scenario_id: str | None = None,
+        skill_id: str | None = None,
+        modal_id: str | None = None,
+        component: str | None = None,
+        severity: str | None = None,
+        blocking: bool | None = None,
+        source: str | None = None,
+        owner: str | None = None,
+        updated_since: str | None = None,
+        search: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
         tickets = list(self._read()["tickets"].values())
         if status:
-            tickets = [item for item in tickets if item.get("status") == status]
+            allowed = {_text(part) for part in _text(status).split(",") if _text(part)}
+            tickets = [item for item in tickets if _text(item.get("status")) in allowed]
+        group = _text(status_group)
+        if group:
+            allowed = set()
+            for part in group.split(","):
+                allowed.update(TICKET_STATUS_GROUPS.get(_text(part), {_text(part)}))
+            tickets = [item for item in tickets if _text(item.get("status")) in allowed]
         if target_id:
             token = _text(target_id)
             tickets = [
@@ -777,7 +1188,86 @@ class DevelopmentTicketService:
                 for item in tickets
                 if _text(_mapping(item.get("target_scope")).get("id")) == token
             ]
-        return [_clone(item) for item in sorted(tickets, key=lambda item: item.get("created_at") or "")]
+        tokens = {_text(item) for item in target_tokens if _text(item)}
+        scoped_tokens = [_text(scenario_id), _text(skill_id), _text(modal_id), _text(component)]
+        tokens.update(item for item in scoped_tokens if item)
+        if tokens:
+            tickets = [item for item in tickets if _ticket_scope_tokens(item) & tokens]
+        kind_token = _text(kind)
+        if kind_token:
+            allowed = {_text(part) for part in kind_token.split(",") if _text(part)}
+            tickets = [item for item in tickets if _text(item.get("kind")) in allowed]
+        severity_token = _text(severity)
+        if severity_token:
+            allowed = {_text(part) for part in severity_token.split(",") if _text(part)}
+            tickets = [item for item in tickets if _text(item.get("severity")) in allowed]
+        if blocking is not None:
+            tickets = [item for item in tickets if bool(item.get("blocking")) is bool(blocking)]
+        source_token = _text(source)
+        if source_token:
+            allowed = {_text(part) for part in source_token.split(",") if _text(part)}
+            tickets = [item for item in tickets if _text(item.get("source")) in allowed]
+        owner_token = _text(owner)
+        if owner_token:
+            tickets = [item for item in tickets if owner_token in _ticket_owner_tokens(item)]
+        since_token = _text(updated_since)
+        if since_token:
+            tickets = [item for item in tickets if _text(item.get("updated_at") or item.get("created_at")) >= since_token]
+        search_token = _text(search).lower()
+        if search_token:
+            tickets = [item for item in tickets if search_token in _ticket_search_text(item)]
+        sorted_tickets = sorted(tickets, key=lambda item: item.get("updated_at") or item.get("created_at") or "")
+        if limit is not None and int(limit) >= 0:
+            sorted_tickets = sorted_tickets[-int(limit):]
+        return [_normalized_ticket(item) for item in sorted_tickets]
+
+    def list_artifacts(self, ticket_id: str | None = None) -> list[dict[str, Any]]:
+        root = self.root / "artifacts"
+        if not root.is_dir():
+            return []
+        wanted: set[str] = set()
+        if _text(ticket_id):
+            ticket = self.get_ticket(_text(ticket_id))
+            if not ticket:
+                raise KeyError(_text(ticket_id))
+            for ref in [
+                *_sequence_of_mappings(ticket.get("artifact_refs") or []),
+                *_sequence_of_mappings(ticket.get("evidence_refs") or []),
+            ]:
+                artifact_id = _artifact_id_from_ref(ref)
+                if artifact_id:
+                    wanted.add(artifact_id)
+        items: list[dict[str, Any]] = []
+        for path in root.glob("*.json"):
+            try:
+                manifest = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            artifact_id = _text(manifest.get("artifact_id") or path.stem)
+            if wanted and artifact_id not in wanted:
+                continue
+            items.append({**manifest, "manifest_path": str(path)})
+        return sorted(items, key=lambda item: _text(item.get("artifact_id")))
+
+    def get_artifact(self, artifact_id: str) -> dict[str, Any] | None:
+        token = _text(artifact_id)
+        if not token or "/" in token or "\\" in token or ".." in token:
+            return None
+        manifest_path = self.root / "artifacts" / f"{token}.json"
+        if not manifest_path.is_file():
+            return None
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        file_name = _text(manifest.get("file_name"))
+        file_path = self.root / "artifacts" / file_name if file_name else None
+        return {
+            **manifest,
+            "manifest_path": str(manifest_path),
+            "path": str(file_path) if file_path else None,
+            "exists": bool(file_path and file_path.is_file()),
+        }
 
     def _create_builder_repair(
         self,
@@ -864,7 +1354,7 @@ class DevelopmentTicketService:
                     self._validate_signal(signal)
             self._validate_ticket(ticket)
             self._write(state)
-            return _clone(ticket)
+            return _normalized_ticket(ticket)
 
     def _update_ticket(self, ticket_id: str, *, history_item: Mapping[str, Any] | None = None, **patch: Any) -> dict[str, Any]:
         with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
@@ -879,7 +1369,7 @@ class DevelopmentTicketService:
                 self._append_history(ticket, {**dict(history_item), "recorded_at": ticket["updated_at"]})
             self._validate_ticket(ticket)
             self._write(state)
-            return _clone(ticket)
+            return _normalized_ticket(ticket)
 
     def _append_ticket_history(self, ticket_id: str, item: Mapping[str, Any]) -> dict[str, Any]:
         with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
@@ -891,7 +1381,7 @@ class DevelopmentTicketService:
             self._append_history(ticket, {**dict(item), "recorded_at": ticket["updated_at"]})
             self._validate_ticket(ticket)
             self._write(state)
-            return _clone(ticket)
+            return _normalized_ticket(ticket)
 
     def _close_ticket(
         self,
@@ -902,6 +1392,7 @@ class DevelopmentTicketService:
         evidence_refs: Sequence[Mapping[str, Any]] = (),
     ) -> dict[str, Any]:
         reason_token = _text(reason) or "closed"
+        normal_close = reason_token in {"closed", "closed_from_client", "done", "verified"}
         ticket_status = {
             "duplicate": "superseded",
             "superseded": "superseded",
@@ -914,12 +1405,14 @@ class DevelopmentTicketService:
             "stale": "stale",
             "not-design-time-fixable": "not_design_time_fixable",
             "not_design_time_fixable": "not_design_time_fixable",
-        }.get(reason_token, "superseded")
+        }.get(reason_token)
         with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
             state = self._read()
             ticket = state["tickets"].get(_text(ticket_id))
             if not ticket:
                 raise KeyError(ticket_id)
+            if normal_close and _text(ticket.get("status")) != "verified":
+                raise ValueError("normal Dev Ticket closure requires verified status")
             now = _now()
             ticket["status"] = ticket_status
             ticket["closure"] = {
@@ -934,12 +1427,13 @@ class DevelopmentTicketService:
             for signal_id in ticket.get("signal_ids") or []:
                 signal = state["signals"].get(signal_id)
                 if signal:
-                    signal["status"] = signal_status
+                    if signal_status:
+                        signal["status"] = signal_status
                     signal["updated_at"] = now
                     self._validate_signal(signal)
             self._validate_ticket(ticket)
             self._write(state)
-            return _clone(ticket)
+            return _normalized_ticket(ticket)
 
     @staticmethod
     def _latest_repair_id(ticket: Mapping[str, Any]) -> str:

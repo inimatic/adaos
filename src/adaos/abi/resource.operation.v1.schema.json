@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/resource.operation.v1.schema.json",
+  "title": "AdaOS Resource Operation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "resource_type", "operation_id"],
+  "properties": {
+    "schema": { "const": "adaos.resource.operation.v1" },
+    "resource_type": { "type": "string", "minLength": 1 },
+    "operation_id": { "type": "string", "minLength": 1 },
+    "record_id": { "type": "string" },
+    "payload": { "type": "object", "additionalProperties": true },
+    "actor": { "type": "object", "additionalProperties": true },
+    "subject": { "type": "object", "additionalProperties": true },
+    "delegation": { "type": "object", "additionalProperties": true },
+    "idempotency_key": { "type": "string" },
+    "expected_revision": {
+      "oneOf": [
+        { "type": "integer" },
+        { "type": "string" },
+        { "type": "null" }
+      ]
+    },
+    "evidence_refs": { "type": "array", "items": { "type": "object" } },
+    "locale": { "type": "string" },
+    "context": { "type": "object", "additionalProperties": true }
+  }
+}
