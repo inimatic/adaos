@@ -876,6 +876,7 @@ class ResourceWorkbenchService:
                 now = _now()
                 note.update(
                     {
+                        "metric_id": _text(payload.get("metric_id") if "metric_id" in payload else note.get("metric_id")) or "cpu",
                         "title": title,
                         "body": _text(payload.get("body") if "body" in payload else note.get("body")),
                         "revision": int(note.get("revision") or 1) + 1,
