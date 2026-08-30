@@ -97,6 +97,7 @@
         "kind": {
           "type": "string",
           "enum": [
+            "action_bar",
             "collection_grid",
             "collection_tree",
             "metric_chart",

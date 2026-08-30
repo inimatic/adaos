@@ -878,8 +878,9 @@ Current pre-stand milestone:
 
 ### 3. Web UI Priority Slice
 
-- [x] implement the first four semantic view kinds:
-  `collection_grid`, `metric_chart`, `event_log`, `chat_panel`
+- [x] implement the first semantic view kinds:
+  `action_bar`, `collection_grid`, `metric_chart`, `event_log`,
+  `chat_panel`
 - [ ] implement the first typed action kinds:
   `emit`, `open_modal`, `set_view_state`, `call_host`,
   `invoke_skill_action`
