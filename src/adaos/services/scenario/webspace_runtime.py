@@ -8005,7 +8005,11 @@ def _startup_materialization_scenario(row: Any) -> tuple[str, str]:
     return scenario_id, source_mode if source_mode in {"workspace", "dev"} else "workspace"
 
 
-def _startup_materialization_allowed(row: Any) -> tuple[bool, str, str]:
+def _startup_materialization_allowed(
+    row: Any,
+    *,
+    default_webspace: bool = False,
+) -> tuple[bool, str, str]:
     mode = _startup_materialization_hydration_mode()
     scenario_id, source_mode = _startup_materialization_scenario(row)
     if mode == "all":
@@ -8014,6 +8018,8 @@ def _startup_materialization_allowed(row: Any) -> tuple[bool, str, str]:
         return False, scenario_id, "disabled"
     if not scenario_id:
         return False, scenario_id, "scenario_unknown"
+    if default_webspace:
+        return True, scenario_id, "default_webspace"
     try:
         manifest = scenarios_loader.read_manifest(scenario_id, space=source_mode)
     except Exception:
@@ -8044,6 +8050,7 @@ async def hydrate_webspace_materialization_statuses() -> dict[str, Any]:
         allowed, scenario_id, admission_reason = await asyncio.to_thread(
             _startup_materialization_allowed,
             row,
+            default_webspace=webspace_id == default_id,
         )
         if not allowed:
             materialization = _pending_materialization_snapshot(

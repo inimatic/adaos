@@ -4484,6 +4484,50 @@ def test_startup_materialization_defers_scenarios_without_opt_in(monkeypatch) ->
     assert result["failed_total"] == 0
 
 
+def test_startup_materialization_always_hydrates_default_webspace(monkeypatch) -> None:
+    rebuilds: list[str] = []
+    manifest_reads: list[str] = []
+    monkeypatch.delenv("ADAOS_WEBSPACE_STARTUP_HYDRATION_MODE", raising=False)
+    monkeypatch.setattr(webspace_runtime_module, "default_webspace_id", lambda: "desktop")
+    monkeypatch.setattr(
+        webspace_runtime_module.workspace_index,
+        "list_workspaces",
+        lambda: [
+            SimpleNamespace(workspace_id="desktop", home_scenario="web_desktop"),
+            SimpleNamespace(workspace_id="preview", home_scenario="preview_scene"),
+        ],
+    )
+
+    def _read_manifest(scenario_id: str, **_kwargs) -> dict[str, object]:
+        manifest_reads.append(scenario_id)
+        return {"runtime": {"activation": {"startup_allowed": False}}}
+
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "read_manifest",
+        _read_manifest,
+    )
+
+    async def _fake_rebuild(webspace_id: str, **_kwargs) -> dict[str, object]:
+        rebuilds.append(webspace_id)
+        return {
+            "ok": True,
+            "accepted": True,
+            "scenario_id": "web_desktop",
+            "error": None,
+            "materialization": {"ready": True},
+        }
+
+    monkeypatch.setattr(webspace_runtime_module, "rebuild_webspace_from_sources", _fake_rebuild)
+
+    result = asyncio.run(webspace_runtime_module.hydrate_webspace_materialization_statuses())
+
+    assert rebuilds == ["desktop"]
+    assert manifest_reads == ["preview_scene"]
+    assert result["ready_total"] == 1
+    assert result["deferred_total"] == 1
+
+
 def test_startup_materialization_uses_isolated_payload_without_live_mutation(monkeypatch) -> None:
     materialize_calls: list[dict[str, object]] = []
     direct_rebuild_calls: list[str] = []
