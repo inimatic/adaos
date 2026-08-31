@@ -119,6 +119,224 @@ def _latest_ticket_repair_id(ticket: Mapping[str, Any]) -> str:
     return ""
 
 
+def _ticket_mapping_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, Mapping)]
+
+
+def _ticket_owner_area(ticket: Mapping[str, Any], target: Mapping[str, Any]) -> str:
+    explicit = str(ticket.get("owner_area") or target.get("owner_area") or "").strip().lower()
+    if explicit:
+        return explicit
+    target_type = str(target.get("type") or "").strip().lower()
+    if target_type in {"core", "api", "sdk", "runtime", "builder", "project", "skill", "scenario", "nlu"}:
+        return target_type
+    if target_type in {"modal", "component", "webui", "ui"}:
+        return "project"
+    if str(target.get("project_ref") or target.get("project_id") or "").strip():
+        return "project"
+    if str(target.get("skill_ref") or target.get("skill_id") or "").strip():
+        return "skill"
+    if str(target.get("scenario_ref") or target.get("scenario_id") or "").strip():
+        return "scenario"
+    return "workspace"
+
+
+def _ticket_component_ref(ticket: Mapping[str, Any], target: Mapping[str, Any]) -> str:
+    for source in (ticket, target):
+        for key in (
+            "component_ref",
+            "ref",
+            "canonical_ref",
+            "target_ref",
+            "modal_ref",
+            "skill_ref",
+            "scenario_ref",
+            "project_ref",
+            "core_ref",
+            "sdk_ref",
+            "api_ref",
+        ):
+            value = str(source.get(key) or "").strip()
+            if value:
+                return value
+    target_type = str(target.get("type") or "").strip()
+    target_id = str(target.get("id") or target.get("name") or "").strip()
+    return f"{target_type}:{target_id}" if target_type and target_id else ""
+
+
+def _ticket_relation_refs(ticket: Mapping[str, Any]) -> list[dict[str, Any]]:
+    refs = _ticket_mapping_list(ticket.get("relation_refs"))
+    legacy = _ticket_mapping_list(ticket.get("related_refs"))
+    if not legacy:
+        return refs
+    seen = {json.dumps(item, ensure_ascii=False, sort_keys=True, default=str) for item in refs}
+    for item in legacy:
+        relation = str(item.get("relation") or item.get("type") or "related").strip().lower() or "related"
+        ticket_id = str(item.get("ticket_id") or item.get("id") or "").strip()
+        normalized = {
+            **item,
+            "type": relation,
+            "relation": relation,
+            "target_ref": str(item.get("target_ref") or (f"dticket:{ticket_id}" if ticket_id else "")).strip(),
+        }
+        if ticket_id:
+            normalized["ticket_id"] = ticket_id
+        key = json.dumps(normalized, ensure_ascii=False, sort_keys=True, default=str)
+        if key not in seen:
+            refs.append(normalized)
+            seen.add(key)
+    return refs
+
+
+def _builder_ticket_qualification(
+    ticket: Mapping[str, Any],
+    *,
+    target: Mapping[str, Any],
+    development_source: Mapping[str, Any],
+) -> dict[str, Any]:
+    owner_area = _ticket_owner_area(ticket, target)
+    component_ref = _ticket_component_ref(ticket, target)
+    kind = str(ticket.get("kind") or "").strip().lower()
+    status = str(ticket.get("status") or "").strip().lower()
+    source_status = str(development_source.get("status") or "").strip().lower()
+    relations = _ticket_relation_refs(ticket)
+    blocked_by = [item for item in relations if str(item.get("relation") or item.get("type") or "").strip().lower() == "blocked_by"]
+    target_id = str(target.get("id") or target.get("name") or "").strip()
+    guardrails = [
+        "builder_uses_public_sdk_api_only",
+        "project_repair_must_not_modify_core",
+        "ticket_resolution_requires_validation_evidence",
+    ]
+    if status == "waiting_for_core" or blocked_by:
+        return {
+            "schema": "adaos.builder.ticket_qualification.v1",
+            "class": "needs_core",
+            "confidence": "high",
+            "repair_allowed": False,
+            "autonomous_allowed": False,
+            "recommended_next": "wait_for_linked_core_ticket_or_rescope",
+            "reason": "ticket is blocked by a core/API/SDK capability ticket",
+            "owner_area": owner_area,
+            "component_ref": component_ref or None,
+            "blocked_by": blocked_by,
+            "guardrails": guardrails,
+        }
+    if owner_area in {"core", "api", "runtime"} or component_ref.startswith(("core:", "api:", "runtime:")):
+        return {
+            "schema": "adaos.builder.ticket_qualification.v1",
+            "class": "needs_core",
+            "confidence": "high",
+            "repair_allowed": False,
+            "autonomous_allowed": False,
+            "recommended_next": "create_or_update_core_capability_request",
+            "reason": "ticket is owned by core/runtime/API rather than the project repair surface",
+            "owner_area": owner_area,
+            "component_ref": component_ref or None,
+            "guardrails": guardrails,
+        }
+    if owner_area == "sdk" or kind == "sdk_understanding" or component_ref.startswith("sdk:"):
+        return {
+            "schema": "adaos.builder.ticket_qualification.v1",
+            "class": "uncertain_sdk",
+            "confidence": "high",
+            "repair_allowed": False,
+            "autonomous_allowed": False,
+            "recommended_next": "record_sdk_understanding_or_link_core_request",
+            "reason": "ticket describes SDK/API contract understanding rather than a direct project patch",
+            "owner_area": owner_area,
+            "component_ref": component_ref or None,
+            "guardrails": guardrails,
+        }
+    if not target_id:
+        return {
+            "schema": "adaos.builder.ticket_qualification.v1",
+            "class": "needs_user_clarification",
+            "confidence": "medium",
+            "repair_allowed": False,
+            "autonomous_allowed": False,
+            "recommended_next": "ask_user_for_target_artifact",
+            "reason": "ticket target is missing a stable artifact id",
+            "owner_area": owner_area,
+            "component_ref": component_ref or None,
+            "guardrails": guardrails,
+        }
+    if source_status == "needs_materialization":
+        return {
+            "schema": "adaos.builder.ticket_qualification.v1",
+            "class": "needs_source",
+            "confidence": "high",
+            "repair_allowed": True,
+            "autonomous_allowed": False,
+            "recommended_next": "choose_materialize_fork_overlay_or_defer",
+            "reason": "target source is not yet available in the development workspace",
+            "owner_area": owner_area,
+            "component_ref": component_ref or None,
+            "guardrails": guardrails,
+        }
+    return {
+        "schema": "adaos.builder.ticket_qualification.v1",
+        "class": "project_solvable",
+        "confidence": "medium",
+        "repair_allowed": True,
+        "autonomous_allowed": True,
+        "recommended_next": "plan_builder_repair_with_validation_evidence",
+        "reason": "ticket targets a project-owned artifact with development source available",
+        "owner_area": owner_area,
+        "component_ref": component_ref or None,
+        "guardrails": guardrails,
+    }
+
+
+def _builder_ticket_batch(service: Any, ticket: Mapping[str, Any], *, target: Mapping[str, Any], limit: int = 20) -> dict[str, Any]:
+    owner_area = _ticket_owner_area(ticket, target)
+    component_ref = _ticket_component_ref(ticket, target)
+    ticket_id = str(ticket.get("ticket_id") or "").strip()
+    query_kwargs: dict[str, Any] = {
+        "status_group": "triage,waiting,work,review",
+        "limit": max(1, min(int(limit or 20), 50)),
+    }
+    if owner_area and owner_area != "workspace":
+        query_kwargs["owner_area"] = owner_area
+    if component_ref:
+        query_kwargs["component_ref"] = component_ref
+    else:
+        target_id = str(target.get("id") or target.get("name") or "").strip()
+        if target_id:
+            query_kwargs["target_id"] = target_id
+    try:
+        candidates = service.list_tickets(**query_kwargs)
+    except Exception:
+        candidates = []
+    related: list[dict[str, Any]] = []
+    for item in candidates:
+        candidate_id = str(item.get("ticket_id") or "").strip()
+        if not candidate_id:
+            continue
+        related.append(
+            {
+                "ticket_id": candidate_id,
+                "current": candidate_id == ticket_id,
+                "status": item.get("status"),
+                "status_group": item.get("status_group"),
+                "kind": item.get("kind"),
+                "summary": item.get("summary"),
+                "owner_area": item.get("owner_area"),
+                "component_ref": item.get("component_ref"),
+                "updated_at": item.get("updated_at"),
+            }
+        )
+    return {
+        "schema": "adaos.builder.ticket_repair_batch.v1",
+        "strategy": "component_family" if component_ref else "target_artifact",
+        "owner_area": owner_area,
+        "component_ref": component_ref or None,
+        "count": len(related),
+        "tickets": related,
+    }
+
+
 def _project_selection(
     object_type: Any,
     object_id: Any,
@@ -830,7 +1048,8 @@ class BuilderWorkbenchService:
         ticket_token = str(ticket_id or "").strip()
         if not ticket_token:
             raise ValueError("ticket_id is required")
-        ticket = DevelopmentTicketService(state_dir=self.state_dir).get_ticket(ticket_token)
+        ticket_service = DevelopmentTicketService(state_dir=self.state_dir)
+        ticket = ticket_service.get_ticket(ticket_token)
         if not ticket:
             raise ValueError(f"development ticket not found: {ticket_token}")
         target = ticket.get("target_scope") if isinstance(ticket.get("target_scope"), Mapping) else {}
@@ -846,18 +1065,34 @@ class BuilderWorkbenchService:
             description=f"Development ticket {ticket_token}",
             persist_projection=False,
         )
+        development_source = development_source_options(target)
+        relation_refs = _ticket_relation_refs(ticket)
+        qualification = _builder_ticket_qualification(
+            ticket,
+            target=target,
+            development_source=development_source,
+        )
         context = {
             "schema": "adaos.builder.development_ticket_context.v1",
             "ticket_id": ticket_token,
             "kind": ticket.get("kind"),
             "status": ticket.get("status"),
+            "status_group": ticket.get("status_group"),
             "summary": ticket.get("summary"),
+            "owner_area": _ticket_owner_area(ticket, target),
+            "component_ref": _ticket_component_ref(ticket, target) or None,
             "target_scope": dict(target),
-            "development_source": development_source_options(target),
+            "development_source": development_source,
+            "qualification": qualification,
+            "repair_batch": _builder_ticket_batch(ticket_service, ticket, target=target),
+            "relation_refs": relation_refs,
+            "comments": _ticket_mapping_list(ticket.get("comments")),
             "builder_refs": list(ticket.get("builder_refs") or []),
             "latest_repair_id": _latest_ticket_repair_id(ticket) or None,
             "evidence_refs": list(ticket.get("evidence_refs") or []),
+            "artifact_refs": list(ticket.get("artifact_refs") or []),
             "policy": dict(ticket.get("policy") or {}),
+            "metadata": dict(ticket.get("metadata") or {}),
         }
         return self.set_development_ticket_context(
             source_webspace_id=binding.get("source_webspace_id") or source_webspace_id,

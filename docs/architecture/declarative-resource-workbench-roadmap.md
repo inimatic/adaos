@@ -2,7 +2,7 @@
 
 Status: proposed domain roadmap.
 
-Last reviewed: 2026-08-30.
+Last reviewed: 2026-08-31.
 
 This roadmap sequences the work needed to make the
 [Declarative Resource Workbench](declarative-resource-workbench.md) a reusable
@@ -85,26 +85,26 @@ Exit proof: a person and Codex can query, inspect, claim, comment, resolve,
 verify, close, and reopen the same ticket through CLI/API/UI/Builder context,
 with evidence and trace visible.
 
-- [ ] `[must]` `DRW1-01` Publish a resource definition for
+- [x] `[must]` `DRW1-01` Publish a resource definition for
   `adaos.dev.ticket` that wraps the existing ticket API and CLI lifecycle.
-- [ ] `[must]` `DRW1-02` Normalize open-status grouping across
+- [x] `[must]` `DRW1-02` Normalize open-status grouping across
   `captured`, `proposed`, `accepted`, `deferred`, `waiting_for_user`,
   `ready_for_builder`, `in_builder`, `claimed`, `in_progress`, `resolved`, and
   tickets returned to active work by `reopen`.
-- [ ] `[must]` `DRW1-03` Add lifecycle operations `claim`, `comment`,
+- [x] `[must]` `DRW1-03` Add lifecycle operations `claim`, `comment`,
   `resolve`, `verify`, `close`, `reopen`, `duplicate`, and `related`.
-- [ ] `[must]` `DRW1-04` Keep `resolve` evidence-gated but non-terminal;
+- [x] `[must]` `DRW1-04` Keep `resolve` evidence-gated but non-terminal;
   require verification evidence before `verified`, and only then permit normal
   closure.
 - [ ] `[must]` `DRW1-05` Add artifact commands such as `artifact list`,
   `artifact open`, and evidence preview through the same resource operation
   model.
-- [ ] `[must]` `DRW1-06` Add scenario, skill, modal, component, severity,
+- [x] `[must]` `DRW1-06` Add scenario, skill, modal, component, severity,
   blocking, source, owner, and updated-time filters.
-- [ ] `[must]` `DRW1-11` Extend `adaos.dev_ticket.v1` for the target lifecycle:
+- [x] `[must]` `DRW1-11` Extend `adaos.dev_ticket.v1` for the target lifecycle:
   `claimed`, `in_progress`, `verified`, non-terminal `resolved`, and `reopen`
   lifecycle events or operation history.
-- [ ] `[must]` `DRW1-12` Add field and artifact access policy for ticket
+- [x] `[must]` `DRW1-12` Add field and artifact access policy for ticket
   summary, original input, screenshots, logs, traces, local paths, Builder refs,
   NLU refs, and external issue exports.
 - [ ] `[must]` `DRW1-13` Preserve original ticket/report locale and expose
@@ -122,6 +122,16 @@ with evidence and trace visible.
 - [ ] `[could]` `DRW1-10` Prepare redacted external issue drafts, but keep
   GitHub Issues optional and non-authoritative.
 
+Implementation note, 2026-08-31: `adaos.dev.ticket` now has a first resource
+definition over the Development Ticket service. It declares governed lifecycle
+operations, owner/component and scope filters, stage grouping, evidence and
+artifact views, i18n fields, access policy, Builder handoff operations, core
+capability requests, and SDK-understanding signals. The production gap is no
+longer the core lifecycle contract; it is uniform agent ergonomics:
+artifact-open commands, subscriptions, relevance ranking, SDK/MCP helper
+surface, access-decision traces on every operation, and a Resource Workbench
+renderer that can replace the custom client panel.
+
 ## DRW2. Demo Metrics Harness
 
 Goal: Demo Metrics demonstrates the workbench renderer, synthetic resources,
@@ -130,29 +140,37 @@ events, and traces without touching production skills.
 Exit proof: the Demo Metrics scenario shows a resource list/detail/form/action
 surface, synthetic CRUD, validation errors, event log, and trace inspector.
 
-- [ ] `[must]` `DRW2-01` Add `demo.metric` resource definition over the existing
+- [x] `[must]` `DRW2-01` Add `demo.metric` resource definition over the existing
   Demo Metrics snapshot data.
-- [ ] `[must]` `DRW2-02` Add `demo.metric_note` with synthetic create, update,
+- [x] `[must]` `DRW2-02` Add `demo.metric_note` with synthetic create, update,
   delete, validation error, and optimistic revision conflict cases.
-- [ ] `[must]` `DRW2-03` Add `demo.metric_event` stream projection over
+- [x] `[must]` `DRW2-03` Add `demo.metric_event` stream projection over
   `demo_metrics.events`.
-- [ ] `[must]` `DRW2-04` Add a workbench demo surface that renders from resource
+- [x] `[must]` `DRW2-04` Add a workbench demo surface that renders from resource
   definitions rather than a custom hand-written grid.
-- [ ] `[must]` `DRW2-05` Add fixture states for empty, normal, validation
+- [x] `[must]` `DRW2-05` Add fixture states for empty, normal, validation
   failure, unavailable provider, long text, and RU/EN labels.
-- [ ] `[must]` `DRW2-09` Add owner/admin/member/guest role fixtures that prove
+- [x] `[must]` `DRW2-09` Add owner/admin/member/guest role fixtures that prove
   hidden, disabled, allowed, and denied operation states.
-- [ ] `[must]` `DRW2-10` Add i18n fixture coverage for fields, operations,
+- [x] `[must]` `DRW2-10` Add i18n fixture coverage for fields, operations,
   statuses, validation messages, empty states, and permission denials.
 - [ ] `[should]` `DRW2-06` Add visual regression and browser E2E tests for the
   demo workbench surface.
-- [ ] `[should]` `DRW2-07` Show query, operation, event, and render traces in a
+- [x] `[should]` `DRW2-07` Show query, operation, event, and render traces in a
   read-only inspector.
 - [ ] `[should]` `DRW2-11` Add accessibility fixture checks for keyboard
   navigation, focus return, announcement text, compact layout, long labels, and
   high-contrast rendering.
 - [ ] `[could]` `DRW2-08` Add a compact/mobile renderer profile after desktop
   behavior is stable.
+
+Implementation note, 2026-08-31: Demo Metrics now exposes a Resource Workbench
+modal with resource definitions, live `demo.metric_note` create/update/delete,
+validation and revision-conflict behavior, role fixtures, RU/EN labels,
+readiness fixtures, role matrix, and trace tables. The visible form exposes
+Create, Update selected, and Delete selected so CRUD semantics can be tested
+without custom code paths. Browser E2E, visual regression, mobile profile, and
+accessibility fixture checks remain open.
 
 ## DRW3. Builder Observability
 

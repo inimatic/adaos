@@ -849,27 +849,38 @@ Implemented first slice, 2026-08-20:
   Builder, autonomous repair, and refuse;
 - Builder repair task handoff with Dev Ticket and Development Signal source
   refs;
-- resolution only through explicit validation evidence refs;
+- stable `owner_area` and `component_ref` classification for project, skill,
+  scenario, modal/component, Builder, SDK/API, and core tickets;
+- ticket relationships for core blockers, related tickets, duplicate tickets,
+  and caused-by links;
+- evidence-gated `resolve`, non-terminal `resolved`, evidence-gated
+  `verify`, verified-only normal `close`, and `reopen`;
 - `adaos dev ticket` CLI for Codex and developer workflows;
 - client Dev Ticket list/detail/actions, screenshot evidence preview, and
-  stage/component filters.
+  stage/component filters;
+- client invocation-scoped filtering from scenario header, modal/panel, and
+  Builder context, plus summary edit and ticket comments;
+- Builder workbench ticket selection with source options, deterministic intake
+  qualification, active related-ticket batch context, and core-blocker guard;
+- Core Dev Ticket creation for `core_capability_request` and SDK
+  Understanding Signal creation for ambiguous or failed SDK/API use.
 
 Remaining target pieces include:
 
 - artifact-local signal projection;
 - declarative Resource Workbench rendering for Dev Tickets instead of only the
   custom client surface;
-- stronger context filtering from modal/panel invocation and Builder project
-  context;
 - Feedback Skill UI/voice intake with screenshot capture;
 - conversational disambiguation before feedback/Teacher/Builder routing;
 - NLU Teacher and Feedback Signal refs in both directions;
-- Builder intake qualification, batch grouping, source strategy, comment, and
-  agent-grade ticket workflow;
-- SDK Understanding Signals for ambiguous definitions, application failures,
-  observability gaps, example gaps, policy boundaries, and rejected repairs;
-- Core Dev Tickets with `blocked_by` links from project tickets, core lifecycle
-  events, and capability-available fanout to affected Builders and users;
+- full agent-grade ticket workflow: artifact-open commands, relevance ranking,
+  subscriptions, SDK/MCP helper surface, access-decision traces, duplicate and
+  related UI, autonomous cost estimates, delayed completion notifications, and
+  batch repair execution;
+- SDK Understanding Signal routing to docs/examples, evals, SDK/API work, and
+  core capability requests;
+- Core Dev Ticket lifecycle events and capability-available fanout to affected
+  Builders, subnets, Pending Actions, and users;
 - broader compatibility producers for validation, route pressure, projection
   rule misses, and invalid data-route contracts;
 - optional redacted GitHub issue draft/link/export integration;

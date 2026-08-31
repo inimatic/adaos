@@ -45,6 +45,7 @@ _HUB_LOCAL_TOOL_PREFIXES: tuple[str, ...] = (
     "browsers_skill:",
     "infra_access_skill:",
     "infrastate_skill:",
+    "slideshow_skill:",
 )
 _HUB_LOCAL_TOOL_NAMES: tuple[str, ...] = (
     "prompt_engineer_skill:prompt_select_project",

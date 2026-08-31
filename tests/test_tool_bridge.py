@@ -2228,6 +2228,7 @@ def test_call_tool_proxies_to_explicit_target_node_on_hub(monkeypatch) -> None:
         "browsers_skill:rename_link",
         "infra_access_skill:get_snapshot",
         "infrastate_skill:get_snapshot",
+        "slideshow_skill:get_slideshow_folders",
     ],
 )
 def test_call_tool_keeps_hub_projection_tools_local_on_hub(monkeypatch, tool_name: str) -> None:

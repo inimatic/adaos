@@ -711,6 +711,68 @@ def test_builder_workbench_open_selects_development_ticket_context(tmp_path: Pat
     assert binding["development_ticket"]["ticket_id"] == ticket["ticket_id"]
     assert binding["development_ticket"]["development_source"]["status"] == "needs_materialization"
     assert "materialize_dev_source" in binding["development_ticket"]["development_source"]["options"]
+    assert binding["development_ticket"]["owner_area"] == "skill"
+    assert binding["development_ticket"]["component_ref"] == "skill:legacy_skill"
+    assert binding["development_ticket"]["qualification"]["class"] == "needs_source"
+    assert binding["development_ticket"]["qualification"]["repair_allowed"] is True
+    assert binding["development_ticket"]["repair_batch"]["count"] == 1
+    assert binding["development_ticket"]["repair_batch"]["tickets"][0]["ticket_id"] == ticket["ticket_id"]
+
+
+def test_builder_workbench_qualifies_core_blocked_development_ticket(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    service = BuilderWorkbenchService(state_dir=state_dir)
+    tickets = DevelopmentTicketService(state_dir=state_dir)
+    signal = tickets.capture_signal(
+        kind="development_request",
+        summary="Modal repair needs a stable focus handoff API",
+        target_scope={
+            "type": "modal",
+            "id": "nlu_teacher_modal",
+            "source": "workspace",
+            "component_ref": "modal:nlu_teacher_modal",
+            "scenario_ref": "scenario:web_desktop",
+        },
+        owner_area="project",
+        component_ref="modal:nlu_teacher_modal",
+        evidence_refs=[{"type": "trace", "id": "modal.focus"}],
+    )["signal"]
+    project_ticket = tickets.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="accepted",
+        owner_area="project",
+        component_ref="modal:nlu_teacher_modal",
+    )["ticket"]
+    core = tickets.create_core_capability_request(
+        summary="Expose focus handoff for layered Dev Ticket panels",
+        component_ref="core:client",
+        desired_contract="A public client/modal focus handoff API.",
+        actor="builder:test",
+        impact="blocker",
+        blocked_ticket_ids=[project_ticket["ticket_id"]],
+        evidence_refs=[{"type": "trace", "id": "modal.focus"}],
+    )["ticket"]
+    app = FastAPI()
+    app.include_router(builder_api.router, prefix="/api/builder")
+    app.dependency_overrides[require_token] = lambda: None
+    app.dependency_overrides[builder_api._get_workbench_service] = lambda: service
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/builder/workbench/open",
+        params={"webspace_id": "desktop", "ticket_id": project_ticket["ticket_id"]},
+    )
+
+    assert response.status_code == 200
+    context = response.json()["binding"]["development_ticket"]
+    assert context["ticket_id"] == project_ticket["ticket_id"]
+    assert context["owner_area"] == "project"
+    assert context["component_ref"] == "modal:nlu_teacher_modal"
+    assert context["qualification"]["class"] == "needs_core"
+    assert context["qualification"]["repair_allowed"] is False
+    assert context["qualification"]["blocked_by"][0]["ticket_id"] == core["ticket_id"]
+    assert context["repair_batch"]["tickets"][0]["ticket_id"] == project_ticket["ticket_id"]
 
 
 def test_get_workspace_binding_migrates_runtime_dialog_topic(tmp_path: Path) -> None:
