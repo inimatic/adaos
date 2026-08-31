@@ -16,3 +16,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "AdaOSAndroidNode"
 include ":app"
+include ":diag32"
+include ":diag32py"

@@ -1,0 +1,39 @@
+plugins {
+    id "com.android.application"
+    id "com.chaquo.python"
+}
+
+android {
+    namespace = "dev.adaos.androidnodepydiag"
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = "dev.adaos.androidnodepydiag"
+        minSdk = 26
+        targetSdk = 36
+        versionCode = 1
+        versionName = "0.1.0-python-abi-probe"
+
+        ndk {
+            abiFilters.add("armeabi-v7a")
+        }
+    }
+
+    buildFeatures {
+        buildConfig = true
+    }
+}
+
+chaquopy {
+    defaultConfig {
+        version = "3.11"
+        if (System.getProperty("os.name").toLowerCase().contains("windows")) {
+            buildPython("py", "-3.11")
+        } else {
+            buildPython("python3.11")
+        }
+        pyc {
+            src = false
+        }
+    }
+}

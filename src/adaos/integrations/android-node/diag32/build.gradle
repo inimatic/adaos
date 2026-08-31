@@ -1,0 +1,20 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace = "dev.adaos.androidnodediag"
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = "dev.adaos.androidnodediag"
+        minSdk = 26
+        targetSdk = 36
+        versionCode = 1
+        versionName = "0.1.0-abi-probe"
+    }
+
+    buildFeatures {
+        buildConfig = true
+    }
+}
