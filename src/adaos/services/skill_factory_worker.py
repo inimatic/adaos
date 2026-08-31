@@ -2293,7 +2293,11 @@ class LocalSkillFactoryWorker:
 
         changed_paths = self._changed_from_baseline(previous_workspace)
         if not changed_paths:
-            raise ValueError("continuation candidate has no source changes")
+            # A live token guard can stop Codex during source discovery, before
+            # the first edit. There is no candidate to preserve in that case;
+            # continue with the newly submitted bounded turn instead of
+            # converting a recoverable budget stop into another failed task.
+            return None
         self._validate_changed_paths(
             assignment,
             changed_paths,

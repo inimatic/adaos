@@ -3690,6 +3690,80 @@ def test_worker_restores_budget_stopped_candidate_for_validation(
     assert json.loads(current_file.read_text(encoding="utf-8"))["value"] == "candidate"
 
 
+def test_worker_ignores_budget_stopped_continuation_without_source_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    source_task_id = "task.discovery-only"
+    source_run = worker.runs_root / source_task_id
+    previous_workspace = source_run / "workspace"
+    previous_file = previous_workspace / "skills" / "demo" / "webui.json"
+    previous_file.parent.mkdir(parents=True)
+    previous_file.write_text('{"value":"baseline"}', encoding="utf-8")
+    worker._init_git_workspace(previous_workspace, "realize/source")
+    previous_assignment = {
+        "task_id": source_task_id,
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {
+            "sparse_paths": ["skills/demo/"],
+            "source_snapshot": {"digest": "sha256:same"},
+        },
+    }
+    (source_run / "input").mkdir(parents=True)
+    (source_run / "input" / "assignment.json").write_text(
+        json.dumps(previous_assignment),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        SkillFactoryService,
+        "read_task",
+        lambda _self, task_id: {
+            "task_id": task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.discovery-only",
+                    "message": "Codex token budget exceeded: observed 10 of 5 model tokens.",
+                }
+            ],
+        },
+    )
+    workspace = tmp_path / "current"
+    current_file = workspace / "skills" / "demo" / "webui.json"
+    current_file.parent.mkdir(parents=True)
+    current_file.write_text('{"value":"baseline"}', encoding="utf-8")
+    worker._init_git_workspace(workspace, "realize/current")
+    assignment = {
+        "task_id": "task.current",
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {
+            "sparse_paths": ["skills/demo/"],
+            "source_snapshot": {"digest": "sha256:same"},
+        },
+        "realize_request": {
+            "artifacts": {
+                "continuation_checkpoint": {
+                    "mode": "validate_preserved_candidate",
+                    "source_task_id": source_task_id,
+                    "failure_id": "failure.discovery-only",
+                }
+            }
+        },
+    }
+
+    restored = worker._restore_continuation_candidate(assignment, workspace)
+
+    assert restored is None
+    assert json.loads(current_file.read_text(encoding="utf-8"))["value"] == "baseline"
+
+
 def test_codex_executor_discovers_vscode_bundled_cli(
     monkeypatch, tmp_path: Path
 ) -> None:
