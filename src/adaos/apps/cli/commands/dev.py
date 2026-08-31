@@ -1152,6 +1152,27 @@ def _coalesce_zone(cfg: Any, *, zone: str | None) -> str | None:
     return None
 
 
+def _managed_target_via_native_mcp(
+    client: RootMcpClient,
+    target_id: str,
+) -> dict[str, Any] | None:
+    """Discover targets on roots that predate the management REST routes."""
+
+    try:
+        response = client.call("list_managed_targets")
+    except Exception:
+        return None
+    envelope = response.get("response") if isinstance(response, Mapping) else {}
+    result = envelope.get("result") if isinstance(envelope, Mapping) else {}
+    targets = result.get("targets") if isinstance(result, Mapping) else []
+    for item in targets or []:
+        if not isinstance(item, Mapping):
+            continue
+        if str(item.get("target_id") or "").strip() == str(target_id or "").strip():
+            return {"target": dict(item)}
+    return None
+
+
 @mcp_app.command("prepare-codex")
 @_run_safe
 def prepare_codex(
@@ -1180,7 +1201,8 @@ def prepare_codex(
     try:
         target_payload = client.get_managed_target(effective_target_id)
     except Exception:
-        if ensure_target:
+        target_payload = _managed_target_via_native_mcp(client, effective_target_id)
+        if target_payload is None and ensure_target:
             minimal_target = {
                 "target_id": effective_target_id,
                 "title": f"Hub {inferred_subnet_id or effective_target_id}",
@@ -1198,7 +1220,7 @@ def prepare_codex(
                 "meta": {"registry_source": "codex_prepare"},
             }
             target_payload = client.upsert_managed_target(minimal_target)
-        else:
+        elif target_payload is None:
             raise RootServiceError(f"Managed target '{effective_target_id}' is not registered on root.")
 
     target_block = dict(target_payload.get("target") or {}) if isinstance(target_payload, dict) else {}

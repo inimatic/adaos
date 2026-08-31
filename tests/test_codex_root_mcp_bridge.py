@@ -1223,3 +1223,37 @@ def test_prepare_codex_writes_profile_and_prints_command(tmp_path: Path, monkeyp
     assert stored_profile["session_id"] == "sess-1"
     assert stored_profile["capability_profile"] == "ProfileOpsRead"
     assert payload["codex_add_command"][:4] == ["codex", "mcp", "add", "adaos-test-hub"]
+
+
+def test_prepare_codex_discovers_target_through_native_mcp_fallback() -> None:
+    class _NativeOnlyClient:
+        def call(self, tool: str) -> dict:
+            assert tool == "list_managed_targets"
+            return {
+                "response": {
+                    "result": {
+                        "targets": [
+                            {
+                                "target_id": "hub:test-subnet",
+                                "subnet_id": "test-subnet",
+                                "zone": "lab-a",
+                                "status": "online",
+                            }
+                        ]
+                    }
+                }
+            }
+
+    target = dev_cmd._managed_target_via_native_mcp(
+        _NativeOnlyClient(),
+        "hub:test-subnet",
+    )
+
+    assert target == {
+        "target": {
+            "target_id": "hub:test-subnet",
+            "subnet_id": "test-subnet",
+            "zone": "lab-a",
+            "status": "online",
+        }
+    }
