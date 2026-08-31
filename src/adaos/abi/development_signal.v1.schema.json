@@ -32,7 +32,15 @@
         "runtime_failure",
         "review_comment",
         "nlu_failure",
-        "user_adaptation_request"
+        "user_adaptation_request",
+        "sdk_unclear_definition",
+        "sdk_application_failure",
+        "sdk_observability_gap",
+        "sdk_example_gap",
+        "sdk_policy_boundary",
+        "sdk_generalization_pressure",
+        "builder_rejection_learning",
+        "core_capability_request"
       ]
     },
     "status": {
@@ -59,6 +67,8 @@
     "summary": { "type": "string", "minLength": 1 },
     "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
     "blocking": { "type": "boolean" },
+    "owner_area": { "type": "string" },
+    "component_ref": { "type": "string" },
     "classification_confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
     "owner_scope": { "type": "object" },
     "origin_scope": { "type": "object" },
@@ -72,6 +82,7 @@
     "nlu_teacher_ref": { "type": "object" },
     "builder_ref": { "type": "object" },
     "issue_ref": { "type": "object" },
+    "relation_refs": { "type": "array", "items": { "type": "object" } },
     "policy": { "type": "object" },
     "metadata": { "type": "object" },
     "created_at": { "type": "string", "format": "date-time" },

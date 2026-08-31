@@ -152,6 +152,8 @@ def _ticket_signal_kind(ticket_kind: str) -> str:
         "review_debt": "review_comment",
         "nlu_repair": "nlu_failure",
         "user_adaptation": "user_adaptation_request",
+        "sdk_understanding": "sdk_unclear_definition",
+        "core_capability_request": "core_capability_request",
     }
     return mapping.get(str(ticket_kind or "").strip(), "development_request")
 
@@ -308,6 +310,8 @@ def dev_ticket_new(
     source: str = typer.Option("codex_review", "--source", help="producer source"),
     severity: str = typer.Option("medium", "--severity", help="info, low, medium, high, critical"),
     blocking: bool = typer.Option(False, "--blocking/--non-blocking", help="mark as blocking"),
+    owner_area: str = typer.Option("", "--owner-area", help="owner area: project, skill, scenario, sdk, api, core, builder"),
+    component_ref: str = typer.Option("", "--component-ref", help="stable component ref, e.g. core:sdk or scenario:web.modal:settings"),
     status: str = typer.Option("proposed", "--status", help="initial ticket status"),
     evidence: List[str] = typer.Option([], "--evidence", help="evidence ref, optionally type:id"),
     state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
@@ -332,12 +336,16 @@ def dev_ticket_new(
         source=source,
         evidence_refs=_ticket_evidence_refs(evidence),
         metadata={"ticket_cli": True},
+        owner_area=owner_area or None,
+        component_ref=component_ref or None,
     )
     ticket_result = service.ensure_ticket_for_signal(
         signal_result["signal"],
         kind=kind,
         status=status,
         source=source,
+        owner_area=owner_area or None,
+        component_ref=component_ref or None,
     )
     payload = {
         "ok": True,
@@ -369,6 +377,8 @@ def dev_ticket_list(
     blocking: Optional[bool] = typer.Option(None, "--blocking/--non-blocking", help="filter by blocking flag"),
     source: str = typer.Option("", "--source", help="filter by source"),
     owner: str = typer.Option("", "--owner", help="filter by owner/assignee token"),
+    owner_area: str = typer.Option("", "--owner-area", help="filter by owner area"),
+    component_ref: str = typer.Option("", "--component-ref", help="filter by stable component ref"),
     updated_since: str = typer.Option("", "--updated-since", help="filter by ISO updated_at lower bound"),
     search: str = typer.Option("", "--search", help="full-text search over indexed ticket fields"),
     limit: Optional[int] = typer.Option(None, "--limit", min=0, max=1000, help="limit result count"),
@@ -393,6 +403,8 @@ def dev_ticket_list(
         blocking=blocking,
         source=source or None,
         owner=owner or None,
+        owner_area=owner_area or None,
+        component_ref=component_ref or None,
         updated_since=updated_since or None,
         search=search or None,
         limit=limit,
@@ -405,6 +417,72 @@ def dev_ticket_list(
         return
     for ticket in tickets:
         _print_ticket_summary(ticket)
+
+
+@ticket_app.command("core-request")
+@_run_safe
+def dev_ticket_core_request(
+    summary: str = typer.Argument(..., help="core capability request summary"),
+    component_ref: str = typer.Option(..., "--component-ref", help="core component ref, e.g. core:sdk"),
+    desired_contract: str = typer.Option(..., "--desired-contract", help="desired SDK/API/resource contract"),
+    impact: str = typer.Option("contract_gap", "--impact", help="blocker, speed, generalization, contract_gap, observability_gap, lifecycle_gap, policy_boundary, compatibility_debt, security_governance"),
+    motivation: str = typer.Option("", "--motivation", help="project/user motivation"),
+    observed_limitation: str = typer.Option("", "--observed-limitation", help="observed SDK/API/core limitation"),
+    blocked_ticket_id: List[str] = typer.Option([], "--blocked-ticket-id", help="project ticket blocked by this core request"),
+    evidence: List[str] = typer.Option([], "--evidence", help="evidence ref, optionally type:id"),
+    actor: str = typer.Option("codex", "--actor", help="actor id"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    result = _ticket_service(state_dir).create_core_capability_request(
+        summary=summary,
+        component_ref=component_ref,
+        desired_contract=desired_contract,
+        actor=actor,
+        impact=impact,
+        motivation=motivation,
+        observed_limitation=observed_limitation,
+        blocked_ticket_ids=blocked_ticket_id,
+        evidence_refs=_ticket_evidence_refs(evidence),
+    )
+    if json_output:
+        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    _print_ticket_summary(result["ticket"])
+    if result.get("blocked_tickets"):
+        typer.echo(f"blocked: {len(result['blocked_tickets'])}")
+
+
+@ticket_app.command("sdk-understanding")
+@_run_safe
+def dev_ticket_sdk_understanding(
+    summary: str = typer.Argument(..., help="SDK understanding signal summary"),
+    method_ref: str = typer.Option(..., "--method-ref", help="SDK/API method or resource ref"),
+    kind: str = typer.Option("sdk_unclear_definition", "--kind", help="SDK understanding signal kind"),
+    expected_behavior: str = typer.Option("", "--expected", help="expected behavior"),
+    observed_behavior: str = typer.Option("", "--observed", help="observed behavior"),
+    diagnosis: str = typer.Option("", "--diagnosis", help="qualified diagnosis"),
+    project_ticket_id: str = typer.Option("", "--project-ticket-id", help="related project ticket id"),
+    evidence: List[str] = typer.Option([], "--evidence", help="evidence ref, optionally type:id"),
+    actor: str = typer.Option("codex", "--actor", help="actor id"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    result = _ticket_service(state_dir).record_sdk_understanding_signal(
+        kind=kind,
+        summary=summary,
+        method_ref=method_ref,
+        actor=actor,
+        expected_behavior=expected_behavior,
+        observed_behavior=observed_behavior,
+        diagnosis=diagnosis,
+        project_ticket_id=project_ticket_id or None,
+        evidence_refs=_ticket_evidence_refs(evidence),
+    )
+    if json_output:
+        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    _print_ticket_summary(result["ticket"])
 
 
 @ticket_app.command("show")

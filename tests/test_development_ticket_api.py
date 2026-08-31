@@ -362,3 +362,65 @@ def test_development_ticket_api_handoff_and_resolution_require_evidence(tmp_path
     )
     assert reopened.status_code == 200, reopened.text
     assert reopened.json()["ticket"]["status"] == "in_progress"
+
+
+def test_development_ticket_api_creates_core_and_sdk_qualification_tickets(tmp_path: Path) -> None:
+    client = _client(DevelopmentTicketService(state_dir=tmp_path))
+
+    project = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "summary": "Autonomous repair cannot proceed with current SDK docs",
+            "kind": "development_request",
+            "owner_area": "project",
+            "component_ref": "modal:nlu_teacher_modal",
+            "target_scope": {
+                "type": "modal",
+                "id": "nlu_teacher_modal",
+                "project_ref": "project:homepoint",
+                "component_ref": "modal:nlu_teacher_modal",
+            },
+        },
+    )
+    assert project.status_code == 201, project.text
+    project_ticket_id = project.json()["ticket"]["ticket_id"]
+
+    core = client.post(
+        "/api/development-tickets/core-capability-requests",
+        headers=_headers(),
+        json={
+            "summary": "Builder needs an artifact-open SDK helper",
+            "component_ref": "core:sdk",
+            "desired_contract": "Expose ticket artifact open/read helpers for agent workflows.",
+            "impact": "blocker",
+            "actor": "builder:test",
+            "blocked_ticket_ids": [project_ticket_id],
+            "evidence_refs": [{"type": "trace", "id": "builder.artifact.lookup"}],
+        },
+    )
+    assert core.status_code == 201, core.text
+    core_ticket = core.json()["ticket"]
+    assert core_ticket["owner_area"] == "core"
+    assert core_ticket["component_ref"] == "core:sdk"
+    assert core.json()["blocked_tickets"][0]["status"] == "waiting_for_core"
+
+    sdk = client.post(
+        "/api/development-tickets/sdk-understanding",
+        headers=_headers(),
+        json={
+            "kind": "sdk_unclear_definition",
+            "summary": "Artifact refs are readable but not directly openable by Codex",
+            "method_ref": "dev_ticket.artifact",
+            "actor": "codex:test",
+            "diagnosis": "sdk_example_gap",
+            "project_ticket_id": project_ticket_id,
+        },
+    )
+    assert sdk.status_code == 201, sdk.text
+    assert sdk.json()["ticket"]["kind"] == "sdk_understanding"
+    assert sdk.json()["ticket"]["relation_refs"][0]["ticket_id"] == project_ticket_id
+
+    listed = client.get("/api/development-tickets?owner_area=core&component_ref=core:sdk", headers=_headers())
+    assert listed.status_code == 200, listed.text
+    assert [item["ticket_id"] for item in listed.json()["tickets"]] == [core_ticket["ticket_id"]]

@@ -33,7 +33,9 @@
         "runtime_failure",
         "review_debt",
         "nlu_repair",
-        "user_adaptation"
+        "user_adaptation",
+        "sdk_understanding",
+        "core_capability_request"
       ]
     },
     "status": {
@@ -43,6 +45,7 @@
         "accepted",
         "deferred",
         "waiting_for_user",
+        "waiting_for_core",
         "ready_for_builder",
         "claimed",
         "in_progress",
@@ -57,6 +60,8 @@
     "summary": { "type": "string", "minLength": 1 },
     "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
     "blocking": { "type": "boolean" },
+    "owner_area": { "type": "string" },
+    "component_ref": { "type": "string" },
     "target_scope": { "type": "object" },
     "owner_scope": { "type": "object" },
     "origin_scope": { "type": "object" },
@@ -68,6 +73,8 @@
     "pending_action_refs": { "type": "array", "items": { "type": "object" } },
     "builder_refs": { "type": "array", "items": { "type": "object" } },
     "external_refs": { "type": "array", "items": { "type": "object" } },
+    "relation_refs": { "type": "array", "items": { "type": "object" } },
+    "comments": { "type": "array", "items": { "type": "object" } },
     "policy": { "type": "object" },
     "metadata": { "type": "object" },
     "closure": { "type": "object" },

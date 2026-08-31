@@ -42,11 +42,14 @@ class DevTicketCreateRequest(BaseModel):
     origin_scope: dict[str, Any] | None = None
     severity: str = "medium"
     blocking: bool = False
+    owner_area: str | None = None
+    component_ref: str | None = None
     source: str = "ui_feedback"
     status: str = "proposed"
     dedup_key: str | None = None
     evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
     artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
+    relation_refs: list[dict[str, Any]] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     policy: dict[str, Any] = Field(default_factory=dict)
 
@@ -134,6 +137,37 @@ class DevTicketRelatedRequest(BaseModel):
     actor: str = "ui"
 
 
+class CoreCapabilityRequest(BaseModel):
+    summary: str = Field(..., min_length=1)
+    component_ref: str = Field(..., min_length=1)
+    desired_contract: str = Field(..., min_length=1)
+    actor: str = "builder"
+    impact: str = "contract_gap"
+    motivation: str = ""
+    observed_limitation: str = ""
+    rejected_workarounds: list[dict[str, Any]] = Field(default_factory=list)
+    blocked_ticket_ids: list[str] = Field(default_factory=list)
+    evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+    target_scope: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    policy: dict[str, Any] = Field(default_factory=dict)
+    status: str = "proposed"
+
+
+class SdkUnderstandingRequest(BaseModel):
+    kind: str = "sdk_unclear_definition"
+    summary: str = Field(..., min_length=1)
+    method_ref: str = Field(..., min_length=1)
+    actor: str = "builder"
+    expected_behavior: str = ""
+    observed_behavior: str = ""
+    diagnosis: str = ""
+    project_ticket_id: str | None = None
+    evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    status: str = "proposed"
+
+
 TICKET_KIND_TO_SIGNAL_KIND = {
     "feedback": "feedback_note",
     "development_request": "development_request",
@@ -142,6 +176,8 @@ TICKET_KIND_TO_SIGNAL_KIND = {
     "review_debt": "review_comment",
     "nlu_repair": "nlu_failure",
     "user_adaptation": "user_adaptation_request",
+    "sdk_understanding": "sdk_unclear_definition",
+    "core_capability_request": "core_capability_request",
 }
 SIGNAL_KIND_TO_TICKET_KIND = {
     "feedback_note": "feedback",
@@ -151,6 +187,14 @@ SIGNAL_KIND_TO_TICKET_KIND = {
     "review_comment": "review_debt",
     "nlu_failure": "nlu_repair",
     "user_adaptation_request": "user_adaptation",
+    "sdk_unclear_definition": "sdk_understanding",
+    "sdk_application_failure": "sdk_understanding",
+    "sdk_observability_gap": "sdk_understanding",
+    "sdk_example_gap": "sdk_understanding",
+    "sdk_policy_boundary": "sdk_understanding",
+    "sdk_generalization_pressure": "sdk_understanding",
+    "builder_rejection_learning": "sdk_understanding",
+    "core_capability_request": "core_capability_request",
 }
 TICKET_KINDS = set(TICKET_KIND_TO_SIGNAL_KIND)
 SIGNAL_KINDS = set(SIGNAL_KIND_TO_TICKET_KIND)
@@ -315,6 +359,8 @@ def _query_filter_tokens(request: Request, *names: str, expand_ref_tail: bool = 
 
 def _ticket_target_tokens(ticket: Mapping[str, Any]) -> set[str]:
     tokens: set[str] = set()
+    _append_filter_tokens(tokens, ticket.get("owner_area"))
+    _append_filter_tokens(tokens, ticket.get("component_ref"))
     target = ticket.get("target_scope")
     if isinstance(target, Mapping):
         _append_filter_tokens(tokens, target)
@@ -424,6 +470,8 @@ def list_tickets(
     blocking: str | None = None,
     source: str | None = None,
     owner: str | None = None,
+    owner_area: str | None = None,
+    component_ref: str | None = None,
     updated_since: str | None = None,
     search: str | None = None,
     limit: int | None = Query(default=None, ge=0, le=1000),
@@ -454,6 +502,8 @@ def list_tickets(
         blocking=_bool_query(blocking),
         source=source,
         owner=owner,
+        owner_area=owner_area,
+        component_ref=component_ref,
         updated_since=updated_since,
         search=search,
         limit=limit,
@@ -490,6 +540,9 @@ def create_ticket(
             evidence_refs=body.evidence_refs,
             policy=body.policy,
             metadata=body.metadata,
+            owner_area=body.owner_area,
+            component_ref=body.component_ref,
+            relation_refs=body.relation_refs,
         )
         ticket_result = service.ensure_ticket_for_signal(
             signal_result["signal"],
@@ -499,6 +552,9 @@ def create_ticket(
             dedup_key=body.dedup_key,
             metadata=body.metadata,
             policy=body.policy,
+            owner_area=body.owner_area,
+            component_ref=body.component_ref,
+            relation_refs=body.relation_refs,
         )
         ticket = ticket_result["ticket"]
         return {
@@ -509,6 +565,61 @@ def create_ticket(
             "signal_duplicate": bool(signal_result.get("duplicate")),
             "ticket_duplicate": bool(ticket_result.get("duplicate")),
         }
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/core-capability-requests", status_code=status.HTTP_201_CREATED)
+def create_core_capability_request(
+    body: CoreCapabilityRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        result = service.create_core_capability_request(
+            summary=body.summary,
+            component_ref=body.component_ref,
+            desired_contract=body.desired_contract,
+            actor=body.actor,
+            impact=body.impact,
+            motivation=body.motivation,
+            observed_limitation=body.observed_limitation,
+            rejected_workarounds=body.rejected_workarounds,
+            blocked_ticket_ids=body.blocked_ticket_ids,
+            evidence_refs=body.evidence_refs,
+            target_scope=body.target_scope,
+            metadata=body.metadata,
+            policy=body.policy,
+            status=body.status,
+        )
+        return {"ok": True, **result, "detail": _ticket_detail(service, result["ticket"])}
+    except KeyError as exc:
+        raise _not_found(str(exc).strip("'")) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/sdk-understanding", status_code=status.HTTP_201_CREATED)
+def create_sdk_understanding_signal(
+    body: SdkUnderstandingRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        result = service.record_sdk_understanding_signal(
+            kind=body.kind,
+            summary=body.summary,
+            method_ref=body.method_ref,
+            actor=body.actor,
+            expected_behavior=body.expected_behavior,
+            observed_behavior=body.observed_behavior,
+            diagnosis=body.diagnosis,
+            project_ticket_id=body.project_ticket_id,
+            evidence_refs=body.evidence_refs,
+            metadata=body.metadata,
+            status=body.status,
+        )
+        return {"ok": True, **result, "detail": _ticket_detail(service, result["ticket"])}
+    except KeyError as exc:
+        raise _not_found(str(exc).strip("'")) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 

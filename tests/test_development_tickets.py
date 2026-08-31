@@ -261,3 +261,90 @@ def test_close_ticket_maps_terminal_reason_to_ticket_and_signal_status(tmp_path:
     )
     assert duplicate["status"] == "superseded"
     assert service.get_signal(duplicate_report["signal"]["signal_id"])["status"] == "superseded"
+
+
+def test_core_capability_request_blocks_project_ticket_and_filters_by_owner_area(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    project_signal = service.capture_signal(
+        kind="development_request",
+        summary="Builder cannot implement modal repair with the current SDK",
+        target_scope={
+            "type": "modal",
+            "id": "nlu_teacher_modal",
+            "project_ref": "project:homepoint",
+            "scenario_ref": "scenario:web_desktop",
+            "component_ref": "modal:nlu_teacher_modal",
+        },
+        source="client_feedback",
+        owner_area="project",
+        component_ref="modal:nlu_teacher_modal",
+    )["signal"]
+    project_ticket = service.ensure_ticket_for_signal(
+        project_signal,
+        kind="development_request",
+        status="accepted",
+        owner_area="project",
+        component_ref="modal:nlu_teacher_modal",
+    )["ticket"]
+
+    result = service.create_core_capability_request(
+        summary="Builder needs a stable modal focus override API",
+        component_ref="core:client",
+        desired_contract="Expose a scoped modal focus handoff API for Dev Tickets overlays.",
+        actor="builder:test",
+        impact="blocker",
+        motivation="Project repair cannot edit Dev Tickets when opened from a modal.",
+        observed_limitation="Current client focus trap keeps focus inside the original modal.",
+        rejected_workarounds=[{"summary": "Patch individual modals", "reason": "does not generalize"}],
+        blocked_ticket_ids=[project_ticket["ticket_id"]],
+        evidence_refs=[{"type": "trace", "id": "modal.focus.trap"}],
+    )
+
+    core_ticket = result["ticket"]
+    blocked = result["blocked_tickets"][0]
+
+    assert core_ticket["kind"] == "core_capability_request"
+    assert core_ticket["owner_area"] == "core"
+    assert core_ticket["component_ref"] == "core:client"
+    assert core_ticket["status"] == "accepted"
+    assert core_ticket["metadata"]["impact"] == "blocker"
+    assert blocked["status"] == "waiting_for_core"
+    assert blocked["status_group"] == "waiting"
+    assert blocked["relation_refs"][0]["type"] == "blocked_by"
+    assert blocked["relation_refs"][0]["ticket_id"] == core_ticket["ticket_id"]
+
+    assert [item["ticket_id"] for item in service.list_tickets(owner_area="core")] == [core_ticket["ticket_id"]]
+    assert [item["ticket_id"] for item in service.list_tickets(component_ref="modal:nlu_teacher_modal")] == [
+        project_ticket["ticket_id"]
+    ]
+
+
+def test_sdk_understanding_signal_links_to_project_ticket(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    project_signal = service.capture_signal(
+        kind="review_comment",
+        summary="Builder result was rejected by user",
+        target_scope={"type": "skill", "id": "media_center", "component_ref": "skill:media_center"},
+        source="codex_review",
+    )["signal"]
+    project_ticket = service.ensure_ticket_for_signal(project_signal, kind="review_debt", status="accepted")["ticket"]
+
+    result = service.record_sdk_understanding_signal(
+        kind="sdk_application_failure",
+        summary="Builder misunderstood the modal action contract",
+        method_ref="ui.modal.actions",
+        actor="builder:test",
+        expected_behavior="Actions remain editable and separately grouped.",
+        observed_behavior="Builder collapsed commands into the wrong action group.",
+        diagnosis="sdk_doc_ambiguity",
+        project_ticket_id=project_ticket["ticket_id"],
+        evidence_refs=[{"type": "test", "id": "tests/test_media_center_modal.py"}],
+    )
+
+    ticket = result["ticket"]
+    assert result["signal"]["kind"] == "sdk_application_failure"
+    assert ticket["kind"] == "sdk_understanding"
+    assert ticket["owner_area"] == "sdk"
+    assert ticket["component_ref"] == "sdk:ui.modal.actions"
+    assert ticket["relation_refs"][0]["ticket_id"] == project_ticket["ticket_id"]
+    assert service.list_tickets(owner_area="sdk")[0]["ticket_id"] == ticket["ticket_id"]

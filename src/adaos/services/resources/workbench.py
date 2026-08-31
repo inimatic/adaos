@@ -93,6 +93,8 @@ def _ticket_signal_kind(ticket_kind: str) -> str:
         "review_debt": "review_comment",
         "nlu_repair": "nlu_failure",
         "user_adaptation": "user_adaptation_request",
+        "sdk_understanding": "sdk_unclear_definition",
+        "core_capability_request": "core_capability_request",
     }
     return mapping.get(_text(ticket_kind), "development_request")
 
@@ -206,6 +208,8 @@ def _dev_ticket_definition() -> dict[str, Any]:
                 "skill_id",
                 "modal_id",
                 "component",
+                "owner_area",
+                "component_ref",
                 "kind",
                 "severity",
                 "blocking",
@@ -233,6 +237,8 @@ def _dev_ticket_definition() -> dict[str, Any]:
             {"id": "reopen", "kind": "reopen", "risk": "medium", "requires": ["reason"], "required_capabilities": ["dev_ticket.reopen"]},
             {"id": "duplicate", "kind": "transition", "risk": "low", "required_capabilities": ["dev_ticket.close"]},
             {"id": "related", "kind": "transition", "risk": "low", "required_capabilities": ["dev_ticket.update"]},
+            {"id": "core_request", "kind": "core_capability_request", "risk": "medium", "requires": ["desired_contract"], "required_capabilities": ["dev_ticket.core_request"]},
+            {"id": "sdk_understanding", "kind": "sdk_understanding", "risk": "low", "requires": ["method_ref"], "required_capabilities": ["dev_ticket.sdk_understanding"]},
             {"id": "preview_evidence", "kind": "preview_evidence", "risk": "read", "required_capabilities": ["dev_ticket.read"]},
             {"id": "open_artifact", "kind": "open_artifact", "risk": "read", "required_capabilities": ["dev_ticket.artifact.read"]},
         ],
@@ -245,7 +251,7 @@ def _dev_ticket_definition() -> dict[str, Any]:
         ],
         "events": {
             "emits": ["resource.record.created", "resource.operation.completed"],
-            "semantic_types": ["dev_ticket.created", "dev_ticket.resolved", "dev_ticket.verified", "dev_ticket.reopened"],
+            "semantic_types": ["dev_ticket.created", "dev_ticket.resolved", "dev_ticket.verified", "dev_ticket.reopened", "core_ticket.created", "sdk_understanding.created"],
         },
         "i18n": {
             "default_locale": "en",
@@ -688,6 +694,8 @@ class ResourceWorkbenchService:
                 blocking=filters.get("blocking") if isinstance(filters.get("blocking"), bool) else None,
                 source=_text(filters.get("source")) or None,
                 owner=_text(filters.get("owner")) or None,
+                owner_area=_text(filters.get("owner_area")) or None,
+                component_ref=_text(filters.get("component_ref")) or None,
                 updated_since=_text(filters.get("updated_since")) or None,
                 search=search or None,
                 limit=max_items,
@@ -743,6 +751,9 @@ class ResourceWorkbenchService:
                 evidence_refs=evidence_refs,
                 metadata=_mapping(payload.get("metadata")),
                 policy=_mapping(payload.get("policy")),
+                owner_area=_text(payload.get("owner_area")) or None,
+                component_ref=_text(payload.get("component_ref")) or None,
+                relation_refs=_sequence_of_mappings(payload.get("relation_refs") or []),
             )
             ticket_result = service.ensure_ticket_for_signal(
                 signal_result["signal"],
@@ -752,6 +763,9 @@ class ResourceWorkbenchService:
                 dedup_key=_text(payload.get("dedup_key")) or None,
                 metadata=_mapping(payload.get("metadata")),
                 policy=_mapping(payload.get("policy")),
+                owner_area=_text(payload.get("owner_area")) or None,
+                component_ref=_text(payload.get("component_ref")) or None,
+                relation_refs=_sequence_of_mappings(payload.get("relation_refs") or []),
             )
             return {"signal": signal_result["signal"], "ticket": ticket_result["ticket"], "record_id": ticket_result["ticket"]["ticket_id"]}
         if not ticket_id:
@@ -822,6 +836,38 @@ class ResourceWorkbenchService:
                 actor=actor,
             )
             return {"ticket": ticket, "record_id": ticket_id}
+        if operation_id == "core_request":
+            return {**service.create_core_capability_request(
+                summary=_text(payload.get("summary")),
+                component_ref=_text(payload.get("component_ref")),
+                desired_contract=_text(payload.get("desired_contract")),
+                actor=actor,
+                impact=_text(payload.get("impact")) or "contract_gap",
+                motivation=_text(payload.get("motivation")),
+                observed_limitation=_text(payload.get("observed_limitation")),
+                rejected_workarounds=_sequence_of_mappings(payload.get("rejected_workarounds") or []),
+                blocked_ticket_ids=[_text(ticket_id)] if ticket_id else [
+                    _text(item) for item in payload.get("blocked_ticket_ids") or [] if _text(item)
+                ],
+                evidence_refs=evidence_refs,
+                metadata=_mapping(payload.get("metadata")),
+                policy=_mapping(payload.get("policy")),
+                status=_text(payload.get("status")) or "proposed",
+            ), "record_id": ticket_id}
+        if operation_id == "sdk_understanding":
+            return {**service.record_sdk_understanding_signal(
+                kind=_text(payload.get("kind")) or "sdk_unclear_definition",
+                summary=_text(payload.get("summary")),
+                method_ref=_text(payload.get("method_ref")),
+                actor=actor,
+                expected_behavior=_text(payload.get("expected_behavior")),
+                observed_behavior=_text(payload.get("observed_behavior")),
+                diagnosis=_text(payload.get("diagnosis")),
+                project_ticket_id=ticket_id or _text(payload.get("project_ticket_id")) or None,
+                evidence_refs=evidence_refs,
+                metadata=_mapping(payload.get("metadata")),
+                status=_text(payload.get("status")) or "proposed",
+            ), "record_id": ticket_id}
         if operation_id == "preview_evidence":
             ticket = service.get_ticket(ticket_id)
             if not ticket:

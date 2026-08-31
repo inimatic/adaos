@@ -148,3 +148,87 @@ def test_dev_ticket_cli_dedups_and_defers(tmp_path: Path) -> None:
         )
     )
     assert deferred["ticket"]["status"] == "deferred"
+
+
+def test_dev_ticket_cli_core_request_and_sdk_understanding(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_arg = ["--state-dir", str(tmp_path)]
+
+    project = _payload(
+        runner.invoke(
+            dev_cmd.ticket_app,
+            [
+                "new",
+                "Project repair is blocked by SDK ambiguity",
+                "--kind",
+                "development_request",
+                "--target-type",
+                "modal",
+                "--target-id",
+                "nlu_teacher_modal",
+                "--owner-area",
+                "project",
+                "--component-ref",
+                "modal:nlu_teacher_modal",
+                *state_arg,
+                "--json",
+            ],
+        )
+    )
+    project_ticket_id = project["ticket"]["ticket_id"]
+
+    core = _payload(
+        runner.invoke(
+            dev_cmd.ticket_app,
+            [
+                "core-request",
+                "Builder needs stable ticket artifact helpers",
+                "--component-ref",
+                "core:sdk",
+                "--desired-contract",
+                "Expose Dev Ticket artifact open/read helpers to Codex and Builder.",
+                "--impact",
+                "blocker",
+                "--blocked-ticket-id",
+                project_ticket_id,
+                "--evidence",
+                "trace:builder.artifact.lookup",
+                *state_arg,
+                "--json",
+            ],
+        )
+    )
+
+    assert core["ticket"]["kind"] == "core_capability_request"
+    assert core["ticket"]["owner_area"] == "core"
+    assert core["blocked_tickets"][0]["status"] == "waiting_for_core"
+
+    sdk = _payload(
+        runner.invoke(
+            dev_cmd.ticket_app,
+            [
+                "sdk-understanding",
+                "Artifact refs are not clear enough for agent use",
+                "--method-ref",
+                "dev_ticket.artifact",
+                "--kind",
+                "sdk_example_gap",
+                "--diagnosis",
+                "sdk_example_gap",
+                "--project-ticket-id",
+                project_ticket_id,
+                *state_arg,
+                "--json",
+            ],
+        )
+    )
+    assert sdk["ticket"]["kind"] == "sdk_understanding"
+    assert sdk["ticket"]["owner_area"] == "sdk"
+
+    listed = _payload(
+        runner.invoke(
+            dev_cmd.ticket_app,
+            ["list", "--owner-area", "core", "--component-ref", "core:sdk", *state_arg, "--json"],
+        )
+    )
+    assert [item["ticket_id"] for item in listed["tickets"]] == [core["ticket"]["ticket_id"]]

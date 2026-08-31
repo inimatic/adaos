@@ -41,6 +41,7 @@ ACTIVE_TICKET_STATES = {
     "accepted",
     "deferred",
     "waiting_for_user",
+    "waiting_for_core",
     "ready_for_builder",
     "claimed",
     "in_progress",
@@ -53,10 +54,46 @@ TICKET_STATUS_GROUPS = {
     "open": ACTIVE_TICKET_STATES,
     "active": ACTIVE_TICKET_STATES,
     "triage": {"captured", "proposed", "accepted", "waiting_for_user", "ready_for_builder"},
+    "waiting": {"deferred", "waiting_for_user", "waiting_for_core"},
+    "waiting_for_core": {"waiting_for_core"},
     "work": {"claimed", "in_progress", "in_builder"},
     "review": {"resolved", "verified"},
     "terminal": TERMINAL_TICKET_STATES,
     "closed": TERMINAL_TICKET_STATES,
+}
+SDK_UNDERSTANDING_SIGNAL_KINDS = {
+    "sdk_unclear_definition",
+    "sdk_application_failure",
+    "sdk_observability_gap",
+    "sdk_example_gap",
+    "sdk_policy_boundary",
+    "sdk_generalization_pressure",
+    "builder_rejection_learning",
+}
+CORE_IMPACT_CLASSES = {
+    "blocker",
+    "speed",
+    "generalization",
+    "contract_gap",
+    "observability_gap",
+    "lifecycle_gap",
+    "policy_boundary",
+    "compatibility_debt",
+    "security_governance",
+}
+TICKET_RELATION_KINDS = {
+    "blocks",
+    "blocked_by",
+    "related",
+    "duplicate_of",
+    "supersedes",
+    "caused_by",
+}
+INVERSE_TICKET_RELATION = {
+    "blocks": "blocked_by",
+    "blocked_by": "blocks",
+    "duplicate_of": "supersedes",
+    "supersedes": "duplicate_of",
 }
 RECEIVER_COMPATIBILITY_REASONS = {
     "stream_receiver_policy_missing",
@@ -117,6 +154,8 @@ def _project_id_from_target(target_scope: Mapping[str, Any]) -> str:
 
 def ticket_status_group(status: str) -> str:
     token = _text(status)
+    if token in {"deferred", "waiting_for_core"}:
+        return "waiting"
     if token in {"claimed", "in_progress", "in_builder"}:
         return "work"
     if token in {"resolved", "verified"}:
@@ -126,9 +165,109 @@ def ticket_status_group(status: str) -> str:
     return "triage"
 
 
+def _owner_area_from_scope(target_scope: Mapping[str, Any] | None, metadata: Mapping[str, Any] | None = None) -> str:
+    target = _mapping(target_scope)
+    meta = _mapping(metadata)
+    explicit = _text(meta.get("owner_area") or target.get("owner_area")).lower()
+    if explicit:
+        return explicit
+    target_type = _text(target.get("type")).lower()
+    if target_type in {
+        "project",
+        "skill",
+        "scenario",
+        "sdk",
+        "api",
+        "core",
+        "builder",
+        "runtime",
+        "nlu",
+        "webui",
+        "component",
+        "modal",
+        "user",
+    }:
+        if target_type in {"webui", "component", "modal"}:
+            return "project"
+        return target_type
+    if _text(target.get("project_ref") or target.get("project_id")):
+        return "project"
+    if _text(target.get("skill_ref") or target.get("skill_id")):
+        return "skill"
+    if _text(target.get("scenario_ref") or target.get("scenario_id")):
+        return "scenario"
+    return "workspace"
+
+
+def _component_ref_from_scopes(
+    target_scope: Mapping[str, Any] | None,
+    origin_scope: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> str:
+    target = _mapping(target_scope)
+    origin = _mapping(origin_scope)
+    meta = _mapping(metadata)
+    for source in (meta, target, origin):
+        for key in ("component_ref", "ref", "canonical_ref", "target_ref", "modal_ref", "skill_ref", "scenario_ref", "project_ref"):
+            token = _text(source.get(key))
+            if token:
+                return token
+    target_type = _text(target.get("type") or origin.get("type"))
+    target_id = _text(target.get("id") or target.get("name") or origin.get("id") or origin.get("name"))
+    if target_type and target_id:
+        return f"{target_type}:{target_id}"
+    return ""
+
+
+def _normalize_relation_ref(ref: Mapping[str, Any]) -> dict[str, Any] | None:
+    relation = _text(ref.get("relation") or ref.get("type")).lower()
+    if relation == "dev_ticket":
+        relation = _text(ref.get("relation")).lower()
+    relation = relation or "related"
+    if relation not in TICKET_RELATION_KINDS:
+        relation = "related"
+    ticket_id = _text(ref.get("ticket_id") or ref.get("id"))
+    target_ref = _text(ref.get("target_ref") or ref.get("ref"))
+    if not target_ref and ticket_id:
+        target_ref = f"dticket:{ticket_id}"
+    if not ticket_id and target_ref.startswith("dticket:"):
+        ticket_id = target_ref.split(":", 1)[1].strip()
+    if not target_ref:
+        return None
+    item = {**dict(ref), "type": relation, "relation": relation, "target_ref": target_ref}
+    if ticket_id:
+        item["ticket_id"] = ticket_id
+    return item
+
+
+def _normalize_relation_refs(*groups: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    for group in groups:
+        for raw in group or []:
+            if not isinstance(raw, Mapping):
+                continue
+            item = _normalize_relation_ref(raw)
+            if item:
+                refs.append(item)
+    return _merge_refs([], refs)
+
+
 def _normalized_ticket(ticket: Mapping[str, Any]) -> dict[str, Any]:
     out = dict(ticket)
     out["status_group"] = ticket_status_group(_text(out.get("status")))
+    out["owner_area"] = _text(out.get("owner_area")) or _owner_area_from_scope(
+        _mapping(out.get("target_scope")),
+        _mapping(out.get("metadata")),
+    )
+    out["component_ref"] = _text(out.get("component_ref")) or _component_ref_from_scopes(
+        _mapping(out.get("target_scope")),
+        _mapping(out.get("origin_scope")),
+        _mapping(out.get("metadata")),
+    )
+    out["relation_refs"] = _normalize_relation_refs(
+        _sequence_of_mappings(out.get("relation_refs") or []),
+        _sequence_of_mappings(out.get("related_refs") or []),
+    )
     return _clone(out)
 
 
@@ -248,7 +387,11 @@ def _collect_scope_tokens(tokens: set[str], value: Any) -> None:
 
 def _ticket_scope_tokens(ticket: Mapping[str, Any]) -> set[str]:
     tokens: set[str] = set()
+    _collect_scope_tokens(tokens, ticket.get("owner_area"))
+    _collect_scope_tokens(tokens, ticket.get("component_ref"))
     _collect_scope_tokens(tokens, ticket.get("target_scope"))
+    _collect_scope_tokens(tokens, ticket.get("relation_refs"))
+    _collect_scope_tokens(tokens, ticket.get("related_refs"))
     _collect_scope_tokens(tokens, _mapping(ticket.get("metadata")).get("invocation_context"))
     return tokens
 
@@ -266,10 +409,14 @@ def _ticket_search_text(ticket: Mapping[str, Any]) -> str:
         _text(ticket.get("ticket_id")),
         _text(ticket.get("kind")),
         _text(ticket.get("status")),
+        _text(ticket.get("owner_area")),
+        _text(ticket.get("component_ref")),
         _text(ticket.get("summary")),
         _text(ticket.get("source")),
         json.dumps(ticket.get("target_scope") or {}, ensure_ascii=False, sort_keys=True, default=str),
         json.dumps(ticket.get("metadata") or {}, ensure_ascii=False, sort_keys=True, default=str),
+        json.dumps(ticket.get("relation_refs") or ticket.get("related_refs") or [], ensure_ascii=False, sort_keys=True, default=str),
+        json.dumps(ticket.get("comments") or [], ensure_ascii=False, sort_keys=True, default=str),
     ]
     return "\n".join(chunks).lower()
 
@@ -321,6 +468,9 @@ class DevelopmentTicketService:
         policy: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,
         classification_confidence: float | None = None,
+        owner_area: str | None = None,
+        component_ref: str | None = None,
+        relation_refs: Sequence[Mapping[str, Any]] = (),
     ) -> dict[str, Any]:
         signal_kind = _text(kind)
         text = _text(summary)
@@ -329,6 +479,9 @@ class DevelopmentTicketService:
         owner = _mapping(owner_scope) or {"type": "workspace", "id": "local"}
         origin = _mapping(origin_scope) or {"type": "runtime"}
         target = _mapping(target_scope) or {"type": "unknown"}
+        meta = _mapping(metadata)
+        area = _text(owner_area) or _owner_area_from_scope(target, meta)
+        component = _text(component_ref) or _component_ref_from_scopes(target, origin, meta)
         key = _text(dedup_key) or _fingerprint("dsig", signal_kind, text.lower(), _target_identity(target), metadata or {})
         with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
             state = self._read()
@@ -337,6 +490,12 @@ class DevelopmentTicketService:
                     signal["occurrence_count"] = int(signal.get("occurrence_count") or 1) + 1
                     signal["artifact_refs"] = _merge_refs(signal.get("artifact_refs") or [], artifact_refs)
                     signal["evidence_refs"] = _merge_refs(signal.get("evidence_refs") or [], evidence_refs)
+                    signal["relation_refs"] = _normalize_relation_refs(
+                        _sequence_of_mappings(signal.get("relation_refs") or []),
+                        relation_refs,
+                    )
+                    signal["owner_area"] = _text(signal.get("owner_area")) or area
+                    signal["component_ref"] = _text(signal.get("component_ref")) or component
                     signal["updated_at"] = _now()
                     self._append_history(
                         signal,
@@ -359,6 +518,8 @@ class DevelopmentTicketService:
                 "summary": text,
                 "severity": _text(severity) or "medium",
                 "blocking": bool(blocking),
+                "owner_area": area,
+                "component_ref": component,
                 "classification_confidence": float(classification_confidence if classification_confidence is not None else 1.0),
                 "owner_scope": owner,
                 "origin_scope": origin,
@@ -372,8 +533,9 @@ class DevelopmentTicketService:
                 "nlu_teacher_ref": _mapping(nlu_teacher_ref),
                 "builder_ref": {},
                 "issue_ref": {},
+                "relation_refs": _normalize_relation_refs(relation_refs),
                 "policy": _mapping(policy),
-                "metadata": _mapping(metadata),
+                "metadata": meta,
                 "history": [{"kind": "captured", "recorded_at": now}],
                 "created_at": now,
                 "updated_at": now,
@@ -394,6 +556,9 @@ class DevelopmentTicketService:
         dedup_key: str | None = None,
         metadata: Mapping[str, Any] | None = None,
         policy: Mapping[str, Any] | None = None,
+        owner_area: str | None = None,
+        component_ref: str | None = None,
+        relation_refs: Sequence[Mapping[str, Any]] = (),
     ) -> dict[str, Any]:
         signal_id = _text(signal.get("signal_id"))
         if not signal_id:
@@ -403,6 +568,13 @@ class DevelopmentTicketService:
         if not ticket_kind or not text:
             raise ValueError("kind and summary are required")
         target = _mapping(signal.get("target_scope"))
+        meta = _mapping(metadata)
+        area = _text(owner_area) or _text(signal.get("owner_area")) or _owner_area_from_scope(target, meta)
+        component = _text(component_ref) or _text(signal.get("component_ref")) or _component_ref_from_scopes(
+            target,
+            _mapping(signal.get("origin_scope")),
+            meta,
+        )
         key = _text(dedup_key) or _fingerprint("dticket", ticket_kind, signal.get("dedup_key"), _target_identity(target))
         with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
             state = self._read()
@@ -416,6 +588,17 @@ class DevelopmentTicketService:
                         ticket.get("evidence_refs") or [],
                         _sequence_of_mappings(signal.get("evidence_refs") or []),
                     )
+                    ticket["artifact_refs"] = _merge_refs(
+                        ticket.get("artifact_refs") or [],
+                        _sequence_of_mappings(signal.get("artifact_refs") or []),
+                    )
+                    ticket["relation_refs"] = _normalize_relation_refs(
+                        _sequence_of_mappings(ticket.get("relation_refs") or []),
+                        _sequence_of_mappings(signal.get("relation_refs") or []),
+                        relation_refs,
+                    )
+                    ticket["owner_area"] = _text(ticket.get("owner_area")) or area
+                    ticket["component_ref"] = _text(ticket.get("component_ref")) or component
                     ticket["updated_at"] = _now()
                     self._append_history(
                         ticket,
@@ -438,6 +621,8 @@ class DevelopmentTicketService:
                 "summary": text,
                 "severity": _text(signal.get("severity")) or "medium",
                 "blocking": bool(signal.get("blocking")),
+                "owner_area": area,
+                "component_ref": component,
                 "owner_scope": _mapping(signal.get("owner_scope")),
                 "origin_scope": _mapping(signal.get("origin_scope")),
                 "target_scope": target,
@@ -446,11 +631,16 @@ class DevelopmentTicketService:
                 "occurrence_count": 1,
                 "source": _text(source or signal.get("source")) or "runtime",
                 "evidence_refs": _merge_refs([], _sequence_of_mappings(signal.get("evidence_refs") or [])),
+                "artifact_refs": _merge_refs([], _sequence_of_mappings(signal.get("artifact_refs") or [])),
                 "pending_action_refs": [],
                 "builder_refs": [],
                 "external_refs": [],
+                "relation_refs": _normalize_relation_refs(
+                    _sequence_of_mappings(signal.get("relation_refs") or []),
+                    relation_refs,
+                ),
                 "policy": _mapping(policy) or _mapping(signal.get("policy")),
-                "metadata": _mapping(metadata),
+                "metadata": meta,
                 "history": [{"kind": "created", "signal_id": signal_id, "recorded_at": now}],
                 "created_at": now,
                 "updated_at": now,
@@ -752,6 +942,241 @@ class DevelopmentTicketService:
         repair = self._create_builder_repair(ticket, mode=mode_token, repair_service=repair_service)
         updated = self._link_builder_repair(ticket["ticket_id"], repair, mode=mode_token, actor=_text(actor) or "system")
         return {"ok": True, "ticket": updated, "repair": repair}
+
+    def create_core_capability_request(
+        self,
+        *,
+        summary: str,
+        component_ref: str,
+        desired_contract: str,
+        actor: str,
+        impact: str = "contract_gap",
+        motivation: str = "",
+        observed_limitation: str = "",
+        rejected_workarounds: Sequence[Mapping[str, Any]] = (),
+        blocked_ticket_ids: Sequence[str] = (),
+        evidence_refs: Sequence[Mapping[str, Any]] = (),
+        target_scope: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        policy: Mapping[str, Any] | None = None,
+        status: str = "proposed",
+    ) -> dict[str, Any]:
+        text = _text(summary)
+        component = _text(component_ref)
+        contract = _text(desired_contract)
+        if not text:
+            raise ValueError("core capability request summary is required")
+        if not component:
+            raise ValueError("core capability request component_ref is required")
+        if not contract:
+            raise ValueError("core capability request desired_contract is required")
+        impact_token = (_text(impact) or "contract_gap").lower()
+        if impact_token not in CORE_IMPACT_CLASSES:
+            raise ValueError(f"unsupported core impact: {impact_token}")
+        target = _mapping(target_scope) or {
+            "type": "core",
+            "id": component.split(":", 1)[1] if component.startswith("core:") else component,
+            "component_ref": component,
+            "source": "core",
+        }
+        blocked_ids = [_text(item) for item in blocked_ticket_ids or [] if _text(item)]
+        meta = {
+            **_mapping(metadata),
+            "actor": _text(actor) or "builder",
+            "impact": impact_token,
+            "motivation": _text(motivation) or None,
+            "desired_contract": contract,
+            "observed_limitation": _text(observed_limitation) or None,
+            "rejected_workarounds": _sequence_of_mappings(rejected_workarounds),
+            "blocked_ticket_ids": blocked_ids,
+        }
+        relation_refs = [
+            {"type": "blocks", "relation": "blocks", "target_ref": f"dticket:{ticket_id}", "ticket_id": ticket_id}
+            for ticket_id in blocked_ids
+        ]
+        signal_result = self.capture_signal(
+            kind="core_capability_request",
+            summary=text,
+            owner_scope={"type": "workspace", "id": "local"},
+            origin_scope={"type": "builder", "surface": "core_capability_request", "id": _text(actor) or "builder"},
+            target_scope=target,
+            severity="high" if impact_token == "blocker" else "medium",
+            blocking=impact_token == "blocker",
+            source="builder_intake",
+            dedup_key=_fingerprint("core-capability", component, contract.lower(), blocked_ids),
+            evidence_refs=evidence_refs,
+            metadata=meta,
+            policy=policy,
+            owner_area="core",
+            component_ref=component,
+            relation_refs=relation_refs,
+        )
+        ticket_result = self.ensure_ticket_for_signal(
+            signal_result["signal"],
+            kind="core_capability_request",
+            status="accepted" if impact_token == "blocker" and status == "proposed" else status,
+            source="builder_intake",
+            dedup_key=signal_result["signal"]["dedup_key"],
+            metadata=meta,
+            policy=policy,
+            owner_area="core",
+            component_ref=component,
+            relation_refs=relation_refs,
+        )
+        core_ticket = ticket_result["ticket"]
+        blocked = [
+            self.block_ticket_by_core(ticket_id, core_ticket["ticket_id"], actor=_text(actor) or "builder")
+            for ticket_id in blocked_ids
+        ]
+        return {
+            "ok": True,
+            "signal": signal_result["signal"],
+            "ticket": core_ticket,
+            "blocked_tickets": blocked,
+            "signal_duplicate": bool(signal_result.get("duplicate")),
+            "ticket_duplicate": bool(ticket_result.get("duplicate")),
+        }
+
+    def record_sdk_understanding_signal(
+        self,
+        *,
+        kind: str,
+        summary: str,
+        method_ref: str,
+        actor: str,
+        expected_behavior: str = "",
+        observed_behavior: str = "",
+        diagnosis: str = "",
+        project_ticket_id: str | None = None,
+        evidence_refs: Sequence[Mapping[str, Any]] = (),
+        metadata: Mapping[str, Any] | None = None,
+        status: str = "proposed",
+    ) -> dict[str, Any]:
+        signal_kind = (_text(kind) or "sdk_unclear_definition").lower()
+        if signal_kind not in SDK_UNDERSTANDING_SIGNAL_KINDS:
+            raise ValueError(f"unsupported SDK understanding kind: {signal_kind}")
+        text = _text(summary)
+        method = _text(method_ref)
+        if not text:
+            raise ValueError("SDK understanding summary is required")
+        if not method:
+            raise ValueError("SDK understanding method_ref is required")
+        relation_refs = []
+        project_ticket = _text(project_ticket_id)
+        if project_ticket:
+            relation_refs.append(
+                {
+                    "type": "caused_by",
+                    "relation": "caused_by",
+                    "target_ref": f"dticket:{project_ticket}",
+                    "ticket_id": project_ticket,
+                }
+            )
+        meta = {
+            **_mapping(metadata),
+            "actor": _text(actor) or "builder",
+            "method_ref": method,
+            "expected_behavior": _text(expected_behavior) or None,
+            "observed_behavior": _text(observed_behavior) or None,
+            "diagnosis": _text(diagnosis) or None,
+            "project_ticket_id": project_ticket or None,
+        }
+        target = {"type": "sdk", "id": method, "component_ref": f"sdk:{method}", "source": "sdk"}
+        signal_result = self.capture_signal(
+            kind=signal_kind,
+            summary=text,
+            owner_scope={"type": "workspace", "id": "local"},
+            origin_scope={"type": "builder", "surface": "sdk_understanding", "id": _text(actor) or "builder"},
+            target_scope=target,
+            severity="medium",
+            blocking=False,
+            source="builder_intake",
+            dedup_key=_fingerprint("sdk-understanding", signal_kind, method, text.lower(), project_ticket),
+            evidence_refs=evidence_refs,
+            metadata=meta,
+            owner_area="sdk",
+            component_ref=f"sdk:{method}",
+            relation_refs=relation_refs,
+        )
+        ticket_result = self.ensure_ticket_for_signal(
+            signal_result["signal"],
+            kind="sdk_understanding",
+            status=status,
+            source="builder_intake",
+            dedup_key=signal_result["signal"]["dedup_key"],
+            metadata=meta,
+            owner_area="sdk",
+            component_ref=f"sdk:{method}",
+            relation_refs=relation_refs,
+        )
+        if project_ticket:
+            self.relate_ticket(project_ticket, related_ticket_id=ticket_result["ticket"]["ticket_id"], relation="caused_by", actor=_text(actor) or "builder")
+        return {
+            "ok": True,
+            "signal": signal_result["signal"],
+            "ticket": ticket_result["ticket"],
+            "signal_duplicate": bool(signal_result.get("duplicate")),
+            "ticket_duplicate": bool(ticket_result.get("duplicate")),
+        }
+
+    def block_ticket_by_core(self, ticket_id: str, core_ticket_id: str, *, actor: str) -> dict[str, Any]:
+        ticket_token = _text(ticket_id)
+        core_token = _text(core_ticket_id)
+        if not ticket_token or not core_token:
+            raise ValueError("ticket_id and core_ticket_id are required")
+        actor_token = _text(actor) or "system"
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(ticket_token)
+            core = state["tickets"].get(core_token)
+            if not ticket:
+                raise KeyError(ticket_token)
+            if not core:
+                raise KeyError(core_token)
+            now = _now()
+            ticket["status"] = "waiting_for_core"
+            ticket["relation_refs"] = _normalize_relation_refs(
+                _sequence_of_mappings(ticket.get("relation_refs") or []),
+                [{"type": "blocked_by", "relation": "blocked_by", "target_ref": f"dticket:{core_token}", "ticket_id": core_token}],
+            )
+            ticket["updated_at"] = now
+            self._append_history(
+                ticket,
+                {
+                    "kind": "blocked_by_core",
+                    "actor": actor_token,
+                    "core_ticket_id": core_token,
+                    "recorded_at": now,
+                },
+            )
+            core["relation_refs"] = _normalize_relation_refs(
+                _sequence_of_mappings(core.get("relation_refs") or []),
+                [{"type": "blocks", "relation": "blocks", "target_ref": f"dticket:{ticket_token}", "ticket_id": ticket_token}],
+            )
+            core["updated_at"] = now
+            self._append_history(
+                core,
+                {
+                    "kind": "blocks_project_ticket",
+                    "actor": actor_token,
+                    "blocked_ticket_id": ticket_token,
+                    "recorded_at": now,
+                },
+            )
+            for signal_id in ticket.get("signal_ids") or []:
+                signal = state["signals"].get(signal_id)
+                if signal:
+                    signal["status"] = "deferred"
+                    signal["relation_refs"] = _normalize_relation_refs(
+                        _sequence_of_mappings(signal.get("relation_refs") or []),
+                        [{"type": "blocked_by", "relation": "blocked_by", "target_ref": f"dticket:{core_token}", "ticket_id": core_token}],
+                    )
+                    signal["updated_at"] = now
+                    self._validate_signal(signal)
+            self._validate_ticket(ticket)
+            self._validate_ticket(core)
+            self._write(state)
+            return _normalized_ticket(ticket)
 
     def close_ticket(
         self,
@@ -1066,7 +1491,9 @@ class DevelopmentTicketService:
         related = _text(related_ticket_id)
         if not related:
             raise ValueError("related_ticket_id is required")
-        relation_token = _text(relation) or "related"
+        relation_token = (_text(relation) or "related").lower()
+        if relation_token not in TICKET_RELATION_KINDS:
+            raise ValueError(f"unsupported ticket relation: {relation_token}")
         actor_token = _text(actor) or "system"
         with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
             state = self._read()
@@ -1075,9 +1502,22 @@ class DevelopmentTicketService:
                 raise KeyError(ticket_id)
             if related not in state["tickets"]:
                 raise KeyError(related)
-            ref = {"type": "dev_ticket", "ticket_id": related, "relation": relation_token}
-            ticket["related_refs"] = _merge_refs(ticket.get("related_refs") or [], [ref])
-            ticket["updated_at"] = _now()
+            now = _now()
+            ref = {
+                "type": relation_token,
+                "relation": relation_token,
+                "target_ref": f"dticket:{related}",
+                "ticket_id": related,
+            }
+            ticket["relation_refs"] = _normalize_relation_refs(
+                _sequence_of_mappings(ticket.get("relation_refs") or []),
+                [ref],
+            )
+            ticket["related_refs"] = _merge_refs(
+                ticket.get("related_refs") or [],
+                [{"type": "dev_ticket", "ticket_id": related, "relation": relation_token}],
+            )
+            ticket["updated_at"] = now
             self._append_history(
                 ticket,
                 {
@@ -1085,9 +1525,39 @@ class DevelopmentTicketService:
                     "actor": actor_token,
                     "related_ticket_id": related,
                     "relation": relation_token,
-                    "recorded_at": ticket["updated_at"],
+                    "recorded_at": now,
                 },
             )
+            inverse = INVERSE_TICKET_RELATION.get(relation_token)
+            if inverse:
+                other = state["tickets"].get(related)
+                if other:
+                    other_ref = {
+                        "type": inverse,
+                        "relation": inverse,
+                        "target_ref": f"dticket:{ticket['ticket_id']}",
+                        "ticket_id": ticket["ticket_id"],
+                    }
+                    other["relation_refs"] = _normalize_relation_refs(
+                        _sequence_of_mappings(other.get("relation_refs") or []),
+                        [other_ref],
+                    )
+                    other["related_refs"] = _merge_refs(
+                        other.get("related_refs") or [],
+                        [{"type": "dev_ticket", "ticket_id": ticket["ticket_id"], "relation": inverse}],
+                    )
+                    other["updated_at"] = now
+                    self._append_history(
+                        other,
+                        {
+                            "kind": "related",
+                            "actor": actor_token,
+                            "related_ticket_id": ticket["ticket_id"],
+                            "relation": inverse,
+                            "recorded_at": now,
+                        },
+                    )
+                    self._validate_ticket(other)
             self._validate_ticket(ticket)
             self._write(state)
             return _normalized_ticket(ticket)
@@ -1109,10 +1579,37 @@ class DevelopmentTicketService:
             ticket = state["tickets"].get(_text(ticket_id))
             if not ticket:
                 raise KeyError(ticket_id)
+            relation_ref = {
+                "type": "duplicate_of",
+                "relation": "duplicate_of",
+                "target_ref": f"dticket:{duplicate_target}",
+                "ticket_id": duplicate_target,
+            }
+            ticket["relation_refs"] = _normalize_relation_refs(
+                _sequence_of_mappings(ticket.get("relation_refs") or []),
+                [relation_ref],
+            )
             ticket["related_refs"] = _merge_refs(
                 ticket.get("related_refs") or [],
                 [{"type": "dev_ticket", "ticket_id": duplicate_target, "relation": "duplicate_of"}],
             )
+            canonical = state["tickets"].get(duplicate_target)
+            if canonical:
+                canonical["relation_refs"] = _normalize_relation_refs(
+                    _sequence_of_mappings(canonical.get("relation_refs") or []),
+                    [
+                        {
+                            "type": "supersedes",
+                            "relation": "supersedes",
+                            "target_ref": f"dticket:{ticket['ticket_id']}",
+                            "ticket_id": ticket["ticket_id"],
+                        }
+                    ],
+                )
+                canonical["related_refs"] = _merge_refs(
+                    canonical.get("related_refs") or [],
+                    [{"type": "dev_ticket", "ticket_id": ticket["ticket_id"], "relation": "supersedes"}],
+                )
             now = _now()
             ticket["status"] = "superseded"
             ticket["closure"] = {
@@ -1133,6 +1630,19 @@ class DevelopmentTicketService:
                     "recorded_at": now,
                 },
             )
+            if canonical:
+                canonical["updated_at"] = now
+                self._append_history(
+                    canonical,
+                    {
+                        "kind": "related",
+                        "actor": _text(actor) or "system",
+                        "related_ticket_id": ticket["ticket_id"],
+                        "relation": "supersedes",
+                        "recorded_at": now,
+                    },
+                )
+                self._validate_ticket(canonical)
             for signal_id in ticket.get("signal_ids") or []:
                 signal = state["signals"].get(signal_id)
                 if signal:
@@ -1167,11 +1677,13 @@ class DevelopmentTicketService:
         blocking: bool | None = None,
         source: str | None = None,
         owner: str | None = None,
+        owner_area: str | None = None,
+        component_ref: str | None = None,
         updated_since: str | None = None,
         search: str | None = None,
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
-        tickets = list(self._read()["tickets"].values())
+        tickets = [_normalized_ticket(item) for item in self._read()["tickets"].values()]
         if status:
             allowed = {_text(part) for part in _text(status).split(",") if _text(part)}
             tickets = [item for item in tickets if _text(item.get("status")) in allowed]
@@ -1210,6 +1722,19 @@ class DevelopmentTicketService:
         owner_token = _text(owner)
         if owner_token:
             tickets = [item for item in tickets if owner_token in _ticket_owner_tokens(item)]
+        owner_area_token = _text(owner_area)
+        if owner_area_token:
+            allowed = {_text(part).lower() for part in owner_area_token.split(",") if _text(part)}
+            tickets = [item for item in tickets if _text(item.get("owner_area")).lower() in allowed]
+        component_ref_token = _text(component_ref)
+        if component_ref_token:
+            allowed = {_text(part).lower() for part in component_ref_token.split(",") if _text(part)}
+            tickets = [
+                item
+                for item in tickets
+                if _text(item.get("component_ref")).lower() in allowed
+                or bool({_text(token).lower() for token in _ticket_scope_tokens(item)} & allowed)
+            ]
         since_token = _text(updated_since)
         if since_token:
             tickets = [item for item in tickets if _text(item.get("updated_at") or item.get("created_at")) >= since_token]
@@ -1219,7 +1744,7 @@ class DevelopmentTicketService:
         sorted_tickets = sorted(tickets, key=lambda item: item.get("updated_at") or item.get("created_at") or "")
         if limit is not None and int(limit) >= 0:
             sorted_tickets = sorted_tickets[-int(limit):]
-        return [_normalized_ticket(item) for item in sorted_tickets]
+        return [_clone(item) for item in sorted_tickets]
 
     def list_artifacts(self, ticket_id: str | None = None) -> list[dict[str, Any]]:
         root = self.root / "artifacts"
@@ -1237,6 +1762,17 @@ class DevelopmentTicketService:
                 artifact_id = _artifact_id_from_ref(ref)
                 if artifact_id:
                     wanted.add(artifact_id)
+            for signal_id in ticket.get("signal_ids") or []:
+                signal = self.get_signal(_text(signal_id))
+                if not signal:
+                    continue
+                for ref in [
+                    *_sequence_of_mappings(signal.get("artifact_refs") or []),
+                    *_sequence_of_mappings(signal.get("evidence_refs") or []),
+                ]:
+                    artifact_id = _artifact_id_from_ref(ref)
+                    if artifact_id:
+                        wanted.add(artifact_id)
         items: list[dict[str, Any]] = []
         for path in root.glob("*.json"):
             try:

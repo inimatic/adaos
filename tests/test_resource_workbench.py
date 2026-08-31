@@ -30,8 +30,11 @@ def test_resource_definitions_validate_and_include_dev_tickets_and_demo_metrics(
 
     definitions = service.definitions()
     resource_types = {item["resource_type"] for item in definitions}
+    dev_ticket = next(item for item in definitions if item["resource_type"] == "adaos.dev.ticket")
 
     assert {"adaos.dev.ticket", "demo.metric", "demo.metric_note", "demo.metric_event"} <= resource_types
+    assert {"owner_area", "component_ref"} <= set(dev_ticket["query"]["filters"])
+    assert {"core_request", "sdk_understanding"} <= {item["id"] for item in dev_ticket["operations"]}
     for definition in definitions:
         validator.validate(definition)
         assert definition["i18n"]["default_locale"] == "en"
@@ -109,6 +112,78 @@ def test_resource_workbench_queries_and_operates_dev_ticket_lifecycle(tmp_path: 
         }
     )
     assert verified["result"]["ticket"]["status"] == "verified"
+
+
+def test_resource_workbench_core_and_sdk_ticket_routes(tmp_path: Path) -> None:
+    tickets = DevelopmentTicketService(state_dir=tmp_path)
+    workbench = ResourceWorkbenchService(state_dir=tmp_path, ticket_service=tickets)
+
+    project = workbench.operate(
+        {
+            "schema": "adaos.resource.operation.v1",
+            "resource_type": "adaos.dev.ticket",
+            "operation_id": "create",
+            "payload": {
+                "kind": "development_request",
+                "summary": "Builder needs a clearer artifact contract",
+                "owner_area": "project",
+                "component_ref": "scenario:demo.modal:ticket",
+                "target_scope": {
+                    "type": "scenario",
+                    "id": "demo",
+                    "component_ref": "scenario:demo.modal:ticket",
+                },
+            },
+            "actor": {"id": "codex:test", "role": "owner"},
+        }
+    )
+    project_ticket_id = project["result"]["ticket"]["ticket_id"]
+
+    core = workbench.operate(
+        {
+            "schema": "adaos.resource.operation.v1",
+            "resource_type": "adaos.dev.ticket",
+            "operation_id": "core_request",
+            "record_id": project_ticket_id,
+            "payload": {
+                "summary": "Expose ticket artifact helpers",
+                "component_ref": "core:sdk",
+                "desired_contract": "Provide typed Dev Ticket artifact open/read helper methods.",
+                "impact": "blocker",
+            },
+            "evidence_refs": [{"type": "trace", "id": "artifact.helper.missing"}],
+            "actor": {"id": "builder:test", "role": "owner"},
+        }
+    )
+    assert core["result"]["ticket"]["owner_area"] == "core"
+    assert core["result"]["blocked_tickets"][0]["status"] == "waiting_for_core"
+
+    sdk = workbench.operate(
+        {
+            "schema": "adaos.resource.operation.v1",
+            "resource_type": "adaos.dev.ticket",
+            "operation_id": "sdk_understanding",
+            "record_id": project_ticket_id,
+            "payload": {
+                "kind": "sdk_unclear_definition",
+                "summary": "Artifact helper behavior is unclear",
+                "method_ref": "dev_ticket.artifact",
+                "diagnosis": "sdk_doc_ambiguity",
+            },
+            "actor": {"id": "builder:test", "role": "owner"},
+        }
+    )
+    assert sdk["result"]["ticket"]["owner_area"] == "sdk"
+
+    listed = workbench.query(
+        {
+            "schema": "adaos.resource.query.v1",
+            "resource_type": "adaos.dev.ticket",
+            "filters": {"owner_area": "core", "component_ref": "core:sdk"},
+            "actor": {"id": "codex:test", "role": "owner"},
+        }
+    )
+    assert [item["ticket_id"] for item in listed["items"]] == [core["result"]["ticket"]["ticket_id"]]
 
 
 def test_resource_workbench_demo_metric_note_crud_validation_roles_and_traces(tmp_path: Path) -> None:
