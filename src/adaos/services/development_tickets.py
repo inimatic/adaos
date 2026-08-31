@@ -110,7 +110,7 @@ _log = logging.getLogger("adaos.development_tickets")
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _clone(value: Any) -> Any:
@@ -1730,6 +1730,76 @@ class DevelopmentTicketService:
                     "actor": actor_token,
                     "previous_summary": previous,
                     "summary": text,
+                    "recorded_at": now,
+                },
+            )
+            self._validate_ticket(ticket)
+            self._write(state)
+            return _normalized_ticket(ticket)
+
+    def requalify_builder_repair(
+        self,
+        ticket_id: str,
+        *,
+        builder_repair: Mapping[str, Any],
+        actor: str,
+        reason: str,
+        expected_updated_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Replace the bounded Builder repair envelope with an audited revision."""
+
+        raw = dict(builder_repair)
+        profile = _text(raw.get("profile")).lower()
+        if profile not in _REPAIR_HINT_PROFILES:
+            raise ValueError(f"unsupported Builder repair profile: {profile or '<missing>'}")
+        requested_files = [
+            _text(value).replace("\\", "/").strip("/")
+            for value in raw.get("target_files") or []
+            if _text(value)
+        ]
+        normalized = _bounded_repair_hints({"metadata": {"builder_repair": raw}})
+        target_files = list(normalized.get("target_files") or [])
+        if target_files != requested_files:
+            raise ValueError("Builder repair target_files contain duplicates or unsafe paths")
+        if not target_files:
+            raise ValueError("Builder repair qualification requires target_files")
+        if int(normalized.get("max_changed_files") or 0) < len(target_files):
+            raise ValueError("max_changed_files must cover every qualified target file")
+        reason_token = _text(reason)
+        if not reason_token:
+            raise ValueError("Builder repair requalification reason is required")
+        actor_token = _text(actor) or "builder"
+
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                raise KeyError(ticket_id)
+            ticket_status = _text(ticket.get("status"))
+            if ticket_status in {*TERMINAL_TICKET_STATES, "resolved", "verified"}:
+                raise ValueError("completed Dev Ticket cannot be requalified")
+            if ticket_status == "in_builder":
+                raise ValueError("Dev Ticket cannot be requalified while Builder is running")
+            expected = _text(expected_updated_at)
+            if expected and expected != _text(ticket.get("updated_at")):
+                raise ValueError("Dev Ticket changed since the qualification was loaded")
+
+            previous = _bounded_repair_hints(ticket)
+            if previous == normalized:
+                return _normalized_ticket(ticket)
+            now = _now()
+            metadata = _mapping(ticket.get("metadata"))
+            metadata["builder_repair"] = normalized
+            ticket["metadata"] = metadata
+            ticket["updated_at"] = now
+            self._append_history(
+                ticket,
+                {
+                    "kind": "builder_repair_requalified",
+                    "actor": actor_token,
+                    "reason": reason_token,
+                    "previous_builder_repair": previous,
+                    "builder_repair": normalized,
                     "recorded_at": now,
                 },
             )

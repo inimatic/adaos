@@ -75,6 +75,13 @@ class DevTicketUpdateRequest(BaseModel):
     actor: str = Field(default="ui", min_length=1)
 
 
+class DevTicketBuilderQualificationRequest(BaseModel):
+    builder_repair: dict[str, Any]
+    reason: str = Field(..., min_length=1)
+    actor: str = Field(default="builder", min_length=1)
+    expected_updated_at: str | None = None
+
+
 class DevTicketResponseRequest(BaseModel):
     response_action_id: str = Field(..., min_length=1)
     pending_action_id: str | None = None
@@ -970,6 +977,28 @@ def update_ticket(
         raise _not_found(ticket_id) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/{ticket_id}/builder-qualification")
+def requalify_builder_repair(
+    ticket_id: str,
+    body: DevTicketBuilderQualificationRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        ticket = service.requalify_builder_repair(
+            ticket_id,
+            builder_repair=body.builder_repair,
+            actor=body.actor,
+            reason=body.reason,
+            expected_updated_at=body.expected_updated_at,
+        )
+        return {"ok": True, "ticket": ticket, "detail": _ticket_detail(service, ticket)}
+    except KeyError as exc:
+        raise _not_found(ticket_id) from exc
+    except ValueError as exc:
+        code = status.HTTP_409_CONFLICT if "changed since" in str(exc) else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
 
 
 @router.get("/{ticket_id}/evidence")

@@ -367,6 +367,71 @@ def test_postponed_ticket_does_not_create_builder_repair(tmp_path: Path) -> None
     assert repair_service.list(project_id="legacy_skill") == []
 
 
+def test_builder_repair_requalification_is_bounded_and_audited(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    signal = service.capture_signal(
+        kind="development_request",
+        summary="Rename a Demo Metrics action",
+        target_scope={"type": "skill", "id": "demo_metrics_skill", "source": "dev"},
+        source="client_feedback",
+        owner_area="skill",
+        metadata={
+            "builder_repair": {
+                "profile": "surgical_ui",
+                "target_files": ["skills/demo_metrics_skill/missing_test.py"],
+            }
+        },
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="ready_for_builder",
+    )["ticket"]
+
+    updated = service.requalify_builder_repair(
+        ticket["ticket_id"],
+        actor="builder:qualifier",
+        reason="The first pass discovered the focused test in a different file.",
+        expected_updated_at=ticket["updated_at"],
+        builder_repair={
+            "profile": "surgical_ui",
+            "change_summary": "Rename only the selected action label.",
+            "target_files": [
+                "skills/demo_metrics_skill/webui.json",
+                "skills/demo_metrics_skill/tests/test_resource_workbench.py",
+            ],
+            "target_refs": [
+                "ydoc_defaults.data/demo_metrics/summary.buttons[id=open-operations]"
+            ],
+            "acceptance_checks": ["The action id and order are unchanged."],
+            "max_changed_files": 2,
+            "requires_root_mcp": False,
+        },
+    )
+
+    assert updated["metadata"]["builder_repair"]["target_files"][-1].endswith(
+        "test_resource_workbench.py"
+    )
+    history = updated["history"][-1]
+    assert history["kind"] == "builder_repair_requalified"
+    assert history["previous_builder_repair"]["target_files"] == [
+        "skills/demo_metrics_skill/missing_test.py"
+    ]
+    assert history["builder_repair"] == updated["metadata"]["builder_repair"]
+
+    with pytest.raises(ValueError, match="unsafe paths"):
+        service.requalify_builder_repair(
+            ticket["ticket_id"],
+            actor="builder:qualifier",
+            reason="invalid envelope",
+            builder_repair={
+                "profile": "surgical_ui",
+                "target_files": ["../outside.py"],
+                "max_changed_files": 1,
+            },
+        )
+
+
 def test_autonomous_repair_links_builder_automation_and_resolves_with_evidence(tmp_path: Path) -> None:
     service = DevelopmentTicketService(state_dir=tmp_path)
     repair_service = BuilderRepairService(state_dir=tmp_path)

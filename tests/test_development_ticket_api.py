@@ -530,6 +530,54 @@ def test_development_ticket_api_starts_autonomous_repair_and_exposes_builder_usa
     assert synced.json()["detail"]["work_stream"]["builder_work_items"][0]["automation_status"] == "completed"
 
 
+def test_development_ticket_api_requalifies_builder_envelope_with_revision_guard(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    client = _client(service)
+    created = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "summary": "Rename a Demo Metrics action",
+            "kind": "development_request",
+            "status": "ready_for_builder",
+            "target_scope": {"type": "skill", "id": "demo_metrics_skill", "source": "dev"},
+            "metadata": {
+                "builder_repair": {
+                    "profile": "surgical_ui",
+                    "target_files": ["skills/demo_metrics_skill/missing.py"],
+                }
+            },
+        },
+    )
+    ticket = created.json()["ticket"]
+    payload = {
+        "actor": "builder:qualifier",
+        "reason": "Discovery found the focused test file.",
+        "expected_updated_at": ticket["updated_at"],
+        "builder_repair": {
+            "profile": "surgical_ui",
+            "target_files": ["skills/demo_metrics_skill/webui.json"],
+            "target_refs": ["ydoc_defaults.data/demo_metrics/summary.buttons[id=open-operations]"],
+            "max_changed_files": 1,
+        },
+    }
+
+    response = client.post(
+        f"/api/development-tickets/{ticket['ticket_id']}/builder-qualification",
+        headers=_headers(),
+        json=payload,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["ticket"]["history"][-1]["kind"] == "builder_repair_requalified"
+
+    conflict = client.post(
+        f"/api/development-tickets/{ticket['ticket_id']}/builder-qualification",
+        headers=_headers(),
+        json={**payload, "builder_repair": {**payload["builder_repair"], "max_changed_files": 2}},
+    )
+    assert conflict.status_code == 409, conflict.text
+
+
 def test_development_ticket_api_creates_core_and_sdk_qualification_tickets(tmp_path: Path) -> None:
     client = _client(DevelopmentTicketService(state_dir=tmp_path))
 
