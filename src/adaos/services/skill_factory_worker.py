@@ -491,6 +491,39 @@ def _generated_test_budget(assignment: Mapping[str, Any] | None) -> dict[str, An
     )
 
 
+def _codex_execution_timeout_seconds(
+    assignment: Mapping[str, Any] | None,
+    *,
+    fallback: int,
+) -> int:
+    task = assignment if isinstance(assignment, Mapping) else {}
+    request = (
+        task.get("realize_request")
+        if isinstance(task.get("realize_request"), Mapping)
+        else {}
+    )
+    artifacts = (
+        request.get("artifacts")
+        if isinstance(request.get("artifacts"), Mapping)
+        else {}
+    )
+    development = (
+        artifacts.get("development_context")
+        if isinstance(artifacts.get("development_context"), Mapping)
+        else {}
+    )
+    for raw_budget in (artifacts.get("execution_budget"), development.get("execution_budget")):
+        if not isinstance(raw_budget, Mapping):
+            continue
+        try:
+            value = int(raw_budget.get("max_wall_seconds") or 0)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return max(60, min(int(fallback), value))
+    return int(fallback)
+
+
 def _git(command: Sequence[str], *, cwd: Path, timeout: float = 120.0) -> str:
     result = _run(["git", *command], cwd=cwd, timeout=timeout)
     if result.returncode:
@@ -1436,6 +1469,7 @@ class LocalSkillFactoryWorker:
             self._ensure_task_active(task_id)
             codex_result = self._execute_codex(
                 task_id=task_id,
+                assignment=assignment,
                 workspace=workspace,
                 prompt=prompt,
                 output_dir=output_dir,
@@ -1517,6 +1551,7 @@ class LocalSkillFactoryWorker:
                 )
                 codex_result = self._execute_codex(
                     task_id=task_id,
+                    assignment=assignment,
                     workspace=workspace,
                     prompt=repair_prompt,
                     output_dir=output_dir,
@@ -1653,6 +1688,7 @@ class LocalSkillFactoryWorker:
         self,
         *,
         task_id: str,
+        assignment: Mapping[str, Any] | None = None,
         workspace: Path,
         prompt: str,
         output_dir: Path,
@@ -1665,12 +1701,16 @@ class LocalSkillFactoryWorker:
             if provider != "openai-codex-cli":
                 raise ValueError(f"unsupported Codex agent provider: {provider}")
             executor = self.executor
-            if profile:
+            timeout_seconds = _codex_execution_timeout_seconds(
+                assignment,
+                fallback=self.executor.timeout_seconds,
+            )
+            if profile or timeout_seconds != self.executor.timeout_seconds:
                 executor = SubprocessCodexExecutor(
                     executable=self.executor.executable,
                     model=str(profile.get("model") or "").strip() or self.executor.model,
                     reasoning_effort=str(profile.get("reasoning_effort") or "").strip() or None,
-                    timeout_seconds=self.executor.timeout_seconds,
+                    timeout_seconds=timeout_seconds,
                     sandbox_mode=self.executor.sandbox_mode,
                     repo_root=self.executor.repo_root,
                 )

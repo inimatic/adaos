@@ -1709,11 +1709,12 @@ def test_generated_cleanup_removes_only_reserved_runtime_projection(
 def test_worker_applies_frozen_agent_profile_to_codex_executor(
     monkeypatch, tmp_path: Path
 ) -> None:
-    captured: dict[str, str | None] = {}
+    captured: dict[str, int | str | None] = {}
 
     def fake_call(self, **_kwargs):
         captured["model"] = self.model
         captured["reasoning_effort"] = self.reasoning_effort
+        captured["timeout_seconds"] = self.timeout_seconds
         return CodexRunResult(returncode=0)
 
     monkeypatch.setattr(SubprocessCodexExecutor, "__call__", fake_call)
@@ -1728,6 +1729,15 @@ def test_worker_applies_frozen_agent_profile_to_codex_executor(
 
     worker._execute_codex(
         task_id="task.profile",
+        assignment={
+            "realize_request": {
+                "artifacts": {
+                    "execution_budget": {
+                        "max_wall_seconds": 600,
+                    }
+                }
+            }
+        },
         workspace=tmp_path,
         prompt="bounded task",
         output_dir=tmp_path / "output",
@@ -1739,7 +1749,11 @@ def test_worker_applies_frozen_agent_profile_to_codex_executor(
         },
     )
 
-    assert captured == {"model": "gpt-5.4", "reasoning_effort": "high"}
+    assert captured == {
+        "model": "gpt-5.4",
+        "reasoning_effort": "high",
+        "timeout_seconds": 600,
+    }
 
 
 def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(
