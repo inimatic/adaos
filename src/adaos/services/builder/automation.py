@@ -1408,6 +1408,9 @@ class BuilderAutomationService:
                     }
                 )
                 session["completion_history"] = history[-20:]
+            current_usage = session.get("codex_usage_accounting")
+            if isinstance(current_usage, Mapping):
+                self._retain_codex_usage_receipt(session, current_usage)
             for stale_key in (
                 "completion_readiness",
                 "completion_notified_task_id",
@@ -2159,6 +2162,32 @@ class BuilderAutomationService:
             )
         return total
 
+    @staticmethod
+    def _retain_codex_usage_receipt(
+        session: dict[str, Any],
+        receipt: Mapping[str, Any],
+    ) -> None:
+        task_id = str(receipt.get("task_id") or "").strip()
+        if not task_id:
+            return
+        history = [
+            dict(item)
+            for item in session.get("codex_usage_history") or []
+            if isinstance(item, Mapping)
+            and str(item.get("task_id") or "").strip() != task_id
+        ]
+        history.append(dict(receipt))
+        session["codex_usage_history"] = history[-50:]
+
+    @staticmethod
+    def _is_zero_model_continuation(session: Mapping[str, Any], task_id: str) -> bool:
+        return any(
+            str(item.get("mode") or "").strip() == "validate_preserved_candidate"
+            and str(item.get("resumed_by_task_id") or "").strip() == task_id
+            for item in session.get("continuation_history") or []
+            if isinstance(item, Mapping)
+        )
+
     def _report_terminal_codex_usage(
         self,
         session: Mapping[str, Any],
@@ -2177,7 +2206,7 @@ class BuilderAutomationService:
             else {}
         )
         if (
-            accounting.get("status") == "reported"
+            accounting.get("status") in {"reported", "not_applicable"}
             and str(accounting.get("task_id") or "") == task_id
         ):
             return current
@@ -2188,19 +2217,42 @@ class BuilderAutomationService:
         )
         usage = self._codex_run_usage(local_run)
         if not usage:
-            current["codex_usage_accounting"] = {
-                "schema": "adaos.builder.codex_usage_receipt.v1",
-                "task_id": task_id,
-                "status": "unavailable",
-                "accuracy": "unavailable",
-                "total_tokens": None,
-                "reason": "No provider usage was found in the terminal Codex journal.",
-                "checked_at": _now_iso(),
-            }
+            if self._is_zero_model_continuation(current, task_id):
+                receipt = {
+                    "schema": "adaos.builder.codex_usage_receipt.v1",
+                    "task_id": task_id,
+                    "status": "not_applicable",
+                    "accuracy": "exact",
+                    "input_tokens": 0,
+                    "cached_input_tokens": 0,
+                    "output_tokens": 0,
+                    "reasoning_tokens": 0,
+                    "model_tokens": 0,
+                    "total_tokens": 0,
+                    "billable_tokens": 0,
+                    "idempotency_key": (
+                        f"builder:{current.get('session_id') or 'session'}:"
+                        f"{task_id}:codex-usage:v1"
+                    ),
+                    "reason": "Validated a preserved candidate without starting a model turn.",
+                    "checked_at": _now_iso(),
+                }
+            else:
+                receipt = {
+                    "schema": "adaos.builder.codex_usage_receipt.v1",
+                    "task_id": task_id,
+                    "status": "unavailable",
+                    "accuracy": "unavailable",
+                    "total_tokens": None,
+                    "reason": "No provider usage was found in the terminal Codex journal.",
+                    "checked_at": _now_iso(),
+                }
+            current["codex_usage_accounting"] = receipt
+            self._retain_codex_usage_receipt(current, receipt)
             return current
         if self.codex_usage_reporter is None:
             usage_accuracy = str(usage.get("accuracy") or "provider_reported")
-            current["codex_usage_accounting"] = {
+            receipt = {
                 "schema": "adaos.builder.codex_usage_receipt.v1",
                 "task_id": task_id,
                 "status": "reporter_unavailable",
@@ -2209,6 +2261,8 @@ class BuilderAutomationService:
                 "total_tokens": int(usage.get("model_tokens") or 0),
                 "checked_at": _now_iso(),
             }
+            current["codex_usage_accounting"] = receipt
+            self._retain_codex_usage_receipt(current, receipt)
             return current
         idempotency_key = f"builder:{current.get('session_id') or 'session'}:{task_id}:codex-usage:v1"
         object_type = str(current.get("object_type") or "").strip()
@@ -2238,7 +2292,7 @@ class BuilderAutomationService:
         try:
             reported = dict(self.codex_usage_reporter(event))
             root_event = reported.get("event") if isinstance(reported.get("event"), Mapping) else {}
-            current["codex_usage_accounting"] = {
+            receipt = {
                 "schema": "adaos.builder.codex_usage_receipt.v1",
                 "task_id": task_id,
                 "status": "reported",
@@ -2251,7 +2305,7 @@ class BuilderAutomationService:
                 "reported_at": _now_iso(),
             }
         except Exception as exc:
-            current["codex_usage_accounting"] = {
+            receipt = {
                 "schema": "adaos.builder.codex_usage_receipt.v1",
                 "task_id": task_id,
                 "status": "report_failed",
@@ -2262,6 +2316,8 @@ class BuilderAutomationService:
                 "error": f"{type(exc).__name__}: {exc}"[:2000],
                 "checked_at": _now_iso(),
             }
+        current["codex_usage_accounting"] = receipt
+        self._retain_codex_usage_receipt(current, receipt)
         return current
 
     @staticmethod
@@ -4707,8 +4763,8 @@ class BuilderAutomationService:
         }
         if (
             current.get("development_ticket_sync_schema")
-            != "adaos.builder.dev_ticket_task_sync.v2"
-            or current.get("development_ticket_sync_revision") != 1
+            != "adaos.builder.dev_ticket_task_sync.v3"
+            or current.get("development_ticket_sync_revision") != 2
         ):
             synced_task_ids.clear()
         historical_task_ids = {
@@ -4718,8 +4774,8 @@ class BuilderAutomationService:
         }
         if (
             current.get("development_ticket_sync_schema")
-            == "adaos.builder.dev_ticket_task_sync.v2"
-            and current.get("development_ticket_sync_revision") == 1
+            == "adaos.builder.dev_ticket_task_sync.v3"
+            and current.get("development_ticket_sync_revision") == 2
             and task_id in synced_task_ids
             and historical_task_ids.issubset(synced_task_ids)
         ):
@@ -4747,6 +4803,9 @@ class BuilderAutomationService:
                 task_session = self._session_for_linked_task(current, linked_task_id)
                 if task_session is None:
                     continue
+                task_receipt = task_session.get("codex_usage_accounting")
+                if isinstance(task_receipt, Mapping):
+                    self._retain_codex_usage_receipt(current, task_receipt)
                 status_result = {
                     "ok": True,
                     "session": task_session,
@@ -4768,9 +4827,9 @@ class BuilderAutomationService:
                     item for item in ordered_task_ids if item in synced_task_ids
                 ]
                 current["development_ticket_sync_schema"] = (
-                    "adaos.builder.dev_ticket_task_sync.v2"
+                    "adaos.builder.dev_ticket_task_sync.v3"
                 )
-                current["development_ticket_sync_revision"] = 1
+                current["development_ticket_sync_revision"] = 2
                 current["development_ticket_synced_at"] = now
                 synced_ticket = (
                     latest_sync.get("ticket")
@@ -4838,6 +4897,21 @@ class BuilderAutomationService:
             ]
             if failures:
                 snapshot["last_failure"] = failures[-1]
+        historical_receipt = next(
+            (
+                dict(item)
+                for item in reversed(snapshot.get("codex_usage_history") or [])
+                if isinstance(item, Mapping)
+                and str(item.get("task_id") or "").strip() == task_id
+            ),
+            None,
+        )
+        if historical_receipt:
+            snapshot["codex_usage_accounting"] = historical_receipt
+        snapshot = self._report_terminal_codex_usage(
+            snapshot,
+            task_status=str(task.get("status") or ""),
+        )
         return snapshot
 
     def _on_worker_progress(self, session_id: str, task_id: str, status: str, message: str) -> None:

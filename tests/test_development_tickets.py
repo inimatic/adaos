@@ -74,6 +74,15 @@ class _FakeBuilderAutomation:
                 "current_task_id": task_id,
                 "task": {"task_id": task_id, "status": "completed", "result": result},
                 "completion_readiness": {"ok": True, "checks": [{"id": "tests", "status": "passed"}]},
+                "codex_usage_history": [
+                    {
+                        "task_id": f"factory.task.previous.{suffix}",
+                        "status": "reported",
+                        "accuracy": "provider_reported",
+                        "root_event_id": f"codex.usage.previous.{suffix}",
+                        "total_tokens": 25,
+                    }
+                ],
                 "codex_usage_accounting": {
                     "status": "recorded",
                     "root_event_id": f"codex.usage.{suffix}",
@@ -426,6 +435,15 @@ def test_autonomous_repair_links_builder_automation_and_resolves_with_evidence(t
     assert first_ref["token_usage"]["total_tokens"] == 150
     evidence_types = {ref["type"] for ref in result["ticket"]["closure"]["evidence_refs"]}
     assert {"builder_automation", "skill_factory_task", "builder_change", "test", "validation", "codex_usage"} <= evidence_types
+    usage_refs = [
+        ref
+        for ref in result["ticket"]["closure"]["evidence_refs"]
+        if ref["type"] == "codex_usage"
+    ]
+    assert {ref["id"] for ref in usage_refs} == {
+        "codex.usage.previous.1",
+        "codex.usage.1",
+    }
 
     repair = next(item for item in repair_service.list(status="resolved") if item["repair_id"] == result["repair"]["repair_id"])
     assert repair["context"]["automation"]["session_id"] == "automation.session.1"

@@ -771,6 +771,38 @@ def test_terminal_codex_usage_missing_journal_is_unavailable_not_zero(tmp_path: 
     assert result["codex_usage_accounting"]["total_tokens"] is None
 
 
+def test_terminal_codex_usage_marks_preserved_candidate_validation_as_exact_zero(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    service.codex_usage_reporter = lambda _event: pytest.fail(
+        "a no-model continuation must not report usage"
+    )
+    session = {
+        "session_id": "automation.skill.demo",
+        "object_type": "skill",
+        "object_id": "demo",
+        "current_task_id": "task.finalizer",
+        "local_run": {"path": str(tmp_path / "missing")},
+        "continuation_history": [
+            {
+                "mode": "validate_preserved_candidate",
+                "source_task_id": "task.source",
+                "resumed_by_task_id": "task.finalizer",
+            }
+        ],
+    }
+
+    result = service._report_terminal_codex_usage(session, task_status="completed")
+
+    receipt = result["codex_usage_accounting"]
+    assert receipt["status"] == "not_applicable"
+    assert receipt["accuracy"] == "exact"
+    assert receipt["total_tokens"] == 0
+    assert receipt["billable_tokens"] == 0
+    assert result["codex_usage_history"] == [receipt]
+
+
 def test_terminal_codex_usage_reports_live_budget_estimate(tmp_path: Path) -> None:
     service = _service(tmp_path)
     calls: list[dict] = []

@@ -467,18 +467,28 @@ def _automation_evidence_refs(payload: Mapping[str, Any], *, repair_id: str) -> 
                 "repair_id": repair_id,
             }
         )
-    usage = session.get("codex_usage_accounting") if isinstance(session.get("codex_usage_accounting"), Mapping) else {}
-    usage_id = _text(usage.get("root_event_id") or usage.get("idempotency_key"))
-    if usage_id:
-        refs.append(
-            {
-                "type": "codex_usage",
-                "id": usage_id,
-                "status": usage.get("status"),
-                "total_tokens": usage.get("total_tokens"),
-                "repair_id": repair_id,
-            }
-        )
+    usage_receipts = [
+        dict(item)
+        for item in session.get("codex_usage_history") or []
+        if isinstance(item, Mapping)
+    ]
+    current_usage = session.get("codex_usage_accounting")
+    if isinstance(current_usage, Mapping):
+        usage_receipts.append(dict(current_usage))
+    for usage in usage_receipts:
+        usage_id = _text(usage.get("root_event_id") or usage.get("idempotency_key"))
+        if usage_id:
+            refs.append(
+                {
+                    "type": "codex_usage",
+                    "id": usage_id,
+                    "task_id": _text(usage.get("task_id")) or None,
+                    "status": usage.get("status"),
+                    "accuracy": usage.get("accuracy"),
+                    "total_tokens": usage.get("total_tokens"),
+                    "repair_id": repair_id,
+                }
+            )
     return _merge_refs([], refs)
 
 
