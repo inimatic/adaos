@@ -1511,9 +1511,59 @@ class BuilderAutomationService:
             if isinstance(item, Mapping)
         ]
         failure = failures[-1] if failures else {}
-        if "Codex token budget exceeded:" not in str(failure.get("message") or ""):
-            return None
-        run_root = Path(self.runs_root) / _safe_token(task_id)
+        failure_message = str(failure.get("message") or "")
+        source_task_id = task_id
+        source_failure = failure
+        reason = "codex_token_budget_exceeded"
+        trigger_failure_id: str | None = None
+        if "Codex token budget exceeded:" not in failure_message:
+            if "changed paths outside the exact repair files:" not in failure_message:
+                return None
+            failed_run_root = Path(self.runs_root) / _safe_token(task_id)
+            assignment_path = failed_run_root / "input" / "assignment.json"
+            try:
+                assignment = json.loads(assignment_path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, OSError, json.JSONDecodeError):
+                return None
+            request = (
+                dict(assignment.get("realize_request") or {})
+                if isinstance(assignment, Mapping)
+                else {}
+            )
+            artifacts = (
+                dict(request.get("artifacts") or {})
+                if isinstance(request.get("artifacts"), Mapping)
+                else {}
+            )
+            checkpoint = (
+                dict(artifacts.get("continuation_checkpoint") or {})
+                if isinstance(artifacts.get("continuation_checkpoint"), Mapping)
+                else {}
+            )
+            if checkpoint.get("mode") != "validate_preserved_candidate":
+                return None
+            source_task_id = str(checkpoint.get("source_task_id") or "").strip()
+            if not source_task_id or source_task_id == task_id:
+                return None
+            try:
+                source_task = self.factory.read_task(source_task_id)
+            except (KeyError, RuntimeError):
+                return None
+            source_failures = [
+                dict(item)
+                for item in source_task.get("failure_history") or []
+                if isinstance(item, Mapping)
+            ]
+            source_failure = source_failures[-1] if source_failures else {}
+            if (
+                str(source_task.get("status") or "").strip() != "failed"
+                or "Codex token budget exceeded:"
+                not in str(source_failure.get("message") or "")
+            ):
+                return None
+            trigger_failure_id = str(failure.get("failure_id") or "").strip() or None
+            reason = "repair_envelope_requalified_after_path_guard"
+        run_root = Path(self.runs_root) / _safe_token(source_task_id)
         if not (run_root / "workspace" / ".git").is_dir():
             return None
         if not (run_root / "input" / "assignment.json").is_file():
@@ -1521,9 +1571,10 @@ class BuilderAutomationService:
         return {
             "schema": "adaos.builder.automation_continuation_checkpoint.v1",
             "mode": "validate_preserved_candidate",
-            "source_task_id": task_id,
-            "failure_id": str(failure.get("failure_id") or "").strip() or None,
-            "reason": "codex_token_budget_exceeded",
+            "source_task_id": source_task_id,
+            "failure_id": str(source_failure.get("failure_id") or "").strip() or None,
+            "trigger_failure_id": trigger_failure_id,
+            "reason": reason,
             "created_at": _now_iso(),
         }
 

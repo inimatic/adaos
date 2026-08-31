@@ -804,6 +804,72 @@ def test_terminal_codex_usage_marks_preserved_candidate_validation_as_exact_zero
     assert result["updated_at"]
 
 
+def test_path_guard_failure_reuses_original_budget_candidate_after_requalification(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    source_task_id = "task.source-budget-candidate"
+    finalizer_task_id = "task.failed-path-guard"
+    source_run = service.runs_root / source_task_id
+    (source_run / "workspace" / ".git").mkdir(parents=True)
+    (source_run / "input").mkdir(parents=True)
+    (source_run / "input" / "assignment.json").write_text("{}", encoding="utf-8")
+    finalizer_run = service.runs_root / finalizer_task_id
+    (finalizer_run / "input").mkdir(parents=True)
+    (finalizer_run / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {
+                        "continuation_checkpoint": {
+                            "mode": "validate_preserved_candidate",
+                            "source_task_id": source_task_id,
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    tasks = {
+        source_task_id: {
+            "task_id": source_task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.source-budget",
+                    "message": "Codex token budget exceeded: 50001 > 45000",
+                }
+            ],
+        },
+        finalizer_task_id: {
+            "task_id": finalizer_task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.path-guard",
+                    "message": (
+                        "ValueError: Codex changed paths outside the exact repair files: "
+                        "['skills/demo/tests/test_actual.py']"
+                    ),
+                }
+            ],
+        },
+    }
+    service.factory = SimpleNamespace(read_task=lambda task_id: tasks[task_id])
+
+    checkpoint = service._budget_continuation_checkpoint(
+        {"current_task_id": finalizer_task_id}
+    )
+
+    assert checkpoint is not None
+    assert checkpoint["mode"] == "validate_preserved_candidate"
+    assert checkpoint["source_task_id"] == source_task_id
+    assert checkpoint["failure_id"] == "failure.source-budget"
+    assert checkpoint["trigger_failure_id"] == "failure.path-guard"
+    assert checkpoint["reason"] == "repair_envelope_requalified_after_path_guard"
+
+
 def test_terminal_codex_usage_reports_live_budget_estimate(tmp_path: Path) -> None:
     service = _service(tmp_path)
     calls: list[dict] = []
