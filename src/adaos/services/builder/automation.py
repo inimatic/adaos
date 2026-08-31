@@ -1101,6 +1101,7 @@ class BuilderAutomationService:
         conversation_id: str | None = None,
         workflow_transition: str | None = None,
         development_session_id: str | None = None,
+        execution_budget: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         instruction = str(text or "").strip()
         if not instruction:
@@ -1131,10 +1132,55 @@ class BuilderAutomationService:
                     "session": session,
                     "automation": self.project_session(session),
                 }
+            continuation_checkpoint = self._budget_continuation_checkpoint(session)
+            if continuation_checkpoint:
+                session["pending_continuation_checkpoint"] = continuation_checkpoint
+            else:
+                session.pop("pending_continuation_checkpoint", None)
             self._rebind_development_session(
                 session,
                 development_session_id=str(development_session_id or ""),
             )
+            if isinstance(execution_budget, Mapping):
+                previous_budget = (
+                    dict(session.get("execution_budget"))
+                    if isinstance(session.get("execution_budget"), Mapping)
+                    else {}
+                )
+                next_budget = {**previous_budget, **dict(execution_budget)}
+                try:
+                    max_tokens = int(next_budget.get("max_tokens") or 0)
+                    max_wall_seconds = int(next_budget.get("max_wall_seconds") or 0)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("execution budget limits must be integers") from exc
+                if not 1024 <= max_tokens <= 20_000_000:
+                    raise ValueError("execution budget max_tokens must be between 1024 and 20000000")
+                if not 60 <= max_wall_seconds <= 86_400:
+                    raise ValueError("execution budget max_wall_seconds must be between 60 and 86400")
+                next_budget.update(
+                    {
+                        "schema": "adaos.builder.execution_budget.v1",
+                        "source": str(next_budget.get("source") or "builder.continuation").strip()
+                        or "builder.continuation",
+                        "max_tokens": max_tokens,
+                        "max_wall_seconds": max_wall_seconds,
+                    }
+                )
+                history = [
+                    dict(item)
+                    for item in session.get("execution_budget_history") or []
+                    if isinstance(item, Mapping)
+                ]
+                if previous_budget:
+                    history.append(
+                        {
+                            **previous_budget,
+                            "replaced_at": _now_iso(),
+                            "replaced_by_iteration": int(session.get("iteration") or 0) + 1,
+                        }
+                    )
+                session["execution_budget_history"] = history[-20:]
+                session["execution_budget"] = next_budget
             transition_token = str(workflow_transition or "").strip() or None
             starts_successor_change = False
             if transition_token != "return_to_prototype":
@@ -1284,6 +1330,20 @@ class BuilderAutomationService:
             self._refresh_session_companion_skill_ids(session)
             self._capture_preview_binding(session)
             submitted = self._submit(session, iteration_instruction=instruction)
+            if continuation_checkpoint:
+                history = [
+                    dict(item)
+                    for item in session.get("continuation_history") or []
+                    if isinstance(item, Mapping)
+                ]
+                history.append(
+                    {
+                        **continuation_checkpoint,
+                        "resumed_by_task_id": submitted["task"]["task_id"],
+                    }
+                )
+                session["continuation_history"] = history[-20:]
+            session.pop("pending_continuation_checkpoint", None)
             session["status"] = "queued"
             session["current_task_id"] = submitted["task"]["task_id"]
             session.setdefault("task_history", []).append(session["current_task_id"])
@@ -1336,6 +1396,38 @@ class BuilderAutomationService:
             "session": session,
             "task": submitted["task"],
             "automation": self.project_session(session),
+        }
+
+    def _budget_continuation_checkpoint(self, session: Mapping[str, Any]) -> dict[str, Any] | None:
+        task_id = str(session.get("current_task_id") or "").strip()
+        if not task_id:
+            return None
+        try:
+            task = self.factory.read_task(task_id)
+        except (KeyError, RuntimeError):
+            return None
+        if str(task.get("status") or "").strip() != "failed":
+            return None
+        failures = [
+            dict(item)
+            for item in task.get("failure_history") or []
+            if isinstance(item, Mapping)
+        ]
+        failure = failures[-1] if failures else {}
+        if "Codex token budget exceeded:" not in str(failure.get("message") or ""):
+            return None
+        run_root = Path(self.runs_root) / _safe_token(task_id)
+        if not (run_root / "workspace" / ".git").is_dir():
+            return None
+        if not (run_root / "input" / "assignment.json").is_file():
+            return None
+        return {
+            "schema": "adaos.builder.automation_continuation_checkpoint.v1",
+            "mode": "validate_preserved_candidate",
+            "source_task_id": task_id,
+            "failure_id": str(failure.get("failure_id") or "").strip() or None,
+            "reason": "codex_token_budget_exceeded",
+            "created_at": _now_iso(),
         }
 
     def reconcile_checkpoint(self, *, object_type: str, object_id: str) -> dict[str, Any]:
@@ -1605,6 +1697,7 @@ class BuilderAutomationService:
         if not session:
             return {"ok": False, "error": "automation_session_not_found"}
         current = self.refresh_session(session)
+        current = self._reconcile_required_aprobation(current)
         if current.get("status") == "completed":
             current = self._notify_completed_session(current)
         return {"ok": True, "session": current, "automation": self.project_session(current)}
@@ -1634,9 +1727,48 @@ class BuilderAutomationService:
             session["updated_at"] = _now_iso()
             self._save_session(session)
         current = self.refresh_session(session)
+        current = self._reconcile_required_aprobation(current)
         if current.get("status") == "completed":
             current = self._notify_completed_session(current)
         return {"ok": True, "session": current, "automation": self.project_session(current)}
+
+    def _reconcile_required_aprobation(
+        self,
+        session: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        current = dict(session)
+        readiness = (
+            current.get("completion_readiness")
+            if isinstance(current.get("completion_readiness"), Mapping)
+            else {}
+        )
+        aprobation = (
+            readiness.get("aprobation")
+            if isinstance(readiness.get("aprobation"), Mapping)
+            else {}
+        )
+        if (
+            str(current.get("status") or "").strip() == "completed"
+            and bool(readiness.get("ok"))
+            and self._session_requires_aprobation_overlay(current)
+            and not bool(aprobation.get("ok"))
+        ):
+            _log.info(
+                "reconciling required Dev Ticket aprobation session=%s task=%s",
+                current.get("session_id"),
+                current.get("current_task_id"),
+            )
+            reconciled = self._reconcile_completed_workflow(current)
+            if reconciled is None:
+                _log.warning(
+                    "Dev Ticket aprobation reconciliation declined by workflow guard "
+                    "session=%s task=%s change=%s",
+                    current.get("session_id"),
+                    current.get("current_task_id"),
+                    current.get("change_id"),
+                )
+            return reconciled or current
+        return current
 
     @staticmethod
     def empty_projection(*, webspace_id: str | None = None) -> dict[str, Any]:
@@ -1671,6 +1803,16 @@ class BuilderAutomationService:
             task=task,
             local_run=local_run,
         )
+        readiness = (
+            session.get("completion_readiness")
+            if isinstance(session.get("completion_readiness"), Mapping)
+            else {}
+        )
+        aprobation = (
+            readiness.get("aprobation")
+            if isinstance(readiness.get("aprobation"), Mapping)
+            else {}
+        )
         error = str(failure.get("error") or failure.get("message") or task.get("error") or "").strip() or None
         return {
             "schema": AUTOMATION_PROJECTION_SCHEMA,
@@ -1701,6 +1843,13 @@ class BuilderAutomationService:
             "progress": dict(progress) if progress else None,
             "summary": str(result.get("summary") or result.get("message") or "").strip() or None,
             "budget_usage": budget_usage,
+            "delivery": {
+                "aprobation_required": BuilderAutomationService._session_requires_aprobation_overlay(
+                    session
+                ),
+                "aprobation_ready": bool(aprobation.get("ok")),
+                "mode": str(aprobation.get("mode") or "").strip() or None,
+            },
             "error": error,
             "failure_id": str(failure.get("failure_id") or "").strip() or None,
             "failure_stage": str(failure.get("stage") or "").strip() or None,
@@ -1834,18 +1983,46 @@ class BuilderAutomationService:
             return {}
 
     @staticmethod
-    def _codex_run_usage(local_run: Mapping[str, Any]) -> dict[str, int]:
+    def _codex_run_usage(local_run: Mapping[str, Any]) -> dict[str, Any]:
         run_root = Path(str(local_run.get("path") or "").strip())
         runtime_root = run_root / "runtime"
         paths = sorted(runtime_root.glob("codex-events*.jsonl")) if runtime_root.is_dir() else []
         if not paths:
             event_path = str(local_run.get("events_path") or "").strip()
             paths = [Path(event_path)] if event_path else []
-        total: dict[str, int] = {}
+        total: dict[str, Any] = {}
         for path in paths:
             usage = BuilderAutomationService._codex_journal_usage(str(path))
+            accuracy = "provider_reported"
+            if not usage:
+                budget_path = path.with_name(
+                    path.name.replace("codex-events", "codex-token-budget").replace(
+                        ".jsonl",
+                        ".json",
+                    )
+                )
+                if budget_path.is_file():
+                    try:
+                        receipt = json.loads(budget_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        receipt = {}
+                    estimated = receipt.get("usage") if isinstance(receipt, Mapping) else {}
+                    if isinstance(estimated, Mapping) and int(estimated.get("model_tokens") or 0) > 0:
+                        usage = {
+                            key: int(estimated.get(key) or 0)
+                            for key in (
+                                "input_tokens",
+                                "cached_input_tokens",
+                                "output_tokens",
+                                "reasoning_tokens",
+                                "model_tokens",
+                            )
+                        }
+                        accuracy = str(estimated.get("accuracy") or "estimated")
             if usage:
                 total["attempts"] = int(total.get("attempts") or 0) + 1
+                if accuracy != "provider_reported":
+                    total["accuracy"] = accuracy
             for key, value in usage.items():
                 if key == "model_tokens":
                     continue
@@ -1896,11 +2073,12 @@ class BuilderAutomationService:
             }
             return current
         if self.codex_usage_reporter is None:
+            usage_accuracy = str(usage.get("accuracy") or "provider_reported")
             current["codex_usage_accounting"] = {
                 "schema": "adaos.builder.codex_usage_receipt.v1",
                 "task_id": task_id,
                 "status": "reporter_unavailable",
-                "accuracy": "provider_reported",
+                "accuracy": usage_accuracy,
                 **usage,
                 "total_tokens": int(usage.get("model_tokens") or 0),
                 "checked_at": _now_iso(),
@@ -1909,13 +2087,14 @@ class BuilderAutomationService:
         idempotency_key = f"builder:{current.get('session_id') or 'session'}:{task_id}:codex-usage:v1"
         object_type = str(current.get("object_type") or "").strip()
         object_id = str(current.get("object_id") or "").strip()
+        usage_accuracy = str(usage.get("accuracy") or "provider_reported")
         event = {
             "idempotency_key": idempotency_key,
             "run_id": task_id,
             "job_id": task_id,
             "status": task_status,
             "source": "builder_automation",
-            "accuracy": "reported",
+            "accuracy": "reported" if usage_accuracy == "provider_reported" else "estimated",
             "input_tokens": int(usage.get("input_tokens") or 0),
             "cached_input_tokens": int(usage.get("cached_input_tokens") or 0),
             "output_tokens": int(usage.get("output_tokens") or 0),
@@ -1937,7 +2116,7 @@ class BuilderAutomationService:
                 "schema": "adaos.builder.codex_usage_receipt.v1",
                 "task_id": task_id,
                 "status": "reported",
-                "accuracy": "provider_reported",
+                "accuracy": usage_accuracy,
                 **usage,
                 "total_tokens": int(usage.get("model_tokens") or 0),
                 "idempotency_key": idempotency_key,
@@ -1950,7 +2129,7 @@ class BuilderAutomationService:
                 "schema": "adaos.builder.codex_usage_receipt.v1",
                 "task_id": task_id,
                 "status": "report_failed",
-                "accuracy": "provider_reported",
+                "accuracy": usage_accuracy,
                 **usage,
                 "total_tokens": int(usage.get("model_tokens") or 0),
                 "idempotency_key": idempotency_key,
@@ -2350,6 +2529,20 @@ class BuilderAutomationService:
             and bool(readiness.get("ok"))
             and str(readiness.get("task_id") or "").strip() == task_id
         )
+        aprobation = (
+            readiness.get("aprobation")
+            if isinstance(readiness, Mapping)
+            and isinstance(readiness.get("aprobation"), Mapping)
+            else {}
+        )
+        if (
+            terminal_readiness
+            and self._session_requires_aprobation_overlay(current)
+            and not bool(aprobation.get("ok"))
+        ):
+            reconciled = self._reconcile_completed_workflow(current)
+            if reconciled is not None:
+                return reconciled
         task_progress = task.get("progress") if isinstance(task.get("progress"), list) else []
         finalizing = str(current.get("finalizing_task_id") or "").strip() == task_id
         if terminal_readiness:
@@ -2674,6 +2867,9 @@ class BuilderAutomationService:
                 "context_packet": context_packet,
                 "development_context": development_context,
                 "prototype_handoff": copy.deepcopy(session.get("prototype_handoff")),
+                "continuation_checkpoint": copy.deepcopy(
+                    session.get("pending_continuation_checkpoint")
+                ),
             },
             "repo": {
                 "sparse_paths": sparse_paths,
@@ -3071,11 +3267,30 @@ class BuilderAutomationService:
                     "reconciled_from": "canonical_builder_workflow",
                 }
             ]
+        existing_aprobation = (
+            readiness.get("aprobation")
+            if isinstance(readiness.get("aprobation"), Mapping)
+            else {}
+        )
+        if (
+            self._session_requires_aprobation_overlay(current)
+            and not bool(existing_aprobation.get("ok"))
+        ):
+            companion_skill_ids = self._session_companion_skill_ids(current)
+            scenario_id = object_id if object_type == "scenario" else None
+            if companion_skill_ids or scenario_id:
+                readiness["aprobation"] = self._prepare_and_activate_aprobation_overlay(
+                    current,
+                    skill_ids=companion_skill_ids,
+                    scenario_id=scenario_id,
+                    webspace_id=str(current.get("webspace_id") or "desktop").strip() or "desktop",
+                )
         completed_at = str(
             automation.get("completed_at")
             or delivery.get("checkpoint_at")
             or _now_iso()
         )
+        reconciled_at = _now_iso()
         readiness.update(
             {
                 "ok": True,
@@ -3099,9 +3314,9 @@ class BuilderAutomationService:
             "task_id": task_id,
             "status": "completed",
             "message": "Reconciled terminal session from canonical Builder workflow",
-            "updated_at": completed_at,
+            "updated_at": reconciled_at,
         }
-        current["updated_at"] = completed_at
+        current["updated_at"] = reconciled_at
         current.pop("finalizing_task_id", None)
         current.pop("reuse_confirmed_checkpoints", None)
         current.pop("last_failure", None)
@@ -3814,7 +4029,14 @@ class BuilderAutomationService:
         ticket_id = str(links.get("development_ticket_id") or "").strip()
         brief = cls._session_repair_brief(session)
         policy = brief.get("policy") if isinstance(brief.get("policy"), Mapping) else {}
-        return bool(ticket_id and policy.get("publication_required") is True)
+        is_autonomous_ticket_repair = (
+            str(brief.get("execution_mode") or "").strip() == "surgical_dev_ticket_repair"
+        )
+        if not ticket_id or policy.get("publication_required") is False:
+            return False
+        return bool(
+            policy.get("publication_required") is True or is_autonomous_ticket_repair
+        )
 
     def _prepare_and_activate_aprobation_overlay(
         self,
@@ -4251,7 +4473,7 @@ class BuilderAutomationService:
 
     def _notify_completed_session(self, session: Mapping[str, Any]) -> dict[str, Any]:
         """Publish one idempotent terminal Builder message for a local task."""
-        current = dict(session)
+        current = self._sync_linked_development_ticket_tasks(dict(session))
         task_id = str(current.get("current_task_id") or "").strip()
         if task_id and str(current.get("completion_notified_task_id") or "").strip() == task_id:
             return current
@@ -4295,6 +4517,157 @@ class BuilderAutomationService:
         except Exception:
             pass
         return current
+
+    def _sync_linked_development_ticket_tasks(
+        self,
+        session: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        current = dict(session)
+        links = current.get("links") if isinstance(current.get("links"), Mapping) else {}
+        ticket_id = str(links.get("development_ticket_id") or "").strip()
+        repair_id = str(links.get("builder_repair_id") or "").strip()
+        task_id = str(current.get("current_task_id") or "").strip()
+        if not ticket_id or not repair_id or not task_id:
+            return current
+        synced_task_ids = {
+            str(item).strip()
+            for item in current.get("development_ticket_synced_task_ids") or []
+            if str(item).strip()
+        }
+        if (
+            current.get("development_ticket_sync_schema")
+            != "adaos.builder.dev_ticket_task_sync.v2"
+            or current.get("development_ticket_sync_revision") != 1
+        ):
+            synced_task_ids.clear()
+        historical_task_ids = {
+            str(item).strip()
+            for item in current.get("task_history") or []
+            if str(item).strip()
+        }
+        if (
+            current.get("development_ticket_sync_schema")
+            == "adaos.builder.dev_ticket_task_sync.v2"
+            and current.get("development_ticket_sync_revision") == 1
+            and task_id in synced_task_ids
+            and historical_task_ids.issubset(synced_task_ids)
+        ):
+            return current
+        try:
+            from adaos.services.builder.repair import BuilderRepairService
+            from adaos.services.development_tickets import DevelopmentTicketService
+
+            ticket_service = DevelopmentTicketService(state_dir=self.state_dir)
+            repair_service = BuilderRepairService(state_dir=self.state_dir)
+            ordered_task_ids = list(
+                dict.fromkeys(
+                    [
+                        str(item).strip()
+                        for item in current.get("task_history") or []
+                        if str(item).strip()
+                    ]
+                    + [task_id]
+                )
+            )
+            latest_sync: Mapping[str, Any] = {}
+            for linked_task_id in ordered_task_ids:
+                if linked_task_id in synced_task_ids:
+                    continue
+                task_session = self._session_for_linked_task(current, linked_task_id)
+                if task_session is None:
+                    continue
+                status_result = {
+                    "ok": True,
+                    "session": task_session,
+                    "automation": self.project_session(task_session),
+                }
+                latest_sync = ticket_service.sync_builder_repair(
+                    ticket_id,
+                    actor="builder.automation",
+                    repair_id=repair_id,
+                    repair_service=repair_service,
+                    automation_result=status_result,
+                )
+                if bool(latest_sync.get("synchronized")):
+                    synced_task_ids.add(linked_task_id)
+            if synced_task_ids:
+                now = _now_iso()
+                current["development_ticket_synced_task_id"] = task_id
+                current["development_ticket_synced_task_ids"] = [
+                    item for item in ordered_task_ids if item in synced_task_ids
+                ]
+                current["development_ticket_sync_schema"] = (
+                    "adaos.builder.dev_ticket_task_sync.v2"
+                )
+                current["development_ticket_sync_revision"] = 1
+                current["development_ticket_synced_at"] = now
+                synced_ticket = (
+                    latest_sync.get("ticket")
+                    if isinstance(latest_sync.get("ticket"), Mapping)
+                    else {}
+                )
+                current["development_ticket_sync"] = {
+                    "ticket_id": ticket_id,
+                    "repair_id": repair_id,
+                    "resolved": bool(
+                        latest_sync.get("resolved")
+                        or str(synced_ticket.get("status") or "").strip()
+                        in {"resolved", "verified", "closed"}
+                    ),
+                    "task_count": len(ordered_task_ids),
+                    "updated_at": now,
+                }
+                current["updated_at"] = now
+                self._save_session(current)
+        except Exception:
+            _log.exception(
+                "completed Builder automation failed to synchronize Dev Ticket "
+                "ticket=%s repair=%s task=%s",
+                ticket_id,
+                repair_id,
+                task_id,
+            )
+        return current
+
+    def _session_for_linked_task(
+        self,
+        session: Mapping[str, Any],
+        task_id: str,
+    ) -> dict[str, Any] | None:
+        current_task_id = str(session.get("current_task_id") or "").strip()
+        if task_id == current_task_id:
+            return copy.deepcopy(dict(session))
+        try:
+            task = self.factory.read_task(task_id)
+        except KeyError:
+            return None
+        snapshot = copy.deepcopy(dict(session))
+        snapshot["current_task_id"] = task_id
+        snapshot["task"] = task
+        snapshot["status"] = str(task.get("status") or "").strip() or "failed"
+        snapshot["updated_at"] = task.get("updated_at") or snapshot.get("updated_at")
+        run_dir = Path(self.runs_root) / _safe_token(task_id)
+        snapshot["local_run"] = {
+            "path": str(run_dir),
+            "events_path": str(run_dir / "output" / "codex-live.jsonl"),
+            "stderr_path": str(run_dir / "output" / "codex-live.stderr.log"),
+            "result_path": str(run_dir / "output" / "result.json"),
+        }
+        snapshot.pop("completion_readiness", None)
+        snapshot.pop("codex_usage_accounting", None)
+        if isinstance(task.get("result"), Mapping):
+            snapshot["last_result"] = copy.deepcopy(task["result"])
+            snapshot.pop("last_failure", None)
+        else:
+            snapshot.pop("last_result", None)
+            failures = [
+                dict(item)
+                for item in task.get("failure_history") or []
+                if isinstance(item, Mapping)
+            ]
+            if failures:
+                snapshot["last_failure"] = failures[-1]
+        return snapshot
 
     def _on_worker_progress(self, session_id: str, task_id: str, status: str, message: str) -> None:
         with _LOCK:

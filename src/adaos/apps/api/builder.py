@@ -109,6 +109,7 @@ class BuilderAutomationTurnRequest(BaseModel):
     object_type: str | None = Field(default=None, pattern="^(skill|scenario|project)$")
     object_id: str | None = None
     webspace_id: str | None = None
+    execution_budget: dict[str, Any] | None = None
 
 
 class BuilderWorkflowTransitionRequest(BaseModel):
@@ -320,6 +321,7 @@ def submit_automation_turn(
             object_type=body.object_type,
             object_id=body.object_id,
             webspace_id=body.webspace_id,
+            execution_budget=body.execution_budget,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

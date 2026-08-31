@@ -739,6 +739,36 @@ def test_realtime_sidecar_child_can_fallback_to_supervisor_http(
     assert realtime_sidecar_mod._route_tunnel_supervisor_runtime_endpoint() == ("127.0.0.1", 8778)
 
 
+def test_realtime_sidecar_api_serve_uses_configured_local_api_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ADAOS_RUNTIME_LAUNCH_MODE", "api_serve")
+    monkeypatch.setenv("ADAOS_RUNTIME_HOST", "localhost")
+    monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8999")
+    monkeypatch.delenv("ADAOS_SUPERVISOR_ENABLED", raising=False)
+    monkeypatch.setattr(
+        "adaos.services.node_config.load_config",
+        lambda: SimpleNamespace(local_api_url="http://127.0.0.1:8777"),
+    )
+
+    assert realtime_sidecar_mod._route_tunnel_upstream_host() == "127.0.0.1"
+    assert realtime_sidecar_mod._route_tunnel_upstream_port() == 8777
+
+
+def test_realtime_sidecar_supervisor_ignores_direct_local_api_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ADAOS_RUNTIME_LAUNCH_MODE", "api_serve")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
+    monkeypatch.setattr(realtime_sidecar_mod, "_route_tunnel_supervisor_runtime_endpoint", lambda: ("127.0.0.1", 8778))
+    monkeypatch.setattr(
+        "adaos.services.node_config.load_config",
+        lambda: SimpleNamespace(local_api_url="http://127.0.0.1:8777"),
+    )
+
+    assert realtime_sidecar_mod._route_tunnel_upstream_port() == 8778
+
+
 def test_realtime_sidecar_route_tunnel_refreshes_upstream_after_slot_switch(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

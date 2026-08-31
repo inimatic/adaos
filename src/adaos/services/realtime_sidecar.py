@@ -637,6 +637,9 @@ def _route_tunnel_upstream_host() -> str:
     dynamic = _route_tunnel_supervisor_runtime_endpoint()
     if dynamic is not None:
         return dynamic[0]
+    direct = _route_tunnel_direct_runtime_endpoint()
+    if direct is not None:
+        return direct[0]
     raw = str(os.getenv("ADAOS_RUNTIME_HOST") or "").strip()
     if raw:
         return raw
@@ -647,7 +650,29 @@ def _route_tunnel_upstream_port() -> int:
     dynamic = _route_tunnel_supervisor_runtime_endpoint()
     if dynamic is not None:
         return dynamic[1]
+    direct = _route_tunnel_direct_runtime_endpoint()
+    if direct is not None:
+        return direct[1]
     return runtime_env_int("ADAOS_RUNTIME_PORT", DEFAULT_RUNTIME_PORT, minimum=1)
+
+
+def _route_tunnel_direct_runtime_endpoint() -> tuple[str, int] | None:
+    if env_bool("ADAOS_SUPERVISOR_ENABLED"):
+        return None
+    if str(os.getenv("ADAOS_RUNTIME_LAUNCH_MODE") or "").strip().lower() != "api_serve":
+        return None
+    try:
+        from adaos.services.node_config import load_config
+
+        configured = str(load_config().local_api_url or "").strip().rstrip("/")
+        parsed = urlparse(configured)
+    except Exception:
+        return None
+    host = str(parsed.hostname or "").strip()
+    port = parsed.port
+    if parsed.scheme not in {"http", "https"} or not host or not isinstance(port, int) or port <= 0:
+        return None
+    return host, int(port)
 
 
 def _route_tunnel_supervisor_base_url() -> str | None:

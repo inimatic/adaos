@@ -65,6 +65,8 @@ class CodexBridgeProfile:
     zone: str | None = None
     bootstrap_mode: str = "mcp_session_lease"
     session_id: str | None = None
+    task_id: str | None = None
+    task_scopes: list[str] = field(default_factory=list)
     capability_profile: str | None = None
     access_token: str | None = None
     access_token_file: str | None = None
@@ -248,6 +250,42 @@ class CodexRootMcpBridge:
             "For operational context, prefer get_status, get_runtime_summary, and get_operational_surface "
             "before requesting logs or healthchecks."
         )
+
+    def resource_definitions(self) -> list[dict[str, Any]]:
+        task_id = _normalize_text(self.profile.task_id)
+        if not task_id:
+            return []
+        return [
+            {
+                "uri": f"adaos://builder/tasks/{task_id}/context",
+                "name": "AdaOS Builder task context",
+                "description": "Bounded task identity, scopes, and Root MCP capabilities for this Builder run.",
+                "mimeType": "application/json",
+            }
+        ]
+
+    def read_resource(self, uri: str) -> dict[str, Any]:
+        task_id = _normalize_text(self.profile.task_id)
+        expected_uri = f"adaos://builder/tasks/{task_id}/context" if task_id else ""
+        if not expected_uri or str(uri or "").strip() != expected_uri:
+            raise KeyError(uri)
+        payload = {
+            "schema": "adaos.builder.task_mcp_context.v1",
+            "task_id": task_id,
+            "task_scopes": _normalize_unique(self.profile.task_scopes),
+            "capabilities": _normalize_unique(self.profile.capabilities),
+            "authority": "bounded_read_and_staging_validation",
+            "secrets_included": False,
+        }
+        return {
+            "contents": [
+                {
+                    "uri": expected_uri,
+                    "mimeType": "application/json",
+                    "text": _json_text(payload),
+                }
+            ]
+        }
 
     def tool_definitions(self) -> list[dict[str, Any]]:
         target_optional = self.profile.target_id is not None
@@ -1339,7 +1377,10 @@ class CodexRootMcpBridge:
             if method == "initialize":
                 result = {
                     "protocolVersion": "2025-03-26",
-                    "capabilities": {"tools": {"listChanged": False}},
+                    "capabilities": {
+                        "tools": {"listChanged": False},
+                        "resources": {"subscribe": False, "listChanged": False},
+                    },
                     "serverInfo": {"name": self.profile.server_name, "version": "0.1.0"},
                     "instructions": self.instructions(),
                 }
@@ -1348,6 +1389,19 @@ class CodexRootMcpBridge:
                 return {"jsonrpc": "2.0", "id": request_id, "result": {}}
             if method == "tools/list":
                 return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": self.tool_definitions()}}
+            if method == "resources/list":
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {"resources": self.resource_definitions()},
+                }
+            if method == "resources/read":
+                payload = dict(params or {})
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": self.read_resource(str(payload.get("uri") or "")),
+                }
             if method == "tools/call":
                 payload = dict(params or {})
                 name = str(payload.get("name") or "").strip()

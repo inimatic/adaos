@@ -1322,18 +1322,59 @@ class SkillFactoryService:
         scope: str,
         credential_ref: str | None = None,
     ) -> dict[str, Any]:
+        result = self.validate_task_access_token(
+            access_token,
+            task_id=task_id,
+            node_id=node_id,
+            scope=scope,
+            credential_ref=credential_ref,
+        )
+        return {
+            **result,
+            "scope": scope,
+            "credential_ref": credential_ref,
+        }
+
+    def validate_task_access_token(
+        self,
+        access_token: str,
+        *,
+        task_id: str | None = None,
+        node_id: str | None = None,
+        scope: str | None = None,
+        credential_ref: str | None = None,
+    ) -> dict[str, Any]:
+        """Validate a bounded Builder task bearer without exposing its secret."""
+
         token = str(access_token or "").strip()
         if not token:
             raise ValueError("task access token is required")
+        observed_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         with self._state_lock():
             state = self._read_state()
-            task = self._require_task(state, str(task_id))
+            task: dict[str, Any] | None = None
+            for candidate in _mapping(state.get("tasks")).values():
+                observed = _mapping(candidate)
+                lease = _mapping(observed.get("access_lease"))
+                if lease.get("schema") != TASK_ACCESS_LEASE_SCHEMA:
+                    continue
+                if hmac.compare_digest(str(lease.get("token_hash") or ""), observed_hash):
+                    task = observed
+                    break
+            if task is None:
+                raise ValueError("task access token is invalid")
+
+            observed_task_id = _text(task.get("task_id"))
+            if task_id and observed_task_id != str(task_id):
+                raise ValueError("task access lease belongs to another task")
             lease = _mapping(task.get("access_lease"))
-            if lease.get("schema") != TASK_ACCESS_LEASE_SCHEMA:
-                raise ValueError("task has no access lease")
             if lease.get("status") != "active":
                 raise ValueError(f"task access lease is {lease.get('status') or 'inactive'}")
-            if _text(lease.get("node_id")) != str(node_id) or _text(task.get("assigned_node_id")) != str(node_id):
+            observed_node_id = _text(lease.get("node_id"))
+            assigned_node_id = _text(task.get("assigned_node_id"))
+            if observed_node_id != assigned_node_id:
+                raise ValueError("task access lease node assignment is inconsistent")
+            if node_id and (observed_node_id != str(node_id) or assigned_node_id != str(node_id)):
                 raise ValueError("task access lease belongs to another dev node")
             expires_at = datetime.fromisoformat(str(lease.get("expires_at") or ""))
             if expires_at.tzinfo is None:
@@ -1342,28 +1383,26 @@ class SkillFactoryService:
                 lease["status"] = "expired"
                 lease["revoked_at"] = _now_iso()
                 task["access_lease"] = lease
-                state["tasks"][str(task_id)] = task
+                state["tasks"][observed_task_id] = task
                 self._write_state(state)
                 raise ValueError("task access lease expired")
-            observed_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-            if not hmac.compare_digest(str(lease.get("token_hash") or ""), observed_hash):
-                raise ValueError("task access token is invalid")
-            if str(scope) not in _string_list(lease.get("scopes")):
+            scopes = _string_list(lease.get("scopes"))
+            if scope and str(scope) not in scopes:
                 raise ValueError(f"task access lease does not allow scope: {scope}")
             if credential_ref and str(credential_ref) not in _string_list(lease.get("credential_refs")):
                 raise ValueError("credential reference is outside the task lease")
             lease["last_used_at"] = _now_iso()
             lease["use_count"] = int(lease.get("use_count") or 0) + 1
             task["access_lease"] = lease
-            state["tasks"][str(task_id)] = task
+            state["tasks"][observed_task_id] = task
             self._write_state(state)
             return {
                 "ok": True,
                 "lease_id": lease["lease_id"],
-                "task_id": task_id,
-                "node_id": node_id,
-                "scope": scope,
-                "credential_ref": credential_ref,
+                "task_id": observed_task_id,
+                "node_id": observed_node_id,
+                "scopes": scopes,
+                "credential_refs": _string_list(lease.get("credential_refs")),
                 "expires_at": lease["expires_at"],
             }
 

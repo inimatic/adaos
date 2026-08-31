@@ -375,6 +375,20 @@ completion notifications, subscriptions, artifact-open helpers, autonomous
 cost estimates, richer user-ticket/Builder history, and full Builder repair
 execution over ticket batches remain open.
 
+E2E acceptance note, 2026-08-31: a real autonomous repair for
+`subscription_status_skill` materialized source that was absent from DEV,
+created four separately visible Builder tasks under one user ticket, preserved
+and revalidated the budget-stopped Codex candidate instead of repeating model
+work, and activated DEV version `0.1.13` as an idempotent default-workspace
+runtime overlay while workspace source remained at `0.1.12`. Task-scoped MCP
+leases admitted bounded task context without secrets. Failed Codex iterations
+reported `2,874,058` tokens to Root in total; the validation-only continuation
+reported zero additional model usage. Automation then synchronized validation,
+commit, and runtime-overlay evidence back to the repair and moved the user
+ticket only to non-terminal `resolved`. Full owning-project discovery remains
+open when a standalone skill target has no `project_id`; DS5-03, DS5-17, and
+DS5-25 retain that project/scenario publication work.
+
 ## DS6. Analytics, Campaigns, And Policy Hardening
 
 Goal: feedback improves the platform without turning private observations into

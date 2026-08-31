@@ -193,6 +193,56 @@ def _require_root_write_auth(*, authorization: str | None, owner_token: str | No
     raise HTTPException(status_code=401, detail="Missing Authorization bearer token or X-Owner-Token")
 
 
+_TASK_MCP_SCOPE_CAPABILITIES: dict[str, tuple[str, ...]] = {
+    "read_capability_snapshot": (
+        "development.read.foundation",
+        "development.read.contracts",
+        "development.read.descriptors",
+    ),
+    "read_requirements": (
+        "development.read.contracts",
+        "development.read.system_model",
+        "development.read.skill_contracts",
+        "development.read.scenario_contracts",
+    ),
+    "read_mock_data": ("development.read.descriptors",),
+    "run_staging_validation": (
+        "operations.read.contracts",
+        "operations.read.targets",
+    ),
+}
+
+
+def _skill_factory_task_auth(access_token: str, *, task_id: str | None = None) -> dict[str, Any] | None:
+    token = str(access_token or "").strip()
+    if not token.startswith("sf_task_"):
+        return None
+    try:
+        from adaos.services.skill_factory import SkillFactoryService
+
+        lease = SkillFactoryService().validate_task_access_token(token, task_id=task_id)
+    except (KeyError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid or inactive Builder task access lease") from exc
+
+    capabilities: list[str] = []
+    for scope in lease.get("scopes") or []:
+        for capability in _TASK_MCP_SCOPE_CAPABILITIES.get(str(scope), ()):
+            if capability not in capabilities:
+                capabilities.append(capability)
+    return {
+        "method": "skill_factory_task_lease",
+        "verified": True,
+        "actor": f"builder_task:{lease.get('task_id')}",
+        "grant_source": "skill_factory_task_lease",
+        "capabilities": capabilities,
+        "task_id": lease.get("task_id"),
+        "dev_node_id": lease.get("node_id"),
+        "task_scopes": list(lease.get("scopes") or []),
+        "task_access_lease_id": lease.get("lease_id"),
+        "audience": "adaos-builder-task",
+    }
+
+
 def _require_root_access_auth(*, authorization: str | None, owner_token: str | None) -> dict[str, Any]:
     if owner_token:
         return _require_root_write_auth(authorization=authorization, owner_token=owner_token)
@@ -239,8 +289,21 @@ def _require_root_access_auth(*, authorization: str | None, owner_token: str | N
                 "audience": session_record.get("audience"),
                 "capability_profile": session_record.get("capability_profile"),
             }
+        task_auth = _skill_factory_task_auth(token)
+        if task_auth is not None:
+            return task_auth
 
     raise HTTPException(status_code=401, detail="Missing Authorization bearer token or X-Owner-Token")
+
+
+def _require_task_mcp_auth(*, task_id: str, authorization: str | None) -> dict[str, Any]:
+    token = _authorization_bearer(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing Builder task access lease")
+    auth = _skill_factory_task_auth(token, task_id=task_id)
+    if auth is None:
+        raise HTTPException(status_code=401, detail="Invalid Builder task access lease")
+    return auth
 
 
 def _legacy_root_token_auth(root_token: str | None) -> dict[str, Any] | None:
@@ -381,6 +444,8 @@ def _root_mcp_http_bridge(
         zone=None,
         bootstrap_mode=str(auth.get("method") or "remote_mcp"),
         session_id=str(auth.get("mcp_session_id") or "").strip() or None,
+        task_id=str(auth.get("task_id") or "").strip() or None,
+        task_scopes=[str(item) for item in auth.get("task_scopes") or [] if str(item).strip()],
         capability_profile=str(auth.get("capability_profile") or "").strip() or None,
         access_token=bearer,
         server_name="adaos-root",
@@ -3155,18 +3220,15 @@ async def root_mcp_call(
     return {"ok": response.ok, "scope": scope, "response": response.to_dict()}
 
 
-@root_router.post("/mcp")
-async def root_mcp_jsonrpc(
+async def _dispatch_root_mcp_jsonrpc(
     payload: dict[str, Any] | list[Any],
     request: Request,
     response: Response,
-    authorization: str | None = Header(default=None),
-    owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
-    subnet_id: str | None = Header(default=None, alias="X-AdaOS-Subnet-Id"),
-    zone: str | None = Header(default=None, alias="X-AdaOS-Zone"),
+    *,
+    auth: dict[str, Any],
+    authorization: str | None,
+    scope: dict[str, Any],
 ) -> Any:
-    auth = _require_root_access_auth(authorization=authorization, owner_token=owner_token)
-    scope = _effective_mcp_scope(auth=auth, subnet_id=subnet_id, zone=zone)
     bridge = _root_mcp_http_bridge(request=request, auth=auth, authorization=authorization, scope=scope)
 
     async def _handle_one(item: Any) -> dict[str, Any] | None:
@@ -3194,6 +3256,47 @@ async def root_mcp_jsonrpc(
         response.status_code = 202
         return {}
     return result
+
+
+@root_router.post("/mcp/task/{task_id}")
+async def root_task_mcp_jsonrpc(
+    task_id: str,
+    payload: dict[str, Any] | list[Any],
+    request: Request,
+    response: Response,
+    authorization: str | None = Header(default=None),
+) -> Any:
+    auth = _require_task_mcp_auth(task_id=task_id, authorization=authorization)
+    return await _dispatch_root_mcp_jsonrpc(
+        payload,
+        request,
+        response,
+        auth=auth,
+        authorization=authorization,
+        scope={},
+    )
+
+
+@root_router.post("/mcp")
+async def root_mcp_jsonrpc(
+    payload: dict[str, Any] | list[Any],
+    request: Request,
+    response: Response,
+    authorization: str | None = Header(default=None),
+    owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    subnet_id: str | None = Header(default=None, alias="X-AdaOS-Subnet-Id"),
+    zone: str | None = Header(default=None, alias="X-AdaOS-Zone"),
+) -> Any:
+    auth = _require_root_access_auth(authorization=authorization, owner_token=owner_token)
+    scope = _effective_mcp_scope(auth=auth, subnet_id=subnet_id, zone=zone)
+    return await _dispatch_root_mcp_jsonrpc(
+        payload,
+        request,
+        response,
+        auth=auth,
+        authorization=authorization,
+        scope=scope,
+    )
 
 
 router.include_router(root_router)

@@ -495,6 +495,8 @@ def _automation_has_validation_evidence(payload: Mapping[str, Any]) -> bool:
 
 
 def _autonomous_repair_brief(ticket: Mapping[str, Any], repair: Mapping[str, Any], *, target: Mapping[str, str]) -> str:
+    policy = _mapping(ticket.get("policy"))
+    policy.setdefault("publication_required", True)
     payload = {
         "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
         "execution_mode": "surgical_dev_ticket_repair",
@@ -506,7 +508,7 @@ def _autonomous_repair_brief(ticket: Mapping[str, Any], repair: Mapping[str, Any
         "target_scope": _mapping(ticket.get("target_scope")),
         "owner_area": _text(ticket.get("owner_area")),
         "component_ref": _text(ticket.get("component_ref")),
-        "policy": _mapping(ticket.get("policy")),
+        "policy": policy,
         "metadata": _mapping(ticket.get("metadata")),
         "relation_refs": _sequence_of_mappings(ticket.get("relation_refs") or []),
         "evidence_refs": _sequence_of_mappings(ticket.get("evidence_refs") or []),
@@ -1301,6 +1303,7 @@ class DevelopmentTicketService:
         repair_id: str | None = None,
         repair_service: BuilderRepairService | None = None,
         automation_service: Any | None = None,
+        automation_result: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         ticket = self.get_ticket(ticket_id)
         if not ticket:
@@ -1309,15 +1312,18 @@ class DevelopmentTicketService:
         linked_repair_id = _text(repair_id) or self._latest_repair_id(ticket)
         if not linked_repair_id:
             return {"ok": True, "synchronized": False, "reason": "builder_repair_not_linked", "ticket": ticket}
-        if automation_service is None:
-            from adaos.services.builder.automation import BuilderAutomationService
-
-            automation_service = BuilderAutomationService.from_context()
         service = repair_service or BuilderRepairService(state_dir=self.state_dir)
-        status_result = automation_service.status(
-            object_type=target["object_type"],
-            object_id=target["object_id"],
-        )
+        if isinstance(automation_result, Mapping):
+            status_result = dict(automation_result)
+        else:
+            if automation_service is None:
+                from adaos.services.builder.automation import BuilderAutomationService
+
+                automation_service = BuilderAutomationService.from_context()
+            status_result = automation_service.status(
+                object_type=target["object_type"],
+                object_id=target["object_id"],
+            )
         if not status_result.get("ok"):
             return {
                 "ok": True,
@@ -2429,11 +2435,31 @@ class DevelopmentTicketService:
             for index, ref in enumerate(refs):
                 if _text(ref.get("repair_id")) != _text(repair_id):
                     continue
+                existing_task_id = _text(ref.get("automation_task_id"))
+                if task_id and existing_task_id and existing_task_id != task_id:
+                    continue
                 refs[index] = {**ref, **automation_ref, "updated_at": now}
                 matched = True
                 break
             if not matched:
                 refs.append({**automation_ref, "created_at": now, "updated_at": now})
+            task_order = {
+                _text(item): index
+                for index, item in enumerate(session.get("task_history") or [])
+                if _text(item)
+            }
+            if task_order:
+                refs = sorted(
+                    enumerate(refs),
+                    key=lambda item: (
+                        task_order.get(
+                            _text(item[1].get("automation_task_id")),
+                            len(task_order) + item[0],
+                        ),
+                        item[0],
+                    ),
+                )
+                refs = [item for _, item in refs]
             ticket["builder_refs"] = refs[-100:]
             if _text(ticket.get("status")) not in {"resolved", "verified", "closed", *TERMINAL_TICKET_STATES}:
                 ticket["status"] = "ready_for_builder" if failed_automation else "in_builder"

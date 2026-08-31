@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import types
 
@@ -227,6 +228,79 @@ def test_root_mcp_foundation_and_contracts(monkeypatch) -> None:
     assert bundle_descriptor["payload"]["descriptor_count"] >= 1
     assert bundle_descriptor["metadata"]["provenance"]["build_version"]
     assert bundle_descriptor["metadata"]["fresh_until"]
+
+
+def test_root_mcp_accepts_bounded_builder_task_lease(monkeypatch) -> None:
+    from adaos.services.skill_factory import SkillFactoryService
+
+    task_id = "task.builder-mcp"
+
+    def _validate(_self, token, *, task_id=None, **_kwargs):
+        if token != "sf_task_test-secret" or task_id not in {None, "task.builder-mcp"}:
+            raise ValueError("invalid task lease")
+        return {
+            "ok": True,
+            "lease_id": "lease.builder-mcp",
+            "task_id": "task.builder-mcp",
+            "node_id": "devnode.builder",
+            "scopes": ["read_capability_snapshot"],
+            "credential_refs": [],
+            "expires_at": "2099-01-01T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr(SkillFactoryService, "validate_task_access_token", _validate)
+    client = _make_client()
+    headers = {"Authorization": "Bearer sf_task_test-secret"}
+
+    initialize = client.post(
+        f"/v1/root/mcp/task/{task_id}",
+        headers=headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": "initialize",
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-03-26", "capabilities": {}},
+        },
+    )
+    assert initialize.status_code == 200
+    assert initialize.json()["result"]["serverInfo"]["name"] == "adaos-root"
+    assert "resources" in initialize.json()["result"]["capabilities"]
+
+    resources = client.post(
+        f"/v1/root/mcp/task/{task_id}",
+        headers=headers,
+        json={"jsonrpc": "2.0", "id": "resources", "method": "resources/list", "params": {}},
+    )
+    assert resources.status_code == 200
+    task_resource = resources.json()["result"]["resources"][0]
+    assert task_resource["uri"] == f"adaos://builder/tasks/{task_id}/context"
+
+    resource = client.post(
+        f"/v1/root/mcp/task/{task_id}",
+        headers=headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": "resource",
+            "method": "resources/read",
+            "params": {"uri": task_resource["uri"]},
+        },
+    )
+    task_context = json.loads(resource.json()["result"]["contents"][0]["text"])
+    assert task_context["task_id"] == task_id
+    assert task_context["secrets_included"] is False
+
+    foundation = client.get("/v1/root/mcp/foundation", headers=headers)
+    assert foundation.status_code == 200
+
+    audit = client.get("/v1/root/mcp/audit", headers=headers)
+    assert audit.status_code == 403
+
+    wrong_task = client.post(
+        "/v1/root/mcp/task/task.other",
+        headers=headers,
+        json={"jsonrpc": "2.0", "id": "tools", "method": "tools/list", "params": {}},
+    )
+    assert wrong_task.status_code == 401
 
 
 def test_root_mcp_call_records_audit(monkeypatch) -> None:

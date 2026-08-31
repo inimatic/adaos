@@ -652,6 +652,7 @@ def test_api_serve_dev_sidecar_adopts_existing_listener(monkeypatch):
         subnet_id="sn_1",
         role="hub",
         hub_url="http://127.0.0.1:8777",
+        local_api_url="http://127.0.0.1:8777",
         token="t1",
     )
     monkeypatch.delenv("ADAOS_AUTOSTART_MANAGED", raising=False)
@@ -665,6 +666,10 @@ def test_api_serve_dev_sidecar_adopts_existing_listener(monkeypatch):
             "listener_running": True,
             "listener_pid": 1234,
             "local_url": "nats://127.0.0.1:7422",
+            "route_tunnel_contract": {
+                "lifecycle_manager": "runtime",
+                "ws": {"upstream": {"url": "ws://127.0.0.1:8777/ws"}},
+            },
         },
     )
 
@@ -674,6 +679,51 @@ def test_api_serve_dev_sidecar_adopts_existing_listener(monkeypatch):
     monkeypatch.setattr("adaos.services.realtime_sidecar.start_realtime_sidecar_subprocess", _unexpected_start)
 
     assert asyncio.run(_ensure_api_serve_dev_sidecar(conf, launch_mode="dev_serve")) is None
+
+
+def test_api_serve_dev_sidecar_replaces_listener_for_stale_runtime(monkeypatch):
+    conf = NodeConfig(
+        node_id="n1",
+        subnet_id="sn_1",
+        role="hub",
+        local_api_url="http://127.0.0.1:8777",
+        token="t1",
+    )
+    monkeypatch.delenv("ADAOS_AUTOSTART_MANAGED", raising=False)
+    monkeypatch.delenv("ADAOS_SUPERVISOR_ENABLED", raising=False)
+    monkeypatch.delenv("ADAOS_AUTOSTART_MODE", raising=False)
+    monkeypatch.setattr("adaos.services.realtime_sidecar.realtime_sidecar_enabled", lambda role=None: True)
+    monkeypatch.setattr("adaos.services.realtime_sidecar.resolve_realtime_remote_candidates", lambda: ["wss://root/nats"])
+    monkeypatch.setattr(
+        "adaos.services.realtime_sidecar.realtime_sidecar_listener_snapshot",
+        lambda proc=None, role=None: {
+            "listener_running": True,
+            "listener_pid": 1234,
+            "local_url": "nats://127.0.0.1:7422",
+            "route_tunnel_contract": {
+                "lifecycle_manager": "supervisor",
+                "ws": {"upstream": {"url": "ws://127.0.0.1:8778/ws"}},
+            },
+        },
+    )
+
+    class FakeProc:
+        pid = 4321
+
+    calls: dict[str, object] = {}
+
+    async def _start(**kwargs):
+        calls["start_kwargs"] = dict(kwargs)
+        return FakeProc()
+
+    monkeypatch.setattr("adaos.services.realtime_sidecar.start_realtime_sidecar_subprocess", _start)
+    async def _stop(_proc):
+        return None
+
+    monkeypatch.setattr("adaos.services.realtime_sidecar.stop_realtime_sidecar_subprocess", _stop)
+
+    assert asyncio.run(_ensure_api_serve_dev_sidecar(conf, launch_mode="api_serve")) is not None
+    assert calls["start_kwargs"] == {"role": "hub"}
 
 
 def test_api_serve_dev_sidecar_leaves_repo_root_to_context(monkeypatch):

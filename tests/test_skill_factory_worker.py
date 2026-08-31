@@ -27,7 +27,9 @@ from adaos.services.skill_factory_worker import (
     LocalSkillFactoryWorker,
     SubprocessCodexExecutor,
     _codex_failure_detail,
+    _codex_jsonl_live_budget_estimate,
     _codex_prompt_budget_check,
+    _context_packet_prompt_projection,
     _root_mcp_profile_from_assignment,
 )
 
@@ -1686,6 +1688,47 @@ def test_codex_executor_projects_root_mcp_config_without_prompt_secret(
     assert "secret-token-value" not in prompt
 
 
+def test_optional_root_mcp_uses_generic_runtime_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ADAOS_ROOT_MCP_AUTH", "generic-secret")
+    assignment = {
+        "task_id": "task.generic-mcp",
+        "mcp": {
+            "root_mcp": {
+                "enabled": True,
+                "url": "https://ru.api.inimatic.com/v1/root/mcp",
+                "required": False,
+            }
+        },
+    }
+
+    profile = _root_mcp_profile_from_assignment(assignment, include_private_token=True)
+
+    assert profile is not None
+    assert profile["bearer_token_env_var"] == "ADAOS_TASK_MCP_AUTH_TASK_GENERIC_MCP"
+    assert profile["_bearer_token_value"] == "generic-secret"
+    assert "generic-secret" not in json.dumps(_context_packet_prompt_projection({}))
+
+
+def test_optional_root_mcp_is_omitted_without_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ADAOS_ROOT_MCP_AUTH", raising=False)
+    assignment = {
+        "task_id": "task.no-mcp",
+        "mcp": {
+            "root_mcp": {
+                "enabled": True,
+                "url": "https://ru.api.inimatic.com/v1/root/mcp",
+                "required": False,
+            }
+        },
+    }
+
+    assert _root_mcp_profile_from_assignment(assignment, include_private_token=True) is None
+
+
 def test_worker_projects_task_scoped_mcp_lease_without_prompt_secret(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -1715,7 +1758,7 @@ def test_worker_projects_task_scoped_mcp_lease_without_prompt_secret(
     )
     assert private_profile is not None
     assert private_profile["server_name"] == "adaos_task_root"
-    assert private_profile["url"] == "http://127.0.0.1:8778/v1/root/mcp"
+    assert private_profile["url"] == "http://127.0.0.1:8778/v1/root/mcp/task/task.lease"
     assert private_profile["bearer_token_env_var"] == "ADAOS_TASK_MCP_AUTH_TASK_LEASE"
     assert private_profile["bearer_env_present"] is True
     assert private_profile["_bearer_token_value"] == "lease-secret-value"
@@ -1723,7 +1766,12 @@ def test_worker_projects_task_scoped_mcp_lease_without_prompt_secret(
     executor = SubprocessCodexExecutor(repo_root=tmp_path / "repo")
     config_args = executor._root_mcp_config_args(private_profile)
     environment = executor._execution_environment(root_mcp=private_profile)
-    assert any(arg.endswith("mcp_servers.adaos_task_root.url=\"http://127.0.0.1:8778/v1/root/mcp\"") for arg in config_args)
+    assert any(
+        arg.endswith(
+            "mcp_servers.adaos_task_root.url=\"http://127.0.0.1:8778/v1/root/mcp/task/task.lease\""
+        )
+        for arg in config_args
+    )
     assert "lease-secret-value" not in " ".join(config_args)
     assert environment["ADAOS_TASK_MCP_AUTH_TASK_LEASE"] == "lease-secret-value"
 
@@ -1766,6 +1814,48 @@ def test_codex_prompt_budget_blocks_oversized_instruction_before_launch() -> Non
     assert check["status"] == "blocked"
     assert check["declared"]["max_model_tokens"] == 1600
     assert check["prompt_token_estimate"] > check["prompt_token_limit"]
+
+
+def test_codex_live_budget_estimate_counts_growing_tool_context(tmp_path: Path) -> None:
+    journal = tmp_path / "codex-events.jsonl"
+    events = [
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "output": "x" * 4000,
+            },
+        }
+        for _ in range(4)
+    ]
+    journal.write_text(
+        "\n".join(json.dumps(item) for item in events) + "\n",
+        encoding="utf-8",
+    )
+
+    usage = _codex_jsonl_live_budget_estimate(journal, prompt="p" * 4000)
+
+    assert usage["accuracy"] == "estimated"
+    assert usage["tool_rounds"] == 4
+    assert usage["model_tokens"] > 12_000
+
+
+def test_context_packet_omits_intent_duplicated_by_implementation_brief() -> None:
+    packet = {
+        "change": {
+            "change_id": "change.demo",
+            "intent": "Fix the scoped projection.",
+            "issues": [{"issue_id": "issue.demo"}],
+        }
+    }
+
+    projected = _context_packet_prompt_projection(
+        packet,
+        implementation_brief="Fix the scoped projection.",
+    )
+
+    assert projected["change"]["change_id"] == "change.demo"
+    assert "intent" not in projected["change"]
 
 
 def test_codex_task_runtime_is_outside_candidate_worktree(tmp_path: Path) -> None:
@@ -3366,6 +3456,85 @@ def test_worker_changed_paths_differs_from_root_after_commit(tmp_path: Path) -> 
     worker = object.__new__(LocalSkillFactoryWorker)
 
     assert worker._changed_from_baseline(workspace) == ["tracked.txt"]
+
+
+def test_worker_restores_budget_stopped_candidate_for_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    source_task_id = "task.budget-stopped"
+    source_run = worker.runs_root / source_task_id
+    previous_workspace = source_run / "workspace"
+    previous_file = previous_workspace / "skills" / "demo" / "webui.json"
+    previous_file.parent.mkdir(parents=True)
+    previous_file.write_text('{"value":"baseline"}', encoding="utf-8")
+    worker._init_git_workspace(previous_workspace, "realize/source")
+    previous_file.write_text('{"value":"candidate"}', encoding="utf-8")
+    previous_assignment = {
+        "task_id": source_task_id,
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {
+            "sparse_paths": ["skills/demo/"],
+            "source_snapshot": {"digest": "sha256:same"},
+        },
+    }
+    (source_run / "input").mkdir(parents=True)
+    (source_run / "input" / "assignment.json").write_text(
+        json.dumps(previous_assignment),
+        encoding="utf-8",
+    )
+    failure_id = "failure.task.budget-stopped.test"
+    monkeypatch.setattr(
+        SkillFactoryService,
+        "read_task",
+        lambda _self, task_id: {
+            "task_id": task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": failure_id,
+                    "message": "Codex token budget exceeded: observed 10 of 5 model tokens.",
+                }
+            ],
+        },
+    )
+
+    workspace = tmp_path / "current"
+    current_file = workspace / "skills" / "demo" / "webui.json"
+    current_file.parent.mkdir(parents=True)
+    current_file.write_text('{"value":"baseline"}', encoding="utf-8")
+    worker._init_git_workspace(workspace, "realize/current")
+    assignment = {
+        "task_id": "task.current",
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {
+            "sparse_paths": ["skills/demo/"],
+            "source_snapshot": {"digest": "sha256:same"},
+        },
+        "realize_request": {
+            "artifacts": {
+                "continuation_checkpoint": {
+                    "mode": "validate_preserved_candidate",
+                    "source_task_id": source_task_id,
+                    "failure_id": failure_id,
+                }
+            }
+        },
+    }
+
+    restored = worker._restore_continuation_candidate(assignment, workspace)
+
+    assert restored is not None
+    assert restored["source_task_id"] == source_task_id
+    assert restored["changed_paths"] == ["skills/demo/webui.json"]
+    assert json.loads(current_file.read_text(encoding="utf-8"))["value"] == "candidate"
 
 
 def test_codex_executor_discovers_vscode_bundled_cli(

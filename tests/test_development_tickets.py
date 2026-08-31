@@ -397,6 +397,8 @@ def test_autonomous_repair_links_builder_automation_and_resolves_with_evidence(t
     assert automation.calls[0]["object_type"] == "skill"
     assert automation.calls[0]["object_id"] == "demo_metrics_skill"
     assert automation.calls[0]["links"]["development_ticket_id"] == ticket["ticket_id"]
+    brief = json.loads(automation.calls[0]["implementation_brief"])
+    assert brief["policy"]["publication_required"] is True
     first_ref = result["ticket"]["builder_refs"][0]
     assert first_ref["automation_session_id"] == "automation.session.1"
     assert first_ref["automation_task_id"] == "factory.task.1"
@@ -477,6 +479,42 @@ def test_failed_autonomous_repair_returns_ticket_to_builder_queue_with_evidence(
     assert repair["status"] == "in_progress"
     assert repair["context"]["automation"]["status"] == "failed"
     assert repair["context"]["usage"]["receipt_status"] == "unavailable"
+
+
+def test_builder_refs_preserve_multiple_automation_tasks_for_one_repair(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    signal = service.capture_signal(
+        kind="development_request",
+        summary="Repair the same component through bounded Builder iterations",
+        target_scope={"type": "skill", "id": "demo_metrics_skill", "source": "dev"},
+        source="client_feedback",
+        owner_area="skill",
+        component_ref="skill:demo_metrics_skill",
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="accepted",
+        owner_area="skill",
+        component_ref="skill:demo_metrics_skill",
+    )["ticket"]
+    automation = _FakeBuilderAutomation()
+
+    for suffix, status in (("2", "completed"), ("1", "failed")):
+        automation_result = automation._payload(status=status, suffix=suffix, links={})
+        automation_result["session"]["task_history"] = ["factory.task.1", "factory.task.2"]
+        service._link_builder_automation(
+            ticket["ticket_id"],
+            repair_id="repair.shared",
+            automation=automation_result,
+            actor="builder.automation",
+        )
+
+    linked = service.get_ticket(ticket["ticket_id"])
+    assert [ref["automation_task_id"] for ref in linked["builder_refs"]] == [
+        "factory.task.1",
+        "factory.task.2",
+    ]
 
 
 def test_close_ticket_maps_terminal_reason_to_ticket_and_signal_status(tmp_path: Path) -> None:

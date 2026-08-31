@@ -60,6 +60,7 @@ CODEX_TOKEN_BUDGET_CHECK_INTERVAL_SECONDS = 2.0
 CODEX_TOKEN_BUDGET_EXIT_CODE = 124
 CODEX_PROMPT_BUDGET_MIN_RESERVE = 1024
 CODEX_PROMPT_BUDGET_MAX_RESERVE = 8192
+CODEX_LIVE_BUDGET_SAFETY_FACTOR = 1.25
 
 
 def _now_iso() -> str:
@@ -131,10 +132,6 @@ def _resolve_mcp_http_url(value: Any) -> str:
     url = str(value or "").strip()
     if not url:
         return ""
-    if "/v1/root/mcp/task/" in url:
-        url = url.split("/v1/root/mcp/task/", 1)[0].rstrip("/") + "/v1/root/mcp"
-    elif url.startswith("/v1/root/mcp/task/"):
-        url = "/v1/root/mcp"
     parsed = urlparse(url)
     if parsed.scheme in {"http", "https"} and parsed.netloc:
         return url
@@ -186,7 +183,57 @@ def _codex_jsonl_usage(path: Path) -> dict[str, int]:
         return {}
 
 
-def _context_packet_prompt_projection(value: Any) -> dict[str, Any]:
+def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, Any]:
+    """Estimate cumulative input while Codex is still executing tool rounds.
+
+    ``codex exec --json`` emits authoritative usage only when the turn ends.  A
+    tool-driven run can therefore exceed its budget before provider usage is
+    visible.  The event stream does expose each completed tool result; summing
+    the growing visible context at those model boundaries gives a conservative
+    live guard without treating it as provider-reported accounting.
+    """
+
+    context_bytes = len(str(prompt or "").encode("utf-8", errors="replace"))
+    cumulative_tokens = 0
+    tool_rounds = 0
+    if path.is_file():
+        try:
+            if path.stat().st_size > 16 * 1024 * 1024:
+                return {}
+            for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                try:
+                    event = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+                item = event.get("item") if isinstance(event.get("item"), Mapping) else {}
+                if event.get("type") != "item.completed" or item.get("type") not in {
+                    "command_execution",
+                    "file_change",
+                    "mcp_tool_call",
+                }:
+                    continue
+                cumulative_tokens += max(1, (context_bytes + 3) // 4)
+                context_bytes += len(raw_line.encode("utf-8", errors="replace"))
+                tool_rounds += 1
+        except OSError:
+            return {}
+    cumulative_tokens += max(1, (context_bytes + 3) // 4)
+    estimated = max(1, int(cumulative_tokens * CODEX_LIVE_BUDGET_SAFETY_FACTOR))
+    return {
+        "accuracy": "estimated",
+        "model_tokens": estimated,
+        "input_tokens": estimated,
+        "cached_input_tokens": 0,
+        "output_tokens": 0,
+        "reasoning_tokens": 0,
+        "visible_cumulative_tokens": cumulative_tokens,
+        "visible_context_bytes": context_bytes,
+        "tool_rounds": tool_rounds,
+        "safety_factor": CODEX_LIVE_BUDGET_SAFETY_FACTOR,
+    }
+
+
+def _context_packet_prompt_projection(value: Any, *, implementation_brief: str = "") -> dict[str, Any]:
     """Keep Codex context useful and bounded without replacing exact evidence."""
 
     packet = dict(value) if isinstance(value, Mapping) else {}
@@ -299,6 +346,8 @@ def _context_packet_prompt_projection(value: Any) -> dict[str, Any]:
                     value = facet.get(key)
                     common[key] = value[:20] if isinstance(value, list) else value
         projected_facets[str(facet_name)] = common
+    if str(projected_change.get("intent") or "").strip() == str(implementation_brief or "").strip():
+        projected_change.pop("intent", None)
     return {
         "schema": packet.get("schema"),
         "digest": packet.get("digest"),
@@ -368,6 +417,14 @@ def _root_mcp_profile_from_assignment(
         or root.get("access_token_env_var")
         or ""
     ).strip()
+    if include_private_token and not token:
+        token = str(os.getenv(env_var) or "").strip() if env_var else ""
+        if not token:
+            token = str(os.getenv("ADAOS_ROOT_MCP_AUTH") or "").strip()
+    if include_private_token and not token and not bool(root.get("required", False)):
+        return None
+    if include_private_token and token and not env_var:
+        env_var = _assignment_task_mcp_env_var(assignment)
     profile: dict[str, Any] = {
         "enabled": True,
         "transport": "streamable_http",
@@ -902,9 +959,20 @@ class SubprocessCodexExecutor:
                     if max_model_tokens is not None and max_model_tokens > 0:
                         now = time.monotonic()
                         if now >= next_budget_check:
-                            usage = _codex_jsonl_usage(live_events_path)
-                            observed = int(usage.get("model_tokens") or 0)
+                            provider_usage = _codex_jsonl_usage(live_events_path)
+                            live_estimate = _codex_jsonl_live_budget_estimate(
+                                live_events_path,
+                                prompt=prompt,
+                            )
+                            provider_tokens = int(provider_usage.get("model_tokens") or 0)
+                            estimated_tokens = int(live_estimate.get("model_tokens") or 0)
+                            observed = max(provider_tokens, estimated_tokens)
                             if observed > int(max_model_tokens):
+                                usage: dict[str, Any] = (
+                                    {**provider_usage, "accuracy": "provider_reported"}
+                                    if provider_tokens
+                                    else live_estimate
+                                )
                                 budget_exceeded = {
                                     "schema": "adaos.skill_factory.codex_token_budget_receipt.v1",
                                     "status": "exceeded",
@@ -932,9 +1000,17 @@ class SubprocessCodexExecutor:
         stderr = live_stderr_path.read_text(encoding="utf-8", errors="replace")
         final_message = final_path.read_text(encoding="utf-8", errors="replace") if final_path.exists() else ""
         if budget_exceeded is None and max_model_tokens is not None and max_model_tokens > 0:
-            usage = _codex_jsonl_usage(live_events_path)
-            observed = int(usage.get("model_tokens") or 0)
+            provider_usage = _codex_jsonl_usage(live_events_path)
+            live_estimate = _codex_jsonl_live_budget_estimate(live_events_path, prompt=prompt)
+            provider_tokens = int(provider_usage.get("model_tokens") or 0)
+            estimated_tokens = int(live_estimate.get("model_tokens") or 0)
+            observed = max(provider_tokens, estimated_tokens)
             if observed > int(max_model_tokens):
+                usage = (
+                    {**provider_usage, "accuracy": "provider_reported"}
+                    if provider_tokens
+                    else live_estimate
+                )
                 budget_exceeded = {
                     "schema": "adaos.skill_factory.codex_token_budget_receipt.v1",
                     "status": "exceeded",
@@ -1729,24 +1805,36 @@ class LocalSkillFactoryWorker:
             packet_hash = "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
             self._init_git_workspace(workspace, str((assignment.get("forge") or {}).get("branch") or f"realize/{task_id}"))
-            self._progress(task_id, "in_progress", "Codex is implementing the requested skill changes")
-            self._ensure_task_active(task_id)
-            codex_result = self._execute_codex(
-                task_id=task_id,
-                assignment=assignment,
-                workspace=workspace,
-                prompt=prompt,
-                output_dir=output_dir,
-                agent_profile=agent_profile,
-                root_mcp=root_mcp,
-            )
-            self._ensure_task_active(task_id)
-            self._record_codex_attempt(runtime_dir, codex_result, attempt=0)
-            if codex_result.returncode:
-                raise RuntimeError(
-                    f"Codex exited with code {codex_result.returncode}: "
-                    f"{_codex_failure_detail(codex_result)}"
+            continuation = self._restore_continuation_candidate(assignment, workspace)
+            if continuation:
+                self._progress(task_id, "tests_running", "Validating preserved Codex candidate")
+                codex_result = CodexRunResult(
+                    returncode=0,
+                    final_message=(
+                        "Validated and finalized the preserved candidate from "
+                        f"{continuation['source_task_id']} without repeating model work."
+                    ),
                 )
+                _write_json(runtime_dir / "continuation.json", continuation)
+            else:
+                self._progress(task_id, "in_progress", "Codex is implementing the requested skill changes")
+                self._ensure_task_active(task_id)
+                codex_result = self._execute_codex(
+                    task_id=task_id,
+                    assignment=assignment,
+                    workspace=workspace,
+                    prompt=prompt,
+                    output_dir=output_dir,
+                    agent_profile=agent_profile,
+                    root_mcp=root_mcp,
+                )
+                self._ensure_task_active(task_id)
+                self._record_codex_attempt(runtime_dir, codex_result, attempt=0)
+                if codex_result.returncode:
+                    raise RuntimeError(
+                        f"Codex exited with code {codex_result.returncode}: "
+                        f"{_codex_failure_detail(codex_result)}"
+                    )
 
             test_report: dict[str, Any] = {}
             for repair_attempt in range(self.max_repair_attempts + 1):
@@ -1856,6 +1944,7 @@ class LocalSkillFactoryWorker:
                 "tool_versions": {"python": sys.version.split()[0]},
                 "sdk_snapshot": dict(codex_result.sdk_snapshot or {}) or None,
                 "root_mcp": _public_root_mcp_profile(root_mcp),
+                "continuation": continuation or None,
                 "created_at": _now_iso(),
             }
             _write_json(evidence_root / "provenance.json", provenance)
@@ -2079,6 +2168,100 @@ class LocalSkillFactoryWorker:
             raise ValueError(f"local worker supports skill or scenario targets, got {target_type!r}")
         return None
 
+    def _restore_continuation_candidate(
+        self,
+        assignment: Mapping[str, Any],
+        workspace: Path,
+    ) -> dict[str, Any] | None:
+        request = dict(assignment.get("realize_request") or {})
+        artifacts = dict(request.get("artifacts") or {})
+        checkpoint = (
+            dict(artifacts.get("continuation_checkpoint") or {})
+            if isinstance(artifacts.get("continuation_checkpoint"), Mapping)
+            else {}
+        )
+        if checkpoint.get("mode") != "validate_preserved_candidate":
+            return None
+        source_task_id = str(checkpoint.get("source_task_id") or "").strip()
+        if not source_task_id or source_task_id == str(assignment.get("task_id") or "").strip():
+            raise ValueError("continuation checkpoint source_task_id is invalid")
+
+        source_task = self.factory.read_task(source_task_id)
+        if str(source_task.get("status") or "").strip() != "failed":
+            raise ValueError("continuation source task is not failed")
+        failures = [
+            dict(item)
+            for item in source_task.get("failure_history") or []
+            if isinstance(item, Mapping)
+        ]
+        failure = failures[-1] if failures else {}
+        if "Codex token budget exceeded:" not in str(failure.get("message") or ""):
+            raise ValueError("continuation source task did not stop at the token budget boundary")
+        expected_failure_id = str(checkpoint.get("failure_id") or "").strip()
+        if expected_failure_id and expected_failure_id != str(failure.get("failure_id") or "").strip():
+            raise ValueError("continuation checkpoint failure identity does not match")
+
+        source_run = (self.runs_root / _safe_token(source_task_id)).resolve()
+        previous_workspace = (source_run / "workspace").resolve()
+        previous_assignment_path = source_run / "input" / "assignment.json"
+        if not previous_workspace.is_dir() or not (previous_workspace / ".git").is_dir():
+            raise ValueError("continuation candidate workspace is unavailable")
+        if not previous_assignment_path.is_file():
+            raise ValueError("continuation candidate assignment is unavailable")
+        previous_assignment = json.loads(previous_assignment_path.read_text(encoding="utf-8"))
+        if dict(previous_assignment.get("target") or {}) != dict(assignment.get("target") or {}):
+            raise ValueError("continuation candidate targets another project")
+        previous_snapshot = dict((previous_assignment.get("forge") or {}).get("source_snapshot") or {})
+        current_snapshot = dict((assignment.get("forge") or {}).get("source_snapshot") or {})
+        previous_digest = str(previous_snapshot.get("digest") or "").strip()
+        current_digest = str(current_snapshot.get("digest") or "").strip()
+        if not previous_digest or previous_digest != current_digest:
+            raise ValueError("continuation candidate source snapshot is stale")
+
+        changed_paths = self._changed_from_baseline(previous_workspace)
+        if not changed_paths:
+            raise ValueError("continuation candidate has no source changes")
+        self._validate_changed_paths(
+            assignment,
+            changed_paths,
+            workspace=previous_workspace,
+        )
+        workspace_root = workspace.resolve()
+        for changed_path in changed_paths:
+            parts = [part for part in changed_path.replace("\\", "/").split("/") if part]
+            if not parts or any(part in {"..", ".git"} for part in parts):
+                raise ValueError(f"unsafe continuation candidate path: {changed_path}")
+            source = previous_workspace.joinpath(*parts)
+            destination = workspace.joinpath(*parts)
+            resolved_destination = destination.resolve(strict=False)
+            if workspace_root not in resolved_destination.parents:
+                raise ValueError(f"continuation candidate path escapes workspace: {changed_path}")
+            if source.is_symlink():
+                raise ValueError(f"continuation candidate symlink is not allowed: {changed_path}")
+            if source.is_file():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+            elif source.exists():
+                raise ValueError(f"continuation candidate directory change is unsupported: {changed_path}")
+            elif destination.is_file() or destination.is_symlink():
+                destination.unlink()
+            elif destination.is_dir():
+                if workspace_root not in destination.resolve().parents:
+                    raise ValueError(f"continuation deletion escapes workspace: {changed_path}")
+                shutil.rmtree(destination)
+
+        restored_paths = self._changed_paths(workspace)
+        self._validate_changed_paths(assignment, restored_paths, workspace=workspace)
+        return {
+            "schema": "adaos.skill_factory.continuation_restore.v1",
+            "mode": "validate_preserved_candidate",
+            "source_task_id": source_task_id,
+            "failure_id": str(failure.get("failure_id") or "").strip() or None,
+            "source_snapshot_digest": current_digest,
+            "changed_paths": restored_paths,
+            "restored_at": _now_iso(),
+        }
+
     def _companion_skill_id(self, assignment: Mapping[str, Any]) -> str:
         companions = self._companion_skill_ids(assignment)
         return companions[0] if companions else ""
@@ -2115,13 +2298,21 @@ class LocalSkillFactoryWorker:
             if isinstance(artifacts.get("context_packet"), Mapping)
             else {}
         )
-        context_projection = _context_packet_prompt_projection(context_packet)
+        context_projection = _context_packet_prompt_projection(
+            context_packet,
+            implementation_brief=brief,
+        )
         development_context = (
             dict(artifacts.get("development_context") or {})
             if isinstance(artifacts.get("development_context"), Mapping)
             else {}
         )
-        root_mcp = _root_mcp_profile_from_assignment(assignment)
+        root_mcp = _public_root_mcp_profile(
+            _root_mcp_profile_from_assignment(
+                assignment,
+                include_private_token=True,
+            )
+        )
         contract_checklist = _contract_execution_checklist(
             development_context,
             workspace,
@@ -2176,7 +2367,18 @@ This is a bounded Dev Ticket repair, not a full project implementation pass. Tre
 
 Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.json`, `webui.json`, `scenario.yaml`, or `skill.yaml` unless the ticket explicitly requires that manifest change. It is acceptable for a Dev Ticket repair to leave manifests untouched when the fix is in handlers, tests, resource data, comments, or scoped UI text. If the requested result needs core/API/SDK support that is unavailable to this project, stop with a blocker explanation and propose the required core/API/SDK Dev Ticket instead of patching around the limitation.
 """ if is_dev_ticket_repair else ""
-        required_result = """1. Inspect all existing files under the target paths before editing.
+        if is_dev_ticket_repair:
+            required_result = """1. Inspect the complete targeted skill or scenario before editing.
+2. Reproduce the ticket against the real declared UI, handler, projection, or runtime path; a test that only confirms existing behavior is not acceptance evidence.
+3. Implement the smallest project-owned change that satisfies the ticket. Use only public AdaOS SDK/API contracts and stop with a linked core-capability blocker when the project cannot own the fix.
+4. Add focused regression coverage that fails before the change and exercises the user-visible or runtime boundary named by the ticket.
+5. Run bounded relevant tests plus install-strict validation for a skill, or strict scenario validation for a scenario.
+6. Edit only these authorized paths: {allowed_paths}.
+7. Preserve manifest version and updated_at; the trusted Forge checkpoint owns release metadata.
+8. Do not publish, install, activate, or mutate the canonical workspace. The worker owns validation, checkpointing, trial activation, and evidence.
+9. Conclude against each ticket acceptance point. Report any unmet point explicitly instead of describing the repair as complete."""
+        else:
+            required_result = """1. Inspect all existing files under the target paths before editing.
 2. Edit only the current scenario's declarative prototype files; do not modify companion skills.
 3. Preserve useful UX while removing functional tool, service, credential, external-network, device, and production-data bindings from the Prototype.
 4. Use bounded local mock or `initialState` data so the resulting `webui.json` remains safely interactive.
@@ -2204,17 +2406,18 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
 18. Treat typed provider operation names and schemas as ABI, not suggestions. Implement every required operation under its exact declared name, export it as a tool, and run any admitted consumer/conformance fixture against the production handler path; a semantically similar alias does not satisfy the contract.
 19. Before adding or importing a third-party Python package, inspect the authoritative manifest schema at `${{ADAOS_REPO_ROOT}}/src/adaos/services/skill/skill_schema.json` and the dependency-isolation policy in `${{ADAOS_REPO_ROOT}}/docs/skill_runtime.md`. Declare every imported dependency. Heavy/native dependencies require a service boundary or the explicit documented transitional `allow_heavy_dependencies` allowance. Run install-strict `SkillValidationService.validate_path(...)` so manifest schema, imports, exported tools, and dependency isolation fail in one bounded pass before concluding.
 20. This checkout is an isolated candidate, not the canonical AdaOS workspace. Run source-tree validation and bounded tests here, but do not copy into or mutate the canonical workspace/runtime and do not publish, install, or activate the candidate yourself. The trusted worker finalizer owns package, install, activation, and rollback receipts after your turn."""
-        required_result += """
+        if not is_dev_ticket_repair:
+            required_result += """
 21. Keep every mutable test/runtime file outside the candidate source tree. Use `ADAOS_BASE_DIR` for the default task-owned AdaOS runtime. If a test needs multiple isolated bases, create child directories below `ADAOS_TASK_RUNTIME_DIR` (or an OS temporary directory outside this checkout), and clean them normally; never create repository-relative `.adaos*` runtime directories.
 22. Packaged tests must be hermetic. They cannot read `.adaos_context`, Builder Development-session instruction/artifact paths, session IDs, or other authoring-only files that Forge omits. Copy only a bounded non-secret fixture that remains necessary into the skill's own tests/fixtures, or leave admitted-context verification to consumer acceptance.
 23. Never reconstruct a skill's `.runtime`/slot path from `ADAOS_BASE_DIR`. Resolve mutable owner-scoped files with `adaos.sdk.skill_env.skill_data_root()` (or the equivalent typed SDK capability). Core supplies the exact DEV or installed data root through current skill context and execution bindings."""
-        required_result += """
+            required_result += """
 24. Treat every admitted `adaos.contract.operation_set.v1` instruction as executable consumer authority. Copy its exact operation input and output schemas into the manifest operation declarations; compare their canonical JSON before concluding instead of rewriting the schemas from memory. Honor every `required`, `const`, enum, and `additionalProperties` boundary. An operation set with `candidate_role: provider` requires the target skill to declare every exact `required_provider_declaration`; keep independent contracts (for example a generic runner and a domain probe) as independent provider declarations rather than merging their operations. Execute every admitted required conformance fixture against the production provider, including document-set and operation-sequence fixtures rather than only a helper that resembles them, so the trusted worker can validate the newest complete document set. If the SDK normally resolves provider output through `skill_data_root()`, bind `ADAOS_SKILL_INTERNAL_DATA_ROOT` to a dedicated child of `ADAOS_TASK_RUNTIME_DIR` in the local conformance process environment only; an OS-temporary or other owner-data root is not visible to trusted task validation. Never copy that binding into the returned ExecutionSpec. `prepare_attempt.environment` must not return any platform-protected key: `ADAOS_CURRENT_SKILL`, `ADAOS_SKILL_ENV_PATH`, `ADAOS_SKILL_INTERNAL_DATA_ROOT`, `ADAOS_SKILL_NAME`, `ADAOS_SKILL_ROOT`, `ADAOS_TASK_RUNTIME_DIR`, `PYTHONHOME`, or `PYTHONPATH`; the trusted executor supplies them. When a provider returns `working_directory` and `expected_outputs`, execute its returned command in that exact directory and require every output at the exact relative path `Path(working_directory) / expected_outputs[i]`; an undeclared implicit subdirectory is a missing output. Exercise collection through the returned `output_ref` and verification through the provider's declared operation. Do not replace consumer schemas with a permissive local look-alike."""
-        required_result += """
+            required_result += """
 25. For a governed scientific handoff, treat the accepted `experiment_plan.system` object and its digest as executable subject authority. Realize the declared system, component settings, arm semantics, intervention boundary, and locked invariants on the production runner path. A bounded fixture may reduce sample counts or runtime only where the accepted execution profile permits it; it must not substitute another model family, operator, input geometry, output space, or scientific subject. Emit the required implementation-observation document from that same path so an independent consumer can detect semantic substitution."""
-        required_result += """
+            required_result += """
 26. In `adaos.research.runner.v1`, branch input acquisition only on the admitted `request.profile_conditions.input_policy.source`. `deterministic_contract_fixture` must run the bounded production conformance path without opening the accepted scientific dataset; `accepted_dataset` selects the admitted dataset path. Never invent or require a duplicate private selector under `request.conditions`."""
-        required_result += """
+            required_result += """
 27. When accepted authority requires a neutral/shared initialization or initial-equivalence invariant, test it directly on the production operators before training: use the same admitted input and shared initialization state for both arms and enforce the admitted tolerance. A declaration, parameter default, or post-training comparison is not evidence of initial equivalence."""
         required_result = required_result.format(
             target_id=target_id,

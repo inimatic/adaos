@@ -515,6 +515,38 @@ def test_skill_factory_projects_root_mcp_profile_without_secret(tmp_path: Path) 
     assert assignment["mcp"]["access_token"].startswith("sf_task_")
 
 
+def test_skill_factory_validates_task_bearer_and_rejects_cross_task_use(tmp_path: Path) -> None:
+    service = SkillFactoryService(state_dir=tmp_path)
+    first = service.submit_realize_request(
+        {"target": {"type": "skill", "id": "lease_first"}}
+    )["task"]
+    second = service.submit_realize_request(
+        {"target": {"type": "skill", "id": "lease_second"}}
+    )["task"]
+    service.register_dev_node({"node_id": "devnode.lease"})
+    assignment = service.poll_assignment("devnode.lease", task_id=first["task_id"])["assignment"]
+    access_token = assignment["mcp"]["access_token"]
+
+    validated = service.validate_task_access_token(
+        access_token,
+        task_id=first["task_id"],
+        node_id="devnode.lease",
+    )
+
+    assert validated["task_id"] == first["task_id"]
+    assert validated["node_id"] == "devnode.lease"
+    assert "read_capability_snapshot" in validated["scopes"]
+    with pytest.raises(ValueError, match="another task"):
+        service.validate_task_access_token(access_token, task_id=second["task_id"])
+    with pytest.raises(ValueError, match="does not allow scope"):
+        service.validate_task_access_lease(
+            access_token,
+            task_id=first["task_id"],
+            node_id="devnode.lease",
+            scope="write_production",
+        )
+
+
 def test_root_mcp_exposes_skill_factory_plane_and_status(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
 

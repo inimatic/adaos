@@ -756,6 +756,87 @@ def test_terminal_codex_usage_missing_journal_is_unavailable_not_zero(tmp_path: 
     assert result["codex_usage_accounting"]["total_tokens"] is None
 
 
+def test_terminal_codex_usage_reports_live_budget_estimate(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    calls: list[dict] = []
+    service.codex_usage_reporter = lambda event: (
+        calls.append(dict(event))
+        or {"ok": True, "duplicate": False, "event": {"event_id": "codex_usage_estimated"}}
+    )
+    run_root = tmp_path / "run"
+    runtime_root = run_root / "runtime"
+    runtime_root.mkdir(parents=True)
+    journal = runtime_root / "codex-events.jsonl"
+    journal.write_text('{"type":"item.completed","item":{"type":"command_execution"}}\n', encoding="utf-8")
+    (runtime_root / "codex-token-budget.json").write_text(
+        json.dumps(
+            {
+                "status": "exceeded",
+                "usage": {
+                    "accuracy": "estimated",
+                    "input_tokens": 125000,
+                    "cached_input_tokens": 0,
+                    "output_tokens": 0,
+                    "reasoning_tokens": 0,
+                    "model_tokens": 125000,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    session = {
+        "session_id": "automation.skill.demo",
+        "object_type": "skill",
+        "object_id": "demo",
+        "current_task_id": "task.estimated",
+        "updated_at": "2026-08-31T12:00:00+00:00",
+        "local_run": {"path": str(run_root), "events_path": str(journal)},
+    }
+
+    result = service._report_terminal_codex_usage(session, task_status="failed")
+
+    assert calls[0]["accuracy"] == "estimated"
+    assert calls[0]["total_tokens"] == 125000
+    assert result["codex_usage_accounting"]["accuracy"] == "estimated"
+    assert result["codex_usage_accounting"]["status"] == "reported"
+
+
+def test_followup_turn_can_replace_bounded_execution_budget(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipe search.",
+        execution_budget={
+            "schema": "adaos.builder.execution_budget.v1",
+            "source": "test.initial",
+            "max_tokens": 120000,
+            "max_wall_seconds": 1200,
+        },
+    )
+
+    followed = service.submit_turn(
+        text="Continue from acceptance evidence with a bounded validation pass.",
+        object_type="scenario",
+        object_id="recipes",
+        execution_budget={
+            "source": "test.continuation",
+            "max_tokens": 200000,
+            "max_wall_seconds": 1800,
+        },
+    )
+
+    session = followed["session"]
+    assert session["execution_budget"]["max_tokens"] == 200000
+    assert session["execution_budget_history"][-1]["max_tokens"] == 120000
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == session["current_task_id"]
+    )
+    assert task["realize_request"]["artifacts"]["execution_budget"]["max_tokens"] == 200000
+
+
 def test_background_automation_launches_durable_worker_process(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     service.background = True
@@ -2436,6 +2517,160 @@ def test_finalize_activates_dev_ticket_aprobation_overlay_after_checkpoint(
         saved[-1]["completion_readiness"]["aprobation"]["mode"]
         == "devspace_to_workspace_runtime_overlay"
     )
+
+
+def test_dev_ticket_repair_defaults_to_aprobation_overlay() -> None:
+    assert BuilderAutomationService._session_requires_aprobation_overlay(
+        {
+            "links": {"development_ticket_id": "dticket.1"},
+            "implementation_brief": json.dumps(
+                {
+                    "execution_mode": "surgical_dev_ticket_repair",
+                    "policy": {},
+                }
+            ),
+        }
+    )
+    assert not BuilderAutomationService._session_requires_aprobation_overlay(
+        {
+            "links": {"development_ticket_id": "dticket.1"},
+            "implementation_brief": json.dumps(
+                {
+                    "execution_mode": "surgical_dev_ticket_repair",
+                    "policy": {"publication_required": False},
+                }
+            ),
+        }
+    )
+
+
+def test_completed_workflow_reconciliation_backfills_aprobation_overlay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    saved: list[dict] = []
+    overlay_calls: list[dict] = []
+    workflow = {
+        "generation": 4,
+        "automation": {
+            "status": "completed",
+            "head_task_id": "task.1",
+            "completed_at": "2026-08-31T12:00:00+00:00",
+        },
+        "delivery": {
+            "status": "checkpoint",
+            "checkpoint_change_id": "change.1",
+            "package_digest": "sha256:" + "1" * 64,
+            "source_revision": "commit.1",
+            "version": "0.1.1",
+        },
+    }
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_workflow",
+        lambda self: SimpleNamespace(describe=lambda *_: workflow),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_save_session",
+        lambda self, value: saved.append(dict(value)),
+    )
+
+    def activate(self, session, *, skill_ids, scenario_id, webspace_id):  # noqa: ARG001
+        overlay_calls.append(
+            {
+                "skill_ids": list(skill_ids),
+                "scenario_id": scenario_id,
+                "webspace_id": webspace_id,
+            }
+        )
+        return {"ok": True, "mode": "devspace_to_workspace_runtime_overlay"}
+
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_prepare_and_activate_aprobation_overlay",
+        activate,
+    )
+
+    reconciled = service._reconcile_completed_workflow(
+        {
+            "object_type": "skill",
+            "object_id": "subscription_status_skill",
+            "companion_skill_id": "subscription_status_skill",
+            "current_task_id": "task.1",
+            "change_id": "change.1",
+            "webspace_id": "desktop",
+            "links": {"development_ticket_id": "dticket.1"},
+            "implementation_brief": json.dumps(
+                {"execution_mode": "surgical_dev_ticket_repair", "policy": {}}
+            ),
+            "completion_readiness": {
+                "vcs_checkpoints": [{"ok": True, "commit": "commit.1"}],
+            },
+        }
+    )
+
+    assert overlay_calls == [
+        {
+            "skill_ids": ["subscription_status_skill"],
+            "scenario_id": None,
+            "webspace_id": "desktop",
+        }
+    ]
+    assert reconciled["completion_readiness"]["aprobation"]["ok"] is True
+    assert saved[-1]["status"] == "completed"
+    assert saved[-1]["updated_at"] != "2026-08-31T12:00:00+00:00"
+
+
+def test_completed_automation_synchronizes_linked_dev_ticket_without_status_recursion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.services.development_tickets import DevelopmentTicketService
+
+    service = _service(tmp_path)
+    saved: list[dict] = []
+    calls: list[dict] = []
+
+    def sync(self, ticket_id, **kwargs):  # noqa: ARG001
+        calls.append({"ticket_id": ticket_id, **kwargs})
+        assert kwargs.get("automation_service") is None
+        assert kwargs["automation_result"]["automation"]["task_id"] == "task.1"
+        return {"ok": True, "synchronized": True, "resolved": True}
+
+    monkeypatch.setattr(DevelopmentTicketService, "sync_builder_repair", sync)
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_save_session",
+        lambda self, value: saved.append(dict(value)),
+    )
+
+    current = service._sync_linked_development_ticket_tasks(
+        {
+            "object_type": "skill",
+            "object_id": "subscription_status_skill",
+            "status": "completed",
+            "current_task_id": "task.1",
+            "links": {
+                "development_ticket_id": "dticket.1",
+                "builder_repair_id": "repair.1",
+            },
+            "completion_readiness": {"ok": True, "task_id": "task.1"},
+            "development_ticket_synced_task_ids": ["task.1"],
+        }
+    )
+
+    assert calls[0]["repair_id"] == "repair.1"
+    assert current["development_ticket_synced_task_id"] == "task.1"
+    assert current["development_ticket_synced_task_ids"] == ["task.1"]
+    assert (
+        current["development_ticket_sync_schema"]
+        == "adaos.builder.dev_ticket_task_sync.v2"
+    )
+    assert current["development_ticket_sync_revision"] == 1
+    assert current["development_ticket_sync"]["resolved"] is True
+    assert saved[-1]["development_ticket_synced_task_id"] == "task.1"
 
 
 def test_finalize_reconciles_exact_canonical_checkpoint_without_replay(

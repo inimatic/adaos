@@ -774,6 +774,18 @@ def _is_local_url(url: str | None) -> bool:
     return host in {"127.0.0.1", "localhost", "::1"}
 
 
+def _same_local_endpoint(left: str | None, right: str | None) -> bool:
+    try:
+        left_parsed = urlparse(str(left or "").strip())
+        right_parsed = urlparse(str(right or "").strip())
+    except Exception:
+        return False
+    aliases = {"127.0.0.1": "loopback", "localhost": "loopback", "::1": "loopback"}
+    left_host = aliases.get(str(left_parsed.hostname or "").lower(), str(left_parsed.hostname or "").lower())
+    right_host = aliases.get(str(right_parsed.hostname or "").lower(), str(right_parsed.hostname or "").lower())
+    return bool(left_host and left_host == right_host and left_parsed.port and left_parsed.port == right_parsed.port)
+
+
 def _advertise_base(host: str, port: int) -> str:
     advertised_host = (host or "").strip() or "127.0.0.1"
     if advertised_host in {"0.0.0.0", "::", "[::]"}:
@@ -1741,7 +1753,19 @@ async def _ensure_api_serve_dev_sidecar(conf, *, launch_mode: str) -> subprocess
         )
         return None
     snapshot = realtime_sidecar_listener_snapshot(None, role=role)
-    if snapshot.get("listener_running"):
+    configured_endpoint = _configured_local_api_url(conf)
+    route_contract = snapshot.get("route_tunnel_contract") if isinstance(snapshot.get("route_tunnel_contract"), dict) else {}
+    ws_contract = route_contract.get("ws") if isinstance(route_contract.get("ws"), dict) else {}
+    upstream = ws_contract.get("upstream") if isinstance(ws_contract.get("upstream"), dict) else {}
+    upstream_url = str(upstream.get("url") or "").strip().rstrip("/")
+    existing_matches_runtime = bool(
+        snapshot.get("listener_running")
+        and configured_endpoint
+        and upstream_url
+        and _same_local_endpoint(upstream_url, configured_endpoint)
+        and str(route_contract.get("lifecycle_manager") or "").strip().lower() == "runtime"
+    )
+    if existing_matches_runtime:
         typer.echo(
             "[AdaOS] realtime sidecar: adopted existing listener "
             f"pid={snapshot.get('listener_pid')} local={snapshot.get('local_url')}"
