@@ -2,7 +2,7 @@
 
 Status: target architecture.
 
-Last reviewed: 2026-08-30.
+Last reviewed: 2026-08-31.
 
 This document defines the target AdaOS architecture for a reusable declarative
 resource workbench. It turns repeated list/detail/form/action UI patterns into
@@ -556,6 +556,30 @@ with regression or insufficiency evidence.
 GitHub Issues and other trackers are optional external refs or redacted
 exports. They are not the primary AdaOS resource.
 
+The Dev Ticket resource family must support both project-visible tickets and
+core/SDK/API tickets without splitting into unrelated products. The same
+resource contract should expose:
+
+- `owner_area` and `component_ref` filters for project, skill, scenario,
+  modal/component, Builder, SDK/API, and core tickets;
+- relationship fields for `blocks`, `blocked_by`, `related`,
+  `duplicate_of`, `supersedes`, and `caused_by`;
+- stage groups such as open, triage, work, review, waiting-for-core, and
+  closed;
+- lifecycle operations for claim, in-progress, comment, resolve, verify,
+  close, reopen, duplicate, related, and incremental evidence;
+- artifact operations for screenshot, trace, log, test, release, and runtime
+  guard evidence preview;
+- Builder handoff operations for interactive repair, autonomous repair,
+  source materialization/fork/overlay/defer, and core capability request;
+- i18n labels and role-based operation availability as declarative views over
+  the same language-neutral operation ids.
+
+Core Dev Tickets are not a separate public issue tracker. They are the same
+internal resource family with a different owner area, impact taxonomy, event
+fanout, and maintainer workflow. External AdaOS Issues or GitHub Issues remain
+explicit projections after redaction and approval.
+
 ## Demo Metrics Harness
 
 Demo Metrics is the preferred safe harness for the first visual workbench
@@ -667,6 +691,9 @@ gives all of them a common resource route without merging their state machines.
 - Original-language evidence is retained; translations are derived views.
 - Provider-specific behavior must be explicit in capabilities and traces.
 - Yjs and streams are projections/delivery, not the source of truth.
+- Signed domain events connect resources to skills, scenarios, Builder, and
+  core evolution; event handlers are projections and reactions, not hidden
+  mutation authority.
 - Screenshots, logs, audio, DOM snapshots, and traces are artifact refs with
   sensitivity and retention metadata.
 - Resource views respect accessibility and user preference contracts without
@@ -677,4 +704,7 @@ gives all of them a common resource route without merging their state machines.
 - Builder can inspect why a resource view or operation behaved as it did.
 - Domain services keep domain logic; the workbench standardizes the control
   surface.
+- Core, SDK/API, project, skill, scenario, and modal/component tickets use the
+  same resource family but remain distinct through owner area, component ref,
+  policy, lifecycle, and event routing.
 - External issue trackers are optional projections with redaction and approval.

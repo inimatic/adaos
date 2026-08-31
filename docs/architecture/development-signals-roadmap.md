@@ -2,7 +2,7 @@
 
 Status: proposed cross-domain roadmap.
 
-Last reviewed: 2026-08-26.
+Last reviewed: 2026-08-31.
 
 This roadmap sequences the work needed to make evolution feedback a governed,
 natural AdaOS interface for both people and Codex. It is subordinate to
@@ -65,21 +65,32 @@ signal becomes a Dev Ticket visible to a person and consumable by Codex.
   Tickets local/private by default and links each ticket to its source signals.
 - [x] `[must]` `DS0-11` Define ticket lifecycle states:
   `captured`, `proposed`, `accepted`, `deferred`, `waiting_for_user`,
-  `ready_for_builder`, `in_builder`, `claimed`, `in_progress`, `resolved`,
-  `verified`, `closed`, `superseded`, and `stale`; define `reopen` as a
-  lifecycle operation that returns the ticket to an active state.
+  `waiting_for_core`, `ready_for_builder`, `in_builder`, `claimed`,
+  `in_progress`, `resolved`, `verified`, `closed`, `superseded`, and `stale`;
+  define `reopen` as a lifecycle operation that returns the ticket to an
+  active state.
 - [ ] `[should]` `DS0-12` Add ticket projection indexes by current scenario,
   skill, modal/surface, status, blocker flag, source, and target artifact
   version.
+- [ ] `[must]` `DS0-13` Add first-class ticket relationships:
+  `blocks`, `blocked_by`, `related`, `duplicate_of`, `supersedes`, and
+  `caused_by`, with optimistic revision checks.
+- [ ] `[must]` `DS0-14` Add `owner_area` and stable `component_ref` fields so
+  tickets can distinguish project, skill, scenario, modal/component, SDK/API,
+  Builder, and core ownership without relying on display text.
+- [ ] `[should]` `DS0-15` Add open/read-model filters for `status_group`,
+  `owner_area`, `component_ref`, `scenario_id`, `skill_id`, `modal_id`,
+  `severity`, `blocking`, `owner`, `updated_since`, and full-text search.
 
-Implementation note, 2026-08-26: the first store lives in runtime state under
+Implementation note, 2026-08-31: the first store lives in runtime state under
 `development_tickets/state.json` and is intentionally local/private. It stores
 `adaos.development_signal.v1` records and `adaos.dev_ticket.v1` tickets with
 generic target scopes, so installed, catalog, remote, read-only, and
 not-yet-materialized artifacts can be referenced before source is available.
 Signals and tickets deduplicate active records, merge evidence refs, and link
 Builder repairs back to ticket history. Artifact-local projections, rich
-artifact blob storage, and global UI indexes remain open.
+artifact blob storage, relationship indexes, and full agent-grade query
+indexes remain open.
 
 ## DS1. Feedback Skill Intake
 
@@ -120,14 +131,24 @@ resulting Dev Ticket is visible in the same context.
   target version, evidence refs, screenshots, source, dedup links, and actions.
 - [x] `[should]` `DS1-12` Keep the ticket UI separate from Builder while
   providing explicit "open Builder" and "repair autonomously" actions.
+- [ ] `[must]` `DS1-13` Apply the initial Dev Tickets filter from the
+  invocation context, especially modal/panel component refs, while keeping the
+  filter visible and reversible.
+- [x] `[should]` `DS1-14` Add stage and component dropdown filters to the
+  Dev Tickets panel.
+- [ ] `[must]` `DS1-15` Add comment/edit flow for ticket text and ticket notes
+  after screenshot-first capture.
+- [ ] `[should]` `DS1-16` Move Dev Tickets UI toward the Declarative Resource
+  Workbench rendering model once the resource definition supports the current
+  custom surface.
 
-Implementation note, 2026-08-26: the first human UI lives in the AdaOS client
+Implementation note, 2026-08-31: the first human UI lives in the AdaOS client
 owner chrome rather than a standalone Feedback Skill. It adds a header entry,
 ticket list/detail, feedback text intake, active modal/surface scope detection,
 a screenshot capture hook that hides and restores the ticket panel, evidence
-preview, and state actions. Full artifact upload/storage for screenshots and
-component-level modal buttons remain open. Context-filtered list indexes remain
-covered by `DS0-12`.
+preview, state actions, and stage/component filters. Full artifact
+upload/storage for screenshots, comment/edit ergonomics, and initial
+component-scoped filters from modal invocation remain open.
 
 ## DS2. Conversational Failure Triage
 
@@ -282,15 +303,37 @@ Ticket and signals, and closes only with evidence.
 - [ ] `[must]` `DS5-14` Keep `resolve` non-terminal: a resolved ticket must show
   candidate fix evidence, but normal closure requires verification evidence
   and an explicit `verified` or `close` transition.
+- [ ] `[must]` `DS5-15` Add Builder intake qualification before repair:
+  `project_solvable`, `needs_source`, `needs_core`, `mixed`,
+  `uncertain_sdk`, and `needs_user_clarification`.
+- [ ] `[must]` `DS5-16` Add batch repair planning for related tickets under the
+  same project, source tree, skill/scenario/modal/component family, or shared
+  core blocker, while keeping per-ticket comments and evidence.
+- [ ] `[must]` `DS5-17` Make the absent-dev-source choice explicit:
+  `materialize`, `fork project`, `runtime overlay`, or `defer`.
+- [ ] `[should]` `DS5-18` Add ticket artifact commands and SDK helpers for
+  `artifact open`, screenshot preview, incremental evidence, optimistic
+  revision, comment, claim, progress, resolve, verify, close, reopen,
+  duplicate, and related.
+- [ ] `[should]` `DS5-19` Add subscription support:
+  initial snapshot plus ticket change events so Builder, Codex, and the client
+  do not rely on polling.
+- [ ] `[should]` `DS5-20` Add cost estimates before autonomous repair:
+  approximate token budget, runtime/test cost, expected source scope, and
+  confidence/risk.
 
-Implementation note, 2026-08-26: `adaos dev ticket` now covers create, list,
-show, defer, handoff, resolve, and close. Pending Action responses can choose
-postpone, open Builder, or autonomous repair; Builder repair tasks link back to
-the Dev Ticket and source Development Signals. The Builder workbench open path
-accepts `ticket_id`, selects the target skill/scenario, stores a
-`development_ticket` context in the durable workbench binding, and exposes
-source options when dev source is absent. Resolution requires evidence refs.
-Delayed completion notifications remain open.
+Implementation note, 2026-08-31: `adaos dev ticket` now covers create, list,
+show, defer, handoff, resolve, verify, close, and reopen, but agent ergonomics
+are still incomplete: `show --json` consistency, artifact-open commands,
+comment/claim/progress helpers, query relevance, subscriptions, and SDK/MCP
+surfaces remain open. Pending Action responses can choose postpone, open
+Builder, or autonomous repair; Builder repair tasks link back to the Dev Ticket
+and source Development Signals. The Builder workbench open path accepts
+`ticket_id`, selects the target skill/scenario, stores a `development_ticket`
+context in the durable workbench binding, and exposes source options when dev
+source is absent. Resolution requires evidence refs. Delayed completion
+notifications, batch repair, intake qualification, and non-terminal
+resolved/verified/closed enforcement across all surfaces remain open.
 
 ## DS6. Analytics, Campaigns, And Policy Hardening
 
@@ -345,6 +388,95 @@ remains local.
 - [ ] `[deferred]` `DS7-06` Defer public upstream automation until the first
   internal ticket and Builder repair loop is validated locally.
 
+## DS8. Core Evolution Rails
+
+Goal: Builder can identify and raise core, runtime, API, SDK, policy, and
+lifecycle needs without modifying core from a project repair context or hiding
+platform gaps as project workarounds.
+
+Exit proof: a project Dev Ticket that cannot be solved within the public
+SDK/API creates or links a Core Dev Ticket, moves the project ticket to a
+visible waiting state, and resumes through an event when the core capability
+is released and verified.
+
+- [ ] `[must]` `DS8-01` Add `target_scope.type = core`, `owner_area = core`,
+  and stable `component_ref` values such as `core:runtime`, `core:sdk`,
+  `core:router`, `core:builder`, and `core:client`.
+- [ ] `[must]` `DS8-02` Define the first core impact taxonomy:
+  `blocker`, `speed`, `generalization`, `contract_gap`,
+  `observability_gap`, `lifecycle_gap`, `policy_boundary`,
+  `compatibility_debt`, and `security_governance`.
+- [ ] `[must]` `DS8-03` Add a Builder-facing `core_capability_request`
+  operation that records motivation, desired public contract, observed
+  limitation, rejected workarounds, impact, blocked ticket refs, and expected
+  validation.
+- [ ] `[must]` `DS8-04` Link project tickets to core tickets with
+  `blocked_by`/`blocks` relations and a user-visible `waiting_for_core`
+  status or status group.
+- [ ] `[must]` `DS8-05` Add core ticket lifecycle events:
+  `core_ticket.created`, `core_ticket.qualified`, `core_ticket.accepted`,
+  `core_ticket.deferred`, `core_ticket.released`,
+  `core_ticket.verified`, `core_ticket.reopened`, and
+  `core_capability.available`.
+- [ ] `[must]` `DS8-06` Fan out signed core lifecycle events to linked project
+  tickets, affected subnet Builders, Pending Actions, and user notifications
+  where policy allows.
+- [ ] `[must]` `DS8-07` Prevent project Builder runs from closing tickets that
+  are still blocked by unresolved core tickets unless the user explicitly
+  accepts a reduced-scope result.
+- [ ] `[should]` `DS8-08` Add a core backlog view for maintainers with filters
+  by component, impact, affected projects/subnets, release target, and
+  verification state.
+- [ ] `[should]` `DS8-09` Add approved projection from Core Dev Tickets to
+  AdaOS Issues, private repository issues, or GitHub issue drafts after
+  redaction and ownership checks.
+- [ ] `[should]` `DS8-10` Add priority/ranking signals based on repeated
+  blockers, generalization pressure, safety impact, and release proximity.
+- [ ] `[could]` `DS8-11` Add advanced-user inspection and subscription controls
+  for core tickets that affect their projects.
+
+## DS9. SDK Understanding And Agent Product UX
+
+Goal: ambiguous SDK/API/resource contracts, failed method application, and
+user-rejected Builder results become structured learning signals, docs/API
+improvements, and eval cases instead of repeated failed patches.
+
+Exit proof: a Builder failure or user rejection produces a qualified SDK
+Understanding Signal with method/resource refs, trace evidence, rejected
+workarounds, and a diagnosis that routes to user clarification, Builder retry,
+SDK docs/examples, SDK/API implementation, policy decision, or Core Dev Ticket.
+
+- [ ] `[must]` `DS9-01` Add signal kinds:
+  `sdk_unclear_definition`, `sdk_application_failure`,
+  `sdk_observability_gap`, `sdk_example_gap`, `sdk_policy_boundary`,
+  `sdk_generalization_pressure`, and `builder_rejection_learning`.
+- [ ] `[must]` `DS9-02` Capture Builder method/resource application traces:
+  public contract ref, operation id, input summary, expected behavior,
+  observed behavior, validation result, user response, and trace/test refs.
+- [ ] `[must]` `DS9-03` Add rejection qualification classes:
+  `requirement_ambiguity`, `builder_misread_user`, `sdk_doc_ambiguity`,
+  `sdk_capability_gap`, `weak_patch`, and `insufficient_validation`.
+- [ ] `[must]` `DS9-04` Route qualified signals to the right owner:
+  NLU/User clarification, Builder retry, SDK documentation/example update,
+  SDK/API implementation, policy review, or Core Dev Ticket.
+- [ ] `[must]` `DS9-05` Add replayable eval-candidate creation from accepted
+  SDK ambiguity, application failure, user rejection, and core compatibility
+  findings.
+- [ ] `[must]` `DS9-06` Expose an agent-facing SDK/API product surface:
+  capability catalog, typed resources/tools, method contracts, known
+  limitations, deprecation/compatibility notes, and common failure modes.
+- [ ] `[should]` `DS9-07` Add executable examples and counterexamples for
+  high-use SDK/resource operations, including RU/EN user-language traces where
+  conversation initiated the task.
+- [ ] `[should]` `DS9-08` Add metrics for ambiguity rate, failed application
+  rate, rejected workaround rate, acceptance after docs/API fix, and eval
+  regression recurrence.
+- [ ] `[should]` `DS9-09` Add human audit or LLM grader support for
+  qualification quality, with the audit result stored as evidence rather than
+  replacing deterministic validation.
+- [ ] `[could]` `DS9-10` Add model-specific guidance packs only after the
+  language-neutral SDK/resource contracts and eval cases are stable.
+
 ## Recommended First Slice
 
 The first implementation should be narrow:
@@ -363,6 +495,32 @@ Feedback Skill modal + workspace inbox
 
 This proves the full lifecycle while avoiding the harder unresolved pieces of
 global Issues, public collaboration, and broad autonomous development.
+
+The next local implementation slice should prove the human/Codex/Builder
+workflow as one loop:
+
+```text
+Dev Tickets UI with invocation-scoped filters
+  -> comment/edit and evidence preview
+  -> Builder intake qualification
+  -> batch repair or source strategy choice
+  -> autonomous repair result
+  -> per-ticket comment + validation evidence
+  -> resolved
+  -> human or deterministic verify
+  -> closed or reopened
+```
+
+The first core-evolution slice should be narrower:
+
+```text
+project ticket blocked by missing SDK/API capability
+  -> Builder creates Core Dev Ticket with rejected workaround evidence
+  -> project ticket waits on blocked_by relation
+  -> core maintainer qualifies or defers
+  -> core release emits capability-available event
+  -> Builder resumes and validates original project ticket
+```
 
 ## Documentation Owners
 

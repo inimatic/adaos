@@ -2,7 +2,7 @@
 
 Status: high-level sequencing for the AdaOS Builder vertical slice.
 
-Last reviewed: 2026-08-18.
+Last reviewed: 2026-08-31.
 
 This roadmap tracks how AdaOS evolves from separate skill/scenario/runtime
 surfaces into a coherent Builder workflow: idea -> governed artifact -> preview
@@ -84,7 +84,9 @@ clean-stand or multi-user production acceptance claim.
 - [Development Signals And Evolution Feedback](development-signals.md) defines
   feedback intake, scoped signal storage, Dev Tickets,
   autonomous-versus-interactive Builder handoff, and the boundary with NLU
-  Teacher.
+  Teacher. It also owns Builder intake qualification, SDK Understanding
+  Signals, and Core Dev Tickets for platform evolution requested from project
+  repair work.
 - [Builder SDK Boundary](builder-sdk-boundary.md) defines the public SDK
   dependency direction and tracks the functional replacement-control slice.
 - [Navigation Intent And Location](navigation-intent-and-location.md) defines
@@ -96,6 +98,10 @@ clean-stand or multi-user production acceptance claim.
 - Specialized roadmaps continue to own detailed sequencing for their domains.
 - Builder milestones should link out to domain roadmaps instead of duplicating
   every low-level checklist.
+- Builder works against public SDK/API/resource contracts. When a project task
+  needs core, runtime, SDK, API, policy, observability, or lifecycle evolution,
+  Builder creates or links a Core Dev Ticket and pauses/rescopes the project
+  ticket instead of modifying core from the project repair context.
 
 ## Status Labels
 
