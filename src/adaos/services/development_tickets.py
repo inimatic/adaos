@@ -1836,6 +1836,14 @@ class DevelopmentTicketService:
                 "development_source": development_source_options(target),
                 "compatibility": _mapping(ticket.get("metadata")),
                 "policy": _mapping(ticket.get("policy")),
+                "economic": {
+                    "schema": "adaos.builder.codex_token_accounting.v1",
+                    "subscription_resource": "codex.api.tokens",
+                    "source_of_truth": "adaos.root_mgmnt.codex_usage_event.v1",
+                    "usage_event_endpoint": "/hub/economic/codex/usage",
+                    "required_for_statuses": ["succeeded", "failed", "errored", "cancelled"],
+                    "policy": "record provider-reported billable tokens even when repair work fails",
+                },
                 "acceptance": {
                     "checks": [
                         "strict skill/scenario validation passes",
@@ -1859,6 +1867,9 @@ class DevelopmentTicketService:
             "status": repair.get("status"),
             "created_at": repair.get("created_at"),
         }
+        economic = _mapping(_mapping(repair.get("context")).get("economic"))
+        if economic:
+            ref["token_accounting"] = economic
         with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
             state = self._read()
             ticket = state["tickets"].get(_text(ticket_id))

@@ -250,11 +250,150 @@ def _ticket_detail(service: DevelopmentTicketService, ticket: dict[str, Any]) ->
         for signal in [service.get_signal(str(signal_id))]
         if signal
     ]
+    work_stream = _builder_work_stream(service, ticket)
     return {
         "ticket": ticket,
         "signals": signals,
         "development_source": development_source_options(ticket.get("target_scope") or {}),
         "evidence": _evidence_view(ticket, signals),
+        "work_stream": work_stream,
+        "builder_work_items": work_stream["builder_work_items"],
+    }
+
+
+def _mapping_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, Mapping)]
+
+
+def _builder_work_id(ref: Mapping[str, Any], index: int) -> str:
+    for key in ("repair_id", "task_id", "work_id", "id"):
+        token = str(ref.get(key) or "").strip()
+        if token:
+            return token
+    return f"builder-work-{index + 1}"
+
+
+def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, Any]) -> dict[str, Any]:
+    ticket_id = str(ticket.get("ticket_id") or "").strip()
+    refs = _mapping_list(ticket.get("builder_refs"))
+    repair_ids = {
+        str(ref.get("repair_id") or "").strip()
+        for ref in refs
+        if str(ref.get("repair_id") or "").strip()
+    }
+    repair_tasks: dict[str, dict[str, Any]] = {}
+    if repair_ids:
+        try:
+            repair_tasks = {
+                str(task.get("repair_id") or "").strip(): dict(task)
+                for task in _repair_service_for(service).list()
+                if str(task.get("repair_id") or "").strip() in repair_ids
+            }
+        except Exception:
+            repair_tasks = {}
+    builder_items: list[dict[str, Any]] = []
+    entries: list[dict[str, Any]] = [
+        {
+            "entry_id": f"{ticket_id}:ticket",
+            "kind": "user_ticket",
+            "authority": "adaos.dev.ticket",
+            "title": str(ticket.get("summary") or "").strip(),
+            "status": ticket.get("status"),
+            "status_group": ticket.get("status_group"),
+            "human_manageable": True,
+            "read_only": False,
+            "created_at": ticket.get("created_at"),
+            "updated_at": ticket.get("updated_at"),
+        }
+    ]
+    for index, comment in enumerate(_mapping_list(ticket.get("comments"))):
+        comment_id = str(comment.get("id") or index).strip()
+        entries.append(
+            {
+                "entry_id": f"{ticket_id}:comment:{comment_id}",
+                "kind": "user_comment",
+                "authority": "adaos.dev.ticket.comment",
+                "title": str(comment.get("body") or comment.get("summary") or "").strip(),
+                "actor": comment.get("actor"),
+                "human_manageable": True,
+                "read_only": True,
+                "created_at": comment.get("created_at"),
+                "updated_at": comment.get("created_at"),
+                "evidence_refs": _mapping_list(comment.get("evidence_refs")),
+            }
+        )
+    for index, ref in enumerate(refs):
+        work_id = _builder_work_id(ref, index)
+        task = repair_tasks.get(work_id) or {}
+        context = task.get("context") if isinstance(task.get("context"), Mapping) else {}
+        economic = context.get("economic") if isinstance(context.get("economic"), Mapping) else {}
+        token_accounting = ref.get("token_accounting") if isinstance(ref.get("token_accounting"), Mapping) else {}
+        item = {
+            "entry_id": f"{ticket_id}:builder:{work_id}",
+            "kind": "builder_work_item",
+            "authority": "adaos.builder.repair_task",
+            "work_id": work_id,
+            "work_type": str(ref.get("type") or "builder_repair_task"),
+            "mode": str(ref.get("mode") or ref.get("handoff_mode") or "").strip() or None,
+            "status": task.get("status") or ref.get("status") or "linked",
+            "summary": task.get("summary") or ref.get("summary") or "",
+            "project_id": task.get("project_id") or context.get("project_id") or None,
+            "repair_id": str(ref.get("repair_id") or task.get("repair_id") or "").strip() or None,
+            "human_manageable": False,
+            "read_only": True,
+            "created_at": task.get("created_at") or ref.get("created_at"),
+            "updated_at": task.get("updated_at") or ref.get("updated_at") or ref.get("created_at"),
+            "acceptance": task.get("acceptance") if isinstance(task.get("acceptance"), Mapping) else {},
+            "token_accounting": {
+                "schema": "adaos.builder.codex_token_accounting.v1",
+                "subscription_resource": str(
+                    token_accounting.get("subscription_resource")
+                    or economic.get("subscription_resource")
+                    or "codex.api.tokens"
+                ),
+                "source_of_truth": str(
+                    token_accounting.get("source_of_truth")
+                    or economic.get("source_of_truth")
+                    or "adaos.root_mgmnt.codex_usage_event.v1"
+                ),
+                "usage_event_endpoint": str(
+                    token_accounting.get("usage_event_endpoint")
+                    or economic.get("usage_event_endpoint")
+                    or "/hub/economic/codex/usage"
+                ),
+                "required_for_statuses": list(
+                    token_accounting.get("required_for_statuses")
+                    if isinstance(token_accounting.get("required_for_statuses"), list)
+                    else economic.get("required_for_statuses")
+                    if isinstance(economic.get("required_for_statuses"), list)
+                    else ["succeeded", "failed", "errored", "cancelled"]
+                ),
+                "reported_usage": {},
+                "estimate": {},
+            },
+        }
+        builder_items.append(item)
+        entries.append(item)
+    entries = sorted(entries, key=lambda item: (str(item.get("created_at") or item.get("updated_at") or ""), str(item.get("entry_id") or "")))
+    return {
+        "schema": "adaos.builder.ticket_work_stream.v1",
+        "ticket_id": ticket_id,
+        "authority": {
+            "user_ticket": "adaos.dev.ticket",
+            "builder_work": "adaos.builder.repair_task",
+            "token_usage": "adaos.root_mgmnt.codex_usage_event.v1",
+        },
+        "lifecycle_split": {
+            "user_ticket_human_manageable": True,
+            "builder_work_human_manageable": False,
+            "builder_work_status_source": "Builder repair/task registry",
+            "one_user_ticket_can_spawn_many_builder_items": True,
+        },
+        "builder_work_count": len(builder_items),
+        "builder_work_items": builder_items,
+        "entries": entries,
     }
 
 

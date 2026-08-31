@@ -112,6 +112,9 @@ with evidence and trace visible.
 - [ ] `[must]` `DRW1-14` Add access-decision trace to ticket operations,
   including actor, subject, delegated context, required capability, policy
   digest, and denial reason.
+- [x] `[must]` `DRW1-15` Expose linked Builder work as read-only related
+  resource rows on Dev Ticket detail, preserving the split between
+  human-managed ticket state and Builder-managed repair task state.
 - [ ] `[should]` `DRW1-07` Add relevance ranking by active Builder project,
   current scenario, current modal, selected files, commit diff, and recent
   runtime evidence.
@@ -129,8 +132,9 @@ artifact views, i18n fields, access policy, Builder handoff operations, core
 capability requests, and SDK-understanding signals. The production gap is no
 longer the core lifecycle contract; it is uniform agent ergonomics:
 artifact-open commands, subscriptions, relevance ranking, SDK/MCP helper
-surface, access-decision traces on every operation, and a Resource Workbench
-renderer that can replace the custom client panel.
+surface, access-decision traces on every operation, richer related Builder
+history, and a Resource Workbench renderer that can replace the custom client
+panel.
 
 ## DRW2. Demo Metrics Harness
 
@@ -200,10 +204,16 @@ delivery, provider diagnostics, and source availability choices.
 - [ ] `[must]` `DRW3-12` Show readiness/degraded-mode traces for stale data,
   read-only operation mode, provider failure, unsupported filters, queued work,
   and missing authority.
+- [x] `[must]` `DRW3-13` Include linked Builder repair work and token-accounting
+  metadata in Dev Ticket and Builder contexts, with Builder work items rendered
+  as read-only state from the Builder registry.
 - [ ] `[should]` `DRW3-07` Add relevance queries for "tickets/resources related
   to this project, scenario, skill, modal, open file set, and current diff".
 - [ ] `[should]` `DRW3-08` Add autonomous-repair cost estimates and risk labels
   to Builder handoff views.
+- [ ] `[should]` `DRW3-14` Show recorded and estimated `codex.api.tokens`
+  consumption beside Builder work, using root economic usage events as the
+  authority and counting provider-reported failed/cancelled usage.
 - [ ] `[could]` `DRW3-09` Add trace comparison between prototype behavior and
   implemented behavior.
 
@@ -360,6 +370,9 @@ resource families.
 - [ ] `[should]` `DRW8-12` Add quota and rate-limit traces for expensive
   queries, artifact previews, LLM classification, and autonomous repair cost
   estimation.
+- [ ] `[should]` `DRW8-13` Add a common economic trace relation from resource
+  operations to Subscription usage events, so Dev Tickets, Builder repairs,
+  LLM qualification, and conversational intake can show token/cost impact.
 - [ ] `[could]` `DRW8-08` Add analytics over operation latency, validation
   failure rate, unsupported filter rate, stale revision rate, and autonomous
   repair cost.

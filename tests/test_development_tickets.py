@@ -116,7 +116,17 @@ def test_compatibility_pending_action_response_creates_builder_repair(tmp_path: 
     assert response["repair"]["project_id"] == "legacy_skill"
     assert response["repair"]["context"]["development_ticket"]["ticket_id"] == report["ticket"]["ticket_id"]
     assert response["repair"]["context"]["development_ticket"]["handoff_mode"] == "autonomous"
+    assert response["repair"]["context"]["economic"]["subscription_resource"] == "codex.api.tokens"
+    assert response["repair"]["context"]["economic"]["required_for_statuses"] == [
+        "succeeded",
+        "failed",
+        "errored",
+        "cancelled",
+    ]
     assert response["repair"]["source_refs"][0] == {"type": "dev_ticket", "id": report["ticket"]["ticket_id"]}
+    assert response["ticket"]["builder_refs"][0]["token_accounting"]["source_of_truth"] == (
+        "adaos.root_mgmnt.codex_usage_event.v1"
+    )
     assert tickets.get_signal(report["signal"]["signal_id"])["status"] == "repair_created"
 
     context = repair_service.task_context("legacy_skill")

@@ -102,6 +102,16 @@ publish Pending Actions, and hand off to Builder. It is still narrower than an
 AdaOS Issue: it does not own support SLAs, cross-user collaboration, public
 upstream negotiation, or final release authority.
 
+A Dev Ticket is not the execution registry for Builder. It is the user and
+Codex backlog object; Builder repair tasks, autonomous runs, and future
+implementation subtasks have their own lifecycle and authority. One user
+ticket may therefore spawn several Builder work items. The ticket detail may
+show those work items as a read-only history with task status, source context,
+validation evidence, and token-accounting metadata, but human ticket actions
+must not mutate Builder task state directly. Builder status belongs to the
+Builder task registry, and billable token usage belongs to the economic usage
+event stream.
+
 An AdaOS Issue remains the durable work source of truth once support or
 development accepts a problem for tracked execution. Until that Issue layer is
 implemented, workspace-scoped Development Signals may bridge to the existing
@@ -170,6 +180,13 @@ Implementation status, 2026-08-31:
   workbench with ticket/target context, and records development-source choices
   (`use_existing_dev_source`, `materialize_dev_source`, `create_local_fork`,
   `create_runtime_overlay`, `defer`) when source is absent.
+- Ticket detail and Builder context expose linked Builder repair tasks as
+  read-only work items so a single user report can spawn multiple Builder
+  tasks without collapsing their lifecycle into the human ticket lifecycle.
+- Builder handoff carries `codex.api.tokens` accounting metadata. The root
+  economic usage stream remains authoritative for actual billable usage,
+  including provider-reported tokens from failed, errored, or cancelled repair
+  attempts.
 - Ticket resolution currently requires evidence refs; the target verification
   split above keeps final acceptance as a separate `verify`/`closed` step.
   Close without a fix uses the separate `close` lifecycle.

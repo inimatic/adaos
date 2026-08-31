@@ -327,6 +327,17 @@ Ticket and signals, and closes only with evidence.
 - [ ] `[should]` `DS5-20` Add cost estimates before autonomous repair:
   approximate token budget, runtime/test cost, expected source scope, and
   confidence/risk.
+- [x] `[must]` `DS5-21` Split the user Dev Ticket lifecycle from Builder work
+  lifecycles: one user ticket can spawn several Builder repair tasks, and the
+  ticket detail must show them as read-only linked work items with their own
+  statuses.
+- [x] `[must]` `DS5-22` Carry token-accounting requirements into Builder repair
+  handoff metadata: autonomous and interactive repairs use `codex.api.tokens`,
+  and failed, errored, or cancelled provider calls remain billable usage events
+  in the Subscription/economic stream.
+- [ ] `[should]` `DS5-23` Add a richer ticket history feed that interleaves the
+  original user report, follow-up comments, Builder work items, validation
+  evidence, user rejection, reopen notes, and delayed completion notices.
 
 Implementation note, 2026-08-31: `adaos dev ticket` now covers create, list,
 show, defer, handoff, claim, start, comment, resolve, verify, close, reopen,
@@ -339,11 +350,17 @@ open path accepts `ticket_id`, selects the target skill/scenario, stores a
 `development_ticket` context in the durable workbench binding, exposes source
 options when dev source is absent, filters related active tickets for the
 current artifact, and emits deterministic intake qualification plus a batch
-repair plan. Resolution is evidence-gated, `resolved` is non-terminal,
-`verify` requires verification evidence, and normal closure requires verified
-status. Delayed completion notifications, subscriptions, artifact-open
-helpers, autonomous cost estimates, and full Builder repair execution over
-ticket batches remain open.
+repair plan. Ticket detail and Builder context expose linked Builder repair
+tasks as read-only work items, so one user ticket can spawn multiple Builder
+tasks without giving human ticket actions authority over Builder task state.
+Handoff metadata carries the `codex.api.tokens` Subscription accounting
+requirement; actual usage remains authoritative in the root economic stream,
+including failed, errored, or cancelled provider calls with reported billable
+tokens. Resolution is evidence-gated, `resolved` is non-terminal, `verify`
+requires verification evidence, and normal closure requires verified status.
+Delayed completion notifications, subscriptions, artifact-open helpers,
+autonomous cost estimates, richer user-ticket/Builder history, and full
+Builder repair execution over ticket batches remain open.
 
 ## DS6. Analytics, Campaigns, And Policy Hardening
 

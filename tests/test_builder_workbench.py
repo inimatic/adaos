@@ -17,6 +17,7 @@ from adaos.services.builder.workbench import (
     safe_source_webspace_id,
     source_webspace_id_for,
 )
+from adaos.services.builder.repair import BuilderRepairService
 from adaos.services.development_tickets import DevelopmentTicketService
 
 
@@ -773,6 +774,85 @@ def test_builder_workbench_qualifies_core_blocked_development_ticket(tmp_path: P
     assert context["qualification"]["repair_allowed"] is False
     assert context["qualification"]["blocked_by"][0]["ticket_id"] == core["ticket_id"]
     assert context["repair_batch"]["tickets"][0]["ticket_id"] == project_ticket["ticket_id"]
+
+
+def test_builder_workbench_exposes_ticket_builder_work_stream(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    service = BuilderWorkbenchService(state_dir=state_dir)
+    tickets = DevelopmentTicketService(state_dir=state_dir)
+    repair_service = BuilderRepairService(state_dir=state_dir)
+    signal = tickets.capture_signal(
+        kind="development_request",
+        summary="Tune Demo Metrics workbench CRUD controls",
+        target_scope={
+            "type": "skill",
+            "id": "demo_metrics_skill",
+            "source": "workspace",
+            "component_ref": "skill:demo_metrics_skill",
+        },
+        source="client_feedback",
+        owner_area="skill",
+        component_ref="skill:demo_metrics_skill",
+        evidence_refs=[{"type": "trace", "id": "demo.metrics.feedback"}],
+    )["signal"]
+    ticket = tickets.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="accepted",
+        owner_area="skill",
+        component_ref="skill:demo_metrics_skill",
+    )["ticket"]
+    first = tickets.handoff_ticket(
+        ticket["ticket_id"],
+        mode="interactive",
+        repair_service=repair_service,
+        actor="user:owner",
+    )
+    repair_service.record_acceptance(
+        first["repair"]["repair_id"],
+        capability_works=True,
+        regression_free=True,
+        evidence_refs=[{"type": "test", "id": "tests/test_demo_metrics.py"}],
+        actor="builder:test",
+    )
+    tickets.comment_ticket(ticket["ticket_id"], body="User follow-up after first repair.", actor="user:owner")
+    second = tickets.handoff_ticket(
+        ticket["ticket_id"],
+        mode="autonomous",
+        repair_service=repair_service,
+        actor="user:owner",
+    )
+    app = FastAPI()
+    app.include_router(builder_api.router, prefix="/api/builder")
+    app.dependency_overrides[require_token] = lambda: None
+    app.dependency_overrides[builder_api._get_workbench_service] = lambda: service
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/builder/workbench/open",
+        params={"webspace_id": "desktop", "ticket_id": ticket["ticket_id"]},
+    )
+
+    assert response.status_code == 200
+    context = response.json()["binding"]["development_ticket"]
+    stream = context["work_stream"]
+    assert stream["schema"] == "adaos.builder.ticket_work_stream.v1"
+    assert stream["authority"]["user_ticket"] == "adaos.dev.ticket"
+    assert stream["authority"]["builder_work"] == "adaos.builder.repair_task"
+    assert stream["authority"]["token_usage"] == "adaos.root_mgmnt.codex_usage_event.v1"
+    assert stream["lifecycle_split"]["one_user_ticket_can_spawn_many_builder_items"] is True
+    assert stream["builder_work_count"] == 2
+    assert len(context["builder_work_items"]) == 2
+    by_id = {item["work_id"]: item for item in context["builder_work_items"]}
+    assert by_id[first["repair"]["repair_id"]]["status"] == "resolved"
+    assert by_id[second["repair"]["repair_id"]]["status"] == "open"
+    assert all(item["read_only"] is True for item in context["builder_work_items"])
+    assert all(item["human_manageable"] is False for item in context["builder_work_items"])
+    assert all(
+        item["token_accounting"]["subscription_resource"] == "codex.api.tokens"
+        for item in context["builder_work_items"]
+    )
+    assert any(entry["kind"] == "user_comment" for entry in stream["entries"])
 
 
 def test_get_workspace_binding_migrates_runtime_dialog_topic(tmp_path: Path) -> None:

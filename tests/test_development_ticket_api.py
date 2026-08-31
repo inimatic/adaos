@@ -301,6 +301,17 @@ def test_development_ticket_api_handoff_and_resolution_require_evidence(tmp_path
     assert handoff_payload["repair"]["context"]["development_source"]["status"] == "needs_materialization"
     assert "materialize_dev_source" in handoff_payload["repair"]["context"]["development_source"]["options"]
 
+    shown_after_handoff = client.get(f"/api/development-tickets/{ticket_id}", headers=_headers())
+    assert shown_after_handoff.status_code == 200, shown_after_handoff.text
+    work_stream = shown_after_handoff.json()["work_stream"]
+    assert work_stream["schema"] == "adaos.builder.ticket_work_stream.v1"
+    assert work_stream["lifecycle_split"]["one_user_ticket_can_spawn_many_builder_items"] is True
+    assert work_stream["builder_work_count"] == 1
+    assert work_stream["builder_work_items"][0]["repair_id"] == handoff_payload["repair"]["repair_id"]
+    assert work_stream["builder_work_items"][0]["status"] == "open"
+    assert work_stream["builder_work_items"][0]["human_manageable"] is False
+    assert work_stream["builder_work_items"][0]["token_accounting"]["subscription_resource"] == "codex.api.tokens"
+
     rejected = client.post(
         f"/api/development-tickets/{ticket_id}/resolve",
         headers=_headers(),
