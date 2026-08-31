@@ -2897,9 +2897,9 @@ def test_completed_automation_synchronizes_linked_dev_ticket_without_status_recu
     assert current["development_ticket_synced_task_ids"] == ["task.1"]
     assert (
         current["development_ticket_sync_schema"]
-        == "adaos.builder.dev_ticket_task_sync.v2"
+        == "adaos.builder.dev_ticket_task_sync.v3"
     )
-    assert current["development_ticket_sync_revision"] == 1
+    assert current["development_ticket_sync_revision"] == 2
     assert current["development_ticket_sync"]["resolved"] is True
     assert saved[-1]["development_ticket_synced_task_id"] == "task.1"
 

@@ -2256,7 +2256,8 @@ class BuilderAutomationService:
                 }
             current["codex_usage_accounting"] = receipt
             self._retain_codex_usage_receipt(current, receipt)
-            current["updated_at"] = _now_iso()
+            if zero_model_continuation or accounting:
+                current["updated_at"] = _now_iso()
             return current
         if self.codex_usage_reporter is None:
             usage_accuracy = str(usage.get("accuracy") or "provider_reported")

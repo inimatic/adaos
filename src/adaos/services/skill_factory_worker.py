@@ -2739,6 +2739,11 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
             else "No task-scoped Root MCP route was admitted."
         )
         if bounded_repair:
+            bounded_prompt_title = (
+                "AdaOS bounded surgical UI repair"
+                if surgical_ui
+                else "AdaOS bounded Dev Ticket repair"
+            )
             bounded_brief = _bounded_repair_brief_prompt(brief)
             qualified_targets = (
                 json.dumps(
@@ -2750,7 +2755,7 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
                 if repair_target_context
                 else "No qualified target slices were resolved; use the bounded discovery rules below."
             )
-            prompt = f"""# AdaOS bounded Dev Ticket repair
+            prompt = f"""# {bounded_prompt_title}
 
 Target: {target_type}:{target_id}
 
