@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.research.discussion_event.v1",
+  "title": "AdaOS Research Discussion Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "event_id",
+    "inquiry_id",
+    "direction_ref",
+    "ordinal",
+    "actor",
+    "content",
+    "source_refs",
+    "created_at",
+    "digest"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.research.discussion_event.v1"},
+    "schema_version": {"const": "1.0.0"},
+    "event_id": {"$ref": "#/$defs/id"},
+    "inquiry_id": {"$ref": "#/$defs/id"},
+    "direction_ref": {"type": "string", "pattern": "^research-direction:[A-Za-z0-9_.:-]+$"},
+    "task_ref": {"type": ["string", "null"], "pattern": "^research-task:[A-Za-z0-9_.:-]+$"},
+    "ordinal": {"type": "integer", "minimum": 1},
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "actor_id"],
+      "properties": {
+        "kind": {"enum": ["human", "llm", "deterministic_tool", "imported_dialogue"]},
+        "actor_id": {"type": "string", "minLength": 1, "maxLength": 240},
+        "label": {"type": "string", "maxLength": 240}
+      }
+    },
+    "content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "text", "text_digest"],
+      "properties": {
+        "kind": {"enum": ["message", "source_note", "decision", "imported_dialogue"]},
+        "text": {"type": "string", "minLength": 1, "maxLength": 50000},
+        "text_digest": {"$ref": "#/$defs/digest"},
+        "language": {"type": "string", "maxLength": 32}
+      }
+    },
+    "prior_projection_digest": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+    "source_refs": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1, "maxLength": 2000},
+      "maxItems": 500,
+      "uniqueItems": true
+    },
+    "created_at": {"type": "string", "minLength": 1, "maxLength": 80},
+    "digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

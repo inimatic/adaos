@@ -1,0 +1,40 @@
+{
+  "review_type": "bounded_reproducible_scoping_review",
+  "search_directions": [
+    "human-AI coevolution and co-adaptation",
+    "human-AI co-creation with artifacts and relational ontology",
+    "distributed cognition and mediating artifacts",
+    "software and self-evolving agent feedback loops",
+    "end-user development and participatory AI",
+    "provenance and versioned artifact lineage",
+    "diverse software contribution attribution",
+    "data valuation and peer-production incentives",
+    "Sybil and reward-gaming threats",
+    "design-science conceptual artifact evaluation"
+  ],
+  "inclusion_rules": [
+    "include primary papers, peer-reviewed proceedings, author manuscripts, or normative standards with direct conceptual relevance",
+    "include recent nearest-neighbor frameworks that explicitly model artifacts in human-AI co-creation",
+    "include empirical or formal work for attribution, incentive, and gaming boundary conditions",
+    "record the actual reading level and do not treat metadata-only discovery as evidentiary support"
+  ],
+  "exclusion_rules": [
+    "exclude popular summaries when a primary source is available",
+    "exclude sources used only for naming similarity",
+    "exclude unverified claims from hidden drafts or implementation plans",
+    "exclude production mechanism selection from Phase A"
+  ],
+  "stop_rule": "Stop when every substantive cluster has at least two admitted sources except a normative-standard or method-foundation cluster, and at least two recent nearest neighbors explicitly including artifacts have been found; this is sufficient for Draft 0 novelty-risk assessment, not a systematic or exhaustive review.",
+  "source_count": 15,
+  "verified_source_count": 15,
+  "novelty_claim_ceiling": "known_combination_or_unresolved",
+  "required_nearest_neighbor_count": 5,
+  "out_of_scope": [
+    "exhaustive systematic review",
+    "proof of novelty",
+    "legal determination of ownership or compensation rights",
+    "selection of a production economic mechanism",
+    "empirical validation claims",
+    "Builder implementation authorization"
+  ]
+}

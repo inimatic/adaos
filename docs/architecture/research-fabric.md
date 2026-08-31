@@ -20,7 +20,7 @@ evaluation remain target work. Distributed
 execution/Ray is explicitly deferred; the current path executes on the
 selected AdaOS member node.
 
-Last reviewed: 2026-08-18.
+Last reviewed: 2026-08-30.
 
 This page defines a general research framework for AdaOS and uses Tropical
 Learnable Pooling (TLP) as its first reference case. It intentionally does not
@@ -89,10 +89,14 @@ pack, and aResearcher as a solution agent or workbench are governed by the
     Development Session. Neither the orchestrator nor Workbench edits installed
     package sources.
 14. Human/LLM research design produces task-scoped, versioned
-    `ResearchPrototype` and `ResearchCompilation` artifacts, not an authoritative
-    chat transcript. Human consensus accepts exact digests; Automation receives
-    a bounded implementation handoff naming the exact direction, task, Project,
-    targets, artifact views, read-only context, and accepted revision.
+    `ResearchPrototype`, `ResearchCompilation`, and conceptual
+    `ResearchSynthesisRevision` artifacts, not an authoritative chat
+    transcript. Human consensus accepts exact digests. A conceptual Phase A
+    may freeze an `AcceptedResearchSynthesis`, `DraftCandidate`, and Gate A1
+    receipt for comparison without creating a `ResearchRelease` or authorizing
+    Builder work; Automation receives a bounded implementation handoff only
+    after a separate handoff decision naming the exact direction, task,
+    Project, targets, artifact views, read-only context, and accepted revision.
 15. Full autonomy is a delegated execution mode over the same contracts. A
     signed `ResearchMandate` defines scope, budgets, tools, data access,
     software-mutation authority, stop conditions, and escalation. It never
@@ -176,6 +180,16 @@ pack, and aResearcher as a solution agent or workbench are governed by the
     question creates a ResearchTask; a protocol change creates a revision; an
     alternative engineering architecture creates an ImplementationTrack; seeds
     create Trials/Runs; and infrastructure retries create ExecutionAttempts.
+34. Informal discussion does not directly create a paper, prototype, or Builder
+    task. Each turn is an immutable `DiscussionEvent`; the Researcher LLM may
+    only propose a bounded patch over a typed `InquiryProjection`. The shared
+    Workbench deterministically recomputes semantic measures and a
+    `ProblemDisposition` gate that routes the frame to clarification, source
+    search, problem splitting, known-solution reuse, research formulation,
+    engineering formulation, deferral, or stop. Only a human decision over the
+    exact projection digest advances it. Failed LLM calls retain and replay
+    unprojected discussion events; discovered source candidates remain outside
+    evidence until separately admitted.
 
 ## Why `Research Fabric`
 
@@ -560,6 +574,38 @@ Workbench is only their projection.
   policy for Automation and later Study
   instantiation; chat remains linked provenance rather than the object.
 
+`ResearchSynthesisRevision`
+: Research-domain conceptual candidate produced from explicit sources, bounded
+  scoping review records, generated analysis, and human author decisions. It
+  contains the conceptual model, embedded conceptual `claim_set`, argument map,
+  related-work map, source coverage, novelty ledger, boundary conditions,
+  counterarguments, limitations, research agenda, attribution, and provenance.
+  Its claim statuses distinguish `source_supported`, `conceptually_derived`,
+  `proposed`, `contested`, `speculative`, `requires_empirical_validation`, and
+  `rejected`. This artifact is not an empirical Study result.
+
+`AcceptedResearchSynthesis`
+: Human-accepted exact digest of one conceptual `ResearchSynthesisRevision`.
+  It is the minimal canonical Phase A state for conceptual framework work and
+  explicitly records `phase_b_authorized: false` and
+  `research_release_created: false`.
+
+`DraftCandidate`
+: Read-only narrative projection from an `AcceptedResearchSynthesis`, typically
+  Draft 0 of a conceptual framework paper with design-science research agenda.
+  It has section traceability back to accepted synthesis components and cannot
+  add claims or repair missing evidence in prose.
+
+`GateA1Freeze`
+: Receipt that freezes `AcceptedResearchSynthesis`, `DraftCandidate`,
+  provenance, visibility, and isolation digests as `accepted_for_comparison`.
+  Gate A1 does not start implementation and cannot authorize Phase B.
+
+`GateA2HandoffAuthorization`
+: Separate human decision, after comparison/review, that may authorize a
+  limited Builder handoff such as an observability and attribution substrate.
+  It is intentionally distinct from Gate A1.
+
 `Study`
 : Stable execution/evaluation aggregate instantiated from one accepted task and
   protocol, with owners, policy, budget, and lifecycle. A direction may contain
@@ -644,7 +690,9 @@ Workbench is only their projection.
 The model deliberately distinguishes scientific identity (`Trial`, `Run`) from
 infrastructure identity (`ExecutionAttempt`). This prevents a preemption or
 worker loss from inflating the sample count. It also distinguishes design-time
-source (`ResearchPrototype`/`ResearchCompilation`), live portfolio state
+source (`ResearchPrototype`/`ResearchCompilation`/`ResearchSynthesisRevision`),
+accepted conceptual synthesis (`AcceptedResearchSynthesis`/`DraftCandidate`),
+live portfolio state
 (`ResearchDirection`/`ResearchAgenda`), execution state (`Study`/`Campaign`),
 engineering state (`ImplementationTrack`/Development Session), software
 publication (`ProjectRelease`), and result publication (`ResearchRelease`) so
@@ -657,6 +705,9 @@ ResearchDirection
   -> ResearchAgenda (DAG)
      -> ResearchTask
         -> formulation and ResearchCompilation revisions
+        -> ResearchSynthesisRevision -> AcceptedResearchSynthesis
+           -> DraftCandidate -> GateA1Freeze
+           -> optional GateA2HandoffAuthorization
         -> ImplementationTrack(s)
            -> Project + DevelopmentSession(s) + candidate ProjectRelease(s)
         -> Study/Campaign
@@ -1239,6 +1290,41 @@ distributed, because independent agents can amplify rather than correct shared
 errors.
 
 ## Scientific Synthesis and Communication
+
+Conceptual Phase A has a pre-release synthesis path. A shared Research Fabric
+LLM Researcher may produce a `ResearchSynthesisRevision`, but the accepted
+object is the human-approved digest, not the chat. Codex is the engineering
+agent for Research Fabric changes and an optional later Builder; it is not the
+scientific authoring actor. Phase A performs bounded reproducible
+scoping, conceptual modeling, claim typing, novelty accounting, and research
+agenda formulation. It may freeze `AcceptedResearchSynthesis` plus a traced
+`DraftCandidate` at Gate A1 for independent comparison. It does not create
+`ResearchRelease`, does not authorize Phase B, and does not invent empirical
+experiments, datasets, metrics, trials, results, token rules, balances,
+transfers, payouts, or ownership semantics.
+
+The LLM receives one digest-bound source snapshot and an exact allowlist.
+`VisibilityReceipt` and `IsolationReceipt` bind the visible refs, denied
+material classes, prompt digest, and absence of hidden comparator, Builder, or
+Phase B context. `ResearchAuthoringRun` and `SynthesisReview` bind the provider
+job id, model, request id, output digest, and provider-reported input, cached
+input, output, reasoning, and total tokens. A failed or incomplete job emits a
+durable `ResearchLlmRunFailure`; unknown provider usage remains `null`, never
+zero. Recovery may re-materialize the same provider response after a Fabric
+validator improvement, but aggregation deduplicates by provider job id.
+
+Accounting scopes are non-overlapping. Research authoring and review use
+`researcher_llm`; a later Builder run uses `builder_codex` and reports the
+terminal Codex journal to Root `codex.api.tokens` with an idempotency key. The
+interactive Codex session that develops Research Fabric is excluded. Failed
+Builder tasks still report positive provider usage because task failure does
+not erase consumed model tokens.
+
+Synthesis ABI 1.0 remains valid for the first calibration artifacts. ABI 1.1
+adds non-operational resource-feedback mode, structured threats,
+nearest-neighbor deltas, and hypothesis operationalization. ABI 1.2 adds a
+preregistered nearest-neighbor minimum and a novelty ceiling: a bounded corpus
+that is not proof of novelty cannot emit an `apparently_new` conclusion.
 
 Deterministic analyzers execute the locked Analysis Plan and emit typed results,
 tables, and figure data with evidence refs. An LLM may explain those outputs,

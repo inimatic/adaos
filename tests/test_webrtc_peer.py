@@ -797,6 +797,40 @@ def test_request_webio_stream_snapshots_extracts_global_node_receiver(monkeypatc
     ]
 
 
+def test_event_channel_topics_replace_node_slideshow_stream_with_hub_alias(monkeypatch) -> None:
+    peer_mod = _load_peer_module(monkeypatch)
+
+    topics = peer_mod._normalize_event_channel_topics(
+        [
+            "webio.stream.desktop.nodes.member-01.slideshow_skill.index",
+            "webio.stream.nodes.member-02.slideshow_skill.folders",
+            "webio.stream.desktop.nodes.member-03.weather.current",
+            "webio.stream.desktop.slideshow_skill.preview",
+            "core.update.status",
+        ]
+    )
+
+    assert "webio.stream.desktop.nodes.member-01.slideshow_skill.index" not in topics
+    assert "webio.stream.desktop.slideshow_skill.index" in topics
+    assert "webio.stream.nodes.member-02.slideshow_skill.folders" not in topics
+    assert "webio.stream.desktop.slideshow_skill.folders" in topics
+    assert "webio.stream.desktop.nodes.member-03.weather.current" in topics
+    assert "webio.stream.desktop.weather.current" not in topics
+    assert "webio.stream.desktop.slideshow_skill.preview" in topics
+    assert "core.update.status" in topics
+
+    aliases = peer_mod._webio_stream_node_aliases(
+        ["webio.stream.desktop.nodes.member-01.slideshow_skill.index"]
+    )
+    assert aliases == [
+        {
+            "source": "webio.stream.desktop.slideshow_skill.index",
+            "target": "webio.stream.desktop.nodes.member-01.slideshow_skill.index",
+            "node_id": "member-01",
+        }
+    ]
+
+
 def test_request_webio_yjs_projection_snapshots_extracts_node_qualified_slot(monkeypatch) -> None:
     clear_snapshot_demand_for_tests()
     peer_mod = _load_peer_module(monkeypatch)

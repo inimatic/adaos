@@ -1,0 +1,27 @@
+{
+  "schema": "adaos.research.llm_run_failure.v1",
+  "schema_version": "1.0.0",
+  "failure_id": "failure.evolnomics.r4.20260829.synthesis_authoring",
+  "run_id": "evolnomics.r4.20260829",
+  "operation": "synthesis_authoring",
+  "task_ref": "research-task:evolnomics.phase_a",
+  "actor": "llm",
+  "model": "gpt-5.4-mini",
+  "request_id": "research.evolnomics.r4.20260829.synthesis",
+  "status": "validation_failed",
+  "reason": "LLM synthesis candidate failed Fabric validation: related_work_map must be an object",
+  "usage": {
+    "accounting_scope": "researcher_llm",
+    "input_tokens": 5704,
+    "cached_input_tokens": 0,
+    "output_tokens": 5174,
+    "reasoning_tokens": 98,
+    "total_tokens": 10878,
+    "accuracy": "provider_reported"
+  },
+  "started_at": "2026-08-29T06:35:00.787089+00:00",
+  "failed_at": "2026-08-29T06:35:30.554830+00:00",
+  "provider_job_id": "llm_job_795c72b758964cbf8f9649e5",
+  "provider_response_id": "resp_07f9ec52d99528ee006a927d9639f487d194121feb28d67cfd",
+  "digest": "sha256:1c430f18ce04edf6ac9a4fbf0d49f4558685c8f854af70eabe84cc225d41a9cc"
+}

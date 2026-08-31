@@ -279,6 +279,7 @@ class BuilderAutomationService:
     event_sink: Callable[[Mapping[str, Any]], None] | None = None
     workspace_service: BuilderWorkspaceService | None = None
     workflow_service: BuilderWorkflowService | None = None
+    codex_usage_reporter: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None
     background: bool = True
     materialize_on_completion: bool = True
     factory: SkillFactoryService = field(init=False)
@@ -293,6 +294,8 @@ class BuilderAutomationService:
 
     @classmethod
     def from_context(cls, *, background: bool = True) -> "BuilderAutomationService":
+        from adaos.services.economic_policy import report_codex_usage_to_root
+
         workspace = BuilderWorkspaceService.from_context()
         repo_root = Path(workspace.repo_root or current_repo_root() or Path.cwd())
         dev_skills = workspace.dev_skills_root or (repo_root / ".adaos" / "workspace" / "skills")
@@ -304,6 +307,7 @@ class BuilderAutomationService:
             dev_scenarios_root=Path(dev_scenarios),
             event_sink=_publish_automation_changed,
             workspace_service=workspace,
+            codex_usage_reporter=report_codex_usage_to_root,
             background=background,
         )
 
@@ -1204,6 +1208,7 @@ class BuilderAutomationService:
                 "local_run",
                 "progress",
                 "task",
+                "codex_usage_accounting",
             ):
                 session.pop(stale_key, None)
             self._refresh_session_companion_skill_ids(session)
@@ -1720,7 +1725,12 @@ class BuilderAutomationService:
                     usage = turn.get("usage") if isinstance(turn.get("usage"), Mapping) else None
                 if usage is None:
                     continue
-                for key in ("input_tokens", "cached_input_tokens", "output_tokens"):
+                for key in (
+                    "input_tokens",
+                    "cached_input_tokens",
+                    "output_tokens",
+                    "reasoning_tokens",
+                ):
                     try:
                         values[key] = max(values.get(key, 0), int(usage.get(key) or 0))
                     except (TypeError, ValueError):
@@ -1755,6 +1765,109 @@ class BuilderAutomationService:
                 total.get("output_tokens") or 0
             )
         return total
+
+    def _report_terminal_codex_usage(
+        self,
+        session: Mapping[str, Any],
+        *,
+        task_status: str,
+    ) -> dict[str, Any]:
+        """Report one terminal Codex usage event and retain an auditable receipt."""
+
+        current = dict(session)
+        task_id = str(current.get("current_task_id") or "").strip()
+        if not task_id or task_status not in _TERMINAL_STATUSES:
+            return current
+        accounting = (
+            current.get("codex_usage_accounting")
+            if isinstance(current.get("codex_usage_accounting"), Mapping)
+            else {}
+        )
+        if (
+            accounting.get("status") == "reported"
+            and str(accounting.get("task_id") or "") == task_id
+        ):
+            return current
+        local_run = (
+            current.get("local_run")
+            if isinstance(current.get("local_run"), Mapping)
+            else {}
+        )
+        usage = self._codex_run_usage(local_run)
+        if not usage:
+            current["codex_usage_accounting"] = {
+                "schema": "adaos.builder.codex_usage_receipt.v1",
+                "task_id": task_id,
+                "status": "unavailable",
+                "accuracy": "unavailable",
+                "total_tokens": None,
+                "reason": "No provider usage was found in the terminal Codex journal.",
+                "checked_at": _now_iso(),
+            }
+            return current
+        if self.codex_usage_reporter is None:
+            current["codex_usage_accounting"] = {
+                "schema": "adaos.builder.codex_usage_receipt.v1",
+                "task_id": task_id,
+                "status": "reporter_unavailable",
+                "accuracy": "provider_reported",
+                **usage,
+                "total_tokens": int(usage.get("model_tokens") or 0),
+                "checked_at": _now_iso(),
+            }
+            return current
+        idempotency_key = f"builder:{current.get('session_id') or 'session'}:{task_id}:codex-usage:v1"
+        object_type = str(current.get("object_type") or "").strip()
+        object_id = str(current.get("object_id") or "").strip()
+        event = {
+            "idempotency_key": idempotency_key,
+            "run_id": task_id,
+            "job_id": task_id,
+            "status": task_status,
+            "source": "builder_automation",
+            "accuracy": "reported",
+            "input_tokens": int(usage.get("input_tokens") or 0),
+            "cached_input_tokens": int(usage.get("cached_input_tokens") or 0),
+            "output_tokens": int(usage.get("output_tokens") or 0),
+            "reasoning_tokens": int(usage.get("reasoning_tokens") or 0),
+            "total_tokens": int(usage.get("model_tokens") or 0),
+            "billable_tokens": int(usage.get("model_tokens") or 0),
+            "occurred_at": str(current.get("updated_at") or _now_iso()),
+            "change_id": str(current.get("change_id") or "").strip() or None,
+            "note": f"builder_status={task_status}; attempts={int(usage.get('attempts') or 0)}",
+        }
+        if object_type == "scenario" and object_id:
+            event["scenario_id"] = object_id
+        elif object_id:
+            event["project_id"] = object_id
+        try:
+            reported = dict(self.codex_usage_reporter(event))
+            root_event = reported.get("event") if isinstance(reported.get("event"), Mapping) else {}
+            current["codex_usage_accounting"] = {
+                "schema": "adaos.builder.codex_usage_receipt.v1",
+                "task_id": task_id,
+                "status": "reported",
+                "accuracy": "provider_reported",
+                **usage,
+                "total_tokens": int(usage.get("model_tokens") or 0),
+                "idempotency_key": idempotency_key,
+                "root_event_id": root_event.get("event_id"),
+                "duplicate": bool(reported.get("duplicate")),
+                "reported_at": _now_iso(),
+            }
+        except Exception as exc:
+            current["codex_usage_accounting"] = {
+                "schema": "adaos.builder.codex_usage_receipt.v1",
+                "task_id": task_id,
+                "status": "report_failed",
+                "accuracy": "provider_reported",
+                **usage,
+                "total_tokens": int(usage.get("model_tokens") or 0),
+                "idempotency_key": idempotency_key,
+                "error": f"{type(exc).__name__}: {exc}"[:2000],
+                "checked_at": _now_iso(),
+            }
+        return current
 
     @staticmethod
     def _phase_for_status(status: str) -> str:
@@ -2092,6 +2205,10 @@ class BuilderAutomationService:
             "stderr_path": str(run_dir / "output" / "codex-live.stderr.log"),
             "result_path": str(run_dir / "output" / "result.json"),
         }
+        current = self._report_terminal_codex_usage(
+            current,
+            task_status=str(task_status or ""),
+        )
         if task.get("result"):
             current["last_result"] = task.get("result")
             current.pop("last_failure", None)

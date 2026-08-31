@@ -69,7 +69,15 @@ def _normalize_meta(meta: Mapping[str, Any]) -> dict[str, Any]:
 def _merged_meta(_meta: Mapping[str, Any] | None) -> dict[str, Any]:
     meta = get_current_meta()
     if _meta:
-        meta.update(dict(_meta))
+        override = dict(_meta)
+        has_singular_webspace = any(
+            key in override and override.get(key) is not None
+            for key in ("webspace_id", "workspace_id")
+        )
+        if has_singular_webspace and "webspace_ids" not in override:
+            meta.pop("webspace_ids", None)
+            meta.pop("workspace_ids", None)
+        meta.update(override)
     try:
         current = get_current_skill()
         skill_name = str(getattr(current, "name", "") or "").strip()
@@ -108,6 +116,20 @@ def _copy_chat_meta_payload_fields(payload: dict[str, Any], meta: Mapping[str, A
 
 
 def _local_node_id() -> str:
+    try:
+        ctx = get_ctx()
+        config = getattr(ctx, "config", None)
+        node_id = str(getattr(config, "node_id", "") or "").strip()
+        if node_id:
+            return node_id
+        nested = str(getattr(getattr(config, "node_settings", None), "id", "") or "").strip()
+        if nested:
+            return nested
+    except Exception:
+        pass
+    node_id = str(os.getenv("ADAOS_NODE_ID") or "").strip()
+    if node_id:
+        return node_id
     try:
         conf = load_config()
         node_id = str(getattr(conf, "node_id", "") or "").strip()
@@ -584,8 +606,8 @@ def stream_publish(
     meta = _merged_meta(_meta)
     node_id = _local_node_id()
     if node_id:
-        meta.setdefault("node_id", node_id)
-        meta.setdefault("source_node_id", node_id)
+        meta["node_id"] = node_id
+        meta["source_node_id"] = node_id
     if meta:
         payload["_meta"] = meta
 

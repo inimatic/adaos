@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.research.llm_run_failure.v1",
+  "title": "AdaOS Research LLM Run Failure Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "failure_id",
+    "run_id",
+    "operation",
+    "task_ref",
+    "actor",
+    "model",
+    "request_id",
+    "status",
+    "reason",
+    "usage",
+    "started_at",
+    "failed_at",
+    "digest"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.research.llm_run_failure.v1"},
+    "schema_version": {"const": "1.0.0"},
+    "failure_id": {"$ref": "#/$defs/id"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "operation": {"enum": ["synthesis_authoring", "synthesis_review"]},
+    "task_ref": {"type": "string", "pattern": "^research-task:[A-Za-z0-9_.:-]+$"},
+    "actor": {"const": "llm"},
+    "model": {"type": "string", "minLength": 1, "maxLength": 240},
+    "request_id": {"type": "string", "minLength": 1, "maxLength": 240},
+    "provider_job_id": {"type": "string", "minLength": 1, "maxLength": 240},
+    "provider_response_id": {"type": "string", "minLength": 1, "maxLength": 240},
+    "status": {"enum": ["provider_failed", "incomplete", "validation_failed", "transport_failed"]},
+    "reason": {"type": "string", "minLength": 1, "maxLength": 4000},
+    "usage": {"$ref": "#/$defs/usage"},
+    "started_at": {"type": "string", "minLength": 1, "maxLength": 80},
+    "failed_at": {"type": "string", "minLength": 1, "maxLength": 80},
+    "digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "token_count": {"type": ["integer", "null"], "minimum": 0},
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accounting_scope",
+        "input_tokens",
+        "cached_input_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+        "total_tokens",
+        "accuracy"
+      ],
+      "properties": {
+        "accounting_scope": {"const": "researcher_llm"},
+        "input_tokens": {"$ref": "#/$defs/token_count"},
+        "cached_input_tokens": {"$ref": "#/$defs/token_count"},
+        "output_tokens": {"$ref": "#/$defs/token_count"},
+        "reasoning_tokens": {"$ref": "#/$defs/token_count"},
+        "total_tokens": {"$ref": "#/$defs/token_count"},
+        "accuracy": {"enum": ["provider_reported", "unavailable"]}
+      }
+    }
+  }
+}

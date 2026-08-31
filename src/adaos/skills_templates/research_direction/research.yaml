@@ -2,15 +2,47 @@ schema: "adaos.research.direction.v1"
 schema_version: "1.0.0"
 direction_id: "new_skill"
 title: "New Research Direction"
-status: "formulation"
+status: "conceptual_authoring"
 owner: "skill:new_skill"
 source_bundle_digest: null
+accepted_synthesis_digest: null
+draft_candidate_digest: null
+gate_a1_freeze_digest: null
 accepted_prototype_digest: null
 automation_brief_digest: null
 contracts:
+  synthesis: "adaos.research.synthesis.v1"
+  authoring_run: "adaos.research.authoring_run.v1"
+  synthesis_review: "adaos.research.synthesis_review.v1"
+  visibility_receipt: "adaos.research.visibility_receipt.v1"
+  isolation_receipt: "adaos.research.isolation_receipt.v1"
+  llm_run_failure: "adaos.research.llm_run_failure.v1"
+  accepted_synthesis: "adaos.research.accepted_synthesis.v1"
+  draft_candidate: "adaos.research.draft_candidate.v1"
+  gate_a1_freeze: "adaos.research.gate_a1_freeze.v1"
   runner: "adaos.research.runner.v1"
   primary_data: "skill-owned"
   tracker: "adaos.research.tracker.v1"
+profiles:
+  conceptual_authoring:
+    state: "available"
+    schema: "adaos.research.synthesis.v1"
+    lifecycle: "research_synthesis_revision_to_gate_a1"
+    experiment_required: false
+    actor: "llm_researcher"
+    accounting_scope: "researcher_llm"
+    current_codex_session_accounted: false
+    missing: []
+  empirical_runner:
+    state: "pre_codex"
+    schema: "adaos.research.runner.v1"
+    lifecycle: "research_compilation_to_study"
+    experiment_required: true
+    missing:
+      - "accepted ResearchPrototype"
+      - "digest-bound AutomationBrief"
+      - "domain experiment implementation"
+      - "runner conformance tests"
 implementation:
   state: "pre_codex"
   entrypoints: []
@@ -23,3 +55,6 @@ constraints:
   no_direction_scenario: true
   no_notebook_output_as_evidence: true
   no_undeclared_confirmatory_claims: true
+  no_research_release_in_phase_a: true
+  no_phase_b_without_gate_a2: true
+  no_fake_empirical_entities_for_conceptual: true

@@ -1,0 +1,40 @@
+{
+  "schema": "adaos.research.visibility_receipt.v1",
+  "schema_version": "1.0.0",
+  "receipt_id": "visibility.evolnomics.r7.revision2.recovered.20260829",
+  "task_ref": "research-task:evolnomics.phase_a",
+  "source_snapshot_digest": "sha256:20aa5373dbef8ba4ebde22c071490913b4a590017e271145133cae4eedc34982",
+  "visible_refs": [
+    "artifact:evolnomics.author-brief",
+    "artifact:prior-synthesis",
+    "artifact:prior-synthesis-review",
+    "source:S1",
+    "source:S10",
+    "source:S11",
+    "source:S12",
+    "source:S13",
+    "source:S14",
+    "source:S15",
+    "source:S2",
+    "source:S3",
+    "source:S4",
+    "source:S5",
+    "source:S6",
+    "source:S7",
+    "source:S8",
+    "source:S9"
+  ],
+  "denied_material_classes": [
+    "Builder implementation context",
+    "Phase B artifacts",
+    "empirical results not present in admitted sources",
+    "hidden comparator drafts",
+    "unlisted web or model knowledge"
+  ],
+  "hidden_comparator_visible": false,
+  "builder_context_visible": false,
+  "phase_b_context_visible": false,
+  "generated_by": "deterministic_tool",
+  "generated_at": "2026-08-29T06:56:51.672905+00:00",
+  "digest": "sha256:c9b4ca954cf6f8057d3169616a5e5f1f432107b646b25d46504da24f47535199"
+}

@@ -1,0 +1,32 @@
+{
+  "schema": "adaos.research.case_run_manifest.v1",
+  "run_id": "evolnomics.r6.recovered.20260829",
+  "builder_codex": {
+    "required": false,
+    "invoked": false,
+    "total_tokens": 0,
+    "accounting_scope": "builder_codex"
+  },
+  "current_codex_session_accounted": false,
+  "accepted_synthesis_created": false,
+  "draft_candidate_created": false,
+  "gate_a1_created": false,
+  "phase_b_authorized": false,
+  "research_release_created": false,
+  "created_at": "2026-08-29T06:43:00.951339+00:00",
+  "status": "awaiting_human_synthesis_decision",
+  "source_snapshot_digest": "sha256:a95a06ac99553e61d8f3c724a097385704a162c7998e67ad97476251c38a3bf0",
+  "synthesis_digest": "sha256:6b7f3099c4a3961c78ef73623cb3ff70bfb04de411bf89e7b5a2576da33c573e",
+  "review_digest": "sha256:a390ce8276ce6d54b35593e7c7ac766d6c200886457acbe134dfb62d6ebd3de7",
+  "review_verdict": "revise",
+  "researcher_llm_usage": {
+    "accounting_scope": "researcher_llm",
+    "input_tokens": 21271,
+    "cached_input_tokens": 0,
+    "output_tokens": 10750,
+    "reasoning_tokens": 207,
+    "total_tokens": 32021,
+    "accuracy": "provider_reported"
+  },
+  "recovered_authoring_job_id": "llm_job_dbb9b5d0795b462c9e9ba084"
+}

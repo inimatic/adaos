@@ -1,0 +1,173 @@
+{
+  "schema": "adaos.research.llm_usage_ledger.v1",
+  "accounting_scope": "researcher_llm",
+  "aggregation_key": "provider_job_id",
+  "unique_provider_jobs": 9,
+  "provider_reported_jobs": 7,
+  "unknown_usage_jobs": 2,
+  "conflicting_usage_job_ids": [],
+  "known_usage_lower_bound": {
+    "input_tokens": 82437,
+    "cached_input_tokens": 5376,
+    "output_tokens": 54211,
+    "reasoning_tokens": 9624,
+    "total_tokens": 136648
+  },
+  "exact_total_available": false,
+  "jobs": [
+    {
+      "provider_job_id": "llm_job_0603055b200140fc906e0622",
+      "operation": "synthesis_authoring",
+      "status": "failed",
+      "usage": {
+        "input_tokens": null,
+        "cached_input_tokens": null,
+        "output_tokens": null,
+        "reasoning_tokens": null,
+        "total_tokens": null
+      },
+      "accuracy": "unavailable",
+      "receipt_paths": [
+        "evolnomics-r1-20260829\\failure.json"
+      ]
+    },
+    {
+      "provider_job_id": "llm_job_45fb918ef06b45119b68c966",
+      "operation": "synthesis_authoring",
+      "status": "provider_failed",
+      "usage": {
+        "input_tokens": null,
+        "cached_input_tokens": null,
+        "output_tokens": null,
+        "reasoning_tokens": null,
+        "total_tokens": null
+      },
+      "accuracy": "unavailable",
+      "receipt_paths": [
+        "evolnomics-r3-20260829\\llm-failure.json"
+      ]
+    },
+    {
+      "provider_job_id": "llm_job_6a7a7c0df62644739cc4b770",
+      "operation": "synthesis_review",
+      "status": "revise",
+      "usage": {
+        "input_tokens": 16114,
+        "cached_input_tokens": 0,
+        "output_tokens": 1193,
+        "reasoning_tokens": 47,
+        "total_tokens": 17307
+      },
+      "accuracy": "provider_reported",
+      "receipt_paths": [
+        "evolnomics-r7-revision-2-recovered-20260829\\synthesis-review-2.json"
+      ]
+    },
+    {
+      "provider_job_id": "llm_job_6e48718e15e94b5386b35a4b",
+      "operation": "synthesis_review",
+      "status": "revise",
+      "usage": {
+        "input_tokens": 14933,
+        "cached_input_tokens": 0,
+        "output_tokens": 963,
+        "reasoning_tokens": 134,
+        "total_tokens": 15896
+      },
+      "accuracy": "provider_reported",
+      "receipt_paths": [
+        "evolnomics-r6-recovered-20260829\\synthesis-review-1.json"
+      ]
+    },
+    {
+      "provider_job_id": "llm_job_795c72b758964cbf8f9649e5",
+      "operation": "synthesis_authoring",
+      "status": "validation_failed",
+      "usage": {
+        "input_tokens": 5704,
+        "cached_input_tokens": 0,
+        "output_tokens": 5174,
+        "reasoning_tokens": 98,
+        "total_tokens": 10878
+      },
+      "accuracy": "provider_reported",
+      "receipt_paths": [
+        "evolnomics-r4-20260829\\llm-failure.json"
+      ]
+    },
+    {
+      "provider_job_id": "llm_job_b149b09f42d248a48af30051",
+      "operation": "synthesis_authoring",
+      "status": "incomplete",
+      "usage": {
+        "input_tokens": 5594,
+        "cached_input_tokens": 5376,
+        "output_tokens": 16000,
+        "reasoning_tokens": 9112,
+        "total_tokens": 21594
+      },
+      "accuracy": "provider_reported",
+      "receipt_paths": [
+        "evolnomics-r2b-20260829\\llm-failure.json"
+      ]
+    },
+    {
+      "provider_job_id": "llm_job_b71d9de027054f8d9c7051c3",
+      "operation": "synthesis_authoring",
+      "status": "validation_failed",
+      "usage": {
+        "input_tokens": 6175,
+        "cached_input_tokens": 0,
+        "output_tokens": 9910,
+        "reasoning_tokens": 106,
+        "total_tokens": 16085
+      },
+      "accuracy": "provider_reported",
+      "receipt_paths": [
+        "evolnomics-r5-20260829\\llm-failure.json"
+      ]
+    },
+    {
+      "provider_job_id": "llm_job_cdf5f3c9f196494687b964e6",
+      "operation": "synthesis_authoring",
+      "status": "candidate_generated",
+      "usage": {
+        "input_tokens": 27579,
+        "cached_input_tokens": 0,
+        "output_tokens": 11184,
+        "reasoning_tokens": 54,
+        "total_tokens": 38763
+      },
+      "accuracy": "provider_reported",
+      "receipt_paths": [
+        "evolnomics-r7-revision-2-recovered-20260829\\authoring-run.json",
+        "evolnomics-r7-revision-2-20260829\\llm-failure.json"
+      ]
+    },
+    {
+      "provider_job_id": "llm_job_dbb9b5d0795b462c9e9ba084",
+      "operation": "synthesis_authoring",
+      "status": "candidate_generated",
+      "usage": {
+        "input_tokens": 6338,
+        "cached_input_tokens": 0,
+        "output_tokens": 9787,
+        "reasoning_tokens": 73,
+        "total_tokens": 16125
+      },
+      "accuracy": "provider_reported",
+      "receipt_paths": [
+        "evolnomics-r6-recovered-20260829\\authoring-run.json",
+        "evolnomics-r6-20260829\\llm-failure.json"
+      ]
+    }
+  ],
+  "unidentified_attempts": [],
+  "builder_codex": {
+    "required": false,
+    "invoked": false,
+    "total_tokens": 0,
+    "accounting_scope": "builder_codex"
+  },
+  "current_codex_session_accounted": false
+}

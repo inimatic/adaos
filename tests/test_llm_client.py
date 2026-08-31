@@ -595,6 +595,10 @@ def test_llm_root_payload_includes_stream_prompt_cache_and_text_format_controls(
         prompt_cache_retention="24h",
         stream_protocol="jsonl",
         text={"format": {"type": "json_object"}},
+        tools=[{"type": "web_search"}],
+        tool_choice="auto",
+        max_tool_calls=4,
+        parallel_tool_calls=False,
     )
 
     assert payload["stream"] is True
@@ -602,6 +606,10 @@ def test_llm_root_payload_includes_stream_prompt_cache_and_text_format_controls(
     assert payload["prompt_cache_retention"] == "24h"
     assert payload["stream_protocol"] == "jsonl"
     assert payload["text"] == {"format": {"type": "json_object"}}
+    assert payload["tools"] == [{"type": "web_search"}]
+    assert payload["tool_choice"] == "auto"
+    assert payload["max_tool_calls"] == 4
+    assert payload["parallel_tool_calls"] is False
     assert payload["instructions"] == "Stable contract"
 
 

@@ -1,0 +1,17 @@
+{
+  "schema": "adaos.research.isolation_receipt.v1",
+  "schema_version": "1.0.0",
+  "receipt_id": "isolation.evolnomics.r6.recovered.20260829",
+  "authoring_run_id": "evolnomics.r6.recovered.20260829",
+  "task_ref": "research-task:evolnomics.phase_a",
+  "source_snapshot_digest": "sha256:a95a06ac99553e61d8f3c724a097385704a162c7998e67ad97476251c38a3bf0",
+  "prompt_digest": "sha256:19a3476849ea4e120ce7bbc2a010487c111394a4b423a359afe3615bc675153c",
+  "visible_context_digest": "sha256:0c7428b692958eab211c9f30600ce178490eb8ef466de20318d5383ab7ed98a7",
+  "unlisted_source_accessed": false,
+  "hidden_comparator_accessed": false,
+  "builder_context_accessed": false,
+  "phase_b_context_accessed": false,
+  "checked_by": "deterministic_tool",
+  "checked_at": "2026-08-29T06:43:02.966465+00:00",
+  "digest": "sha256:9aa389c632964e23e718bd56b2f637cc2d3a42dba36670f1e5e8dd8978fcfd4f"
+}

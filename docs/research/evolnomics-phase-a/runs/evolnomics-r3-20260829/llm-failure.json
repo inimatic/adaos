@@ -1,0 +1,26 @@
+{
+  "schema": "adaos.research.llm_run_failure.v1",
+  "schema_version": "1.0.0",
+  "failure_id": "failure.evolnomics.r3.20260829.synthesis_authoring",
+  "run_id": "evolnomics.r3.20260829",
+  "operation": "synthesis_authoring",
+  "task_ref": "research-task:evolnomics.phase_a",
+  "actor": "llm",
+  "model": "gpt-5.4-mini",
+  "request_id": "research.evolnomics.r3.20260829.synthesis",
+  "status": "provider_failed",
+  "reason": "Root LLM synthesis_authoring job failed: {'message': \"Response input messages must contain the word 'json' in some form to use 'text.format' of type 'json_object'.\", 'type': 'invalid_request_error', 'param': 'input', 'code': None}",
+  "usage": {
+    "accounting_scope": "researcher_llm",
+    "input_tokens": null,
+    "cached_input_tokens": null,
+    "output_tokens": null,
+    "reasoning_tokens": null,
+    "total_tokens": null,
+    "accuracy": "unavailable"
+  },
+  "started_at": "2026-08-29T06:34:40.462615+00:00",
+  "failed_at": "2026-08-29T06:34:42.755555+00:00",
+  "provider_job_id": "llm_job_45fb918ef06b45119b68c966",
+  "digest": "sha256:1ed0a8cb664438cfd7945a6c1f26994cef14812487eec5adcce41512f39b2f9f"
+}

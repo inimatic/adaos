@@ -609,6 +609,76 @@ def test_automation_projects_declared_and_observed_execution_budget(tmp_path: Pa
     assert projected["created_at"] == "2026-08-18T00:00:00Z"
 
 
+def test_terminal_codex_usage_is_reported_once_with_provider_counts(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    calls: list[dict] = []
+    service.codex_usage_reporter = lambda event: (
+        calls.append(dict(event))
+        or {
+            "ok": True,
+            "duplicate": False,
+            "event": {"event_id": "codex_usage_task_1"},
+        }
+    )
+    run_root = tmp_path / "run"
+    runtime_root = run_root / "runtime"
+    runtime_root.mkdir(parents=True)
+    journal = runtime_root / "codex-events.jsonl"
+    journal.write_text(
+        json.dumps(
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 1200,
+                    "cached_input_tokens": 300,
+                    "output_tokens": 400,
+                    "reasoning_tokens": 80,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.scenario.recipes",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "current_task_id": "task.1",
+        "updated_at": "2026-08-29T06:00:00+00:00",
+        "local_run": {"path": str(run_root), "events_path": str(journal)},
+    }
+
+    first = service._report_terminal_codex_usage(session, task_status="failed")
+    second = service._report_terminal_codex_usage(first, task_status="failed")
+
+    assert len(calls) == 1
+    assert calls[0]["status"] == "failed"
+    assert calls[0]["total_tokens"] == 1600
+    assert calls[0]["reasoning_tokens"] == 80
+    assert calls[0]["idempotency_key"].endswith(":task.1:codex-usage:v1")
+    assert second["codex_usage_accounting"]["status"] == "reported"
+    assert second["codex_usage_accounting"]["total_tokens"] == 1600
+    assert second["codex_usage_accounting"]["model_tokens"] == 1600
+
+
+def test_terminal_codex_usage_missing_journal_is_unavailable_not_zero(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service.codex_usage_reporter = lambda _event: pytest.fail("empty usage must not be reported")
+    session = {
+        "session_id": "automation.skill.direction",
+        "object_type": "skill",
+        "object_id": "direction",
+        "current_task_id": "task.empty",
+        "local_run": {"path": str(tmp_path / "missing")},
+    }
+
+    result = service._report_terminal_codex_usage(session, task_status="completed")
+
+    assert result["codex_usage_accounting"]["status"] == "unavailable"
+    assert result["codex_usage_accounting"]["total_tokens"] is None
+
+
 def test_background_automation_launches_durable_worker_process(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     service.background = True

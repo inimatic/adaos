@@ -68,6 +68,7 @@ from adaos.services.yjs.webspace import default_webspace_id
 from adaos.services.scheduler import get_scheduler
 from adaos.services.webio_snapshot_demand import request_snapshot_event, snapshot_demand_snapshot
 from adaos.domain import Event as DomainEvent
+from adaos.domain.node_identity import node_identities_match
 from adaos.services.agent_context import get_ctx as get_agent_ctx
 
 router = APIRouter()
@@ -3237,11 +3238,93 @@ def _publish_runtime_event(topic: str, payload: dict[str, Any] | None = None, *,
 def _normalize_ws_event_topics(raw_topics: Any) -> set[str]:
     if not isinstance(raw_topics, list):
         return set()
+    topics: set[str] = set()
+    for raw in raw_topics:
+        topic = str(raw or "").strip()
+        if not topic:
+            continue
+        alias = _webio_stream_node_alias(topic)
+        topics.add(str(alias.get("source") or "") if alias else topic)
+    return topics
+
+
+def _webio_stream_node_alias(topic: str) -> dict[str, str] | None:
+    token = str(topic or "").strip()
+    prefix = "webio.stream."
+    if not token.startswith(prefix):
+        return None
+    suffix = token[len(prefix):]
+    parts = [str(part or "").strip() for part in suffix.split(".") if str(part or "").strip()]
+    if len(parts) < 3:
+        return None
+    if parts[0] == "nodes":
+        webspace_id = _coerce_gateway_webspace_id(None)
+        node_id = parts[1]
+        receiver = ".".join(parts[2:]).strip()
+    else:
+        webspace_id = _coerce_gateway_webspace_id(parts[0])
+        receiver_parts = parts[1:]
+        if len(receiver_parts) < 3 or receiver_parts[0] != "nodes":
+            return None
+        node_id = receiver_parts[1]
+        receiver = ".".join(receiver_parts[2:]).strip()
+    if not webspace_id or not node_id or not receiver.startswith("slideshow_skill."):
+        return None
+    source = f"webio.stream.{webspace_id}.{receiver}"
+    if source == token:
+        return None
     return {
-        topic
-        for topic in (str(raw or "").strip() for raw in raw_topics)
-        if topic
+        "source": source,
+        "target": token,
+        "node_id": node_id,
     }
+
+
+def _webio_stream_node_aliases(raw_topics: Any) -> list[dict[str, str]]:
+    if not isinstance(raw_topics, list):
+        return []
+    aliases: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for raw in raw_topics:
+        alias = _webio_stream_node_alias(str(raw or "").strip())
+        if not alias:
+            continue
+        key = (
+            str(alias.get("source") or ""),
+            str(alias.get("target") or ""),
+            str(alias.get("node_id") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        aliases.append(alias)
+    return aliases
+
+
+def _alias_webio_stream_payload(payload: Any, node_id: str) -> Any:
+    if not isinstance(payload, dict):
+        return payload
+    target_node_id = str(node_id or "").strip()
+    if not target_node_id:
+        return payload
+    aliased = dict(payload)
+    source_node_id = str(
+        payload.get("node_id")
+        or payload.get("source_node_id")
+        or (payload.get("_meta", {}).get("node_id") if isinstance(payload.get("_meta"), dict) else "")
+        or ""
+    ).strip()
+    aliased["node_id"] = target_node_id
+    aliased["source_node_id"] = target_node_id
+    aliased["target_node_id"] = target_node_id
+    meta = dict(payload.get("_meta") or {}) if isinstance(payload.get("_meta"), dict) else {}
+    if source_node_id and not node_identities_match(source_node_id, target_node_id):
+        meta.setdefault("stream_alias_source_node_id", source_node_id)
+    meta["node_id"] = target_node_id
+    meta["source_node_id"] = target_node_id
+    meta["target_node_id"] = target_node_id
+    aliased["_meta"] = meta
+    return aliased
 
 
 def _ws_event_topic_matches(subscription: str, event_type: str) -> bool:
@@ -3816,6 +3899,7 @@ def _register_ws_event_subscriptions(
     raw_topics: Any,
 ) -> set[str]:
     topics = _normalize_ws_event_topics(raw_topics)
+    aliases = _webio_stream_node_aliases(raw_topics)
     if not topics:
         return set()
     _ensure_ws_event_forwarder()
@@ -3826,12 +3910,31 @@ def _register_ws_event_subscriptions(
                 "websocket": websocket,
                 "loop": loop,
                 "topics": set(),
+                "stream_aliases": {},
             },
         )
         entry["loop"] = loop
         tracked = entry.setdefault("topics", set())
         added = set(topics) - set(tracked)
         tracked.update(topics)
+        alias_added: set[str] = set()
+        stream_aliases = entry.setdefault("stream_aliases", {})
+        if isinstance(stream_aliases, dict):
+            for alias in aliases:
+                source_topic = str(alias.get("source") or "").strip()
+                target_topic = str(alias.get("target") or "").strip()
+                target_node_id = str(alias.get("node_id") or "").strip()
+                if not source_topic or not target_topic or not target_node_id:
+                    continue
+                rows = stream_aliases.setdefault(source_topic, [])
+                if not any(
+                    isinstance(item, dict)
+                    and str(item.get("target") or "") == target_topic
+                    and str(item.get("node_id") or "") == target_node_id
+                    for item in rows
+                ):
+                    rows.append({"target": target_topic, "node_id": target_node_id})
+                    alias_added.add(source_topic)
     if added:
         _publish_webio_stream_subscription_change(
             added,
@@ -3845,7 +3948,7 @@ def _register_ws_event_subscriptions(
             transport="ws",
             connection_id=str(id(websocket)),
         )
-    return added
+    return added | alias_added
 
 
 def _unregister_ws_event_subscriptions(websocket: WebSocket) -> None:
@@ -3870,12 +3973,35 @@ def _unregister_ws_event_subscriptions(websocket: WebSocket) -> None:
 
 def _unregister_ws_event_subscription_topics(websocket: WebSocket, raw_topics: Any) -> set[str]:
     topics = _normalize_ws_event_topics(raw_topics)
+    aliases = _webio_stream_node_aliases(raw_topics)
     if not topics:
         return set()
     with _WS_EVENT_SUBSCRIPTIONS_LOCK:
         entry = _WS_EVENT_SUBSCRIBERS.get(id(websocket))
         if not isinstance(entry, dict):
             return set()
+        stream_aliases = entry.setdefault("stream_aliases", {})
+        if isinstance(stream_aliases, dict):
+            for alias in aliases:
+                source_topic = str(alias.get("source") or "").strip()
+                target_topic = str(alias.get("target") or "").strip()
+                target_node_id = str(alias.get("node_id") or "").strip()
+                rows = stream_aliases.get(source_topic)
+                if not isinstance(rows, list):
+                    continue
+                kept = [
+                    item
+                    for item in rows
+                    if not (
+                        isinstance(item, dict)
+                        and str(item.get("target") or "") == target_topic
+                        and str(item.get("node_id") or "") == target_node_id
+                    )
+                ]
+                if kept:
+                    stream_aliases[source_topic] = kept
+                else:
+                    stream_aliases.pop(source_topic, None)
         tracked = entry.setdefault("topics", set())
         removed = set(topics) & set(tracked)
         tracked.difference_update(removed)
@@ -3921,8 +4047,27 @@ def _forward_ws_bus_event(ev: DomainEvent) -> None:
         loop = entry.get("loop")
         if websocket is None or not isinstance(loop, asyncio.AbstractEventLoop):
             continue
+        messages = [message]
+        stream_aliases = entry.get("stream_aliases")
+        if isinstance(stream_aliases, dict):
+            for alias in stream_aliases.get(event_type, []) or []:
+                if not isinstance(alias, dict):
+                    continue
+                target_topic = str(alias.get("target") or "").strip()
+                target_node_id = str(alias.get("node_id") or "").strip()
+                if not target_topic or not target_node_id:
+                    continue
+                messages.append(
+                    _build_ws_event_message(
+                        target_topic,
+                        _alias_webio_stream_payload(getattr(ev, "payload", {}) or {}, target_node_id),
+                        source=str(getattr(ev, "source", "") or "events_ws"),
+                        ts=float(getattr(ev, "ts", 0.0) or time.time()),
+                    )
+                )
         try:
-            loop.call_soon_threadsafe(_enqueue_ws_event_message, websocket, message)
+            for item in messages:
+                loop.call_soon_threadsafe(_enqueue_ws_event_message, websocket, item)
         except Exception:
             _unregister_ws_event_subscriptions(websocket)
 

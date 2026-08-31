@@ -3279,7 +3279,12 @@ class RouterService:
             except Exception:
                 return ""
 
-        def _webio_stream_topics(webspace_id: str, receiver: str, node_id: str) -> list[str]:
+        def _webio_stream_topics(
+            webspace_id: str,
+            receiver: str,
+            node_id: str,
+            aliases: list[str] | None = None,
+        ) -> list[str]:
             ws = coerce_webspace_id(webspace_id, fallback="default")
             receiver_id = str(receiver or "").strip()
             if not receiver_id:
@@ -3294,9 +3299,19 @@ class RouterService:
             topics: list[str] = []
             if publish_unqualified:
                 topics.append(f"webio.stream.{ws}.{receiver_id}")
+            node_ids: list[str] = []
             if source_node_id:
-                topics.append(f"webio.stream.{ws}.nodes.{source_node_id}.{receiver_id}")
-                topics.append(f"webio.stream.nodes.{source_node_id}.{receiver_id}")
+                node_ids.append(source_node_id)
+            for alias in aliases or []:
+                alias_node_id = str(alias or "").strip()
+                if not alias_node_id:
+                    continue
+                if any(node_identities_match(alias_node_id, existing) for existing in node_ids):
+                    continue
+                node_ids.append(alias_node_id)
+            for item_node_id in node_ids:
+                topics.append(f"webio.stream.{ws}.nodes.{item_node_id}.{receiver_id}")
+                topics.append(f"webio.stream.nodes.{item_node_id}.{receiver_id}")
             return topics
 
         def _publish_webio_stream_event(
@@ -3320,7 +3335,16 @@ class RouterService:
                 )
                 or ""
             ).strip()
-            for topic in _webio_stream_topics(webspace_id, receiver_id, node_id):
+            meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+            target_node_id = str(
+                payload.get("target_node_id")
+                or payload.get("node_target_id")
+                or meta.get("target_node_id")
+                or meta.get("node_target_id")
+                or ""
+            ).strip()
+            aliases = [target_node_id] if target_node_id else []
+            for topic in _webio_stream_topics(webspace_id, receiver_id, node_id, aliases=aliases):
                 self.bus.publish(
                     Event(
                         type=topic,
@@ -3746,7 +3770,15 @@ class RouterService:
             ).strip()
             targets = await _resolve_webspace_ids(payload)
             for ws in targets:
-                fanout_total = len(_webio_stream_topics(ws, receiver, node_id)) or 1
+                target_node_id = str(
+                    payload.get("target_node_id")
+                    or payload.get("node_target_id")
+                    or meta.get("target_node_id")
+                    or meta.get("node_target_id")
+                    or ""
+                ).strip()
+                aliases = [target_node_id] if target_node_id else []
+                fanout_total = len(_webio_stream_topics(ws, receiver, node_id, aliases=aliases)) or 1
                 receiver_meta = await self._webio_receiver_metadata(ws, receiver)
                 effective_owner = owner or _receiver_declared_owner(receiver_meta)
                 if not _webio_stream_admit(

@@ -1,0 +1,79 @@
+{
+  "schema": "adaos.research.workbench_case.v1",
+  "direction_id": "evolnomics",
+  "title": "Evolnomics: Human-Agent-Artifact Coevolution",
+  "description": "Conceptual position-paper research with design-science elements. The current Draft 0 candidate requires revision and human review; no Builder handoff has been accepted.",
+  "tags": [
+    "evolnomics",
+    "conceptual-research",
+    "position-paper",
+    "design-science",
+    "provenance"
+  ],
+  "task": {
+    "task_id": "evolnomics.phase_a",
+    "title": "Conceptual framework and Draft 0",
+    "research_question": "What defensible conceptual framework connects human-agent-artifact coevolution, governed artifact lineage, contribution provenance, downstream utility, and resources for subsequent AI-native software evolution without prematurely selecting an economic mechanism?"
+  },
+  "synthesis_id": "evolnomics.phase_a",
+  "artifacts": [
+    {
+      "path": "author-brief.md",
+      "group_id": "phase-a-inputs",
+      "role": "author_intent",
+      "visibility_profile": "formulation_only"
+    },
+    {
+      "path": "scope.json",
+      "group_id": "phase-a-inputs",
+      "role": "review_protocol",
+      "visibility_profile": "formulation_only"
+    },
+    {
+      "path": "sources.json",
+      "group_id": "phase-a-inputs",
+      "role": "literature_corpus",
+      "visibility_profile": "formulation_only"
+    },
+    {
+      "path": "runs/evolnomics-r7-revision-2-recovered-20260829/research-synthesis-revision-2.json",
+      "group_id": "candidate-r2",
+      "role": "synthesis_candidate",
+      "visibility_profile": "evaluation_only"
+    },
+    {
+      "path": "runs/evolnomics-r7-revision-2-recovered-20260829/synthesis-review-2.json",
+      "group_id": "candidate-r2",
+      "role": "independent_review",
+      "visibility_profile": "evaluation_only"
+    },
+    {
+      "path": "runs/evolnomics-r7-revision-2-recovered-20260829/run-manifest.json",
+      "group_id": "candidate-r2",
+      "role": "lifecycle_receipt",
+      "visibility_profile": "evaluation_only"
+    },
+    {
+      "path": "critical-analysis.md",
+      "group_id": "candidate-r2",
+      "role": "critical_analysis",
+      "visibility_profile": "evaluation_only"
+    },
+    {
+      "path": "token-ledger.json",
+      "group_id": "candidate-r2",
+      "role": "usage_ledger",
+      "visibility_profile": "evaluation_only"
+    }
+  ],
+  "lifecycle": {
+    "status": "awaiting_human_synthesis_decision",
+    "review_verdict": "revise",
+    "accepted_synthesis_created": false,
+    "draft_candidate_created": false,
+    "gate_a1_created": false,
+    "phase_b_authorized": false,
+    "builder_handoff_created": false,
+    "research_release_created": false
+  }
+}

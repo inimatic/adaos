@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.research.authoring_run.v1",
+  "title": "AdaOS Research LLM Authoring Run Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "run_id",
+    "direction_ref",
+    "task_ref",
+    "source_snapshot_digest",
+    "visibility_receipt_digest",
+    "isolation_receipt_digest",
+    "prompt_digest",
+    "response_digest",
+    "output_synthesis_digest",
+    "actor",
+    "model",
+    "request_id",
+    "status",
+    "usage",
+    "started_at",
+    "completed_at",
+    "digest"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.research.authoring_run.v1"},
+    "schema_version": {"const": "1.0.0"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "direction_ref": {"type": "string", "pattern": "^research-direction:[A-Za-z0-9_.:-]+$"},
+    "task_ref": {"type": "string", "pattern": "^research-task:[A-Za-z0-9_.:-]+$"},
+    "source_snapshot_digest": {"$ref": "#/$defs/digest"},
+    "visibility_receipt_digest": {"$ref": "#/$defs/digest"},
+    "isolation_receipt_digest": {"$ref": "#/$defs/digest"},
+    "prompt_digest": {"$ref": "#/$defs/digest"},
+    "response_digest": {"$ref": "#/$defs/digest"},
+    "output_synthesis_digest": {"$ref": "#/$defs/digest"},
+    "actor": {"const": "llm"},
+    "model": {"type": "string", "minLength": 1, "maxLength": 240},
+    "request_id": {"type": "string", "minLength": 1, "maxLength": 240},
+    "provider_job_id": {"type": "string", "minLength": 1, "maxLength": 240},
+    "status": {"enum": ["candidate_generated", "failed_validation"]},
+    "usage": {"$ref": "#/$defs/usage"},
+    "started_at": {"type": "string", "minLength": 1, "maxLength": 80},
+    "completed_at": {"type": "string", "minLength": 1, "maxLength": 80},
+    "digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accounting_scope",
+        "input_tokens",
+        "cached_input_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+        "total_tokens",
+        "accuracy"
+      ],
+      "properties": {
+        "accounting_scope": {"const": "researcher_llm"},
+        "input_tokens": {"type": "integer", "minimum": 0},
+        "cached_input_tokens": {"type": "integer", "minimum": 0},
+        "output_tokens": {"type": "integer", "minimum": 0},
+        "reasoning_tokens": {"type": "integer", "minimum": 0},
+        "total_tokens": {"type": "integer", "minimum": 0},
+        "accuracy": {"enum": ["provider_reported", "unavailable"]}
+      }
+    }
+  }
+}

@@ -1,0 +1,180 @@
+{
+  "source_bundle_digest": "sha256:92b4baf5562b71545966d7cc6f6b2f082ba91962331b6003fbe88bad7220e867",
+  "input_refs": [
+    {
+      "ref": "artifact:evolnomics.author-brief",
+      "kind": "genesis_brief",
+      "authority": "authoritative_input",
+      "digest": "sha256:acf846c5f16a0b82666e20554730cf6b5a597676b3b81912eb4a0fb27f0aeafc",
+      "accessed_at": "2026-08-29T06:56:51.672905+00:00",
+      "fragments": []
+    },
+    {
+      "ref": "source:S1",
+      "kind": "external_literature",
+      "authority": "admitted_literature",
+      "digest": "sha256:1eabf42efcddc1276603a98b58232af67bab007162a4fc32c35fd33339230f7b",
+      "accessed_at": "2026-08-29T06:56:51.672905+00:00",
+      "fragments": []
+    },
+    {
+      "ref": "source:S2",
+      "kind": "external_literature",
+      "authority": "admitted_literature",
+      "digest": "sha256:8b4c6eaeaf45acb3720fec0007676b9acdedcd74c3a82dd2bc43be7586199595",
+      "accessed_at": "2026-08-29T06:56:51.672905+00:00",
+      "fragments": []
+    },
+    {
+      "ref": "source:S3",
+      "kind": "external_literature",
+      "authority": "admitted_literature",
+      "digest": "sha256:02620f935d91dd0a9ede4ebdbb5334e4c2861c9bb5bd15d499fc4e2e43744212",
+      "accessed_at": "2026-08-29T06:56:51.672905+00:00",
+      "fragments": []
+    },
+    {
+      "ref": "source:S4",
+      "kind": "external_literature",
+      "authority": "admitted_literature",
+      "digest": "sha256:669f43b23098b81aee1d496734e19922109f219f92d8936a948cc6eb6d3bc13a",
+      "accessed_at": "2026-08-29T06:56:51.672905+00:00",
+      "fragments": []
+    },
+    {
+      "ref": "source:S5",
+      "kind": "external_literature",
+      "authority": "admitted_literature",
+      "digest": "sha256:7ee6e15cda387756792685c31caed18f73a1508a77f99596aa4e1add520f6d09",
+      "accessed_at": "2026-08-29T06:56:51.672905+00:00",
+      "fragments": []
+    },
+    {
+      "ref": "source:S6",
+      "kind": "external_literature",
+      "authority": "admitted_literature",
+      "digest": "sha256:593768e243d914380fe8c67fad7ada0531ecada24a548e7faa236f38043aa374",
+      "accessed_at": "2026-08-29T06:56:51.672905+00:00",
+      "fragments": []
+    },
+    {
+      "ref": "source:S7",
+      "kind": "external_literature",
+      "authority": "admitted_literature",
+      "digest": "sha256:583f923c9a1faaffab31f3d4a3bbfea5b3470e4aa3c8af4e81a0373eeeb9b32f",
+      "accessed_at": "2026-08-29T06:56:51.672905+00:00",
+      "fragments": []
+    },
+    {
+      "ref": "source:S8",
+      "kind": "external_literature",
+      "authority": "admitted_literature",
+      "digest": "sha256:db95e5f56952eb2847ab0d85c8f8aa2dc2dff65d939a155d42ff4939cb72dd12",
+      "accessed_at": "2026-08-29T06:56:51.672905+00:00",
+      "fragments": []
+    },
+    {
+      "ref": "source:S9",
+      "kind": "external_literature",
+      "authority": "admitted_literature",
+      "digest": "sha256:3277f8f2ae9321c09a60b54ac0418289e47ae914054bf70add2dafced9f3117e",
+      "accessed_at": "2026-08-29T06:56:51.672905+00:00",
+      "fragments": []
+    },
+    {
+      "ref": "source:S10",
+      "kind": "external_literature",
+      "authority": "admitted_literature",
+      "digest": "sha256:3f7a90612bef9dbc4dce821581c6d3c39e398a45699c8ad46cd637f0bb8003c8",
+      "accessed_at": "2026-08-29T06:56:51.672905+00:00",
+      "fragments": []
+    },
+    {
+      "ref": "source:S11",
+      "kind": "external_literature",
+      "authority": "admitted_literature",
+      "digest": "sha256:ff53461a6fe9432f715e7016d9e45b3964e3aa06af98a78b6dbf6d39d09bed4f",
+      "accessed_at": "2026-08-29T06:56:51.672905+00:00",
+      "fragments": []
+    },
+    {
+      "ref": "source:S12",
+      "kind": "external_literature",
+      "authority": "admitted_literature",
+      "digest": "sha256:7c674492f0c96f130e4fb0c3263424eeed16a7b12123803d2f008c86bf83d6b8",
+      "accessed_at": "2026-08-29T06:56:51.672905+00:00",
+      "fragments": []
+    },
+    {
+      "ref": "source:S13",
+      "kind": "external_literature",
+      "authority": "admitted_literature",
+      "digest": "sha256:0e3f7056eef19a6ad617766bec2ab9c91cd7dc8e7551c87941c389a7318184d9",
+      "accessed_at": "2026-08-29T06:56:51.672905+00:00",
+      "fragments": []
+    },
+    {
+      "ref": "source:S14",
+      "kind": "external_literature",
+      "authority": "admitted_literature",
+      "digest": "sha256:f8d3d2ae2424da13b638dfe633e94400d2067f01f44f775da6d23eb5eaff4670",
+      "accessed_at": "2026-08-29T06:56:51.672905+00:00",
+      "fragments": []
+    },
+    {
+      "ref": "source:S15",
+      "kind": "external_literature",
+      "authority": "admitted_literature",
+      "digest": "sha256:17c567bd24605e0644041feeba01e80b889d6f6f8538d0c93c87edd1efe3fe07",
+      "accessed_at": "2026-08-29T06:56:51.672905+00:00",
+      "fragments": []
+    },
+    {
+      "ref": "artifact:prior-synthesis",
+      "kind": "generated_analysis",
+      "authority": "generated_non_authoritative",
+      "digest": "sha256:6e9781eb5c7118054acfdc82beb769723daf6185bccf6c7a4901048c5783ce15",
+      "accessed_at": "2026-08-29T06:56:51.672905+00:00",
+      "fragments": []
+    },
+    {
+      "ref": "artifact:prior-synthesis-review",
+      "kind": "generated_analysis",
+      "authority": "generated_non_authoritative",
+      "digest": "sha256:bdadb5ca4dd7bcd1a00d44d3bab576547d71e2ab3f0b5ef5ea46576e7d9d8d5c",
+      "accessed_at": "2026-08-29T06:56:51.672905+00:00",
+      "fragments": []
+    }
+  ],
+  "allowed_paths": [
+    "D:\\git\\inimatic\\adaos\\docs\\research\\evolnomics-phase-a",
+    "D:\\git\\inimatic\\adaos\\docs\\research\\evolnomics-phase-a\\runs\\evolnomics-r6-recovered-20260829\\research-synthesis-revision-1.json",
+    "D:\\git\\inimatic\\adaos\\docs\\research\\evolnomics-phase-a\\runs\\evolnomics-r6-recovered-20260829\\synthesis-review-1.json"
+  ],
+  "allowed_external_sources": [
+    "https://doi.org/10.1145/353485.353487",
+    "https://www.w3.org/TR/prov-o/",
+    "https://l3d.colorado.edu/wp-content/uploads/2011/09/EUD-siegen-2009.pdf",
+    "https://arxiv.org/abs/2103.11007",
+    "https://proceedings.mlr.press/v97/ghorbani19c.html",
+    "https://doi.org/10.1371/journal.pone.0034358",
+    "https://doi.org/10.1016/S0020-0190(03)00382-X",
+    "https://arxiv.org/abs/2508.07407",
+    "https://researchonline.rca.ac.uk/6757/",
+    "https://www.cambridge.org/core/journals/proceedings-of-the-design-society/article/humanai-cocreation-why-what-and-how/025392A0D621F0A40E9499FAC699489F",
+    "https://www.microsoft.com/en-us/research/publication/the-sybil-attack/",
+    "https://arxiv.org/abs/1606.06565",
+    "https://www.jstor.org/stable/25148625",
+    "https://arxiv.org/abs/2310.00907",
+    "https://doi.org/10.1609/aaaiss.v8i1.42602"
+  ],
+  "denied_material_classes": [
+    "hidden comparator drafts",
+    "unlisted web or model knowledge",
+    "Builder implementation context",
+    "Phase B artifacts",
+    "empirical results not present in admitted sources"
+  ],
+  "coverage_note": "Bounded scoping corpus for conceptual positioning and novelty-risk assessment; not exhaustive and not proof of novelty.",
+  "snapshot_digest": "sha256:20aa5373dbef8ba4ebde22c071490913b4a590017e271145133cae4eedc34982"
+}

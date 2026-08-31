@@ -1,0 +1,417 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.research.synthesis.v1",
+  "title": "AdaOS Research Synthesis Revision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "synthesis_id",
+    "revision",
+    "direction_ref",
+    "task_ref",
+    "profile",
+    "genre",
+    "status",
+    "phase_boundary",
+    "source_snapshot",
+    "literature_scope",
+    "concept_model",
+    "claim_set",
+    "argument_map",
+    "related_work_map",
+    "source_coverage",
+    "novelty_ledger",
+    "boundary_conditions",
+    "counterarguments",
+    "limitations",
+    "research_agenda",
+    "attribution",
+    "provenance",
+    "created_at",
+    "digest"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.research.synthesis.v1"},
+    "schema_version": {"enum": ["1.0.0", "1.1.0", "1.2.0"]},
+    "synthesis_id": {"$ref": "#/$defs/id"},
+    "revision": {"type": "integer", "minimum": 1},
+    "direction_ref": {"type": "string", "pattern": "^research-direction:[A-Za-z0-9_.:-]+$"},
+    "task_ref": {"type": "string", "pattern": "^research-task:[A-Za-z0-9_.:-]+$"},
+    "profile": {"const": "conceptual_framework"},
+    "genre": {"const": "conceptual_framework_with_design_science_agenda"},
+    "status": {"enum": ["candidate", "rejected", "superseded"]},
+    "phase_boundary": {"$ref": "#/$defs/phase_boundary"},
+    "source_snapshot": {"$ref": "#/$defs/source_snapshot"},
+    "literature_scope": {"$ref": "#/$defs/literature_scope"},
+    "concept_model": {"$ref": "#/$defs/digestible_object"},
+    "claim_set": {"$ref": "#/$defs/claim_set"},
+    "argument_map": {"$ref": "#/$defs/digestible_object"},
+    "related_work_map": {"$ref": "#/$defs/related_work_map"},
+    "source_coverage": {"$ref": "#/$defs/digestible_object"},
+    "novelty_ledger": {"$ref": "#/$defs/novelty_ledger"},
+    "threat_model": {"$ref": "#/$defs/threat_model"},
+    "boundary_conditions": {"type": "array", "items": {"$ref": "#/$defs/text_item"}, "maxItems": 500},
+    "counterarguments": {"type": "array", "items": {"$ref": "#/$defs/text_item"}, "maxItems": 500},
+    "limitations": {"type": "array", "items": {"$ref": "#/$defs/text_item"}, "maxItems": 500},
+    "research_agenda": {"type": "array", "items": {"$ref": "#/$defs/agenda_item"}, "maxItems": 500},
+    "attribution": {"type": "object"},
+    "provenance": {"$ref": "#/$defs/provenance"},
+    "created_at": {"type": "string", "minLength": 1, "maxLength": 80},
+    "digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "ref": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "phase_boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "phase",
+        "implementation_authorized",
+        "mechanism_selected",
+        "research_release_created",
+        "prohibited_commitments"
+      ],
+      "properties": {
+        "phase": {"const": "conceptual_phase_a"},
+        "implementation_authorized": {"const": false},
+        "mechanism_selected": {"const": false},
+        "research_release_created": {"const": false},
+        "prohibited_commitments": {
+          "const": [
+            "token_or_currency",
+            "allocation_formula",
+            "signal_weights",
+            "emission_or_burn_rules",
+            "transfer_or_settlement",
+            "payout_or_royalty",
+            "ownership_rights",
+            "governance_thresholds",
+            "automated_sanctions_or_rewards"
+          ]
+        },
+        "resource_feedback_mode": {"const": "non_operational_research_hypothesis"}
+      }
+    },
+    "support_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "kind"],
+      "properties": {
+        "ref": {"$ref": "#/$defs/ref"},
+        "kind": {"enum": ["source_fragment", "source_record", "claim", "human_decision", "traceability_node", "artifact", "external_prior"]},
+        "digest": {"$ref": "#/$defs/digest"},
+        "note": {"type": "string", "maxLength": 2000}
+      }
+    },
+    "source_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "kind", "authority", "digest", "accessed_at"],
+      "properties": {
+        "ref": {"$ref": "#/$defs/ref"},
+        "kind": {"enum": ["genesis_brief", "project_documentation", "code", "external_literature", "author_decision", "generated_analysis"]},
+        "authority": {"enum": ["authoritative_input", "supporting_context", "admitted_literature", "generated_non_authoritative"]},
+        "digest": {"$ref": "#/$defs/digest"},
+        "accessed_at": {"type": "string", "minLength": 1, "maxLength": 80},
+        "fragments": {"type": "array", "items": {"$ref": "#/$defs/ref"}, "maxItems": 1000}
+      }
+    },
+    "source_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "snapshot_digest",
+        "input_refs",
+        "allowed_paths",
+        "allowed_external_sources",
+        "denied_material_classes"
+      ],
+      "properties": {
+        "snapshot_digest": {"$ref": "#/$defs/digest"},
+        "source_bundle_digest": {"$ref": "#/$defs/digest"},
+        "input_refs": {"type": "array", "items": {"$ref": "#/$defs/source_ref"}, "minItems": 1, "maxItems": 1000},
+        "allowed_paths": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 2000}, "maxItems": 1000},
+        "allowed_external_sources": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 2000}, "maxItems": 1000},
+        "denied_material_classes": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 200}, "maxItems": 200},
+        "coverage_note": {"type": "string", "maxLength": 4000}
+      }
+    },
+    "literature_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "review_type",
+        "search_directions",
+        "inclusion_rules",
+        "exclusion_rules",
+        "stop_rule",
+        "source_count",
+        "verified_source_count",
+        "digest"
+      ],
+      "properties": {
+        "review_type": {"const": "bounded_reproducible_scoping_review"},
+        "search_directions": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 500}, "maxItems": 100},
+        "inclusion_rules": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 500}, "maxItems": 100},
+        "exclusion_rules": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 500}, "maxItems": 100},
+        "stop_rule": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "source_count": {"type": "integer", "minimum": 0},
+        "verified_source_count": {"type": "integer", "minimum": 0},
+        "novelty_claim_ceiling": {"enum": ["known_combination_or_unresolved", "provisional_apparent_novelty"]},
+        "required_nearest_neighbor_count": {"type": "integer", "minimum": 1, "maximum": 100},
+        "out_of_scope": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 500}, "maxItems": 200},
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "claim_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claims", "digest"],
+      "properties": {
+        "claims": {"type": "array", "items": {"$ref": "#/$defs/claim"}, "minItems": 1, "maxItems": 2000},
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim_id",
+        "statement",
+        "type",
+        "epistemic_status",
+        "support",
+        "counterarguments",
+        "confidence",
+        "acceptance_state",
+        "needed_evidence",
+        "provenance_refs"
+      ],
+      "properties": {
+        "claim_id": {"$ref": "#/$defs/id"},
+        "statement": {"type": "string", "minLength": 1, "maxLength": 5000},
+        "type": {
+          "enum": [
+            "externally_sourced_fact",
+            "sourced_interpretation",
+            "reasoned_inference",
+            "conceptual_definition",
+            "proposition_hypothesis",
+            "design_proposal",
+            "implementation_fact",
+            "author_decision"
+          ]
+        },
+        "epistemic_status": {
+          "enum": [
+            "source_supported",
+            "conceptually_derived",
+            "proposed",
+            "contested",
+            "speculative",
+            "requires_empirical_validation",
+            "rejected"
+          ]
+        },
+        "support": {"type": "array", "items": {"$ref": "#/$defs/support_ref"}, "maxItems": 100},
+        "inference_step": {"type": "string", "maxLength": 4000},
+        "counterarguments": {"type": "array", "items": {"$ref": "#/$defs/support_ref"}, "maxItems": 100},
+        "confidence": {"enum": ["low", "medium", "high", "not_applicable"]},
+        "acceptance_state": {"enum": ["draft", "accepted_in_synthesis", "rejected", "needs_revision"]},
+        "needed_evidence": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 1000}, "maxItems": 100},
+        "provenance_refs": {"type": "array", "items": {"$ref": "#/$defs/ref"}, "maxItems": 100}
+        ,"operationalization": {"$ref": "#/$defs/operationalization"}
+      }
+    },
+    "digestible_object": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["digest"],
+      "properties": {
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "related_work_map": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["review_type", "clusters", "nearest_neighbors", "contradictions", "digest"],
+      "properties": {
+        "review_type": {"const": "bounded_reproducible_scoping_review"},
+        "clusters": {"type": "array", "items": {"$ref": "#/$defs/related_cluster"}, "maxItems": 100},
+        "nearest_neighbors": {"type": "array", "items": {"type": "object"}, "maxItems": 500},
+        "contradictions": {"type": "array", "items": {"type": "object"}, "maxItems": 500},
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "related_cluster": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cluster_id", "name", "sources", "relevance", "limits"],
+      "properties": {
+        "cluster_id": {"$ref": "#/$defs/id"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 240},
+        "sources": {"type": "array", "items": {"$ref": "#/$defs/literature_source"}, "maxItems": 200},
+        "relevance": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "limits": {"type": "string", "minLength": 1, "maxLength": 2000}
+      }
+    },
+    "literature_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "metadata", "actual_reading_status", "source_ref", "digest"],
+      "properties": {
+        "source_id": {"$ref": "#/$defs/id"},
+        "metadata": {"type": "object"},
+        "actual_reading_status": {"enum": ["metadata_only", "abstract_read", "fragment_read", "full_text_read", "unavailable"]},
+        "source_ref": {"$ref": "#/$defs/ref"},
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "novelty_ledger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entries", "digest"],
+      "properties": {
+        "entries": {"type": "array", "items": {"$ref": "#/$defs/novelty_entry"}, "maxItems": 500},
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "novelty_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entry_id", "candidate_contribution", "status", "support", "uncertainty"],
+      "properties": {
+        "entry_id": {"$ref": "#/$defs/id"},
+        "candidate_contribution": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "status": {
+          "enum": [
+            "known",
+            "known_combination",
+            "known_but_extended",
+            "apparently_new_boundary",
+            "apparently_new_integration",
+            "unresolved",
+            "not_supported"
+          ]
+        },
+        "support": {"type": "array", "items": {"$ref": "#/$defs/support_ref"}, "maxItems": 100},
+        "uncertainty": {"type": "string", "minLength": 1, "maxLength": 2000}
+      }
+    },
+    "operationalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["variables", "baseline", "test_method", "falsification_condition", "phase"],
+      "properties": {
+        "variables": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 30,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["variable_id", "role", "operational_definition", "measure"],
+            "properties": {
+              "variable_id": {"$ref": "#/$defs/id"},
+              "role": {"enum": ["independent", "dependent", "control", "confounder"]},
+              "operational_definition": {"type": "string", "minLength": 1, "maxLength": 2000},
+              "measure": {"type": "string", "minLength": 1, "maxLength": 2000}
+            }
+          }
+        },
+        "baseline": {"type": "string", "minLength": 1, "maxLength": 3000},
+        "test_method": {"type": "string", "minLength": 1, "maxLength": 3000},
+        "falsification_condition": {"type": "string", "minLength": 1, "maxLength": 3000},
+        "phase": {"const": "future_evaluation"}
+      }
+    },
+    "threat_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["threats", "coverage_statement", "digest"],
+      "properties": {
+        "threats": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "threat_id",
+              "threat_class",
+              "description",
+              "affected_constructs",
+              "phase_a_treatment",
+              "needed_evidence"
+            ],
+            "properties": {
+              "threat_id": {"$ref": "#/$defs/id"},
+              "threat_class": {
+                "enum": [
+                  "sybil",
+                  "collusion",
+                  "identity_borrowing",
+                  "usage_manipulation",
+                  "strategic_under_reporting",
+                  "selective_disclosure",
+                  "lineage_tampering",
+                  "idea_squatting",
+                  "persistent_micro_entitlements",
+                  "governance_capture",
+                  "false_authority",
+                  "reward_hacking"
+                ]
+              },
+              "description": {"type": "string", "minLength": 1, "maxLength": 3000},
+              "affected_constructs": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ref"}, "maxItems": 50},
+              "phase_a_treatment": {"type": "string", "minLength": 1, "maxLength": 3000},
+              "needed_evidence": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 1000}, "maxItems": 50}
+            }
+          }
+        },
+        "coverage_statement": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "text_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "statement"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "statement": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "support": {"type": "array", "items": {"$ref": "#/$defs/support_ref"}, "maxItems": 100},
+        "status": {"type": "string", "minLength": 1, "maxLength": 120}
+      }
+    },
+    "agenda_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["item_id", "question", "purpose", "status"],
+      "properties": {
+        "item_id": {"$ref": "#/$defs/id"},
+        "question": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "purpose": {"enum": ["conceptual_refinement", "design_science_artifact", "observational_study", "mechanism_evaluation", "implementation_handoff", "external_review"]},
+        "status": {"enum": ["proposed", "deferred", "blocked", "rejected"]},
+        "needed_evidence": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 1000}, "maxItems": 100}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["created_by", "model_or_actor", "tool_refs", "traceability_graph_digest"],
+      "properties": {
+        "created_by": {"enum": ["llm", "human", "deterministic_tool", "hybrid"]},
+        "model_or_actor": {"type": "string", "minLength": 1, "maxLength": 240},
+        "tool_refs": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 500}, "maxItems": 200},
+        "traceability_graph_digest": {"$ref": "#/$defs/digest"},
+        "notes": {"type": "string", "maxLength": 4000}
+      }
+    }
+  }
+}

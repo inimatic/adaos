@@ -6,6 +6,7 @@ from typing import Any, Mapping
 import yaml
 
 from adaos.sdk.core.decorators import tool
+from adaos.sdk.research import ResearchSynthesisError, validate_synthesis_revision
 
 
 def _descriptor() -> dict[str, Any]:
@@ -20,6 +21,8 @@ def _descriptor() -> dict[str, Any]:
 def describe_direction(**_: Any) -> dict[str, Any]:
     direction = _descriptor()
     implementation = dict(direction.get("implementation") or {})
+    profiles = dict(direction.get("profiles") or {})
+    conceptual = dict(profiles.get("conceptual_authoring") or {})
     return {
         "ok": True,
         "direction": direction,
@@ -27,6 +30,11 @@ def describe_direction(**_: Any) -> dict[str, Any]:
             "ready": implementation.get("state") == "ready" and not implementation.get("missing"),
             "state": implementation.get("state") or "pre_codex",
             "missing": list(implementation.get("missing") or []),
+        },
+        "conceptual_authoring": {
+            "ready": conceptual.get("state") == "available" and not conceptual.get("missing"),
+            "state": conceptual.get("state") or "unavailable",
+            "missing": list(conceptual.get("missing") or []),
         },
     }
 
@@ -42,6 +50,42 @@ def validate_research_prototype(prototype: Mapping[str, Any], **_: Any) -> dict[
     if value.get("schema") not in {None, "adaos.research.prototype.v1"}:
         issues.append({"code": "prototype.schema", "message": "unsupported ResearchPrototype schema"})
     return {"ok": not issues, "accepted": not issues, "issues": issues}
+
+
+@tool(summary="Report conceptual research authoring readiness.", side_effects="none")
+def conceptual_authoring_readiness(**_: Any) -> dict[str, Any]:
+    profiles = dict(_descriptor().get("profiles") or {})
+    conceptual = dict(profiles.get("conceptual_authoring") or {})
+    missing = list(conceptual.get("missing") or [])
+    ready = conceptual.get("state") == "available" and not missing
+    return {
+        "ok": True,
+        "ready": ready,
+        "state": conceptual.get("state") or "unavailable",
+        "schema": conceptual.get("schema") or "adaos.research.synthesis.v1",
+        "lifecycle": conceptual.get("lifecycle") or "research_synthesis_revision_to_gate_a1",
+        "experiment_required": bool(conceptual.get("experiment_required", False)),
+        "missing": missing,
+    }
+
+
+@tool(summary="Validate a conceptual ResearchSynthesisRevision without accepting it.", side_effects="none")
+def validate_research_synthesis(synthesis: Mapping[str, Any], **_: Any) -> dict[str, Any]:
+    try:
+        checked = validate_synthesis_revision(synthesis)
+    except ResearchSynthesisError as exc:
+        return {
+            "ok": False,
+            "admissible": False,
+            "digest": None,
+            "issues": [{"code": "synthesis.invalid", "message": str(exc)}],
+        }
+    return {
+        "ok": True,
+        "admissible": True,
+        "digest": checked["digest"],
+        "issues": [],
+    }
 
 
 @tool(summary="Report experimental runner readiness.", side_effects="none")

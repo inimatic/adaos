@@ -1,0 +1,1662 @@
+{
+  "schema": "adaos.research.synthesis.v1",
+  "schema_version": "1.0.0",
+  "synthesis_id": "evolnomics.phase_a",
+  "revision": 1,
+  "direction_ref": "research-direction:evolnomics",
+  "task_ref": "research-task:evolnomics.phase_a",
+  "profile": "conceptual_framework",
+  "genre": "conceptual_framework_with_design_science_agenda",
+  "status": "candidate",
+  "phase_boundary": {
+    "phase": "conceptual_phase_a",
+    "implementation_authorized": false,
+    "mechanism_selected": false,
+    "research_release_created": false,
+    "prohibited_commitments": [
+      "token_or_currency",
+      "allocation_formula",
+      "signal_weights",
+      "emission_or_burn_rules",
+      "transfer_or_settlement",
+      "payout_or_royalty",
+      "ownership_rights",
+      "governance_thresholds",
+      "automated_sanctions_or_rewards"
+    ]
+  },
+  "source_snapshot": {
+    "source_bundle_digest": "sha256:0c7428b692958eab211c9f30600ce178490eb8ef466de20318d5383ab7ed98a7",
+    "input_refs": [
+      {
+        "ref": "artifact:evolnomics.author-brief",
+        "kind": "genesis_brief",
+        "authority": "authoritative_input",
+        "digest": "sha256:acf846c5f16a0b82666e20554730cf6b5a597676b3b81912eb4a0fb27f0aeafc",
+        "accessed_at": "2026-08-29T06:39:23.091338+00:00",
+        "fragments": []
+      },
+      {
+        "ref": "source:S1",
+        "kind": "external_literature",
+        "authority": "admitted_literature",
+        "digest": "sha256:1eabf42efcddc1276603a98b58232af67bab007162a4fc32c35fd33339230f7b",
+        "accessed_at": "2026-08-29T06:39:23.091338+00:00",
+        "fragments": []
+      },
+      {
+        "ref": "source:S2",
+        "kind": "external_literature",
+        "authority": "admitted_literature",
+        "digest": "sha256:8b4c6eaeaf45acb3720fec0007676b9acdedcd74c3a82dd2bc43be7586199595",
+        "accessed_at": "2026-08-29T06:39:23.091338+00:00",
+        "fragments": []
+      },
+      {
+        "ref": "source:S3",
+        "kind": "external_literature",
+        "authority": "admitted_literature",
+        "digest": "sha256:02620f935d91dd0a9ede4ebdbb5334e4c2861c9bb5bd15d499fc4e2e43744212",
+        "accessed_at": "2026-08-29T06:39:23.091338+00:00",
+        "fragments": []
+      },
+      {
+        "ref": "source:S4",
+        "kind": "external_literature",
+        "authority": "admitted_literature",
+        "digest": "sha256:669f43b23098b81aee1d496734e19922109f219f92d8936a948cc6eb6d3bc13a",
+        "accessed_at": "2026-08-29T06:39:23.091338+00:00",
+        "fragments": []
+      },
+      {
+        "ref": "source:S5",
+        "kind": "external_literature",
+        "authority": "admitted_literature",
+        "digest": "sha256:7ee6e15cda387756792685c31caed18f73a1508a77f99596aa4e1add520f6d09",
+        "accessed_at": "2026-08-29T06:39:23.091338+00:00",
+        "fragments": []
+      },
+      {
+        "ref": "source:S6",
+        "kind": "external_literature",
+        "authority": "admitted_literature",
+        "digest": "sha256:593768e243d914380fe8c67fad7ada0531ecada24a548e7faa236f38043aa374",
+        "accessed_at": "2026-08-29T06:39:23.091338+00:00",
+        "fragments": []
+      },
+      {
+        "ref": "source:S7",
+        "kind": "external_literature",
+        "authority": "admitted_literature",
+        "digest": "sha256:583f923c9a1faaffab31f3d4a3bbfea5b3470e4aa3c8af4e81a0373eeeb9b32f",
+        "accessed_at": "2026-08-29T06:39:23.091338+00:00",
+        "fragments": []
+      },
+      {
+        "ref": "source:S8",
+        "kind": "external_literature",
+        "authority": "admitted_literature",
+        "digest": "sha256:db95e5f56952eb2847ab0d85c8f8aa2dc2dff65d939a155d42ff4939cb72dd12",
+        "accessed_at": "2026-08-29T06:39:23.091338+00:00",
+        "fragments": []
+      },
+      {
+        "ref": "source:S9",
+        "kind": "external_literature",
+        "authority": "admitted_literature",
+        "digest": "sha256:3277f8f2ae9321c09a60b54ac0418289e47ae914054bf70add2dafced9f3117e",
+        "accessed_at": "2026-08-29T06:39:23.091338+00:00",
+        "fragments": []
+      },
+      {
+        "ref": "source:S10",
+        "kind": "external_literature",
+        "authority": "admitted_literature",
+        "digest": "sha256:3f7a90612bef9dbc4dce821581c6d3c39e398a45699c8ad46cd637f0bb8003c8",
+        "accessed_at": "2026-08-29T06:39:23.091338+00:00",
+        "fragments": []
+      },
+      {
+        "ref": "source:S11",
+        "kind": "external_literature",
+        "authority": "admitted_literature",
+        "digest": "sha256:ff53461a6fe9432f715e7016d9e45b3964e3aa06af98a78b6dbf6d39d09bed4f",
+        "accessed_at": "2026-08-29T06:39:23.091338+00:00",
+        "fragments": []
+      },
+      {
+        "ref": "source:S12",
+        "kind": "external_literature",
+        "authority": "admitted_literature",
+        "digest": "sha256:7c674492f0c96f130e4fb0c3263424eeed16a7b12123803d2f008c86bf83d6b8",
+        "accessed_at": "2026-08-29T06:39:23.091338+00:00",
+        "fragments": []
+      },
+      {
+        "ref": "source:S13",
+        "kind": "external_literature",
+        "authority": "admitted_literature",
+        "digest": "sha256:0e3f7056eef19a6ad617766bec2ab9c91cd7dc8e7551c87941c389a7318184d9",
+        "accessed_at": "2026-08-29T06:39:23.091338+00:00",
+        "fragments": []
+      },
+      {
+        "ref": "source:S14",
+        "kind": "external_literature",
+        "authority": "admitted_literature",
+        "digest": "sha256:f8d3d2ae2424da13b638dfe633e94400d2067f01f44f775da6d23eb5eaff4670",
+        "accessed_at": "2026-08-29T06:39:23.091338+00:00",
+        "fragments": []
+      },
+      {
+        "ref": "source:S15",
+        "kind": "external_literature",
+        "authority": "admitted_literature",
+        "digest": "sha256:17c567bd24605e0644041feeba01e80b889d6f6f8538d0c93c87edd1efe3fe07",
+        "accessed_at": "2026-08-29T06:39:23.091338+00:00",
+        "fragments": []
+      }
+    ],
+    "allowed_paths": [
+      "D:\\git\\inimatic\\adaos\\docs\\research\\evolnomics-phase-a"
+    ],
+    "allowed_external_sources": [
+      "https://doi.org/10.1145/353485.353487",
+      "https://www.w3.org/TR/prov-o/",
+      "https://l3d.colorado.edu/wp-content/uploads/2011/09/EUD-siegen-2009.pdf",
+      "https://arxiv.org/abs/2103.11007",
+      "https://proceedings.mlr.press/v97/ghorbani19c.html",
+      "https://doi.org/10.1371/journal.pone.0034358",
+      "https://doi.org/10.1016/S0020-0190(03)00382-X",
+      "https://arxiv.org/abs/2508.07407",
+      "https://researchonline.rca.ac.uk/6757/",
+      "https://www.cambridge.org/core/journals/proceedings-of-the-design-society/article/humanai-cocreation-why-what-and-how/025392A0D621F0A40E9499FAC699489F",
+      "https://www.microsoft.com/en-us/research/publication/the-sybil-attack/",
+      "https://arxiv.org/abs/1606.06565",
+      "https://www.jstor.org/stable/25148625",
+      "https://arxiv.org/abs/2310.00907",
+      "https://doi.org/10.1609/aaaiss.v8i1.42602"
+    ],
+    "denied_material_classes": [
+      "hidden comparator drafts",
+      "unlisted web or model knowledge",
+      "Builder implementation context",
+      "Phase B artifacts",
+      "empirical results not present in admitted sources"
+    ],
+    "coverage_note": "Bounded scoping corpus for conceptual positioning and novelty-risk assessment; not exhaustive and not proof of novelty.",
+    "snapshot_digest": "sha256:a95a06ac99553e61d8f3c724a097385704a162c7998e67ad97476251c38a3bf0"
+  },
+  "literature_scope": {
+    "review_type": "bounded_reproducible_scoping_review",
+    "search_directions": [
+      "human-AI coevolution and co-adaptation",
+      "human-AI co-creation with artifacts and relational ontology",
+      "distributed cognition and mediating artifacts",
+      "software and self-evolving agent feedback loops",
+      "end-user development and participatory AI",
+      "provenance and versioned artifact lineage",
+      "diverse software contribution attribution",
+      "data valuation and peer-production incentives",
+      "Sybil and reward-gaming threats",
+      "design-science conceptual artifact evaluation"
+    ],
+    "inclusion_rules": [
+      "include primary papers, peer-reviewed proceedings, author manuscripts, or normative standards with direct conceptual relevance",
+      "include recent nearest-neighbor frameworks that explicitly model artifacts in human-AI co-creation",
+      "include empirical or formal work for attribution, incentive, and gaming boundary conditions",
+      "record the actual reading level and do not treat metadata-only discovery as evidentiary support"
+    ],
+    "exclusion_rules": [
+      "exclude popular summaries when a primary source is available",
+      "exclude sources used only for naming similarity",
+      "exclude unverified claims from hidden drafts or implementation plans",
+      "exclude production mechanism selection from Phase A"
+    ],
+    "stop_rule": "Stop when every substantive cluster has at least two admitted sources except a normative-standard or method-foundation cluster, and at least two recent nearest neighbors explicitly including artifacts have been found; this is sufficient for Draft 0 novelty-risk assessment, not a systematic or exhaustive review.",
+    "source_count": 15,
+    "verified_source_count": 15,
+    "out_of_scope": [
+      "exhaustive systematic review",
+      "proof of novelty",
+      "legal determination of ownership or compensation rights",
+      "selection of a production economic mechanism",
+      "empirical validation claims",
+      "Builder implementation authorization"
+    ],
+    "digest": "sha256:9eb56d131b9226743653c6134c5d795a65081e3871c3f8b43b7be399cd4a7b3d"
+  },
+  "concept_model": {
+    "constructs": [
+      {
+        "id": "K1",
+        "name": "human-agent-artifact coevolution",
+        "definition": "A multi-level process in which humans and agents generate variations, artifacts retain selected changes through lineage, and downstream use feeds back into subsequent evolution.",
+        "status": "conceptually_derived",
+        "support": [
+          {
+            "ref": "artifact:evolnomics.author-brief",
+            "kind": "source_record",
+            "digest": "sha256:acf846c5f16a0b82666e20554730cf6b5a597676b3b81912eb4a0fb27f0aeafc"
+          },
+          {
+            "ref": "source:S7",
+            "kind": "source_fragment",
+            "digest": "sha256:583f923c9a1faaffab31f3d4a3bbfea5b3470e4aa3c8af4e81a0373eeeb9b32f"
+          }
+        ]
+      },
+      {
+        "id": "K2",
+        "name": "governed artifact lineage",
+        "definition": "Versioned artifact continuity with explicit derivation, attribution, and revision relations that preserves behavior-defining changes across time.",
+        "status": "conceptually_derived",
+        "support": [
+          {
+            "ref": "source:S2",
+            "kind": "source_fragment",
+            "digest": "sha256:8b4c6eaeaf45acb3720fec0007676b9acdedcd74c3a82dd2bc43be7586199595"
+          },
+          {
+            "ref": "source:S9",
+            "kind": "source_fragment",
+            "digest": "sha256:3277f8f2ae9321c09a60b54ac0418289e47ae914054bf70add2dafced9f3117e"
+          }
+        ]
+      },
+      {
+        "id": "K3",
+        "name": "provenance-aware contribution",
+        "definition": "A contribution representation that distinguishes ideas, code, testing, curation, and governance-relevant acts with traceable attribution.",
+        "status": "conceptually_derived",
+        "support": [
+          {
+            "ref": "source:S4",
+            "kind": "source_fragment",
+            "digest": "sha256:669f43b23098b81aee1d496734e19922109f219f92d8936a948cc6eb6d3bc13a"
+          },
+          {
+            "ref": "source:S2",
+            "kind": "source_fragment",
+            "digest": "sha256:8b4c6eaeaf45acb3720fec0007676b9acdedcd74c3a82dd2bc43be7586199595"
+          }
+        ]
+      },
+      {
+        "id": "K4",
+        "name": "downstream utility observability",
+        "definition": "The capacity to observe post-acceptance usage or value signals without treating them as sufficient evidence of entitlement.",
+        "status": "proposed",
+        "support": [
+          {
+            "ref": "artifact:evolnomics.author-brief",
+            "kind": "source_record",
+            "digest": "sha256:acf846c5f16a0b82666e20554730cf6b5a597676b3b81912eb4a0fb27f0aeafc"
+          },
+          {
+            "ref": "source:S6",
+            "kind": "source_fragment",
+            "digest": "sha256:593768e243d914380fe8c67fad7ada0531ecada24a548e7faa236f38043aa374"
+          }
+        ]
+      },
+      {
+        "id": "K5",
+        "name": "economic feedback closure",
+        "definition": "A provenance-aware link from accepted contribution and downstream utility signals to later resource availability for subsequent evolution, without selecting a production mechanism.",
+        "status": "proposed",
+        "support": [
+          {
+            "ref": "artifact:evolnomics.author-brief",
+            "kind": "source_record",
+            "digest": "sha256:acf846c5f16a0b82666e20554730cf6b5a597676b3b81912eb4a0fb27f0aeafc"
+          }
+        ]
+      }
+    ],
+    "relations": [
+      {
+        "from": "K3",
+        "to": "K2",
+        "type": "supports"
+      },
+      {
+        "from": "K2",
+        "to": "K1",
+        "type": "enables"
+      },
+      {
+        "from": "K4",
+        "to": "K5",
+        "type": "feeds"
+      },
+      {
+        "from": "K1",
+        "to": "K5",
+        "type": "constrains"
+      }
+    ],
+    "levels": [
+      "individual",
+      "team",
+      "artifact",
+      "ecosystem"
+    ],
+    "feedback_loop": "Human and agent variation -> artifact acceptance and lineage retention -> usage/value observability -> resource feedback for subsequent evolution -> new variation.",
+    "digest": "sha256:baea207a7503bf3044b6f8e45b2900e19711e75971c533b3b4218df9af95e929"
+  },
+  "claim_set": {
+    "claims": [
+      {
+        "claim_id": "C1",
+        "type": "externally_sourced_fact",
+        "acceptance_state": "draft",
+        "confidence": "high",
+        "statement": "Distributed cognition treats artifacts and technical environments as constitutive parts of cognition and coordination.",
+        "support": [
+          {
+            "ref": "source:S1",
+            "kind": "source_record",
+            "digest": "sha256:1eabf42efcddc1276603a98b58232af67bab007162a4fc32c35fd33339230f7b",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          }
+        ],
+        "counterarguments": [
+          {
+            "ref": "source:S10",
+            "kind": "source_record",
+            "digest": "sha256:3f7a90612bef9dbc4dce821581c6d3c39e398a45699c8ad46cd637f0bb8003c8",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          }
+        ],
+        "epistemic_status": "source_supported",
+        "needed_evidence": [],
+        "provenance_refs": [
+          "source:S1"
+        ]
+      },
+      {
+        "claim_id": "C2",
+        "type": "externally_sourced_fact",
+        "acceptance_state": "draft",
+        "confidence": "high",
+        "statement": "PROV-O provides an established ontology for entities, activities, agents, derivation, attribution, association, and revision.",
+        "support": [
+          {
+            "ref": "source:S2",
+            "kind": "source_record",
+            "digest": "sha256:8b4c6eaeaf45acb3720fec0007676b9acdedcd74c3a82dd2bc43be7586199595",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          }
+        ],
+        "counterarguments": [],
+        "epistemic_status": "source_supported",
+        "needed_evidence": [],
+        "provenance_refs": [
+          "source:S2"
+        ]
+      },
+      {
+        "claim_id": "C3",
+        "type": "externally_sourced_fact",
+        "acceptance_state": "draft",
+        "confidence": "high",
+        "statement": "End-user development and meta-design support participation in artifact adaptation, evolution, and sharing.",
+        "support": [
+          {
+            "ref": "source:S3",
+            "kind": "source_record",
+            "digest": "sha256:02620f935d91dd0a9ede4ebdbb5334e4c2861c9bb5bd15d499fc4e2e43744212",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          }
+        ],
+        "counterarguments": [],
+        "epistemic_status": "source_supported",
+        "needed_evidence": [],
+        "provenance_refs": [
+          "source:S3"
+        ]
+      },
+      {
+        "claim_id": "C4",
+        "type": "externally_sourced_fact",
+        "acceptance_state": "draft",
+        "confidence": "high",
+        "statement": "Community attribution systems can make non-code contributions more visible than commit-only measures.",
+        "support": [
+          {
+            "ref": "source:S4",
+            "kind": "source_record",
+            "digest": "sha256:669f43b23098b81aee1d496734e19922109f219f92d8936a948cc6eb6d3bc13a",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          }
+        ],
+        "counterarguments": [],
+        "epistemic_status": "source_supported",
+        "needed_evidence": [],
+        "provenance_refs": [
+          "source:S4"
+        ]
+      },
+      {
+        "claim_id": "C5",
+        "type": "externally_sourced_fact",
+        "acceptance_state": "draft",
+        "confidence": "high",
+        "statement": "Data Shapley is a principled attribution family under a specified utility function, but not a general solution across heterogeneous software contributions.",
+        "support": [
+          {
+            "ref": "source:S5",
+            "kind": "source_record",
+            "digest": "sha256:7ee6e15cda387756792685c31caed18f73a1508a77f99596aa4e1add520f6d09",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          }
+        ],
+        "counterarguments": [],
+        "epistemic_status": "source_supported",
+        "needed_evidence": [],
+        "provenance_refs": [
+          "source:S5"
+        ]
+      },
+      {
+        "claim_id": "C6",
+        "type": "externally_sourced_fact",
+        "acceptance_state": "draft",
+        "confidence": "high",
+        "statement": "Informal rewards can alter contribution behavior, making causal evaluation of incentives necessary.",
+        "support": [
+          {
+            "ref": "source:S6",
+            "kind": "source_record",
+            "digest": "sha256:593768e243d914380fe8c67fad7ada0531ecada24a548e7faa236f38043aa374",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          }
+        ],
+        "counterarguments": [],
+        "epistemic_status": "source_supported",
+        "needed_evidence": [],
+        "provenance_refs": [
+          "source:S6"
+        ]
+      },
+      {
+        "claim_id": "C7",
+        "type": "externally_sourced_fact",
+        "acceptance_state": "draft",
+        "confidence": "high",
+        "statement": "Software evolution is already theorized as a long-running feedback phenomenon.",
+        "support": [
+          {
+            "ref": "source:S7",
+            "kind": "source_record",
+            "digest": "sha256:583f923c9a1faaffab31f3d4a3bbfea5b3470e4aa3c8af4e81a0373eeeb9b32f",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          }
+        ],
+        "counterarguments": [],
+        "epistemic_status": "source_supported",
+        "needed_evidence": [],
+        "provenance_refs": [
+          "source:S7"
+        ]
+      },
+      {
+        "claim_id": "C8",
+        "type": "externally_sourced_fact",
+        "acceptance_state": "draft",
+        "confidence": "high",
+        "statement": "Self-evolving agent frameworks center interaction data, environment feedback, and optimizers, but do not center human governance and persistent artifact lineage.",
+        "support": [
+          {
+            "ref": "source:S8",
+            "kind": "source_record",
+            "digest": "sha256:db95e5f56952eb2847ab0d85c8f8aa2dc2dff65d939a155d42ff4939cb72dd12",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          }
+        ],
+        "counterarguments": [],
+        "epistemic_status": "source_supported",
+        "needed_evidence": [],
+        "provenance_refs": [
+          "source:S8"
+        ]
+      },
+      {
+        "claim_id": "C9",
+        "type": "externally_sourced_fact",
+        "acceptance_state": "draft",
+        "confidence": "high",
+        "statement": "Tensional-field relational ontology is a close neighbor because it models humans, AI, creative artifacts, and provenance-related flows in one relational network.",
+        "support": [
+          {
+            "ref": "source:S9",
+            "kind": "source_record",
+            "digest": "sha256:3277f8f2ae9321c09a60b54ac0418289e47ae914054bf70add2dafced9f3117e",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          }
+        ],
+        "counterarguments": [],
+        "epistemic_status": "source_supported",
+        "needed_evidence": [],
+        "provenance_refs": [
+          "source:S9"
+        ]
+      },
+      {
+        "claim_id": "C10",
+        "type": "externally_sourced_fact",
+        "acceptance_state": "draft",
+        "confidence": "high",
+        "statement": "Human-AI co-creation literature already treats artifact as part of the minimum analyzable unit.",
+        "support": [
+          {
+            "ref": "source:S10",
+            "kind": "source_record",
+            "digest": "sha256:3f7a90612bef9dbc4dce821581c6d3c39e398a45699c8ad46cd637f0bb8003c8",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          }
+        ],
+        "counterarguments": [
+          {
+            "ref": "source:S1",
+            "kind": "source_record",
+            "digest": "sha256:1eabf42efcddc1276603a98b58232af67bab007162a4fc32c35fd33339230f7b",
+            "note": "LLM relation label: theoretical overlap"
+          }
+        ],
+        "epistemic_status": "source_supported",
+        "needed_evidence": [],
+        "provenance_refs": [
+          "source:S10"
+        ]
+      },
+      {
+        "claim_id": "C11",
+        "type": "externally_sourced_fact",
+        "acceptance_state": "draft",
+        "confidence": "high",
+        "statement": "Sybil resistance remains a boundary condition for any contribution or usage signal.",
+        "support": [
+          {
+            "ref": "source:S11",
+            "kind": "source_record",
+            "digest": "sha256:ff53461a6fe9432f715e7016d9e45b3964e3aa06af98a78b6dbf6d39d09bed4f",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          }
+        ],
+        "counterarguments": [],
+        "epistemic_status": "source_supported",
+        "needed_evidence": [],
+        "provenance_refs": [
+          "source:S11"
+        ]
+      },
+      {
+        "claim_id": "C12",
+        "type": "externally_sourced_fact",
+        "acceptance_state": "draft",
+        "confidence": "high",
+        "statement": "Reward hacking is a general threat to any measurable value signal used for allocation or control.",
+        "support": [
+          {
+            "ref": "source:S12",
+            "kind": "source_record",
+            "digest": "sha256:7c674492f0c96f130e4fb0c3263424eeed16a7b12123803d2f008c86bf83d6b8",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          }
+        ],
+        "counterarguments": [],
+        "epistemic_status": "source_supported",
+        "needed_evidence": [],
+        "provenance_refs": [
+          "source:S12"
+        ]
+      },
+      {
+        "claim_id": "C13",
+        "type": "externally_sourced_fact",
+        "acceptance_state": "draft",
+        "confidence": "high",
+        "statement": "Design science requires purposeful artifact construction and evaluation; a Phase A conceptual frame is not yet a completed design-science contribution.",
+        "support": [
+          {
+            "ref": "source:S13",
+            "kind": "source_record",
+            "digest": "sha256:0e3f7056eef19a6ad617766bec2ab9c91cd7dc8e7551c87941c389a7318184d9",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          }
+        ],
+        "counterarguments": [],
+        "epistemic_status": "source_supported",
+        "needed_evidence": [],
+        "provenance_refs": [
+          "source:S13"
+        ]
+      },
+      {
+        "claim_id": "C14",
+        "type": "externally_sourced_fact",
+        "acceptance_state": "draft",
+        "confidence": "high",
+        "statement": "Participatory AI work distinguishes observable participation from substantive decision authority.",
+        "support": [
+          {
+            "ref": "source:S14",
+            "kind": "source_record",
+            "digest": "sha256:f8d3d2ae2424da13b638dfe633e94400d2067f01f44f775da6d23eb5eaff4670",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          }
+        ],
+        "counterarguments": [],
+        "epistemic_status": "source_supported",
+        "needed_evidence": [],
+        "provenance_refs": [
+          "source:S14"
+        ]
+      },
+      {
+        "claim_id": "C15",
+        "type": "externally_sourced_fact",
+        "acceptance_state": "draft",
+        "confidence": "high",
+        "statement": "Human-AI coevolution has prior naming and framing, so novelty cannot rest on the phrase alone.",
+        "support": [
+          {
+            "ref": "source:S15",
+            "kind": "source_record",
+            "digest": "sha256:17c567bd24605e0644041feeba01e80b889d6f6f8538d0c93c87edd1efe3fe07",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          }
+        ],
+        "counterarguments": [],
+        "epistemic_status": "source_supported",
+        "needed_evidence": [],
+        "provenance_refs": [
+          "source:S15"
+        ]
+      },
+      {
+        "claim_id": "C16",
+        "type": "sourced_interpretation",
+        "acceptance_state": "draft",
+        "confidence": "medium",
+        "statement": "The likely defensible contribution is not artifact inclusion per se, but the integration of governed artifact lineage with provenance-aware observability and later resource feedback.",
+        "support": [
+          {
+            "ref": "artifact:evolnomics.author-brief",
+            "kind": "artifact",
+            "digest": "sha256:acf846c5f16a0b82666e20554730cf6b5a597676b3b81912eb4a0fb27f0aeafc"
+          },
+          {
+            "ref": "source:S2",
+            "kind": "source_record",
+            "digest": "sha256:8b4c6eaeaf45acb3720fec0007676b9acdedcd74c3a82dd2bc43be7586199595",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          },
+          {
+            "ref": "source:S9",
+            "kind": "source_record",
+            "digest": "sha256:3277f8f2ae9321c09a60b54ac0418289e47ae914054bf70add2dafced9f3117e",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          }
+        ],
+        "counterarguments": [
+          {
+            "ref": "source:S10",
+            "kind": "source_record",
+            "digest": "sha256:3f7a90612bef9dbc4dce821581c6d3c39e398a45699c8ad46cd637f0bb8003c8",
+            "note": "LLM relation label: overlap"
+          }
+        ],
+        "epistemic_status": "conceptually_derived",
+        "needed_evidence": [],
+        "provenance_refs": [
+          "source:S2",
+          "source:S9",
+          "artifact:evolnomics.author-brief"
+        ]
+      },
+      {
+        "claim_id": "C17",
+        "type": "proposition_hypothesis",
+        "acceptance_state": "draft",
+        "confidence": "medium",
+        "statement": "If artifact lineage and acceptance are made explicit, then contribution visibility will improve relative to commit-only baselines.",
+        "support": [
+          {
+            "ref": "source:S4",
+            "kind": "source_record",
+            "digest": "sha256:669f43b23098b81aee1d496734e19922109f219f92d8936a948cc6eb6d3bc13a",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          },
+          {
+            "ref": "source:S2",
+            "kind": "source_record",
+            "digest": "sha256:8b4c6eaeaf45acb3720fec0007676b9acdedcd74c3a82dd2bc43be7586199595",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          }
+        ],
+        "counterarguments": [
+          {
+            "ref": "source:S14",
+            "kind": "source_record",
+            "digest": "sha256:f8d3d2ae2424da13b638dfe633e94400d2067f01f44f775da6d23eb5eaff4670",
+            "note": "LLM relation label: authority-vs-visibility gap"
+          }
+        ],
+        "epistemic_status": "requires_empirical_validation",
+        "needed_evidence": [
+          "Comparative study of contribution visibility under explicit lineage vs commit-only controls"
+        ],
+        "provenance_refs": [
+          "source:S4",
+          "source:S2"
+        ]
+      },
+      {
+        "claim_id": "C18",
+        "type": "proposition_hypothesis",
+        "acceptance_state": "draft",
+        "confidence": "medium",
+        "statement": "If resource feedback is activated before robust identity and gaming safeguards, then signal distortion will increase.",
+        "support": [
+          {
+            "ref": "source:S11",
+            "kind": "source_record",
+            "digest": "sha256:ff53461a6fe9432f715e7016d9e45b3964e3aa06af98a78b6dbf6d39d09bed4f",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          },
+          {
+            "ref": "source:S12",
+            "kind": "source_record",
+            "digest": "sha256:7c674492f0c96f130e4fb0c3263424eeed16a7b12123803d2f008c86bf83d6b8",
+            "note": "LLM requested fragment support but cited the whole admitted source record."
+          }
+        ],
+        "counterarguments": [],
+        "epistemic_status": "requires_empirical_validation",
+        "needed_evidence": [
+          "Adversarial evaluation of signal gaming under shadow-mode observability"
+        ],
+        "provenance_refs": [
+          "source:S11",
+          "source:S12"
+        ]
+      }
+    ],
+    "digest": "sha256:d74b927bb88b8ddb4c18dd890e9cefb357273fc20a13b1fda7f130934ff13e57"
+  },
+  "argument_map": {
+    "nodes": [
+      {
+        "id": "N1",
+        "claim_id": "C1"
+      },
+      {
+        "id": "N2",
+        "claim_id": "C2"
+      },
+      {
+        "id": "N3",
+        "claim_id": "C3"
+      },
+      {
+        "id": "N4",
+        "claim_id": "C4"
+      },
+      {
+        "id": "N5",
+        "claim_id": "C5"
+      },
+      {
+        "id": "N6",
+        "claim_id": "C6"
+      },
+      {
+        "id": "N7",
+        "claim_id": "C7"
+      },
+      {
+        "id": "N8",
+        "claim_id": "C8"
+      },
+      {
+        "id": "N9",
+        "claim_id": "C9"
+      },
+      {
+        "id": "N10",
+        "claim_id": "C10"
+      },
+      {
+        "id": "N11",
+        "claim_id": "C11"
+      },
+      {
+        "id": "N12",
+        "claim_id": "C12"
+      },
+      {
+        "id": "N13",
+        "claim_id": "C13"
+      },
+      {
+        "id": "N14",
+        "claim_id": "C14"
+      },
+      {
+        "id": "N15",
+        "claim_id": "C15"
+      },
+      {
+        "id": "N16",
+        "claim_id": "C16"
+      },
+      {
+        "id": "N17",
+        "claim_id": "C17"
+      },
+      {
+        "id": "N18",
+        "claim_id": "C18"
+      }
+    ],
+    "edges": [
+      {
+        "from": "C1",
+        "to": "C16",
+        "type": "background_for"
+      },
+      {
+        "from": "C2",
+        "to": "C16",
+        "type": "supports"
+      },
+      {
+        "from": "C4",
+        "to": "C16",
+        "type": "supports"
+      },
+      {
+        "from": "C6",
+        "to": "C17",
+        "type": "motivates"
+      },
+      {
+        "from": "C11",
+        "to": "C18",
+        "type": "constrains"
+      },
+      {
+        "from": "C12",
+        "to": "C18",
+        "type": "warns_against"
+      },
+      {
+        "from": "C13",
+        "to": "C16",
+        "type": "bounds"
+      },
+      {
+        "from": "C14",
+        "to": "C16",
+        "type": "counterbalances"
+      },
+      {
+        "from": "C15",
+        "to": "C16",
+        "type": "narrows_novelty"
+      },
+      {
+        "from": "C7",
+        "to": "C16",
+        "type": "prior_state"
+      }
+    ],
+    "digest": "sha256:91c0a91c332ece9ba9a43982f02b05928b4ddf53819438de7eebad86be804f32"
+  },
+  "related_work_map": {
+    "review_type": "bounded_reproducible_scoping_review",
+    "clusters": [
+      {
+        "cluster_id": "RW1",
+        "name": "distributed cognition and mediating artifacts",
+        "relevance": "Establishes artifacts as constitutive in cognition and coordination.",
+        "limits": "Does not establish provenance-aware economic feedback.",
+        "sources": [
+          {
+            "source_id": "S1",
+            "metadata": {
+              "title": "Distributed Cognition: Toward a New Foundation for Human-Computer Interaction Research",
+              "authors": [
+                "James Hollan",
+                "Edwin Hutchins",
+                "David Kirsh"
+              ],
+              "year": 2000,
+              "url": "https://doi.org/10.1145/353485.353487",
+              "doi": "10.1145/353485.353487"
+            },
+            "actual_reading_status": "abstract_read",
+            "source_ref": "source:S1",
+            "digest": "sha256:1eabf42efcddc1276603a98b58232af67bab007162a4fc32c35fd33339230f7b"
+          }
+        ]
+      },
+      {
+        "cluster_id": "RW2",
+        "name": "provenance and artifact lineage",
+        "relevance": "Provides formal lineage, attribution, and revision primitives.",
+        "limits": "Does not define downstream value allocation.",
+        "sources": [
+          {
+            "source_id": "S2",
+            "metadata": {
+              "title": "PROV-O: The PROV Ontology",
+              "authors": [
+                "W3C Provenance Working Group"
+              ],
+              "year": 2013,
+              "url": "https://www.w3.org/TR/prov-o/"
+            },
+            "actual_reading_status": "fragment_read",
+            "source_ref": "source:S2",
+            "digest": "sha256:8b4c6eaeaf45acb3720fec0007676b9acdedcd74c3a82dd2bc43be7586199595"
+          }
+        ]
+      },
+      {
+        "cluster_id": "RW3",
+        "name": "participatory co-creation and end-user development",
+        "relevance": "Shows artifact adaptation and user participation in evolution.",
+        "limits": "Does not connect accepted contributions to resource feedback.",
+        "sources": [
+          {
+            "source_id": "S3",
+            "metadata": {
+              "title": "End User Development and Meta-Design: Foundations for Cultures of Participation",
+              "authors": [
+                "Gerhard Fischer"
+              ],
+              "year": 2010,
+              "url": "https://l3d.colorado.edu/wp-content/uploads/2011/09/EUD-siegen-2009.pdf",
+              "doi": "10.1007/978-3-642-00427-8_1"
+            },
+            "actual_reading_status": "abstract_read",
+            "source_ref": "source:S3",
+            "digest": "sha256:02620f935d91dd0a9ede4ebdbb5334e4c2861c9bb5bd15d499fc4e2e43744212"
+          },
+          {
+            "source_id": "S10",
+            "metadata": {
+              "title": "Human-AI Co-Creation: Why, What, and How?",
+              "authors": [
+                "Xiaowen Sheng",
+                "Sifan Zhou",
+                "Wenhao Zhu",
+                "Jianxi Luo"
+              ],
+              "year": 2026,
+              "url": "https://www.cambridge.org/core/journals/proceedings-of-the-design-society/article/humanai-cocreation-why-what-and-how/025392A0D621F0A40E9499FAC699489F"
+            },
+            "actual_reading_status": "fragment_read",
+            "source_ref": "source:S10",
+            "digest": "sha256:3f7a90612bef9dbc4dce821581c6d3c39e398a45699c8ad46cd637f0bb8003c8"
+          },
+          {
+            "source_id": "S14",
+            "metadata": {
+              "title": "The Participatory Turn in AI Design: Theoretical Foundations and the Current State of Practice",
+              "authors": [
+                "Fernando Delgado",
+                "Stephen Yang",
+                "Michael Madaio",
+                "Qian Yang"
+              ],
+              "year": 2023,
+              "url": "https://arxiv.org/abs/2310.00907",
+              "doi": "10.1145/3617694.3623261"
+            },
+            "actual_reading_status": "fragment_read",
+            "source_ref": "source:S14",
+            "digest": "sha256:f8d3d2ae2424da13b638dfe633e94400d2067f01f44f775da6d23eb5eaff4670"
+          }
+        ]
+      },
+      {
+        "cluster_id": "RW4",
+        "name": "attribution and valuation of contributions",
+        "relevance": "Shows broader contribution visibility and principled valuation families.",
+        "limits": "Does not solve heterogeneous software contribution valuation or entitlement.",
+        "sources": [
+          {
+            "source_id": "S4",
+            "metadata": {
+              "title": "Which Contributions Count? Analysis of Attribution in Open Source",
+              "authors": [
+                "Jean-Gabriel Young",
+                "Amanda Casari",
+                "Katie McLaughlin",
+                "Milo Z. Trujillo",
+                "Laurent Hebert-Dufresne",
+                "James P. Bagrow"
+              ],
+              "year": 2021,
+              "url": "https://arxiv.org/abs/2103.11007"
+            },
+            "actual_reading_status": "fragment_read",
+            "source_ref": "source:S4",
+            "digest": "sha256:669f43b23098b81aee1d496734e19922109f219f92d8936a948cc6eb6d3bc13a"
+          },
+          {
+            "source_id": "S5",
+            "metadata": {
+              "title": "Data Shapley: Equitable Valuation of Data for Machine Learning",
+              "authors": [
+                "Amirata Ghorbani",
+                "James Zou"
+              ],
+              "year": 2019,
+              "url": "https://proceedings.mlr.press/v97/ghorbani19c.html"
+            },
+            "actual_reading_status": "abstract_read",
+            "source_ref": "source:S5",
+            "digest": "sha256:7ee6e15cda387756792685c31caed18f73a1508a77f99596aa4e1add520f6d09"
+          }
+        ]
+      },
+      {
+        "cluster_id": "RW5",
+        "name": "peer-production incentives and gaming risks",
+        "relevance": "Motivates causal caution and adversarial evaluation of signals.",
+        "limits": "Does not prescribe a safe allocation mechanism.",
+        "sources": [
+          {
+            "source_id": "S6",
+            "metadata": {
+              "title": "Experimental Study of Informal Rewards in Peer Production",
+              "authors": [
+                "Michael Restivo",
+                "Arnout van de Rijt"
+              ],
+              "year": 2012,
+              "url": "https://doi.org/10.1371/journal.pone.0034358",
+              "doi": "10.1371/journal.pone.0034358"
+            },
+            "actual_reading_status": "abstract_read",
+            "source_ref": "source:S6",
+            "digest": "sha256:593768e243d914380fe8c67fad7ada0531ecada24a548e7faa236f38043aa374"
+          },
+          {
+            "source_id": "S11",
+            "metadata": {
+              "title": "The Sybil Attack",
+              "authors": [
+                "John R. Douceur"
+              ],
+              "year": 2002,
+              "url": "https://www.microsoft.com/en-us/research/publication/the-sybil-attack/"
+            },
+            "actual_reading_status": "abstract_read",
+            "source_ref": "source:S11",
+            "digest": "sha256:ff53461a6fe9432f715e7016d9e45b3964e3aa06af98a78b6dbf6d39d09bed4f"
+          },
+          {
+            "source_id": "S12",
+            "metadata": {
+              "title": "Concrete Problems in AI Safety",
+              "authors": [
+                "Dario Amodei",
+                "Chris Olah",
+                "Jacob Steinhardt",
+                "Paul Christiano",
+                "John Schulman",
+                "Dan Mane"
+              ],
+              "year": 2016,
+              "url": "https://arxiv.org/abs/1606.06565"
+            },
+            "actual_reading_status": "fragment_read",
+            "source_ref": "source:S12",
+            "digest": "sha256:7c674492f0c96f130e4fb0c3263424eeed16a7b12123803d2f008c86bf83d6b8"
+          }
+        ]
+      },
+      {
+        "cluster_id": "RW6",
+        "name": "software evolution and self-evolving agents",
+        "relevance": "Provides feedback-loop baselines for evolution in software and agents.",
+        "limits": "Does not center human governance plus persistent artifact lineage together.",
+        "sources": [
+          {
+            "source_id": "S7",
+            "metadata": {
+              "title": "Software Evolution: Background, Theory, Practice",
+              "authors": [
+                "Meir M. Lehman",
+                "Juan F. Ramil"
+              ],
+              "year": 2003,
+              "url": "https://doi.org/10.1016/S0020-0190(03)00382-X",
+              "doi": "10.1016/S0020-0190(03)00382-X"
+            },
+            "actual_reading_status": "abstract_read",
+            "source_ref": "source:S7",
+            "digest": "sha256:583f923c9a1faaffab31f3d4a3bbfea5b3470e4aa3c8af4e81a0373eeeb9b32f"
+          },
+          {
+            "source_id": "S8",
+            "metadata": {
+              "title": "A Comprehensive Survey of Self-Evolving AI Agents: A New Paradigm Bridging Foundation Models and Lifelong Agentic Systems",
+              "authors": [
+                "Jinyuan Fang",
+                "Yanwen Peng",
+                "Xi Zhang",
+                "Yingxu Wang",
+                "Xinhao Yi",
+                "Guibin Zhang",
+                "Yi Xu",
+                "Bin Wu",
+                "Siwei Liu",
+                "Zihao Li",
+                "Zhaochun Ren",
+                "Nikos Aletras",
+                "Xi Wang",
+                "Han Zhou",
+                "Zaiqiao Meng"
+              ],
+              "year": 2025,
+              "url": "https://arxiv.org/abs/2508.07407"
+            },
+            "actual_reading_status": "abstract_read",
+            "source_ref": "source:S8",
+            "digest": "sha256:db95e5f56952eb2847ab0d85c8f8aa2dc2dff65d939a155d42ff4939cb72dd12"
+          }
+        ]
+      },
+      {
+        "cluster_id": "RW7",
+        "name": "near-neighbor co-creation ontologies",
+        "relevance": "Very close artifact-inclusive relational modeling with provenance and governance flows.",
+        "limits": "Overlaps substantially; novelty must lie in narrower selection, lineage retention, and resource feedback.",
+        "sources": [
+          {
+            "source_id": "S9",
+            "metadata": {
+              "title": "Beyond Obedient Tools: A Tensional-Field Relational Ontology for Human-AI Co-Creation",
+              "authors": [
+                "Ziming Wang",
+                "Junyi Zeng",
+                "Ashley Hall",
+                "Krity Gera"
+              ],
+              "year": 2025,
+              "url": "https://researchonline.rca.ac.uk/6757/"
+            },
+            "actual_reading_status": "fragment_read",
+            "source_ref": "source:S9",
+            "digest": "sha256:3277f8f2ae9321c09a60b54ac0418289e47ae914054bf70add2dafced9f3117e"
+          },
+          {
+            "source_id": "S10",
+            "metadata": {
+              "title": "Human-AI Co-Creation: Why, What, and How?",
+              "authors": [
+                "Xiaowen Sheng",
+                "Sifan Zhou",
+                "Wenhao Zhu",
+                "Jianxi Luo"
+              ],
+              "year": 2026,
+              "url": "https://www.cambridge.org/core/journals/proceedings-of-the-design-society/article/humanai-cocreation-why-what-and-how/025392A0D621F0A40E9499FAC699489F"
+            },
+            "actual_reading_status": "fragment_read",
+            "source_ref": "source:S10",
+            "digest": "sha256:3f7a90612bef9dbc4dce821581c6d3c39e398a45699c8ad46cd637f0bb8003c8"
+          },
+          {
+            "source_id": "S15",
+            "metadata": {
+              "title": "Peeling Back the Layers: The Co-Evolutionary Onion of Human-AI Co-Creativity",
+              "authors": [
+                "Mahsa Goodarzi"
+              ],
+              "year": 2026,
+              "url": "https://doi.org/10.1609/aaaiss.v8i1.42602",
+              "doi": "10.1609/aaaiss.v8i1.42602"
+            },
+            "actual_reading_status": "abstract_read",
+            "source_ref": "source:S15",
+            "digest": "sha256:17c567bd24605e0644041feeba01e80b889d6f6f8538d0c93c87edd1efe3fe07"
+          }
+        ]
+      },
+      {
+        "cluster_id": "RW_UNMAPPED",
+        "name": "Admitted literature not clustered by the LLM",
+        "sources": [
+          {
+            "source_id": "S13",
+            "metadata": {
+              "title": "Design Science in Information Systems Research",
+              "authors": [
+                "Alan R. Hevner",
+                "Salvatore T. March",
+                "Jinsoo Park",
+                "Sudha Ram"
+              ],
+              "year": 2004,
+              "url": "https://www.jstor.org/stable/25148625"
+            },
+            "actual_reading_status": "fragment_read",
+            "source_ref": "source:S13",
+            "digest": "sha256:0e3f7056eef19a6ad617766bec2ab9c91cd7dc8e7551c87941c389a7318184d9"
+          }
+        ],
+        "relevance": "These sources belong to the admitted corpus but the LLM did not place them in a substantive related-work cluster.",
+        "limits": "Canonical inclusion proves corpus visibility only; it does not establish comparison, synthesis, or novelty coverage."
+      }
+    ],
+    "contradictions": [
+      {
+        "id": "X1",
+        "statement": "Artifact inclusion is not a sufficient novelty claim because artifacts already appear in distributed cognition and co-creation frameworks.",
+        "support": [
+          {
+            "ref": "source:S1",
+            "kind": "source_fragment",
+            "digest": "sha256:1eabf42efcddc1276603a98b58232af67bab007162a4fc32c35fd33339230f7b"
+          },
+          {
+            "ref": "source:S10",
+            "kind": "source_fragment",
+            "digest": "sha256:3f7a90612bef9dbc4dce821581c6d3c39e398a45699c8ad46cd637f0bb8003c8"
+          }
+        ]
+      },
+      {
+        "id": "X2",
+        "statement": "Any allocation-linked framing conflicts with the need to avoid selecting a production mechanism in Phase A.",
+        "support": [
+          {
+            "ref": "artifact:evolnomics.author-brief",
+            "kind": "source_record",
+            "digest": "sha256:acf846c5f16a0b82666e20554730cf6b5a597676b3b81912eb4a0fb27f0aeafc"
+          }
+        ]
+      }
+    ],
+    "nearest_neighbors": [
+      {
+        "id": "NN1",
+        "statement": "Tensional-field relational ontology is the closest artifact-inclusive conceptual neighbor.",
+        "support": [
+          {
+            "ref": "source:S9",
+            "kind": "source_fragment",
+            "digest": "sha256:3277f8f2ae9321c09a60b54ac0418289e47ae914054bf70add2dafced9f3117e"
+          }
+        ]
+      },
+      {
+        "id": "NN2",
+        "statement": "Human-AI Co-Creation: Why, What, and How? is a direct adjacent frame because it already includes artifact as a minimum unit.",
+        "support": [
+          {
+            "ref": "source:S10",
+            "kind": "source_fragment",
+            "digest": "sha256:3f7a90612bef9dbc4dce821581c6d3c39e398a45699c8ad46cd637f0bb8003c8"
+          }
+        ]
+      },
+      {
+        "id": "NN3",
+        "statement": "Peeling Back the Layers is a naming neighbor and coevolution framing neighbor.",
+        "support": [
+          {
+            "ref": "source:S15",
+            "kind": "source_fragment",
+            "digest": "sha256:17c567bd24605e0644041feeba01e80b889d6f6f8538d0c93c87edd1efe3fe07"
+          }
+        ]
+      }
+    ],
+    "digest": "sha256:ac8aa6a6fb6b728a893f953b22750d44bf664e298fcd2e9e940391eb470ea669"
+  },
+  "source_coverage": {
+    "covered_source_refs": [
+      "source:S1",
+      "source:S2",
+      "source:S3",
+      "source:S4",
+      "source:S5",
+      "source:S6",
+      "source:S7",
+      "source:S8",
+      "source:S9",
+      "source:S10",
+      "source:S11",
+      "source:S12",
+      "source:S13",
+      "source:S14",
+      "source:S15",
+      "artifact:evolnomics.author-brief"
+    ],
+    "gaps": [
+      "No direct primary evidence on a tested economic closure for AI-native software evolution.",
+      "No empirical evidence that shadow-mode observability alone improves long-run allocation quality.",
+      "No direct validation that the proposed construct set is minimally sufficient."
+    ],
+    "digest": "sha256:aad2548689ba0c60a4c56710f67b50b8af8d9f2e275b5200696d177a8c99a852"
+  },
+  "novelty_ledger": {
+    "entries": [
+      {
+        "entry_id": "N1",
+        "candidate_contribution": "A narrower integration of governed artifact lineage, provenance-aware observability, and downstream resource feedback for AI-native software evolution.",
+        "status": "apparently_new_integration",
+        "support": [
+          {
+            "ref": "artifact:evolnomics.author-brief",
+            "kind": "source_record",
+            "digest": "sha256:acf846c5f16a0b82666e20554730cf6b5a597676b3b81912eb4a0fb27f0aeafc"
+          },
+          {
+            "ref": "source:S2",
+            "kind": "source_fragment",
+            "digest": "sha256:8b4c6eaeaf45acb3720fec0007676b9acdedcd74c3a82dd2bc43be7586199595"
+          },
+          {
+            "ref": "source:S9",
+            "kind": "source_fragment",
+            "digest": "sha256:3277f8f2ae9321c09a60b54ac0418289e47ae914054bf70add2dafced9f3117e"
+          }
+        ],
+        "uncertainty": "Overlap remains with artifact-inclusive co-creation ontologies; novelty depends on the resource-feedback closure and its testable separation from attribution alone."
+      },
+      {
+        "entry_id": "N2",
+        "candidate_contribution": "Formal separation of contribution visibility from governance authority and from economic entitlement.",
+        "status": "known_but_extended",
+        "support": [
+          {
+            "ref": "source:S14",
+            "kind": "source_fragment",
+            "digest": "sha256:f8d3d2ae2424da13b638dfe633e94400d2067f01f44f775da6d23eb5eaff4670"
+          },
+          {
+            "ref": "source:S4",
+            "kind": "source_fragment",
+            "digest": "sha256:669f43b23098b81aee1d496734e19922109f219f92d8936a948cc6eb6d3bc13a"
+          }
+        ],
+        "uncertainty": "The separation is well motivated but may be more of a synthesis than a new theory."
+      },
+      {
+        "entry_id": "N3",
+        "candidate_contribution": "A shadow-mode observability and attribution substrate as a pre-mechanism evaluation environment.",
+        "status": "apparently_new_boundary",
+        "support": [
+          {
+            "ref": "artifact:evolnomics.author-brief",
+            "kind": "source_record",
+            "digest": "sha256:acf846c5f16a0b82666e20554730cf6b5a597676b3b81912eb4a0fb27f0aeafc"
+          },
+          {
+            "ref": "source:S13",
+            "kind": "source_fragment",
+            "digest": "sha256:0e3f7056eef19a6ad617766bec2ab9c91cd7dc8e7551c87941c389a7318184d9"
+          }
+        ],
+        "uncertainty": "Need evidence that shadow observability reduces later distortion without inducing false confidence."
+      },
+      {
+        "entry_id": "N4",
+        "candidate_contribution": "A falsifiable agenda linking lineage completeness, attribution fidelity, and reward-gaming resistance.",
+        "status": "apparently_new_boundary",
+        "support": [
+          {
+            "ref": "source:S11",
+            "kind": "source_fragment",
+            "digest": "sha256:ff53461a6fe9432f715e7016d9e45b3964e3aa06af98a78b6dbf6d39d09bed4f"
+          },
+          {
+            "ref": "source:S12",
+            "kind": "source_fragment",
+            "digest": "sha256:7c674492f0c96f130e4fb0c3263424eeed16a7b12123803d2f008c86bf83d6b8"
+          }
+        ],
+        "uncertainty": "The agenda is novel only if it remains mechanism-agnostic and empirically discriminative."
+      }
+    ],
+    "digest": "sha256:494b6e22e612fea39cb00cc22ebf9ad871b0db07dcf8720c60f034338af53965"
+  },
+  "boundary_conditions": [
+    {
+      "id": "B1",
+      "statement": "Identity assurance is required before interpreting contribution and usage signals as independent.",
+      "support": [
+        {
+          "ref": "source:S11",
+          "kind": "source_fragment",
+          "digest": "sha256:ff53461a6fe9432f715e7016d9e45b3964e3aa06af98a78b6dbf6d39d09bed4f"
+        }
+      ]
+    },
+    {
+      "id": "B2",
+      "statement": "Visibility of participation does not imply substantive decision authority.",
+      "support": [
+        {
+          "ref": "source:S14",
+          "kind": "source_fragment",
+          "digest": "sha256:f8d3d2ae2424da13b638dfe633e94400d2067f01f44f775da6d23eb5eaff4670"
+        }
+      ]
+    },
+    {
+      "id": "B3",
+      "statement": "Allocation-like signals are vulnerable to optimization against the metric itself.",
+      "support": [
+        {
+          "ref": "source:S12",
+          "kind": "source_fragment",
+          "digest": "sha256:7c674492f0c96f130e4fb0c3263424eeed16a7b12123803d2f008c86bf83d6b8"
+        }
+      ]
+    },
+    {
+      "id": "B4",
+      "statement": "Phase A must not specify currency, token, weights, thresholds, emission, burn, transfer, payout, royalty, ownership share, or automatic reward/sanction.",
+      "status": "author_decision",
+      "support": [
+        {
+          "ref": "artifact:evolnomics.author-brief",
+          "kind": "source_record",
+          "digest": "sha256:acf846c5f16a0b82666e20554730cf6b5a597676b3b81912eb4a0fb27f0aeafc"
+        }
+      ]
+    },
+    {
+      "id": "B5",
+      "statement": "Artifact lineage alone is insufficient to establish novelty because prior work already formalizes provenance and artifact-centered co-creation.",
+      "support": [
+        {
+          "ref": "source:S2",
+          "kind": "source_fragment",
+          "digest": "sha256:8b4c6eaeaf45acb3720fec0007676b9acdedcd74c3a82dd2bc43be7586199595"
+        },
+        {
+          "ref": "source:S10",
+          "kind": "source_fragment",
+          "digest": "sha256:3f7a90612bef9dbc4dce821581c6d3c39e398a45699c8ad46cd637f0bb8003c8"
+        }
+      ]
+    }
+  ],
+  "counterarguments": [
+    {
+      "id": "CA1",
+      "statement": "The framework may be a recombination of established ideas in distributed cognition, provenance, and participatory co-creation rather than a new conceptual contribution.",
+      "support": [
+        {
+          "ref": "source:S1",
+          "kind": "source_fragment",
+          "digest": "sha256:1eabf42efcddc1276603a98b58232af67bab007162a4fc32c35fd33339230f7b"
+        },
+        {
+          "ref": "source:S2",
+          "kind": "source_fragment",
+          "digest": "sha256:8b4c6eaeaf45acb3720fec0007676b9acdedcd74c3a82dd2bc43be7586199595"
+        },
+        {
+          "ref": "source:S10",
+          "kind": "source_fragment",
+          "digest": "sha256:3f7a90612bef9dbc4dce821581c6d3c39e398a45699c8ad46cd637f0bb8003c8"
+        }
+      ],
+      "status": "active"
+    },
+    {
+      "id": "CA2",
+      "statement": "Attribution or reward-like observability can distort behavior and thereby undermine the very signals the framework seeks to use.",
+      "support": [
+        {
+          "ref": "source:S6",
+          "kind": "source_fragment",
+          "digest": "sha256:593768e243d914380fe8c67fad7ada0531ecada24a548e7faa236f38043aa374"
+        },
+        {
+          "ref": "source:S12",
+          "kind": "source_fragment",
+          "digest": "sha256:7c674492f0c96f130e4fb0c3263424eeed16a7b12123803d2f008c86bf83d6b8"
+        }
+      ],
+      "status": "active"
+    },
+    {
+      "id": "CA3",
+      "statement": "Participation data may be measurable without being governance-relevant, so the framework could overstate the link between contribution signals and authority.",
+      "support": [
+        {
+          "ref": "source:S14",
+          "kind": "source_fragment",
+          "digest": "sha256:f8d3d2ae2424da13b638dfe633e94400d2067f01f44f775da6d23eb5eaff4670"
+        }
+      ],
+      "status": "active"
+    },
+    {
+      "id": "CA4",
+      "statement": "The agent-evolution literature already explains feedback-driven adaptation, so the added artifact-centered layer must demonstrate more than descriptive richness.",
+      "support": [
+        {
+          "ref": "source:S8",
+          "kind": "source_fragment",
+          "digest": "sha256:db95e5f56952eb2847ab0d85c8f8aa2dc2dff65d939a155d42ff4939cb72dd12"
+        },
+        {
+          "ref": "source:S7",
+          "kind": "source_fragment",
+          "digest": "sha256:583f923c9a1faaffab31f3d4a3bbfea5b3470e4aa3c8af4e81a0373eeeb9b32f"
+        }
+      ],
+      "status": "active"
+    }
+  ],
+  "limitations": [
+    {
+      "id": "L1",
+      "statement": "No production economic mechanism is selected or evaluated."
+    },
+    {
+      "id": "L2",
+      "statement": "Novelty is calibrated only against the admitted nearest-neighbor set, not proven exhaustively."
+    },
+    {
+      "id": "L3",
+      "statement": "The framework remains conceptual; no empirical validation is claimed."
+    },
+    {
+      "id": "L4",
+      "statement": "Contribution valuation is not generalized across all artifact types or communities."
+    },
+    {
+      "id": "L5",
+      "statement": "Governance authority and entitlement remain intentionally underspecified."
+    }
+  ],
+  "research_agenda": [
+    {
+      "item_id": "A1",
+      "question": "Does explicit artifact lineage improve contribution visibility relative to commit-only baselines?",
+      "purpose": "observational_study",
+      "status": "proposed",
+      "needed_evidence": [
+        "Comparative corpus study across projects using lineage-rich and lineage-poor contribution representations"
+      ]
+    },
+    {
+      "item_id": "A2",
+      "question": "Can provenance-aware observability distinguish accepted contribution from downstream utility without collapsing the two?",
+      "purpose": "conceptual_refinement",
+      "status": "proposed",
+      "needed_evidence": [
+        "Operational definitions and interrater tests"
+      ]
+    },
+    {
+      "item_id": "A3",
+      "question": "Under what conditions does signal gaming increase when resource feedback is introduced?",
+      "purpose": "mechanism_evaluation",
+      "status": "proposed",
+      "needed_evidence": [
+        "Adversarial experiments, Sybil-resistance tests, and reward-hacking probes"
+      ]
+    },
+    {
+      "item_id": "A4",
+      "question": "What minimum provenance schema is sufficient for governed artifact lineage in AI-native software evolution?",
+      "purpose": "design_science_artifact",
+      "status": "proposed",
+      "needed_evidence": [
+        "Schema comparison and traceability evaluation"
+      ]
+    },
+    {
+      "item_id": "A5",
+      "question": "Does separating observable participation from substantive governance authority improve interpretability of co-creation analytics?",
+      "purpose": "external_review",
+      "status": "proposed",
+      "needed_evidence": [
+        "Expert review across participatory AI and governance studies"
+      ]
+    },
+    {
+      "item_id": "A6",
+      "question": "Which boundary conditions prevent causally invalid inferences from contribution or usage signals?",
+      "purpose": "observational_study",
+      "status": "proposed",
+      "needed_evidence": [
+        "Identity assurance, confounding, and selection-bias analysis"
+      ]
+    }
+  ],
+  "attribution": {
+    "llm_role": "conceptual synthesis candidate author",
+    "human_role": "review and exact-digest acceptance",
+    "fabric_role": "source isolation, canonicalization, validation, and digest binding"
+  },
+  "provenance": {
+    "created_by": "llm",
+    "model_or_actor": "gpt-5.4-mini",
+    "tool_refs": [
+      "research-authoring-run:evolnomics.r6.recovered.20260829"
+    ],
+    "traceability_graph_digest": "sha256:91c0a91c332ece9ba9a43982f02b05928b4ddf53819438de7eebad86be804f32",
+    "notes": "Control fields and canonical source records were bound by Research Fabric."
+  },
+  "created_at": "2026-08-29T06:39:23.091338+00:00",
+  "digest": "sha256:6b7f3099c4a3961c78ef73623cb3ff70bfb04de411bf89e7b5a2576da33c573e"
+}

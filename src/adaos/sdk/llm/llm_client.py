@@ -503,6 +503,10 @@ def _llm_root_payload(
     top_p: float | None = None,
     reasoning: Mapping[str, Any] | None = None,
     text: Mapping[str, Any] | None = None,
+    tools: Iterable[Mapping[str, Any]] | None = None,
+    tool_choice: str | Mapping[str, Any] | None = None,
+    max_tool_calls: int | None = None,
+    parallel_tool_calls: bool | None = None,
     request_id: str | None = None,
     stream: bool | None = None,
     prompt_cache_key: str | None = None,
@@ -528,6 +532,16 @@ def _llm_root_payload(
         payload["reasoning"] = dict(reasoning)
     if isinstance(text, Mapping) and text:
         payload["text"] = dict(text)
+    if tools is not None:
+        payload["tools"] = [dict(item) for item in tools]
+    if tool_choice is not None:
+        payload["tool_choice"] = (
+            dict(tool_choice) if isinstance(tool_choice, Mapping) else str(tool_choice)
+        )
+    if max_tool_calls is not None:
+        payload["max_tool_calls"] = int(max_tool_calls)
+    if parallel_tool_calls is not None:
+        payload["parallel_tool_calls"] = bool(parallel_tool_calls)
     req_id = str(request_id or "").strip()
     if req_id:
         payload["request_id"] = req_id
@@ -604,6 +618,10 @@ def send_response(
     top_p: float | None = None,
     reasoning: Mapping[str, Any] | None = None,
     text: Mapping[str, Any] | None = None,
+    tools: Iterable[Mapping[str, Any]] | None = None,
+    tool_choice: str | Mapping[str, Any] | None = None,
+    max_tool_calls: int | None = None,
+    parallel_tool_calls: bool | None = None,
     request_id: str | None = None,
     stream: bool | None = None,
     prompt_cache_key: str | None = None,
@@ -625,6 +643,10 @@ def send_response(
         top_p=top_p,
         reasoning=reasoning,
         text=text,
+        tools=tools,
+        tool_choice=tool_choice,
+        max_tool_calls=max_tool_calls,
+        parallel_tool_calls=parallel_tool_calls,
         request_id=request_id,
         stream=stream,
         prompt_cache_key=prompt_cache_key,
@@ -691,6 +713,10 @@ def submit_response_job(
     top_p: float | None = None,
     reasoning: Mapping[str, Any] | None = None,
     text: Mapping[str, Any] | None = None,
+    tools: Iterable[Mapping[str, Any]] | None = None,
+    tool_choice: str | Mapping[str, Any] | None = None,
+    max_tool_calls: int | None = None,
+    parallel_tool_calls: bool | None = None,
     request_id: str | None = None,
     stream: bool | None = None,
     prompt_cache_key: str | None = None,
@@ -714,6 +740,10 @@ def submit_response_job(
         top_p=top_p,
         reasoning=reasoning,
         text=text,
+        tools=tools,
+        tool_choice=tool_choice,
+        max_tool_calls=max_tool_calls,
+        parallel_tool_calls=parallel_tool_calls,
         request_id=request_id,
         stream=stream,
         prompt_cache_key=prompt_cache_key,

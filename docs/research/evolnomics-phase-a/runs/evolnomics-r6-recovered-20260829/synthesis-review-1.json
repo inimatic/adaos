@@ -1,0 +1,133 @@
+{
+  "schema": "adaos.research.synthesis_review.v1",
+  "schema_version": "1.0.0",
+  "review_id": "review.evolnomics.r6.recovered.20260829",
+  "target_synthesis_digest": "sha256:6b7f3099c4a3961c78ef73623cb3ff70bfb04de411bf89e7b5a2576da33c573e",
+  "reviewer": {
+    "actor": "llm",
+    "model": "gpt-5.4-mini",
+    "request_id": "research.evolnomics.r6.recovered.20260829.review",
+    "provider_job_id": "llm_job_6e48718e15e94b5386b35a4b"
+  },
+  "criteria": [
+    "source_grounding",
+    "conceptual_coherence",
+    "nearest_neighbor_positioning",
+    "novelty_calibration",
+    "falsifiability",
+    "phase_a_boundary",
+    "threat_coverage",
+    "draft_readiness"
+  ],
+  "findings": [
+    {
+      "criterion": "novelty_calibration",
+      "finding_id": "F1",
+      "message": "The novelty claim is still overstated relative to the admitted neighborhood: artifact inclusion, provenance/lineage, participatory co-creation, and coevolution framing all pre-exist in the corpus. The current differentiation rests on recombination and boundary-setting, not a clearly new conceptual core.",
+      "required_change": "Rewrite the contribution statement to claim a narrower integration and explicitly label it as a synthesis unless a distinct mechanism or construct is added and defended against RW1–RW7.",
+      "severity": "major",
+      "target_refs": [
+        "C16",
+        "N1",
+        "CA1",
+        "RW1",
+        "RW2",
+        "RW3",
+        "RW7"
+      ]
+    },
+    {
+      "criterion": "nearest_neighbor_positioning",
+      "finding_id": "F2",
+      "message": "Nearest-neighbor positioning is incomplete for Draft 0 traceability. The corpus identifies RW7, but the synthesis does not explicitly compare the proposed frame against the closest artifact-inclusive ontologies on what is new, what is inherited, and what is excluded.",
+      "required_change": "Add a one-paragraph delta table against NN1–NN3/RW7 with inherited constructs, rejected overlaps, and the single differentiator the framework claims.",
+      "severity": "major",
+      "target_refs": [
+        "NN1",
+        "NN2",
+        "NN3",
+        "RW7",
+        "C16"
+      ]
+    },
+    {
+      "criterion": "falsifiability",
+      "finding_id": "F3",
+      "message": "Several propositions remain too underspecified to be cleanly falsified. In particular, terms like 'improve visibility', 'signal distortion', and 'minimum sufficient provenance schema' lack operational thresholds and measurement protocols.",
+      "required_change": "Define measurable variables, comparison baselines, and pass/fail criteria for A1–A6 and convert each hypothesis into an operational test statement.",
+      "severity": "major",
+      "target_refs": [
+        "C17",
+        "C18",
+        "A1",
+        "A2",
+        "A3",
+        "A4",
+        "A5",
+        "A6"
+      ]
+    },
+    {
+      "criterion": "phase_a_boundary",
+      "finding_id": "F4",
+      "message": "There is phase-boundary leakage from conceptual Phase A into mechanism-adjacent commitments. The agenda and framing imply resource feedback, allocation logic, and reward-oriented evaluation without a clearly quarantined 'shadow mode' boundary.",
+      "required_change": "Explicitly restate that Phase A introduces no allocation or incentive mechanism, and move any resource-feedback discussion into a non-operational research question with no implied deployment path.",
+      "severity": "major",
+      "target_refs": [
+        "B4",
+        "K5",
+        "C18",
+        "A3",
+        "phase_boundary"
+      ]
+    },
+    {
+      "criterion": "threat_coverage",
+      "finding_id": "F5",
+      "message": "Threat coverage is incomplete for gaming-adjacent and governance-adjacent failure modes. Sybil and reward hacking are noted, but the framework omits collusion, identity borrowing, strategic under-reporting, selective disclosure, retroactive lineage editing, and authority capture.",
+      "required_change": "Add a threat model section covering adversarial coalition behavior, lineage tampering, selective participation, governance capture, and false-authority risks, with mitigations scoped to Phase A.",
+      "severity": "major",
+      "target_refs": [
+        "B1",
+        "B2",
+        "B3",
+        "C11",
+        "C12",
+        "C18",
+        "CA2",
+        "CA3"
+      ]
+    },
+    {
+      "criterion": "draft_readiness",
+      "finding_id": "F6",
+      "message": "Draft 0 traceability is not yet fully auditable because several support links are whole-record citations rather than fragment-level evidentiary anchors, and the synthesis leaves some conceptual terms without explicit definitional boundaries.",
+      "required_change": "Bind each key claim to a specific fragment or quoted span, and add a compact glossary defining K1–K5 and the acceptance conditions for each research agenda item.",
+      "severity": "minor",
+      "target_refs": [
+        "source:S1",
+        "source:S2",
+        "source:S4",
+        "source:S9",
+        "K1",
+        "K2",
+        "K3",
+        "K4",
+        "K5"
+      ]
+    }
+  ],
+  "verdict": "revise",
+  "summary": "Conceptually coherent, but the revision still needs tighter novelty calibration, explicit nearest-neighbor deltas, operationalized hypotheses, stricter Phase A boundaries, and broader adversarial threat coverage before human review.",
+  "usage": {
+    "accounting_scope": "researcher_llm",
+    "input_tokens": 14933,
+    "cached_input_tokens": 0,
+    "output_tokens": 963,
+    "reasoning_tokens": 134,
+    "total_tokens": 15896,
+    "accuracy": "provider_reported"
+  },
+  "created_at": "2026-08-29T06:43:02.981466+00:00",
+  "digest": "sha256:a390ce8276ce6d54b35593e7c7ac766d6c200886457acbe134dfb62d6ebd3de7"
+}

@@ -1490,6 +1490,38 @@ def test_request_webio_stream_snapshots_extracts_global_node_receiver() -> None:
     assert getattr(event, "payload", {}).get("_meta", {}).get("target_node_id") == "member-01"
 
 
+def test_normalize_ws_event_topics_replaces_node_slideshow_stream_with_hub_alias() -> None:
+    topics = gateway_module._normalize_ws_event_topics(
+        [
+            "webio.stream.desktop.nodes.member-01.slideshow_skill.index",
+            "webio.stream.nodes.member-02.slideshow_skill.folders",
+            "webio.stream.desktop.nodes.member-03.weather.current",
+            "webio.stream.desktop.slideshow_skill.preview",
+            "core.update.status",
+        ]
+    )
+
+    assert "webio.stream.desktop.nodes.member-01.slideshow_skill.index" not in topics
+    assert "webio.stream.desktop.slideshow_skill.index" in topics
+    assert "webio.stream.nodes.member-02.slideshow_skill.folders" not in topics
+    assert "webio.stream.desktop.slideshow_skill.folders" in topics
+    assert "webio.stream.desktop.nodes.member-03.weather.current" in topics
+    assert "webio.stream.desktop.weather.current" not in topics
+    assert "webio.stream.desktop.slideshow_skill.preview" in topics
+    assert "core.update.status" in topics
+
+    aliases = gateway_module._webio_stream_node_aliases(
+        ["webio.stream.desktop.nodes.member-01.slideshow_skill.index"]
+    )
+    assert aliases == [
+        {
+            "source": "webio.stream.desktop.slideshow_skill.index",
+            "target": "webio.stream.desktop.nodes.member-01.slideshow_skill.index",
+            "node_id": "member-01",
+        }
+    ]
+
+
 def test_webio_yjs_projection_subscription_tracks_active_demand() -> None:
     from adaos.sdk.data.projections import clear_projection_demand, has_projection_demand
 

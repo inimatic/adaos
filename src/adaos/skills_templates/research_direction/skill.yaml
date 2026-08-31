@@ -1,6 +1,6 @@
 name: "new_skill"
 version: "0.1.0"
-description: "Research direction package: governed experimental code and domain-owned primary data."
+description: "Research direction package: conceptual synthesis authoring plus governed experimental code and domain-owned primary data."
 supported_locales: ["en", "ru"]
 entry: "handlers/main.py"
 default_tool: "describe_direction"
@@ -13,6 +13,11 @@ events:
   subscribe: []
   publish: []
 provider_contracts:
+  - contract: "adaos.research.synthesis.v1"
+    capability: "research.synthesis"
+    operations:
+      - conceptual_authoring_readiness
+      - validate_research_synthesis
   - contract: "adaos.research.runner.v1"
     capability: "research.runner"
     operations:
@@ -23,6 +28,8 @@ provider_contracts:
 exports:
   tools:
     - describe_direction
+    - conceptual_authoring_readiness
+    - validate_research_synthesis
     - validate_research_prototype
     - execution_readiness
     - prepare_attempt
@@ -51,6 +58,27 @@ tools:
     output_schema:
       type: object
       required: [ok, accepted, issues]
+  - name: conceptual_authoring_readiness
+    description: "Report whether this direction can accept conceptual ResearchSynthesisRevision candidates."
+    entry: "handlers.main:conceptual_authoring_readiness"
+    input_schema:
+      type: object
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [ok, ready, state, schema, lifecycle, experiment_required, missing]
+  - name: validate_research_synthesis
+    description: "Validate a conceptual ResearchSynthesisRevision without accepting or releasing it."
+    entry: "handlers.main:validate_research_synthesis"
+    input_schema:
+      type: object
+      required: [synthesis]
+      properties:
+        synthesis: {type: object}
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [ok, admissible, digest, issues]
   - name: execution_readiness
     description: "Report whether Codex has implemented the experimental runner contract."
     entry: "handlers.main:execution_readiness"
@@ -109,8 +137,18 @@ research_direction:
   owner: "skill:new_skill"
   descriptor: "research.yaml"
   primary_data_owner: "skill:new_skill"
+  synthesis_contract: "adaos.research.synthesis.v1"
   runner_contract: "adaos.research.runner.v1"
   pre_codex: true
+  profiles:
+    - id: conceptual_authoring
+      schema: adaos.research.synthesis.v1
+      lifecycle: research_synthesis_revision_to_gate_a1
+      experiment_required: false
+    - id: empirical_runner
+      schema: adaos.research.runner.v1
+      lifecycle: research_compilation_to_study
+      experiment_required: true
 
 presentations:
   - id: research-workbench
@@ -121,7 +159,7 @@ presentations:
       direction_ref: skill:self
 
 llm_hints:
-  description: "Research direction owned by new_skill. The shared research orchestrator governs intake and formulation."
+  description: "Research direction owned by new_skill. The shared Research Fabric uses an LLM to form conceptual synthesis; Builder is only eligible after a separate handoff decision."
   aliases: ["research direction"]
   primary_actions:
     - id: new_skill.describe_direction
@@ -131,6 +169,13 @@ llm_hints:
       examples:
         - "Describe this research direction"
         - "What remains before this research can run?"
+    - id: new_skill.validate_research_synthesis
+      intent: new_skill.validate_research_synthesis
+      tool: validate_research_synthesis
+      side_effect_class: read_only
+      examples:
+        - "Validate this conceptual synthesis"
+        - "Can this draft synthesis pass Phase A structure?"
   examples: []
   owner_hints: ["skill:new_skill"]
 

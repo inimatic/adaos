@@ -2,7 +2,7 @@
 
 Status: domain roadmap for the proposed AdaOS Research Fabric.
 
-Last reviewed: 2026-08-21.
+Last reviewed: 2026-08-29.
 
 This roadmap sequences the implementation of the
 [AdaOS Research Fabric](research-fabric.md). TLP is the first transparent
@@ -145,6 +145,10 @@ scientific conclusion. A local demo is not production acceptance.
   formulation result.
 - No SOTA or cross-domain claim from one TLP task, one successful trace, an LLM
   self-score, or unmatched model/tool/compute budgets.
+- No conceptual Phase A `ResearchRelease`, Phase B implementation handoff, or
+  production economic mechanism without a separate human Gate A2 decision.
+- No empirical entities in a conceptual Draft 0 unless they are explicitly
+  framed as future evaluation agenda rather than executed evidence.
 
 ## Current Baseline
 
@@ -163,9 +167,9 @@ scientific conclusion. A local demo is not production acceptance.
 | Research domain | Versioned Study/Experiment/Protocol/Trial/Run/Attempt/Observation/Evidence/Claim contracts, runner-provider boundary, ResearchSpace owner projection, and governed workflows | reusable control plane is separated from domain runner/data ownership |
 | Scenario guidance | Versioned README, modal binding, workflow-aware state/action projection, deterministic EN/RU text and voice intents | implemented first in `tlp_research`; cross-scenario rollout is incremental |
 | TLP | E002 conditions, separate TLP runner/data-owner skill, real deterministic CPU runner, native Workbench, clean fixtures, sanitized exploratory provenance | task-006 direction skill `0.1.7` is published through a ProjectRelease and passes an installed real CPU workflow with independently verified operational Evidence; confirmatory scientific proof remains ARF6 work |
-| Research authoring | Shared Workbench portfolio/focus, atomic Project + direction-skill creation, direction-owned manifested artifacts, typed formulation, private local checkpoint, least-write Development Session, consumer-owned contract requirements, exact system specification, scope gate, canonical preview, ProjectRelease/StudyRealization bridge, and workflow-evidence projection | clean staged formulation and local structured-realization operability are validated; the repeated C0/C3 probability comparison, full traceability UI, and authenticated reconnect receipt remain open |
+| Research authoring | Shared Workbench portfolio/focus, typed inquiry projection and `ProblemDisposition` gate, atomic Project + direction-skill creation, direction-owned manifested artifacts, typed formulation, conceptual synthesis ABI, private local checkpoint, least-write Development Session, consumer-owned contract requirements, exact system specification, scope gate, canonical preview, ProjectRelease/StudyRealization bridge, and workflow-evidence projection | pre-formulation inquiry persistence, source-candidate discovery, exact human decisions, and split token accounting are implemented and calibrated on Evolnomics; clean staged formulation and local structured-realization operability are validated, while automatic licensed full-text admission and cross-domain inquiry benchmarking remain open |
 | Agent assistance/autonomy | Root LLM jobs, durable Builder Runs/context packets, governed workflows, conversations, and exact action admission exist | no Research Mandate, autonomy profile, autonomous campaign controller, agent budget ledger, or TLP autonomous proof |
-| Scientific release | EvidenceBundle and ClaimDecision contracts exist | no ClaimSet synthesis projection, distinct ResearchRelease, external review loop, or writer input contract |
+| Scientific release | EvidenceBundle and ClaimDecision contracts exist; conceptual `ResearchSynthesisRevision`, `AcceptedResearchSynthesis`, `DraftCandidate`, and Gate A1 schemas exist | no evidence-derived ClaimSet synthesis projection, distinct ResearchRelease, external review loop, or writer input contract |
 | Comparative evaluation | TLP supplies a frozen C0-C4 harness, retained negative/inconclusive v32 comparison, and one later C3 successor-path operability success | no positive paired probability result, frozen multi-task ResearchCompilerBench/ARRB package, or benchmark release; task-006 must not be reused as a fresh C3 unit |
 
 ## Milestone Sequence
@@ -185,6 +189,7 @@ scientific conclusion. A local demo is not production acceptance.
 | ARF7.2 | Codex realizes the exact brief as a validated and published TLP direction skill | `validated-local`; task-006 also has an immutable ProjectRelease | complete locally |
 | ARF7.3 | Clean from-raw research compilation is calibrated under matched C0-C4 TLP arms; the published direction then instantiates and runs the accepted local workflow | `validated-local-operability`; v32 is negative/inconclusive for probability and task-006 closes only the end-to-end C3 operability gate | paired probability proof remains open alongside ARF6 |
 | ARF7.4 | Workbench separates live Direction/Agenda/Task/ImplementationTrack from distributable Project, migrates TLP calibration into one task lineage, and proves generic outline/full-page navigation | `implemented-partial` | domain normalization, Project contracts, generic navigation, and TLP lineage are locally proven; release/export and full recovery proof remain open |
+| ARF7.5 | Research Fabric admits conceptual inquiry through typed projection and ProblemDisposition before conceptual framework synthesis, then admits AcceptedResearchSynthesis, traced DraftCandidate, and Gate A1 freeze before any implementation handoff | typed inquiry is `implemented` and calibrated; synthesis is `implemented` for ABI/schema/SDK/template and `specified` for remaining Workbench integration | before Evolnomics implementation |
 | ARF8 | aResearcher completes a mandate-bound autonomous TLP loop through ResearchRelease | `hypothesis` | after ARF7.4 |
 | ARF9 | ResearchCompilerBench/ARRB measures artifact-to-experiment compilation and replication on frozen multi-domain tasks and matched budgets | `hypothesis` | compilation track after ARF7.3; autonomous replication track after ARF8 |
 | ARF10 | Multi-domain evidence, scale, security, and operations justify broader claims/core promotion | `deferred` | long-term |
@@ -2041,6 +2046,83 @@ Evaluator `0.1.15`, and calibration runner `0.1.9`. The Workbench scenario is
 strictly validated with exact read policies for outline, lineage, and Study
 surfaces. Re-adoption is idempotent and preserves the frozen v5 score of `0/5`
 evidence-valid completions.
+
+## ARF7.5. Conceptual Synthesis Authoring and Draft 0 Freeze
+
+The shared pre-synthesis inquiry lifecycle is now implemented. Immutable
+discussion events are projected by a Researcher LLM through bounded typed
+patches; deterministic measures classify each problem frame as established,
+open, engineering, researchable, underspecified, currently intractable,
+category error, mixed, or unresolved. The gate admits only semantically
+compatible next steps and requires source-checked support before a solved,
+open, or intractable judgment can authorize task formulation or stopping.
+Provider failures preserve raw turns, and the next successful call replays
+events absent from projection provenance. Replay compacts exact duplicate text
+by content digest while retaining every immutable event ref in provenance, so
+provider retries do not multiply prompt content. Web discovery stores no more than six
+`candidate_not_admitted` records; license and full-text verification remain a
+separate open admission step.
+
+The clean `evolnomics_inquiry_poc` calibration produced three bounded problem
+frames, three provisional unresolved dispositions, three search requests, two
+candidate research questions, and no hypotheses or implementation tasks. Its
+readiness is `search`, so Builder remains unauthorized. The run identified the
+critical category boundary that provenance records lineage but does not itself
+establish causal contribution credit. This is a useful fail-closed outcome, not
+evidence that Evolnomics is novel or scientifically valid.
+
+**Outcome:** before a direction such as Evolnomics is implemented, Research
+Fabric can turn explicit ideas, admitted artifacts, bounded scoping review
+records, and human author decisions into a canonical conceptual research
+artifact. The accepted state is `AcceptedResearchSynthesis`; a `DraftCandidate`
+is only a traced narrative projection, and Gate A1 freezes both for independent
+comparison.
+
+**Admission gate:** a `ResearchTask` has a source snapshot, an explicit material
+allowlist/denylist, a conceptual framework profile, and no hidden comparator or
+implementation authorization.
+
+**Exit proof:** the accepted synthesis, draft candidate, provenance package,
+visibility receipt, and isolation receipt are digest-bound. The Gate A1 receipt
+records `accepted_for_comparison`, `phase_b_authorized: false`, and
+`research_release_created: false`.
+
+- [x] `[must]` `ARF7.5-01` Define JSON schemas for
+  `ResearchSynthesisRevision`, `AcceptedResearchSynthesis`, `DraftCandidate`,
+  and Gate A1 freeze.
+- [x] `[must]` `ARF7.5-02` Provide SDK helpers that validate digests,
+  component bindings, conceptual claim statuses, accepted-synthesis wrapping,
+  draft projection references, and Gate A1 non-authorization.
+- [x] `[must]` `ARF7.5-03` Extend the `research_direction` template with an
+  available conceptual authoring profile while keeping the empirical runner
+  fail-closed.
+- [ ] `[must]` `ARF7.5-04` Persist synthesis revisions in the shared
+  `research_orchestrator_skill` without creating `.adaos/research` or a
+  direction-specific scenario.
+- [ ] `[must]` `ARF7.5-05` Add Workbench UI for source coverage, related-work
+  map, novelty ledger, claim statuses, counterarguments, limitations, and
+  human acceptance of the exact synthesis digest.
+- [ ] `[must]` `ARF7.5-06` Generate a read-only Draft 0 from accepted synthesis
+  with section traceability and no new claims.
+- [x] `[must]` `ARF7.5-07` Emit visibility and isolation receipts proving that
+  hidden evaluator material, previous generated drafts, and Phase B assumptions
+  were unavailable to the conceptual run.
+- [x] `[must]` `ARF7.5-08` Run conceptual authoring and adversarial review as
+  separate Root LLM jobs with provider job ids, immutable usage receipts,
+  durable failure receipts, and aggregation by unique provider job id.
+- [x] `[must]` `ARF7.5-09` Keep `researcher_llm`, `builder_codex`, and the
+  interactive Codex session as distinct accounting scopes; recovery
+  materialization must not double-count the original LLM job.
+- [ ] `[should]` `ARF7.5-10` Add Gate A2 handoff authorization for a limited
+  Builder task, such as an observability and attribution substrate, after human
+  comparison of Gate A1 outputs.
+
+The Evolnomics calibration run reached a schema-valid 1.1 synthesis and an
+independent `revise` verdict. It exposed contract ambiguity, missing failure
+usage, weak novelty ceilings, under-specified hypotheses, and an absent threat
+model. Those findings produced the backward-compatible 1.2 synthesis policy.
+No synthesis was human-accepted, no DraftCandidate or Gate A1 was created, and
+Builder was not invoked.
 
 ## ARF8. Autonomous TLP Closed Loop and Scientific Release
 

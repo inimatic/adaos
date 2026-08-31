@@ -22,10 +22,22 @@ def test_template_is_one_skill_direction_and_fails_closed_before_codex() -> None
     descriptor = yaml.safe_load((root / "research.yaml").read_text(encoding="utf-8"))
     assert manifest["research_direction"]["owner"] == "skill:new_skill"
     assert descriptor["constraints"]["no_direction_scenario"] is True
+    assert descriptor["constraints"]["no_research_release_in_phase_a"] is True
+    conceptual = _module().conceptual_authoring_readiness()
+    assert conceptual["ready"] is True
+    assert conceptual["experiment_required"] is False
     readiness = _module().execution_readiness()
     assert readiness["ready"] is False
     assert readiness["missing"]
-    assert manifest["provider_contracts"] == [
+    assert manifest["provider_contracts"][0] == {
+        "contract": "adaos.research.synthesis.v1",
+        "capability": "research.synthesis",
+        "operations": [
+            "conceptual_authoring_readiness",
+            "validate_research_synthesis",
+        ],
+    }
+    assert manifest["provider_contracts"][1] == (
         {
             "contract": "adaos.research.runner.v1",
             "capability": "research.runner",
@@ -36,7 +48,7 @@ def test_template_is_one_skill_direction_and_fails_closed_before_codex() -> None
                 "dataset_status",
             ],
         }
-    ]
+    )
 
 
 def test_pre_codex_runner_surface_is_standard_and_fails_closed() -> None:
@@ -67,3 +79,9 @@ def test_candidate_validation_requires_scientific_structure() -> None:
         }
     )
     assert valid["accepted"] is True
+
+
+def test_conceptual_synthesis_validation_fails_closed_without_required_structure() -> None:
+    invalid = _module().validate_research_synthesis({"schema": "adaos.research.synthesis.v1"})
+    assert invalid["admissible"] is False
+    assert invalid["issues"]

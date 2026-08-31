@@ -1,0 +1,27 @@
+{
+  "schema": "adaos.research.llm_run_failure.v1",
+  "schema_version": "1.0.0",
+  "failure_id": "failure.evolnomics.r7.revision2.20260829.synthesis_authoring",
+  "run_id": "evolnomics.r7.revision2.20260829",
+  "operation": "synthesis_authoring",
+  "task_ref": "research-task:evolnomics.phase_a",
+  "actor": "llm",
+  "model": "gpt-5.4-mini",
+  "request_id": "research.evolnomics.r7.revision2.20260829.synthesis",
+  "status": "validation_failed",
+  "reason": "LLM synthesis candidate failed Fabric validation: claim_set.claims.0.counterarguments.0.digest: 'Tension with artifact-minimum-unit co-creation frame' does not match '^sha256:[0-9a-f]{64}$'",
+  "usage": {
+    "accounting_scope": "researcher_llm",
+    "input_tokens": 27579,
+    "cached_input_tokens": 0,
+    "output_tokens": 11184,
+    "reasoning_tokens": 54,
+    "total_tokens": 38763,
+    "accuracy": "provider_reported"
+  },
+  "started_at": "2026-08-29T06:56:51.672905+00:00",
+  "failed_at": "2026-08-29T06:57:34.499419+00:00",
+  "provider_job_id": "llm_job_cdf5f3c9f196494687b964e6",
+  "provider_response_id": "resp_08b424ee5c82b04a006a9282b7167487d1800985d7717e4f55",
+  "digest": "sha256:f59193c0399679568f2e2ce96f7abd578e5a764f31841635fc830359877b5d05"
+}

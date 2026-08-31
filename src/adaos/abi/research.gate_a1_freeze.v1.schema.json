@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.research.gate_a1_freeze.v1",
+  "title": "AdaOS Research Gate A1 Freeze Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "gate_id",
+    "source_snapshot_digest",
+    "literature_scope_digest",
+    "research_synthesis_digest",
+    "accepted_synthesis_digest",
+    "claim_set_digest",
+    "draft_candidate_digest",
+    "provenance_package_digest",
+    "visibility_receipt_digest",
+    "isolation_receipt_digest",
+    "decision",
+    "accepted_by",
+    "accepted_at",
+    "phase_b_authorized",
+    "research_release_created",
+    "digest"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.research.gate_a1_freeze.v1"},
+    "schema_version": {"const": "1.0.0"},
+    "gate_id": {"$ref": "#/$defs/id"},
+    "source_snapshot_digest": {"$ref": "#/$defs/digest"},
+    "literature_scope_digest": {"$ref": "#/$defs/digest"},
+    "research_synthesis_digest": {"$ref": "#/$defs/digest"},
+    "accepted_synthesis_digest": {"$ref": "#/$defs/digest"},
+    "claim_set_digest": {"$ref": "#/$defs/digest"},
+    "draft_candidate_digest": {"$ref": "#/$defs/digest"},
+    "provenance_package_digest": {"$ref": "#/$defs/digest"},
+    "visibility_receipt_digest": {"$ref": "#/$defs/digest"},
+    "isolation_receipt_digest": {"$ref": "#/$defs/digest"},
+    "decision": {"const": "accepted_for_comparison"},
+    "accepted_by": {"type": "string", "pattern": "^(human|operator|user):[A-Za-z0-9_.:@-]{1,199}$"},
+    "accepted_at": {"type": "string", "minLength": 1, "maxLength": 80},
+    "phase_b_authorized": {"const": false},
+    "research_release_created": {"const": false},
+    "digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

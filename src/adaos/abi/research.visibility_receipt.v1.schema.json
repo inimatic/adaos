@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.research.visibility_receipt.v1",
+  "title": "AdaOS Research Authoring Visibility Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "receipt_id",
+    "task_ref",
+    "source_snapshot_digest",
+    "visible_refs",
+    "denied_material_classes",
+    "hidden_comparator_visible",
+    "builder_context_visible",
+    "phase_b_context_visible",
+    "generated_by",
+    "generated_at",
+    "digest"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.research.visibility_receipt.v1"},
+    "schema_version": {"const": "1.0.0"},
+    "receipt_id": {"$ref": "#/$defs/id"},
+    "task_ref": {"type": "string", "pattern": "^research-task:[A-Za-z0-9_.:-]+$"},
+    "source_snapshot_digest": {"$ref": "#/$defs/digest"},
+    "visible_refs": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1, "maxLength": 2000},
+      "minItems": 1,
+      "maxItems": 2000,
+      "uniqueItems": true
+    },
+    "denied_material_classes": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1, "maxLength": 200},
+      "maxItems": 200,
+      "uniqueItems": true
+    },
+    "hidden_comparator_visible": {"const": false},
+    "builder_context_visible": {"const": false},
+    "phase_b_context_visible": {"const": false},
+    "generated_by": {"const": "deterministic_tool"},
+    "generated_at": {"type": "string", "minLength": 1, "maxLength": 80},
+    "digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

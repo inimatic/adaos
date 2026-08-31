@@ -1,0 +1,27 @@
+{
+  "schema": "adaos.research.llm_run_failure.v1",
+  "schema_version": "1.0.0",
+  "failure_id": "failure.evolnomics.r5.20260829.synthesis_authoring",
+  "run_id": "evolnomics.r5.20260829",
+  "operation": "synthesis_authoring",
+  "task_ref": "research-task:evolnomics.phase_a",
+  "actor": "llm",
+  "model": "gpt-5.4-mini",
+  "request_id": "research.evolnomics.r5.20260829.synthesis",
+  "status": "validation_failed",
+  "reason": "LLM synthesis candidate failed Fabric validation: LLM related work omitted admitted literature sources: source:S3",
+  "usage": {
+    "accounting_scope": "researcher_llm",
+    "input_tokens": 6175,
+    "cached_input_tokens": 0,
+    "output_tokens": 9910,
+    "reasoning_tokens": 106,
+    "total_tokens": 16085,
+    "accuracy": "provider_reported"
+  },
+  "started_at": "2026-08-29T06:36:41.659303+00:00",
+  "failed_at": "2026-08-29T06:37:27.103217+00:00",
+  "provider_job_id": "llm_job_b71d9de027054f8d9c7051c3",
+  "provider_response_id": "resp_01be69d70fdb0295006a927dfb356487d1b4fc409dbe23536c",
+  "digest": "sha256:47a0d5d6cf8cc140364f53dca0146b62e0cf4f6b8491340681f3a0ef11b0b7b4"
+}

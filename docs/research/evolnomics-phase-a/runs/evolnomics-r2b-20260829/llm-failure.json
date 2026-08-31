@@ -1,0 +1,27 @@
+{
+  "schema": "adaos.research.llm_run_failure.v1",
+  "schema_version": "1.0.0",
+  "failure_id": "failure.evolnomics.r2b.20260829.synthesis_authoring",
+  "run_id": "evolnomics.r2b.20260829",
+  "operation": "synthesis_authoring",
+  "task_ref": "research-task:evolnomics.phase_a",
+  "actor": "llm",
+  "model": "gpt-5.4-mini",
+  "request_id": "research.evolnomics.r2b.20260829.synthesis",
+  "status": "incomplete",
+  "reason": "Root LLM synthesis_authoring job failed: max_output_tokens",
+  "usage": {
+    "accounting_scope": "researcher_llm",
+    "input_tokens": 5594,
+    "cached_input_tokens": 5376,
+    "output_tokens": 16000,
+    "reasoning_tokens": 9112,
+    "total_tokens": 21594,
+    "accuracy": "provider_reported"
+  },
+  "started_at": "2026-08-29T06:29:21.196645+00:00",
+  "failed_at": "2026-08-29T06:31:03+00:00",
+  "provider_job_id": "llm_job_b149b09f42d248a48af30051",
+  "provider_response_id": "resp_0502b11a7bf553c7006a927c41c91887d1bfe1398b98877be5",
+  "digest": "sha256:a4e8746218ed75bbbaee9b757d9a138a88af83bcf5620f19ec82a39b3e955a09"
+}

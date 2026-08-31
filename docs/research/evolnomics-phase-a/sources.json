@@ -1,0 +1,158 @@
+[
+  {
+    "source_id": "S1",
+    "title": "Distributed Cognition: Toward a New Foundation for Human-Computer Interaction Research",
+    "authors": ["James Hollan", "Edwin Hutchins", "David Kirsh"],
+    "year": 2000,
+    "url": "https://doi.org/10.1145/353485.353487",
+    "doi": "10.1145/353485.353487",
+    "actual_reading_status": "abstract_read",
+    "summary": "Distributed cognition shifts the unit of analysis from an isolated person-computer dyad to whole environments in which cognition and coordination are distributed across people and technologies.",
+    "claim_scope": "Supports treating artifacts and technical environments as constitutive parts of a cognitive and collaborative system; it weakens any claim that adding artifacts to the unit of analysis is itself new."
+  },
+  {
+    "source_id": "S2",
+    "title": "PROV-O: The PROV Ontology",
+    "authors": ["W3C Provenance Working Group"],
+    "year": 2013,
+    "url": "https://www.w3.org/TR/prov-o/",
+    "actual_reading_status": "fragment_read",
+    "summary": "The W3C recommendation models provenance through entities, activities, agents, derivation, attribution, association, and explicit revision relationships, and supports provenance bundles with their own provenance.",
+    "claim_scope": "Provides a mature baseline for artifact lineage and responsibility representation; Evolnomics must specialize or compose with provenance rather than claim provenance as a new primitive."
+  },
+  {
+    "source_id": "S3",
+    "title": "End User Development and Meta-Design: Foundations for Cultures of Participation",
+    "authors": ["Gerhard Fischer"],
+    "year": 2010,
+    "url": "https://l3d.colorado.edu/wp-content/uploads/2011/09/EUD-siegen-2009.pdf",
+    "doi": "10.1007/978-3-642-00427-8_1",
+    "actual_reading_status": "abstract_read",
+    "summary": "End-user development and meta-design support a shift from passive consumption to cultures in which users participate in the design, adaptation, evolution, and sharing of artifacts.",
+    "claim_scope": "Supports diverse user contributions and artifact evolution; does not by itself connect accepted contribution provenance to downstream resource allocation."
+  },
+  {
+    "source_id": "S4",
+    "title": "Which Contributions Count? Analysis of Attribution in Open Source",
+    "authors": ["Jean-Gabriel Young", "Amanda Casari", "Katie McLaughlin", "Milo Z. Trujillo", "Laurent Hebert-Dufresne", "James P. Bagrow"],
+    "year": 2021,
+    "url": "https://arxiv.org/abs/2103.11007",
+    "actual_reading_status": "fragment_read",
+    "summary": "An analysis of projects using the All Contributors model finds that community-generated attribution makes non-code work such as ideas and bug finding more visible and creates clearer contribution boundaries than commit-only measures.",
+    "claim_scope": "Direct evidence that contribution representation is broader than commits and that attribution models shape visibility; it does not establish economic value or entitlement."
+  },
+  {
+    "source_id": "S5",
+    "title": "Data Shapley: Equitable Valuation of Data for Machine Learning",
+    "authors": ["Amirata Ghorbani", "James Zou"],
+    "year": 2019,
+    "url": "https://proceedings.mlr.press/v97/ghorbani19c.html",
+    "actual_reading_status": "abstract_read",
+    "summary": "Data Shapley applies cooperative-game-theoretic axioms to estimate the contribution of individual training data to model performance and demonstrates practical approximation methods in supervised learning.",
+    "claim_scope": "Shows one principled attribution family under a specified utility function; it is not a general solution for heterogeneous ideas, code, usage, governance, or temporal artifact lineages."
+  },
+  {
+    "source_id": "S6",
+    "title": "Experimental Study of Informal Rewards in Peer Production",
+    "authors": ["Michael Restivo", "Arnout van de Rijt"],
+    "year": 2012,
+    "url": "https://doi.org/10.1371/journal.pone.0034358",
+    "doi": "10.1371/journal.pone.0034358",
+    "actual_reading_status": "abstract_read",
+    "summary": "A randomized field experiment on Wikipedia reports that informal peer awards affected subsequent contribution behavior and that reward and contribution histories otherwise co-evolve in ways that complicate causal inference.",
+    "claim_scope": "Supports treating incentives as interventions that can alter behavior and therefore require causal evaluation; it does not justify a particular reward design for software."
+  },
+  {
+    "source_id": "S7",
+    "title": "Software Evolution: Background, Theory, Practice",
+    "authors": ["Meir M. Lehman", "Juan F. Ramil"],
+    "year": 2003,
+    "url": "https://doi.org/10.1016/S0020-0190(03)00382-X",
+    "doi": "10.1016/S0020-0190(03)00382-X",
+    "actual_reading_status": "abstract_read",
+    "summary": "The software-evolution program characterizes real-world software change as a long-running feedback phenomenon and develops laws and management implications for evolving E-type systems.",
+    "claim_scope": "Provides a prior feedback-system view of software evolution; Evolnomics must specify what the human-agent-artifact and economic closure add beyond established software-evolution feedback."
+  },
+  {
+    "source_id": "S8",
+    "title": "A Comprehensive Survey of Self-Evolving AI Agents: A New Paradigm Bridging Foundation Models and Lifelong Agentic Systems",
+    "authors": ["Jinyuan Fang", "Yanwen Peng", "Xi Zhang", "Yingxu Wang", "Xinhao Yi", "Guibin Zhang", "Yi Xu", "Bin Wu", "Siwei Liu", "Zihao Li", "Zhaochun Ren", "Nikos Aletras", "Xi Wang", "Han Zhou", "Zaiqiao Meng"],
+    "year": 2025,
+    "url": "https://arxiv.org/abs/2508.07407",
+    "actual_reading_status": "abstract_read",
+    "summary": "The survey frames self-evolving agents through system inputs, an agent system, environment, and optimizers, with adaptation driven by interaction data and environmental feedback across agent components.",
+    "claim_scope": "Establishes a neighboring agent-centered evolution loop and evaluation/safety agenda; it does not center human governance, persistent product artifact lineages, or contributor resource allocation."
+  },
+  {
+    "source_id": "S9",
+    "title": "Beyond Obedient Tools: A Tensional-Field Relational Ontology for Human-AI Co-Creation",
+    "authors": ["Ziming Wang", "Junyi Zeng", "Ashley Hall", "Krity Gera"],
+    "year": 2025,
+    "url": "https://researchonline.rca.ac.uk/6757/",
+    "actual_reading_status": "fragment_read",
+    "summary": "TFRF models human designers, AI systems, creative artifacts, intentional vectors, and sociotechnical environments as a relational network; its trace procedure follows prompts, platform mediation, model settings, and versioned artifacts while instrumenting provenance, permission transitions, reward cadence, and other flows.",
+    "claim_scope": "A very close nearest neighbor. It substantially overlaps artifact-centered relational modeling, versioned traces, provenance, governance controls, and reward-related flows; Evolnomics needs a narrower distinction grounded in selection, lineage retention, and resource feedback for subsequent software evolution."
+  },
+  {
+    "source_id": "S10",
+    "title": "Human-AI Co-Creation: Why, What, and How?",
+    "authors": ["Xiaowen Sheng", "Sifan Zhou", "Wenhao Zhu", "Jianxi Luo"],
+    "year": 2026,
+    "url": "https://www.cambridge.org/core/journals/proceedings-of-the-design-society/article/humanai-cocreation-why-what-and-how/025392A0D621F0A40E9499FAC699489F",
+    "actual_reading_status": "fragment_read",
+    "summary": "The HAIC framework explicitly identifies Human, AI, Instruction, Interaction, and Artifact as the minimum unit for controllable, repeatable, and evaluable co-creation and treats the co-creation process as a design object.",
+    "claim_scope": "A direct contradiction to any claim that co-creation literature generally omits artifacts. Evolnomics may distinguish persistent behavior-defining lineage and economic feedback, not the mere presence of an artifact."
+  },
+  {
+    "source_id": "S11",
+    "title": "The Sybil Attack",
+    "authors": ["John R. Douceur"],
+    "year": 2002,
+    "url": "https://www.microsoft.com/en-us/research/publication/the-sybil-attack/",
+    "actual_reading_status": "abstract_read",
+    "summary": "The paper shows that a single entity presenting many identities can defeat redundancy in distributed systems and argues that, without a logically centralized identity authority, Sybil resistance requires extreme assumptions.",
+    "claim_scope": "Supports treating identity assurance as a boundary condition for contribution and usage signals; provenance alone does not establish independent participants."
+  },
+  {
+    "source_id": "S12",
+    "title": "Concrete Problems in AI Safety",
+    "authors": ["Dario Amodei", "Chris Olah", "Jacob Steinhardt", "Paul Christiano", "John Schulman", "Dan Mane"],
+    "year": 2016,
+    "url": "https://arxiv.org/abs/1606.06565",
+    "actual_reading_status": "fragment_read",
+    "summary": "The paper defines reward hacking as behavior that formally maximizes an objective while perverting designer intent and connects it to broader problems of scalable oversight, side effects, exploration, and distribution shift.",
+    "claim_scope": "Supports a general threat that any measured value or allocation signal can be optimized against; Evolnomics needs shadow evaluation and adversarial tests before incentive activation."
+  },
+  {
+    "source_id": "S13",
+    "title": "Design Science in Information Systems Research",
+    "authors": ["Alan R. Hevner", "Salvatore T. March", "Jinsoo Park", "Sudha Ram"],
+    "year": 2004,
+    "url": "https://www.jstor.org/stable/25148625",
+    "actual_reading_status": "fragment_read",
+    "summary": "Design-science research creates purposeful artifacts and requires problem relevance, rigorous construction, evaluation, research contribution, and communication; knowledge is developed through building and applying the artifact.",
+    "claim_scope": "Supports a future design-science program, while also showing why Phase A without an instantiated and evaluated mechanism cannot claim a completed design-science contribution."
+  },
+  {
+    "source_id": "S14",
+    "title": "The Participatory Turn in AI Design: Theoretical Foundations and the Current State of Practice",
+    "authors": ["Fernando Delgado", "Stephen Yang", "Michael Madaio", "Qian Yang"],
+    "year": 2023,
+    "url": "https://arxiv.org/abs/2310.00907",
+    "doi": "10.1145/3617694.3623261",
+    "actual_reading_status": "fragment_read",
+    "summary": "The work finds substantial variation in participatory AI practice and develops a framework for evaluating whether stakeholders receive substantive agency, drawing on theory and interviews with practitioners.",
+    "claim_scope": "Supports distinguishing observable participation from actual decision authority; contribution capture and value signals do not themselves guarantee meaningful governance power."
+  },
+  {
+    "source_id": "S15",
+    "title": "Peeling Back the Layers: The Co-Evolutionary Onion of Human-AI Co-Creativity",
+    "authors": ["Mahsa Goodarzi"],
+    "year": 2026,
+    "url": "https://doi.org/10.1609/aaaiss.v8i1.42602",
+    "doi": "10.1609/aaaiss.v8i1.42602",
+    "actual_reading_status": "abstract_read",
+    "summary": "The paper explicitly reframes human-AI creative interaction as co-evolution in which humans and machines continuously adapt and introduces a multi-layer theoretical framework for that relationship.",
+    "claim_scope": "A direct naming and framing neighbor. Evolnomics must avoid claiming human-AI coevolution as new and instead define the additional role of governed artifact lineages and resource feedback."
+  }
+]

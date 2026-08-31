@@ -1,0 +1,29 @@
+{
+  "schema": "adaos.research.case_run_manifest.v1",
+  "run_id": "evolnomics.r3.20260829",
+  "builder_codex": {
+    "required": false,
+    "invoked": false,
+    "total_tokens": 0,
+    "accounting_scope": "builder_codex"
+  },
+  "current_codex_session_accounted": false,
+  "accepted_synthesis_created": false,
+  "draft_candidate_created": false,
+  "gate_a1_created": false,
+  "phase_b_authorized": false,
+  "research_release_created": false,
+  "created_at": "2026-08-29T06:34:40.462615+00:00",
+  "status": "failed_synthesis_authoring",
+  "source_snapshot_digest": "sha256:c28018d2d0a2d4f981a72bb99e961eade45d9e70b3e5b58226af22c6dc84d127",
+  "failure_digest": "sha256:1ed0a8cb664438cfd7945a6c1f26994cef14812487eec5adcce41512f39b2f9f",
+  "researcher_llm_usage": {
+    "accounting_scope": "researcher_llm",
+    "input_tokens": null,
+    "cached_input_tokens": null,
+    "output_tokens": null,
+    "reasoning_tokens": null,
+    "total_tokens": null,
+    "accuracy": "unavailable"
+  }
+}

@@ -3,6 +3,7 @@ import json
 from types import SimpleNamespace
 
 from adaos.sdk.io import out
+from adaos.sdk.io.context import io_meta
 from adaos.services.eventbus import LocalEventBus
 from adaos.services.webspace_id import coerce_webspace_id
 
@@ -37,6 +38,77 @@ def test_stream_publish_normalizes_webspace_meta(monkeypatch) -> None:
     assert meta["webspace_ids"] == ["default", "desktop"]
     assert meta["node_id"] == "member-01"
     assert meta["source_node_id"] == "member-01"
+
+
+def test_stream_publish_explicit_webspace_overrides_ambient_webspace_ids(monkeypatch) -> None:
+    bus = LocalEventBus()
+    seen = []
+    bus.subscribe("io.out.stream.publish", lambda ev: seen.append(ev))
+    monkeypatch.setattr(out, "get_ctx", lambda: SimpleNamespace(bus=bus))
+    monkeypatch.setattr(out, "load_config", lambda: SimpleNamespace(node_id="member-01"))
+
+    with io_meta({"webspace_id": "desktop", "webspace_ids": ["desktop"]}):
+        result = out.stream_publish(
+            "infrastate.realtime",
+            {"state": "ok"},
+            _meta={"webspace_id": "homepoint"},
+        )
+
+    assert result == {"ok": True}
+    meta = seen[0].payload["_meta"]
+    assert meta["webspace_id"] == "homepoint"
+    assert "webspace_ids" not in meta
+
+
+def test_stream_publish_prefers_agent_context_node_id(monkeypatch) -> None:
+    bus = LocalEventBus()
+    seen = []
+    bus.subscribe("io.out.stream.publish", lambda ev: seen.append(ev))
+    monkeypatch.setattr(
+        out,
+        "get_ctx",
+        lambda: SimpleNamespace(bus=bus, config=SimpleNamespace(node_id="ctx-node")),
+    )
+    monkeypatch.setattr(out, "load_config", lambda: SimpleNamespace(node_id="file-node"))
+
+    result = out.stream_publish("infrastate.realtime", {"state": "ok"})
+
+    assert result == {"ok": True}
+    meta = seen[0].payload["_meta"]
+    assert meta["node_id"] == "ctx-node"
+    assert meta["source_node_id"] == "ctx-node"
+
+
+def test_stream_publish_uses_env_node_id_before_file_config(monkeypatch) -> None:
+    bus = LocalEventBus()
+    seen = []
+    bus.subscribe("io.out.stream.publish", lambda ev: seen.append(ev))
+    monkeypatch.setattr(out, "get_ctx", lambda: SimpleNamespace(bus=bus))
+    monkeypatch.setenv("ADAOS_NODE_ID", "env-node")
+    monkeypatch.setattr(out, "load_config", lambda: SimpleNamespace(node_id="file-node"))
+
+    result = out.stream_publish("infrastate.realtime", {"state": "ok"})
+
+    assert result == {"ok": True}
+    meta = seen[0].payload["_meta"]
+    assert meta["node_id"] == "env-node"
+    assert meta["source_node_id"] == "env-node"
+
+
+def test_stream_publish_overrides_ambient_node_id(monkeypatch) -> None:
+    bus = LocalEventBus()
+    seen = []
+    bus.subscribe("io.out.stream.publish", lambda ev: seen.append(ev))
+    monkeypatch.setattr(out, "get_ctx", lambda: SimpleNamespace(bus=bus))
+    monkeypatch.setattr(out, "load_config", lambda: SimpleNamespace(node_id="local-node"))
+
+    with io_meta({"node_id": "incoming-node", "source_node_id": "incoming-node"}):
+        result = out.stream_publish("infrastate.realtime", {"state": "ok"})
+
+    assert result == {"ok": True}
+    meta = seen[0].payload["_meta"]
+    assert meta["node_id"] == "local-node"
+    assert meta["source_node_id"] == "local-node"
 
 
 def test_stream_variable_publish_wraps_replace_mode_envelope(monkeypatch) -> None:

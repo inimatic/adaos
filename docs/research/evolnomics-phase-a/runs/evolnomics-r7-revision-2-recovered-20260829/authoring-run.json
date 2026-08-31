@@ -1,0 +1,30 @@
+{
+  "schema": "adaos.research.authoring_run.v1",
+  "schema_version": "1.0.0",
+  "run_id": "evolnomics.r7.revision2.recovered.20260829",
+  "direction_ref": "research-direction:evolnomics",
+  "task_ref": "research-task:evolnomics.phase_a",
+  "source_snapshot_digest": "sha256:20aa5373dbef8ba4ebde22c071490913b4a590017e271145133cae4eedc34982",
+  "visibility_receipt_digest": "sha256:c9b4ca954cf6f8057d3169616a5e5f1f432107b646b25d46504da24f47535199",
+  "isolation_receipt_digest": "sha256:df5c3ac31546cf2df83b8bd460d075a34fef2fe25c0cf059ca4abd9bdb55a4c7",
+  "prompt_digest": "sha256:564621ecbb08b1fadddef545fe1d3ca8aaa0e909d975261b12f1564a2e444e26",
+  "response_digest": "sha256:35abad6a84b386f5371fad850346a9dc48bef1d6bdef4c4e7af7f0faa1cef007",
+  "output_synthesis_digest": "sha256:219c763b3eb26a1ada9d685c2a4eaebe50bd5d365a8f6a503962d70755bc36c2",
+  "actor": "llm",
+  "model": "gpt-5.4-mini",
+  "request_id": "research.evolnomics.r7.revision2.20260829.synthesis",
+  "provider_job_id": "llm_job_cdf5f3c9f196494687b964e6",
+  "status": "candidate_generated",
+  "usage": {
+    "accounting_scope": "researcher_llm",
+    "input_tokens": 27579,
+    "cached_input_tokens": 0,
+    "output_tokens": 11184,
+    "reasoning_tokens": 54,
+    "total_tokens": 38763,
+    "accuracy": "provider_reported"
+  },
+  "started_at": "2026-08-29T06:56:51.672905+00:00",
+  "completed_at": "2026-08-29T06:59:30.765249+00:00",
+  "digest": "sha256:7bfa14406ffe07aa7c986602d0a9354b24853327f1c4bc56572d08241c1c8957"
+}

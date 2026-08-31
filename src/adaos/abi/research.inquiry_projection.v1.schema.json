@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.research.inquiry_projection.v1",
+  "title": "AdaOS Scientific Inquiry Projection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "inquiry_id",
+    "direction_ref",
+    "revision",
+    "parent_digest",
+    "applied_patch_digest",
+    "state",
+    "records",
+    "measures",
+    "readiness",
+    "provenance",
+    "created_at",
+    "digest"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.research.inquiry_projection.v1"},
+    "schema_version": {"const": "1.0.0"},
+    "inquiry_id": {"$ref": "#/$defs/id"},
+    "direction_ref": {"type": "string", "pattern": "^research-direction:[A-Za-z0-9_.:-]+$"},
+    "task_ref": {"type": ["string", "null"], "pattern": "^research-task:[A-Za-z0-9_.:-]+$"},
+    "revision": {"type": "integer", "minimum": 0},
+    "parent_digest": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+    "applied_patch_digest": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+    "state": {"enum": ["draft", "closed"]},
+    "records": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "concepts",
+        "problem_frames",
+        "knowledge_claims",
+        "research_questions",
+        "hypotheses",
+        "problem_dispositions",
+        "evidence_needs",
+        "search_requests",
+        "contradictions",
+        "task_candidates"
+      ],
+      "properties": {
+        "concepts": {"$ref": "#/$defs/record_array"},
+        "problem_frames": {"$ref": "#/$defs/record_array"},
+        "knowledge_claims": {"$ref": "#/$defs/record_array"},
+        "research_questions": {"$ref": "#/$defs/record_array"},
+        "hypotheses": {"$ref": "#/$defs/record_array"},
+        "problem_dispositions": {"$ref": "#/$defs/record_array"},
+        "evidence_needs": {"$ref": "#/$defs/record_array"},
+        "search_requests": {"$ref": "#/$defs/record_array"},
+        "contradictions": {"$ref": "#/$defs/record_array"},
+        "task_candidates": {"$ref": "#/$defs/record_array"}
+      }
+    },
+    "measures": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["active_record_count", "unclassified_problem_count", "untraceable_record_count", "unsupported_source_claim_count", "incompatible_task_count", "semantic_churn"],
+      "properties": {
+        "active_record_count": {"type": "integer", "minimum": 0},
+        "unclassified_problem_count": {"type": "integer", "minimum": 0},
+        "untraceable_record_count": {"type": "integer", "minimum": 0},
+        "unsupported_source_claim_count": {"type": "integer", "minimum": 0},
+        "incompatible_task_count": {"type": "integer", "minimum": 0},
+        "semantic_churn": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["added", "changed", "rejected_or_superseded"],
+          "properties": {
+            "added": {"type": "integer", "minimum": 0},
+            "changed": {"type": "integer", "minimum": 0},
+            "rejected_or_superseded": {"type": "integer", "minimum": 0}
+          }
+        }
+      }
+    },
+    "readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision", "admitted_transitions", "blockers"],
+      "properties": {
+        "decision": {"enum": ["continue_discussion", "clarify", "search", "split_problem", "reformulate", "reuse_known_solution", "ready_for_research_task", "ready_for_engineering_task", "defer_or_stop"]},
+        "admitted_transitions": {
+          "type": "array",
+          "items": {"enum": ["continue_discussion", "clarify", "search", "split_problem", "reformulate", "reuse_known_solution", "formulate_research_task", "formulate_engineering_task", "defer", "stop"]},
+          "uniqueItems": true
+        },
+        "blockers": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 2000}, "maxItems": 200}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_refs", "patch_digests", "created_by"],
+      "properties": {
+        "event_refs": {"type": "array", "items": {"type": "string", "pattern": "^discussion-event:[A-Za-z0-9_.:-]+$"}, "uniqueItems": true, "maxItems": 5000},
+        "patch_digests": {"type": "array", "items": {"$ref": "#/$defs/digest"}, "uniqueItems": true, "maxItems": 5000},
+        "created_by": {"const": "research_fabric_deterministic_patch_application"}
+      }
+    },
+    "created_at": {"type": "string", "minLength": 1, "maxLength": 80},
+    "digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "target_type", "statement", "status", "derivation", "basis_refs", "confidence", "uncertainty", "attributes"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "target_type": {"type": "string", "minLength": 1, "maxLength": 80},
+        "statement": {"type": "string", "minLength": 1, "maxLength": 8000},
+        "status": {"enum": ["proposed", "contested", "rejected", "superseded"]},
+        "derivation": {"enum": ["explicit_user", "inferred_from_discussion", "model_proposed", "source_supported", "human_decision"]},
+        "basis_refs": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 2000}, "minItems": 1, "maxItems": 200, "uniqueItems": true},
+        "confidence": {"enum": ["low", "medium", "high", "not_assessed"]},
+        "uncertainty": {"type": "string", "maxLength": 4000},
+        "attributes": {"type": "object", "additionalProperties": true}
+      }
+    },
+    "record_array": {"type": "array", "items": {"$ref": "#/$defs/record"}, "maxItems": 5000}
+  }
+}

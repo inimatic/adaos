@@ -1,0 +1,148 @@
+{
+  "schema": "adaos.research.synthesis_review.v1",
+  "schema_version": "1.0.0",
+  "review_id": "review.evolnomics.r7.revision2.recovered.20260829",
+  "target_synthesis_digest": "sha256:219c763b3eb26a1ada9d685c2a4eaebe50bd5d365a8f6a503962d70755bc36c2",
+  "reviewer": {
+    "actor": "llm",
+    "model": "gpt-5.4-mini",
+    "request_id": "research.evolnomics.r7.revision2.recovered.20260829.review",
+    "provider_job_id": "llm_job_6a7a7c0df62644739cc4b770"
+  },
+  "criteria": [
+    "source_grounding",
+    "conceptual_coherence",
+    "nearest_neighbor_positioning",
+    "novelty_calibration",
+    "falsifiability",
+    "phase_a_boundary",
+    "threat_coverage",
+    "draft_readiness"
+  ],
+  "findings": [
+    {
+      "criterion": "nearest_neighbor_positioning",
+      "finding_id": "F1",
+      "message": "The nearest-neighbor set is still too thin for the central claim of novelty. It covers artifact-inclusive co-creation and provenance, but omits obvious adjacent baselines in provenance-aware software evolution, contribution analytics, and governance/participation separation that would better bound the integration claim.",
+      "required_change": "Add at least 2-3 additional nearest neighbors and explicitly map what is inherited vs. newly combined for each construct in C16/N1-N4.",
+      "severity": "major",
+      "target_refs": [
+        "RW2",
+        "RW4",
+        "RW7",
+        "C16",
+        "novelty_ledger:N1",
+        "novelty_ledger:N4"
+      ]
+    },
+    {
+      "criterion": "novelty_calibration",
+      "finding_id": "F2",
+      "message": "Novelty is slightly overstated in the integration language. The document repeatedly implies a substantive new framework, but the admitted sources already cover artifacts as constitutive, artifact-inclusive co-creation, provenance/lineage, and participatory visibility; the defensible novelty appears narrower than the framing suggests.",
+      "required_change": "Downgrade novelty wording from 'new framework' to a narrowly scoped synthesis with a clearly delimited delta, and separate 'known but extended' from 'apparently new' with explicit non-novel overlap statements.",
+      "severity": "major",
+      "target_refs": [
+        "C16",
+        "novelty_ledger:N1",
+        "novelty_ledger:N2",
+        "X1",
+        "CA1"
+      ]
+    },
+    {
+      "criterion": "source_grounding",
+      "finding_id": "F3",
+      "message": "Some synthesis statements are supported only indirectly by source adjacency rather than direct evidence. In particular, C16 adds 'resource-feedback closure' and 'governed artifact lineage' as a contribution while the admitted corpus does not directly establish that combination as a validated construct.",
+      "required_change": "Mark C16 and K5 strictly as proposed conceptual synthesis, not source-supported contribution, and add a gap statement that direct evidence is absent.",
+      "severity": "major",
+      "target_refs": [
+        "C16",
+        "K5",
+        "source_coverage:gaps",
+        "novelty_ledger:N3"
+      ]
+    },
+    {
+      "criterion": "falsifiability",
+      "finding_id": "F4",
+      "message": "C17 is testable, but the proposed falsification condition is too weak and potentially non-diagnostic: 'no statistically meaningful improvement' depends on an under-specified metric and may fail to distinguish null effect from measurement noise or rater bias.",
+      "required_change": "Specify effect-size thresholds, pre-registered metrics, and a concrete visibility scoring rubric so the hypothesis can be cleanly falsified.",
+      "severity": "major",
+      "target_refs": [
+        "C17",
+        "A1"
+      ]
+    },
+    {
+      "criterion": "falsifiability",
+      "finding_id": "F5",
+      "message": "C18 is only partially falsifiable as written because the treatment mixes resource-feedback exposure with the absence of safeguards, so a negative result cannot tell whether the hypothesis was wrong or the setup was simply unsafe/underprotected.",
+      "required_change": "Split the hypothesis into separate conditions for observability, identity assurance, and anti-gaming safeguards, then define independent predictions for each.",
+      "severity": "major",
+      "target_refs": [
+        "C18",
+        "A3",
+        "threat_model:T1",
+        "threat_model:T12"
+      ]
+    },
+    {
+      "criterion": "phase_a_boundary",
+      "finding_id": "F6",
+      "message": "There is some phase-boundary leakage: C18 and K5 move close to resource-feedback design logic even though Phase A explicitly forbids selecting a production mechanism, thresholds, payouts, or rewards. The current text can be read as implying a quasi-mechanism agenda.",
+      "required_change": "Rephrase K5/C18/A3 as non-operational research questions only, and add an explicit 'no mechanism design' note wherever resource feedback is mentioned.",
+      "severity": "major",
+      "target_refs": [
+        "C18",
+        "K5",
+        "phase_boundary",
+        "B4",
+        "X2"
+      ]
+    },
+    {
+      "criterion": "threat_coverage",
+      "finding_id": "F7",
+      "message": "Gaming coverage is incomplete for a framework that plans observability and future allocation research. Missing or underdeveloped threats include collusive coordination, strategic under-reporting, selective disclosure, lineage tampering, idea squatting, governance capture, and false-authority misuse of participation traces.",
+      "required_change": "Expand the threat model with explicit controls/tests for T2, T5, T6, T7, T8, T10, and T11, not just Sybil and reward hacking.",
+      "severity": "major",
+      "target_refs": [
+        "threat_model:T2",
+        "threat_model:T5",
+        "threat_model:T6",
+        "threat_model:T7",
+        "threat_model:T8",
+        "threat_model:T10",
+        "threat_model:T11"
+      ]
+    },
+    {
+      "criterion": "draft_readiness",
+      "finding_id": "F8",
+      "message": "A traceable Draft 0 is not yet fully secured because the manuscript still relies on several conceptually derived constructs whose boundaries, operational relations, and exclusion criteria are not fully pinned down. The model also leaves K4/K5 underdefined relative to the rest of the construct set.",
+      "required_change": "Provide a Draft 0 construct table with necessary/sufficient inclusion criteria, exclusion criteria, and a traceability matrix from each claim to specific source passages or explicit derivation steps.",
+      "severity": "major",
+      "target_refs": [
+        "K4",
+        "K5",
+        "K1",
+        "K2",
+        "K3",
+        "source_snapshot:coverage_note"
+      ]
+    }
+  ],
+  "verdict": "revise",
+  "summary": "Conceptually coherent, but novelty is narrower than claimed, nearest-neighbor coverage is incomplete, and Phase A still leaks toward mechanism design. The main safety issue is not acceptance of the idea itself but insufficient calibration of novelty, falsifiability, and gaming threats for a traceable Draft 0.",
+  "usage": {
+    "accounting_scope": "researcher_llm",
+    "input_tokens": 16114,
+    "cached_input_tokens": 0,
+    "output_tokens": 1193,
+    "reasoning_tokens": 47,
+    "total_tokens": 17307,
+    "accuracy": "provider_reported"
+  },
+  "created_at": "2026-08-29T06:59:30.781240+00:00",
+  "digest": "sha256:8a1d85a1110e20158da4fe625dc516e637a8107bda013c8d79b28a6e10860bda"
+}

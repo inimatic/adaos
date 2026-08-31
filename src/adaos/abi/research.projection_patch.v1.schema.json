@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.research.projection_patch.v1",
+  "title": "AdaOS Research Inquiry Projection Patch",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "patch_id",
+    "inquiry_id",
+    "base_projection_digest",
+    "trigger_event_ref",
+    "actor",
+    "operations",
+    "rationale",
+    "created_at",
+    "digest"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.research.projection_patch.v1"},
+    "schema_version": {"const": "1.0.0"},
+    "patch_id": {"$ref": "#/$defs/id"},
+    "inquiry_id": {"$ref": "#/$defs/id"},
+    "base_projection_digest": {"$ref": "#/$defs/digest"},
+    "trigger_event_ref": {"type": "string", "pattern": "^discussion-event:[A-Za-z0-9_.:-]+$"},
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "actor_id"],
+      "properties": {
+        "kind": {"enum": ["human", "llm", "deterministic_tool"]},
+        "actor_id": {"type": "string", "minLength": 1, "maxLength": 240},
+        "model": {"type": "string", "maxLength": 240},
+        "provider_job_id": {"type": "string", "maxLength": 240}
+      }
+    },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 500,
+      "items": {"$ref": "#/$defs/operation"}
+    },
+    "rationale": {"type": "string", "minLength": 1, "maxLength": 8000},
+    "usage": {"$ref": "#/$defs/usage"},
+    "created_at": {"type": "string", "minLength": 1, "maxLength": 80},
+    "digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "target_type": {
+      "enum": [
+        "concept",
+        "problem_frame",
+        "knowledge_claim",
+        "research_question",
+        "hypothesis",
+        "problem_disposition",
+        "evidence_need",
+        "search_request",
+        "contradiction",
+        "task_candidate"
+      ]
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "target_type",
+        "statement",
+        "status",
+        "derivation",
+        "basis_refs",
+        "confidence",
+        "uncertainty",
+        "attributes"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "target_type": {"$ref": "#/$defs/target_type"},
+        "statement": {"type": "string", "minLength": 1, "maxLength": 8000},
+        "status": {"enum": ["proposed", "contested", "rejected", "superseded"]},
+        "derivation": {"enum": ["explicit_user", "inferred_from_discussion", "model_proposed", "source_supported", "human_decision"]},
+        "basis_refs": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1, "maxLength": 2000},
+          "minItems": 1,
+          "maxItems": 200,
+          "uniqueItems": true
+        },
+        "confidence": {"enum": ["low", "medium", "high", "not_assessed"]},
+        "uncertainty": {"type": "string", "maxLength": 4000},
+        "attributes": {"type": "object", "additionalProperties": true}
+      }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "target_type", "target_id", "basis_refs"],
+      "properties": {
+        "action": {"enum": ["upsert", "reject", "supersede"]},
+        "target_type": {"$ref": "#/$defs/target_type"},
+        "target_id": {"$ref": "#/$defs/id"},
+        "record": {"$ref": "#/$defs/record"},
+        "basis_refs": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1, "maxLength": 2000},
+          "minItems": 1,
+          "maxItems": 200,
+          "uniqueItems": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"action": {"const": "upsert"}}},
+          "then": {"required": ["record"]},
+          "else": {"not": {"required": ["record"]}}
+        }
+      ]
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["accounting_scope", "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens", "total_tokens", "accuracy"],
+      "properties": {
+        "accounting_scope": {"const": "researcher_llm"},
+        "input_tokens": {"type": "integer", "minimum": 0},
+        "cached_input_tokens": {"type": "integer", "minimum": 0},
+        "output_tokens": {"type": "integer", "minimum": 0},
+        "reasoning_tokens": {"type": "integer", "minimum": 0},
+        "total_tokens": {"type": "integer", "minimum": 0},
+        "accuracy": {"enum": ["provider_reported", "unavailable"]}
+      }
+    }
+  }
+}

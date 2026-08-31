@@ -1,0 +1,27 @@
+{
+  "schema": "adaos.research.case_run_failure.v1",
+  "run_id": "evolnomics.r1.20260829",
+  "stage": "synthesis_authoring",
+  "model": "gpt-5.4",
+  "provider_job_id": "llm_job_0603055b200140fc906e0622",
+  "status": "failed",
+  "error_code": "gateway_timeout",
+  "detail": "Both upstream attempts reached the 120-second gateway timeout.",
+  "researcher_llm_usage": {
+    "accounting_scope": "researcher_llm",
+    "accuracy": "unavailable",
+    "total_tokens": null
+  },
+  "builder_codex": {
+    "required": false,
+    "invoked": false,
+    "total_tokens": 0,
+    "accounting_scope": "builder_codex"
+  },
+  "current_codex_session_accounted": false,
+  "accepted_synthesis_created": false,
+  "draft_candidate_created": false,
+  "gate_a1_created": false,
+  "phase_b_authorized": false,
+  "research_release_created": false
+}

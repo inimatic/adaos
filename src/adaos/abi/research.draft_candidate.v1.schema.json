@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.research.draft_candidate.v1",
+  "title": "AdaOS Research Draft Candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "draft_id",
+    "version",
+    "title",
+    "language",
+    "genre",
+    "derived_from_accepted_synthesis_digest",
+    "derived_from_synthesis_digest",
+    "content_ref",
+    "section_trace",
+    "status",
+    "created_by",
+    "created_at",
+    "digest"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.research.draft_candidate.v1"},
+    "schema_version": {"const": "1.0.0"},
+    "draft_id": {"$ref": "#/$defs/id"},
+    "version": {"type": "integer", "minimum": 0},
+    "title": {"type": "string", "minLength": 1, "maxLength": 500},
+    "language": {"enum": ["en", "ru"]},
+    "genre": {"const": "conceptual_framework_with_design_science_agenda"},
+    "derived_from_accepted_synthesis_digest": {"$ref": "#/$defs/digest"},
+    "derived_from_synthesis_digest": {"$ref": "#/$defs/digest"},
+    "content_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "digest", "media_type"],
+      "properties": {
+        "ref": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "digest": {"$ref": "#/$defs/digest"},
+        "media_type": {"type": "string", "minLength": 1, "maxLength": 200}
+      }
+    },
+    "section_trace": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["section_id", "source"],
+        "properties": {
+          "section_id": {"$ref": "#/$defs/id"},
+          "source": {"enum": ["accepted_synthesis", "draft_projection"]},
+          "claim_ids": {"type": "array", "items": {"$ref": "#/$defs/id"}, "maxItems": 500},
+          "source_refs": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 2000}, "maxItems": 500},
+          "notes": {"type": "string", "maxLength": 2000}
+        }
+      }
+    },
+    "status": {"enum": ["candidate", "frozen_for_comparison", "superseded"]},
+    "created_by": {"enum": ["llm", "human", "deterministic_tool", "hybrid"]},
+    "created_at": {"type": "string", "minLength": 1, "maxLength": 80},
+    "digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.research.isolation_receipt.v1",
+  "title": "AdaOS Research Authoring Isolation Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "receipt_id",
+    "authoring_run_id",
+    "task_ref",
+    "source_snapshot_digest",
+    "prompt_digest",
+    "visible_context_digest",
+    "unlisted_source_accessed",
+    "hidden_comparator_accessed",
+    "builder_context_accessed",
+    "phase_b_context_accessed",
+    "checked_by",
+    "checked_at",
+    "digest"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.research.isolation_receipt.v1"},
+    "schema_version": {"const": "1.0.0"},
+    "receipt_id": {"$ref": "#/$defs/id"},
+    "authoring_run_id": {"$ref": "#/$defs/id"},
+    "task_ref": {"type": "string", "pattern": "^research-task:[A-Za-z0-9_.:-]+$"},
+    "source_snapshot_digest": {"$ref": "#/$defs/digest"},
+    "prompt_digest": {"$ref": "#/$defs/digest"},
+    "visible_context_digest": {"$ref": "#/$defs/digest"},
+    "unlisted_source_accessed": {"const": false},
+    "hidden_comparator_accessed": {"const": false},
+    "builder_context_accessed": {"const": false},
+    "phase_b_context_accessed": {"const": false},
+    "checked_by": {"const": "deterministic_tool"},
+    "checked_at": {"type": "string", "minLength": 1, "maxLength": 80},
+    "digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}
