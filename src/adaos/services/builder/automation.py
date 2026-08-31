@@ -712,6 +712,17 @@ class BuilderAutomationService:
                 for item in active_change_set.get("issues") or []
                 if isinstance(item, Mapping)
             }
+            if issue_id in existing_issue_ids:
+                repair_revision = str(
+                    external_links.get("builder_repair_id")
+                    or external_links.get("repair_id")
+                    or ""
+                ).strip()
+                revision_seed = repair_revision or brief
+                revision_suffix = hashlib.sha256(
+                    revision_seed.encode("utf-8")
+                ).hexdigest()[:12]
+                issue_id = f"{issue_id[:147]}-{revision_suffix}"
             if issue_id not in existing_issue_ids:
                 extended = self._workflow().transition(
                     kind,

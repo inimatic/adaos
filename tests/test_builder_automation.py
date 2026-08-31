@@ -1197,6 +1197,81 @@ def test_dev_ticket_followup_extends_active_trial_batch(tmp_path: Path) -> None:
     assert started["session"]["current_task_id"] != "task.first"
 
 
+def test_reopened_dev_ticket_adds_a_revision_to_active_trial_batch(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    workflow = service._workflow()
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CS-recipes-trial",
+            "request": "Implement the accepted repair.",
+            "issues": [
+                {
+                    "issue_id": "automation-followup-dticket.followup",
+                    "title": "Implement the accepted repair",
+                    "lane": "automation",
+                    "status": "resolved",
+                    "acceptance_criteria": ["The accepted repair works."],
+                }
+            ],
+        },
+    )
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata={"confirmed": True, "task_id": "task.first", "run_id": "task.first"},
+    )
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "automation_completed",
+        metadata={"confirmed": True, "task_id": "task.first", "version": "0.1.1"},
+    )
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata={
+            "confirmed": True,
+            "change_id": "checkpoint-first",
+            "package_digest": "sha256:" + "1" * 64,
+            "source_revision": "a" * 40,
+        },
+    )
+
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief=json.dumps(
+            {
+                "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+                "summary": "Correct the semantic CRUD views.",
+                "repair_hints": {"profile": "resource_crud"},
+            }
+        ),
+        webspace_id="prompt-dev",
+        links={
+            "development_ticket_id": "dticket.followup",
+            "builder_repair_id": "repair.second",
+        },
+    )
+
+    projected = workflow.describe("scenario", "recipes")
+    revisions = [
+        item
+        for item in projected["change_set"]["issues"]
+        if str(item["issue_id"]).startswith("automation-followup-dticket.followup")
+    ]
+    assert len(revisions) == 2
+    assert revisions[-1]["issue_id"] != "automation-followup-dticket.followup"
+    assert revisions[-1]["status"] == "open"
+    assert projected["change_set"]["gate"] == "automation"
+    assert started["session"]["current_task_id"] != "task.first"
+
+
 def test_scenario_automation_uses_declared_runtime_skill_as_companion(tmp_path: Path) -> None:
     service = _service(tmp_path)
     scenario = service.dev_scenarios_root / "recipes" / "scenario.yaml"
