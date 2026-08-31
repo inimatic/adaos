@@ -127,6 +127,14 @@ def _builder_work_id(ref: Mapping[str, Any], index: int) -> str:
     return f"builder-work-{index + 1}"
 
 
+def _builder_automation_context(ref: Mapping[str, Any], task: Mapping[str, Any]) -> dict[str, Any]:
+    context = task.get("context") if isinstance(task.get("context"), Mapping) else {}
+    automation = context.get("automation") if isinstance(context.get("automation"), Mapping) else {}
+    if not automation and isinstance(ref.get("automation"), Mapping):
+        automation = ref.get("automation") or {}
+    return dict(automation) if isinstance(automation, Mapping) else {}
+
+
 def _builder_token_accounting(ref: Mapping[str, Any], task: Mapping[str, Any]) -> dict[str, Any]:
     context = task.get("context") if isinstance(task.get("context"), Mapping) else {}
     economic = context.get("economic") if isinstance(context.get("economic"), Mapping) else {}
@@ -213,6 +221,7 @@ def _builder_ticket_work_stream(
         work_id = _builder_work_id(ref, index)
         task = repairs.get(work_id) or {}
         context = task.get("context") if isinstance(task.get("context"), Mapping) else {}
+        automation = _builder_automation_context(ref, task)
         item = {
             "entry_id": f"{ticket_id}:builder:{work_id}",
             "kind": "builder_work_item",
@@ -229,6 +238,10 @@ def _builder_ticket_work_stream(
             "created_at": task.get("created_at") or ref.get("created_at"),
             "updated_at": task.get("updated_at") or ref.get("updated_at") or ref.get("created_at"),
             "acceptance": dict(task.get("acceptance") or {}) if isinstance(task.get("acceptance"), Mapping) else {},
+            "automation": automation,
+            "automation_session_id": automation.get("session_id") or ref.get("automation_session_id"),
+            "automation_task_id": automation.get("task_id") or ref.get("automation_task_id"),
+            "automation_status": automation.get("status") or ref.get("automation_status"),
             "token_accounting": _builder_token_accounting(ref, task),
         }
         builder_items.append(item)

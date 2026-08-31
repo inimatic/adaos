@@ -610,12 +610,14 @@ class BuilderAutomationService:
         change_set_id: str | None = None,
         prototype_handoff: Mapping[str, Any] | None = None,
         development_session_id: str | None = None,
+        links: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         kind, project_id = self._project_ref(object_type, object_id)
         brief = str(implementation_brief or "").strip()
         if not brief:
             raise ValueError("implementation_brief is required after Prompt IDE Execute")
         _reject_transport_corruption(brief, field="implementation_brief")
+        external_links = dict(links) if isinstance(links, Mapping) else {}
         admitted_development_session_id = str(development_session_id or "").strip() or None
         if admitted_development_session_id:
             self._load_development_session(
@@ -734,6 +736,13 @@ class BuilderAutomationService:
                     current_change_set_id = requested_change_set_id
                 if requested_change_set_id and current_change_set_id != requested_change_set_id:
                     raise ValueError("another Builder change set already owns the active Automation session")
+                if external_links:
+                    current_links = current.get("links") if isinstance(current.get("links"), Mapping) else {}
+                    merged_links = {**dict(current_links), **external_links}
+                    if merged_links != current_links:
+                        current["links"] = merged_links
+                        current["updated_at"] = _now_iso()
+                        self._save_session(current)
                 current_development_session_id = str(
                     current.get("development_session_id") or ""
                 ).strip() or None
@@ -800,6 +809,7 @@ class BuilderAutomationService:
                 "source_prototype_version": self._project_prototype_ref(kind, project_id),
                 "prototype_handoff": admitted_handoff,
                 "development_session_id": admitted_development_session_id,
+                "links": external_links,
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
                 "status": "starting",
                 "iteration": 0,
@@ -1635,6 +1645,7 @@ class BuilderAutomationService:
             "failure_id": str(failure.get("failure_id") or "").strip() or None,
             "failure_stage": str(failure.get("stage") or "").strip() or None,
             "retryable": bool(failure.get("retryable")) if failure else None,
+            "links": dict(session.get("links")) if isinstance(session.get("links"), Mapping) else {},
             "diagnostic_hint": (
                 "Исправьте причину и отправьте уточнение в Автоматизации, чтобы запустить новую итерацию."
                 if error
@@ -2605,6 +2616,11 @@ class BuilderAutomationService:
                 "development_context_digest": str(
                     (development_context or {}).get("digest") or ""
                 ) or None,
+                **(
+                    dict(session.get("links"))
+                    if isinstance(session.get("links"), Mapping)
+                    else {}
+                ),
             },
         }
         execution_budget = (

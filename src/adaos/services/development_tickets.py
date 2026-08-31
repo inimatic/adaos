@@ -11,7 +11,6 @@ from typing import Any, Mapping, Sequence
 
 from jsonschema import Draft202012Validator
 
-from adaos.domain import Event
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from adaos.services.builder.repair import BuilderRepairService
@@ -298,6 +297,152 @@ def development_source_options(target_scope: Mapping[str, Any]) -> dict[str, Any
         ],
         "default_option": "materialize_dev_source",
     }
+
+
+def _ref_tail(value: Any, prefix: str) -> str:
+    token = _text(value)
+    wanted = f"{prefix}:"
+    return token[len(wanted):].strip() if token.startswith(wanted) else ""
+
+
+def _automation_target_from_ticket(ticket: Mapping[str, Any]) -> dict[str, str]:
+    target = _mapping(ticket.get("target_scope"))
+    meta = _mapping(ticket.get("metadata"))
+    owner_area = _text(ticket.get("owner_area") or _owner_area_from_scope(target, meta)).lower()
+    component = _text(ticket.get("component_ref") or _component_ref_from_scopes(target, _mapping(ticket.get("origin_scope")), meta))
+    if owner_area in {"core", "api", "runtime", "sdk"} or component.startswith(("core:", "api:", "runtime:", "sdk:")):
+        raise ValueError("Dev Ticket is owned by core/API/SDK/runtime and cannot be repaired by project Builder automation")
+    target_type = _text(target.get("type")).lower().rstrip("s")
+    target_id = _text(target.get("id") or target.get("name"))
+    if target_type in {"skill", "scenario"} and target_id:
+        return {"object_type": target_type, "object_id": target_id}
+    for key, object_type in (
+        ("scenario_ref", "scenario"),
+        ("skill_ref", "skill"),
+        ("scenario_id", "scenario"),
+        ("skill_id", "skill"),
+    ):
+        value = target.get(key) or meta.get(key)
+        if object_type in {"scenario", "skill"}:
+            ref_value = _ref_tail(value, object_type) if str(value or "").startswith(f"{object_type}:") else _text(value)
+            if ref_value:
+                return {"object_type": object_type, "object_id": ref_value}
+    if owner_area in {"scenario", "skill"}:
+        candidate = _ref_tail(component, owner_area)
+        if candidate:
+            return {"object_type": owner_area, "object_id": candidate}
+    for key in ("project_ref", "project_id"):
+        value = target.get(key) or meta.get(key)
+        if _ref_tail(value, "scenario"):
+            return {"object_type": "scenario", "object_id": _ref_tail(value, "scenario")}
+    raise ValueError("Dev Ticket target must resolve to a skill or scenario before autonomous repair")
+
+
+def _automation_projection(payload: Mapping[str, Any]) -> dict[str, Any]:
+    projection = payload.get("automation") if isinstance(payload.get("automation"), Mapping) else payload
+    return dict(projection) if isinstance(projection, Mapping) else {}
+
+
+def _automation_session(payload: Mapping[str, Any]) -> dict[str, Any]:
+    session = payload.get("session") if isinstance(payload.get("session"), Mapping) else {}
+    return dict(session) if isinstance(session, Mapping) else {}
+
+
+def _automation_task(payload: Mapping[str, Any]) -> dict[str, Any]:
+    session = _automation_session(payload)
+    task = session.get("task") if isinstance(session.get("task"), Mapping) else payload.get("task")
+    return dict(task) if isinstance(task, Mapping) else {}
+
+
+def _automation_evidence_refs(payload: Mapping[str, Any], *, repair_id: str) -> list[dict[str, Any]]:
+    projection = _automation_projection(payload)
+    session = _automation_session(payload)
+    task = _automation_task(payload)
+    task_id = _text(projection.get("task_id") or session.get("current_task_id") or task.get("task_id"))
+    session_id = _text(projection.get("session_id") or session.get("session_id"))
+    status = _text(projection.get("status") or session.get("status") or task.get("status"))
+    refs: list[dict[str, Any]] = []
+    if session_id:
+        refs.append({"type": "builder_automation", "id": session_id, "task_id": task_id or None, "status": status or None, "repair_id": repair_id})
+    if task_id:
+        refs.append({"type": "skill_factory_task", "id": task_id, "status": _text(task.get("status")) or status or None, "repair_id": repair_id})
+    if _text(projection.get("change_id")):
+        refs.append({"type": "builder_change", "id": _text(projection.get("change_id")), "status": status or None})
+    evidence = projection.get("evidence") if isinstance(projection.get("evidence"), Mapping) else {}
+    for key, ref_type in (("result_path", "file"), ("events_path", "trace"), ("stderr_path", "trace")):
+        path = _text(evidence.get(key))
+        if path:
+            refs.append({"type": ref_type, "id": path, "path": path, "source": "builder_automation", "status": status or None})
+    result = task.get("result") if isinstance(task.get("result"), Mapping) else session.get("last_result")
+    result = dict(result) if isinstance(result, Mapping) else {}
+    tests = result.get("tests") if isinstance(result.get("tests"), Mapping) else {}
+    if _text(tests.get("report")):
+        refs.append({"type": "test", "id": _text(tests.get("report")), "status": _text(tests.get("status")) or "unknown"})
+    readiness = session.get("completion_readiness") if isinstance(session.get("completion_readiness"), Mapping) else {}
+    if readiness:
+        refs.append(
+            {
+                "type": "validation",
+                "id": f"builder_completion:{task_id or session_id or repair_id}",
+                "status": "passed" if readiness.get("ok") else "failed",
+                "repair_id": repair_id,
+            }
+        )
+    usage = session.get("codex_usage_accounting") if isinstance(session.get("codex_usage_accounting"), Mapping) else {}
+    usage_id = _text(usage.get("root_event_id") or usage.get("idempotency_key"))
+    if usage_id:
+        refs.append(
+            {
+                "type": "codex_usage",
+                "id": usage_id,
+                "status": usage.get("status"),
+                "total_tokens": usage.get("total_tokens"),
+                "repair_id": repair_id,
+            }
+        )
+    return _merge_refs([], refs)
+
+
+def _automation_has_validation_evidence(payload: Mapping[str, Any]) -> bool:
+    session = _automation_session(payload)
+    readiness = session.get("completion_readiness") if isinstance(session.get("completion_readiness"), Mapping) else {}
+    if readiness:
+        return bool(readiness.get("ok"))
+    task = _automation_task(payload)
+    result = task.get("result") if isinstance(task.get("result"), Mapping) else session.get("last_result")
+    result = dict(result) if isinstance(result, Mapping) else {}
+    tests = result.get("tests") if isinstance(result.get("tests"), Mapping) else {}
+    return _text(task.get("status")) == "completed" and _text(tests.get("status")) == "passed"
+
+
+def _autonomous_repair_brief(ticket: Mapping[str, Any], repair: Mapping[str, Any], *, target: Mapping[str, str]) -> str:
+    payload = {
+        "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+        "ticket_id": _text(ticket.get("ticket_id")),
+        "repair_id": _text(repair.get("repair_id")),
+        "kind": _text(ticket.get("kind")),
+        "summary": _text(ticket.get("summary")),
+        "target": target,
+        "target_scope": _mapping(ticket.get("target_scope")),
+        "owner_area": _text(ticket.get("owner_area")),
+        "component_ref": _text(ticket.get("component_ref")),
+        "policy": _mapping(ticket.get("policy")),
+        "metadata": _mapping(ticket.get("metadata")),
+        "relation_refs": _sequence_of_mappings(ticket.get("relation_refs") or []),
+        "evidence_refs": _sequence_of_mappings(ticket.get("evidence_refs") or []),
+        "artifact_refs": _sequence_of_mappings(ticket.get("artifact_refs") or []),
+        "guardrails": [
+            "Use only public AdaOS SDK/API surfaces available to the project.",
+            "Do not modify AdaOS core/runtime from project Builder automation.",
+            "If the defect requires core/API/SDK changes, create or link a core capability Dev Ticket instead of patching a symptom.",
+        ],
+        "acceptance": [
+            "The ticket summary is satisfied.",
+            "Relevant validation passes and is recorded as evidence.",
+            "Unrelated project behavior remains valid.",
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
 
 
 def _merge_refs(current: Sequence[Mapping[str, Any]], incoming: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -942,6 +1087,178 @@ class DevelopmentTicketService:
         repair = self._create_builder_repair(ticket, mode=mode_token, repair_service=repair_service)
         updated = self._link_builder_repair(ticket["ticket_id"], repair, mode=mode_token, actor=_text(actor) or "system")
         return {"ok": True, "ticket": updated, "repair": repair}
+
+    def start_autonomous_repair(
+        self,
+        ticket_id: str,
+        *,
+        actor: str,
+        repair_service: BuilderRepairService | None = None,
+        automation_service: Any | None = None,
+        webspace_id: str = "desktop",
+        conversation_id: str | None = None,
+        source_strategy: str | None = None,
+    ) -> dict[str, Any]:
+        ticket = self.get_ticket(ticket_id)
+        if not ticket:
+            raise KeyError(ticket_id)
+        if _text(ticket.get("status")) in TERMINAL_TICKET_STATES:
+            raise ValueError("terminal Dev Ticket cannot start autonomous repair")
+        target = _automation_target_from_ticket(ticket)
+        development_source = development_source_options(_mapping(ticket.get("target_scope")))
+        strategy = _text(source_strategy)
+        if development_source.get("status") == "needs_materialization":
+            if not strategy:
+                raise ValueError("autonomous repair requires source_strategy when development source is missing")
+            if strategy == "defer":
+                deferred = self.defer_ticket(ticket["ticket_id"], actor=actor, reason="development_source_missing")
+                return {
+                    "ok": True,
+                    "started": False,
+                    "ticket": deferred,
+                    "repair": None,
+                    "automation": None,
+                    "reason": "development_source_deferred",
+                    "development_source": development_source,
+                }
+            if strategy != "materialize_dev_source":
+                raise ValueError(f"development source strategy is not implemented for autonomous repair: {strategy}")
+        service = repair_service or BuilderRepairService(state_dir=self.state_dir)
+        handoff = self.handoff_ticket(
+            ticket["ticket_id"],
+            mode="autonomous",
+            repair_service=service,
+            actor=_text(actor) or "builder",
+        )
+        repair = handoff["repair"]
+        repair_id = _text(repair.get("repair_id"))
+        if automation_service is None:
+            from adaos.services.builder.automation import BuilderAutomationService
+
+            automation_service = BuilderAutomationService.from_context()
+        brief = _autonomous_repair_brief(handoff["ticket"], repair, target=target)
+        started = automation_service.start_from_execute(
+            object_type=target["object_type"],
+            object_id=target["object_id"],
+            implementation_brief=brief,
+            webspace_id=_text(webspace_id) or "desktop",
+            conversation_id=_text(conversation_id) or f"dev-ticket:{ticket['ticket_id']}",
+            links={
+                "development_ticket_id": ticket["ticket_id"],
+                "builder_repair_id": repair_id,
+                "development_ticket_component_ref": _text(handoff["ticket"].get("component_ref")) or None,
+                "development_ticket_owner_area": _text(handoff["ticket"].get("owner_area")) or None,
+            },
+        )
+        linked_repair = service.link_automation(repair_id, automation=started, actor=_text(actor) or "builder")
+        linked_ticket = self._link_builder_automation(
+            ticket["ticket_id"],
+            repair_id=repair_id,
+            automation=started,
+            actor=_text(actor) or "builder",
+        )
+        sync = self.sync_builder_repair(
+            ticket["ticket_id"],
+            repair_id=repair_id,
+            actor=_text(actor) or "builder.automation",
+            repair_service=service,
+            automation_service=automation_service,
+        )
+        return {
+            "ok": True,
+            "started": True,
+            "ticket": sync.get("ticket") or linked_ticket,
+            "repair": sync.get("repair") or linked_repair,
+            "automation": sync.get("automation") or started,
+            "sync": sync,
+            "development_source": development_source,
+        }
+
+    def sync_builder_repair(
+        self,
+        ticket_id: str,
+        *,
+        actor: str,
+        repair_id: str | None = None,
+        repair_service: BuilderRepairService | None = None,
+        automation_service: Any | None = None,
+    ) -> dict[str, Any]:
+        ticket = self.get_ticket(ticket_id)
+        if not ticket:
+            raise KeyError(ticket_id)
+        target = _automation_target_from_ticket(ticket)
+        linked_repair_id = _text(repair_id) or self._latest_repair_id(ticket)
+        if not linked_repair_id:
+            return {"ok": True, "synchronized": False, "reason": "builder_repair_not_linked", "ticket": ticket}
+        if automation_service is None:
+            from adaos.services.builder.automation import BuilderAutomationService
+
+            automation_service = BuilderAutomationService.from_context()
+        service = repair_service or BuilderRepairService(state_dir=self.state_dir)
+        status_result = automation_service.status(
+            object_type=target["object_type"],
+            object_id=target["object_id"],
+        )
+        if not status_result.get("ok"):
+            return {
+                "ok": True,
+                "synchronized": False,
+                "reason": status_result.get("error") or "automation_session_not_found",
+                "ticket": ticket,
+                "automation": status_result,
+            }
+        repair = service.link_automation(linked_repair_id, automation=status_result, actor=_text(actor) or "builder.automation")
+        updated = self._link_builder_automation(
+            ticket["ticket_id"],
+            repair_id=linked_repair_id,
+            automation=status_result,
+            actor=_text(actor) or "builder.automation",
+        )
+        projection = _automation_projection(status_result)
+        status = _text(projection.get("status"))
+        if (
+            status == "completed"
+            and _automation_has_validation_evidence(status_result)
+            and _text(updated.get("status")) not in {"resolved", "verified", "closed"}
+        ):
+            refs = _automation_evidence_refs(status_result, repair_id=linked_repair_id)
+            result = _automation_task(status_result).get("result")
+            result = dict(result) if isinstance(result, Mapping) else _mapping(_automation_session(status_result).get("last_result"))
+            resolved = self.record_resolution(
+                ticket["ticket_id"],
+                evidence_refs=refs,
+                actor=_text(actor) or "builder.automation",
+                resolved_by_overlay=_text(result.get("commit_hash") or projection.get("result_branch")) or None,
+                repair_service=service,
+                repair_id=linked_repair_id,
+            )
+            updated = resolved["ticket"]
+            resolved_repairs = service.list(status="resolved")
+            repair = next((item for item in resolved_repairs if _text(item.get("repair_id")) == linked_repair_id), None)
+            if repair is None:
+                repair = service.link_automation(
+                    linked_repair_id,
+                    automation=status_result,
+                    actor=_text(actor) or "builder.automation",
+                )
+            return {
+                "ok": True,
+                "synchronized": True,
+                "resolved": True,
+                "ticket": updated,
+                "repair": repair,
+                "automation": status_result,
+                "evidence_refs": refs,
+            }
+        return {
+            "ok": True,
+            "synchronized": True,
+            "resolved": False,
+            "ticket": updated,
+            "repair": repair,
+            "automation": status_result,
+            "evidence_refs": _automation_evidence_refs(status_result, repair_id=linked_repair_id),
+        }
 
     def create_core_capability_request(
         self,
@@ -1898,6 +2215,134 @@ class DevelopmentTicketService:
                         "handoff_mode": mode,
                     }
                     signal["updated_at"] = ticket["updated_at"]
+                    self._validate_signal(signal)
+            self._validate_ticket(ticket)
+            self._write(state)
+            return _normalized_ticket(ticket)
+
+    def _link_builder_automation(
+        self,
+        ticket_id: str,
+        *,
+        repair_id: str,
+        automation: Mapping[str, Any],
+        actor: str,
+    ) -> dict[str, Any]:
+        projection = _automation_projection(automation)
+        session = _automation_session(automation)
+        task = _automation_task(automation)
+        automation_status = _text(
+            projection.get("status")
+            or session.get("status")
+            or task.get("status")
+            or "linked"
+        )
+        session_id = _text(projection.get("session_id") or session.get("session_id"))
+        task_id = _text(projection.get("task_id") or session.get("current_task_id") or task.get("task_id"))
+        if not session_id and not task_id:
+            raise ValueError("builder automation link requires session_id or task_id")
+        budget_usage = projection.get("budget_usage") if isinstance(projection.get("budget_usage"), Mapping) else {}
+        declared = budget_usage.get("declared") if isinstance(budget_usage.get("declared"), Mapping) else {}
+        observed = budget_usage.get("observed") if isinstance(budget_usage.get("observed"), Mapping) else {}
+        receipt = (
+            session.get("codex_usage_accounting")
+            if isinstance(session.get("codex_usage_accounting"), Mapping)
+            else {}
+        )
+        token_usage = dict(observed) if observed else {}
+        for key in (
+            "model_tokens",
+            "input_tokens",
+            "cached_input_tokens",
+            "output_tokens",
+            "reasoning_tokens",
+            "total_tokens",
+            "billable_tokens",
+        ):
+            if receipt.get(key) is not None:
+                token_usage[key] = receipt.get(key)
+        if receipt.get("status"):
+            token_usage["receipt_status"] = receipt.get("status")
+        if receipt.get("root_event_id"):
+            token_usage["root_event_id"] = receipt.get("root_event_id")
+        work_status = "in_progress"
+        if automation_status in {"completed"}:
+            work_status = "resolved" if _automation_has_validation_evidence(automation) else "in_progress"
+        elif automation_status in {"failed", "cancelled", "error"}:
+            work_status = automation_status
+        automation_ref = {
+            "type": "builder_repair_task",
+            "repair_id": _text(repair_id),
+            "mode": "autonomous",
+            "status": work_status,
+            "automation_session_id": session_id or None,
+            "automation_task_id": task_id or None,
+            "automation_status": automation_status or None,
+            "automation": {
+                "schema": "adaos.dev_ticket.builder_automation_ref.v1",
+                "session_id": session_id or None,
+                "task_id": task_id or None,
+                "status": automation_status or None,
+                "phase": projection.get("phase"),
+                "terminal": bool(projection.get("terminal")),
+                "busy": bool(projection.get("busy")),
+                "change_set_id": projection.get("change_set_id"),
+                "change_id": projection.get("change_id"),
+                "webspace_id": projection.get("webspace_id"),
+                "result_branch": projection.get("result_branch"),
+                "summary": projection.get("summary"),
+                "error": projection.get("error"),
+            },
+        }
+        if declared:
+            automation_ref["cost_estimate"] = dict(declared)
+        if token_usage:
+            automation_ref["token_usage"] = token_usage
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                raise KeyError(ticket_id)
+            now = _now()
+            refs = [dict(ref) for ref in ticket.get("builder_refs") or [] if isinstance(ref, Mapping)]
+            matched = False
+            for index, ref in enumerate(refs):
+                if _text(ref.get("repair_id")) != _text(repair_id):
+                    continue
+                refs[index] = {**ref, **automation_ref, "updated_at": now}
+                matched = True
+                break
+            if not matched:
+                refs.append({**automation_ref, "created_at": now, "updated_at": now})
+            ticket["builder_refs"] = refs[-100:]
+            if _text(ticket.get("status")) not in {"resolved", "verified", "closed", *TERMINAL_TICKET_STATES}:
+                ticket["status"] = "in_builder"
+            ticket["updated_at"] = now
+            self._append_history(
+                ticket,
+                {
+                    "kind": "builder_automation_linked",
+                    "repair_id": _text(repair_id),
+                    "automation_session_id": session_id or None,
+                    "automation_task_id": task_id or None,
+                    "automation_status": automation_status or None,
+                    "actor": _text(actor) or "builder.automation",
+                    "recorded_at": now,
+                },
+            )
+            for signal_id in ticket.get("signal_ids") or []:
+                signal = state["signals"].get(signal_id)
+                if signal:
+                    signal["status"] = "repair_created"
+                    signal["builder_ref"] = {
+                        **_mapping(signal.get("builder_ref")),
+                        "repair_id": _text(repair_id),
+                        "handoff_mode": "autonomous",
+                        "automation_session_id": session_id or None,
+                        "automation_task_id": task_id or None,
+                        "automation_status": automation_status or None,
+                    }
+                    signal["updated_at"] = now
                     self._validate_signal(signal)
             self._validate_ticket(ticket)
             self._write(state)

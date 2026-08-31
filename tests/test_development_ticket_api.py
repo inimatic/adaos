@@ -21,6 +21,59 @@ def _headers() -> dict[str, str]:
     return {"X-AdaOS-Token": "dev-local-token"}
 
 
+class _FakeAutomationService:
+    def __init__(self) -> None:
+        self.started: list[dict] = []
+
+    def start_from_execute(self, **kwargs):
+        self.started.append(dict(kwargs))
+        return self._payload(status="running")
+
+    def status(self, *, object_type: str, object_id: str):
+        return self._payload(status="completed", object_type=object_type, object_id=object_id)
+
+    def _payload(self, *, status: str, object_type: str = "skill", object_id: str = "demo_metrics_skill") -> dict:
+        result = {
+            "commit_hash": "abc123",
+            "tests": {"status": "passed", "report": "reports/autonomous-tests.json"},
+        }
+        return {
+            "ok": True,
+            "automation": {
+                "session_id": "automation.session.api",
+                "task_id": "factory.task.api",
+                "status": status,
+                "phase": "completed" if status == "completed" else "running",
+                "terminal": status == "completed",
+                "busy": status != "completed",
+                "change_id": "builder.change.api",
+                "result_branch": "builder/api-dev-ticket",
+                "webspace_id": "desktop",
+                "project": {"object_type": object_type, "object_id": object_id},
+                "budget_usage": {
+                    "declared": {"max_tokens": 200000},
+                    "observed": {"total_tokens": 321, "input_tokens": 200, "output_tokens": 121},
+                },
+            },
+            "session": {
+                "session_id": "automation.session.api",
+                "status": status,
+                "current_task_id": "factory.task.api",
+                "task": {"task_id": "factory.task.api", "status": "completed", "result": result},
+                "completion_readiness": {"ok": True},
+                "codex_usage_accounting": {
+                    "status": "recorded",
+                    "root_event_id": "codex.usage.api",
+                    "total_tokens": 321,
+                    "input_tokens": 200,
+                    "output_tokens": 121,
+                    "billable_tokens": 321,
+                },
+                "last_result": result,
+            },
+        }
+
+
 def test_development_ticket_api_create_list_show_evidence_and_defer(tmp_path: Path) -> None:
     client = _client(DevelopmentTicketService(state_dir=tmp_path))
 
@@ -373,6 +426,62 @@ def test_development_ticket_api_handoff_and_resolution_require_evidence(tmp_path
     )
     assert reopened.status_code == 200, reopened.text
     assert reopened.json()["ticket"]["status"] == "in_progress"
+
+
+def test_development_ticket_api_starts_autonomous_repair_and_exposes_builder_usage(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    automation = _FakeAutomationService()
+    client = _client(service)
+    client.app.dependency_overrides[tickets_api._get_automation_service] = lambda: automation
+
+    created = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "summary": "Tune Demo Metrics Resource Workbench edit/delete controls",
+            "kind": "development_request",
+            "target_scope": {
+                "type": "skill",
+                "id": "demo_metrics_skill",
+                "source": "workspace",
+                "component_ref": "skill:demo_metrics_skill",
+            },
+            "owner_area": "skill",
+            "component_ref": "skill:demo_metrics_skill",
+        },
+    )
+    assert created.status_code == 201, created.text
+    ticket_id = created.json()["ticket"]["ticket_id"]
+
+    started = client.post(
+        f"/api/development-tickets/{ticket_id}/autonomous-repair",
+        headers=_headers(),
+        json={"actor": "browser", "webspace_id": "desktop"},
+    )
+
+    assert started.status_code == 200, started.text
+    payload = started.json()
+    assert payload["started"] is True
+    assert payload["sync"]["resolved"] is True
+    assert payload["ticket"]["status"] == "resolved"
+    assert automation.started[0]["object_type"] == "skill"
+    assert automation.started[0]["object_id"] == "demo_metrics_skill"
+    assert automation.started[0]["links"]["development_ticket_id"] == ticket_id
+    work_item = payload["detail"]["work_stream"]["builder_work_items"][0]
+    assert work_item["repair_id"] == payload["repair"]["repair_id"]
+    assert work_item["automation_session_id"] == "automation.session.api"
+    assert work_item["automation_task_id"] == "factory.task.api"
+    assert work_item["token_accounting"]["reported_usage"]["total_tokens"] == 321
+    assert work_item["token_accounting"]["estimate"]["max_tokens"] == 200000
+
+    synced = client.post(
+        f"/api/development-tickets/{ticket_id}/builder-sync",
+        headers=_headers(),
+        json={"actor": "browser", "repair_id": payload["repair"]["repair_id"]},
+    )
+    assert synced.status_code == 200, synced.text
+    assert synced.json()["detail"]["work_stream"]["builder_work_count"] == 1
+    assert synced.json()["detail"]["work_stream"]["builder_work_items"][0]["automation_status"] == "completed"
 
 
 def test_development_ticket_api_creates_core_and_sdk_qualification_tickets(tmp_path: Path) -> None:

@@ -231,6 +231,108 @@ class BuilderRepairService:
             self._write(state)
             return _clone(task)
 
+    def link_automation(
+        self,
+        repair_id: str,
+        *,
+        automation: Mapping[str, Any],
+        actor: str,
+    ) -> dict[str, Any]:
+        """Attach one Builder Automation session to this repair task."""
+
+        if not actor:
+            raise ValueError("automation link requires actor identity")
+        projection = (
+            automation.get("automation")
+            if isinstance(automation.get("automation"), Mapping)
+            else automation
+        )
+        session = automation.get("session") if isinstance(automation.get("session"), Mapping) else {}
+        task = session.get("task") if isinstance(session.get("task"), Mapping) else {}
+        if not task and isinstance(automation.get("task"), Mapping):
+            task = automation["task"]
+        task_id = str(
+            projection.get("task_id")
+            or session.get("current_task_id")
+            or task.get("task_id")
+            or ""
+        ).strip()
+        session_id = str(projection.get("session_id") or session.get("session_id") or "").strip()
+        if not session_id and not task_id:
+            raise ValueError("automation link requires session_id or task_id")
+        status = str(projection.get("status") or session.get("status") or task.get("status") or "linked").strip()
+        budget_usage = projection.get("budget_usage") if isinstance(projection.get("budget_usage"), Mapping) else {}
+        observed = budget_usage.get("observed") if isinstance(budget_usage.get("observed"), Mapping) else {}
+        declared = budget_usage.get("declared") if isinstance(budget_usage.get("declared"), Mapping) else {}
+        usage_receipt = (
+            session.get("codex_usage_accounting")
+            if isinstance(session.get("codex_usage_accounting"), Mapping)
+            else {}
+        )
+        reported_usage = dict(observed) if observed else {}
+        if usage_receipt:
+            for key in (
+                "model_tokens",
+                "input_tokens",
+                "cached_input_tokens",
+                "output_tokens",
+                "reasoning_tokens",
+                "total_tokens",
+                "billable_tokens",
+            ):
+                if usage_receipt.get(key) is not None:
+                    reported_usage[key] = usage_receipt.get(key)
+            if usage_receipt.get("status"):
+                reported_usage["receipt_status"] = usage_receipt.get("status")
+            if usage_receipt.get("root_event_id"):
+                reported_usage["root_event_id"] = usage_receipt.get("root_event_id")
+        link = {
+            "schema": "adaos.builder.repair_automation_link.v1",
+            "session_id": session_id or None,
+            "task_id": task_id or None,
+            "status": status or None,
+            "phase": projection.get("phase"),
+            "terminal": bool(projection.get("terminal")),
+            "busy": bool(projection.get("busy")),
+            "change_set_id": projection.get("change_set_id"),
+            "change_id": projection.get("change_id"),
+            "webspace_id": projection.get("webspace_id"),
+            "project": projection.get("project") if isinstance(projection.get("project"), Mapping) else {},
+            "result_branch": projection.get("result_branch"),
+            "summary": projection.get("summary"),
+            "error": projection.get("error"),
+            "linked_by": str(actor),
+            "linked_at": _now(),
+        }
+        if usage_receipt:
+            link["codex_usage_accounting"] = dict(usage_receipt)
+        refs = []
+        if session_id:
+            refs.append({"type": "builder_automation_session", "id": session_id})
+        if task_id:
+            refs.append({"type": "skill_factory_task", "id": task_id})
+        if projection.get("change_id"):
+            refs.append({"type": "builder_change", "id": str(projection.get("change_id"))})
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            repair = state["tasks"].get(str(repair_id))
+            if not repair:
+                raise KeyError(repair_id)
+            context = dict(repair.get("context") or {})
+            context["automation"] = link
+            if declared:
+                context["cost_estimate"] = dict(declared)
+            if reported_usage:
+                context["usage"] = reported_usage
+            repair["context"] = context
+            repair["source_refs"] = self._merge_refs(repair.get("source_refs") or [], refs)
+            if repair.get("status") == "open":
+                repair["status"] = "in_progress"
+            repair["updated_at"] = _now()
+            self._validate(repair)
+            self._write(state)
+            return _clone(repair)
+
     def list(self, *, project_id: str | None = None, status: str | None = None) -> list[dict[str, Any]]:
         state = self._read()
         tasks = list(state["tasks"].values())

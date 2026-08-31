@@ -15,6 +15,81 @@ from adaos.services.development_tickets import (
 from adaos.services.skill.activation import stream_receiver_event_admission
 
 
+class _FakeBuilderAutomation:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self.counter = 0
+
+    def start_from_execute(self, **kwargs):
+        self.counter += 1
+        self.calls.append(dict(kwargs))
+        return self._payload(status="running", suffix=str(self.counter), links=kwargs.get("links") or {})
+
+    def status(self, *, object_type: str, object_id: str):
+        suffix = str(self.counter or 1)
+        return self._payload(
+            status="completed",
+            suffix=suffix,
+            links={
+                "object_type": object_type,
+                "object_id": object_id,
+            },
+        )
+
+    def _payload(self, *, status: str, suffix: str, links: dict) -> dict:
+        task_id = f"factory.task.{suffix}"
+        session_id = f"automation.session.{suffix}"
+        result = {
+            "commit_hash": f"commit-{suffix}",
+            "tests": {"status": "passed", "report": f"reports/tests-{suffix}.json"},
+        }
+        return {
+            "ok": True,
+            "automation": {
+                "schema": "adaos.builder.automation_session_projection.v1",
+                "session_id": session_id,
+                "task_id": task_id,
+                "status": status,
+                "phase": "completed" if status == "completed" else "running",
+                "terminal": status == "completed",
+                "busy": status != "completed",
+                "change_id": f"change.{suffix}",
+                "result_branch": f"builder/dev-ticket-{suffix}",
+                "webspace_id": "desktop",
+                "links": dict(links),
+                "budget_usage": {
+                    "declared": {"max_tokens": 200000},
+                    "observed": {
+                        "input_tokens": 100,
+                        "cached_input_tokens": 20,
+                        "output_tokens": 50,
+                        "reasoning_tokens": 10,
+                        "total_tokens": 150,
+                    },
+                },
+            },
+            "session": {
+                "session_id": session_id,
+                "status": status,
+                "current_task_id": task_id,
+                "task": {"task_id": task_id, "status": "completed", "result": result},
+                "completion_readiness": {"ok": True, "checks": [{"id": "tests", "status": "passed"}]},
+                "codex_usage_accounting": {
+                    "status": "recorded",
+                    "root_event_id": f"codex.usage.{suffix}",
+                    "model_tokens": 140,
+                    "input_tokens": 100,
+                    "cached_input_tokens": 20,
+                    "output_tokens": 50,
+                    "reasoning_tokens": 10,
+                    "total_tokens": 150,
+                    "billable_tokens": 130,
+                },
+                "last_result": result,
+            },
+        }
+
+
 def _schema(name: str) -> dict:
     return json.loads((Path(__file__).parents[1] / "src" / "adaos" / "abi" / name).read_text(encoding="utf-8"))
 
@@ -235,6 +310,80 @@ def test_postponed_ticket_does_not_create_builder_repair(tmp_path: Path) -> None
     assert response["ticket"]["status"] == "deferred"
     assert response["repair"] is None
     assert repair_service.list(project_id="legacy_skill") == []
+
+
+def test_autonomous_repair_links_builder_automation_and_resolves_with_evidence(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    automation = _FakeBuilderAutomation()
+    signal = service.capture_signal(
+        kind="development_request",
+        summary="Tune Demo Metrics Resource Workbench CRUD controls",
+        target_scope={
+            "type": "skill",
+            "id": "demo_metrics_skill",
+            "source": "workspace",
+            "component_ref": "skill:demo_metrics_skill",
+        },
+        source="client_feedback",
+        owner_area="skill",
+        component_ref="skill:demo_metrics_skill",
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="accepted",
+        owner_area="skill",
+        component_ref="skill:demo_metrics_skill",
+    )["ticket"]
+
+    result = service.start_autonomous_repair(
+        ticket["ticket_id"],
+        actor="user:owner",
+        repair_service=repair_service,
+        automation_service=automation,
+        webspace_id="desktop",
+    )
+
+    assert result["started"] is True
+    assert result["sync"]["resolved"] is True
+    assert result["ticket"]["status"] == "resolved"
+    assert automation.calls[0]["object_type"] == "skill"
+    assert automation.calls[0]["object_id"] == "demo_metrics_skill"
+    assert automation.calls[0]["links"]["development_ticket_id"] == ticket["ticket_id"]
+    first_ref = result["ticket"]["builder_refs"][0]
+    assert first_ref["automation_session_id"] == "automation.session.1"
+    assert first_ref["automation_task_id"] == "factory.task.1"
+    assert first_ref["token_usage"]["total_tokens"] == 150
+    evidence_types = {ref["type"] for ref in result["ticket"]["closure"]["evidence_refs"]}
+    assert {"builder_automation", "skill_factory_task", "builder_change", "test", "validation", "codex_usage"} <= evidence_types
+
+    repair = next(item for item in repair_service.list(status="resolved") if item["repair_id"] == result["repair"]["repair_id"])
+    assert repair["context"]["automation"]["session_id"] == "automation.session.1"
+    assert repair["context"]["usage"]["billable_tokens"] == 130
+    assert repair["context"]["cost_estimate"]["max_tokens"] == 200000
+    assert repair["acceptance"]["evidence_refs"]
+
+    service.reopen_ticket(
+        ticket["ticket_id"],
+        actor="user:owner",
+        reason="follow-up request after review",
+        evidence_refs=[{"type": "trace", "id": "review.followup"}],
+    )
+    follow_up = service.start_autonomous_repair(
+        ticket["ticket_id"],
+        actor="user:owner",
+        repair_service=repair_service,
+        automation_service=automation,
+        webspace_id="desktop",
+    )
+
+    assert follow_up["ticket"]["status"] == "resolved"
+    assert len(follow_up["ticket"]["builder_refs"]) == 2
+    assert [ref["automation_task_id"] for ref in follow_up["ticket"]["builder_refs"]] == [
+        "factory.task.1",
+        "factory.task.2",
+    ]
 
 
 def test_close_ticket_maps_terminal_reason_to_ticket_and_signal_status(tmp_path: Path) -> None:

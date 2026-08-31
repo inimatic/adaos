@@ -32,6 +32,12 @@ def _repair_service_for(service: DevelopmentTicketService) -> BuilderRepairServi
     return BuilderRepairService(state_dir=service.state_dir)
 
 
+def _get_automation_service() -> Any:
+    from adaos.services.builder.automation import BuilderAutomationService
+
+    return BuilderAutomationService.from_context()
+
+
 class DevTicketCreateRequest(BaseModel):
     summary: str = Field(..., min_length=1)
     kind: str = "development_request"
@@ -84,6 +90,18 @@ class DevTicketDeferRequest(BaseModel):
 class DevTicketHandoffRequest(BaseModel):
     mode: str = Field(default="interactive", pattern="^(interactive|autonomous)$")
     actor: str = "ui"
+
+
+class DevTicketAutonomousRepairRequest(BaseModel):
+    actor: str = "ui"
+    webspace_id: str = "desktop"
+    conversation_id: str | None = None
+    source_strategy: str | None = None
+
+
+class DevTicketBuilderSyncRequest(BaseModel):
+    actor: str = "ui"
+    repair_id: str | None = None
 
 
 class DevTicketResolveRequest(BaseModel):
@@ -275,6 +293,70 @@ def _builder_work_id(ref: Mapping[str, Any], index: int) -> str:
     return f"builder-work-{index + 1}"
 
 
+def _builder_automation_context(ref: Mapping[str, Any], task: Mapping[str, Any]) -> dict[str, Any]:
+    context = task.get("context") if isinstance(task.get("context"), Mapping) else {}
+    automation = context.get("automation") if isinstance(context.get("automation"), Mapping) else {}
+    if not automation and isinstance(ref.get("automation"), Mapping):
+        automation = ref.get("automation") or {}
+    return dict(automation) if isinstance(automation, Mapping) else {}
+
+
+def _builder_token_accounting(ref: Mapping[str, Any], task: Mapping[str, Any]) -> dict[str, Any]:
+    context = task.get("context") if isinstance(task.get("context"), Mapping) else {}
+    economic = context.get("economic") if isinstance(context.get("economic"), Mapping) else {}
+    token_accounting = ref.get("token_accounting") if isinstance(ref.get("token_accounting"), Mapping) else {}
+    usage = (
+        ref.get("token_usage")
+        if isinstance(ref.get("token_usage"), Mapping)
+        else task.get("token_usage")
+        if isinstance(task.get("token_usage"), Mapping)
+        else context.get("usage")
+        if isinstance(context.get("usage"), Mapping)
+        else {}
+    )
+    estimate = (
+        ref.get("cost_estimate")
+        if isinstance(ref.get("cost_estimate"), Mapping)
+        else task.get("cost_estimate")
+        if isinstance(task.get("cost_estimate"), Mapping)
+        else context.get("cost_estimate")
+        if isinstance(context.get("cost_estimate"), Mapping)
+        else {}
+    )
+    return {
+        "schema": "adaos.builder.codex_token_accounting.v1",
+        "subscription_resource": str(
+            token_accounting.get("subscription_resource")
+            or economic.get("subscription_resource")
+            or "codex.api.tokens"
+        ),
+        "source_of_truth": str(
+            token_accounting.get("source_of_truth")
+            or economic.get("source_of_truth")
+            or "adaos.root_mgmnt.codex_usage_event.v1"
+        ),
+        "usage_event_endpoint": str(
+            token_accounting.get("usage_event_endpoint")
+            or economic.get("usage_event_endpoint")
+            or "/hub/economic/codex/usage"
+        ),
+        "required_for_statuses": list(
+            token_accounting.get("required_for_statuses")
+            if isinstance(token_accounting.get("required_for_statuses"), list)
+            else economic.get("required_for_statuses")
+            if isinstance(economic.get("required_for_statuses"), list)
+            else ["succeeded", "failed", "errored", "cancelled"]
+        ),
+        "policy": str(
+            token_accounting.get("policy")
+            or economic.get("policy")
+            or "record provider-reported billable tokens even when repair work fails"
+        ),
+        "reported_usage": dict(usage) if isinstance(usage, Mapping) else {},
+        "estimate": dict(estimate) if isinstance(estimate, Mapping) else {},
+    }
+
+
 def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, Any]) -> dict[str, Any]:
     ticket_id = str(ticket.get("ticket_id") or "").strip()
     refs = _mapping_list(ticket.get("builder_refs"))
@@ -328,8 +410,7 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
         work_id = _builder_work_id(ref, index)
         task = repair_tasks.get(work_id) or {}
         context = task.get("context") if isinstance(task.get("context"), Mapping) else {}
-        economic = context.get("economic") if isinstance(context.get("economic"), Mapping) else {}
-        token_accounting = ref.get("token_accounting") if isinstance(ref.get("token_accounting"), Mapping) else {}
+        automation = _builder_automation_context(ref, task)
         item = {
             "entry_id": f"{ticket_id}:builder:{work_id}",
             "kind": "builder_work_item",
@@ -346,33 +427,11 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
             "created_at": task.get("created_at") or ref.get("created_at"),
             "updated_at": task.get("updated_at") or ref.get("updated_at") or ref.get("created_at"),
             "acceptance": task.get("acceptance") if isinstance(task.get("acceptance"), Mapping) else {},
-            "token_accounting": {
-                "schema": "adaos.builder.codex_token_accounting.v1",
-                "subscription_resource": str(
-                    token_accounting.get("subscription_resource")
-                    or economic.get("subscription_resource")
-                    or "codex.api.tokens"
-                ),
-                "source_of_truth": str(
-                    token_accounting.get("source_of_truth")
-                    or economic.get("source_of_truth")
-                    or "adaos.root_mgmnt.codex_usage_event.v1"
-                ),
-                "usage_event_endpoint": str(
-                    token_accounting.get("usage_event_endpoint")
-                    or economic.get("usage_event_endpoint")
-                    or "/hub/economic/codex/usage"
-                ),
-                "required_for_statuses": list(
-                    token_accounting.get("required_for_statuses")
-                    if isinstance(token_accounting.get("required_for_statuses"), list)
-                    else economic.get("required_for_statuses")
-                    if isinstance(economic.get("required_for_statuses"), list)
-                    else ["succeeded", "failed", "errored", "cancelled"]
-                ),
-                "reported_usage": {},
-                "estimate": {},
-            },
+            "automation": automation,
+            "automation_session_id": automation.get("session_id") or ref.get("automation_session_id"),
+            "automation_task_id": automation.get("task_id") or ref.get("automation_task_id"),
+            "automation_status": automation.get("status") or ref.get("automation_status"),
+            "token_accounting": _builder_token_accounting(ref, task),
         }
         builder_items.append(item)
         entries.append(item)
@@ -1024,6 +1083,52 @@ def handoff_ticket(
             mode=body.mode,
             actor=body.actor,
             repair_service=_repair_service_for(service),
+        )
+        return {"ok": True, **result, "detail": _ticket_detail(service, result["ticket"])}
+    except KeyError as exc:
+        raise _not_found(ticket_id) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/{ticket_id}/autonomous-repair")
+def start_autonomous_repair(
+    ticket_id: str,
+    body: DevTicketAutonomousRepairRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+    automation_service: Any = Depends(_get_automation_service),
+) -> dict[str, Any]:
+    try:
+        result = service.start_autonomous_repair(
+            ticket_id,
+            actor=body.actor,
+            repair_service=_repair_service_for(service),
+            automation_service=automation_service,
+            webspace_id=body.webspace_id,
+            conversation_id=body.conversation_id,
+            source_strategy=body.source_strategy,
+        )
+        return {"ok": True, **result, "detail": _ticket_detail(service, result["ticket"])}
+    except KeyError as exc:
+        raise _not_found(ticket_id) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/{ticket_id}/builder-sync")
+def sync_builder_repair(
+    ticket_id: str,
+    body: DevTicketBuilderSyncRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+    automation_service: Any = Depends(_get_automation_service),
+) -> dict[str, Any]:
+    try:
+        result = service.sync_builder_repair(
+            ticket_id,
+            actor=body.actor,
+            repair_id=body.repair_id,
+            repair_service=_repair_service_for(service),
+            automation_service=automation_service,
         )
         return {"ok": True, **result, "detail": _ticket_detail(service, result["ticket"])}
     except KeyError as exc:
