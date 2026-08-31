@@ -666,6 +666,73 @@ class BuilderAutomationService:
             if isinstance(workflow_before.get("change_set"), Mapping)
             else {}
         )
+        if (
+            active_change_set
+            and not change_set_id
+            and admitted_handoff is None
+            and str(active_change_set.get("status") or "").strip().lower()
+            not in {"published", "rejected", "superseded"}
+            and str(active_change_set.get("gate") or "").strip().lower() != "automation"
+            and str(
+                (
+                    workflow_before.get("governed")
+                    if isinstance(workflow_before.get("governed"), Mapping)
+                    else {}
+                ).get("state")
+                or ""
+            ).strip()
+            in {"verification", "trial_ready", "trial_review"}
+        ):
+            # A verified checkpoint is still the active unpublished Change.
+            # Follow-up Dev Tickets belong to that trial batch, but each one
+            # receives a separate Automation task and usage receipt.
+            ticket_id = str(external_links.get("development_ticket_id") or "").strip()
+            issue_seed = ticket_id or hashlib.sha256(brief.encode("utf-8")).hexdigest()[:20]
+            issue_id = f"automation-followup-{issue_seed}"[:160]
+            existing_issue_ids = {
+                str(item.get("issue_id") or "").strip()
+                for item in active_change_set.get("issues") or []
+                if isinstance(item, Mapping)
+            }
+            if issue_id not in existing_issue_ids:
+                extended = self._workflow().transition(
+                    kind,
+                    project_id,
+                    "change_issues_added",
+                    actor="builder.automation.compat",
+                    reason="follow-up Dev Ticket admitted into the active trial batch",
+                    metadata={
+                        "change_set_id": str(active_change_set.get("change_set_id") or ""),
+                        "request": brief,
+                        "issues": [
+                            {
+                                "issue_id": issue_id,
+                                "title": " ".join(brief.split())[:240],
+                                "lane": "automation",
+                                "status": "open",
+                                "acceptance_criteria": [
+                                    f"The follow-up implementation satisfies: {' '.join(brief.split())}"[
+                                        :500
+                                    ]
+                                ],
+                            }
+                        ],
+                        "source_message_ids": ([ticket_id] if ticket_id else []),
+                        "idempotency_key": (
+                            f"builder-automation-followup:{active_change_set.get('change_set_id')}:{issue_id}"
+                        ),
+                    },
+                )
+                workflow_before = (
+                    extended.get("workflow")
+                    if isinstance(extended.get("workflow"), Mapping)
+                    else self._workflow().describe(kind, project_id)
+                )
+                active_change_set = (
+                    workflow_before.get("change_set")
+                    if isinstance(workflow_before.get("change_set"), Mapping)
+                    else {}
+                )
         if not active_change_set or str(active_change_set.get("status") or "").strip().lower() in {
             "published",
             "rejected",

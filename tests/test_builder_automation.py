@@ -1122,6 +1122,70 @@ def test_automation_rejects_change_set_before_prototype_approval(tmp_path: Path)
         )
 
 
+def test_dev_ticket_followup_extends_active_trial_batch(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    workflow = service._workflow()
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CS-recipes-trial",
+            "request": "Implement the first accepted repair.",
+            "issues": [
+                {
+                    "issue_id": "first-repair",
+                    "title": "Implement the first accepted repair",
+                    "lane": "automation",
+                    "acceptance_criteria": ["The first repair works."],
+                }
+            ],
+        },
+    )
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata={"confirmed": True, "task_id": "task.first", "run_id": "task.first"},
+    )
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "automation_completed",
+        metadata={"confirmed": True, "task_id": "task.first", "version": "0.1.1"},
+    )
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata={
+            "confirmed": True,
+            "change_id": "checkpoint-first",
+            "package_digest": "sha256:" + "1" * 64,
+            "source_revision": "a" * 40,
+        },
+    )
+
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Rename the visible metrics heading.",
+        webspace_id="prompt-dev",
+        links={"development_ticket_id": "dticket.followup"},
+    )
+
+    assert started["session"]["change_set_id"] == "CS-recipes-trial"
+    projected = workflow.describe("scenario", "recipes")
+    followup = next(
+        item
+        for item in projected["change_set"]["issues"]
+        if item["issue_id"] == "automation-followup-dticket.followup"
+    )
+    assert followup["lane"] == "automation"
+    assert "dticket.followup" in projected["change_set"]["source_message_ids"]
+    assert started["session"]["current_task_id"] != "task.first"
+
+
 def test_scenario_automation_uses_declared_runtime_skill_as_companion(tmp_path: Path) -> None:
     service = _service(tmp_path)
     scenario = service.dev_scenarios_root / "recipes" / "scenario.yaml"
