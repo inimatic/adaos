@@ -2377,15 +2377,13 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
 """ if is_dev_ticket_repair else ""
         surgical_ui = is_dev_ticket_repair and constraints.get("repair_profile") == "surgical_ui"
         if surgical_ui:
-            target_files = [str(item) for item in repair_hints.get("target_files") or []]
-            target_refs = [str(item) for item in repair_hints.get("target_refs") or []]
-            acceptance_checks = [str(item) for item in repair_hints.get("acceptance_checks") or []]
-            required_result = """1. Read only the exact target files listed in the repair hints before editing.
-2. Apply only the requested visible UI change; do not explore AdaOS core or unrelated project files.
-3. Add or update only the focused regression assertion named by the acceptance checks.
-4. Run the focused test first. The trusted worker will run package validation afterward.
-5. Do not edit manifest version/updated_at, publish, activate, or access external services.
-6. Stop immediately after the requested diff and focused check succeed."""
+            required_result = """1. This is source work inside an existing AdaOS skill, not Codex skill authoring. Do not load generic skill-creator instructions.
+2. Locate the named target refs with `rg`, then read only bounded surrounding slices. Do not dump a complete target file larger than 20 KB.
+3. Apply only the requested visible UI change; do not explore AdaOS core or unrelated project files.
+4. Add or update only the focused regression assertion named by the acceptance checks.
+5. Run the focused test first. The trusted worker will run package validation afterward.
+6. Do not edit manifest version/updated_at, publish, activate, or access external services.
+7. Stop immediately after the requested diff and focused check succeed."""
         elif is_dev_ticket_repair:
             required_result = """1. Inspect the complete targeted skill or scenario before editing.
 2. Reproduce the ticket against the real declared UI, handler, projection, or runtime path; a test that only confirms existing behavior is not acceptance evidence.

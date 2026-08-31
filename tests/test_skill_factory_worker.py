@@ -1308,6 +1308,46 @@ def test_surgical_repair_enforces_exact_files_and_file_count(tmp_path: Path) -> 
         )
 
 
+def test_surgical_repair_prompt_requires_bounded_targeted_reads(tmp_path: Path) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    workspace = tmp_path / "workspace"
+    input_dir = tmp_path / "input"
+    (workspace / "skills" / "demo").mkdir(parents=True)
+    assignment = {
+        "task_id": "task.surgical-prompt",
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {"sparse_paths": ["skills/demo/"]},
+        "constraints": {
+            "mode": "dev_ticket_repair",
+            "repair_profile": "surgical_ui",
+            "minimal_diff": True,
+        },
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": "adaos.dev_ticket.autonomous_repair_brief.v1",
+                "repair_hints": {
+                    "target_files": ["skills/demo/webui.json"],
+                    "target_refs": ["summary.buttons"],
+                    "acceptance_checks": ["focused UI assertion passes"],
+                },
+            }
+        },
+    }
+
+    worker._build_packet(assignment, workspace, input_dir)
+    prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+
+    assert "not Codex skill authoring" in prompt
+    assert "Do not load generic skill-creator instructions" in prompt
+    assert "Locate the named target refs with `rg`" in prompt
+    assert "Do not dump a complete target file larger than 20 KB" in prompt
+
+
 def test_bounded_dev_ticket_rejects_large_manifest_collapse(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     scenario = workspace / "scenarios" / "demo"
