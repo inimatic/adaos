@@ -1317,7 +1317,28 @@ class DevelopmentTicketService:
         repair_id = _text(repair.get("repair_id"))
         brief = _autonomous_repair_brief(handoff["ticket"], repair, target=target)
         bounded_budget = dict(execution_budget) if isinstance(execution_budget, Mapping) else dict(DEFAULT_AUTONOMOUS_REPAIR_BUDGET)
-        started = automation_service.start_from_execute(
+        automation_links = {
+            "development_ticket_id": ticket["ticket_id"],
+            "builder_repair_id": repair_id,
+            "development_ticket_component_ref": _text(handoff["ticket"].get("component_ref")) or None,
+            "development_ticket_owner_area": _text(handoff["ticket"].get("owner_area")) or None,
+            "development_source_materialization": materialization,
+        }
+        resume_failed = getattr(automation_service, "resume_failed_dev_ticket_repair", None)
+        can_resume = False
+        if callable(resume_failed):
+            current = automation_service.status(
+                object_type=target["object_type"],
+                object_id=target["object_id"],
+            )
+            current_session = _automation_session(current)
+            current_links = _mapping(current_session.get("links"))
+            can_resume = (
+                _text(current_session.get("status")) == "failed"
+                and _text(current_links.get("development_ticket_id")) == ticket["ticket_id"]
+            )
+        start_method = resume_failed if can_resume else automation_service.start_from_execute
+        started = start_method(
             object_type=target["object_type"],
             object_id=target["object_id"],
             implementation_brief=brief,
@@ -1326,13 +1347,7 @@ class DevelopmentTicketService:
             execution_budget=bounded_budget,
             agent_profile=dict(agent_profile) if isinstance(agent_profile, Mapping) else None,
             mcp=dict(mcp) if isinstance(mcp, Mapping) else None,
-            links={
-                "development_ticket_id": ticket["ticket_id"],
-                "builder_repair_id": repair_id,
-                "development_ticket_component_ref": _text(handoff["ticket"].get("component_ref")) or None,
-                "development_ticket_owner_area": _text(handoff["ticket"].get("owner_area")) or None,
-                "development_source_materialization": materialization,
-            },
+            links=automation_links,
         )
         linked_repair = service.link_automation(repair_id, automation=started, actor=_text(actor) or "builder")
         linked_ticket = self._link_builder_automation(

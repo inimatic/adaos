@@ -870,6 +870,56 @@ def test_path_guard_failure_reuses_original_budget_candidate_after_requalificati
     assert checkpoint["reason"] == "repair_envelope_requalified_after_path_guard"
 
 
+def test_failed_dev_ticket_resume_updates_brief_before_submitting_continuation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation.skill.demo",
+            "object_type": "skill",
+            "object_id": "demo",
+            "status": "failed",
+            "implementation_brief": "stale brief",
+            "links": {"development_ticket_id": "dticket.demo"},
+            "created_at": "2026-09-01T00:00:00+00:00",
+            "updated_at": "2026-09-01T00:00:00+00:00",
+        }
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "refresh_session",
+        lambda _service, session: session,
+    )
+    submitted: list[dict] = []
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "submit_turn",
+        lambda _service, **kwargs: submitted.append(dict(kwargs))
+        or {"ok": True, "status": "automation_queued"},
+    )
+
+    result = service.resume_failed_dev_ticket_repair(
+        object_type="skill",
+        object_id="demo",
+        implementation_brief="requalified brief",
+        links={
+            "development_ticket_id": "dticket.demo",
+            "builder_repair_id": "repair.demo",
+        },
+        execution_budget={"max_tokens": 45000, "max_wall_seconds": 600},
+    )
+
+    updated = service.get_session("skill", "demo")
+    assert updated is not None
+    assert updated["implementation_brief"] == "requalified brief"
+    assert updated["links"]["builder_repair_id"] == "repair.demo"
+    assert submitted[0]["execution_budget"]["max_tokens"] == 45000
+    assert result["resumed_failed_dev_ticket"] is True
+
+
 def test_terminal_codex_usage_reports_live_budget_estimate(tmp_path: Path) -> None:
     service = _service(tmp_path)
     calls: list[dict] = []

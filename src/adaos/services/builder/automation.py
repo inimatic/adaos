@@ -996,6 +996,70 @@ class BuilderAutomationService:
             "automation": self.project_session(session),
         }
 
+    def resume_failed_dev_ticket_repair(
+        self,
+        *,
+        object_type: str,
+        object_id: str,
+        implementation_brief: str,
+        links: Mapping[str, Any],
+        webspace_id: str = "desktop",
+        conversation_id: str | None = None,
+        execution_budget: Mapping[str, Any] | None = None,
+        agent_profile: Mapping[str, Any] | None = None,
+        mcp: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Resume the same failed ticket while preserving its candidate and usage history."""
+
+        kind, project_id = self._project_ref(object_type, object_id)
+        brief = str(implementation_brief or "").strip()
+        ticket_id = str(dict(links or {}).get("development_ticket_id") or "").strip()
+        if not brief or not ticket_id:
+            raise ValueError("failed Dev Ticket repair resume requires its brief and ticket link")
+        _reject_transport_corruption(brief, field="implementation_brief")
+        with _LOCK:
+            session = self.get_session(kind, project_id)
+            if not session:
+                raise ValueError("automation_session_not_found")
+            session = self.refresh_session(session)
+            if str(session.get("status") or "").strip() != "failed":
+                raise ValueError("only a failed Automation session can resume a Dev Ticket repair")
+            current_links = (
+                dict(session.get("links") or {})
+                if isinstance(session.get("links"), Mapping)
+                else {}
+            )
+            if str(current_links.get("development_ticket_id") or "").strip() != ticket_id:
+                raise ValueError("failed Automation session belongs to another Dev Ticket")
+            session["implementation_brief"] = brief
+            session["links"] = {**current_links, **dict(links)}
+            session["webspace_id"] = str(webspace_id or session.get("webspace_id") or "desktop")
+            if str(conversation_id or "").strip():
+                session["conversation_id"] = str(conversation_id).strip()
+            if isinstance(agent_profile, Mapping):
+                session["agent_profile"] = dict(agent_profile)
+            admitted_mcp = _sanitized_mcp_profile(mcp)
+            if admitted_mcp:
+                current_mcp = (
+                    dict(session.get("mcp") or {})
+                    if isinstance(session.get("mcp"), Mapping)
+                    else {}
+                )
+                session["mcp"] = {**current_mcp, **admitted_mcp}
+            session["updated_at"] = _now_iso()
+            self._save_session(session)
+
+        result = self.submit_turn(
+            text="Resume the requalified Dev Ticket repair from its preserved candidate.",
+            object_type=kind,
+            object_id=project_id,
+            webspace_id=webspace_id,
+            conversation_id=conversation_id,
+            execution_budget=execution_budget,
+        )
+        result["resumed_failed_dev_ticket"] = True
+        return result
+
     def _ensure_automation_artifacts_created(
         self,
         *,

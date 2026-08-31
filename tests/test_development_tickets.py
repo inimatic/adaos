@@ -99,6 +99,38 @@ class _FakeBuilderAutomation:
         }
 
 
+class _FakeResumableBuilderAutomation(_FakeBuilderAutomation):
+    def __init__(self) -> None:
+        super().__init__()
+        self.resume_calls: list[dict] = []
+        self.ticket_id = ""
+
+    def status(self, *, object_type: str, object_id: str):
+        return {
+            "ok": True,
+            "session": {
+                "session_id": "automation.session.failed",
+                "status": "failed",
+                "links": {"development_ticket_id": self.ticket_id},
+            },
+            "automation": {
+                "session_id": "automation.session.failed",
+                "status": "failed",
+                "terminal": True,
+                "project": {"object_type": object_type, "object_id": object_id},
+            },
+        }
+
+    def resume_failed_dev_ticket_repair(self, **kwargs):
+        self.resume_calls.append(dict(kwargs))
+        self.counter += 1
+        return self._payload(
+            status="running",
+            suffix=f"resumed-{self.counter}",
+            links=kwargs.get("links") or {},
+        )
+
+
 class _FakeFailingBuilderAutomation(_FakeBuilderAutomation):
     def status(self, *, object_type: str, object_id: str):
         suffix = str(self.counter or 1)
@@ -583,6 +615,39 @@ def test_failed_autonomous_repair_returns_ticket_to_builder_queue_with_evidence(
     assert repair["status"] == "in_progress"
     assert repair["context"]["automation"]["status"] == "failed"
     assert repair["context"]["usage"]["receipt_status"] == "unavailable"
+
+
+def test_failed_autonomous_repair_resumes_same_ticket_session(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    automation = _FakeResumableBuilderAutomation()
+    signal = service.capture_signal(
+        kind="development_request",
+        summary="Resume a bounded Demo Metrics repair",
+        target_scope={"type": "skill", "id": "demo_metrics_skill", "source": "dev"},
+        source="client_feedback",
+        owner_area="skill",
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="ready_for_builder",
+        owner_area="skill",
+    )["ticket"]
+    automation.ticket_id = ticket["ticket_id"]
+
+    result = service.start_autonomous_repair(
+        ticket["ticket_id"],
+        actor="builder:automation",
+        repair_service=repair_service,
+        automation_service=automation,
+        webspace_id="desktop",
+    )
+
+    assert result["started"] is True
+    assert len(automation.resume_calls) == 1
+    assert automation.calls == []
+    assert automation.resume_calls[0]["links"]["development_ticket_id"] == ticket["ticket_id"]
 
 
 def test_builder_refs_preserve_multiple_automation_tasks_for_one_repair(tmp_path: Path) -> None:
