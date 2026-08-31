@@ -61,6 +61,9 @@ CODEX_TOKEN_BUDGET_EXIT_CODE = 124
 CODEX_PROMPT_BUDGET_MIN_RESERVE = 1024
 CODEX_PROMPT_BUDGET_MAX_RESERVE = 8192
 CODEX_LIVE_BUDGET_SAFETY_FACTOR = 1.25
+BOUNDED_REPAIR_COMMAND_OUTPUT_BYTES = 8 * 1024
+BOUNDED_REPAIR_COMMAND_OUTPUT_LINES = 120
+BOUNDED_REPAIR_DISCOVERY_LINES = 400
 
 
 def _now_iso() -> str:
@@ -364,6 +367,74 @@ def _context_packet_prompt_projection(value: Any, *, implementation_brief: str =
         "coverage": dict(packet.get("coverage") or {}),
         "budget": dict(packet.get("budget") or {}),
     }
+
+
+def _bounded_repair_brief_prompt(value: str) -> str:
+    """Project a Development Ticket into the minimum model-facing repair brief.
+
+    The complete immutable brief remains in ``packet.json``. Historical Builder
+    receipts are useful governance evidence, but sending them back to Codex on a
+    follow-up repair wastes context and can make the previous implementation
+    look like current requirements.
+    """
+
+    raw = str(value or "").strip()
+    if not raw:
+        return "No approved ticket brief was supplied."
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return raw[:12_000]
+    if not isinstance(parsed, Mapping):
+        return raw[:12_000]
+
+    projected: dict[str, Any] = {
+        key: copy.deepcopy(parsed.get(key))
+        for key in (
+            "schema",
+            "ticket_id",
+            "repair_id",
+            "kind",
+            "summary",
+            "component_ref",
+            "target",
+            "target_scope",
+            "acceptance",
+            "guardrails",
+        )
+        if parsed.get(key) not in (None, "", [], {})
+    }
+    evidence: list[dict[str, Any]] = []
+    for item in reversed(list(parsed.get("evidence_refs") or [])):
+        if not isinstance(item, Mapping):
+            continue
+        evidence_type = str(item.get("type") or "").strip()
+        evidence_status = str(item.get("status") or "").strip().lower()
+        if evidence_type not in {"screenshot", "runtime_guard", "trace", "test", "validation"}:
+            continue
+        if evidence_status in {"passed", "completed", "reported"}:
+            continue
+        compact = {
+            key: copy.deepcopy(item.get(key))
+            for key in (
+                "type",
+                "id",
+                "status",
+                "code",
+                "path",
+                "message",
+                "receiver",
+                "topic",
+            )
+            if item.get(key) not in (None, "", [], {})
+        }
+        if compact:
+            evidence.append(compact)
+        if len(evidence) >= 6:
+            break
+    if evidence:
+        projected["current_failure_evidence"] = list(reversed(evidence))
+    return json.dumps(projected, ensure_ascii=False, indent=2, sort_keys=True)
 
 
 def _public_root_mcp_profile(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -2385,7 +2456,7 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
         }
         if surgical_ui:
             required_result = """1. This is source work inside an existing AdaOS skill, not Codex skill authoring. Do not load generic skill-creator instructions.
-2. Locate the named target refs with `rg`, then read only bounded surrounding slices. Do not dump a complete target file larger than 20 KB.
+2. Locate one exact target ID at a time with `rg -n --max-count 12` in one file. Every discovery command must return at most {command_output_lines} lines and {command_output_bytes} bytes. Never use `rg -A`, `rg -B`, or `rg -C` across a manifest, multiple patterns, or multiple files. Read at most one 120-line surrounding slice after each exact match, and at most {discovery_lines} source lines before the first edit. Narrow a query instead of printing more output.
 3. Apply only the requested visible UI change; do not explore AdaOS core or unrelated project files.
 4. Add or update only the focused regression assertion named by the acceptance checks.
 5. Do not run tests or validation commands in the Codex turn. Stop after the diff; the trusted worker runs package validation and records evidence.
@@ -2393,7 +2464,7 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
 7. Stop immediately after the requested diff and focused check succeed."""
         elif bounded_repair:
             required_result = """1. This is source work inside an existing AdaOS skill, not Codex skill authoring. Do not load generic skill-creator instructions.
-2. Locate the named target refs with `rg`, then read only bounded surrounding slices. Do not dump a complete target file larger than 20 KB.
+2. Locate one exact target ID at a time with `rg -n --max-count 12` in one file. Every discovery command must return at most {command_output_lines} lines and {command_output_bytes} bytes. Never use `rg -A`, `rg -B`, or `rg -C` across a manifest, multiple patterns, or multiple files. Read at most one 120-line surrounding slice after each exact match, and at most {discovery_lines} source lines before the first edit. Narrow a query instead of printing more output.
 3. Implement only the scoped resource/data change in the exact authorized files. Use existing public AdaOS SDK/API contracts and preserve unrelated behavior.
 4. For subnet data, use only the admitted typed provider route and degrade without failing when it is unavailable. Do not invent or persist provider data.
 5. Add or update only focused regression coverage for the acceptance checks. Do not run tests or validation commands in the Codex turn; the trusted worker runs them and records evidence.
@@ -2459,6 +2530,9 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
             generated_test_timeout_seconds=_generated_test_budget(assignment)[
                 "packaged_pytest_wall_seconds"
             ],
+            command_output_lines=BOUNDED_REPAIR_COMMAND_OUTPUT_LINES,
+            command_output_bytes=BOUNDED_REPAIR_COMMAND_OUTPUT_BYTES,
+            discovery_lines=BOUNDED_REPAIR_DISCOVERY_LINES,
         )
         governed_context = (
             json.dumps(context_projection, ensure_ascii=False, indent=2, sort_keys=True)
@@ -2487,13 +2561,14 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
             else "No task-scoped Root MCP route was admitted."
         )
         if bounded_repair:
+            bounded_brief = _bounded_repair_brief_prompt(brief)
             prompt = f"""# AdaOS bounded Dev Ticket repair
 
 Target: {target_type}:{target_id}
 
 ## Approved ticket brief
 
-{brief}
+{bounded_brief}
 
 ## Exact repair hints
 

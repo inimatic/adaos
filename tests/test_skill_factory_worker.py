@@ -1348,10 +1348,76 @@ def test_bounded_repair_prompt_requires_targeted_reads(
 
     assert "not Codex skill authoring" in prompt
     assert "Do not load generic skill-creator instructions" in prompt
-    assert "Locate the named target refs with `rg`" in prompt
-    assert "Do not dump a complete target file larger than 20 KB" in prompt
+    assert "`rg -n --max-count 12`" in prompt
+    assert "at most 120 lines and 8192 bytes" in prompt
+    assert "Never use `rg -A`, `rg -B`, or `rg -C`" in prompt
+    assert "at most 400 source lines before the first edit" in prompt
     assert "Do not run tests or validation commands in the Codex turn" in prompt
     assert "AdaOS bounded Dev Ticket repair" in prompt
+
+
+def test_bounded_repair_prompt_omits_completed_builder_history(tmp_path: Path) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    workspace = tmp_path / "workspace"
+    input_dir = tmp_path / "input"
+    (workspace / "skills" / "demo").mkdir(parents=True)
+    brief = {
+        "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+        "ticket_id": "dticket.demo",
+        "repair_id": "repair.current",
+        "summary": "Expose note CRUD in semantic views.",
+        "target": {"object_type": "skill", "object_id": "demo"},
+        "evidence_refs": [
+            {
+                "type": "builder_automation",
+                "id": "automation.previous",
+                "status": "completed",
+                "huge_history": "x" * 50_000,
+            },
+            {
+                "type": "screenshot",
+                "id": "artifact.failed",
+                "status": "failed_acceptance",
+            },
+            {
+                "type": "runtime_guard",
+                "id": "semantic_authority_mismatch",
+                "status": "failed",
+            },
+        ],
+    }
+    assignment = {
+        "task_id": "task.compact-repair",
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {"sparse_paths": ["skills/demo/"]},
+        "constraints": {
+            "mode": "dev_ticket_repair",
+            "repair_profile": "resource_crud",
+            "minimal_diff": True,
+        },
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": json.dumps(brief),
+                "repair_hints": {"target_files": ["skills/demo/webui.json"]},
+            }
+        },
+    }
+
+    worker._build_packet(assignment, workspace, input_dir)
+    prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+    packet = json.loads((input_dir / "packet.json").read_text(encoding="utf-8"))
+
+    assert "automation.previous" not in prompt
+    assert "huge_history" not in prompt
+    assert "artifact.failed" in prompt
+    assert "semantic_authority_mismatch" in prompt
+    assert len(prompt.encode("utf-8")) < 12_000
+    assert "automation.previous" in packet["brief"]
 
 
 def test_bounded_dev_ticket_rejects_large_manifest_collapse(tmp_path: Path) -> None:
