@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import psutil
@@ -25,6 +26,7 @@ from adaos.domain.development_validation import (
     derive_validation_budget,
     normalize_validation_budget,
 )
+from adaos.services.node_runtime_state import load_node_runtime_state
 from adaos.services.artifact_pipeline.storage import replace_with_retry
 from adaos.services.skill_factory import SkillFactoryService
 from adaos.services.skill_factory_sources import (
@@ -54,6 +56,10 @@ DECLARATIVE_MANIFEST_NAMES = {
 MANIFEST_REWRITE_DELETION_THRESHOLD = 120
 MANIFEST_REWRITE_DELETION_RATIO = 4.0
 MANIFEST_REWRITE_SHRINK_RATIO = 0.5
+CODEX_TOKEN_BUDGET_CHECK_INTERVAL_SECONDS = 2.0
+CODEX_TOKEN_BUDGET_EXIT_CODE = 124
+CODEX_PROMPT_BUDGET_MIN_RESERVE = 1024
+CODEX_PROMPT_BUDGET_MAX_RESERVE = 8192
 
 
 def _now_iso() -> str:
@@ -93,6 +99,91 @@ def _write_json(path: Path, payload: Any) -> None:
 def _read_json(path: Path) -> dict[str, Any]:
     raw = json.loads(path.read_text(encoding="utf-8"))
     return dict(raw) if isinstance(raw, Mapping) else {}
+
+
+def _estimate_codex_tokens_from_text(*parts: Any) -> int:
+    payload = "\n".join(str(part or "").strip() for part in parts if str(part or "").strip())
+    if not payload:
+        return 0
+    return max(1, (len(payload.encode("utf-8", errors="replace")) + 3) // 4)
+
+
+def _local_runtime_base_url() -> str | None:
+    for key in (
+        "ADAOS_CONTROL_URL",
+        "ADAOS_CONTROL_BASE",
+        "ADAOS_SELF_BASE_URL",
+        "ADAOS_HUB_URL",
+        "ADAOS_API_BASE",
+        "ADAOS_BASE",
+    ):
+        raw = str(os.getenv(key) or "").strip().rstrip("/")
+        if raw:
+            return raw
+    try:
+        raw = str(load_node_runtime_state().get("hub_url") or "").strip().rstrip("/")
+    except Exception:
+        raw = ""
+    return raw or None
+
+
+def _resolve_mcp_http_url(value: Any) -> str:
+    url = str(value or "").strip()
+    if not url:
+        return ""
+    if "/v1/root/mcp/task/" in url:
+        url = url.split("/v1/root/mcp/task/", 1)[0].rstrip("/") + "/v1/root/mcp"
+    elif url.startswith("/v1/root/mcp/task/"):
+        url = "/v1/root/mcp"
+    parsed = urlparse(url)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return url
+    if not url.startswith("/"):
+        return ""
+    base = _local_runtime_base_url()
+    return f"{base}{url}" if base else ""
+
+
+def _assignment_task_mcp_env_var(assignment: Mapping[str, Any]) -> str:
+    task_id = _safe_config_token(assignment.get("task_id") or "TASK", fallback="TASK").upper()
+    return f"ADAOS_TASK_MCP_AUTH_{task_id}"
+
+
+def _codex_jsonl_usage(path: Path) -> dict[str, int]:
+    if not path.is_file():
+        return {}
+    try:
+        if path.stat().st_size > 16 * 1024 * 1024:
+            return {}
+        values: dict[str, int] = {}
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            usage = event.get("usage") if isinstance(event.get("usage"), Mapping) else None
+            if usage is None and isinstance(event.get("turn"), Mapping):
+                turn = event["turn"]
+                usage = turn.get("usage") if isinstance(turn.get("usage"), Mapping) else None
+            if usage is None:
+                continue
+            for key in (
+                "input_tokens",
+                "cached_input_tokens",
+                "output_tokens",
+                "reasoning_tokens",
+            ):
+                try:
+                    values[key] = max(values.get(key, 0), int(usage.get(key) or 0))
+                except (TypeError, ValueError):
+                    continue
+        if values:
+            values["model_tokens"] = int(values.get("input_tokens") or 0) + int(
+                values.get("output_tokens") or 0
+            )
+        return values
+    except OSError:
+        return {}
 
 
 def _context_packet_prompt_projection(value: Any) -> dict[str, Any]:
@@ -226,13 +317,49 @@ def _context_packet_prompt_projection(value: Any) -> dict[str, Any]:
     }
 
 
-def _root_mcp_profile_from_assignment(assignment: Mapping[str, Any]) -> dict[str, Any] | None:
+def _public_root_mcp_profile(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    profile = {
+        key: item
+        for key, item in dict(value or {}).items()
+        if not str(key).startswith("_")
+        and str(key).lower()
+        not in {
+            "access_token",
+            "authorization",
+            "bearer_token",
+            "secret",
+            "token",
+        }
+    }
+    return profile or None
+
+
+def _root_mcp_profile_from_assignment(
+    assignment: Mapping[str, Any],
+    *,
+    include_private_token: bool = False,
+) -> dict[str, Any] | None:
     mcp = dict(assignment.get("mcp") or {})
     raw = mcp.get("root_mcp") if isinstance(mcp.get("root_mcp"), Mapping) else {}
     root = dict(raw) if isinstance(raw, Mapping) else {}
+    token = ""
+    if not root and mcp:
+        token = str(mcp.get("access_token") or "").strip()
+        root = {
+            "enabled": True,
+            "transport": "streamable_http",
+            "server_name": mcp.get("server_name") or "adaos_task_root",
+            "url": _resolve_mcp_http_url(mcp.get("url") or mcp.get("mcp_http_url") or mcp.get("endpoint")),
+            "bearer_token_env_var": _assignment_task_mcp_env_var(assignment),
+            "required": bool(mcp.get("required", False)),
+            "scope": _string_list(mcp.get("scope") or mcp.get("requested_scope")),
+            "lease_id": mcp.get("lease_id"),
+            "token_ref": mcp.get("token_ref"),
+            "expires_at": mcp.get("expires_at"),
+        }
     if not root or root.get("enabled") is False:
         return None
-    url = str(root.get("url") or root.get("mcp_http_url") or "").strip()
+    url = _resolve_mcp_http_url(root.get("url") or root.get("mcp_http_url"))
     if not url:
         return None
     env_var = str(
@@ -250,11 +377,15 @@ def _root_mcp_profile_from_assignment(assignment: Mapping[str, Any]) -> dict[str
     }
     if env_var:
         profile["bearer_token_env_var"] = env_var
-        profile["bearer_env_present"] = bool(os.getenv(env_var))
+        profile["bearer_env_present"] = bool(token or os.getenv(env_var))
     for key in ("enabled_tools", "disabled_tools", "scope"):
         values = _string_list(root.get(key))
         if values:
             profile[key] = values
+    for key in ("lease_id", "token_ref", "expires_at"):
+        value = str(root.get(key) or "").strip()
+        if value:
+            profile[key] = value
     for key in ("startup_timeout_sec", "tool_timeout_sec"):
         try:
             value_int = int(root.get(key) or 0)
@@ -265,6 +396,8 @@ def _root_mcp_profile_from_assignment(assignment: Mapping[str, Any]) -> dict[str
     approval = str(root.get("default_tools_approval_mode") or "").strip()
     if approval in {"auto", "prompt", "writes", "approve"}:
         profile["default_tools_approval_mode"] = approval
+    if include_private_token and token:
+        profile["_bearer_token_value"] = token
     return profile
 
 
@@ -534,6 +667,74 @@ def _codex_execution_timeout_seconds(
     return int(fallback)
 
 
+def _codex_execution_token_budget(assignment: Mapping[str, Any] | None) -> dict[str, Any]:
+    task = assignment if isinstance(assignment, Mapping) else {}
+    request = (
+        task.get("realize_request")
+        if isinstance(task.get("realize_request"), Mapping)
+        else {}
+    )
+    artifacts = (
+        request.get("artifacts")
+        if isinstance(request.get("artifacts"), Mapping)
+        else {}
+    )
+    development = (
+        artifacts.get("development_context")
+        if isinstance(artifacts.get("development_context"), Mapping)
+        else {}
+    )
+    for source, raw_budget in (
+        ("realize_request.execution_budget", artifacts.get("execution_budget")),
+        ("development_session.execution_budget", development.get("execution_budget")),
+    ):
+        if not isinstance(raw_budget, Mapping):
+            continue
+        for key in ("max_model_tokens", "max_tokens"):
+            try:
+                value = int(raw_budget.get(key) or 0)
+            except (TypeError, ValueError):
+                value = 0
+            if value > 0:
+                return {
+                    "schema": "adaos.skill_factory.codex_token_budget.v1",
+                    "source": source,
+                    "field": key,
+                    "max_model_tokens": value,
+                    "raw": dict(raw_budget),
+                }
+    return {}
+
+
+def _codex_prompt_budget_check(
+    assignment: Mapping[str, Any] | None,
+    prompt: str,
+) -> dict[str, Any]:
+    budget = _codex_execution_token_budget(assignment)
+    estimate = _estimate_codex_tokens_from_text(prompt)
+    if not budget:
+        return {
+            "schema": "adaos.skill_factory.codex_prompt_budget_check.v1",
+            "status": "not_declared",
+            "prompt_token_estimate": estimate,
+        }
+    max_tokens = int(budget["max_model_tokens"])
+    reserve = min(
+        CODEX_PROMPT_BUDGET_MAX_RESERVE,
+        max(CODEX_PROMPT_BUDGET_MIN_RESERVE, max_tokens // 10),
+    )
+    prompt_limit = max(1, max_tokens - reserve)
+    status = "ok" if estimate <= prompt_limit else "blocked"
+    return {
+        "schema": "adaos.skill_factory.codex_prompt_budget_check.v1",
+        "status": status,
+        "prompt_token_estimate": estimate,
+        "prompt_token_limit": prompt_limit,
+        "reserved_for_tools_and_output": reserve,
+        "declared": budget,
+    }
+
+
 def _git(command: Sequence[str], *, cwd: Path, timeout: float = 120.0) -> str:
     result = _run(["git", *command], cwd=cwd, timeout=timeout)
     if result.returncode:
@@ -550,6 +751,7 @@ class CodexRunResult:
     final_message: str = ""
     command: tuple[str, ...] = ()
     sdk_snapshot: dict[str, Any] | None = None
+    token_budget: dict[str, Any] | None = None
 
 
 class TaskExecutionCancelled(RuntimeError):
@@ -624,6 +826,7 @@ class SubprocessCodexExecutor:
         prompt: str,
         output_dir: Path,
         root_mcp: Mapping[str, Any] | None = None,
+        max_model_tokens: int | None = None,
         cancel_check: Callable[[], bool] | None = None,
     ) -> CodexRunResult:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -690,10 +893,29 @@ class SubprocessCodexExecutor:
                 process.stdin.close()
                 process.stdin = None
                 deadline = time.monotonic() + self.timeout_seconds
+                next_budget_check = time.monotonic() + CODEX_TOKEN_BUDGET_CHECK_INTERVAL_SECONDS
+                budget_exceeded: dict[str, Any] | None = None
                 while process.poll() is None:
                     if cancel_check is not None and cancel_check():
                         self._terminate_process_tree(process)
                         raise TaskExecutionCancelled("Skill Factory task was cancelled")
+                    if max_model_tokens is not None and max_model_tokens > 0:
+                        now = time.monotonic()
+                        if now >= next_budget_check:
+                            usage = _codex_jsonl_usage(live_events_path)
+                            observed = int(usage.get("model_tokens") or 0)
+                            if observed > int(max_model_tokens):
+                                budget_exceeded = {
+                                    "schema": "adaos.skill_factory.codex_token_budget_receipt.v1",
+                                    "status": "exceeded",
+                                    "max_model_tokens": int(max_model_tokens),
+                                    "observed_model_tokens": observed,
+                                    "usage": usage,
+                                    "checked_at": _now_iso(),
+                                }
+                                self._terminate_process_tree(process)
+                                break
+                            next_budget_check = now + CODEX_TOKEN_BUDGET_CHECK_INTERVAL_SECONDS
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         self._terminate_process_tree(process)
@@ -709,18 +931,41 @@ class SubprocessCodexExecutor:
         events = live_events_path.read_text(encoding="utf-8", errors="replace")
         stderr = live_stderr_path.read_text(encoding="utf-8", errors="replace")
         final_message = final_path.read_text(encoding="utf-8", errors="replace") if final_path.exists() else ""
+        if budget_exceeded is None and max_model_tokens is not None and max_model_tokens > 0:
+            usage = _codex_jsonl_usage(live_events_path)
+            observed = int(usage.get("model_tokens") or 0)
+            if observed > int(max_model_tokens):
+                budget_exceeded = {
+                    "schema": "adaos.skill_factory.codex_token_budget_receipt.v1",
+                    "status": "exceeded",
+                    "max_model_tokens": int(max_model_tokens),
+                    "observed_model_tokens": observed,
+                    "usage": usage,
+                    "checked_at": _now_iso(),
+                }
+        if budget_exceeded is not None:
+            stderr = (
+                stderr.rstrip()
+                + "\nCodex token budget exceeded: "
+                + f"observed {budget_exceeded['observed_model_tokens']} "
+                + f"of {budget_exceeded['max_model_tokens']} model tokens."
+                + "\n"
+            )
         sdk_snapshot = (
             _read_json(sdk_root / "SDK_SNAPSHOT.json")
             if sdk_root is not None and (sdk_root / "SDK_SNAPSHOT.json").is_file()
             else None
         )
         return CodexRunResult(
-            returncode=int(process.returncode or 0),
+            returncode=CODEX_TOKEN_BUDGET_EXIT_CODE
+            if budget_exceeded is not None
+            else int(process.returncode or 0),
             events=events,
             stderr=stderr,
             final_message=final_message,
             command=tuple(command),
             sdk_snapshot=sdk_snapshot,
+            token_budget=budget_exceeded,
         )
 
     @staticmethod
@@ -978,7 +1223,7 @@ class SubprocessCodexExecutor:
         profile = dict(root_mcp or {})
         env_var = str(profile.get("bearer_token_env_var") or "").strip()
         if env_var:
-            token = os.getenv(env_var)
+            token = str(profile.get("_bearer_token_value") or "").strip() or os.getenv(env_var)
             if token:
                 environment[env_var] = token
         return environment
@@ -1445,7 +1690,7 @@ class LocalSkillFactoryWorker:
         output_dir = run_root / "output"
         runtime_dir = run_root / "runtime"
         agent_profile = dict((assignment.get("codex") or {}).get("agent_profile") or {})
-        root_mcp = _root_mcp_profile_from_assignment(assignment)
+        root_mcp = _root_mcp_profile_from_assignment(assignment, include_private_token=True)
         for path in (input_dir, output_dir, runtime_dir):
             path.mkdir(parents=True, exist_ok=True)
         process_owner = self._current_process_owner()
@@ -1472,6 +1717,15 @@ class LocalSkillFactoryWorker:
             _write_json(input_dir / "assignment.json", dict(assignment))
             packet = self._build_packet(assignment, workspace, input_dir)
             prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+            prompt_budget = _codex_prompt_budget_check(assignment, prompt)
+            _write_json(input_dir / "token_budget_preflight.json", prompt_budget)
+            if prompt_budget.get("status") == "blocked":
+                raise ValueError(
+                    "Codex prompt token budget exceeded before launch: "
+                    f"estimated {prompt_budget['prompt_token_estimate']} > "
+                    f"limit {prompt_budget['prompt_token_limit']} "
+                    f"for declared {prompt_budget['declared']['max_model_tokens']} model tokens"
+                )
             packet_hash = "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
             self._init_git_workspace(workspace, str((assignment.get("forge") or {}).get("branch") or f"realize/{task_id}"))
@@ -1601,7 +1855,7 @@ class LocalSkillFactoryWorker:
                 else None,
                 "tool_versions": {"python": sys.version.split()[0]},
                 "sdk_snapshot": dict(codex_result.sdk_snapshot or {}) or None,
-                "root_mcp": root_mcp,
+                "root_mcp": _public_root_mcp_profile(root_mcp),
                 "created_at": _now_iso(),
             }
             _write_json(evidence_root / "provenance.json", provenance)
@@ -1715,6 +1969,8 @@ class LocalSkillFactoryWorker:
                 assignment,
                 fallback=self.executor.timeout_seconds,
             )
+            token_budget = _codex_execution_token_budget(assignment)
+            max_model_tokens = int(token_budget.get("max_model_tokens") or 0) or None
             if profile or timeout_seconds != self.executor.timeout_seconds:
                 executor = SubprocessCodexExecutor(
                     executable=self.executor.executable,
@@ -1729,6 +1985,7 @@ class LocalSkillFactoryWorker:
                 prompt=prompt,
                 output_dir=output_dir,
                 root_mcp=root_mcp,
+                max_model_tokens=max_model_tokens,
                 cancel_check=lambda: self._task_status(task_id) in {"cancelled", "expired"},
             )
         return self.executor(workspace=workspace, prompt=prompt, output_dir=output_dir)
@@ -1745,6 +2002,8 @@ class LocalSkillFactoryWorker:
                 runtime_dir / f"codex-sdk-snapshot{suffix}.json",
                 result.sdk_snapshot,
             )
+        if result.token_budget:
+            _write_json(runtime_dir / f"codex-token-budget{suffix}.json", result.token_budget)
 
     def _progress(self, task_id: str, status: str, message: str) -> None:
         self.factory.report_progress(

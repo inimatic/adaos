@@ -317,6 +317,14 @@ Ticket and signals, and closes only with evidence.
   core blocker, while keeping per-ticket comments and evidence.
 - [ ] `[must]` `DS5-17` Make the absent-dev-source choice explicit:
   `materialize`, `fork project`, `runtime overlay`, or `defer`.
+- [x] `[must]` `DS5-24` Publish completed Dev Ticket skill repairs to the user
+  as a dev-to-workspace `.runtime` overlay: prepare and test the default
+  workspace runtime slot from DEV source, preserve workspace source, rebuild
+  the target webspace, and record an `aprobation_runtime_overlay` receipt.
+- [ ] `[must]` `DS5-25` Complete scenario/project acceptance publication with
+  the same rule: materialize the user's workspace projection from DEV
+  scenario/project source without replacing workspace source, keep an explicit
+  receipt, and provide rollback/acceptance controls for the overlay.
 - [ ] `[should]` `DS5-18` Add ticket artifact commands and SDK helpers for
   `artifact open`, screenshot preview, incremental evidence, optimistic
   revision, comment, claim, progress, resolve, verify, close, reopen,
@@ -358,9 +366,14 @@ requirement; actual usage remains authoritative in the root economic stream,
 including failed, errored, or cancelled provider calls with reported billable
 tokens. Resolution is evidence-gated, `resolved` is non-terminal, `verify`
 requires verification evidence, and normal closure requires verified status.
-Delayed completion notifications, subscriptions, artifact-open helpers,
-autonomous cost estimates, richer user-ticket/Builder history, and full
-Builder repair execution over ticket batches remain open.
+Completed skill repairs can now be exposed to the user's workspace as a
+dev-to-workspace `.runtime` overlay without replacing workspace source. The
+same acceptance rule for full scenario/project source remains open: DEV source
+must feed the user-visible materialized projection with explicit rollback and
+acceptance controls, not silently replace stable workspace source. Delayed
+completion notifications, subscriptions, artifact-open helpers, autonomous
+cost estimates, richer user-ticket/Builder history, and full Builder repair
+execution over ticket batches remain open.
 
 ## DS6. Analytics, Campaigns, And Policy Hardening
 

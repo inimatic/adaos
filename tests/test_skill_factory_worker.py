@@ -27,6 +27,8 @@ from adaos.services.skill_factory_worker import (
     LocalSkillFactoryWorker,
     SubprocessCodexExecutor,
     _codex_failure_detail,
+    _codex_prompt_budget_check,
+    _root_mcp_profile_from_assignment,
 )
 
 
@@ -1682,6 +1684,88 @@ def test_codex_executor_projects_root_mcp_config_without_prompt_secret(
     assert "Task-scoped Root MCP route" in prompt
     assert "adaos_root" in prompt
     assert "secret-token-value" not in prompt
+
+
+def test_worker_projects_task_scoped_mcp_lease_without_prompt_secret(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ADAOS_HUB_URL", "http://127.0.0.1:8778")
+    assignment = {
+        "task_id": "task.lease",
+        "target": {"type": "skill", "id": "demo"},
+        "mcp": {
+            "endpoint": "/v1/root/mcp/task/task.lease",
+            "token_ref": "task_access_lease:lease.demo",
+            "scope": ["read_capability_snapshot"],
+            "lease_id": "lease.demo",
+            "access_token": "lease-secret-value",
+            "expires_at": "2026-08-31T12:00:00+00:00",
+        },
+        "forge": {"sparse_paths": ["skills/demo/"]},
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": "Use Root MCP only when it reduces guessing."
+            }
+        },
+    }
+
+    private_profile = _root_mcp_profile_from_assignment(
+        assignment,
+        include_private_token=True,
+    )
+    assert private_profile is not None
+    assert private_profile["server_name"] == "adaos_task_root"
+    assert private_profile["url"] == "http://127.0.0.1:8778/v1/root/mcp"
+    assert private_profile["bearer_token_env_var"] == "ADAOS_TASK_MCP_AUTH_TASK_LEASE"
+    assert private_profile["bearer_env_present"] is True
+    assert private_profile["_bearer_token_value"] == "lease-secret-value"
+
+    executor = SubprocessCodexExecutor(repo_root=tmp_path / "repo")
+    config_args = executor._root_mcp_config_args(private_profile)
+    environment = executor._execution_environment(root_mcp=private_profile)
+    assert any(arg.endswith("mcp_servers.adaos_task_root.url=\"http://127.0.0.1:8778/v1/root/mcp\"") for arg in config_args)
+    assert "lease-secret-value" not in " ".join(config_args)
+    assert environment["ADAOS_TASK_MCP_AUTH_TASK_LEASE"] == "lease-secret-value"
+
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    workspace = tmp_path / "workspace"
+    input_dir = tmp_path / "input"
+    (workspace / "skills" / "demo").mkdir(parents=True)
+
+    worker._build_packet(assignment, workspace, input_dir)
+    packet = json.loads((input_dir / "packet.json").read_text(encoding="utf-8"))
+    prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+
+    assert packet["root_mcp"]["lease_id"] == "lease.demo"
+    assert packet["root_mcp"]["bearer_env_present"] is True
+    assert "_bearer_token_value" not in packet["root_mcp"]
+    assert "lease-secret-value" not in prompt
+    assert "Task-scoped Root MCP route" in prompt
+
+
+def test_codex_prompt_budget_blocks_oversized_instruction_before_launch() -> None:
+    assignment = {
+        "realize_request": {
+            "artifacts": {
+                "execution_budget": {
+                    "source": "test",
+                    "max_tokens": 1600,
+                    "max_wall_seconds": 300,
+                }
+            }
+        }
+    }
+
+    check = _codex_prompt_budget_check(assignment, "x" * 12000)
+
+    assert check["status"] == "blocked"
+    assert check["declared"]["max_model_tokens"] == 1600
+    assert check["prompt_token_estimate"] > check["prompt_token_limit"]
 
 
 def test_codex_task_runtime_is_outside_candidate_worktree(tmp_path: Path) -> None:

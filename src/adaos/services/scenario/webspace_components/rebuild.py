@@ -5,7 +5,7 @@ import json
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Dict
 
 
 @dataclass(frozen=True)
@@ -233,7 +233,9 @@ class WebspaceRebuildService:
             and (
                 reseed_from_scenario
                 or requested_action == "builder_revision_apply"
+                or requested_action == "builder_aprobation_apply"
                 or str(source_of_truth or "").strip().lower() == "builder_revision"
+                or str(source_of_truth or "").strip().lower() == "devspace_runtime_overlay"
             )
         )
         if should_invalidate_loader_cache:

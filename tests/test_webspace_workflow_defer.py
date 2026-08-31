@@ -608,6 +608,7 @@ def test_skill_runtime_rebuild_actions_refresh_the_live_room_with_materialized_p
         "skill_uninstall_sync",
         "skill_update_sync",
         "artifact_subscription_sync",
+        "builder_aprobation_apply",
     }:
         assert webspace_runtime_module._rebuild_action_refreshes_live_room(action) is True
         assert webspace_runtime_module._rebuild_action_applies_live_payload(action) is True

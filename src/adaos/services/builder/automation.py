@@ -1763,10 +1763,27 @@ class BuilderAutomationService:
             pass
         if declared is None and not usage and not started_raw:
             return None
+        declared_model_tokens = 0
+        if declared:
+            try:
+                declared_model_tokens = int(
+                    declared.get("max_model_tokens") or declared.get("max_tokens") or 0
+                )
+            except (TypeError, ValueError):
+                declared_model_tokens = 0
+        observed_model_tokens = int(usage.get("model_tokens") or 0)
+        budget_status = "unknown"
+        overrun_tokens = 0
+        if declared_model_tokens > 0 and observed_model_tokens > 0:
+            if observed_model_tokens > declared_model_tokens:
+                budget_status = "exceeded"
+                overrun_tokens = observed_model_tokens - declared_model_tokens
+            else:
+                budget_status = "within_budget"
         return {
             "declared": declared,
             "observed": {
-                "model_tokens": int(usage.get("model_tokens") or 0),
+                "model_tokens": observed_model_tokens,
                 "input_tokens": int(usage.get("input_tokens") or 0),
                 "cached_input_tokens": int(usage.get("cached_input_tokens") or 0),
                 "output_tokens": int(usage.get("output_tokens") or 0),
@@ -1774,6 +1791,8 @@ class BuilderAutomationService:
                 "wall_seconds": wall_seconds,
                 "terminal": status in _TERMINAL_STATUSES,
             },
+            "status": budget_status,
+            "overrun_tokens": overrun_tokens,
         }
 
     @staticmethod
@@ -3186,6 +3205,7 @@ class BuilderAutomationService:
             "iteration": int(session.get("iteration") or 0),
             "skill": None,
             "materialization": None,
+            "aprobation": None,
             "vcs_checkpoints": [],
             "completed_at": None,
         }
@@ -3285,6 +3305,23 @@ class BuilderAutomationService:
                     for item in failed_checkpoints
                 )
                 raise RuntimeError(f"Forge checkpoint failed for {failed_refs}")
+
+            aprobation_scenario_id = object_id if object_type == "scenario" and object_id else None
+            if self._session_requires_aprobation_overlay(current) and (
+                companion_skill_ids or aprobation_scenario_id
+            ):
+                with self._finalization_stage(
+                    current,
+                    readiness,
+                    "aprobation_activation",
+                    "Activating the DEV repair as a workspace runtime overlay",
+                ):
+                    readiness["aprobation"] = self._prepare_and_activate_aprobation_overlay(
+                        current,
+                        skill_ids=companion_skill_ids,
+                        scenario_id=aprobation_scenario_id,
+                        webspace_id=webspace_id,
+                    )
 
             if object_type == "scenario" and object_id:
                 from adaos.services.builder.workbench import BuilderWorkbenchService
@@ -3758,6 +3795,265 @@ class BuilderAutomationService:
             "version": prepared.version,
             "slot": slot,
             "resolved_manifest": str(prepared.resolved_manifest),
+        }
+
+    @staticmethod
+    def _session_repair_brief(session: Mapping[str, Any]) -> dict[str, Any]:
+        raw = session.get("implementation_brief")
+        if isinstance(raw, Mapping):
+            return dict(raw)
+        try:
+            payload = json.loads(str(raw or ""))
+        except (TypeError, ValueError):
+            return {}
+        return dict(payload) if isinstance(payload, Mapping) else {}
+
+    @classmethod
+    def _session_requires_aprobation_overlay(cls, session: Mapping[str, Any]) -> bool:
+        links = session.get("links") if isinstance(session.get("links"), Mapping) else {}
+        ticket_id = str(links.get("development_ticket_id") or "").strip()
+        brief = cls._session_repair_brief(session)
+        policy = brief.get("policy") if isinstance(brief.get("policy"), Mapping) else {}
+        return bool(ticket_id and policy.get("publication_required") is True)
+
+    def _prepare_and_activate_aprobation_overlay(
+        self,
+        session: Mapping[str, Any],
+        *,
+        skill_ids: Sequence[str],
+        scenario_id: str | None = None,
+        webspace_id: str,
+    ) -> dict[str, Any]:
+        """Expose a validated DEV repair to the user without replacing sources.
+
+        The stable workspace source tree remains unchanged. Skill repairs are
+        prepared into the default workspace runtime from DEV source. Scenario
+        repairs are applied as a materialized runtime overlay in the target
+        webspace. A human can then accept/reopen the ticket from the real
+        client surface before any source promotion.
+        """
+
+        skills: list[dict[str, Any]] = []
+        errors: list[str] = []
+        for skill_id in dict.fromkeys(str(item).strip() for item in skill_ids if str(item).strip()):
+            try:
+                skills.append(
+                    self._prepare_and_activate_aprobation_skill(
+                        skill_id,
+                        webspace_id=webspace_id,
+                    )
+                )
+            except Exception as exc:
+                errors.append(f"{skill_id}: {type(exc).__name__}: {exc}")
+        scenario_receipt: dict[str, Any] | None = None
+        scenario_token = str(scenario_id or "").strip()
+        if scenario_token:
+            try:
+                scenario_receipt = self._prepare_and_activate_aprobation_scenario(
+                    scenario_token,
+                    webspace_id=webspace_id,
+                )
+            except Exception as exc:
+                errors.append(f"scenario:{scenario_token}: {type(exc).__name__}: {exc}")
+        applied_count = len(skills) + (
+            1
+            if isinstance(scenario_receipt, Mapping)
+            and not bool(scenario_receipt.get("skipped"))
+            else 0
+        )
+        receipt = {
+            "schema": "adaos.builder.aprobation_runtime_overlay.v1",
+            "ok": not errors and applied_count > 0,
+            "mode": "devspace_to_workspace_runtime_overlay",
+            "source_policy": "workspace_sources_preserved",
+            "runtime_space": "default",
+            "source_space": "dev",
+            "webspace_id": webspace_id,
+            "skill_count": len(skills),
+            "skills": skills,
+            "scenario": scenario_receipt,
+            "applied_count": applied_count,
+            "errors": errors,
+            "ticket_id": str(
+                (
+                    session.get("links")
+                    if isinstance(session.get("links"), Mapping)
+                    else {}
+                ).get("development_ticket_id")
+                or ""
+            ).strip()
+            or None,
+            "task_id": str(session.get("current_task_id") or "").strip() or None,
+            "created_at": _now_iso(),
+        }
+        if not errors and applied_count <= 0:
+            errors.append("no_aprobation_overlay_applied")
+        if errors:
+            receipt["ok"] = False
+            receipt["errors"] = errors
+            raise RuntimeError("; ".join(errors))
+        return receipt
+
+    def _prepare_and_activate_aprobation_skill(self, skill_id: str, *, webspace_id: str) -> dict[str, Any]:
+        from adaos.adapters.db import SqliteSkillRegistry
+        from adaos.services.agent_context import get_ctx
+        from adaos.services.runtime_refresh import rebuild_webspace_projection_sync
+        from adaos.services.scenario.webspace_runtime import invalidate_webspace_materialization_cache
+        from adaos.services.skill.manager import SkillManager
+        from adaos.services.skills_loader_importlib import ImportlibSkillsLoader
+
+        ctx = get_ctx()
+        source_path = Path(ctx.paths.dev_skills_dir()) / skill_id
+        if not source_path.is_dir():
+            raise FileNotFoundError(f"DEV skill source is missing: {source_path}")
+        manager = SkillManager(
+            repo=ctx.skills_repo,
+            registry=SqliteSkillRegistry(ctx.sql),
+            git=ctx.git,
+            paths=ctx.paths,
+            bus=getattr(ctx, "bus", None),
+            caps=ctx.caps,
+            settings=ctx.settings,
+        )
+        prepared = manager.prepare_runtime(skill_id, path=source_path, run_tests=True)
+        slot = manager.activate_for_space(
+            skill_id,
+            version=prepared.version,
+            slot=prepared.slot,
+            space="default",
+            webspace_id=webspace_id,
+            defer_webspace_rebuild=True,
+            emit_activation=False,
+        )
+        handlers = asyncio.run(
+            ImportlibSkillsLoader().reload_skill_handlers(
+                ctx.paths.skills_dir(),
+                skill_id,
+            )
+        )
+        cache = invalidate_webspace_materialization_cache(
+            webspace_id,
+            reason="builder_aprobation_runtime_overlay",
+            action="builder_aprobation_skill_runtime",
+            source_of_truth="devspace_runtime_overlay",
+        )
+        projection = rebuild_webspace_projection_sync(
+            webspace_id=webspace_id,
+            action="builder_aprobation_skill_runtime",
+            source_of_truth="devspace_runtime_overlay",
+        )
+        return {
+            "ok": True,
+            "id": skill_id,
+            "source_path": str(source_path),
+            "source_space": "dev",
+            "runtime_space": "default",
+            "version": prepared.version,
+            "prepared_slot": prepared.slot,
+            "activated_slot": slot,
+            "resolved_manifest": str(prepared.resolved_manifest),
+            "tests": {
+                str(name): str(result.status)
+                for name, result in dict(prepared.tests or {}).items()
+            },
+            "handler_reload": handlers,
+            "materialization_cache": cache,
+            "webspace_projection": projection,
+        }
+
+    def _prepare_and_activate_aprobation_scenario(self, scenario_id: str, *, webspace_id: str) -> dict[str, Any]:
+        from adaos.services.scenario.webspace_runtime import (
+            canonical_materialization_identity,
+            rebuild_webspace_from_sources,
+        )
+        from adaos.services.scenarios import loader as scenarios_loader
+
+        source_path = Path(scenarios_loader.scenario_root_for_space(scenario_id, "dev"))
+        if not source_path.is_dir():
+            return {
+                "ok": True,
+                "id": scenario_id,
+                "source_path": str(source_path),
+                "source_space": "dev",
+                "runtime_space": "default",
+                "skipped": True,
+                "reason": "dev_scenario_source_missing",
+            }
+        content = scenarios_loader.read_content(scenario_id, space="dev")
+        if not isinstance(content, Mapping) or not content:
+            raise RuntimeError("DEV scenario content is unavailable")
+        try:
+            source_fingerprint = scenarios_loader.scenario_source_fingerprint(
+                scenario_id,
+                space="dev",
+            )
+        except Exception:
+            source_fingerprint = ""
+        identity = canonical_materialization_identity(
+            webspace_id=webspace_id,
+            scenario_id=scenario_id,
+            source_fingerprint=f"dev:{source_fingerprint or 'current'}",
+            user_id="builder",
+            roles=["builder", "aprobation"],
+            policy_fingerprint="devspace_runtime_overlay",
+        )
+
+        async def _apply() -> dict[str, Any]:
+            return await rebuild_webspace_from_sources(
+                webspace_id,
+                action="builder_aprobation_apply",
+                scenario_id=scenario_id,
+                scenario_resolution="builder_aprobation_overlay",
+                source_of_truth="devspace_runtime_overlay",
+                reseed_from_scenario=False,
+                request_id=(
+                    f"builder-aprobation-{identity.get('key_hash') or _safe_token(scenario_id)}-"
+                    f"{time.time_ns()}"
+                ),
+                switch_mode="materialization_pointer_compat",
+                materialization_identity=identity,
+                scenario_content_override=content,
+                skill_source_mode="dev",
+            )
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            projection = asyncio.run(_apply())
+        else:
+            result: dict[str, Any] | None = None
+            error: BaseException | None = None
+
+            def _thread_main() -> None:
+                nonlocal result
+                nonlocal error
+                try:
+                    result = asyncio.run(_apply())
+                except BaseException as exc:
+                    error = exc
+
+            thread = threading.Thread(
+                target=_thread_main,
+                name="builder-aprobation-scenario-runtime",
+                daemon=True,
+            )
+            thread.start()
+            thread.join()
+            if error is not None:
+                raise error
+            projection = result if isinstance(result, dict) else {}
+
+        if not bool(projection.get("ok")):
+            raise RuntimeError(str(projection.get("error") or "scenario overlay rebuild failed"))
+        return {
+            "ok": True,
+            "id": scenario_id,
+            "source_path": str(source_path),
+            "source_space": "dev",
+            "runtime_space": "default",
+            "source_fingerprint": source_fingerprint or None,
+            "materialization_identity": identity,
+            "webspace_projection": projection,
         }
 
     def _run_development_acceptance(

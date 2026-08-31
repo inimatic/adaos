@@ -646,8 +646,12 @@ shared.
 
 Autonomous repair may move a ticket to `resolved` with evidence, comment on
 the ticket, and publish a candidate release or runtime overlay according to
-policy. It should not silently `verify` or `close` unless the ticket policy
-defines a deterministic acceptance gate and the evidence passes.
+policy. The default user-acceptance publication from Builder is a
+dev-to-workspace runtime overlay: workspace source remains the current stable
+source, while the user's workspace `.runtime`/materialized projection is
+prepared from the DEV repair so the real client can be used for acceptance.
+It should not silently `verify` or `close` unless the ticket policy defines a
+deterministic acceptance gate and the evidence passes.
 
 When a skill or scenario is not yet in development space, the default source
 strategy is project-level: materialize or fork the owning project when that is

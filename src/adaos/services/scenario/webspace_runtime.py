@@ -3954,6 +3954,7 @@ def _rebuild_action_refreshes_live_room(action: str) -> bool:
     if action_token in {
         "scenario_switch_rebuild",
         "builder_revision_apply",
+        "builder_aprobation_apply",
         "reload",
         "reset",
         "restore",
@@ -3968,6 +3969,7 @@ def _rebuild_action_applies_live_payload(action: str) -> bool:
     if action_token in {
         "scenario_switch_rebuild",
         "builder_revision_apply",
+        "builder_aprobation_apply",
         "reload",
         "reset",
         "artifact_subscription_sync",
@@ -5167,7 +5169,6 @@ class WebspaceScenarioRuntime:
             raw = decl.get("ydoc_defaults") or {}
             if not isinstance(raw, dict):
                 continue
-            skill_name = str(decl.get("skill") or "").strip()
             node_id = str(decl.get("node_id") or "").strip()
             for path, default in raw.items():
                 if not isinstance(path, str):
@@ -6556,9 +6557,7 @@ class WebspaceService:
         infos: List[WebspaceInfo] = []
         local_display = _local_node_display()
         for row in rows:
-            title = row.title
             kind = row.effective_kind
-            is_dev = row.is_dev
             if mode == "workspace" and kind != "workspace":
                 continue
             if mode == "dev" and kind != "dev":
@@ -7153,7 +7152,7 @@ async def _on_member_entity_name_changed(evt: Any) -> None:
     await _schedule_member_snapshot_rebuild_from_event(
         {
             "node_id": node_id,
-            "type": _topic(evt) or str(payload.get("reason") or "entity.name.changed"),
+            "type": _event_type(evt) or str(payload.get("reason") or "entity.name.changed"),
             "source": str(payload.get("source") or "").strip() or "entity",
         },
         force_rebuild=True,

@@ -640,7 +640,50 @@ def test_automation_projects_declared_and_observed_execution_budget(tmp_path: Pa
     assert projected["budget_usage"]["observed"]["attempts"] == 2
     assert projected["budget_usage"]["observed"]["wall_seconds"] == 60.0
     assert projected["budget_usage"]["observed"]["terminal"] is True
+    assert projected["budget_usage"]["status"] == "within_budget"
+    assert projected["budget_usage"]["overrun_tokens"] == 0
     assert projected["created_at"] == "2026-08-18T00:00:00Z"
+
+
+def test_automation_budget_projection_marks_legacy_max_tokens_overrun(tmp_path: Path) -> None:
+    run_root = tmp_path / "run"
+    runtime_root = run_root / "runtime"
+    runtime_root.mkdir(parents=True)
+    journal = runtime_root / "codex-events.jsonl"
+    journal.write_text(
+        json.dumps(
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 1200,
+                    "output_tokens": 600,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    session = {
+        "status": "completed",
+        "task": {
+            "assigned_at": "2026-08-18T00:00:00Z",
+            "updated_at": "2026-08-18T00:00:30Z",
+            "realize_request": {
+                "artifacts": {
+                    "execution_budget": {
+                        "max_tokens": 1000,
+                        "max_wall_seconds": 300,
+                    }
+                }
+            },
+        },
+        "local_run": {"path": str(run_root), "events_path": str(journal)},
+    }
+
+    projected = BuilderAutomationService.project_session(session)
+
+    assert projected["budget_usage"]["status"] == "exceeded"
+    assert projected["budget_usage"]["overrun_tokens"] == 800
 
 
 def test_terminal_codex_usage_is_reported_once_with_provider_counts(tmp_path: Path) -> None:
@@ -2302,6 +2345,97 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
     assert saved[-1]["status"] == "completed"
     assert saved[-1]["progress"]["status"] == "completed"
     assert saved[-1]["progress"]["task_id"] == "task.1"
+
+
+def test_finalize_activates_dev_ticket_aprobation_overlay_after_checkpoint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    calls: list[str] = []
+    saved: list[dict] = []
+
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_checkpoint_completed_artifacts",
+        lambda self, session: calls.append("checkpoint")
+        or [
+            {
+                "ok": True,
+                "kind": "scenario",
+                "name": "recipes",
+                "commit": "forge-1",
+                "package_digest": "sha256:" + "1" * 64,
+                "source_revision": "forge-1",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_prepare_and_activate_dev_skill",
+        lambda self, skill_id, **kwargs: calls.append(f"dev:{skill_id}")
+        or {"ok": True, "slot": "B"},
+    )
+
+    def fake_overlay(self, session, *, skill_ids, scenario_id, webspace_id):  # noqa: ARG001
+        calls.append("overlay")
+        assert list(skill_ids) == ["recipes_skill"]
+        assert scenario_id == "recipes"
+        assert webspace_id == "desktop"
+        return {"ok": True, "mode": "devspace_to_workspace_runtime_overlay"}
+
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_prepare_and_activate_aprobation_overlay",
+        fake_overlay,
+    )
+
+    class FakeWorkbench:
+        def __init__(self, **kwargs):  # noqa: ARG002
+            pass
+
+        async def ensure_dev_webspace(self, source_webspace_id, **kwargs):  # noqa: ARG002
+            calls.append("ensure")
+            return {
+                "dev_webspace_id": "desktop-dev",
+                "runtime": {"ok": True, "webspace_id": "desktop-dev"},
+            }
+
+    monkeypatch.setattr("adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench)
+    monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: saved.append(dict(value)))
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_notify_completed_session",
+        lambda self, value: calls.append("notify") or dict(value),
+    )
+
+    service._finalize_completed_session(
+        {
+            "session_id": "automation.scenario.recipes",
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "companion_skill_id": "recipes_skill",
+            "webspace_id": "desktop",
+            "current_task_id": "task.1",
+            "change_id": "change-1",
+            "status": "completed",
+            "links": {"development_ticket_id": "dticket.demo"},
+            "implementation_brief": json.dumps(
+                {
+                    "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+                    "ticket_id": "dticket.demo",
+                    "policy": {"publication_required": True},
+                }
+            ),
+        }
+    )
+
+    assert calls == ["dev:recipes_skill", "checkpoint", "overlay", "ensure", "notify"]
+    assert saved[-1]["completion_readiness"]["aprobation"]["ok"] is True
+    assert (
+        saved[-1]["completion_readiness"]["aprobation"]["mode"]
+        == "devspace_to_workspace_runtime_overlay"
+    )
 
 
 def test_finalize_reconciles_exact_canonical_checkpoint_without_replay(
