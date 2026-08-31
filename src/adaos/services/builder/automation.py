@@ -2614,6 +2614,22 @@ class BuilderAutomationService:
             for criterion in issue.get("acceptance_criteria") or []
             if str(criterion).strip()
         ]
+        is_dev_ticket_repair = bool(str(dict(session.get("links") or {}).get("development_ticket_id") or "").strip())
+        realization_constraints = {
+            "no_external_api": True,
+            "no_secrets": True,
+            "must_add_tests": True,
+            "must_update_manifest": not is_dev_ticket_repair,
+            "local_process_debug": True,
+        }
+        if is_dev_ticket_repair:
+            realization_constraints.update(
+                {
+                    "mode": "dev_ticket_repair",
+                    "minimal_diff": True,
+                    "preserve_declarative_manifests": True,
+                }
+            )
         request_id = (
             f"realize.{_safe_token(kind)}.{_safe_token(project_id)}."
             f"{_safe_token(session.get('change_id'), fallback='change')}."
@@ -2647,11 +2663,7 @@ class BuilderAutomationService:
                 "source_snapshot": source_snapshot,
             },
             "constraints": {
-                "no_external_api": True,
-                "no_secrets": True,
-                "must_add_tests": True,
-                "must_update_manifest": True,
-                "local_process_debug": True,
+                **realization_constraints,
             },
             "mcp": _sanitized_mcp_profile(session.get("mcp")) or {
                 "requested_scope": [

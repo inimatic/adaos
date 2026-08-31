@@ -1868,6 +1868,12 @@ class LocalSkillFactoryWorker:
             workspace,
         )
         allowed = [str(item) for item in (assignment.get("forge") or {}).get("sparse_paths") or []]
+        constraints = dict(assignment.get("constraints") or {})
+        is_dev_ticket_repair = (
+            str(constraints.get("mode") or "").strip() == "dev_ticket_repair"
+            or constraints.get("minimal_diff") is True
+            or "adaos.dev_ticket.autonomous_repair_brief.v1" in brief
+        )
         packet = {
             "schema": PACKET_SCHEMA,
             "task_id": assignment.get("task_id"),
@@ -1876,7 +1882,7 @@ class LocalSkillFactoryWorker:
             "companion_skill_ids": companions,
             "allowed_paths": allowed,
             "acceptance": dict(assignment.get("acceptance") or {}),
-            "constraints": dict(assignment.get("constraints") or {}),
+            "constraints": constraints,
             "brief": brief,
             "iteration_instruction": iteration,
             "workflow_transition": workflow_transition or None,
@@ -1904,6 +1910,13 @@ When `scenarios/{target_id}/.builder_previous_automation` exists, treat it as th
 
 When `scenarios/{target_id}/.builder_current_publication` exists, treat it as the immutable currently installed functional edition. Use it as the implementation baseline when the current Prototype or previous Automation is non-functional or omits established bindings. Merge the approved Prototype requirements into that baseline; never edit the retained publication directory itself.
 """
+        dev_ticket_repair_requirements = """
+## Dev Ticket repair constraints
+
+This is a bounded Dev Ticket repair, not a full project implementation pass. Treat the ticket summary, target_scope, evidence_refs and governed Issue acceptance as the complete repair scope. Prefer the smallest code or data change that satisfies the ticket and proves it with focused validation. Leave unrelated UX, manifests, versions, generated descriptors, and source layout unchanged.
+
+Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.json`, `webui.json`, `scenario.yaml`, or `skill.yaml` unless the ticket explicitly requires that manifest change. It is acceptable for a Dev Ticket repair to leave manifests untouched when the fix is in handlers, tests, resource data, comments, or scoped UI text. If the requested result needs core/API/SDK support that is unavailable to this project, stop with a blocker explanation and propose the required core/API/SDK Dev Ticket instead of patching around the limitation.
+""" if is_dev_ticket_repair else ""
         required_result = """1. Inspect all existing files under the target paths before editing.
 2. Edit only the current scenario's declarative prototype files; do not modify companion skills.
 3. Preserve useful UX while removing functional tool, service, credential, external-network, device, and production-data bindings from the Prototype.
@@ -1958,6 +1971,12 @@ When `scenarios/{target_id}/.builder_current_publication` exists, treat it as th
             if context_projection
             else "No governed context packet was supplied. Inspect the complete target source and fail closed if the requested scope or acceptance criteria are ambiguous."
         )
+        iteration_text = iteration or (
+            "This is a bounded Dev Ticket repair. Satisfy only the scoped ticket, "
+            "record focused evidence, and leave unrelated behavior unchanged."
+            if is_dev_ticket_repair
+            else "This is the initial realization. Implement the complete first working version."
+        )
         development_inputs = (
             json.dumps(development_context, ensure_ascii=False, indent=2, sort_keys=True)
             if development_context
@@ -1989,7 +2008,7 @@ You are implementing a real AdaOS project from an approved interface prototype. 
 
 ## Current chat iteration
 
-{iteration or 'This is the initial realization. Implement the complete first working version.'}
+{iteration_text}
 
 ## Governed Change context
 
@@ -2040,6 +2059,8 @@ the limitation in the final summary.
 ```json
 {root_mcp_context}
 ```
+
+{dev_ticket_repair_requirements}
 
 {transition_requirements}
 

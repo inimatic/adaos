@@ -117,6 +117,40 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["local_run"]["events_path"].endswith("codex-live.jsonl")
 
 
+def test_dev_ticket_repair_projects_minimal_diff_constraints(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief=json.dumps(
+            {
+                "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+                "ticket_id": "dticket.demo",
+                "summary": "Repair only the scoped issue.",
+            }
+        ),
+        links={"development_ticket_id": "dticket.demo"},
+        execution_budget={"max_wall_seconds": 300, "max_tokens": 20000},
+    )
+
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == started["session"]["current_task_id"]
+    )
+    constraints = task["realize_request"]["constraints"]
+    assert constraints["mode"] == "dev_ticket_repair"
+    assert constraints["minimal_diff"] is True
+    assert constraints["preserve_declarative_manifests"] is True
+    assert constraints["must_update_manifest"] is False
+    prompt = (
+        tmp_path / "runs" / started["session"]["current_task_id"] / "input" / "task.md"
+    ).read_text(encoding="utf-8")
+    assert "Dev Ticket repair constraints" in prompt
+    assert "This is a bounded Dev Ticket repair" in prompt
+
+
 def test_terminal_skill_candidate_runtime_release_is_exact_and_idempotent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
