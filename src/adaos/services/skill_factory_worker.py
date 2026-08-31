@@ -2375,7 +2375,14 @@ This is a bounded Dev Ticket repair, not a full project implementation pass. Tre
 
 Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.json`, `webui.json`, `scenario.yaml`, or `skill.yaml` unless the ticket explicitly requires that manifest change. It is acceptable for a Dev Ticket repair to leave manifests untouched when the fix is in handlers, tests, resource data, comments, or scoped UI text. If the requested result needs core/API/SDK support that is unavailable to this project, stop with a blocker explanation and propose the required core/API/SDK Dev Ticket instead of patching around the limitation.
 """ if is_dev_ticket_repair else ""
-        surgical_ui = is_dev_ticket_repair and constraints.get("repair_profile") == "surgical_ui"
+        repair_profile = str(constraints.get("repair_profile") or "").strip()
+        surgical_ui = is_dev_ticket_repair and repair_profile == "surgical_ui"
+        bounded_repair = is_dev_ticket_repair and repair_profile in {
+            "surgical_ui",
+            "surgical_data",
+            "resource_crud",
+            "subnet_data_integration",
+        }
         if surgical_ui:
             required_result = """1. This is source work inside an existing AdaOS skill, not Codex skill authoring. Do not load generic skill-creator instructions.
 2. Locate the named target refs with `rg`, then read only bounded surrounding slices. Do not dump a complete target file larger than 20 KB.
@@ -2384,6 +2391,14 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
 5. Run the focused test first. The trusted worker will run package validation afterward.
 6. Do not edit manifest version/updated_at, publish, activate, or access external services.
 7. Stop immediately after the requested diff and focused check succeed."""
+        elif bounded_repair:
+            required_result = """1. This is source work inside an existing AdaOS skill, not Codex skill authoring. Do not load generic skill-creator instructions.
+2. Locate the named target refs with `rg`, then read only bounded surrounding slices. Do not dump a complete target file larger than 20 KB.
+3. Implement only the scoped resource/data change in the exact authorized files. Use existing public AdaOS SDK/API contracts and preserve unrelated behavior.
+4. For subnet data, use only the admitted typed provider route and degrade without failing when it is unavailable. Do not invent or persist provider data.
+5. Add or update only focused regression coverage for the acceptance checks, then run that focused test first.
+6. Do not edit manifest version/updated_at, publish, activate, or access services not admitted by the ticket.
+7. Stop immediately after the scoped diff and focused check succeed."""
         elif is_dev_ticket_repair:
             required_result = """1. Inspect the complete targeted skill or scenario before editing.
 2. Reproduce the ticket against the real declared UI, handler, projection, or runtime path; a test that only confirms existing behavior is not acceptance evidence.
@@ -2471,8 +2486,8 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
             if root_mcp
             else "No task-scoped Root MCP route was admitted."
         )
-        if surgical_ui:
-            prompt = f"""# AdaOS bounded surgical UI repair
+        if bounded_repair:
+            prompt = f"""# AdaOS bounded Dev Ticket repair
 
 Target: {target_type}:{target_id}
 
