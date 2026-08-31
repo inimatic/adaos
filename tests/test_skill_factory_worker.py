@@ -1353,7 +1353,12 @@ def test_bounded_repair_prompt_requires_targeted_reads(
     assert "Never use `rg -A`, `rg -B`, or `rg -C`" in prompt
     assert "at most 400 source lines before the first edit" in prompt
     assert "Do not run tests or validation commands in the Codex turn" in prompt
-    assert "AdaOS bounded Dev Ticket repair" in prompt
+    expected_title = (
+        "AdaOS bounded surgical UI repair"
+        if repair_profile == "surgical_ui"
+        else "AdaOS bounded Dev Ticket repair"
+    )
+    assert expected_title in prompt
 
 
 def test_bounded_repair_prompt_omits_completed_builder_history(tmp_path: Path) -> None:
