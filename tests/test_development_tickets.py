@@ -90,6 +90,52 @@ class _FakeBuilderAutomation:
         }
 
 
+class _FakeFailingBuilderAutomation(_FakeBuilderAutomation):
+    def status(self, *, object_type: str, object_id: str):
+        suffix = str(self.counter or 1)
+        return self._failed_payload(
+            suffix=suffix,
+            links={
+                "object_type": object_type,
+                "object_id": object_id,
+            },
+        )
+
+    def _failed_payload(self, *, suffix: str, links: dict) -> dict:
+        task_id = f"factory.task.{suffix}"
+        session_id = f"automation.session.{suffix}"
+        return {
+            "ok": True,
+            "automation": {
+                "schema": "adaos.builder.automation_session_projection.v1",
+                "session_id": session_id,
+                "task_id": task_id,
+                "status": "failed",
+                "phase": "failed",
+                "terminal": True,
+                "busy": False,
+                "change_id": f"change.{suffix}",
+                "result_branch": f"builder/dev-ticket-{suffix}",
+                "webspace_id": "desktop",
+                "links": dict(links),
+                "budget_usage": {"declared": {"max_tokens": 200000}, "observed": {}},
+                "error": "codex timeout",
+            },
+            "session": {
+                "session_id": session_id,
+                "status": "failed",
+                "current_task_id": task_id,
+                "task": {"task_id": task_id, "status": "failed", "failure": {"message": "codex timeout"}},
+                "completion_readiness": {"ok": False, "checks": [{"id": "codex", "status": "failed"}]},
+                "codex_usage_accounting": {
+                    "status": "unavailable",
+                    "reason": "No provider usage was found in the terminal Codex journal.",
+                    "total_tokens": None,
+                },
+            },
+        }
+
+
 def _schema(name: str) -> dict:
     return json.loads((Path(__file__).parents[1] / "src" / "adaos" / "abi" / name).read_text(encoding="utf-8"))
 
@@ -322,7 +368,7 @@ def test_autonomous_repair_links_builder_automation_and_resolves_with_evidence(t
         target_scope={
             "type": "skill",
             "id": "demo_metrics_skill",
-            "source": "workspace",
+            "source": "dev",
             "component_ref": "skill:demo_metrics_skill",
         },
         source="client_feedback",
@@ -384,6 +430,53 @@ def test_autonomous_repair_links_builder_automation_and_resolves_with_evidence(t
         "factory.task.1",
         "factory.task.2",
     ]
+
+
+def test_failed_autonomous_repair_returns_ticket_to_builder_queue_with_evidence(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    automation = _FakeFailingBuilderAutomation()
+    signal = service.capture_signal(
+        kind="development_request",
+        summary="Tune Demo Metrics Resource Workbench marker",
+        target_scope={
+            "type": "skill",
+            "id": "demo_metrics_skill",
+            "source": "dev",
+            "component_ref": "skill:demo_metrics_skill",
+        },
+        source="client_feedback",
+        owner_area="skill",
+        component_ref="skill:demo_metrics_skill",
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="accepted",
+        owner_area="skill",
+        component_ref="skill:demo_metrics_skill",
+    )["ticket"]
+
+    result = service.start_autonomous_repair(
+        ticket["ticket_id"],
+        actor="user:owner",
+        repair_service=repair_service,
+        automation_service=automation,
+        webspace_id="desktop",
+    )
+
+    assert result["sync"]["resolved"] is False
+    assert result["ticket"]["status"] == "ready_for_builder"
+    builder_ref = result["ticket"]["builder_refs"][0]
+    assert builder_ref["status"] == "failed"
+    assert builder_ref["automation_status"] == "failed"
+    evidence_types = {ref["type"] for ref in result["ticket"]["evidence_refs"]}
+    assert {"builder_automation", "skill_factory_task", "builder_change", "validation"} <= evidence_types
+    assert any(item["kind"] == "builder_automation_failed" for item in result["ticket"]["history"])
+    repair = repair_service.list(project_id="demo_metrics_skill")[0]
+    assert repair["status"] == "in_progress"
+    assert repair["context"]["automation"]["status"] == "failed"
+    assert repair["context"]["usage"]["receipt_status"] == "unavailable"
 
 
 def test_close_ticket_maps_terminal_reason_to_ticket_and_signal_status(tmp_path: Path) -> None:

@@ -2368,9 +2368,10 @@ class DevelopmentTicketService:
         if receipt.get("root_event_id"):
             token_usage["root_event_id"] = receipt.get("root_event_id")
         work_status = "in_progress"
+        failed_automation = automation_status in {"failed", "cancelled", "errored", "error"}
         if automation_status in {"completed"}:
             work_status = "resolved" if _automation_has_validation_evidence(automation) else "in_progress"
-        elif automation_status in {"failed", "cancelled", "error"}:
+        elif failed_automation:
             work_status = automation_status
         automation_ref = {
             "type": "builder_repair_task",
@@ -2418,7 +2419,12 @@ class DevelopmentTicketService:
                 refs.append({**automation_ref, "created_at": now, "updated_at": now})
             ticket["builder_refs"] = refs[-100:]
             if _text(ticket.get("status")) not in {"resolved", "verified", "closed", *TERMINAL_TICKET_STATES}:
-                ticket["status"] = "in_builder"
+                ticket["status"] = "ready_for_builder" if failed_automation else "in_builder"
+            if failed_automation:
+                ticket["evidence_refs"] = _merge_refs(
+                    ticket.get("evidence_refs") or [],
+                    _automation_evidence_refs(automation, repair_id=_text(repair_id)),
+                )
             ticket["updated_at"] = now
             self._append_history(
                 ticket,
@@ -2432,10 +2438,23 @@ class DevelopmentTicketService:
                     "recorded_at": now,
                 },
             )
+            if failed_automation:
+                self._append_history(
+                    ticket,
+                    {
+                        "kind": "builder_automation_failed",
+                        "repair_id": _text(repair_id),
+                        "automation_session_id": session_id or None,
+                        "automation_task_id": task_id or None,
+                        "automation_status": automation_status or None,
+                        "actor": _text(actor) or "builder.automation",
+                        "recorded_at": now,
+                    },
+                )
             for signal_id in ticket.get("signal_ids") or []:
                 signal = state["signals"].get(signal_id)
                 if signal:
-                    signal["status"] = "repair_created"
+                    signal["status"] = "in_progress" if failed_automation else "repair_created"
                     signal["builder_ref"] = {
                         **_mapping(signal.get("builder_ref")),
                         "repair_id": _text(repair_id),
