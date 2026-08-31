@@ -24,6 +24,7 @@ def _headers() -> dict[str, str]:
 class _FakeAutomationService:
     def __init__(self) -> None:
         self.started: list[dict] = []
+        self.workspace_service = _FakeWorkspaceService()
 
     def start_from_execute(self, **kwargs):
         self.started.append(dict(kwargs))
@@ -74,6 +75,34 @@ class _FakeAutomationService:
         }
 
 
+class _FakeWorkspaceService:
+    def __init__(self) -> None:
+        self.materialized: list[dict] = []
+
+    def materialize_dev_source(self, **kwargs):
+        self.materialized.append(dict(kwargs))
+        return {
+            "ok": True,
+            "status": "materialized",
+            "development_source": {
+                "status": "source_available",
+                "source": "dev",
+                "target_type": kwargs.get("kind"),
+                "target_id": kwargs.get("artifact_id"),
+                "project_id": kwargs.get("project_id"),
+                "options": ["use_existing_dev_source"],
+                "default_option": "use_existing_dev_source",
+            },
+            "components": [
+                {
+                    "kind": kwargs.get("kind"),
+                    "name": kwargs.get("artifact_id"),
+                    "status": "materialized",
+                }
+            ],
+        }
+
+
 def test_development_ticket_api_create_list_show_evidence_and_defer(tmp_path: Path) -> None:
     client = _client(DevelopmentTicketService(state_dir=tmp_path))
 
@@ -90,7 +119,7 @@ def test_development_ticket_api_create_list_show_evidence_and_defer(tmp_path: Pa
     assert created.status_code == 201, created.text
     created_payload = created.json()
     ticket_id = created_payload["ticket"]["ticket_id"]
-    assert created_payload["detail"]["development_source"]["status"] == "source_available"
+    assert created_payload["detail"]["development_source"]["status"] == "needs_materialization"
 
     listed = client.get(
         "/api/development-tickets?target_id=daily_dashboard",
@@ -456,7 +485,7 @@ def test_development_ticket_api_starts_autonomous_repair_and_exposes_builder_usa
     started = client.post(
         f"/api/development-tickets/{ticket_id}/autonomous-repair",
         headers=_headers(),
-        json={"actor": "browser", "webspace_id": "desktop"},
+        json={"actor": "browser", "webspace_id": "desktop", "source_strategy": "materialize_dev_source"},
     )
 
     assert started.status_code == 200, started.text
@@ -467,6 +496,9 @@ def test_development_ticket_api_starts_autonomous_repair_and_exposes_builder_usa
     assert automation.started[0]["object_type"] == "skill"
     assert automation.started[0]["object_id"] == "demo_metrics_skill"
     assert automation.started[0]["links"]["development_ticket_id"] == ticket_id
+    assert automation.started[0]["execution_budget"]["max_tokens"] == 200000
+    assert automation.workspace_service.materialized[0]["kind"] == "skill"
+    assert automation.workspace_service.materialized[0]["artifact_id"] == "demo_metrics_skill"
     work_item = payload["detail"]["work_stream"]["builder_work_items"][0]
     assert work_item["repair_id"] == payload["repair"]["repair_id"]
     assert work_item["automation_session_id"] == "automation.session.api"

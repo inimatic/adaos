@@ -88,6 +88,13 @@ TICKET_RELATION_KINDS = {
     "supersedes",
     "caused_by",
 }
+
+DEFAULT_AUTONOMOUS_REPAIR_BUDGET = {
+    "schema": "adaos.builder.execution_budget.v1",
+    "source": "development_ticket.default",
+    "max_tokens": 200000,
+    "max_wall_seconds": 1800,
+}
 INVERSE_TICKET_RELATION = {
     "blocks": "blocked_by",
     "blocked_by": "blocks",
@@ -270,25 +277,50 @@ def _normalized_ticket(ticket: Mapping[str, Any]) -> dict[str, Any]:
     return _clone(out)
 
 
-def development_source_options(target_scope: Mapping[str, Any]) -> dict[str, Any]:
+def _ref_tail(value: Any, prefix: str) -> str:
+    token = _text(value)
+    wanted = f"{prefix}:"
+    return token[len(wanted):].strip() if token.startswith(wanted) else ""
+
+
+def _development_source_target(target_scope: Mapping[str, Any]) -> dict[str, str | None]:
     target = _mapping(target_scope)
-    source = _text(target.get("source")).lower()
-    target_type = _text(target.get("type")) or "unknown"
+    target_type = _text(target.get("type")).lower().rstrip("s") or "unknown"
     target_id = _text(target.get("id") or target.get("name"))
-    if source in {"dev", "workspace", "local", "source"}:
-        return {
-            "status": "source_available",
-            "source": source or "workspace",
-            "target_type": target_type,
-            "target_id": target_id or None,
-            "options": ["use_existing_dev_source"],
-            "default_option": "use_existing_dev_source",
-        }
-    return {
+    project_id = _text(target.get("project_id") or _ref_tail(target.get("project_ref"), "project")) or None
+    if target_type in {"project", "scenario", "skill"} and target_id:
+        return {"type": target_type, "id": target_id, "project_id": project_id}
+    for key, object_type in (
+        ("scenario_ref", "scenario"),
+        ("skill_ref", "skill"),
+        ("scenario_id", "scenario"),
+        ("skill_id", "skill"),
+        ("project_ref", "project"),
+        ("project_id", "project"),
+    ):
+        value = target.get(key)
+        ref_value = _ref_tail(value, object_type) if str(value or "").startswith(f"{object_type}:") else _text(value)
+        if ref_value:
+            return {"type": object_type, "id": ref_value, "project_id": project_id}
+    return {"type": target_type, "id": target_id or None, "project_id": project_id}
+
+
+def _source_materialization_options(
+    *,
+    source: str,
+    target_type: str,
+    target_id: str | None,
+    project_id: str | None = None,
+    source_path: str | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = {
         "status": "needs_materialization",
         "source": source or "unknown",
         "target_type": target_type,
         "target_id": target_id or None,
+        "project_id": project_id or None,
+        "source_path": source_path or None,
         "options": [
             "materialize_dev_source",
             "create_local_fork",
@@ -297,12 +329,49 @@ def development_source_options(target_scope: Mapping[str, Any]) -> dict[str, Any
         ],
         "default_option": "materialize_dev_source",
     }
+    if extra:
+        payload.update(dict(extra))
+    return payload
 
 
-def _ref_tail(value: Any, prefix: str) -> str:
-    token = _text(value)
-    wanted = f"{prefix}:"
-    return token[len(wanted):].strip() if token.startswith(wanted) else ""
+def development_source_options(target_scope: Mapping[str, Any]) -> dict[str, Any]:
+    target = _mapping(target_scope)
+    source = _text(target.get("source")).lower()
+    resolved = _development_source_target(target)
+    target_type = str(resolved.get("type") or "unknown")
+    target_id = _text(resolved.get("id"))
+    project_id = _text(resolved.get("project_id")) or None
+    if source in {"dev", "local", "source"}:
+        return {
+            "status": "source_available",
+            "source": source or "dev",
+            "target_type": target_type,
+            "target_id": target_id or None,
+            "project_id": project_id,
+            "options": ["use_existing_dev_source"],
+            "default_option": "use_existing_dev_source",
+        }
+    if target_type in {"project", "scenario", "skill"} and target_id:
+        try:
+            from adaos.services.builder.workspace import BuilderWorkspaceService
+
+            actual = BuilderWorkspaceService.from_context().development_source_status(
+                kind=target_type,
+                artifact_id=target_id,
+                project_id=project_id,
+            )
+            if actual:
+                if source:
+                    actual = {**actual, "declared_source": source}
+                return actual
+        except Exception:
+            pass
+    return _source_materialization_options(
+        source=source or "unknown",
+        target_type=target_type,
+        target_id=target_id or None,
+        project_id=project_id,
+    )
 
 
 def _automation_target_from_ticket(ticket: Mapping[str, Any]) -> dict[str, str]:
@@ -336,6 +405,16 @@ def _automation_target_from_ticket(ticket: Mapping[str, Any]) -> dict[str, str]:
         if _ref_tail(value, "scenario"):
             return {"object_type": "scenario", "object_id": _ref_tail(value, "scenario")}
     raise ValueError("Dev Ticket target must resolve to a skill or scenario before autonomous repair")
+
+
+def _project_id_for_materialization(ticket: Mapping[str, Any], development_source: Mapping[str, Any]) -> str | None:
+    target = _mapping(ticket.get("target_scope"))
+    meta = _mapping(ticket.get("metadata"))
+    for source in (development_source, target, meta):
+        token = _text(source.get("project_id") or _ref_tail(source.get("project_ref"), "project"))
+        if token:
+            return token
+    return None
 
 
 def _automation_projection(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -1098,6 +1177,8 @@ class DevelopmentTicketService:
         webspace_id: str = "desktop",
         conversation_id: str | None = None,
         source_strategy: str | None = None,
+        execution_budget: Mapping[str, Any] | None = None,
+        agent_profile: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         ticket = self.get_ticket(ticket_id)
         if not ticket:
@@ -1107,6 +1188,11 @@ class DevelopmentTicketService:
         target = _automation_target_from_ticket(ticket)
         development_source = development_source_options(_mapping(ticket.get("target_scope")))
         strategy = _text(source_strategy)
+        materialization: dict[str, Any] | None = None
+        if automation_service is None:
+            from adaos.services.builder.automation import BuilderAutomationService
+
+            automation_service = BuilderAutomationService.from_context()
         if development_source.get("status") == "needs_materialization":
             if not strategy:
                 raise ValueError("autonomous repair requires source_strategy when development source is missing")
@@ -1123,6 +1209,19 @@ class DevelopmentTicketService:
                 }
             if strategy != "materialize_dev_source":
                 raise ValueError(f"development source strategy is not implemented for autonomous repair: {strategy}")
+            workspace_service = getattr(automation_service, "workspace_service", None)
+            if workspace_service is None:
+                from adaos.services.builder.workspace import BuilderWorkspaceService
+
+                workspace_service = BuilderWorkspaceService.from_context()
+            materialization = workspace_service.materialize_dev_source(
+                kind=target["object_type"],
+                artifact_id=target["object_id"],
+                project_id=_project_id_for_materialization(ticket, development_source),
+            )
+            if not materialization.get("ok"):
+                raise ValueError("development source materialization failed")
+            development_source = _mapping(materialization.get("development_source")) or development_source
         service = repair_service or BuilderRepairService(state_dir=self.state_dir)
         handoff = self.handoff_ticket(
             ticket["ticket_id"],
@@ -1132,22 +1231,22 @@ class DevelopmentTicketService:
         )
         repair = handoff["repair"]
         repair_id = _text(repair.get("repair_id"))
-        if automation_service is None:
-            from adaos.services.builder.automation import BuilderAutomationService
-
-            automation_service = BuilderAutomationService.from_context()
         brief = _autonomous_repair_brief(handoff["ticket"], repair, target=target)
+        bounded_budget = dict(execution_budget) if isinstance(execution_budget, Mapping) else dict(DEFAULT_AUTONOMOUS_REPAIR_BUDGET)
         started = automation_service.start_from_execute(
             object_type=target["object_type"],
             object_id=target["object_id"],
             implementation_brief=brief,
             webspace_id=_text(webspace_id) or "desktop",
             conversation_id=_text(conversation_id) or f"dev-ticket:{ticket['ticket_id']}",
+            execution_budget=bounded_budget,
+            agent_profile=dict(agent_profile) if isinstance(agent_profile, Mapping) else None,
             links={
                 "development_ticket_id": ticket["ticket_id"],
                 "builder_repair_id": repair_id,
                 "development_ticket_component_ref": _text(handoff["ticket"].get("component_ref")) or None,
                 "development_ticket_owner_area": _text(handoff["ticket"].get("owner_area")) or None,
+                "development_source_materialization": materialization,
             },
         )
         linked_repair = service.link_automation(repair_id, automation=started, actor=_text(actor) or "builder")
@@ -1172,6 +1271,7 @@ class DevelopmentTicketService:
             "automation": sync.get("automation") or started,
             "sync": sync,
             "development_source": development_source,
+            "materialization": materialization,
         }
 
     def sync_builder_repair(

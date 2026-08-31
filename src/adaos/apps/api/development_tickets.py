@@ -97,6 +97,8 @@ class DevTicketAutonomousRepairRequest(BaseModel):
     webspace_id: str = "desktop"
     conversation_id: str | None = None
     source_strategy: str | None = None
+    execution_budget: dict[str, Any] | None = None
+    agent_profile: dict[str, Any] | None = None
 
 
 class DevTicketBuilderSyncRequest(BaseModel):
@@ -1107,6 +1109,8 @@ def start_autonomous_repair(
             webspace_id=body.webspace_id,
             conversation_id=body.conversation_id,
             source_strategy=body.source_strategy,
+            execution_budget=body.execution_budget,
+            agent_profile=body.agent_profile,
         )
         return {"ok": True, **result, "detail": _ticket_detail(service, result["ticket"])}
     except KeyError as exc:

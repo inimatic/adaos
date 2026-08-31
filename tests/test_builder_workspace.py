@@ -83,6 +83,71 @@ def _write_demo_skill(root: Path, name: str = "demo_skill") -> Path:
     return skill_dir
 
 
+def test_materialize_dev_source_copies_workspace_project_owned_slice(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    workspace = tmp_path / "workspace"
+    scenario_dir = workspace / "scenarios" / "demo_scene"
+    skill_dir = workspace / "skills" / "demo_skill"
+    project_dir = workspace / "projects" / "demo_project"
+    scenario_dir.mkdir(parents=True)
+    skill_dir.mkdir(parents=True)
+    project_dir.mkdir(parents=True)
+    (scenario_dir / "scenario.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "id": "demo_scene",
+                "version": "1.0.0",
+                "depends": ["demo_skill"],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (scenario_dir / "scenario.json").write_text(json.dumps({"schema": "adaos.webui.v1"}), encoding="utf-8")
+    (skill_dir / "skill.yaml").write_text(
+        yaml.safe_dump({"name": "demo_skill", "version": "1.0.0", "tools": []}, sort_keys=False),
+        encoding="utf-8",
+    )
+    (skill_dir / "handlers").mkdir()
+    (skill_dir / "handlers" / "main.py").write_text("def handle():\n    return {'ok': True}\n", encoding="utf-8")
+    (project_dir / "project.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema": "adaos.project.v1",
+                "id": "demo_project",
+                "version": "1.0.0",
+                "components": {
+                    "owned": [
+                        {"ref": "scenario:demo_scene", "role": "primary"},
+                        {"ref": "skill:demo_skill", "role": "implementation"},
+                    ],
+                    "dependencies": [],
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    before = service.development_source_status(kind="scenario", artifact_id="demo_scene")
+    result = service.materialize_dev_source(kind="scenario", artifact_id="demo_scene")
+    after = service.development_source_status(kind="scenario", artifact_id="demo_scene")
+
+    assert before["status"] == "needs_materialization"
+    assert before["project_id"] == "demo_project"
+    assert result["ok"] is True
+    assert result["project_id"] == "demo_project"
+    assert {f"{item['kind']}:{item['name']}" for item in result["components"]} == {
+        "project:demo_project",
+        "scenario:demo_scene",
+        "skill:demo_skill",
+    }
+    assert after["status"] == "source_available"
+    assert (service.dev_scenarios_root / "demo_scene" / "scenario.yaml").is_file()
+    assert (service.dev_skills_root / "demo_skill" / "handlers" / "main.py").is_file()
+    assert (service.dev_scenarios_root.parent / "projects" / "demo_project" / "project.yaml").is_file()
+
+
 def test_builder_skill_default_rewrites_conversation_manifest_refs(tmp_path: Path) -> None:
     service = _service(tmp_path)
 

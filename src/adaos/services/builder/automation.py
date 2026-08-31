@@ -611,6 +611,8 @@ class BuilderAutomationService:
         prototype_handoff: Mapping[str, Any] | None = None,
         development_session_id: str | None = None,
         links: Mapping[str, Any] | None = None,
+        execution_budget: Mapping[str, Any] | None = None,
+        agent_profile: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         kind, project_id = self._project_ref(object_type, object_id)
         brief = str(implementation_brief or "").strip()
@@ -618,6 +620,8 @@ class BuilderAutomationService:
             raise ValueError("implementation_brief is required after Prompt IDE Execute")
         _reject_transport_corruption(brief, field="implementation_brief")
         external_links = dict(links) if isinstance(links, Mapping) else {}
+        admitted_execution_budget = dict(execution_budget) if isinstance(execution_budget, Mapping) else None
+        admitted_agent_profile = dict(agent_profile) if isinstance(agent_profile, Mapping) else None
         admitted_development_session_id = str(development_session_id or "").strip() or None
         if admitted_development_session_id:
             self._load_development_session(
@@ -792,6 +796,11 @@ class BuilderAutomationService:
                 companion_skill_ids=companion_skill_ids,
                 implementation_brief=brief,
             )
+            if created_artifacts:
+                refreshed_companion_skill_ids = self._resolve_companion_skill_ids(kind, project_id)
+                if refreshed_companion_skill_ids != companion_skill_ids:
+                    companion_skill_ids = refreshed_companion_skill_ids
+                    companion_skill_id = companion_skill_ids[0] if companion_skill_ids else None
             session = {
                 "schema": AUTOMATION_SESSION_SCHEMA,
                 "session_id": f"automation.{kind}.{project_id}",
@@ -809,6 +818,8 @@ class BuilderAutomationService:
                 "source_prototype_version": self._project_prototype_ref(kind, project_id),
                 "prototype_handoff": admitted_handoff,
                 "development_session_id": admitted_development_session_id,
+                "execution_budget": admitted_execution_budget,
+                "agent_profile": admitted_agent_profile,
                 "links": external_links,
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
                 "status": "starting",
@@ -882,6 +893,25 @@ class BuilderAutomationService:
                 else self.dev_skills_root / artifact_id
             )
             if root.exists():
+                continue
+            try:
+                materialized = service.materialize_dev_source(
+                    kind=artifact_kind,
+                    artifact_id=artifact_id,
+                )
+            except (FileNotFoundError, ValueError, OSError):
+                materialized = {}
+            if root.exists():
+                created.append(
+                    {
+                        "kind": artifact_kind,
+                        "name": artifact_id,
+                        "draft_id": None,
+                        "artifact_root": str(root),
+                        "source": "workspace_materialized",
+                        "materialization": materialized or None,
+                    }
+                )
                 continue
             result = service.create_draft(
                 kind=artifact_kind,
@@ -2629,8 +2659,11 @@ class BuilderAutomationService:
             and isinstance(development_context.get("execution_budget"), Mapping)
             else None
         )
+        if execution_budget is None and isinstance(session.get("execution_budget"), Mapping):
+            execution_budget = session.get("execution_budget")
         if execution_budget:
-            request["timeout_seconds"] = int(execution_budget["max_wall_seconds"])
+            if execution_budget.get("max_wall_seconds"):
+                request["timeout_seconds"] = int(execution_budget["max_wall_seconds"])
             request["artifacts"]["execution_budget"] = copy.deepcopy(execution_budget)
         agent_profile = (
             development_context.get("agent_profile")
@@ -2638,6 +2671,8 @@ class BuilderAutomationService:
             and isinstance(development_context.get("agent_profile"), Mapping)
             else None
         )
+        if agent_profile is None and isinstance(session.get("agent_profile"), Mapping):
+            agent_profile = session.get("agent_profile")
         if agent_profile:
             request["artifacts"]["agent_profile"] = copy.deepcopy(agent_profile)
         return self.factory.submit_realize_request(request)

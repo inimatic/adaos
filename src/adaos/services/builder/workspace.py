@@ -15,7 +15,7 @@ import yaml
 from jsonschema import Draft202012Validator, Draft7Validator, ValidationError
 
 from adaos.services import conversation_links, conversation_safety
-from adaos.services.runtime_paths import current_repo_root, current_state_dir
+from adaos.services.runtime_paths import current_base_dir, current_repo_root, current_state_dir
 from adaos.services.skill.validation import validate_data_route_contract
 
 
@@ -260,6 +260,32 @@ def _ctx_config_dev_workspace(ctx: Any) -> Path | None:
     return None
 
 
+def _config_dev_workspace_from_base(base_dir: Path) -> Path | None:
+    node_path = Path(base_dir).expanduser().resolve() / "node.yaml"
+    try:
+        data = yaml.safe_load(node_path.read_text(encoding="utf-8-sig")) if node_path.is_file() else {}
+    except (OSError, ValueError, yaml.YAMLError):
+        data = {}
+    payload = data if isinstance(data, Mapping) else {}
+    dev = payload.get("dev") if isinstance(payload.get("dev"), Mapping) else {}
+    workspace = str(dev.get("workspace") or "").strip()
+    if workspace and workspace != "dev":
+        path = Path(workspace).expanduser()
+        if not path.is_absolute():
+            path = Path(base_dir) / path
+        return path.resolve()
+    subnet = payload.get("subnet") if isinstance(payload.get("subnet"), Mapping) else {}
+    subnet_id = str(
+        payload.get("subnet_id")
+        or subnet.get("id")
+        or subnet.get("bootstrap_id")
+        or ""
+    ).strip()
+    if subnet_id:
+        return (Path(base_dir) / "dev" / subnet_id).resolve()
+    return (Path(base_dir) / "dev").resolve()
+
+
 @dataclass(slots=True)
 class BuilderWorkspaceService:
     """Create draft workspaces and preview bundles without mutating runtime state."""
@@ -278,10 +304,12 @@ class BuilderWorkspaceService:
     def from_context(cls) -> "BuilderWorkspaceService":
         repo_root = current_repo_root()
         state_dir = current_state_dir()
+        base_dir = current_base_dir()
         builder_root = None
         workspace_root = None
         skills_root = None
         scenarios_root = None
+        dev_workspace = None
         dev_skills_root = None
         dev_scenarios_root = None
         developer_service = None
@@ -306,6 +334,26 @@ class BuilderWorkspaceService:
                 workspace_root = repo_root / ".adaos" / "workspace"
                 skills_root = workspace_root / "skills"
                 scenarios_root = workspace_root / "scenarios"
+        if workspace_root is None:
+            workspace_root = (base_dir / "workspace").resolve()
+        if skills_root is None:
+            skills_root = workspace_root / "skills"
+        if scenarios_root is None:
+            scenarios_root = workspace_root / "scenarios"
+        if dev_workspace is None:
+            dev_workspace = _config_dev_workspace_from_base(base_dir)
+        if dev_workspace is not None:
+            if dev_skills_root is None:
+                dev_skills_root = dev_workspace / "skills"
+            if dev_scenarios_root is None:
+                dev_scenarios_root = dev_workspace / "scenarios"
+        if developer_service is None:
+            try:
+                from adaos.services.root.service import RootDeveloperService
+
+                developer_service = RootDeveloperService()
+            except Exception:
+                developer_service = None
         return cls(
             state_dir=state_dir,
             builder_root=builder_root,
@@ -359,6 +407,325 @@ class BuilderWorkspaceService:
         if root is None:
             raise ValueError("AdaOS dev workspace is not available in the current context")
         return (Path(root).expanduser().resolve() / artifact_id).resolve()
+
+    def _dev_projects_root(self) -> Path:
+        for root in (self.dev_scenarios_root, self.dev_skills_root):
+            if root is not None:
+                return (Path(root).expanduser().resolve().parent / "projects").resolve()
+        raise ValueError("AdaOS dev workspace is not available in the current context")
+
+    def _workspace_artifact_root(self, kind: str, artifact_id: str) -> Path | None:
+        normalized = str(kind or "").strip().lower().rstrip("s")
+        if normalized not in {"skill", "scenario"}:
+            return None
+        roots: list[Path] = []
+        if normalized == "skill":
+            if self.skills_root is not None:
+                roots.append(Path(self.skills_root))
+            if self.workspace_root is not None:
+                roots.append(Path(self.workspace_root) / "skills")
+        else:
+            if self.scenarios_root is not None:
+                roots.append(Path(self.scenarios_root))
+            if self.workspace_root is not None:
+                roots.append(Path(self.workspace_root) / "scenarios")
+        if self.repo_root is not None:
+            roots.append(Path(self.repo_root) / ".adaos" / "workspace" / f"{normalized}s")
+        for root in dict.fromkeys(root.resolve() for root in roots):
+            candidate = (root / artifact_id).resolve()
+            if candidate.is_dir():
+                return candidate
+        return None
+
+    def _workspace_projects_root(self) -> Path | None:
+        roots: list[Path] = []
+        if self.workspace_root is not None:
+            roots.append(Path(self.workspace_root) / "projects")
+        if self.repo_root is not None:
+            roots.append(Path(self.repo_root) / ".adaos" / "workspace" / "projects")
+        for root in dict.fromkeys(root.resolve() for root in roots):
+            if root.is_dir():
+                return root
+        return None
+
+    def _dev_project_root(self, project_id: str) -> Path | None:
+        try:
+            return (self._dev_projects_root() / _slug(project_id)).resolve()
+        except ValueError:
+            return None
+
+    def _workspace_project_root(self, project_id: str) -> Path | None:
+        root = self._workspace_projects_root()
+        if root is None:
+            return None
+        candidate = (root / _slug(project_id)).resolve()
+        return candidate if candidate.is_dir() else None
+
+    def _read_workspace_project_manifest(self, project_id: str) -> tuple[Path, dict[str, Any]] | None:
+        root = self._workspace_project_root(project_id)
+        if root is None:
+            return None
+        for name in ("project.yaml", "project.yml", "project.json"):
+            path = root / name
+            if not path.is_file():
+                continue
+            try:
+                data = _read_json(path) if path.suffix == ".json" else _read_yaml(path)
+            except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError):
+                data = {}
+            if isinstance(data, Mapping):
+                return path, dict(data)
+        return None
+
+    @staticmethod
+    def _project_owned_component_refs(manifest: Mapping[str, Any]) -> list[str]:
+        components = manifest.get("components") if isinstance(manifest.get("components"), Mapping) else {}
+        refs = [
+            str(item.get("ref") or "").strip()
+            for item in components.get("owned") or []
+            if isinstance(item, Mapping) and str(item.get("ref") or "").strip()
+        ]
+        return list(dict.fromkeys(refs))
+
+    def _workspace_project_ids_owning_ref(self, component_ref: str) -> list[str]:
+        token = str(component_ref or "").strip()
+        if not token:
+            return []
+        root = self._workspace_projects_root()
+        if root is None:
+            return []
+        matches: list[str] = []
+        for child in sorted(item for item in root.iterdir() if item.is_dir()):
+            manifest_info = self._read_workspace_project_manifest(child.name)
+            if manifest_info is None:
+                continue
+            _, manifest = manifest_info
+            if token in self._project_owned_component_refs(manifest):
+                project_id = str(manifest.get("id") or child.name).strip() or child.name
+                if project_id not in matches:
+                    matches.append(project_id)
+        return matches
+
+    def development_source_status(
+        self,
+        *,
+        kind: str,
+        artifact_id: str,
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_kind = str(kind or "").strip().lower().rstrip("s")
+        artifact_id = _slug(artifact_id)
+        if normalized_kind not in {"project", "scenario", "skill"}:
+            return {
+                "status": "needs_materialization",
+                "source": "unknown",
+                "target_type": normalized_kind or "unknown",
+                "target_id": artifact_id or None,
+                "options": ["materialize_dev_source", "create_local_fork", "create_runtime_overlay", "defer"],
+                "default_option": "materialize_dev_source",
+            }
+        if normalized_kind == "project":
+            dev_project = self._dev_project_root(artifact_id)
+            if dev_project is not None and dev_project.is_dir():
+                return {
+                    "status": "source_available",
+                    "source": "dev",
+                    "target_type": "project",
+                    "target_id": artifact_id,
+                    "project_id": artifact_id,
+                    "dev_source_path": str(dev_project),
+                    "options": ["use_existing_dev_source"],
+                    "default_option": "use_existing_dev_source",
+                }
+            workspace_project = self._workspace_project_root(artifact_id)
+            source = "workspace" if workspace_project is not None else "unknown"
+            return {
+                "status": "needs_materialization",
+                "source": source,
+                "target_type": "project",
+                "target_id": artifact_id,
+                "project_id": artifact_id,
+                "source_path": str(workspace_project) if workspace_project is not None else None,
+                "options": ["materialize_dev_source", "create_local_fork", "create_runtime_overlay", "defer"],
+                "default_option": "materialize_dev_source",
+            }
+        try:
+            dev_artifact = self._dev_artifact_root(normalized_kind, artifact_id)
+        except ValueError:
+            dev_artifact = None
+        if dev_artifact is not None and dev_artifact.is_dir():
+            return {
+                "status": "source_available",
+                "source": "dev",
+                "target_type": normalized_kind,
+                "target_id": artifact_id,
+                "project_id": project_id or None,
+                "dev_source_path": str(dev_artifact),
+                "options": ["use_existing_dev_source"],
+                "default_option": "use_existing_dev_source",
+            }
+        workspace_artifact = self._workspace_artifact_root(normalized_kind, artifact_id)
+        owners = [project_id] if project_id else self._workspace_project_ids_owning_ref(f"{normalized_kind}:{artifact_id}")
+        owners = [str(item).strip() for item in owners if str(item).strip()]
+        source = "workspace" if workspace_artifact is not None or owners else "unknown"
+        return {
+            "status": "needs_materialization",
+            "source": source,
+            "target_type": normalized_kind,
+            "target_id": artifact_id,
+            "project_id": owners[0] if len(owners) == 1 else None,
+            "project_ids": owners,
+            "ambiguous_project_owners": owners if len(owners) > 1 else [],
+            "source_path": str(workspace_artifact) if workspace_artifact is not None else None,
+            "options": ["materialize_dev_source", "create_local_fork", "create_runtime_overlay", "defer"],
+            "default_option": "materialize_dev_source",
+        }
+
+    def materialize_dev_source(
+        self,
+        *,
+        kind: str,
+        artifact_id: str,
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_kind = str(kind or "").strip().lower().rstrip("s")
+        artifact_id = _slug(artifact_id)
+        if normalized_kind not in {"project", "scenario", "skill"}:
+            raise ValueError("kind must be project, scenario, or skill")
+        status = self.development_source_status(
+            kind=normalized_kind,
+            artifact_id=artifact_id,
+            project_id=project_id,
+        )
+        if status.get("status") == "source_available":
+            return {
+                "ok": True,
+                "status": "already_present",
+                "strategy": "materialize_dev_source",
+                "target_type": normalized_kind,
+                "target_id": artifact_id,
+                "development_source": status,
+                "components": [],
+            }
+
+        project_ids: list[str] = []
+        if normalized_kind == "project":
+            project_ids = [artifact_id]
+        elif project_id:
+            project_ids = [_slug(project_id)]
+        else:
+            project_ids = self._workspace_project_ids_owning_ref(f"{normalized_kind}:{artifact_id}")[:1]
+
+        components: list[dict[str, Any]] = []
+        if project_ids:
+            for current_project_id in project_ids:
+                manifest_info = self._read_workspace_project_manifest(current_project_id)
+                if manifest_info is None:
+                    raise FileNotFoundError(f"workspace project source not found: {current_project_id}")
+                manifest_path, manifest = manifest_info
+                project_source_root = manifest_path.parent
+                project_target_root = self._dev_projects_root() / _slug(current_project_id)
+                components.append(
+                    self._copy_workspace_dir(
+                        source_root=project_source_root,
+                        target_root=project_target_root,
+                        kind="project",
+                        artifact_id=current_project_id,
+                    )
+                )
+                refs = self._project_owned_component_refs(manifest)
+                requested_ref = f"{normalized_kind}:{artifact_id}" if normalized_kind != "project" else ""
+                if requested_ref and requested_ref not in refs:
+                    refs.append(requested_ref)
+                for ref in refs:
+                    ref_kind, _, ref_id = ref.partition(":")
+                    ref_kind = ref_kind.strip().lower().rstrip("s")
+                    ref_id = _slug(ref_id)
+                    if ref_kind not in {"skill", "scenario"} or not ref_id:
+                        continue
+                    source_root = self._workspace_artifact_root(ref_kind, ref_id)
+                    if source_root is None:
+                        components.append(
+                            {
+                                "kind": ref_kind,
+                                "name": ref_id,
+                                "status": "missing_workspace_source",
+                                "source_root": None,
+                                "artifact_root": None,
+                            }
+                        )
+                        continue
+                    target_root = self._dev_artifact_root(ref_kind, ref_id)
+                    components.append(
+                        self._copy_workspace_dir(
+                            source_root=source_root,
+                            target_root=target_root,
+                            kind=ref_kind,
+                            artifact_id=ref_id,
+                        )
+                    )
+        else:
+            source_root = self._workspace_artifact_root(normalized_kind, artifact_id)
+            if source_root is None:
+                raise FileNotFoundError(f"workspace {normalized_kind} source not found: {artifact_id}")
+            target_root = self._dev_artifact_root(normalized_kind, artifact_id)
+            components.append(
+                self._copy_workspace_dir(
+                    source_root=source_root,
+                    target_root=target_root,
+                    kind=normalized_kind,
+                    artifact_id=artifact_id,
+                )
+            )
+
+        materialized = [item for item in components if item.get("status") == "materialized"]
+        missing = [item for item in components if item.get("status") == "missing_workspace_source"]
+        return {
+            "ok": not missing,
+            "status": "materialized" if materialized else "already_present",
+            "strategy": "materialize_dev_source",
+            "target_type": normalized_kind,
+            "target_id": artifact_id,
+            "project_id": project_ids[0] if len(project_ids) == 1 else None,
+            "components": components,
+            "development_source": self.development_source_status(
+                kind=normalized_kind,
+                artifact_id=artifact_id,
+                project_id=project_ids[0] if len(project_ids) == 1 else project_id,
+            ),
+        }
+
+    def _copy_workspace_dir(
+        self,
+        *,
+        source_root: Path,
+        target_root: Path,
+        kind: str,
+        artifact_id: str,
+    ) -> dict[str, Any]:
+        source = Path(source_root).expanduser().resolve()
+        target = Path(target_root).expanduser().resolve()
+        if target.is_dir():
+            return {
+                "kind": kind,
+                "name": artifact_id,
+                "status": "already_present",
+                "source_root": str(source),
+                "artifact_root": str(target),
+            }
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staging = target.parent / f".{target.name}.materializing"
+        if staging.exists():
+            shutil.rmtree(staging)
+        _copytree(source, staging)
+        staging.replace(target)
+        return {
+            "kind": kind,
+            "name": artifact_id,
+            "status": "materialized",
+            "source_root": str(source),
+            "artifact_root": str(target),
+        }
 
     def _require_developer_service(self) -> Any:
         if self.developer_service is None:
