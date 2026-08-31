@@ -801,6 +801,7 @@ def test_terminal_codex_usage_marks_preserved_candidate_validation_as_exact_zero
     assert receipt["total_tokens"] == 0
     assert receipt["billable_tokens"] == 0
     assert result["codex_usage_history"] == [receipt]
+    assert result["updated_at"]
 
 
 def test_terminal_codex_usage_reports_live_budget_estimate(tmp_path: Path) -> None:

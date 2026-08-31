@@ -2217,7 +2217,14 @@ class BuilderAutomationService:
         )
         usage = self._codex_run_usage(local_run)
         if not usage:
-            if self._is_zero_model_continuation(current, task_id):
+            zero_model_continuation = self._is_zero_model_continuation(current, task_id)
+            if (
+                not zero_model_continuation
+                and accounting.get("status") == "unavailable"
+                and str(accounting.get("task_id") or "") == task_id
+            ):
+                return current
+            if zero_model_continuation:
                 receipt = {
                     "schema": "adaos.builder.codex_usage_receipt.v1",
                     "task_id": task_id,
@@ -2249,6 +2256,7 @@ class BuilderAutomationService:
                 }
             current["codex_usage_accounting"] = receipt
             self._retain_codex_usage_receipt(current, receipt)
+            current["updated_at"] = _now_iso()
             return current
         if self.codex_usage_reporter is None:
             usage_accuracy = str(usage.get("accuracy") or "provider_reported")
@@ -2263,6 +2271,7 @@ class BuilderAutomationService:
             }
             current["codex_usage_accounting"] = receipt
             self._retain_codex_usage_receipt(current, receipt)
+            current["updated_at"] = _now_iso()
             return current
         idempotency_key = f"builder:{current.get('session_id') or 'session'}:{task_id}:codex-usage:v1"
         object_type = str(current.get("object_type") or "").strip()
@@ -2318,6 +2327,7 @@ class BuilderAutomationService:
             }
         current["codex_usage_accounting"] = receipt
         self._retain_codex_usage_receipt(current, receipt)
+        current["updated_at"] = _now_iso()
         return current
 
     @staticmethod
@@ -2744,7 +2754,10 @@ class BuilderAutomationService:
                 ),
                 "updated_at": readiness.get("completed_at") or current.get("updated_at"),
             }
-            current["updated_at"] = current["progress"]["updated_at"]
+            current["updated_at"] = max(
+                str(current.get("updated_at") or ""),
+                str(current["progress"]["updated_at"] or ""),
+            )
             current.pop("last_failure", None)
         elif task_progress and isinstance(task_progress[-1], Mapping) and not finalizing:
             current["progress"] = dict(task_progress[-1])
