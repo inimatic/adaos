@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Mapping
 from typing import Any
 
 
@@ -24,22 +25,33 @@ async def rebuild_webspace_projection(
     webspace_id: str | None = None,
     action: str,
     source_of_truth: str,
+    scenario_id: str | None = None,
+    scenario_resolution: str | None = None,
+    skill_source_mode: str | None = None,
 ) -> dict[str, Any]:
     from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
 
     target_webspace = str(webspace_id or "").strip() or _default_webspace_id()
-    await rebuild_webspace_from_sources(
-        target_webspace,
-        action=str(action or "").strip() or "runtime_refresh",
-        source_of_truth=str(source_of_truth or "").strip() or "skill_runtime",
-    )
-    return {
-        "ok": True,
-        "accepted": True,
-        "webspace_id": target_webspace,
-        "action": str(action or "").strip() or "runtime_refresh",
-        "source_of_truth": str(source_of_truth or "").strip() or "skill_runtime",
+    action_token = str(action or "").strip() or "runtime_refresh"
+    source_token = str(source_of_truth or "").strip() or "skill_runtime"
+    rebuild_kwargs: dict[str, Any] = {
+        "action": action_token,
+        "source_of_truth": source_token,
     }
+    if str(scenario_id or "").strip():
+        rebuild_kwargs["scenario_id"] = str(scenario_id).strip()
+    if str(scenario_resolution or "").strip():
+        rebuild_kwargs["scenario_resolution"] = str(scenario_resolution).strip()
+    if str(skill_source_mode or "").strip():
+        rebuild_kwargs["skill_source_mode"] = str(skill_source_mode).strip()
+    raw = await rebuild_webspace_from_sources(target_webspace, **rebuild_kwargs)
+    result = dict(raw) if isinstance(raw, Mapping) else {}
+    result.setdefault("ok", True)
+    result.setdefault("accepted", bool(result.get("ok")))
+    result.setdefault("webspace_id", target_webspace)
+    result.setdefault("action", action_token)
+    result.setdefault("source_of_truth", source_token)
+    return result
 
 
 def rebuild_webspace_projection_sync(
@@ -47,12 +59,18 @@ def rebuild_webspace_projection_sync(
     webspace_id: str | None = None,
     action: str,
     source_of_truth: str,
+    scenario_id: str | None = None,
+    scenario_resolution: str | None = None,
+    skill_source_mode: str | None = None,
 ) -> dict[str, Any]:
     async def _runner() -> dict[str, Any]:
         return await rebuild_webspace_projection(
             webspace_id=webspace_id,
             action=action,
             source_of_truth=source_of_truth,
+            scenario_id=scenario_id,
+            scenario_resolution=scenario_resolution,
+            skill_source_mode=skill_source_mode,
         )
 
     try:

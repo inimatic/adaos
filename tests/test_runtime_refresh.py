@@ -247,6 +247,44 @@ def test_refresh_skill_runtime_recovers_transient_migration_deactivation() -> No
     ]
 
 
+def test_rebuild_webspace_projection_forwards_dev_skill_materialization(monkeypatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def _fake_rebuild(webspace_id: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"webspace_id": webspace_id, **kwargs})
+        return {
+            "ok": True,
+            "accepted": True,
+            "scenario_id": "web_desktop",
+            "materialization": {"ready": True},
+        }
+
+    module = types.ModuleType("adaos.services.scenario.webspace_runtime")
+    module.rebuild_webspace_from_sources = _fake_rebuild
+    monkeypatch.setitem(sys.modules, "adaos.services.scenario.webspace_runtime", module)
+
+    result = rebuild_webspace_projection_sync(
+        webspace_id="desktop",
+        action="skill_aprobation_sync",
+        source_of_truth="devspace_runtime_overlay",
+        scenario_id="web_desktop",
+        scenario_resolution="builder_aprobation_overlay",
+        skill_source_mode="dev",
+    )
+
+    assert result["materialization"]["ready"] is True
+    assert calls == [
+        {
+            "webspace_id": "desktop",
+            "action": "skill_aprobation_sync",
+            "source_of_truth": "devspace_runtime_overlay",
+            "scenario_id": "web_desktop",
+            "scenario_resolution": "builder_aprobation_overlay",
+            "skill_source_mode": "dev",
+        }
+    ]
+
+
 def test_refresh_skill_runtime_isolates_same_version_source_revision() -> None:
     calls: list[str] = []
 

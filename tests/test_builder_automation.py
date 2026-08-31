@@ -2634,6 +2634,39 @@ def test_dev_ticket_repair_defaults_to_aprobation_overlay() -> None:
     )
 
 
+def test_aprobation_overlay_requires_ready_webspace_materialization() -> None:
+    assert not BuilderAutomationService._aprobation_overlay_ready(
+        {
+            "ok": True,
+            "skills": [
+                {
+                    "id": "demo_metrics_skill",
+                    "webspace_projection": {"ok": True, "accepted": True},
+                    "materialization_cache": {
+                        "pending": True,
+                        "materialization": {"ready": False},
+                    },
+                }
+            ],
+        }
+    )
+    assert BuilderAutomationService._aprobation_overlay_ready(
+        {
+            "ok": True,
+            "skills": [
+                {
+                    "id": "demo_metrics_skill",
+                    "webspace_projection": {
+                        "ok": True,
+                        "accepted": True,
+                        "materialization": {"ready": True},
+                    },
+                }
+            ],
+        }
+    )
+
+
 def test_completed_workflow_reconciliation_backfills_aprobation_overlay(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

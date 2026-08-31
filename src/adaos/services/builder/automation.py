@@ -1834,7 +1834,7 @@ class BuilderAutomationService:
             str(current.get("status") or "").strip() == "completed"
             and bool(readiness.get("ok"))
             and self._session_requires_aprobation_overlay(current)
-            and not bool(aprobation.get("ok"))
+            and not self._aprobation_overlay_ready(aprobation)
         ):
             _log.info(
                 "reconciling required Dev Ticket aprobation session=%s task=%s",
@@ -1852,6 +1852,38 @@ class BuilderAutomationService:
                 )
             return reconciled or current
         return current
+
+    @staticmethod
+    def _aprobation_overlay_ready(value: Mapping[str, Any] | None) -> bool:
+        receipt = dict(value) if isinstance(value, Mapping) else {}
+        if not bool(receipt.get("ok")):
+            return False
+        for raw_skill in receipt.get("skills") or []:
+            if not isinstance(raw_skill, Mapping):
+                continue
+            skill = dict(raw_skill)
+            projection = (
+                dict(skill.get("webspace_projection"))
+                if isinstance(skill.get("webspace_projection"), Mapping)
+                else {}
+            )
+            if projection and not bool(projection.get("ok")):
+                return False
+            materialization = (
+                projection.get("materialization")
+                if isinstance(projection.get("materialization"), Mapping)
+                else None
+            )
+            cache = (
+                skill.get("materialization_cache")
+                if isinstance(skill.get("materialization_cache"), Mapping)
+                else {}
+            )
+            if materialization is None and isinstance(cache.get("materialization"), Mapping):
+                materialization = cache["materialization"]
+            if isinstance(materialization, Mapping) and materialization.get("ready") is not True:
+                return False
+        return True
 
     @staticmethod
     def empty_projection(*, webspace_id: str | None = None) -> dict[str, Any]:
@@ -3383,7 +3415,7 @@ class BuilderAutomationService:
         )
         if (
             self._session_requires_aprobation_overlay(current)
-            and not bool(existing_aprobation.get("ok"))
+            and not self._aprobation_overlay_ready(existing_aprobation)
         ):
             companion_skill_ids = self._session_companion_skill_ids(current)
             scenario_id = object_id if object_type == "scenario" else None
@@ -4270,9 +4302,28 @@ class BuilderAutomationService:
         )
         projection = rebuild_webspace_projection_sync(
             webspace_id=webspace_id,
-            action="builder_aprobation_skill_runtime",
+            action="skill_aprobation_sync",
             source_of_truth="devspace_runtime_overlay",
+            scenario_resolution="builder_aprobation_overlay",
+            skill_source_mode="dev",
         )
+        materialization = (
+            dict(projection.get("materialization"))
+            if isinstance(projection.get("materialization"), Mapping)
+            else {}
+        )
+        if not bool(projection.get("ok")) or materialization.get("ready") is not True:
+            raise RuntimeError(
+                str(projection.get("error") or "DEV skill webspace materialization is not ready")
+            )
+        cache = {
+            **dict(cache),
+            "status": "ready",
+            "pending": False,
+            "finished_at": time.time(),
+            "materialization": materialization,
+            "error": None,
+        }
         return {
             "ok": True,
             "id": skill_id,
