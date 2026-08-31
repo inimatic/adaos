@@ -1454,6 +1454,16 @@ def test_bounded_repair_prompt_includes_only_qualified_json_target_slices(
         ),
         encoding="utf-8",
     )
+    (skill / "handlers").mkdir()
+    (skill / "handlers" / "main.py").write_text(
+        'GRID_ID = "grid"\n',
+        encoding="utf-8",
+    )
+    (skill / "tests").mkdir()
+    (skill / "tests" / "test_webui.py").write_text(
+        'def test_grid_id():\n    assert "grid" == "grid"\n',
+        encoding="utf-8",
+    )
     target_ref = "registry.modals.metrics.schema.semantic.views[id=grid]"
     moved_target_ref = "semantic.workspaces[0].widgets[id=grid]"
     assignment = {
@@ -1476,6 +1486,7 @@ def test_bounded_repair_prompt_includes_only_qualified_json_target_slices(
                 "repair_hints": {
                     "target_files": [
                         "skills/demo/webui.json",
+                        "skills/demo/handlers/main.py",
                         "skills/demo/tests/test_webui.py",
                     ],
                     "target_refs": [target_ref, moved_target_ref, "registry.modals.missing"],
@@ -1499,10 +1510,80 @@ def test_bounded_repair_prompt_includes_only_qualified_json_target_slices(
     assert context["resolved"][1]["resolved_by"] == "unique_id"
     assert context["resolved"][1]["resolved_path"].endswith("views[id=grid]")
     assert context["missing"] == ["registry.modals.missing"]
+    assert {item["file"] for item in context["source_slices"]} == {
+        "skills/demo/handlers/main.py",
+        "skills/demo/tests/test_webui.py",
+    }
+    assert context["coverage"]["complete"] is True
     assert "collection_grid" in prompt
     assert "not selected" in prompt
     assert "edit directly and do not rediscover" in prompt
     assert "Keep the chart sibling unchanged." in prompt
+
+
+def test_fully_qualified_surgical_ui_prompt_forbids_model_discovery(
+    tmp_path: Path,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    workspace = tmp_path / "workspace"
+    input_dir = tmp_path / "input"
+    skill = workspace / "skills" / "demo"
+    (skill / "handlers").mkdir(parents=True)
+    (skill / "tests").mkdir()
+    (skill / "webui.json").write_text(
+        json.dumps({"buttons": [{"id": "open-workspace", "label": "Workspace"}]}),
+        encoding="utf-8",
+    )
+    (skill / "handlers" / "main.py").write_text(
+        'BUTTON = {"id": "open-workspace", "label": "Workspace"}\n',
+        encoding="utf-8",
+    )
+    (skill / "tests" / "test_ui.py").write_text(
+        'assert {"id": "open-workspace", "label": "Workspace"}\n',
+        encoding="utf-8",
+    )
+    assignment = {
+        "task_id": "task.fully-qualified-ui",
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {"sparse_paths": ["skills/demo/"]},
+        "constraints": {
+            "mode": "dev_ticket_repair",
+            "repair_profile": "surgical_ui",
+            "minimal_diff": True,
+        },
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": json.dumps(
+                    {
+                        "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+                        "summary": "Rename Workspace to Data workspace.",
+                    }
+                ),
+                "repair_hints": {
+                    "target_files": [
+                        "skills/demo/webui.json",
+                        "skills/demo/handlers/main.py",
+                        "skills/demo/tests/test_ui.py",
+                    ],
+                    "target_refs": ["buttons[id=open-workspace]"],
+                },
+            }
+        },
+    }
+
+    worker._build_packet(assignment, workspace, input_dir)
+    prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+    packet = json.loads((input_dir / "packet.json").read_text(encoding="utf-8"))
+
+    assert packet["repair_target_context"]["coverage"]["complete"] is True
+    assert "Apply the exact patch directly in one file-change operation" in prompt
+    assert "Do not run discovery, source-read, diff, status, test, or validation commands" in prompt
+    assert "Locate one exact target ID" not in prompt
 
 
 def test_bounded_dev_ticket_rejects_large_manifest_collapse(tmp_path: Path) -> None:

@@ -507,15 +507,15 @@ def _bounded_repair_target_context(
     """Resolve qualified JSON refs before Codex starts source discovery."""
 
     refs = _string_list(repair_hints.get("target_refs"))[:12]
-    files = [
+    target_files = [
         str(item).replace("\\", "/").strip("/")
         for item in _string_list(repair_hints.get("target_files"))
-        if str(item).lower().endswith(".json")
     ][:6]
-    if not refs or not files:
+    json_files = [item for item in target_files if item.lower().endswith(".json")]
+    if not refs or not target_files:
         return {}
     documents: list[tuple[str, Any]] = []
-    for relative in files:
+    for relative in json_files:
         path = (workspace / relative).resolve(strict=False)
         if workspace.resolve() not in path.parents or not path.is_file():
             continue
@@ -601,11 +601,58 @@ def _bounded_repair_target_context(
             missing.append(target_ref)
         else:
             resolved.append(match)
+
+    anchors: list[str] = []
+    for target_ref in refs:
+        selector_match = re.search(r"\[id=([^\]]+)\]", target_ref)
+        if selector_match and selector_match.group(1) not in anchors:
+            anchors.append(selector_match.group(1))
+    source_slices: list[dict[str, Any]] = []
+    for relative in target_files:
+        if relative.lower().endswith(".json"):
+            continue
+        path = (workspace / relative).resolve(strict=False)
+        if workspace.resolve() not in path.parents or not path.is_file():
+            continue
+        try:
+            if path.stat().st_size > 1024 * 1024:
+                continue
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for anchor in anchors:
+            matches = [index for index, line in enumerate(lines) if anchor in line][:3]
+            for index in matches:
+                start = max(0, index - 6)
+                end = min(len(lines), index + 7)
+                candidate = {
+                    "file": relative,
+                    "anchor": anchor,
+                    "line_start": start + 1,
+                    "line_end": end,
+                    "source": "\n".join(lines[start:end]),
+                }
+                encoded = json.dumps(candidate, ensure_ascii=False, sort_keys=True).encode("utf-8")
+                if len(encoded) > 8 * 1024 or used_bytes + len(encoded) > BOUNDED_REPAIR_TARGET_CONTEXT_BYTES:
+                    continue
+                used_bytes += len(encoded)
+                source_slices.append(candidate)
+    covered_files = {
+        str(item.get("file") or "")
+        for item in [*resolved, *source_slices]
+        if str(item.get("file") or "")
+    }
     return {
         "schema": "adaos.builder.qualified_target_context.v1",
         "resolved": resolved,
+        "source_slices": source_slices,
         "missing": missing,
         "bytes": used_bytes,
+        "coverage": {
+            "target_files": target_files,
+            "covered_files": sorted(covered_files),
+            "complete": bool(target_files) and covered_files == set(target_files),
+        },
     }
 
 
@@ -2632,8 +2679,24 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
             "resource_crud",
             "subnet_data_integration",
         }
+        repair_coverage = (
+            dict(repair_target_context.get("coverage") or {})
+            if isinstance(repair_target_context.get("coverage"), Mapping)
+            else {}
+        )
+        qualified_repair_complete = bool(repair_coverage.get("complete")) and not list(
+            repair_target_context.get("missing") or []
+        )
         if surgical_ui:
-            required_result = """1. This is source work inside an existing AdaOS skill, not Codex skill authoring. Do not load generic skill-creator instructions.
+            if qualified_repair_complete:
+                required_result = """1. This is source work inside an existing AdaOS skill, not Codex skill authoring. Do not load generic skill-creator instructions.
+2. Qualified target slices cover every authorized file. Apply the exact patch directly in one file-change operation. Do not run discovery, source-read, diff, status, test, or validation commands; the trusted worker owns those checks.
+3. Apply only the requested visible UI change; do not explore AdaOS core or unrelated project files.
+4. Update only the focused regression assertion named by the acceptance checks.
+5. Do not edit manifest version/updated_at, publish, activate, or access external services.
+6. Stop immediately after the requested file change and return its concise summary."""
+            else:
+                required_result = """1. This is source work inside an existing AdaOS skill, not Codex skill authoring. Do not load generic skill-creator instructions.
 2. Locate one exact target ID at a time with `rg -n --max-count 12` in one file. Every discovery command must return at most {command_output_lines} lines and {command_output_bytes} bytes. Never use `rg -A`, `rg -B`, or `rg -C` across a manifest, multiple patterns, or multiple files. Read at most one 120-line surrounding slice after each exact match, and at most {discovery_lines} source lines before the first edit. Narrow a query instead of printing more output.
 3. Apply only the requested visible UI change; do not explore AdaOS core or unrelated project files.
 4. Add or update only the focused regression assertion named by the acceptance checks.
