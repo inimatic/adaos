@@ -53,6 +53,9 @@ _HUB_LOCAL_TOOL_NAMES: tuple[str, ...] = (
 _UI_NAVIGATION_TOOL_NAMES: tuple[str, ...] = (
     "prompt_engineer_skill:prompt_select_project",
 )
+_WORKSPACE_AUTOSYNC_EXEMPT_TOOL_PREFIXES: tuple[str, ...] = (
+    "slideshow_skill:",
+)
 _DECLARED_SIDE_EFFECT_RISK_CLASS: dict[str, str] = {
     "safe": "safe",
     "none": "safe",
@@ -1089,6 +1092,8 @@ def _should_autosync_workspace_runtime(*, tool_name: str) -> bool:
     if _is_readonly_snapshot_tool(tool_name):
         return False
     full_name = str(tool_name or "").strip()
+    if full_name.startswith(_WORKSPACE_AUTOSYNC_EXEMPT_TOOL_PREFIXES):
+        return False
     public_tool = full_name.split(":", 1)[-1]
     if _looks_readonly_tool(public_tool) or _looks_ui_navigation_tool(full_name, public_tool):
         return False

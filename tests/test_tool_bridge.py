@@ -108,6 +108,14 @@ def test_workspace_autosync_skips_project_owned_skill(monkeypatch) -> None:
     assert updates == []
 
 
+def test_workspace_autosync_skips_slideshow_runtime_tools(monkeypatch) -> None:
+    monkeypatch.setattr(tool_bridge_module, "_debug_autosync_enabled", lambda: True)
+
+    assert tool_bridge_module._should_autosync_workspace_runtime(
+        tool_name="slideshow_skill:control_redevice_slideshow"
+    ) is False
+
+
 def _patch_runtime_approval_pending_actions(monkeypatch) -> list[dict[str, object]]:
     published: list[dict[str, object]] = []
 
