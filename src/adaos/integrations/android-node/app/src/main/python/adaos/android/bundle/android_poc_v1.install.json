@@ -21,6 +21,12 @@
       "version": "0.6.2+adaos.1",
       "abi": "cp311-android_26_arm64_v8a",
       "sha256": "48730c726ee14411806ee29af8a727d2453b873815523ccfa51e512812597a95"
+    },
+    {
+      "name": "y-py",
+      "version": "0.6.2+adaos.1",
+      "abi": "cp311-android_26_armeabi_v7a",
+      "sha256": "60ddd91713295b1c4c6aa612b1ea2cc24374c13dcc1f71f7115c873abf0b1421"
     }
   ],
   "models": [
