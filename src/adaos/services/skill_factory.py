@@ -117,6 +117,13 @@ def _safe_branch_fragment(value: Any) -> str:
     return _slug(value, fallback="task").replace("_", "-")
 
 
+def _safe_config_token(value: Any, *, fallback: str) -> str:
+    token = _slug(value, fallback=fallback).replace("-", "_").replace(".", "_")
+    if token and not (token[0].isalpha() or token[0] == "_"):
+        token = f"mcp_{token}"
+    return token or fallback
+
+
 def _json_clone(value: Any) -> Any:
     return json.loads(json.dumps(value, ensure_ascii=False, default=str))
 
@@ -216,6 +223,52 @@ def _assignment_mcp_scope(raw_scope: Any) -> list[str]:
     if not scope:
         scope = ["read_capability_snapshot", "read_requirements", "read_mock_data", "run_staging_validation"]
     return scope
+
+
+def _normalize_root_mcp_profile(value: Any) -> dict[str, Any]:
+    root = _mapping(value)
+    if not root:
+        return {}
+    transport = _text(root.get("transport")).lower().replace("-", "_")
+    url = _text(root.get("url") or root.get("mcp_http_url") or root.get("endpoint"))
+    if not transport:
+        transport = "streamable_http" if url else ""
+    if transport not in {"streamable_http", "http"} or not url:
+        return {}
+    normalized: dict[str, Any] = {
+        "enabled": bool(root.get("enabled", True)),
+        "transport": "streamable_http",
+        "server_name": _safe_config_token(root.get("server_name") or root.get("name"), fallback="adaos_root"),
+        "url": url,
+        "required": bool(root.get("required", False)),
+    }
+    token_env = _text(
+        root.get("bearer_token_env_var")
+        or root.get("auth_env_var")
+        or root.get("access_token_env_var")
+    )
+    if token_env:
+        normalized["bearer_token_env_var"] = token_env
+    enabled_tools = _string_list(root.get("enabled_tools"))
+    if enabled_tools:
+        normalized["enabled_tools"] = enabled_tools
+    disabled_tools = _string_list(root.get("disabled_tools"))
+    if disabled_tools:
+        normalized["disabled_tools"] = disabled_tools
+    scopes = _string_list(root.get("scope") or root.get("requested_scope"))
+    if scopes:
+        normalized["scope"] = scopes
+    for key in ("startup_timeout_sec", "tool_timeout_sec"):
+        try:
+            value_int = int(root.get(key) or 0)
+        except (TypeError, ValueError):
+            value_int = 0
+        if value_int > 0:
+            normalized[key] = value_int
+    approval = _text(root.get("default_tools_approval_mode"))
+    if approval in {"auto", "prompt", "writes", "approve"}:
+        normalized["default_tools_approval_mode"] = approval
+    return normalized
 
 
 def _truthy(value: Any) -> bool:
@@ -432,6 +485,7 @@ class SkillFactoryService:
         artifacts = _mapping(raw.get("artifacts"))
         constraints = _mapping(raw.get("constraints"))
         mcp = _mapping(raw.get("mcp"))
+        root_mcp = _normalize_root_mcp_profile(mcp.get("root_mcp"))
 
         draft_id = _text(draft.get("draft_id") or links.get("draft_id") or artifacts.get("draft_id"))
         if draft_id:
@@ -505,6 +559,15 @@ class SkillFactoryService:
         created_at = _text(raw.get("created_at")) or now
         realization_policy = _classify_realization_policy(raw, target, default_constraints)
         snapshot_context = _snapshot_context(raw, artifacts, now=now)
+        normalized_mcp = {
+            key: value
+            for key, value in mcp.items()
+            if key not in {"root_mcp", "access_token"}
+        }
+        normalized_mcp["requested_scope"] = requested_scope
+        if root_mcp:
+            normalized_mcp["root_mcp"] = root_mcp
+
         return {
             **raw,
             "schema": REALIZE_REQUEST_SCHEMA,
@@ -528,7 +591,7 @@ class SkillFactoryService:
             "realization_policy": realization_policy,
             "snapshot_context": snapshot_context,
             "constraints": default_constraints,
-            "mcp": {**mcp, "requested_scope": requested_scope},
+            "mcp": normalized_mcp,
             "acceptance": acceptance,
             "links": links,
             "source": _mapping(raw.get("source")) or {
@@ -1501,6 +1564,19 @@ class SkillFactoryService:
         lease = _mapping(task.get("access_lease"))
         realize_request = _mapping(task.get("realize_request"))
         agent_profile = _mapping(_mapping(realize_request.get("artifacts")).get("agent_profile"))
+        assignment_mcp = {
+            "endpoint": _text(mcp.get("endpoint")) or f"/v1/root/mcp/task/{task_id}",
+            "token_ref": f"task_access_lease:{lease.get('lease_id') or task_id}",
+            "scope": _assignment_mcp_scope(mcp.get("requested_scope")),
+            "lease_id": lease.get("lease_id"),
+            "access_token": access_token,
+            "expires_at": lease.get("expires_at"),
+            "credential_refs": _string_list(lease.get("credential_refs")),
+        }
+        root_mcp = _normalize_root_mcp_profile(mcp.get("root_mcp"))
+        if root_mcp:
+            assignment_mcp["root_mcp"] = root_mcp
+
         return {
             "schema": DEV_TASK_ASSIGNMENT_SCHEMA,
             "task_id": task_id,
@@ -1517,15 +1593,7 @@ class SkillFactoryService:
                 "branch_creator": forge.get("branch_creator") or "dev_node",
                 "sparse_paths": _normalize_sparse_paths(forge.get("sparse_paths")),
             },
-            "mcp": {
-                "endpoint": _text(mcp.get("endpoint")) or f"/v1/root/mcp/task/{task_id}",
-                "token_ref": f"task_access_lease:{lease.get('lease_id') or task_id}",
-                "scope": _assignment_mcp_scope(mcp.get("requested_scope")),
-                "lease_id": lease.get("lease_id"),
-                "access_token": access_token,
-                "expires_at": lease.get("expires_at"),
-                "credential_refs": _string_list(lease.get("credential_refs")),
-            },
+            "mcp": assignment_mcp,
             "codex": {
                 "instruction_file": f".adaos/tasks/{_safe_branch_fragment(task_id)}/task.md",
                 "working_dir": "workspace/",

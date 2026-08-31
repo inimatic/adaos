@@ -1573,6 +1573,62 @@ def test_codex_executor_scopes_mutable_adaos_runtime_to_task(
     assert environment["ADAOS_BASE_DIR"] != "C:/host-adaos"
 
 
+def test_codex_executor_projects_root_mcp_config_without_prompt_secret(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ADAOS_ROOT_MCP_AUTH", "secret-token-value")
+    profile = {
+        "url": "https://ru.api.inimatic.com/v1/root/mcp",
+        "server_name": "adaos-root",
+        "bearer_token_env_var": "ADAOS_ROOT_MCP_AUTH",
+        "enabled_tools": "get_status",
+        "disabled_tools": ["unsafe_write", "unsafe_write"],
+        "tool_timeout_sec": 45,
+    }
+    executor = SubprocessCodexExecutor(repo_root=tmp_path / "repo")
+
+    config_args = executor._root_mcp_config_args(profile)
+    environment = executor._execution_environment(root_mcp=profile)
+
+    assert "mcp_servers.adaos_root.url" in " ".join(config_args)
+    assert "mcp_servers.adaos_root.bearer_token_env_var" in " ".join(config_args)
+    assert any(arg.endswith('enabled_tools=["get_status"]') for arg in config_args)
+    assert any(arg.endswith('disabled_tools=["unsafe_write"]') for arg in config_args)
+    assert "secret-token-value" not in " ".join(config_args)
+    assert environment["ADAOS_ROOT_MCP_AUTH"] == "secret-token-value"
+
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    workspace = tmp_path / "workspace"
+    input_dir = tmp_path / "input"
+    (workspace / "skills" / "demo").mkdir(parents=True)
+    assignment = {
+        "task_id": "task.mcp",
+        "target": {"type": "skill", "id": "demo"},
+        "mcp": {"root_mcp": profile},
+        "forge": {"sparse_paths": ["skills/demo/"]},
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": "Use MCP only for live context if needed."
+            }
+        },
+    }
+
+    worker._build_packet(assignment, workspace, input_dir)
+    packet = json.loads((input_dir / "packet.json").read_text(encoding="utf-8"))
+    prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+
+    assert packet["root_mcp"]["server_name"] == "adaos_root"
+    assert packet["root_mcp"]["bearer_env_present"] is True
+    assert "Task-scoped Root MCP route" in prompt
+    assert "adaos_root" in prompt
+    assert "secret-token-value" not in prompt
+
+
 def test_codex_task_runtime_is_outside_candidate_worktree(tmp_path: Path) -> None:
     workspace = tmp_path / "run" / "workspace"
     output_dir = tmp_path / "run" / "output"

@@ -55,6 +55,26 @@ def _safe_token(value: Any, *, fallback: str = "task") -> str:
     return token.strip("._") or fallback
 
 
+def _safe_config_token(value: Any, *, fallback: str = "adaos_root") -> str:
+    token = _safe_token(value, fallback=fallback).replace("-", "_").replace(".", "_")
+    if token and not (token[0].isalpha() or token[0] == "_"):
+        token = f"mcp_{token}"
+    return token or fallback
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        candidates: Sequence[Any] = [value]
+    elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        candidates = value
+    else:
+        candidates = [value]
+    items = [str(item).strip() for item in candidates if str(item).strip()]
+    return list(dict.fromkeys(items))
+
+
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -194,6 +214,58 @@ def _context_packet_prompt_projection(value: Any) -> dict[str, Any]:
         "coverage": dict(packet.get("coverage") or {}),
         "budget": dict(packet.get("budget") or {}),
     }
+
+
+def _root_mcp_profile_from_assignment(assignment: Mapping[str, Any]) -> dict[str, Any] | None:
+    mcp = dict(assignment.get("mcp") or {})
+    raw = mcp.get("root_mcp") if isinstance(mcp.get("root_mcp"), Mapping) else {}
+    root = dict(raw) if isinstance(raw, Mapping) else {}
+    if not root or root.get("enabled") is False:
+        return None
+    url = str(root.get("url") or root.get("mcp_http_url") or "").strip()
+    if not url:
+        return None
+    env_var = str(
+        root.get("bearer_token_env_var")
+        or root.get("auth_env_var")
+        or root.get("access_token_env_var")
+        or ""
+    ).strip()
+    profile: dict[str, Any] = {
+        "enabled": True,
+        "transport": "streamable_http",
+        "server_name": _safe_config_token(root.get("server_name") or root.get("name")),
+        "url": url,
+        "required": bool(root.get("required", False)),
+    }
+    if env_var:
+        profile["bearer_token_env_var"] = env_var
+        profile["bearer_env_present"] = bool(os.getenv(env_var))
+    for key in ("enabled_tools", "disabled_tools", "scope"):
+        values = _string_list(root.get(key))
+        if values:
+            profile[key] = values
+    for key in ("startup_timeout_sec", "tool_timeout_sec"):
+        try:
+            value_int = int(root.get(key) or 0)
+        except (TypeError, ValueError):
+            value_int = 0
+        if value_int > 0:
+            profile[key] = value_int
+    approval = str(root.get("default_tools_approval_mode") or "").strip()
+    if approval in {"auto", "prompt", "writes", "approve"}:
+        profile["default_tools_approval_mode"] = approval
+    return profile
+
+
+def _toml_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(json.dumps(str(item)) for item in value) + "]"
+    return json.dumps(str(value))
 
 
 def _contract_execution_checklist(
@@ -508,6 +580,7 @@ class SubprocessCodexExecutor:
         workspace: Path,
         prompt: str,
         output_dir: Path,
+        root_mcp: Mapping[str, Any] | None = None,
         cancel_check: Callable[[], bool] | None = None,
     ) -> CodexRunResult:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -529,6 +602,7 @@ class SubprocessCodexExecutor:
             "-o",
             str(final_path),
         ]
+        command.extend(self._root_mcp_config_args(root_mcp))
         if self.model:
             command.extend(["--model", self.model])
         if self.reasoning_effort:
@@ -562,6 +636,7 @@ class SubprocessCodexExecutor:
                 env=self._execution_environment(
                     runtime_base_dir=task_runtime_root,
                     sdk_root=sdk_root,
+                    root_mcp=root_mcp,
                 ),
                 **popen_kwargs,
             )
@@ -604,6 +679,46 @@ class SubprocessCodexExecutor:
             command=tuple(command),
             sdk_snapshot=sdk_snapshot,
         )
+
+    @staticmethod
+    def _root_mcp_config_args(root_mcp: Mapping[str, Any] | None) -> list[str]:
+        profile = dict(root_mcp or {})
+        if not profile or profile.get("enabled") is False:
+            return []
+        if str(profile.get("transport") or "streamable_http").strip() not in {"streamable_http", "http"}:
+            return []
+        server = _safe_config_token(profile.get("server_name") or "adaos_root")
+        url = str(profile.get("url") or "").strip()
+        if not url:
+            return []
+        values: dict[str, Any] = {
+            f"mcp_servers.{server}.url": url,
+            f"mcp_servers.{server}.enabled": True,
+            f"mcp_servers.{server}.required": bool(profile.get("required", False)),
+        }
+        env_var = str(profile.get("bearer_token_env_var") or "").strip()
+        if env_var:
+            values[f"mcp_servers.{server}.bearer_token_env_var"] = env_var
+        enabled_tools = _string_list(profile.get("enabled_tools"))
+        if enabled_tools:
+            values[f"mcp_servers.{server}.enabled_tools"] = enabled_tools
+        disabled_tools = _string_list(profile.get("disabled_tools"))
+        if disabled_tools:
+            values[f"mcp_servers.{server}.disabled_tools"] = disabled_tools
+        approval = str(profile.get("default_tools_approval_mode") or "").strip()
+        if approval in {"auto", "prompt", "writes", "approve"}:
+            values[f"mcp_servers.{server}.default_tools_approval_mode"] = approval
+        for key in ("startup_timeout_sec", "tool_timeout_sec"):
+            try:
+                value_int = int(profile.get(key) or 0)
+            except (TypeError, ValueError):
+                value_int = 0
+            if value_int > 0:
+                values[f"mcp_servers.{server}.{key}"] = value_int
+        args: list[str] = []
+        for key, value in values.items():
+            args.extend(["-c", f"{key}={_toml_value(value)}"])
+        return args
 
     @staticmethod
     def _task_runtime_root(output_dir: Path) -> Path:
@@ -782,6 +897,7 @@ class SubprocessCodexExecutor:
         *,
         runtime_base_dir: Path | None = None,
         sdk_root: Path | None = None,
+        root_mcp: Mapping[str, Any] | None = None,
     ) -> dict[str, str]:
         environment = self._bounded_environment()
         environment["PYTHONUTF8"] = "1"
@@ -816,6 +932,12 @@ class SubprocessCodexExecutor:
         if exposed_sdk is not None:
             environment["ADAOS_REPO_ROOT"] = str(exposed_sdk)
             environment["PYTHONPATH"] = str(exposed_sdk / "src")
+        profile = dict(root_mcp or {})
+        env_var = str(profile.get("bearer_token_env_var") or "").strip()
+        if env_var:
+            token = os.getenv(env_var)
+            if token:
+                environment[env_var] = token
         return environment
 
 
@@ -1280,6 +1402,7 @@ class LocalSkillFactoryWorker:
         output_dir = run_root / "output"
         runtime_dir = run_root / "runtime"
         agent_profile = dict((assignment.get("codex") or {}).get("agent_profile") or {})
+        root_mcp = _root_mcp_profile_from_assignment(assignment)
         for path in (input_dir, output_dir, runtime_dir):
             path.mkdir(parents=True, exist_ok=True)
         process_owner = self._current_process_owner()
@@ -1317,6 +1440,7 @@ class LocalSkillFactoryWorker:
                 prompt=prompt,
                 output_dir=output_dir,
                 agent_profile=agent_profile,
+                root_mcp=root_mcp,
             )
             self._ensure_task_active(task_id)
             self._record_codex_attempt(runtime_dir, codex_result, attempt=0)
@@ -1397,6 +1521,7 @@ class LocalSkillFactoryWorker:
                     prompt=repair_prompt,
                     output_dir=output_dir,
                     agent_profile=agent_profile,
+                    root_mcp=root_mcp,
                 )
                 self._ensure_task_active(task_id)
                 self._record_codex_attempt(runtime_dir, codex_result, attempt=repair_attempt + 1)
@@ -1431,6 +1556,7 @@ class LocalSkillFactoryWorker:
                 else None,
                 "tool_versions": {"python": sys.version.split()[0]},
                 "sdk_snapshot": dict(codex_result.sdk_snapshot or {}) or None,
+                "root_mcp": root_mcp,
                 "created_at": _now_iso(),
             }
             _write_json(evidence_root / "provenance.json", provenance)
@@ -1531,6 +1657,7 @@ class LocalSkillFactoryWorker:
         prompt: str,
         output_dir: Path,
         agent_profile: Mapping[str, Any] | None = None,
+        root_mcp: Mapping[str, Any] | None = None,
     ) -> CodexRunResult:
         if isinstance(self.executor, SubprocessCodexExecutor):
             profile = dict(agent_profile or {})
@@ -1551,6 +1678,7 @@ class LocalSkillFactoryWorker:
                 workspace=workspace,
                 prompt=prompt,
                 output_dir=output_dir,
+                root_mcp=root_mcp,
                 cancel_check=lambda: self._task_status(task_id) in {"cancelled", "expired"},
             )
         return self.executor(workspace=workspace, prompt=prompt, output_dir=output_dir)
@@ -1684,6 +1812,7 @@ class LocalSkillFactoryWorker:
             if isinstance(artifacts.get("development_context"), Mapping)
             else {}
         )
+        root_mcp = _root_mcp_profile_from_assignment(assignment)
         contract_checklist = _contract_execution_checklist(
             development_context,
             workspace,
@@ -1708,6 +1837,7 @@ class LocalSkillFactoryWorker:
             or None,
             "contract_execution_checklist": contract_checklist or None,
             "validation_budget": _generated_test_budget(assignment),
+            "root_mcp": root_mcp,
         }
         _write_json(input_dir / "packet.json", packet)
         (input_dir / "allowed_files.txt").write_text("\n".join(allowed) + "\n", encoding="utf-8")
@@ -1788,6 +1918,11 @@ When `scenarios/{target_id}/.builder_current_publication` exists, treat it as th
             if contract_checklist
             else "No typed provider operation sequence was admitted."
         )
+        root_mcp_context = (
+            json.dumps(root_mcp, ensure_ascii=False, indent=2, sort_keys=True)
+            if root_mcp
+            else "No task-scoped Root MCP route was admitted."
+        )
         prompt = f"""# AdaOS local realization task
 
 You are implementing a real AdaOS project from an approved interface prototype. Work autonomously in the current repository and finish the implementation; do not merely describe code.
@@ -1841,6 +1976,19 @@ contract, not this convenience projection.
 
 ```json
 {contract_execution_checklist}
+```
+
+## Task-scoped Root MCP route
+
+When the following profile is present, a Codex MCP server with the shown
+`server_name` may be configured for this task. Use it for compact live
+root/subnet context only when it materially reduces guessing or helps validate
+runtime state. Do not read, print, or inspect bearer-token environment values.
+If the MCP route is unavailable, continue from admitted local context and state
+the limitation in the final summary.
+
+```json
+{root_mcp_context}
 ```
 
 {transition_requirements}

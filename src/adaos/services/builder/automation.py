@@ -82,6 +82,26 @@ def _safe_token(value: Any, *, fallback: str = "project") -> str:
     return token.strip("._") or fallback
 
 
+def _sanitized_mcp_profile(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    mcp = {
+        key: copy.deepcopy(raw_value)
+        for key, raw_value in value.items()
+        if key not in {"root_mcp", "access_token", "token", "authorization", "secret"}
+    }
+    root = value.get("root_mcp")
+    if isinstance(root, Mapping):
+        sanitized_root = {
+            key: copy.deepcopy(raw_value)
+            for key, raw_value in root.items()
+            if key not in {"access_token", "token", "authorization", "secret"}
+        }
+        if sanitized_root:
+            mcp["root_mcp"] = sanitized_root
+    return mcp or None
+
+
 def _reject_transport_corruption(value: Any, *, field: str) -> None:
     """Reject new durable Automation text after Unicode code points were lost."""
 
@@ -613,6 +633,7 @@ class BuilderAutomationService:
         links: Mapping[str, Any] | None = None,
         execution_budget: Mapping[str, Any] | None = None,
         agent_profile: Mapping[str, Any] | None = None,
+        mcp: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         kind, project_id = self._project_ref(object_type, object_id)
         brief = str(implementation_brief or "").strip()
@@ -622,6 +643,7 @@ class BuilderAutomationService:
         external_links = dict(links) if isinstance(links, Mapping) else {}
         admitted_execution_budget = dict(execution_budget) if isinstance(execution_budget, Mapping) else None
         admitted_agent_profile = dict(agent_profile) if isinstance(agent_profile, Mapping) else None
+        admitted_mcp = _sanitized_mcp_profile(mcp)
         admitted_development_session_id = str(development_session_id or "").strip() or None
         if admitted_development_session_id:
             self._load_development_session(
@@ -747,6 +769,13 @@ class BuilderAutomationService:
                         current["links"] = merged_links
                         current["updated_at"] = _now_iso()
                         self._save_session(current)
+                if admitted_mcp:
+                    current_mcp = current.get("mcp") if isinstance(current.get("mcp"), Mapping) else {}
+                    merged_mcp = {**dict(current_mcp), **admitted_mcp}
+                    if merged_mcp != current_mcp:
+                        current["mcp"] = merged_mcp
+                        current["updated_at"] = _now_iso()
+                        self._save_session(current)
                 current_development_session_id = str(
                     current.get("development_session_id") or ""
                 ).strip() or None
@@ -820,6 +849,7 @@ class BuilderAutomationService:
                 "development_session_id": admitted_development_session_id,
                 "execution_budget": admitted_execution_budget,
                 "agent_profile": admitted_agent_profile,
+                "mcp": admitted_mcp,
                 "links": external_links,
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
                 "status": "starting",
@@ -2622,6 +2652,14 @@ class BuilderAutomationService:
                 "must_add_tests": True,
                 "must_update_manifest": True,
                 "local_process_debug": True,
+            },
+            "mcp": _sanitized_mcp_profile(session.get("mcp")) or {
+                "requested_scope": [
+                    "capability_snapshot",
+                    "requirement_spec",
+                    "mock_runtime",
+                    "staging_validation",
+                ]
             },
             "acceptance": {
                 "checks": [

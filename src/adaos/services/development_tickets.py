@@ -1179,6 +1179,7 @@ class DevelopmentTicketService:
         source_strategy: str | None = None,
         execution_budget: Mapping[str, Any] | None = None,
         agent_profile: Mapping[str, Any] | None = None,
+        mcp: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         ticket = self.get_ticket(ticket_id)
         if not ticket:
@@ -1241,6 +1242,7 @@ class DevelopmentTicketService:
             conversation_id=_text(conversation_id) or f"dev-ticket:{ticket['ticket_id']}",
             execution_budget=bounded_budget,
             agent_profile=dict(agent_profile) if isinstance(agent_profile, Mapping) else None,
+            mcp=dict(mcp) if isinstance(mcp, Mapping) else None,
             links={
                 "development_ticket_id": ticket["ticket_id"],
                 "builder_repair_id": repair_id,

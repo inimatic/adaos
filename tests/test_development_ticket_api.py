@@ -485,7 +485,19 @@ def test_development_ticket_api_starts_autonomous_repair_and_exposes_builder_usa
     started = client.post(
         f"/api/development-tickets/{ticket_id}/autonomous-repair",
         headers=_headers(),
-        json={"actor": "browser", "webspace_id": "desktop", "source_strategy": "materialize_dev_source"},
+        json={
+            "actor": "browser",
+            "webspace_id": "desktop",
+            "source_strategy": "materialize_dev_source",
+            "mcp": {
+                "root_mcp": {
+                    "url": "https://ru.api.inimatic.com/v1/root/mcp",
+                    "server_name": "adaos-root",
+                    "bearer_token_env_var": "ADAOS_ROOT_MCP_AUTH",
+                    "enabled_tools": ["get_status"],
+                }
+            },
+        },
     )
 
     assert started.status_code == 200, started.text
@@ -497,6 +509,8 @@ def test_development_ticket_api_starts_autonomous_repair_and_exposes_builder_usa
     assert automation.started[0]["object_id"] == "demo_metrics_skill"
     assert automation.started[0]["links"]["development_ticket_id"] == ticket_id
     assert automation.started[0]["execution_budget"]["max_tokens"] == 200000
+    assert automation.started[0]["mcp"]["root_mcp"]["server_name"] == "adaos-root"
+    assert "bearer_token_env_var" in automation.started[0]["mcp"]["root_mcp"]
     assert automation.workspace_service.materialized[0]["kind"] == "skill"
     assert automation.workspace_service.materialized[0]["artifact_id"] == "demo_metrics_skill"
     work_item = payload["detail"]["work_stream"]["builder_work_items"][0]

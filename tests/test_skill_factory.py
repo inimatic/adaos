@@ -485,6 +485,36 @@ def test_builder_realize_request_preserves_local_fallback(tmp_path: Path) -> Non
     assert Path(result["request_dir"], "realize_request.json").exists()
 
 
+def test_skill_factory_projects_root_mcp_profile_without_secret(tmp_path: Path) -> None:
+    service = SkillFactoryService(state_dir=tmp_path)
+    task = service.submit_realize_request(
+        {
+            "target": {"type": "skill", "id": "mcp_enabled_skill"},
+            "mcp": {
+                "root_mcp": {
+                    "url": "https://ru.api.inimatic.com/v1/root/mcp",
+                    "server_name": "adaos-root",
+                    "bearer_token_env_var": "ADAOS_ROOT_MCP_AUTH",
+                    "access_token": "must-not-persist",
+                    "enabled_tools": ["get_status", "get_builder_context"],
+                }
+            },
+        }
+    )["task"]
+
+    persisted_root_mcp = task["mcp"]["root_mcp"]
+    assert persisted_root_mcp["server_name"] == "adaos_root"
+    assert persisted_root_mcp["url"] == "https://ru.api.inimatic.com/v1/root/mcp"
+    assert persisted_root_mcp["bearer_token_env_var"] == "ADAOS_ROOT_MCP_AUTH"
+    assert "access_token" not in persisted_root_mcp
+
+    service.register_dev_node({"node_id": "devnode.mcp"})
+    assignment = service.poll_assignment("devnode.mcp")["assignment"]
+    assigned_root_mcp = assignment["mcp"]["root_mcp"]
+    assert assigned_root_mcp == persisted_root_mcp
+    assert assignment["mcp"]["access_token"].startswith("sf_task_")
+
+
 def test_root_mcp_exposes_skill_factory_plane_and_status(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
 
