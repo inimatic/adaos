@@ -45,6 +45,16 @@ PACKET_SCHEMA = "adaos.skill_factory.codex_packet.v1"
 LOCAL_SESSION_SCHEMA = "adaos.skill_factory.local_run.v1"
 _log = logging.getLogger("adaos.skill_factory.local_worker")
 
+DECLARATIVE_MANIFEST_NAMES = {
+    "scenario.json",
+    "scenario.yaml",
+    "skill.yaml",
+    "webui.json",
+}
+MANIFEST_REWRITE_DELETION_THRESHOLD = 120
+MANIFEST_REWRITE_DELETION_RATIO = 4.0
+MANIFEST_REWRITE_SHRINK_RATIO = 0.5
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -1144,7 +1154,7 @@ class LocalSkillFactoryWorker:
             # from the immutable materialization root so both committed and
             # uncommitted task changes receive the same bounded validation.
             changed_paths = self._changed_from_baseline(workspace)
-            self._validate_changed_paths(assignment, changed_paths)
+            self._validate_changed_paths(assignment, changed_paths, workspace=workspace)
             test_report = self._validate_workspace(
                 assignment,
                 workspace,
@@ -1491,7 +1501,7 @@ class LocalSkillFactoryWorker:
                 self._cleanup_generated_files(workspace)
                 changed_paths = self._changed_paths(workspace)
                 try:
-                    self._validate_changed_paths(assignment, changed_paths)
+                    self._validate_changed_paths(assignment, changed_paths, workspace=workspace)
                 except ValueError as exc:
                     # A scope violation is deterministic and often
                     # repairable (for example, a test placed mutable runtime
@@ -1524,7 +1534,7 @@ class LocalSkillFactoryWorker:
                     self._cleanup_generated_files(workspace)
                     changed_paths = self._changed_paths(workspace)
                     try:
-                        self._validate_changed_paths(assignment, changed_paths)
+                        self._validate_changed_paths(assignment, changed_paths, workspace=workspace)
                     except ValueError as exc:
                         test_report["ok"] = False
                         test_report["status"] = "failed"
@@ -2096,7 +2106,107 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 paths.append(path)
         return paths
 
-    def _validate_changed_paths(self, assignment: Mapping[str, Any], changed_paths: list[str]) -> None:
+    @staticmethod
+    def _manifest_rewrite_guard_enabled(assignment: Mapping[str, Any]) -> bool:
+        request = dict(assignment.get("realize_request") or {})
+        artifacts = dict(request.get("artifacts") or {})
+        if artifacts.get("allow_large_manifest_rewrite") is True:
+            return False
+        if isinstance(artifacts.get("execution_budget"), Mapping):
+            return True
+        development_context = (
+            artifacts.get("development_context")
+            if isinstance(artifacts.get("development_context"), Mapping)
+            else {}
+        )
+        if isinstance(development_context, Mapping) and isinstance(
+            development_context.get("execution_budget"),
+            Mapping,
+        ):
+            return True
+        brief = str(request.get("brief") or "")
+        return "adaos.dev_ticket.autonomous_repair_brief.v1" in brief
+
+    @staticmethod
+    def _baseline_commit(workspace: Path) -> str:
+        roots = _git(["rev-list", "--max-parents=0", "HEAD"], cwd=workspace).splitlines()
+        if not roots:
+            raise RuntimeError("isolated realization workspace has no baseline commit")
+        return roots[-1].strip()
+
+    @staticmethod
+    def _baseline_blob_size(workspace: Path, baseline: str, path: str) -> int | None:
+        try:
+            raw = _git(["cat-file", "-s", f"{baseline}:{path}"], cwd=workspace)
+            return int(raw)
+        except (RuntimeError, TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _validate_manifest_rewrite_bounds(
+        cls,
+        assignment: Mapping[str, Any],
+        changed_paths: Sequence[str],
+        *,
+        workspace: Path | None,
+    ) -> None:
+        if workspace is None or not cls._manifest_rewrite_guard_enabled(assignment):
+            return
+        if not (workspace / ".git").is_dir():
+            return
+        manifest_paths = [
+            path
+            for path in changed_paths
+            if Path(path.replace("\\", "/")).name in DECLARATIVE_MANIFEST_NAMES
+        ]
+        if not manifest_paths:
+            return
+        baseline = cls._baseline_commit(workspace)
+        output = _git(["diff", "--numstat", baseline, "--", *manifest_paths], cwd=workspace)
+        violations: list[str] = []
+        for line in output.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            try:
+                additions = int(parts[0])
+                deletions = int(parts[1])
+            except ValueError:
+                continue
+            path = parts[-1].strip().replace("\\", "/")
+            if Path(path).name not in DECLARATIVE_MANIFEST_NAMES:
+                continue
+            baseline_size = cls._baseline_blob_size(workspace, baseline, path)
+            current_path = workspace / path
+            current_size = current_path.stat().st_size if current_path.is_file() else 0
+            shrank_substantially = (
+                baseline_size is not None
+                and baseline_size >= 4096
+                and current_size <= int(baseline_size * MANIFEST_REWRITE_SHRINK_RATIO)
+            )
+            deletion_ratio = deletions / max(1, additions)
+            deletion_collapse = (
+                deletions >= MANIFEST_REWRITE_DELETION_THRESHOLD
+                and deletion_ratio >= MANIFEST_REWRITE_DELETION_RATIO
+            )
+            if deletion_collapse or (deletions >= MANIFEST_REWRITE_DELETION_THRESHOLD and shrank_substantially):
+                violations.append(
+                    f"{path} (+{additions}/-{deletions}, "
+                    f"baseline_bytes={baseline_size}, current_bytes={current_size})"
+                )
+        if violations:
+            raise ValueError(
+                "large declarative manifest rewrite is not admitted for this bounded Builder task: "
+                + "; ".join(violations)
+            )
+
+    def _validate_changed_paths(
+        self,
+        assignment: Mapping[str, Any],
+        changed_paths: list[str],
+        *,
+        workspace: Path | None = None,
+    ) -> None:
         allowed = [str(item).replace("\\", "/").strip("/") + "/" for item in (assignment.get("forge") or {}).get("sparse_paths") or []]
         invalid = [path for path in changed_paths if not any(path == item.rstrip("/") or path.startswith(item) for item in allowed)]
         if invalid:
@@ -2125,6 +2235,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 "Automation may not modify the current Publication baseline: "
                 f"{immutable_publication}"
             )
+        self._validate_manifest_rewrite_bounds(assignment, changed_paths, workspace=workspace)
 
     def _validate_workspace(
         self,

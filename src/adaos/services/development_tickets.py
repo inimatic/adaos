@@ -497,6 +497,7 @@ def _automation_has_validation_evidence(payload: Mapping[str, Any]) -> bool:
 def _autonomous_repair_brief(ticket: Mapping[str, Any], repair: Mapping[str, Any], *, target: Mapping[str, str]) -> str:
     payload = {
         "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+        "execution_mode": "surgical_dev_ticket_repair",
         "ticket_id": _text(ticket.get("ticket_id")),
         "repair_id": _text(repair.get("repair_id")),
         "kind": _text(ticket.get("kind")),
@@ -510,10 +511,26 @@ def _autonomous_repair_brief(ticket: Mapping[str, Any], repair: Mapping[str, Any
         "relation_refs": _sequence_of_mappings(ticket.get("relation_refs") or []),
         "evidence_refs": _sequence_of_mappings(ticket.get("evidence_refs") or []),
         "artifact_refs": _sequence_of_mappings(ticket.get("artifact_refs") or []),
+        "diff_policy": {
+            "scope": "minimal",
+            "allowed": [
+                "Small, directly relevant source changes required by this ticket.",
+                "Focused tests or validation fixtures that prove the repair.",
+                "Small additive manifest changes when the ticket explicitly targets declarative UI/resource metadata.",
+            ],
+            "blocked_without_explicit_admission": [
+                "Broad rewrites, regeneration, minification or collapse of declarative manifests.",
+                "Large deletions in scenario.json, webui.json, scenario.yaml or skill.yaml.",
+                "Drive-by refactors unrelated to the ticket summary.",
+            ],
+        },
         "guardrails": [
             "Use only public AdaOS SDK/API surfaces available to the project.",
             "Do not modify AdaOS core/runtime from project Builder automation.",
             "If the defect requires core/API/SDK changes, create or link a core capability Dev Ticket instead of patching a symptom.",
+            "Keep the diff surgical: touch only files needed to satisfy this ticket and its evidence.",
+            "Do not collapse, regenerate, minify or delete large declarative manifests; preserve existing structure unless the ticket explicitly requires a manifest rewrite.",
+            "If a small project-scope repair is not possible, stop with a blocker explanation and propose/link the required core/API/SDK Dev Ticket.",
         ],
         "acceptance": [
             "The ticket summary is satisfied.",

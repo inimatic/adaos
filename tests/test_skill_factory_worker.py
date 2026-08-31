@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import shutil
@@ -1260,6 +1261,60 @@ def test_automation_cannot_modify_current_publication_baseline(tmp_path: Path) -
             assignment,
             ["scenarios/recipe_book/.builder_current_publication/webui.json"],
         )
+
+
+def test_bounded_dev_ticket_rejects_large_manifest_collapse(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    scenario = workspace / "scenarios" / "demo"
+    scenario.mkdir(parents=True)
+    manifest = scenario / "scenario.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.scenario.v1",
+                "id": "demo",
+                "widgets": [
+                    {
+                        "id": f"widget_{index}",
+                        "type": "demo.card",
+                        "title": f"Metric card {index}",
+                        "bindings": {"metric": "cpu", "slot": index},
+                    }
+                    for index in range(180)
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=workspace,
+        check=True,
+    )
+    subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "baseline"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+    )
+    manifest.write_text('{"schema":"adaos.scenario.v1","id":"demo"}\n', encoding="utf-8")
+    worker = object.__new__(LocalSkillFactoryWorker)
+    changed_paths = worker._changed_from_baseline(workspace)
+    assignment = {
+        "forge": {"sparse_paths": ["scenarios/demo/"]},
+        "realize_request": {"artifacts": {"execution_budget": {"max_wall_seconds": 300}}},
+    }
+
+    with pytest.raises(ValueError, match="large declarative manifest rewrite"):
+        worker._validate_changed_paths(assignment, changed_paths, workspace=workspace)
+
+    admitted = copy.deepcopy(assignment)
+    admitted["realize_request"]["artifacts"]["allow_large_manifest_rewrite"] = True
+    worker._validate_changed_paths(admitted, changed_paths, workspace=workspace)
 
 
 def test_return_to_prototype_skips_frozen_skill_tests_but_enforces_safe_ui(
