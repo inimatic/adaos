@@ -2388,7 +2388,7 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
 2. Locate the named target refs with `rg`, then read only bounded surrounding slices. Do not dump a complete target file larger than 20 KB.
 3. Apply only the requested visible UI change; do not explore AdaOS core or unrelated project files.
 4. Add or update only the focused regression assertion named by the acceptance checks.
-5. Run the focused test first. The trusted worker will run package validation afterward.
+5. Do not run tests or validation commands in the Codex turn. Stop after the diff; the trusted worker runs package validation and records evidence.
 6. Do not edit manifest version/updated_at, publish, activate, or access external services.
 7. Stop immediately after the requested diff and focused check succeed."""
         elif bounded_repair:
@@ -2396,7 +2396,7 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
 2. Locate the named target refs with `rg`, then read only bounded surrounding slices. Do not dump a complete target file larger than 20 KB.
 3. Implement only the scoped resource/data change in the exact authorized files. Use existing public AdaOS SDK/API contracts and preserve unrelated behavior.
 4. For subnet data, use only the admitted typed provider route and degrade without failing when it is unavailable. Do not invent or persist provider data.
-5. Add or update only focused regression coverage for the acceptance checks, then run that focused test first.
+5. Add or update only focused regression coverage for the acceptance checks. Do not run tests or validation commands in the Codex turn; the trusted worker runs them and records evidence.
 6. Do not edit manifest version/updated_at, publish, activate, or access services not admitted by the ticket.
 7. Stop immediately after the scoped diff and focused check succeed."""
         elif is_dev_ticket_repair:

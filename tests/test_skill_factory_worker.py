@@ -1350,6 +1350,7 @@ def test_bounded_repair_prompt_requires_targeted_reads(
     assert "Do not load generic skill-creator instructions" in prompt
     assert "Locate the named target refs with `rg`" in prompt
     assert "Do not dump a complete target file larger than 20 KB" in prompt
+    assert "Do not run tests or validation commands in the Codex turn" in prompt
     assert "AdaOS bounded Dev Ticket repair" in prompt
 
 
