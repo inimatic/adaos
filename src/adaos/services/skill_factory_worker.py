@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import signal
 import shutil
 import subprocess
@@ -64,6 +65,7 @@ CODEX_LIVE_BUDGET_SAFETY_FACTOR = 1.25
 BOUNDED_REPAIR_COMMAND_OUTPUT_BYTES = 8 * 1024
 BOUNDED_REPAIR_COMMAND_OUTPUT_LINES = 120
 BOUNDED_REPAIR_DISCOVERY_LINES = 400
+BOUNDED_REPAIR_TARGET_CONTEXT_BYTES = 48 * 1024
 
 
 def _now_iso() -> str:
@@ -435,6 +437,176 @@ def _bounded_repair_brief_prompt(value: str) -> str:
     if evidence:
         projected["current_failure_evidence"] = list(reversed(evidence))
     return json.dumps(projected, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+_JSON_TARGET_SEGMENT_RE = re.compile(
+    r"^(?P<key>[^\[\]]+)(?:\[(?:(?P<index>\d+)|id=(?P<id>[^\]]+))\])?$"
+)
+
+
+def _resolve_json_target_ref(document: Any, target_ref: str) -> Any:
+    current = document
+    for raw_segment in str(target_ref or "").split("."):
+        match = _JSON_TARGET_SEGMENT_RE.fullmatch(raw_segment.strip())
+        if match is None or not isinstance(current, Mapping):
+            raise KeyError(target_ref)
+        key = match.group("key")
+        if key not in current:
+            raise KeyError(target_ref)
+        current = current[key]
+        index = match.group("index")
+        item_id = match.group("id")
+        if index is not None:
+            if not isinstance(current, Sequence) or isinstance(current, (str, bytes, bytearray)):
+                raise KeyError(target_ref)
+            current = current[int(index)]
+        elif item_id is not None:
+            if not isinstance(current, Sequence) or isinstance(current, (str, bytes, bytearray)):
+                raise KeyError(target_ref)
+            matches = [
+                item
+                for item in current
+                if isinstance(item, Mapping) and str(item.get("id") or "") == item_id
+            ]
+            if len(matches) != 1:
+                raise KeyError(target_ref)
+            current = matches[0]
+    return current
+
+
+def _find_unique_json_id(
+    document: Any,
+    item_id: str,
+) -> tuple[Any, Sequence[Any] | None, int, str] | None:
+    matches: list[tuple[Any, Sequence[Any] | None, int, str]] = []
+
+    def visit(value: Any, path: str, siblings: Sequence[Any] | None = None, index: int = -1) -> None:
+        if isinstance(value, Mapping):
+            if str(value.get("id") or "") == item_id:
+                matches.append((value, siblings, index, path))
+            for key, child in value.items():
+                visit(child, f"{path}.{key}" if path else str(key))
+        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            for child_index, child in enumerate(value):
+                child_id = str(child.get("id") or "") if isinstance(child, Mapping) else ""
+                child_path = (
+                    f"{path}[id={child_id}]"
+                    if child_id
+                    else f"{path}[{child_index}]"
+                )
+                visit(child, child_path, value, child_index)
+
+    visit(document, "")
+    return matches[0] if len(matches) == 1 else None
+
+
+def _bounded_repair_target_context(
+    workspace: Path,
+    repair_hints: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Resolve qualified JSON refs before Codex starts source discovery."""
+
+    refs = _string_list(repair_hints.get("target_refs"))[:12]
+    files = [
+        str(item).replace("\\", "/").strip("/")
+        for item in _string_list(repair_hints.get("target_files"))
+        if str(item).lower().endswith(".json")
+    ][:6]
+    if not refs or not files:
+        return {}
+    documents: list[tuple[str, Any]] = []
+    for relative in files:
+        path = (workspace / relative).resolve(strict=False)
+        if workspace.resolve() not in path.parents or not path.is_file():
+            continue
+        try:
+            documents.append((relative, json.loads(path.read_text(encoding="utf-8"))))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+
+    resolved: list[dict[str, Any]] = []
+    missing: list[str] = []
+    used_bytes = 0
+    for target_ref in refs:
+        match: dict[str, Any] | None = None
+        for relative, document in documents:
+            resolved_path = target_ref
+            siblings: Sequence[Any] | None = None
+            selected_index = -1
+            try:
+                value = _resolve_json_target_ref(document, target_ref)
+            except (KeyError, IndexError):
+                selector_match = re.search(r"\[id=([^\]]+)\]$", target_ref)
+                fallback = (
+                    _find_unique_json_id(document, selector_match.group(1))
+                    if selector_match
+                    else None
+                )
+                if fallback is None:
+                    continue
+                value, siblings, selected_index, resolved_path = fallback
+            candidate = {
+                "target_ref": target_ref,
+                "file": relative,
+                "value": copy.deepcopy(value),
+            }
+            if resolved_path != target_ref:
+                candidate["resolved_path"] = resolved_path
+                candidate["resolved_by"] = "unique_id"
+            selector_match = re.search(r"\[id=([^\]]+)\]$", target_ref)
+            if selector_match and siblings is None:
+                try:
+                    siblings = _resolve_json_target_ref(
+                        document,
+                        target_ref[: target_ref.rfind("[")],
+                    )
+                except (KeyError, IndexError):
+                    siblings = None
+                if isinstance(siblings, Sequence) and not isinstance(
+                    siblings, (str, bytes, bytearray)
+                ):
+                    selected_id = selector_match.group(1)
+                    selected_index = next(
+                        (
+                            index
+                            for index, item in enumerate(siblings)
+                            if isinstance(item, Mapping)
+                            and str(item.get("id") or "") == selected_id
+                        ),
+                        -1,
+                    )
+            if (
+                selected_index >= 0
+                and isinstance(siblings, Sequence)
+                and not isinstance(siblings, (str, bytes, bytearray))
+            ):
+                candidate["neighbor_values"] = [
+                    copy.deepcopy(item)
+                    for index, item in enumerate(siblings)
+                    if index != selected_index
+                    and selected_index - 1 <= index <= selected_index + 2
+                ]
+            encoded = json.dumps(candidate, ensure_ascii=False, sort_keys=True).encode("utf-8")
+            if len(encoded) > 24 * 1024 or used_bytes + len(encoded) > BOUNDED_REPAIR_TARGET_CONTEXT_BYTES:
+                match = {
+                    "target_ref": target_ref,
+                    "file": relative,
+                    "status": "too_large",
+                }
+            else:
+                used_bytes += len(encoded)
+                match = candidate
+            break
+        if match is None:
+            missing.append(target_ref)
+        else:
+            resolved.append(match)
+    return {
+        "schema": "adaos.builder.qualified_target_context.v1",
+        "resolved": resolved,
+        "missing": missing,
+        "bytes": used_bytes,
+    }
 
 
 def _public_root_mcp_profile(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -2401,6 +2573,7 @@ class LocalSkillFactoryWorker:
             if isinstance(artifacts.get("repair_hints"), Mapping)
             else {}
         )
+        repair_target_context = _bounded_repair_target_context(workspace, repair_hints)
         is_dev_ticket_repair = (
             str(constraints.get("mode") or "").strip() == "dev_ticket_repair"
             or constraints.get("minimal_diff") is True
@@ -2427,6 +2600,7 @@ class LocalSkillFactoryWorker:
             "validation_budget": _generated_test_budget(assignment),
             "root_mcp": root_mcp,
             "repair_hints": repair_hints or None,
+            "repair_target_context": repair_target_context or None,
         }
         _write_json(input_dir / "packet.json", packet)
         (input_dir / "allowed_files.txt").write_text("\n".join(allowed) + "\n", encoding="utf-8")
@@ -2566,6 +2740,16 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
         )
         if bounded_repair:
             bounded_brief = _bounded_repair_brief_prompt(brief)
+            qualified_targets = (
+                json.dumps(
+                    repair_target_context,
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+                if repair_target_context
+                else "No qualified target slices were resolved; use the bounded discovery rules below."
+            )
             prompt = f"""# AdaOS bounded Dev Ticket repair
 
 Target: {target_type}:{target_id}
@@ -2583,6 +2767,19 @@ Target: {target_type}:{target_id}
 The complete governed packet is retained in `packet.json` with digest
 `{context_packet.get('digest') or 'none'}`. The hints are bounded requirement
 evidence; file authority remains limited to: {', '.join(allowed)}.
+
+## Qualified target slices
+
+```json
+{qualified_targets}
+```
+
+Use these source-exact slices before running discovery commands. When they cover
+the requested change, edit directly and do not rediscover the same structures.
+
+## Current repair instruction
+
+{iteration_text}
 
 ## Required result
 
