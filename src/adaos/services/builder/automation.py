@@ -31,7 +31,7 @@ from adaos.services.skill_factory_worker import LocalSkillFactoryWorker
 
 
 AUTOMATION_SESSION_SCHEMA = "adaos.builder.automation_session.v1"
-STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.11.0"
+STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.12.0"
 FINALIZATION_HEARTBEAT_SECONDS = 10.0
 AUTOMATION_PROJECTION_SCHEMA = "adaos.builder.automation_projection.v1"
 _LOCK = threading.RLock()
@@ -2827,6 +2827,12 @@ class BuilderAutomationService:
             if str(criterion).strip()
         ]
         is_dev_ticket_repair = bool(str(dict(session.get("links") or {}).get("development_ticket_id") or "").strip())
+        repair_brief = self._session_repair_brief(session) if is_dev_ticket_repair else {}
+        repair_hints = (
+            dict(repair_brief.get("repair_hints"))
+            if isinstance(repair_brief.get("repair_hints"), Mapping)
+            else {}
+        )
         realization_constraints = {
             "no_external_api": True,
             "no_secrets": True,
@@ -2842,6 +2848,20 @@ class BuilderAutomationService:
                     "preserve_declarative_manifests": True,
                 }
             )
+            profile = str(repair_hints.get("profile") or "").strip()
+            target_files = [
+                str(item).replace("\\", "/").strip("/")
+                for item in repair_hints.get("target_files") or []
+                if str(item).strip()
+            ]
+            if profile:
+                realization_constraints["repair_profile"] = profile
+            if target_files:
+                realization_constraints["exact_changed_paths"] = target_files
+            if repair_hints.get("max_changed_files"):
+                realization_constraints["max_changed_files"] = int(
+                    repair_hints["max_changed_files"]
+                )
         request_id = (
             f"realize.{_safe_token(kind)}.{_safe_token(project_id)}."
             f"{_safe_token(session.get('change_id'), fallback='change')}."
@@ -2870,6 +2890,7 @@ class BuilderAutomationService:
                 "continuation_checkpoint": copy.deepcopy(
                     session.get("pending_continuation_checkpoint")
                 ),
+                "repair_hints": copy.deepcopy(repair_hints) or None,
             },
             "repo": {
                 "sparse_paths": sparse_paths,
@@ -2880,14 +2901,19 @@ class BuilderAutomationService:
             "constraints": {
                 **realization_constraints,
             },
-            "mcp": _sanitized_mcp_profile(session.get("mcp")) or {
-                "requested_scope": [
-                    "capability_snapshot",
-                    "requirement_spec",
-                    "mock_runtime",
-                    "staging_validation",
-                ]
-            },
+            "mcp": (
+                {"enabled": False, "requested_scope": []}
+                if is_dev_ticket_repair and repair_hints.get("requires_root_mcp") is False
+                else _sanitized_mcp_profile(session.get("mcp"))
+                or {
+                    "requested_scope": [
+                        "capability_snapshot",
+                        "requirement_spec",
+                        "mock_runtime",
+                        "staging_validation",
+                    ]
+                }
+            ),
             "acceptance": {
                 "checks": [
                     *acceptance_checks,

@@ -374,6 +374,21 @@ def test_autonomous_repair_links_builder_automation_and_resolves_with_evidence(t
         source="client_feedback",
         owner_area="skill",
         component_ref="skill:demo_metrics_skill",
+        metadata={
+            "builder_repair": {
+                "profile": "surgical_ui",
+                "change_summary": "Rename the visible Metrics table heading.",
+                "target_files": [
+                    "skills/demo_metrics_skill/webui.json",
+                    "skills/demo_metrics_skill/tests/test_resource_workbench.py",
+                    "../outside.py",
+                ],
+                "target_refs": ["widget:metrics-table.title"],
+                "acceptance_checks": ["The heading is Live metrics."],
+                "max_changed_files": 2,
+                "requires_root_mcp": False,
+            }
+        },
     )["signal"]
     ticket = service.ensure_ticket_for_signal(
         signal,
@@ -399,6 +414,12 @@ def test_autonomous_repair_links_builder_automation_and_resolves_with_evidence(t
     assert automation.calls[0]["links"]["development_ticket_id"] == ticket["ticket_id"]
     brief = json.loads(automation.calls[0]["implementation_brief"])
     assert brief["policy"]["publication_required"] is True
+    assert brief["repair_hints"]["profile"] == "surgical_ui"
+    assert brief["repair_hints"]["target_files"] == [
+        "skills/demo_metrics_skill/webui.json",
+        "skills/demo_metrics_skill/tests/test_resource_workbench.py",
+    ]
+    assert brief["repair_hints"]["requires_root_mcp"] is False
     first_ref = result["ticket"]["builder_refs"][0]
     assert first_ref["automation_session_id"] == "automation.session.1"
     assert first_ref["automation_task_id"] == "factory.task.1"

@@ -494,6 +494,52 @@ def _automation_has_validation_evidence(payload: Mapping[str, Any]) -> bool:
     return _text(task.get("status")) == "completed" and _text(tests.get("status")) == "passed"
 
 
+_REPAIR_HINT_PROFILES = {
+    "surgical_ui",
+    "surgical_data",
+    "resource_crud",
+    "subnet_data_integration",
+}
+
+
+def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
+    raw = _mapping(_mapping(ticket.get("metadata")).get("builder_repair"))
+    if not raw:
+        return {}
+    profile = _text(raw.get("profile")).lower()
+    if profile not in _REPAIR_HINT_PROFILES:
+        profile = ""
+    target_files: list[str] = []
+    for value in raw.get("target_files") or []:
+        path = _text(value).replace("\\", "/").strip("/")
+        if not path or ":" in path or ".." in path.split("/"):
+            continue
+        if path not in target_files:
+            target_files.append(path)
+        if len(target_files) >= 12:
+            break
+    target_refs = [_text(value)[:300] for value in raw.get("target_refs") or [] if _text(value)][:20]
+    acceptance_checks = [
+        _text(value)[:500]
+        for value in raw.get("acceptance_checks") or []
+        if _text(value)
+    ][:12]
+    try:
+        max_changed_files = max(1, min(12, int(raw.get("max_changed_files") or len(target_files) or 1)))
+    except (TypeError, ValueError):
+        max_changed_files = max(1, len(target_files))
+    hints: dict[str, Any] = {
+        "profile": profile or None,
+        "change_summary": _text(raw.get("change_summary"))[:1000] or None,
+        "target_files": target_files,
+        "target_refs": target_refs,
+        "acceptance_checks": acceptance_checks,
+        "max_changed_files": max_changed_files,
+        "requires_root_mcp": raw.get("requires_root_mcp") is True,
+    }
+    return {key: value for key, value in hints.items() if value not in (None, "", [])}
+
+
 def _autonomous_repair_brief(ticket: Mapping[str, Any], repair: Mapping[str, Any], *, target: Mapping[str, str]) -> str:
     policy = _mapping(ticket.get("policy"))
     policy.setdefault("publication_required", True)
@@ -513,6 +559,7 @@ def _autonomous_repair_brief(ticket: Mapping[str, Any], repair: Mapping[str, Any
         "relation_refs": _sequence_of_mappings(ticket.get("relation_refs") or []),
         "evidence_refs": _sequence_of_mappings(ticket.get("evidence_refs") or []),
         "artifact_refs": _sequence_of_mappings(ticket.get("artifact_refs") or []),
+        "repair_hints": _bounded_repair_hints(ticket),
         "diff_policy": {
             "scope": "minimal",
             "allowed": [
@@ -811,7 +858,10 @@ class DevelopmentTicketService:
         if not ticket_kind or not text:
             raise ValueError("kind and summary are required")
         target = _mapping(signal.get("target_scope"))
-        meta = _mapping(metadata)
+        meta = {
+            **_mapping(signal.get("metadata")),
+            **_mapping(metadata),
+        }
         area = _text(owner_area) or _text(signal.get("owner_area")) or _owner_area_from_scope(target, meta)
         component = _text(component_ref) or _text(signal.get("component_ref")) or _component_ref_from_scopes(
             target,
@@ -842,6 +892,10 @@ class DevelopmentTicketService:
                     )
                     ticket["owner_area"] = _text(ticket.get("owner_area")) or area
                     ticket["component_ref"] = _text(ticket.get("component_ref")) or component
+                    ticket["metadata"] = {
+                        **_mapping(ticket.get("metadata")),
+                        **meta,
+                    }
                     ticket["updated_at"] = _now()
                     self._append_history(
                         ticket,

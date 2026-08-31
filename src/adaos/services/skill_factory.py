@@ -540,12 +540,15 @@ class SkillFactoryService:
         }
         default_constraints.update({key: value for key, value in constraints.items() if value is not None})
 
-        requested_scope = _string_list(mcp.get("requested_scope")) or [
-            "capability_snapshot",
-            "requirement_spec",
-            "mock_runtime",
-            "staging_validation",
-        ]
+        mcp_enabled = mcp.get("enabled") is not False
+        requested_scope = _string_list(mcp.get("requested_scope"))
+        if mcp_enabled and not requested_scope:
+            requested_scope = [
+                "capability_snapshot",
+                "requirement_spec",
+                "mock_runtime",
+                "staging_validation",
+            ]
         acceptance = _mapping(raw.get("acceptance"))
         draft_quality = _mapping(draft.get("quality_gates"))
         if draft_quality and not acceptance.get("test_commands"):
@@ -564,6 +567,7 @@ class SkillFactoryService:
             for key, value in mcp.items()
             if key not in {"root_mcp", "access_token"}
         }
+        normalized_mcp["enabled"] = mcp_enabled
         normalized_mcp["requested_scope"] = requested_scope
         if root_mcp:
             normalized_mcp["root_mcp"] = root_mcp
@@ -1604,6 +1608,7 @@ class SkillFactoryService:
         realize_request = _mapping(task.get("realize_request"))
         agent_profile = _mapping(_mapping(realize_request.get("artifacts")).get("agent_profile"))
         assignment_mcp = {
+            "enabled": mcp.get("enabled") is not False,
             "endpoint": _text(mcp.get("endpoint")) or f"/v1/root/mcp/task/{task_id}",
             "token_ref": f"task_access_lease:{lease.get('lease_id') or task_id}",
             "scope": _assignment_mcp_scope(mcp.get("requested_scope")),

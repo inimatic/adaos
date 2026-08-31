@@ -1267,6 +1267,47 @@ def test_automation_cannot_modify_current_publication_baseline(tmp_path: Path) -
         )
 
 
+def test_surgical_repair_enforces_exact_files_and_file_count(tmp_path: Path) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    assignment = {
+        "forge": {"sparse_paths": ["skills/demo_metrics_skill/"]},
+        "constraints": {
+            "repair_profile": "surgical_ui",
+            "exact_changed_paths": [
+                "skills/demo_metrics_skill/webui.json",
+                "skills/demo_metrics_skill/tests/test_resource_workbench.py",
+            ],
+            "max_changed_files": 2,
+        },
+        "realize_request": {"artifacts": {}},
+    }
+
+    worker._validate_changed_paths(
+        assignment,
+        ["skills/demo_metrics_skill/webui.json"],
+    )
+    with pytest.raises(ValueError, match="outside the exact repair files"):
+        worker._validate_changed_paths(
+            assignment,
+            ["skills/demo_metrics_skill/handlers/main.py"],
+        )
+    with pytest.raises(ValueError, match="more files"):
+        worker._validate_changed_paths(
+            assignment,
+            [
+                "skills/demo_metrics_skill/webui.json",
+                "skills/demo_metrics_skill/tests/test_resource_workbench.py",
+                "skills/demo_metrics_skill/README.md",
+            ],
+        )
+
+
 def test_bounded_dev_ticket_rejects_large_manifest_collapse(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     scenario = workspace / "scenarios" / "demo"

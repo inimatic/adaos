@@ -100,7 +100,7 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["status"] == "completed"
     assert status["session"]["source_prototype_version"] == "0.1.0"
     assert status["automation"]["source_prototype_version"] == "0.1.0"
-    assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.11.0"
+    assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.12.0"
     assert status["session"]["created_artifacts"][0]["kind"] == "skill"
     assert status["session"]["created_artifacts"][0]["name"] == "recipes_skill"
     task = next(
@@ -128,6 +128,17 @@ def test_dev_ticket_repair_projects_minimal_diff_constraints(tmp_path: Path) -> 
                 "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
                 "ticket_id": "dticket.demo",
                 "summary": "Repair only the scoped issue.",
+                "repair_hints": {
+                    "profile": "surgical_ui",
+                    "target_files": [
+                        "scenarios/recipes/webui.json",
+                        "scenarios/recipes/tests/test_webui.py",
+                    ],
+                    "target_refs": ["widget:metrics-table.title"],
+                    "acceptance_checks": ["The visible title is Live metrics."],
+                    "max_changed_files": 2,
+                    "requires_root_mcp": False,
+                },
             }
         ),
         links={"development_ticket_id": "dticket.demo"},
@@ -144,11 +155,15 @@ def test_dev_ticket_repair_projects_minimal_diff_constraints(tmp_path: Path) -> 
     assert constraints["minimal_diff"] is True
     assert constraints["preserve_declarative_manifests"] is True
     assert constraints["must_update_manifest"] is False
+    assert constraints["repair_profile"] == "surgical_ui"
+    assert constraints["max_changed_files"] == 2
+    assert task["realize_request"]["mcp"] == {"enabled": False, "requested_scope": []}
     prompt = (
         tmp_path / "runs" / started["session"]["current_task_id"] / "input" / "task.md"
     ).read_text(encoding="utf-8")
-    assert "Dev Ticket repair constraints" in prompt
-    assert "This is a bounded Dev Ticket repair" in prompt
+    assert "AdaOS bounded surgical UI repair" in prompt
+    assert "widget:metrics-table.title" in prompt
+    assert "Governed Development Session inputs" not in prompt
 
 
 def test_terminal_skill_candidate_runtime_release_is_exact_and_idempotent(

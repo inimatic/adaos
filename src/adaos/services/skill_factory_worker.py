@@ -389,6 +389,8 @@ def _root_mcp_profile_from_assignment(
     include_private_token: bool = False,
 ) -> dict[str, Any] | None:
     mcp = dict(assignment.get("mcp") or {})
+    if mcp.get("enabled") is False:
+        return None
     raw = mcp.get("root_mcp") if isinstance(mcp.get("root_mcp"), Mapping) else {}
     root = dict(raw) if isinstance(raw, Mapping) else {}
     token = ""
@@ -2319,6 +2321,11 @@ class LocalSkillFactoryWorker:
         )
         allowed = [str(item) for item in (assignment.get("forge") or {}).get("sparse_paths") or []]
         constraints = dict(assignment.get("constraints") or {})
+        repair_hints = (
+            dict(artifacts.get("repair_hints"))
+            if isinstance(artifacts.get("repair_hints"), Mapping)
+            else {}
+        )
         is_dev_ticket_repair = (
             str(constraints.get("mode") or "").strip() == "dev_ticket_repair"
             or constraints.get("minimal_diff") is True
@@ -2344,6 +2351,7 @@ class LocalSkillFactoryWorker:
             "contract_execution_checklist": contract_checklist or None,
             "validation_budget": _generated_test_budget(assignment),
             "root_mcp": root_mcp,
+            "repair_hints": repair_hints or None,
         }
         _write_json(input_dir / "packet.json", packet)
         (input_dir / "allowed_files.txt").write_text("\n".join(allowed) + "\n", encoding="utf-8")
@@ -2367,7 +2375,18 @@ This is a bounded Dev Ticket repair, not a full project implementation pass. Tre
 
 Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.json`, `webui.json`, `scenario.yaml`, or `skill.yaml` unless the ticket explicitly requires that manifest change. It is acceptable for a Dev Ticket repair to leave manifests untouched when the fix is in handlers, tests, resource data, comments, or scoped UI text. If the requested result needs core/API/SDK support that is unavailable to this project, stop with a blocker explanation and propose the required core/API/SDK Dev Ticket instead of patching around the limitation.
 """ if is_dev_ticket_repair else ""
-        if is_dev_ticket_repair:
+        surgical_ui = is_dev_ticket_repair and constraints.get("repair_profile") == "surgical_ui"
+        if surgical_ui:
+            target_files = [str(item) for item in repair_hints.get("target_files") or []]
+            target_refs = [str(item) for item in repair_hints.get("target_refs") or []]
+            acceptance_checks = [str(item) for item in repair_hints.get("acceptance_checks") or []]
+            required_result = """1. Read only the exact target files listed in the repair hints before editing.
+2. Apply only the requested visible UI change; do not explore AdaOS core or unrelated project files.
+3. Add or update only the focused regression assertion named by the acceptance checks.
+4. Run the focused test first. The trusted worker will run package validation afterward.
+5. Do not edit manifest version/updated_at, publish, activate, or access external services.
+6. Stop immediately after the requested diff and focused check succeed."""
+        elif is_dev_ticket_repair:
             required_result = """1. Inspect the complete targeted skill or scenario before editing.
 2. Reproduce the ticket against the real declared UI, handler, projection, or runtime path; a test that only confirms existing behavior is not acceptance evidence.
 3. Implement the smallest project-owned change that satisfies the ticket. Use only public AdaOS SDK/API contracts and stop with a linked core-capability blocker when the project cannot own the fix.
@@ -2454,7 +2473,34 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
             if root_mcp
             else "No task-scoped Root MCP route was admitted."
         )
-        prompt = f"""# AdaOS local realization task
+        if surgical_ui:
+            prompt = f"""# AdaOS bounded surgical UI repair
+
+Target: {target_type}:{target_id}
+
+## Approved ticket brief
+
+{brief}
+
+## Exact repair hints
+
+```json
+{json.dumps(repair_hints, ensure_ascii=False, indent=2, sort_keys=True)}
+```
+
+The complete governed packet is retained in `packet.json` with digest
+`{context_packet.get('digest') or 'none'}`. The hints are bounded requirement
+evidence; file authority remains limited to: {', '.join(allowed)}.
+
+## Required result
+
+{required_result}
+
+Return a concise summary of the changed files and focused check. The worker owns
+the final commit, package validation, activation, and evidence.
+"""
+        else:
+            prompt = f"""# AdaOS local realization task
 
 You are implementing a real AdaOS project from an approved interface prototype. Work autonomously in the current repository and finish the implementation; do not merely describe code.
 
@@ -2694,6 +2740,24 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         invalid = [path for path in changed_paths if not any(path == item.rstrip("/") or path.startswith(item) for item in allowed)]
         if invalid:
             raise ValueError(f"Codex changed paths outside the task scope: {invalid}")
+        constraints = dict(assignment.get("constraints") or {})
+        exact = {
+            str(item).replace("\\", "/").strip("/")
+            for item in constraints.get("exact_changed_paths") or []
+            if str(item).strip()
+        }
+        try:
+            max_changed_files = int(constraints.get("max_changed_files") or 0)
+        except (TypeError, ValueError):
+            max_changed_files = 0
+        if max_changed_files > 0 and len(changed_paths) > max_changed_files:
+            raise ValueError(
+                "Codex changed more files than the bounded repair admits: "
+                f"{len(changed_paths)} > {max_changed_files}"
+            )
+        outside_exact = [path for path in changed_paths if exact and path not in exact]
+        if outside_exact:
+            raise ValueError(f"Codex changed paths outside the exact repair files: {outside_exact}")
         request = dict(assignment.get("realize_request") or {})
         artifacts = dict(request.get("artifacts") or {})
         transition = str(artifacts.get("workflow_transition") or "").strip()
