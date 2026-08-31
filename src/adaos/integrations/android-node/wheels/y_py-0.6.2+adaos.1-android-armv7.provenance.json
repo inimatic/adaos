@@ -1,0 +1,29 @@
+{
+  "schema": "adaos.android-wheel-provenance.v1",
+  "package": "y-py",
+  "version": "0.6.2+adaos.1",
+  "wheel": "y_py-0.6.2+adaos.1-cp311-cp311-android_26_armeabi_v7a.whl",
+  "sha256": "60ddd91713295b1c4c6aa612b1ea2cc24374c13dcc1f71f7115c873abf0b1421",
+  "source": "vendor/y-py",
+  "source_commit": "029acdb5bd4cf6d61baffe83c4343f129d5f011f",
+  "python": "Chaquopy CPython 3.11.14-0",
+  "android_abi": "armeabi-v7a",
+  "android_api": 26,
+  "android_ndk": "27.2.12479018",
+  "rust": "1.72.1",
+  "maturin": "1.13.3",
+  "elf_machine": "ARM",
+  "needed": ["libpython3.11.so", "libdl.so", "libc.so"],
+  "verified_device": {
+    "model": "HUAWEI DRA-LX9",
+    "android_api": 29,
+    "status": "import_smoke_passed",
+    "observed_runtime": {
+      "machine": "armv8l",
+      "pointer_bits": 32,
+      "y_py_ok": true,
+      "state_vector_bytes": 7,
+      "update_bytes": 59
+    }
+  }
+}

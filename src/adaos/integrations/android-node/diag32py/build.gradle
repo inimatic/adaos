@@ -35,5 +35,8 @@ chaquopy {
         pyc {
             src = false
         }
+        pip {
+            install("../wheels/y_py-0.6.2+adaos.1-cp311-cp311-android_26_armeabi_v7a.whl")
+        }
     }
 }
