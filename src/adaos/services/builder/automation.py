@@ -689,6 +689,24 @@ class BuilderAutomationService:
             ticket_id = str(external_links.get("development_ticket_id") or "").strip()
             issue_seed = ticket_id or hashlib.sha256(brief.encode("utf-8")).hexdigest()[:20]
             issue_id = f"automation-followup-{issue_seed}"[:160]
+            try:
+                brief_payload = json.loads(brief)
+            except (TypeError, ValueError):
+                brief_payload = {}
+            if not isinstance(brief_payload, Mapping):
+                brief_payload = {}
+            repair_hints = (
+                brief_payload.get("repair_hints")
+                if isinstance(brief_payload.get("repair_hints"), Mapping)
+                else {}
+            )
+            issue_summary = " ".join(
+                str(
+                    brief_payload.get("summary")
+                    or repair_hints.get("change_summary")
+                    or brief
+                ).split()
+            )[:3800]
             existing_issue_ids = {
                 str(item.get("issue_id") or "").strip()
                 for item in active_change_set.get("issues") or []
@@ -703,17 +721,15 @@ class BuilderAutomationService:
                     reason="follow-up Dev Ticket admitted into the active trial batch",
                     metadata={
                         "change_set_id": str(active_change_set.get("change_set_id") or ""),
-                        "request": brief,
+                        "request": issue_summary,
                         "issues": [
                             {
                                 "issue_id": issue_id,
-                                "title": " ".join(brief.split())[:240],
+                                "title": issue_summary[:240],
                                 "lane": "automation",
                                 "status": "open",
                                 "acceptance_criteria": [
-                                    f"The follow-up implementation satisfies: {' '.join(brief.split())}"[
-                                        :500
-                                    ]
+                                    f"The follow-up implementation satisfies: {issue_summary}"[:500]
                                 ],
                             }
                         ],

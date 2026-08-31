@@ -1166,10 +1166,18 @@ def test_dev_ticket_followup_extends_active_trial_batch(tmp_path: Path) -> None:
         },
     )
 
+    followup_brief = json.dumps(
+        {
+            "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+            "summary": "Rename the visible metrics heading.",
+            "repair_hints": {"profile": "surgical_ui"},
+            "context": "x" * 5000,
+        }
+    )
     started = service.start_from_execute(
         object_type="scenario",
         object_id="recipes",
-        implementation_brief="Rename the visible metrics heading.",
+        implementation_brief=followup_brief,
         webspace_id="prompt-dev",
         links={"development_ticket_id": "dticket.followup"},
     )
@@ -1183,6 +1191,9 @@ def test_dev_ticket_followup_extends_active_trial_batch(tmp_path: Path) -> None:
     )
     assert followup["lane"] == "automation"
     assert "dticket.followup" in projected["change_set"]["source_message_ids"]
+    assert projected["change_set"]["request_addenda"][-1] == (
+        "Rename the visible metrics heading."
+    )
     assert started["session"]["current_task_id"] != "task.first"
 
 
