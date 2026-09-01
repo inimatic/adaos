@@ -173,6 +173,24 @@ class RootMcpClient:
             dry_run=dry_run,
         )
 
+    def resolve_context(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
+        return self.call("context.resolve", arguments=dict(arguments))
+
+    def plan_context(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
+        return self.call("context.plan", arguments=dict(arguments))
+
+    def compile_context(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
+        return self.call("context.compile", arguments=dict(arguments))
+
+    def inspect_context(self, run_ref: str) -> dict[str, Any]:
+        return self.call("context.inspect", arguments={"run_ref": str(run_ref)})
+
+    def record_context_receipt(self, receipt: Mapping[str, Any]) -> dict[str, Any]:
+        return self.call("context.record_receipt", arguments=dict(receipt))
+
+    def propose_context_memory(self, proposal: Mapping[str, Any]) -> dict[str, Any]:
+        return self.call("context.propose_memory", arguments=dict(proposal))
+
     def get_nlu_authoring_context(
         self,
         *,

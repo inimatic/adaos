@@ -90,9 +90,12 @@ def _plane_registry_payload() -> dict[str, Any]:
                 "preferred_for": ["builder", "codex", "evaluator", "context_inspection"],
                 "descriptor_ids": [
                     "context_capsule_schema",
+                    "context_relationship_schema",
+                    "context_subject_binding_schema",
                     "context_plan_schema",
                     "context_receipt_schema",
-                    "context_memory_candidate_schema"
+                    "context_memory_candidate_schema",
+                    "descriptor_overview_row_schema",
                 ],
                 "tool_prefixes": ["context."],
                 "capability_profiles": ["ContextAgent"],
@@ -157,6 +160,84 @@ def _with_ttl(issued_at: str, ttl_seconds: int) -> str:
 def _json_hash(payload: Any) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _overview_row(
+    *,
+    row_id: str,
+    kind: str,
+    title: str,
+    summary: str | None,
+    stability: str,
+    descriptor_id: str,
+    version: str | None = None,
+    side_effects: str | None = None,
+    owner: str | None = None,
+    schema_id: str | None = None,
+    required_args: Any = None,
+    capabilities: Any = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    identity = {
+        "row_id": row_id,
+        "kind": kind,
+        "title": title,
+        "summary": summary,
+        "version": version,
+        "stability": stability,
+        "side_effects": side_effects,
+        "owner": owner,
+        "schema_id": schema_id,
+        "required_args_digest": f"sha256:{_json_hash(required_args)}" if required_args is not None else None,
+        "capability_digest": f"sha256:{_json_hash(capabilities)}" if capabilities is not None else None,
+    }
+    fingerprint = f"sha256:{_json_hash(identity)}"
+    return {
+        "schema": "adaos.descriptor.overview_row.v1",
+        **identity,
+        "fingerprint": fingerprint,
+        "freshness": {"state": "descriptor_bound"},
+        "drill_down": {
+            "descriptor_id": descriptor_id,
+            "item_id": row_id,
+            "content_hash": fingerprint,
+        },
+        "metadata": dict(metadata or {}),
+    }
+
+
+def _sdk_metadata(level: str) -> dict[str, Any]:
+    payload = dict(sdk_export(level=level))
+    raw_items = payload.get("items") if isinstance(payload.get("items"), list) else payload.get("tools")
+    rows: list[dict[str, Any]] = []
+    for item in raw_items or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("n") or item.get("name") or "").strip()
+        if not name:
+            continue
+        meta = dict(item.get("meta") or {}) if isinstance(item.get("meta"), dict) else {}
+        input_schema = dict(item.get("input_schema") or {}) if isinstance(item.get("input_schema"), dict) else {}
+        rows.append(
+            _overview_row(
+                row_id=name,
+                kind="sdk_method",
+                title=name,
+                summary=str(item.get("s") or item.get("summary") or "").strip() or None,
+                stability=str(item.get("st") or meta.get("stability") or "experimental"),
+                descriptor_id="sdk_metadata",
+                version=str(meta.get("version") or "").strip() or None,
+                side_effects=str(meta.get("side_effects") or "").strip() or None,
+                owner=str(item.get("module") or "adaos.sdk").strip(),
+                schema_id=f"sdk:{name}:input",
+                required_args=input_schema.get("required") or [],
+                capabilities={"approval_scope": meta.get("approval_scope"), "idempotent": meta.get("idempotent")},
+                metadata={"module": item.get("module"), "qualname": item.get("qualname")},
+            )
+        )
+    payload["overview_schema"] = "adaos.descriptor.overview_row.v1"
+    payload["overview_rows"] = rows
+    return payload
 
 
 def _descriptor_cache_state_path() -> Path:
@@ -309,8 +390,7 @@ def _public_registry_summary(kind: str) -> dict[str, Any]:
     items = _registry_entries(token)
     normalized: list[dict[str, Any]] = []
     for item in items[:50]:
-        normalized.append(
-            {
+        value = {
                 "id": str(item.get("id") or item.get("name") or "").strip(),
                 "name": str(item.get("name") or item.get("id") or "").strip(),
                 "version": str(item.get("version") or "").strip() or None,
@@ -318,7 +398,23 @@ def _public_registry_summary(kind: str) -> dict[str, Any]:
                 "description": str(item.get("description") or "").strip() or None,
                 "manifest": str(item.get("manifest") or "").strip() or None,
             }
+        value["overview"] = _overview_row(
+            row_id=value["id"],
+            kind="skill" if token == "skills" else "scenario",
+            title=value["name"] or value["id"],
+            summary=value["description"],
+            version=value["version"],
+            stability="published",
+            descriptor_id=f"public_{token[:-1]}_registry_summary",
+            owner=str(item.get("owner") or "workspace").strip(),
+            schema_id="skill_manifest_schema" if token == "skills" else "scenario_manifest_schema",
+            capabilities={
+                "tools": item.get("tools") or [],
+                "events": item.get("events") or [],
+                "nlu": item.get("nlu") or item.get("hints") or {},
+            },
         )
+        normalized.append(value)
     registry_payload = _workspace_registry()
     return {
         "kind": token,
@@ -385,6 +481,13 @@ def _descriptor_build_profile() -> dict[str, Any]:
             "skill_factory_dev_task_failure_schema",
             "skill_factory_status",
             "nlu_teacher_schema",
+            "descriptor_overview_row_schema",
+            "context_capsule_schema",
+            "context_relationship_schema",
+            "context_subject_binding_schema",
+            "context_plan_schema",
+            "context_receipt_schema",
+            "context_memory_candidate_schema",
             "template_catalog",
             "architecture_catalog",
             "public_skill_registry_summary",
@@ -452,6 +555,17 @@ def _descriptor_entry(
     defaults = dict(DESCRIPTOR_CACHE_CLASS_DEFAULTS.get(str(descriptor_class), {}))
     ttl_seconds = int(defaults.get("ttl_seconds") or 600)
     effective_stability = str(stability or defaults.get("stability") or "experimental")
+    overview = _overview_row(
+        row_id=descriptor_id,
+        kind=f"descriptor.{descriptor_class}",
+        title=title,
+        summary=summary,
+        stability=effective_stability,
+        descriptor_id=descriptor_id,
+        owner="root",
+        schema_id=descriptor_id if descriptor_class == "schema" else None,
+        capabilities=tags or [],
+    )
     return {
         "descriptor_id": descriptor_id,
         "title": title,
@@ -470,6 +584,9 @@ def _descriptor_entry(
             "freshness_policy": str(defaults.get("freshness") or "fresh"),
         },
         "tags": list(tags or []),
+        "fingerprint": overview["fingerprint"],
+        "drill_down": overview["drill_down"],
+        "overview": overview,
     }
 
 
@@ -504,7 +621,7 @@ def _descriptor_payload(descriptor_id: str, *, level: str = "std") -> Any:
         effective_level = str(level or "std").strip().lower() or "std"
         if effective_level not in {"mini", "std", "rich"}:
             effective_level = "std"
-        return sdk_export(level=effective_level)
+        return _sdk_metadata(effective_level)
     if token == "system_model_vocabulary":
         return _system_model_vocabulary()
     if token == "skill_manifest_schema":
@@ -531,6 +648,17 @@ def _descriptor_payload(descriptor_id: str, *, level: str = "std") -> Any:
         return _skill_factory_status()
     if token == "nlu_teacher_schema":
         return _nlu_teacher_schema()
+    context_schemas = {
+        "context_capsule_schema": "context.capsule.v2.schema.json",
+        "context_relationship_schema": "context.relationship.v1.schema.json",
+        "context_subject_binding_schema": "context.subject_binding.v1.schema.json",
+        "context_plan_schema": "context.plan.v1.schema.json",
+        "context_receipt_schema": "agent.context_receipt.v1.schema.json",
+        "context_memory_candidate_schema": "context.memory_candidate.v1.schema.json",
+        "descriptor_overview_row_schema": "descriptor.overview_row.v1.schema.json",
+    }
+    if token in context_schemas:
+        return _skill_factory_schema(context_schemas[token])
     if token == "template_catalog":
         return _template_catalog()
     if token == "capability_registry":
@@ -702,6 +830,62 @@ def list_descriptor_sets() -> list[dict[str, Any]]:
             source_kind="nlu_teacher_schema",
             descriptor_class="schema",
             tags=["development", "nlu", "teacher", "schema"],
+        ),
+        _descriptor_entry(
+            "descriptor_overview_row_schema",
+            title="Descriptor overview row schema",
+            summary="Common compact overview row with stable fingerprint and drill-down identity.",
+            source_kind="descriptor_overview_row_schema",
+            descriptor_class="schema",
+            tags=["development", "descriptor", "overview", "schema"],
+        ),
+        _descriptor_entry(
+            "context_capsule_schema",
+            title="Context capsule schema",
+            summary="Immutable governed context unit with subject, trust, authority, time, and artifact identity.",
+            source_kind="context_capsule_schema",
+            descriptor_class="schema",
+            tags=["development", "context", "capsule", "schema"],
+        ),
+        _descriptor_entry(
+            "context_relationship_schema",
+            title="Context relationship schema",
+            summary="Typed dependency and provenance edge between immutable context capsules.",
+            source_kind="context_relationship_schema",
+            descriptor_class="schema",
+            tags=["development", "context", "relationship", "schema"],
+        ),
+        _descriptor_entry(
+            "context_subject_binding_schema",
+            title="Context subject binding schema",
+            summary="Optimistic mutable binding from a typed subject and purpose to an immutable capsule.",
+            source_kind="context_subject_binding_schema",
+            descriptor_class="schema",
+            tags=["development", "context", "binding", "schema"],
+        ),
+        _descriptor_entry(
+            "context_plan_schema",
+            title="Context plan schema",
+            summary="Deterministic selected, omitted, denied, and unavailable context plan under a token budget.",
+            source_kind="context_plan_schema",
+            descriptor_class="schema",
+            tags=["development", "context", "plan", "schema"],
+        ),
+        _descriptor_entry(
+            "context_receipt_schema",
+            title="Agent context receipt schema",
+            summary="Immutable attribution of context selection, token use, execution route, and validation evidence.",
+            source_kind="context_receipt_schema",
+            descriptor_class="schema",
+            tags=["development", "context", "receipt", "schema"],
+        ),
+        _descriptor_entry(
+            "context_memory_candidate_schema",
+            title="Context memory candidate schema",
+            summary="Evidence-gated reusable-memory proposal and independent promotion lifecycle.",
+            source_kind="context_memory_candidate_schema",
+            descriptor_class="schema",
+            tags=["development", "context", "memory", "schema"],
         ),
         _descriptor_entry(
             "template_catalog",

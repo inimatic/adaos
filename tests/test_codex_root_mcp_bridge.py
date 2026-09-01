@@ -93,6 +93,30 @@ class _FakeRootMcpClient:
         )
         return {"builder_context": {"context_id": "builder_context.v1", "webspace_id": webspace_id or "desktop"}}
 
+    def resolve_context(self, arguments: dict) -> dict:
+        self.calls.append(("resolve_context", "", dict(arguments)))
+        return {"resolution": {"status": "ready", "required": [{"ref": "ctxcap.demo", "kind": "project"}]}}
+
+    def plan_context(self, arguments: dict) -> dict:
+        self.calls.append(("plan_context", "", dict(arguments)))
+        return {"plan": {"plan_id": "ctxplan.demo", "selected": [{"ref": "ctxcap.demo"}]}}
+
+    def compile_context(self, arguments: dict) -> dict:
+        self.calls.append(("compile_context", "", dict(arguments)))
+        return {"compilation": {"packet_ref": "artifact://context/sha256/demo"}}
+
+    def inspect_context(self, run_ref: str) -> dict:
+        self.calls.append(("inspect_context", run_ref, {}))
+        return {"inspection": {"run_ref": run_ref, "receipt_count": 1}}
+
+    def record_context_receipt(self, receipt: dict) -> dict:
+        self.calls.append(("record_context_receipt", "", dict(receipt)))
+        return {"receipt": {"receipt_id": "ctxreceipt.demo"}}
+
+    def propose_context_memory(self, proposal: dict) -> dict:
+        self.calls.append(("propose_context_memory", "", dict(proposal)))
+        return {"candidate": {"candidate_id": "ctxmem.demo", "status": "proposed"}}
+
     def get_nlu_authoring_context(
         self,
         *,
@@ -626,6 +650,55 @@ def test_codex_bridge_profile_roundtrip(tmp_path: Path) -> None:
     assert loaded.zone == "lab-a"
     assert loaded.bootstrap_mode == "mcp_session_lease"
     assert loaded.resolved_access_token() == "secret-token"
+
+
+def test_model_text_formats_preserve_canonical_structured_content(monkeypatch) -> None:
+    payload = {
+        "schema": "adaos.test.overview.v1",
+        "items": [
+            {"id": "one", "title": "First", "status": "ready"},
+            {"id": "two", "title": "Second", "status": "blocked"},
+        ],
+    }
+    projections = {
+        output_format: bridge_mod._tool_text(payload, model_text_format=output_format)
+        for output_format in ("json", "min_json", "jsonl", "toon")
+    }
+
+    for output_format, result in projections.items():
+        assert result["structuredContent"] == payload
+        metadata = result["_meta"]["adaos/modelProjection"]
+        assert metadata["canonical_format"] == "json"
+        assert metadata["model_text_format"] == output_format
+        assert metadata["token_estimate"] > 0
+    assert projections["json"]["content"][0]["text"] != projections["min_json"]["content"][0]["text"]
+    assert projections["toon"]["content"][0]["text"].startswith("path\tvalue")
+
+    profile = bridge_mod.CodexBridgeProfile(
+        root_url="https://root.example.test",
+        target_id="hub:test-subnet",
+        access_token="access-123",
+    )
+    bridge = bridge_mod.CodexRootMcpBridge(profile)
+    fake_client = _FakeRootMcpClient()
+    monkeypatch.setattr(bridge, "_client", lambda: fake_client)
+    response = bridge.call_tool(
+        "context_resolve",
+        {
+            "subject_refs": ["project:demo"],
+            "purpose": "builder.automation",
+            "model_text_format": "toon",
+        },
+    )
+    definition = next(item for item in bridge.tool_definitions() if item["name"] == "context_resolve")
+
+    assert response["structuredContent"]["resolution"]["status"] == "ready"
+    assert response["_meta"]["adaos/modelProjection"]["model_text_format"] == "toon"
+    assert fake_client.calls[-1][2] == {
+        "subject_refs": ["project:demo"],
+        "purpose": "builder.automation",
+    }
+    assert "model_text_format" in definition["inputSchema"]["properties"]
 
 
 def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:

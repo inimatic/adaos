@@ -120,6 +120,10 @@ def test_root_mcp_foundation_and_contracts(monkeypatch) -> None:
     assert "descriptor_bundle" in descriptor_ids
     assert "mcp_plane_registry" in descriptor_ids
     assert "nlu_teacher_schema" in descriptor_ids
+    assert "descriptor_overview_row_schema" in descriptor_ids
+    assert "context_capsule_schema" in descriptor_ids
+    assert all(item["fingerprint"].startswith("sha256:") for item in descriptor_items)
+    assert all(item["drill_down"]["descriptor_id"] == item["descriptor_id"] for item in descriptor_items)
 
     capability_registry = client.get("/v1/root/mcp/descriptors/capability_registry", headers=scoped_headers)
     assert capability_registry.status_code == 200
@@ -142,10 +146,30 @@ def test_root_mcp_foundation_and_contracts(monkeypatch) -> None:
     plane_registry_payload = plane_registry.json()["descriptor"]["payload"]
     assert plane_registry_payload["available"] is True
     plane_ids = {item["plane_id"] for item in plane_registry_payload["planes"]}
-    assert {"adaos_dev", "profile_ops", "nlu_authoring"} <= plane_ids
+    assert {"adaos_dev", "profile_ops", "nlu_authoring", "context_control"} <= plane_ids
     nlu_plane = next(item for item in plane_registry_payload["planes"] if item["plane_id"] == "nlu_authoring")
     assert "nlu_teacher_schema" in nlu_plane["descriptor_ids"]
     assert "NLUTeacherRead" in nlu_plane["capability_profiles"]
+    context_plane = next(item for item in plane_registry_payload["planes"] if item["plane_id"] == "context_control")
+    assert "context_relationship_schema" in context_plane["descriptor_ids"]
+    assert "ContextAgent" in context_plane["capability_profiles"]
+
+    context_schema = client.get("/v1/root/mcp/descriptors/context_capsule_schema", headers=scoped_headers)
+    assert context_schema.status_code == 200
+    context_descriptor = context_schema.json()["descriptor"]
+    assert context_descriptor["payload"]["$id"] == "adaos.context.capsule.v2"
+    assert context_descriptor["overview"]["schema"] == "adaos.descriptor.overview_row.v1"
+
+    sdk_descriptor = client.get(
+        "/v1/root/mcp/descriptors/sdk_metadata",
+        headers=scoped_headers,
+        params={"level": "mini"},
+    ).json()["descriptor"]
+    sdk_rows = sdk_descriptor["payload"]["overview_rows"]
+    assert sdk_rows
+    assert sdk_rows[0]["schema"] == "adaos.descriptor.overview_row.v1"
+    assert sdk_rows[0]["fingerprint"].startswith("sha256:")
+    assert sdk_rows[0]["drill_down"]["descriptor_id"] == "sdk_metadata"
 
     architecture = client.get("/v1/root/mcp/descriptors/architecture_catalog", headers=scoped_headers)
     assert architecture.status_code == 200

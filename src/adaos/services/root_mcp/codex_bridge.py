@@ -6,7 +6,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, BinaryIO, Mapping
+from typing import Any, BinaryIO, Mapping, Sequence
 
 from .client import RootMcpClient, RootMcpClientConfig
 from .tokens import DEFAULT_ACCESS_TOKEN_CAPABILITIES
@@ -55,6 +55,71 @@ def _default_log_scope(value: Any) -> str:
 
 def _json_text(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+_MODEL_TEXT_FORMATS = {"json", "min_json", "jsonl", "toon"}
+_COMPACT_MODEL_TEXT_TOOLS = {
+    "get_builder_context",
+    "get_architecture_catalog",
+    "get_sdk_metadata",
+    "get_named_entity_registry",
+    "get_nlu_authoring_context",
+    "context_resolve",
+    "context_plan",
+    "context_compile",
+    "context_inspect",
+}
+
+
+def _min_json_text(payload: Any) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _jsonl_text(payload: Any) -> str:
+    rows: list[str] = []
+
+    def visit(value: Any, path: str) -> None:
+        if isinstance(value, Mapping):
+            for key in sorted(value):
+                visit(value[key], f"{path}.{key}" if path else str(key))
+            return
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            for index, item in enumerate(value):
+                visit(item, f"{path}[{index}]")
+            if not value:
+                rows.append(_min_json_text({"path": path, "value": []}))
+            return
+        rows.append(_min_json_text({"path": path or "$", "value": value}))
+
+    visit(payload, "")
+    return "\n".join(rows)
+
+
+def _toon_text(payload: Any) -> str:
+    rows: list[str] = ["path\tvalue"]
+
+    def scalar(value: Any) -> str:
+        if isinstance(value, str):
+            return value.replace("\\", "\\\\").replace("\t", "\\t").replace("\r", "\\r").replace("\n", "\\n")
+        return _min_json_text(value)
+
+    def visit(value: Any, path: str) -> None:
+        if isinstance(value, Mapping):
+            if not value:
+                rows.append(f"{path or '$'}\t{{}}")
+            for key in sorted(value):
+                visit(value[key], f"{path}.{key}" if path else str(key))
+            return
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            if not value:
+                rows.append(f"{path or '$'}\t[]")
+            for index, item in enumerate(value):
+                visit(item, f"{path}[{index}]")
+            return
+        rows.append(f"{path or '$'}\t{scalar(value)}")
+
+    visit(payload, "")
+    return "\n".join(rows)
 
 
 @dataclass(slots=True)
@@ -214,11 +279,34 @@ def build_codex_stdio_command(
     ]
 
 
-def _tool_text(payload: Any, *, error: bool = False) -> dict[str, Any]:
-    text = _json_text(payload)
+def _tool_text(
+    payload: Any,
+    *,
+    error: bool = False,
+    model_text_format: str = "json",
+) -> dict[str, Any]:
+    output_format = str(model_text_format or "json").strip().lower()
+    if output_format not in _MODEL_TEXT_FORMATS:
+        raise ValueError(f"unsupported model_text_format: {output_format}")
+    canonical_text = _json_text(payload)
+    text = {
+        "json": canonical_text,
+        "min_json": _min_json_text(payload),
+        "jsonl": _jsonl_text(payload),
+        "toon": _toon_text(payload),
+    }[output_format]
     response = {
         "content": [{"type": "text", "text": text}],
         "structuredContent": payload,
+        "_meta": {
+            "adaos/modelProjection": {
+                "canonical_format": "json",
+                "model_text_format": output_format,
+                "bytes": len(text.encode("utf-8")),
+                "token_estimate": max(1, (len(text.encode("utf-8")) + 3) // 4),
+                "canonical_token_estimate": max(1, (len(canonical_text.encode("utf-8")) + 3) // 4),
+            }
+        },
     }
     if error:
         response["isError"] = True
@@ -291,7 +379,7 @@ class CodexRootMcpBridge:
         target_optional = self.profile.target_id is not None
         target_properties = {"target_id": {"type": "string", "description": "Managed target id. Defaults to the configured test hub."}}
         target_required = [] if target_optional else ["target_id"]
-        return [
+        definitions = [
             {
                 "name": "foundation",
                 "description": "Read the AdaOS Root MCP foundation snapshot used by this bridge.",
@@ -321,6 +409,73 @@ class CodexRootMcpBridge:
                     },
                     "additionalProperties": False,
                 },
+            },
+            {
+                "name": "context_resolve",
+                "description": "Resolve a governed typed context graph for exact subjects, purpose, audience, policy, and as-of time.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "subject_refs": {"type": "array", "items": {"type": "string"}},
+                        "scope_ref": {"type": "string"},
+                        "purpose": {"type": "string"},
+                        "audience": {"type": "string"},
+                        "branch": {"type": "string"},
+                        "as_of": {"type": "string"},
+                        "policy": {"type": "object"},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "context_plan",
+                "description": "Select the minimal deterministic context working set under an explicit token budget.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "resolution": {"type": "object"},
+                        "resolution_ref": {"type": "string"},
+                        "token_budget": {"type": "integer", "minimum": 1},
+                        "model_profile": {"type": "object"},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "context_compile",
+                "description": "Compile a Context Plan into a provider-neutral packet and selected model-text layout.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "plan": {"type": "object"},
+                        "plan_id": {"type": "string"},
+                        "plan_ref": {"type": "string"},
+                        "output_format": {"type": "string", "enum": sorted(_MODEL_TEXT_FORMATS)},
+                        "role_authority": {"type": "object"},
+                        "output_contract": {"type": "object"},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "context_inspect",
+                "description": "Inspect context selection, access decisions, cache, token usage, and validation receipts for an agent run.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"run_ref": {"type": "string"}},
+                    "required": ["run_ref"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "context_record_receipt",
+                "description": "Record immutable context attribution and validation evidence for the current bounded agent run.",
+                "inputSchema": {"type": "object", "additionalProperties": True},
+            },
+            {
+                "name": "context_propose_memory",
+                "description": "Propose unpromoted memory from run evidence; this does not qualify or promote it.",
+                "inputSchema": {"type": "object", "additionalProperties": True},
             },
             {
                 "name": "get_architecture_catalog",
@@ -976,11 +1131,22 @@ class CodexRootMcpBridge:
                 },
             },
         ]
+        format_property = {
+            "type": "string",
+            "enum": sorted(_MODEL_TEXT_FORMATS),
+            "default": "json",
+            "description": "Optional model-facing text projection; structuredContent remains canonical JSON.",
+        }
+        for definition in definitions:
+            if definition.get("name") in _COMPACT_MODEL_TEXT_TOOLS:
+                definition["inputSchema"].setdefault("properties", {})["model_text_format"] = dict(format_property)
+        return definitions
 
     def call_tool(self, name: str, arguments: Mapping[str, Any] | None = None) -> dict[str, Any]:
         args = dict(arguments or {})
         client = self._client()
         tool = str(name or "").strip()
+        model_text_format = str(args.get("model_text_format") or "json").strip().lower()
         if tool == "foundation":
             return _tool_text(client.foundation())
         if tool == "get_builder_context":
@@ -995,12 +1161,43 @@ class CodexRootMcpBridge:
                     include_live=bool(args.get("include_live", True)),
                     include_hints=bool(args.get("include_hints", True)),
                     include_payloads=bool(args.get("include_payloads", False)),
-                )
+                ),
+                model_text_format=model_text_format,
             )
+        if tool == "context_resolve":
+            return _tool_text(
+                client.resolve_context({key: value for key, value in args.items() if key != "model_text_format"}),
+                model_text_format=model_text_format,
+            )
+        if tool == "context_plan":
+            return _tool_text(
+                client.plan_context({key: value for key, value in args.items() if key != "model_text_format"}),
+                model_text_format=model_text_format,
+            )
+        if tool == "context_compile":
+            return _tool_text(
+                client.compile_context({key: value for key, value in args.items() if key != "model_text_format"}),
+                model_text_format=model_text_format,
+            )
+        if tool == "context_inspect":
+            return _tool_text(
+                client.inspect_context(str(args.get("run_ref") or "")),
+                model_text_format=model_text_format,
+            )
+        if tool == "context_record_receipt":
+            return _tool_text(client.record_context_receipt(args))
+        if tool == "context_propose_memory":
+            return _tool_text(client.propose_context_memory(args))
         if tool == "get_architecture_catalog":
-            return _tool_text(client.get_adaos_dev_architecture_catalog())
+            return _tool_text(
+                client.get_adaos_dev_architecture_catalog(),
+                model_text_format=model_text_format,
+            )
         if tool == "get_sdk_metadata":
-            return _tool_text(client.get_adaos_dev_sdk_metadata(level=str(args.get("level") or "std")))
+            return _tool_text(
+                client.get_adaos_dev_sdk_metadata(level=str(args.get("level") or "std")),
+                model_text_format=model_text_format,
+            )
         if tool == "get_template_catalog":
             return _tool_text(client.get_adaos_dev_template_catalog())
         if tool == "get_public_skill_registry":
@@ -1012,7 +1209,8 @@ class CodexRootMcpBridge:
                 client.get_adaos_dev_named_entity_registry(
                     webspace_id=_normalize_text(args.get("webspace_id")),
                     kind=_normalize_text(args.get("kind")),
-                )
+                ),
+                model_text_format=model_text_format,
             )
         if tool == "get_nlu_authoring_context":
             raw_locales = args.get("preferred_locales")
@@ -1026,7 +1224,8 @@ class CodexRootMcpBridge:
                     preferred_locales=preferred_locales,
                     include_live=bool(args.get("include_live", True)),
                     include_hints=bool(args.get("include_hints", True)),
-                )
+                ),
+                model_text_format=model_text_format,
             )
         if tool == "check_nlu_phrase":
             raw_locales = args.get("preferred_locales")

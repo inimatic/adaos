@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos://abi/descriptor.overview_row.v1.schema.json",
+  "title": "AdaOS Descriptor Overview Row",
+  "type": "object",
+  "required": ["schema", "row_id", "kind", "title", "stability", "fingerprint", "drill_down"],
+  "properties": {
+    "schema": {"const": "adaos.descriptor.overview_row.v1"},
+    "row_id": {"type": "string", "minLength": 1},
+    "kind": {"type": "string", "minLength": 1},
+    "title": {"type": "string", "minLength": 1},
+    "summary": {"type": ["string", "null"]},
+    "version": {"type": ["string", "null"]},
+    "stability": {"type": "string", "minLength": 1},
+    "side_effects": {"type": ["string", "null"]},
+    "owner": {"type": ["string", "null"]},
+    "schema_id": {"type": ["string", "null"]},
+    "required_args_digest": {"type": ["string", "null"]},
+    "capability_digest": {"type": ["string", "null"]},
+    "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "freshness": {"type": "object"},
+    "drill_down": {
+      "type": "object",
+      "required": ["descriptor_id"],
+      "properties": {
+        "descriptor_id": {"type": "string", "minLength": 1},
+        "item_id": {"type": ["string", "null"]},
+        "content_hash": {"type": ["string", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "metadata": {"type": "object"}
+  },
+  "additionalProperties": true
+}
