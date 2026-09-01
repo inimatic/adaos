@@ -5,6 +5,10 @@ plugins {
 
 def portableRasaPython = layout.buildDirectory.dir("generated/portable-rasa-python")
 def adaosAndroidAbi = (project.findProperty("adaosAndroidAbi") ?: "arm64-v8a").toString()
+def adaosVoskMirrorBase = (project.findProperty("adaosVoskMirrorBase") ?: "").toString().trim().replaceAll('/+$', '')
+def buildConfigString = { value ->
+    '"' + value.toString().replace("\\", "\\\\").replace("\"", "\\\"") + '"'
+}
 def adaosYPyWheelByAbi = [
     "arm64-v8a"  : "../wheels/y_py-0.6.2+adaos.1-cp311-cp311-android_26_arm64_v8a.whl",
     "armeabi-v7a": "../wheels/y_py-0.6.2+adaos.1-cp311-cp311-android_26_armeabi_v7a.whl",
@@ -34,6 +38,7 @@ android {
         targetSdk = 36
         versionCode = 21
         versionName = "0.1.0-poc21"
+        buildConfigField("String", "VOSK_MODEL_MIRROR_BASE", buildConfigString(adaosVoskMirrorBase))
 
         ndk {
             abiFilters.add(adaosAndroidAbi)

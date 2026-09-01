@@ -18,6 +18,7 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -223,17 +224,42 @@ class MainActivity : Activity() {
                 sttProviderMode = stt?.optString("provider_mode", sttProviderMode) ?: sttProviderMode
                 val activeProvider = stt?.optString("active_provider", "system") ?: "system"
                 val runtimeState = runtime?.optString("state", "not started") ?: "not started"
+                val native = runtime?.optJSONObject("native_assistant")
+                val vosk = runtime?.optJSONObject("vosk_assistant")
                 val input = if (voiceListeningMode == "off") "Mic off" else "Phone"
                 val provider = if (activeProvider == "vosk") "Vosk" else "System STT"
-                voiceRouteView.text = "🎙 $input · $provider → General · Assistant → 🔊 Phone\nState: $runtimeState"
+                val install = models?.optJSONObject("install")
+                val installState = install?.optString("state", "idle") ?: "idle"
+                val installError = install?.optString("error", "")?.takeIf { it.isNotBlank() }
+                val voiceDetails = listOfNotNull(
+                    "State: $runtimeState",
+                    native?.optString("state", "")?.takeIf { it.isNotBlank() }?.let {
+                        "System: $it cycles=${native.optLong("recognition_cycles", 0)} " +
+                            "heard=${native.optLong("transcript_count", 0)} " +
+                            "accepted=${native.optLong("accepted_count", 0)} " +
+                            "last=${native.optString("last_decision", "none")}"
+                    },
+                    native?.optString("last_transcript", "")?.takeIf { it.isNotBlank() }?.let {
+                        "Last STT: ${it.take(80)}"
+                    },
+                    native?.optInt("last_error_code", 0)?.takeIf { it != 0 }?.let {
+                        "System error code: $it"
+                    },
+                    vosk?.optString("state", "")?.takeIf { it.isNotBlank() }?.let {
+                        "Vosk: $it model=${vosk.optString("model_id", "")}"
+                    },
+                    vosk?.optString("last_error", "")?.takeIf { it.isNotBlank() }?.let {
+                        "Vosk error: ${it.take(120)}"
+                    },
+                    installError?.let { "Install error: ${it.take(120)}" },
+                ).joinToString("\n")
+                voiceRouteView.text = "🎙 $input · $provider → General · Assistant → 🔊 Phone\n$voiceDetails"
                 listeningButton.text = if (voiceListeningMode == "off") {
                     "Always-on assistant: Off"
                 } else {
                     "Always-on assistant: On · $voiceListeningMode"
                 }
                 providerButton.text = "STT: ${sttProviderMode.replaceFirstChar { it.uppercase() }}"
-                val install = models?.optJSONObject("install")
-                val installState = install?.optString("state", "idle") ?: "idle"
                 val installed = models?.optJSONArray("installed")
                 val defaultInstalled = (0 until (installed?.length() ?: 0)).any { index ->
                     installed?.optJSONObject(index)?.optString("id") == DEFAULT_VOSK_MODEL
@@ -274,10 +300,39 @@ class MainActivity : Activity() {
         controlWorker.execute {
             postJson(
                 "$LOOPBACK/api/node/voice/stt/models/install",
-                JSONObject().put("model_id", DEFAULT_VOSK_MODEL).put("select", true),
+                defaultVoskInstallPayload(),
             )
             main.post { refreshVoiceControls() }
         }
+    }
+
+    private fun defaultVoskInstallPayload(): JSONObject {
+        val payload = JSONObject().put("model_id", DEFAULT_VOSK_MODEL).put("select", true)
+        val mirrorBase = BuildConfig.VOSK_MODEL_MIRROR_BASE.trim().trimEnd('/')
+        if (mirrorBase.isBlank()) return payload
+        val descriptor = JSONObject()
+            .put("id", DEFAULT_VOSK_MODEL)
+            .put("provider", "vosk")
+            .put("language", "ru-RU")
+            .put("quality_tier", "compact")
+            .put("resource_class", "mobile")
+            .put("archive_url", "$mirrorBase/$DEFAULT_VOSK_MODEL.zip")
+            .put("archive_sha256", DEFAULT_VOSK_MODEL_SHA256)
+            .put("archive_bytes", DEFAULT_VOSK_MODEL_ARCHIVE_BYTES)
+            .put("unpacked_folder", DEFAULT_VOSK_MODEL)
+            .put("expected_runtime_memory_mb", 300)
+            .put("recommended_min_memory_mb", 3072)
+            .put("license", "Apache-2.0")
+            .put(
+                "platforms",
+                JSONArray()
+                    .put("android-arm64")
+                    .put("android-armv7")
+                    .put("linux")
+                    .put("windows")
+                    .put("macos"),
+            )
+        return payload.put("descriptor", descriptor)
     }
 
     private fun postVoicePolicy(payload: JSONObject) {
@@ -371,6 +426,9 @@ class MainActivity : Activity() {
         private const val EXTRA_STOP_NODE = "stop_node"
         private const val LOOPBACK = "http://127.0.0.1:8777"
         private const val DEFAULT_VOSK_MODEL = "vosk-model-small-ru-0.22"
+        private const val DEFAULT_VOSK_MODEL_SHA256 =
+            "961d5ff98a17f4aa6de69864d0aa71fa5bac682301d2b5d17a3f24c5c99a46d4"
+        private const val DEFAULT_VOSK_MODEL_ARCHIVE_BYTES = 46_236_750
         private const val VOICE_STATUS_POLL_MS = 2_500L
     }
 }

@@ -53,6 +53,10 @@ class VoskVoiceAssistant(
     @Volatile private var resumeRecognitionAt = 0L
     private var textToSpeech: TextToSpeech? = null
     private var ttsReady = false
+    private var ttsInitStatus: Int? = null
+    private var ttsLanguageStatus: Int? = null
+    private var lastTtsSpeakStatus: Int? = null
+    private var lastTtsError = ""
     private var currentModelId = ""
     private var currentModel: Model? = null
     private var currentRecognizer: Recognizer? = null
@@ -416,9 +420,25 @@ class VoskVoiceAssistant(
     private fun initializeTts() {
         if (textToSpeech != null) return
         textToSpeech = TextToSpeech(context) { status ->
+            ttsInitStatus = status
             ttsReady = status == TextToSpeech.SUCCESS
-            if (ttsReady) {
-                textToSpeech?.language = Locale.forLanguageTag("ru-RU")
+            if (!ttsReady) {
+                lastTtsError = "tts_init_failed:$status"
+                publishRuntime("tts_unavailable", JSONObject().put("tts_init_status", status))
+            } else {
+                ttsLanguageStatus = textToSpeech?.setLanguage(Locale.forLanguageTag("ru-RU"))
+                if (ttsLanguageStatus in setOf(TextToSpeech.LANG_MISSING_DATA, TextToSpeech.LANG_NOT_SUPPORTED)) {
+                    ttsReady = false
+                    lastTtsError = "tts_language_unavailable:$ttsLanguageStatus"
+                    publishRuntime(
+                        "tts_unavailable",
+                        JSONObject()
+                            .put("tts_init_status", status)
+                            .put("tts_language_status", ttsLanguageStatus),
+                    )
+                } else {
+                    lastTtsError = ""
+                }
                 textToSpeech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) = Unit
                     override fun onDone(utteranceId: String?) {
@@ -434,7 +454,10 @@ class VoskVoiceAssistant(
     }
 
     private fun speak(text: String, voiceProfile: String) {
-        if (!ttsReady) return
+        if (!ttsReady) {
+            publishRuntime("tts_unavailable", JSONObject().put("tts_error", lastTtsError))
+            return
+        }
         speaking = true
         recentSpeechText = text
         echoGuardUntil = Long.MAX_VALUE
@@ -443,14 +466,19 @@ class VoskVoiceAssistant(
             JSONObject().put("capture_owner", "vosk_streaming").put("decode_paused", true),
         )
         val language = if (voiceProfile.startsWith("en", ignoreCase = true)) "en-US" else "ru-RU"
-        textToSpeech?.language = Locale.forLanguageTag(language)
+        ttsLanguageStatus = textToSpeech?.setLanguage(Locale.forLanguageTag(language))
         val result = textToSpeech?.speak(
             text,
             TextToSpeech.QUEUE_FLUSH,
             null,
             "adaos-vosk-${System.currentTimeMillis()}",
         )
-        if (result == TextToSpeech.ERROR) finishSpeaking()
+        lastTtsSpeakStatus = result
+        if (result == TextToSpeech.ERROR) {
+            lastTtsError = "tts_speak_failed"
+            publishRuntime("tts_failed", JSONObject().put("tts_error", lastTtsError))
+            finishSpeaking()
+        }
     }
 
     private fun finishSpeaking() {
@@ -581,6 +609,11 @@ class VoskVoiceAssistant(
             .put("partial", partialText)
             .put("last_transcript", lastTranscript)
             .put("last_error", lastError)
+            .put("tts_ready", ttsReady)
+            .put("tts_init_status", ttsInitStatus ?: JSONObject.NULL)
+            .put("tts_language_status", ttsLanguageStatus ?: JSONObject.NULL)
+            .put("last_tts_speak_status", lastTtsSpeakStatus ?: JSONObject.NULL)
+            .put("last_tts_error", lastTtsError)
             .put("updated_at_epoch_ms", System.currentTimeMillis())
             .put("details", details)
         try {
