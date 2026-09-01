@@ -311,7 +311,10 @@ def test_builder_work_item_aggregates_usage_across_continuation_tasks(tmp_path: 
     assert usage["total_tokens"] == 155_768
     assert usage["output_tokens"] == 1_835
     assert usage["attempts"] == 1
-    assert "billable_tokens" not in usage
+    assert usage["billable_tokens"] == 155_768
+    assert usage["fresh_plus_output_tokens"] == 21_880
+    assert usage["budget_metric"] == "model_tokens"
+    assert usage["budget_tokens"] == 155_768
     assert usage["root_event_ids"] == ["codex_usage.initial"]
 
 

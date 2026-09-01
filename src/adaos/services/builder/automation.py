@@ -3504,6 +3504,19 @@ class BuilderAutomationService:
                 overrun_tokens = observed_budget_tokens - declared_model_tokens
             else:
                 budget_status = "within_budget"
+        elif (
+            declared_model_tokens > 0
+            and status in _TERMINAL_STATUSES
+            and (
+                (
+                    isinstance(artifacts.get("continuation_checkpoint"), Mapping)
+                    and artifacts["continuation_checkpoint"].get("mode")
+                    == "validate_preserved_candidate"
+                )
+                or bool(artifacts.get("structured_edits"))
+            )
+        ):
+            budget_status = "not_applicable"
         return {
             "declared": declared,
             "observed": {
@@ -3950,6 +3963,7 @@ class BuilderAutomationService:
                 "accuracy": usage_accuracy,
                 **usage,
                 "total_tokens": int(usage.get("model_tokens") or 0),
+                "billable_tokens": int(usage.get("model_tokens") or 0),
                 "checked_at": _now_iso(),
             }
             current["codex_usage_accounting"] = receipt
@@ -3996,6 +4010,7 @@ class BuilderAutomationService:
                 "accuracy": usage_accuracy,
                 **usage,
                 "total_tokens": int(usage.get("model_tokens") or 0),
+                "billable_tokens": int(usage.get("model_tokens") or 0),
                 "idempotency_key": idempotency_key,
                 "root_event_id": root_event.get("event_id"),
                 "duplicate": bool(reported.get("duplicate")),
@@ -4009,6 +4024,7 @@ class BuilderAutomationService:
                 "accuracy": usage_accuracy,
                 **usage,
                 "total_tokens": int(usage.get("model_tokens") or 0),
+                "billable_tokens": int(usage.get("model_tokens") or 0),
                 "idempotency_key": idempotency_key,
                 "error": f"{type(exc).__name__}: {exc}"[:2000],
                 "checked_at": _now_iso(),

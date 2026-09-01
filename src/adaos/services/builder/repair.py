@@ -151,7 +151,6 @@ def _aggregate_codex_usage(
         "output_tokens",
         "reasoning_tokens",
         "total_tokens",
-        "billable_tokens",
     )
     aggregate: dict[str, Any] = {
         "status": "reported",
@@ -182,6 +181,30 @@ def _aggregate_codex_usage(
             aggregate[key] = sum(
                 int(value) for value in values if isinstance(value, (int, float))
             )
+    billable_tokens = 0
+    fresh_plus_output_tokens = 0
+    for receipt in usable:
+        if str(receipt.get("status") or "").strip() == "not_applicable":
+            continue
+        billable = receipt.get("billable_tokens")
+        if not isinstance(billable, (int, float)):
+            billable = (
+                receipt.get("model_tokens")
+                if isinstance(receipt.get("model_tokens"), (int, float))
+                else receipt.get("total_tokens")
+            )
+        if isinstance(billable, (int, float)):
+            billable_tokens += int(billable)
+        input_tokens = receipt.get("input_tokens")
+        cached_tokens = receipt.get("cached_input_tokens")
+        output_tokens = receipt.get("output_tokens")
+        if isinstance(input_tokens, (int, float)) or isinstance(output_tokens, (int, float)):
+            fresh_plus_output_tokens += max(
+                0,
+                int(input_tokens or 0) - int(cached_tokens or 0),
+            ) + int(output_tokens or 0)
+    aggregate["billable_tokens"] = billable_tokens
+    aggregate["fresh_plus_output_tokens"] = fresh_plus_output_tokens
     accuracies = {
         str(receipt.get("accuracy") or "").strip()
         for receipt in usable
@@ -585,6 +608,7 @@ class BuilderRepairService:
                     "reasoning_tokens",
                     "total_tokens",
                     "billable_tokens",
+                    "fresh_plus_output_tokens",
                     "accuracy",
                     "attempts",
                     "receipt_count",
@@ -594,6 +618,17 @@ class BuilderRepairService:
                 ):
                     if aggregate_usage.get(key) is not None:
                         reported_usage[key] = aggregate_usage.get(key)
+                budget_metric = str(
+                    declared.get("token_budget_metric") or "model_tokens"
+                ).strip()
+                reported_usage["budget_metric"] = budget_metric
+                reported_usage["budget_tokens"] = int(
+                    aggregate_usage.get("fresh_plus_output_tokens")
+                    if budget_metric == "fresh_plus_output"
+                    else aggregate_usage.get("model_tokens")
+                    or aggregate_usage.get("total_tokens")
+                    or 0
+                )
             elif usage_receipt:
                 if usage_receipt.get("status"):
                     reported_usage["receipt_status"] = usage_receipt.get("status")

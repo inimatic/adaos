@@ -1039,6 +1039,7 @@ def test_terminal_codex_usage_is_reported_once_with_provider_counts(tmp_path: Pa
     assert second["codex_usage_accounting"]["status"] == "reported"
     assert second["codex_usage_accounting"]["total_tokens"] == 1600
     assert second["codex_usage_accounting"]["model_tokens"] == 1600
+    assert second["codex_usage_accounting"]["billable_tokens"] == 1600
     attribution = second["context_attribution_receipt"]
     assert attribution["status"] == "recorded"
     assert attribution["usage"]["provider_input_tokens"] == 1200
@@ -1050,6 +1051,35 @@ def test_terminal_codex_usage_is_reported_once_with_provider_counts(tmp_path: Pa
         "builder-run:usage-test",
         "project:recipe_suite",
     ]
+
+
+def test_preserved_candidate_budget_projection_is_not_applicable() -> None:
+    task = {
+        "assigned_at": "2026-09-01T23:00:00Z",
+        "updated_at": "2026-09-01T23:01:00Z",
+        "realize_request": {
+            "artifacts": {
+                "execution_budget": {
+                    "max_model_tokens": 12_000,
+                    "token_budget_metric": "fresh_plus_output",
+                },
+                "continuation_checkpoint": {
+                    "mode": "validate_preserved_candidate",
+                    "source_task_id": "task.source",
+                },
+            }
+        },
+    }
+
+    projected = BuilderAutomationService._budget_usage_projection(
+        status="completed",
+        task=task,
+        local_run={},
+    )
+
+    assert projected is not None
+    assert projected["observed"]["budget_tokens"] == 0
+    assert projected["status"] == "not_applicable"
 
 
 def test_terminal_codex_usage_missing_journal_is_unavailable_not_zero(tmp_path: Path) -> None:
