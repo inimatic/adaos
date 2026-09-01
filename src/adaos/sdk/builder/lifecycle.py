@@ -55,6 +55,28 @@ def _candidate_identity(state: Mapping[str, Any]) -> tuple[str, str]:
     return candidate_id, digest
 
 
+def _published_candidate_matches(
+    publication: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    candidate_digest: str,
+) -> bool:
+    if str(publication.get("status") or "").strip() != "published":
+        return False
+    release_record = _mapping(publication.get("release_record"))
+    published_id = str(
+        release_record.get("candidate_id") or publication.get("candidate_id") or ""
+    ).strip()
+    published_digest = str(
+        release_record.get("package_digest")
+        or release_record.get("release_digest")
+        or publication.get("package_digest")
+        or publication.get("release_digest")
+        or ""
+    ).strip()
+    return published_id == candidate_id and published_digest == candidate_digest
+
+
 def prepare_trial(
     object_type: str,
     object_id: str,
@@ -295,14 +317,22 @@ def publish_candidate(
     automation_state = _mapping(state.get("automation"))
     publication_state = _mapping(state.get("publication"))
     publication_status = str(publication_state.get("status") or "not_started").strip()
-    if publication_status == "published":
+    if _published_candidate_matches(
+        publication_state,
+        candidate_id=candidate_id,
+        candidate_digest=candidate_digest,
+    ):
         return {
             "ok": True,
             "status": "published",
             "duplicate": True,
             "workflow": workflow.get_state(object_type, object_id),
         }
-    if publication_status != "publishing":
+    published_or_publishing_current = (
+        publication_status == "publishing"
+        and str(publication_state.get("candidate_id") or "").strip() == candidate_id
+    )
+    if not published_or_publishing_current:
         workflow.transition(
             object_type,
             object_id,

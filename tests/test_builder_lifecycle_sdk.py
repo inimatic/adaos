@@ -174,7 +174,7 @@ def test_publish_candidate_resumes_external_promotion_without_restarting(monkeyp
             "candidate_id": "candidate-1",
             "package_digest": "sha256:" + "d" * 64,
         },
-        "publication": {"status": "publishing"},
+        "publication": {"status": "publishing", "candidate_id": "candidate-1"},
     }
     transitions: list[tuple[str, dict]] = []
     monkeypatch.setattr(lifecycle.workflow, "get_state", lambda *_args: state)
@@ -206,6 +206,88 @@ def test_publish_candidate_resumes_external_promotion_without_restarting(monkeyp
     assert [item[0] for item in transitions] == ["publish"]
     assert transitions[0][1]["idempotency_key"] == "publish-1:success"
     assert result["workflow"]["governed"]["state"] == "publish"
+
+
+def test_publish_candidate_does_not_reuse_previous_candidate_publication(monkeypatch) -> None:
+    state = {
+        "automation": {"status": "completed", "head_task_id": "task-2"},
+        "delivery": {
+            "status": "accepted",
+            "candidate_id": "candidate-2",
+            "package_digest": "sha256:" + "d" * 64,
+        },
+        "publication": {
+            "status": "published",
+            "release_record": {
+                "candidate_id": "candidate-1",
+                "package_digest": "sha256:" + "c" * 64,
+            },
+        },
+    }
+    transitions: list[str] = []
+    promoted: list[str] = []
+    monkeypatch.setattr(lifecycle.workflow, "get_state", lambda *_args: state)
+
+    def transition(_kind, _project, action, **_kwargs):
+        transitions.append(action)
+        return {"workflow": {"governed": {"state": action}}}
+
+    monkeypatch.setattr(lifecycle.workflow, "transition", transition)
+
+    def promote(candidate_id, **_kwargs):
+        promoted.append(candidate_id)
+        return {
+            "ok": True,
+            "status": "published",
+            "version": "0.3.0",
+            "release": "recipes@0.3.0",
+            "apply_evidence": {"validation_evidence": [{"status": "passed"}]},
+        }
+
+    monkeypatch.setattr(lifecycle.projects, "promote_candidate", promote)
+
+    lifecycle.publish_candidate(
+        "scenario",
+        "recipes",
+        actor="user:test",
+        idempotency_key="publish-2",
+    )
+
+    assert promoted == ["candidate-2"]
+    assert transitions == ["publication_started", "publish"]
+
+
+def test_publish_candidate_reuses_only_exact_published_candidate(monkeypatch) -> None:
+    state = {
+        "automation": {"status": "completed", "head_task_id": "task-2"},
+        "delivery": {
+            "status": "accepted",
+            "candidate_id": "candidate-2",
+            "package_digest": "sha256:" + "d" * 64,
+        },
+        "publication": {
+            "status": "published",
+            "release_record": {
+                "candidate_id": "candidate-2",
+                "package_digest": "sha256:" + "d" * 64,
+            },
+        },
+    }
+    monkeypatch.setattr(lifecycle.workflow, "get_state", lambda *_args: state)
+    monkeypatch.setattr(
+        lifecycle.projects,
+        "promote_candidate",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not promote")),
+    )
+
+    result = lifecycle.publish_candidate(
+        "scenario",
+        "recipes",
+        actor="user:test",
+        idempotency_key="publish-2",
+    )
+
+    assert result["duplicate"] is True
 
 
 def test_activity_dispatch_builds_implementation_brief_from_change(monkeypatch) -> None:

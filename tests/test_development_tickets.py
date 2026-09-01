@@ -467,6 +467,9 @@ def test_ticket_resolution_requires_evidence_and_closes_linked_repair(tmp_path: 
     assert reopened["status"] == "in_progress"
     assert reopened["status_group"] == "work"
     assert reopened["history"][-1]["kind"] == "reopened"
+    assert "verification" not in reopened
+    assert "closure" not in reopened
+    assert reopened["history"][-1]["previous_verification"]["kind"] == "verified"
 
 
 def test_postponed_ticket_does_not_create_builder_repair(tmp_path: Path) -> None:

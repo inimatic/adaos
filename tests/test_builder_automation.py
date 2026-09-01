@@ -3480,10 +3480,14 @@ def test_accepting_aprobation_publishes_and_closes_resolved_ticket(
                     "release": "demo_metrics_skill@0.2.0",
                     "release_digest": "sha256:" + "3" * 64,
                 },
-                "publication": {"status": "published", "version": "0.2.0"},
-            }
-        ),
-    )
+                    "publication": {
+                        "status": "published",
+                        "version": "0.2.0",
+                        "release_record": {"candidate_id": "candidate.demo"},
+                    },
+                }
+            ),
+        )
 
     result = service.decide_aprobation(
         object_type="skill",
@@ -3497,6 +3501,98 @@ def test_accepting_aprobation_publishes_and_closes_resolved_ticket(
     assert tickets.get_ticket(ticket["ticket_id"])["verification"]["kind"] == "verified"
     persisted = service.get_session("skill", "demo_metrics_skill")
     assert persisted["completion_readiness"]["aprobation"]["trial"]["status"] == "published"
+
+
+def test_accepting_aprobation_does_not_close_for_stale_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.sdk.builder import lifecycle
+    from adaos.services.development_tickets import DevelopmentTicketService
+
+    service = _service(tmp_path)
+    tickets = DevelopmentTicketService(state_dir=service.state_dir)
+    signal = tickets.capture_signal(
+        kind="development_request",
+        summary="Improve Demo Metrics",
+        target_scope={"type": "skill", "id": "demo_metrics_skill", "source": "dev"},
+        source="client_feedback",
+        owner_area="skill",
+    )["signal"]
+    ticket = tickets.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="accepted",
+        owner_area="skill",
+    )["ticket"]
+    tickets.record_resolution(
+        ticket["ticket_id"],
+        actor="builder.automation",
+        evidence_refs=[{"type": "test", "id": "demo-focused", "status": "passed"}],
+        resolved_by_overlay="candidate.current",
+    )
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation.skill.demo_metrics_skill",
+            "object_type": "skill",
+            "object_id": "demo_metrics_skill",
+            "status": "completed",
+            "links": {"development_ticket_id": ticket["ticket_id"]},
+            "completion_readiness": {
+                "ok": True,
+                "aprobation": {
+                    "ok": True,
+                    "trial": {
+                        "status": "trial",
+                        "candidate_id": "candidate.current",
+                        "candidate_digest": "sha256:" + "2" * 64,
+                    },
+                },
+            },
+        }
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "refresh_session",
+        lambda self, value: dict(value),
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "decide_trial",
+        lambda *args, **kwargs: {"ok": True, "accepted": True},
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "publish_candidate",
+        lambda *args, **kwargs: {"ok": True, "status": "published"},
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_workflow",
+        lambda self: SimpleNamespace(
+            describe=lambda *_: {
+                "delivery": {
+                    "status": "accepted",
+                    "candidate_id": "candidate.current",
+                },
+                "publication": {
+                    "status": "published",
+                    "release_record": {"candidate_id": "candidate.previous"},
+                },
+            }
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="did not durably publish"):
+        service.decide_aprobation(
+            object_type="skill",
+            object_id="demo_metrics_skill",
+            decision="accept",
+            actor="user:owner",
+        )
+
+    assert tickets.get_ticket(ticket["ticket_id"])["status"] == "resolved"
 
 
 def test_revising_aprobation_rolls_back_and_reopens_ticket(

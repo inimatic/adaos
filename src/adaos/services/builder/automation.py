@@ -2782,12 +2782,39 @@ class BuilderAutomationService:
             else {}
         )
         governed_state = str(governed_before.get("state") or "").strip()
+        delivery_before = (
+            dict(workflow_before.get("delivery"))
+            if isinstance(workflow_before.get("delivery"), Mapping)
+            else {}
+        )
+        publication_before = (
+            dict(workflow_before.get("publication"))
+            if isinstance(workflow_before.get("publication"), Mapping)
+            else {}
+        )
+        release_record_before = (
+            dict(publication_before.get("release_record"))
+            if isinstance(publication_before.get("release_record"), Mapping)
+            else {}
+        )
+        current_delivery = (
+            str(delivery_before.get("candidate_id") or "").strip() == candidate_id
+        )
+        current_publication = (
+            str(publication_before.get("status") or "").strip() == "published"
+            and str(
+                release_record_before.get("candidate_id")
+                or publication_before.get("candidate_id")
+                or ""
+            ).strip()
+            == candidate_id
+        )
         accepted_already = accepted and governed_state in {
             "publication_ready",
             "publication_waiting",
             "published",
-        }
-        published_already = accepted and governed_state == "published"
+        } and current_delivery
+        published_already = accepted and current_publication
         if accepted_already:
             decision_result = {
                 "ok": True,
@@ -2836,6 +2863,23 @@ class BuilderAutomationService:
             if isinstance(workflow.get("publication"), Mapping)
             else {}
         )
+        published_release_record = (
+            dict(publication_state.get("release_record"))
+            if isinstance(publication_state.get("release_record"), Mapping)
+            else {}
+        )
+        if accepted and (
+            str(publication_state.get("status") or "").strip() != "published"
+            or str(
+                published_release_record.get("candidate_id")
+                or publication_state.get("candidate_id")
+                or ""
+            ).strip()
+            != candidate_id
+        ):
+            raise RuntimeError(
+                "Builder Trial publication did not durably publish the accepted candidate"
+            )
         evidence_refs = [
             {
                 "type": "builder_trial",

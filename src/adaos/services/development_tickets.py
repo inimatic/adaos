@@ -3193,6 +3193,8 @@ class DevelopmentTicketService:
             if not ticket:
                 raise KeyError(ticket_id)
             previous_status = _text(ticket.get("status"))
+            previous_verification = _mapping(ticket.pop("verification", None))
+            previous_closure = _mapping(ticket.pop("closure", None))
             now = _now()
             ticket["status"] = "in_progress" if ticket.get("builder_refs") else "accepted"
             ticket["reopened_at"] = now
@@ -3206,6 +3208,8 @@ class DevelopmentTicketService:
                     "actor": actor_token,
                     "reason": reason_token,
                     "previous_status": previous_status or None,
+                    "previous_verification": previous_verification or None,
+                    "previous_closure": previous_closure or None,
                     "recorded_at": now,
                 },
             )
