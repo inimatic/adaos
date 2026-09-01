@@ -444,6 +444,36 @@ def _project_id_for_materialization(ticket: Mapping[str, Any], development_sourc
     return None
 
 
+def _project_identity_from_ticket(ticket: Mapping[str, Any]) -> dict[str, str]:
+    target = _mapping(ticket.get("target_scope"))
+    metadata = _mapping(ticket.get("metadata"))
+    for source in (target, metadata):
+        project_ref = _text(source.get("project_ref"))
+        project_id = _text(source.get("project_id"))
+        if project_ref.startswith("project:"):
+            project_id = _ref_tail(project_ref, "project") or project_id
+        elif project_ref and ":" not in project_ref:
+            project_id = project_id or project_ref
+            project_ref = f"project:{project_ref}"
+        elif project_ref:
+            project_ref = ""
+        if project_id:
+            project_ref = project_ref or f"project:{project_id}"
+            return {"project_ref": project_ref, "project_id": project_id}
+    return {}
+
+
+def _project_identity_for_package(tickets: Sequence[Mapping[str, Any]]) -> dict[str, str]:
+    identities = [_project_identity_from_ticket(ticket) for ticket in tickets]
+    known = [identity for identity in identities if identity]
+    if known and len(known) != len(identities):
+        raise ValueError("Builder package project scope is incomplete")
+    project_refs = {_text(identity.get("project_ref")) for identity in known}
+    if len(project_refs) > 1:
+        raise ValueError("Builder package tickets must belong to one project")
+    return dict(known[0]) if known else {}
+
+
 def _automation_projection(payload: Mapping[str, Any]) -> dict[str, Any]:
     projection = payload.get("automation") if isinstance(payload.get("automation"), Mapping) else payload
     return dict(projection) if isinstance(projection, Mapping) else {}
@@ -1610,6 +1640,10 @@ class DevelopmentTicketService:
             "builder_repair_id": repair_id,
             "development_ticket_component_ref": _text(handoff["ticket"].get("component_ref")) or None,
             "development_ticket_owner_area": _text(handoff["ticket"].get("owner_area")) or None,
+            **{
+                f"development_ticket_{key}": value
+                for key, value in _project_identity_from_ticket(handoff["ticket"]).items()
+            },
             "development_source_materialization": materialization,
         }
         resume_failed = getattr(automation_service, "resume_failed_dev_ticket_repair", None)
@@ -1770,6 +1804,7 @@ class DevelopmentTicketService:
         if len(target_keys) != 1:
             raise ValueError("Builder package tickets must target one skill or scenario")
         target = targets[0]
+        project_identity = _project_identity_for_package(tickets)
         qualifications = [_bounded_repair_hints(ticket) for ticket in tickets]
         missing = [
             _text(ticket.get("ticket_id"))
@@ -1850,6 +1885,7 @@ class DevelopmentTicketService:
                     "package_id": package_id,
                     "ticket_ids": ids,
                     "target": target,
+                    **project_identity,
                     "repair_hints": repair_hints,
                     "execution_budget": budget,
                     "planned_by": _text(actor) or "builder",
@@ -1882,6 +1918,7 @@ class DevelopmentTicketService:
             "package_id": package_id,
             "ticket_ids": ids,
             "target": target,
+            **project_identity,
             "repair": repair,
             "tickets": linked,
             "repair_hints": repair_hints,
@@ -1916,6 +1953,7 @@ class DevelopmentTicketService:
         if len({(item["object_type"], item["object_id"]) for item in targets}) != 1:
             raise ValueError("Builder package target changed since planning")
         target = targets[0]
+        project_identity = _project_identity_for_package(ticket_list)
         development_source = development_source_options(_development_source_scope(ticket_list[0], target))
         materialization: dict[str, Any] | None = None
         if automation_service is None:
@@ -1941,6 +1979,13 @@ class DevelopmentTicketService:
             development_source = _mapping(materialization.get("development_source")) or development_source
 
         package = _mapping(_mapping(repair.get("context")).get("package"))
+        planned_project_identity = {
+            key: _text(package.get(key))
+            for key in ("project_ref", "project_id")
+            if _text(package.get(key))
+        }
+        if planned_project_identity != project_identity:
+            raise ValueError("Builder package project scope changed since planning")
         budget = _mapping(package.get("execution_budget")) or dict(DEFAULT_AUTONOMOUS_REPAIR_BUDGET)
         budget.setdefault("token_budget_metric", "fresh_plus_output")
         brief = _autonomous_package_brief(ticket_list, repair, target=target)
@@ -1949,6 +1994,10 @@ class DevelopmentTicketService:
             "development_ticket_ids": ticket_ids,
             "builder_repair_id": _text(repair.get("repair_id")),
             "builder_package_id": _text(package_id),
+            **{
+                f"development_ticket_{key}": value
+                for key, value in project_identity.items()
+            },
             "development_source_materialization": materialization,
         }
         current = automation_service.status(

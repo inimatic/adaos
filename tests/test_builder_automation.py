@@ -186,7 +186,11 @@ def test_dev_ticket_repair_projects_minimal_diff_constraints(tmp_path: Path) -> 
                 },
             }
         ),
-        links={"development_ticket_id": "dticket.demo"},
+        links={
+            "development_ticket_id": "dticket.demo",
+            "development_ticket_project_ref": "project:recipe_suite",
+            "development_ticket_project_id": "recipe_suite",
+        },
         execution_budget={"max_wall_seconds": 300, "max_tokens": 20000},
     )
 
@@ -203,6 +207,14 @@ def test_dev_ticket_repair_projects_minimal_diff_constraints(tmp_path: Path) -> 
     assert constraints["repair_profile"] == "surgical_ui"
     assert constraints["max_changed_files"] == 2
     assert task["realize_request"]["mcp"] == {"enabled": False, "requested_scope": []}
+    context_control = started["session"]["context_control"]
+    plan = service._contexts().get_plan(context_control["plan_id"])
+    assert "project:recipe_suite" in plan["subject_refs"]
+    assert "project:recipes" not in plan["subject_refs"]
+    project_capsules = service._contexts().list_capsules(subject_ref="project:recipe_suite")
+    assert project_capsules[0]["subject_refs"] == ["project:recipe_suite", "scenario:recipes"]
+    compact = service.compact_session(started["session"])
+    assert compact["links"]["development_ticket_project_ref"] == "project:recipe_suite"
     prompt = (
         tmp_path / "runs" / started["session"]["current_task_id"] / "input" / "task.md"
     ).read_text(encoding="utf-8")
@@ -506,7 +518,7 @@ def test_automation_materializes_governed_development_session_inputs(tmp_path: P
     session = {
         "schema": "adaos.builder.development_session.v1",
         "session_id": session_id,
-        "project_ref": "project:recipes",
+        "project_ref": "project:recipe_program",
         "base_release": None,
         "focus": {"ref": "scenario:recipes"},
         "targets": {
@@ -598,6 +610,9 @@ def test_automation_materializes_governed_development_session_inputs(tmp_path: P
     assert task["timeout_seconds"] == 7200
     assert task["realize_request"]["artifacts"]["execution_budget"]["budget_view"] == "fixed_downstream"
     assert task["realize_request"]["artifacts"]["agent_profile"]["model"] == "gpt-5.4"
+    plan = service._contexts().get_plan(started["session"]["context_control"]["plan_id"])
+    assert "project:recipe_program" in plan["subject_refs"]
+    assert "project:recipes" not in plan["subject_refs"]
     attachments = task["forge"]["source_snapshot"]["attachments"]
     assert {item["name"] for item in attachments} >= {
         "development_artifact_00",

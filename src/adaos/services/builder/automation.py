@@ -620,8 +620,12 @@ class BuilderAutomationService:
     ) -> dict[str, Any]:
         service = self._contexts()
         now = _now_iso()
-        project_ref = f"project:{project_id}"
         component_ref = f"{kind}:{project_id}"
+        project_ref = self._context_project_ref(
+            session=session,
+            component_ref=component_ref,
+            fallback_project_id=project_id,
+        )
         run_ref = f"builder-run:{session.get('session_id')}:{int(session.get('iteration') or 0)}"
         change_ref = f"change:{session.get('change_set_id')}"
         packet_artifact = service.put_artifact(dict(context_packet))
@@ -806,6 +810,43 @@ class BuilderAutomationService:
             "estimated_tokens": plan["estimated_tokens"],
             "token_budget": plan["token_budget"],
         }
+
+    def _context_project_ref(
+        self,
+        *,
+        session: Mapping[str, Any],
+        component_ref: str,
+        fallback_project_id: str,
+    ) -> str:
+        development_session_id = str(session.get("development_session_id") or "").strip()
+        if development_session_id:
+            development_session, _ = self._load_development_session(
+                development_session_id,
+                target_ref=component_ref,
+            )
+            project_ref = str(development_session.get("project_ref") or "").strip()
+            if project_ref.startswith("project:"):
+                return project_ref
+
+        links = dict(session.get("links") or {})
+        for key in ("development_ticket_project_ref", "project_ref"):
+            project_ref = str(links.get(key) or "").strip()
+            if project_ref.startswith("project:"):
+                return project_ref
+        for key in ("development_ticket_project_id", "project_id"):
+            project_id = str(links.get(key) or "").strip()
+            if project_id and ":" not in project_id:
+                return f"project:{project_id}"
+
+        materialization = (
+            links.get("development_source_materialization")
+            if isinstance(links.get("development_source_materialization"), Mapping)
+            else {}
+        )
+        materialized_project_id = str(materialization.get("project_id") or "").strip()
+        if materialized_project_id and ":" not in materialized_project_id:
+            return f"project:{materialized_project_id}"
+        return f"project:{fallback_project_id}"
 
     def _load_development_session(
         self,
@@ -2707,6 +2748,8 @@ class BuilderAutomationService:
                 "builder_package_id",
                 "development_ticket_component_ref",
                 "development_ticket_owner_area",
+                "development_ticket_project_ref",
+                "development_ticket_project_id",
             )
             if links.get(key) not in (None, "", [])
         }

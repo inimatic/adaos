@@ -1566,8 +1566,44 @@ class BuilderWorkbenchService:
         selection = dict(binding.get("selection") or {})
         object_type = str(selection.get("object_type") or "").strip().lower()
         object_id = str(selection.get("object_id") or "").strip()
-        project_ref = f"project:{object_id}" if object_id else None
-        component_ref = f"{object_type}:{object_id}" if object_type and object_id else None
+        ticket_context = (
+            dict(binding.get("development_ticket"))
+            if isinstance(binding.get("development_ticket"), Mapping)
+            else {}
+        )
+        ticket_target = (
+            dict(ticket_context.get("target_scope"))
+            if isinstance(ticket_context.get("target_scope"), Mapping)
+            else {}
+        )
+        target_type = str(ticket_target.get("type") or "").strip().lower().rstrip("s")
+        target_id = str(ticket_target.get("id") or ticket_target.get("name") or "").strip()
+        ticket_matches_selection = bool(
+            object_id
+            and target_id == object_id
+            and (not target_type or target_type == object_type.rstrip("s"))
+        )
+        ticket_project_ref = str(ticket_target.get("project_ref") or "").strip()
+        ticket_project_id = str(ticket_target.get("project_id") or "").strip()
+        if ticket_project_ref and not ticket_project_ref.startswith("project:"):
+            ticket_project_ref = ""
+        project_ref = (
+            ticket_project_ref
+            if ticket_matches_selection and ticket_project_ref
+            else f"project:{ticket_project_id}"
+            if ticket_matches_selection and ticket_project_id
+            else f"project:{object_id}"
+            if object_id
+            else None
+        )
+        ticket_component_ref = str(ticket_context.get("component_ref") or "").strip()
+        component_ref = (
+            ticket_component_ref
+            if ticket_matches_selection and ticket_component_ref
+            else f"{object_type}:{object_id}"
+            if object_type and object_id
+            else None
+        )
         context = ContextControlService(state_dir=self.state_dir)
         selected_run = str(run_ref or "").strip()
         plans = context.list_plans(limit=max(20, min(int(limit) * 5, 500)))

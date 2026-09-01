@@ -747,6 +747,60 @@ def test_builder_context_inspector_is_project_scoped_and_metadata_only(tmp_path:
     assert "must-not-be-projected" not in json.dumps(inspector)
 
 
+def test_builder_context_inspector_uses_ticket_project_not_component_id(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    service = BuilderWorkbenchService(state_dir=state_dir)
+    service.set_selected_project(
+        source_webspace_id="desktop",
+        object_type="scenario",
+        object_id="demo_metrics_scenario",
+    )
+    service.set_development_ticket_context(
+        source_webspace_id="desktop",
+        context={
+            "ticket_id": "dticket.demo-metrics",
+            "component_ref": "scenario:demo_metrics_scenario.header",
+            "target_scope": {
+                "type": "scenario",
+                "id": "demo_metrics_scenario",
+                "project_ref": "project:demo_metrics",
+                "project_id": "demo_metrics",
+            },
+        },
+    )
+    contexts = ContextControlService(state_dir=state_dir)
+    capsule = contexts.register_capsule(
+        {
+            "kind": "project",
+            "subject_refs": ["project:demo_metrics", "scenario:demo_metrics_scenario"],
+            "authority_ref": "project:demo_metrics",
+            "trust_class": "accepted",
+            "summary": "Demo Metrics project context",
+        }
+    )
+    contexts.bind_subject(
+        subject_ref="project:demo_metrics",
+        capsule_id=capsule["capsule_id"],
+        purpose="builder.automation",
+        audience="builder",
+    )
+    resolution = contexts.resolve(
+        {
+            "subject_refs": ["project:demo_metrics"],
+            "purpose": "builder.automation",
+            "audience": "builder",
+        }
+    )
+    plan = contexts.plan({"resolution": resolution, "token_budget": 2_000})
+
+    inspector = service.context_inspector("desktop")
+
+    assert inspector["scope"]["project_ref"] == "project:demo_metrics"
+    assert inspector["scope"]["component_ref"] == "scenario:demo_metrics_scenario.header"
+    assert inspector["summary"]["plan_count"] == 1
+    assert inspector["plans"][0]["plan_id"] == plan["plan_id"]
+
+
 def test_builder_workbench_open_selects_development_ticket_context(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     service = BuilderWorkbenchService(state_dir=state_dir)

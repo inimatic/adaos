@@ -241,6 +241,7 @@ def _bounded_demo_ticket(
     summary: str,
     target_files: list[str],
     acceptance: str,
+    project_id: str = "demo_metrics",
 ) -> dict:
     signal = service.capture_signal(
         kind="development_request",
@@ -250,6 +251,8 @@ def _bounded_demo_ticket(
             "id": "demo_metrics_skill",
             "source": "dev",
             "component_ref": "skill:demo_metrics_skill",
+            "project_ref": f"project:{project_id}",
+            "project_id": project_id,
         },
         source="client_feedback",
         owner_area="skill",
@@ -714,6 +717,8 @@ def test_builder_package_uses_one_work_item_budget_and_automation(tmp_path: Path
     )
 
     assert planned["ready"] is True
+    assert planned["project_ref"] == "project:demo_metrics"
+    assert planned["project_id"] == "demo_metrics"
     assert planned["execution_budget"]["max_tokens"] == 60000
     assert planned["repair_hints"]["profile"] == "project_batch"
     assert planned["repair_hints"]["target_files"] == [
@@ -738,6 +743,8 @@ def test_builder_package_uses_one_work_item_budget_and_automation(tmp_path: Path
     assert len(automation.calls) == 1
     assert automation.calls[0]["execution_budget"]["max_tokens"] == 60000
     assert automation.calls[0]["links"]["development_ticket_ids"] == ticket_ids
+    assert automation.calls[0]["links"]["development_ticket_project_ref"] == "project:demo_metrics"
+    assert automation.calls[0]["links"]["development_ticket_project_id"] == "demo_metrics"
     brief = json.loads(automation.calls[0]["implementation_brief"])
     assert brief["ticket_ids"] == ticket_ids
     assert brief["policy"]["one_release_for_package"] is True
@@ -748,6 +755,36 @@ def test_builder_package_uses_one_work_item_budget_and_automation(tmp_path: Path
         for ticket_id in ticket_ids
     )
     assert started["rollup"]["total_tokens"] == 150
+
+
+def test_builder_package_rejects_same_skill_from_different_projects(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    tickets = [
+        _bounded_demo_ticket(
+            service,
+            summary="Rename the shared skill for project one",
+            target_files=["skills/demo_metrics_skill/webui.json"],
+            acceptance="Project one sees the new heading.",
+            project_id="project_one",
+        ),
+        _bounded_demo_ticket(
+            service,
+            summary="Move the shared skill control for project two",
+            target_files=["skills/demo_metrics_skill/webui.json"],
+            acceptance="Project two sees the moved control.",
+            project_id="project_two",
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="must belong to one project"):
+        service.plan_builder_package(
+            [ticket["ticket_id"] for ticket in tickets],
+            actor="builder:qualifier",
+            repair_service=repair_service,
+        )
+
+    assert repair_service.list() == []
 
 
 def test_autonomous_repair_links_builder_automation_and_resolves_with_evidence(tmp_path: Path) -> None:
@@ -762,6 +799,8 @@ def test_autonomous_repair_links_builder_automation_and_resolves_with_evidence(t
             "id": "demo_metrics_skill",
             "source": "dev",
             "component_ref": "skill:demo_metrics_skill",
+            "project_ref": "project:demo_metrics",
+            "project_id": "demo_metrics",
         },
         source="client_feedback",
         owner_area="skill",
@@ -804,6 +843,8 @@ def test_autonomous_repair_links_builder_automation_and_resolves_with_evidence(t
     assert automation.calls[0]["object_type"] == "skill"
     assert automation.calls[0]["object_id"] == "demo_metrics_skill"
     assert automation.calls[0]["links"]["development_ticket_id"] == ticket["ticket_id"]
+    assert automation.calls[0]["links"]["development_ticket_project_ref"] == "project:demo_metrics"
+    assert automation.calls[0]["links"]["development_ticket_project_id"] == "demo_metrics"
     brief = json.loads(automation.calls[0]["implementation_brief"])
     assert brief["policy"]["publication_required"] is True
     assert brief["repair_hints"]["profile"] == "surgical_ui"
