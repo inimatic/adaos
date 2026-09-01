@@ -769,6 +769,47 @@ def test_autonomous_repair_links_builder_automation_and_resolves_with_evidence(t
     assert repair["context"]["cost_estimate"]["max_tokens"] == 200000
     assert repair["acceptance"]["evidence_refs"]
 
+    unrelated_usage = {
+        "type": "codex_usage",
+        "id": "codex.usage.unrelated",
+        "task_id": "factory.task.unrelated",
+        "repair_id": result["repair"]["repair_id"],
+        "total_tokens": 999,
+    }
+    polluted_closure = dict(result["ticket"]["closure"])
+    polluted_closure["evidence_refs"] = [
+        *polluted_closure["evidence_refs"],
+        unrelated_usage,
+    ]
+    service._update_ticket(
+        ticket["ticket_id"],
+        evidence_refs=[*result["ticket"]["evidence_refs"], unrelated_usage],
+        closure=polluted_closure,
+    )
+
+    polled = service.sync_builder_repair(
+        ticket["ticket_id"],
+        actor="builder:poller",
+        repair_id=result["repair"]["repair_id"],
+        repair_service=repair_service,
+        automation_result=automation.status(
+            object_type="skill",
+            object_id="demo_metrics_skill",
+        ),
+    )
+
+    assert polled["ticket"]["status"] == "resolved"
+    assert polled["repair"]["work_status"] == "completed"
+    assert "codex.usage.unrelated" not in {
+        ref["id"]
+        for ref in polled["ticket"]["closure"]["evidence_refs"]
+        if ref["type"] == "codex_usage"
+    }
+    assert sum(
+        item["kind"] == "builder_evidence_reconciled"
+        for item in polled["ticket"]["history"]
+    ) == 1
+
     service.reopen_ticket(
         ticket["ticket_id"],
         actor="user:owner",

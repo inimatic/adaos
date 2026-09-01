@@ -1932,17 +1932,17 @@ class DevelopmentTicketService:
         )
         projection = _automation_projection(status_result)
         status = _text(projection.get("status"))
+        repair_task_ids = _repair_automation_task_ids(updated, linked_repair_id)
+        refs = _automation_evidence_refs(
+            status_result,
+            repair_id=linked_repair_id,
+            allowed_task_ids=repair_task_ids,
+        )
         if (
             status == "completed"
             and _automation_has_validation_evidence(status_result)
             and _text(updated.get("status")) not in {"resolved", "verified", "closed"}
         ):
-            repair_task_ids = _repair_automation_task_ids(updated, linked_repair_id)
-            refs = _automation_evidence_refs(
-                status_result,
-                repair_id=linked_repair_id,
-                allowed_task_ids=repair_task_ids,
-            )
             result = _automation_task(status_result).get("result")
             result = dict(result) if isinstance(result, Mapping) else _mapping(_automation_session(status_result).get("last_result"))
             resolved = self.record_resolution(
@@ -1971,6 +1971,17 @@ class DevelopmentTicketService:
                 "automation": status_result,
                 "evidence_refs": refs,
             }
+        if (
+            status == "completed"
+            and _automation_has_validation_evidence(status_result)
+            and _text(updated.get("status")) in {"resolved", "verified", "closed"}
+        ):
+            updated = self._reconcile_builder_resolution_evidence(
+                updated["ticket_id"],
+                repair_id=linked_repair_id,
+                evidence_refs=refs,
+                actor=_text(actor) or "builder.automation",
+            )
         return {
             "ok": True,
             "synchronized": True,
@@ -1978,12 +1989,79 @@ class DevelopmentTicketService:
             "ticket": updated,
             "repair": repair,
             "automation": status_result,
-            "evidence_refs": _automation_evidence_refs(
-                status_result,
-                repair_id=linked_repair_id,
-                allowed_task_ids=_repair_automation_task_ids(updated, linked_repair_id),
-            ),
+            "evidence_refs": refs,
         }
+
+    def _reconcile_builder_resolution_evidence(
+        self,
+        ticket_id: str,
+        *,
+        repair_id: str,
+        evidence_refs: Sequence[Mapping[str, Any]],
+        actor: str,
+    ) -> dict[str, Any]:
+        refs = _sequence_of_mappings(evidence_refs)
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                raise KeyError(ticket_id)
+            allowed_task_ids = set(_repair_automation_task_ids(ticket, repair_id))
+
+            def _without_unrelated_usage(items: Any) -> list[dict[str, Any]]:
+                return [
+                    dict(ref)
+                    for ref in _sequence_of_mappings(items or [])
+                    if not (
+                        _text(ref.get("type")) == "codex_usage"
+                        and _text(ref.get("repair_id")) == _text(repair_id)
+                        and _text(ref.get("task_id"))
+                        and _text(ref.get("task_id")) not in allowed_task_ids
+                    )
+                ]
+
+            changed = False
+            evidence = _merge_refs(
+                _without_unrelated_usage(ticket.get("evidence_refs")),
+                refs,
+            )
+            if evidence != ticket.get("evidence_refs"):
+                ticket["evidence_refs"] = evidence
+                changed = True
+            closure = _mapping(ticket.get("closure"))
+            if closure and _text(closure.get("repair_id")) == _text(repair_id):
+                closure_refs = _merge_refs(
+                    _without_unrelated_usage(closure.get("evidence_refs")),
+                    refs,
+                )
+                if closure_refs != closure.get("evidence_refs"):
+                    closure["evidence_refs"] = closure_refs
+                    ticket["closure"] = closure
+                    changed = True
+            if changed:
+                now = _now()
+                ticket["updated_at"] = now
+                self._append_history(
+                    ticket,
+                    {
+                        "kind": "builder_evidence_reconciled",
+                        "repair_id": _text(repair_id),
+                        "actor": _text(actor) or "builder.automation",
+                        "recorded_at": now,
+                    },
+                )
+                for signal_id in ticket.get("signal_ids") or []:
+                    signal = state["signals"].get(signal_id)
+                    if signal:
+                        signal["evidence_refs"] = _merge_refs(
+                            _without_unrelated_usage(signal.get("evidence_refs")),
+                            refs,
+                        )
+                        signal["updated_at"] = now
+                        self._validate_signal(signal)
+                self._validate_ticket(ticket)
+                self._write(state)
+            return _normalized_ticket(ticket)
 
     def create_core_capability_request(
         self,
