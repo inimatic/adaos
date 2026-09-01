@@ -103,15 +103,29 @@ def operate_ticket(
     actor: str = "sdk",
     payload: Mapping[str, Any] | None = None,
     evidence_refs: Sequence[Mapping[str, Any]] = (),
+    expected_revision: int | None = None,
 ) -> dict[str, Any]:
     service = _service()
     body = dict(payload or {})
     operation_id = str(operation or "").strip().lower()
     refs = [dict(item) for item in evidence_refs if isinstance(item, Mapping)]
     if operation_id == "claim":
-        return {"ticket": service.claim_ticket(ticket_id, actor=actor, owner=body.get("owner"))}
+        return {
+            "ticket": service.claim_ticket(
+                ticket_id,
+                actor=actor,
+                owner=body.get("owner"),
+                expected_revision=expected_revision,
+            )
+        }
     if operation_id == "start":
-        return {"ticket": service.start_ticket(ticket_id, actor=actor)}
+        return {
+            "ticket": service.start_ticket(
+                ticket_id,
+                actor=actor,
+                expected_revision=expected_revision,
+            )
+        }
     if operation_id == "comment":
         return {
             "ticket": service.comment_ticket(
@@ -119,6 +133,7 @@ def operate_ticket(
                 body=str(body.get("body") or body.get("comment") or ""),
                 actor=actor,
                 evidence_refs=refs,
+                expected_revision=expected_revision,
             )
         }
     if operation_id in {"defer", "postpone"}:
@@ -127,6 +142,7 @@ def operate_ticket(
                 ticket_id,
                 actor=actor,
                 reason=str(body.get("reason") or ""),
+                expected_revision=expected_revision,
             )
         }
     if operation_id == "resolve":
@@ -138,6 +154,7 @@ def operate_ticket(
             resolved_by_overlay=str(body.get("resolved_by_overlay") or "") or None,
             repair_id=str(body.get("repair_id") or "") or None,
             accept_reduced_scope=bool(body.get("accept_reduced_scope", False)),
+            expected_revision=expected_revision,
         )
     if operation_id == "verify":
         return service.verify_ticket(
@@ -146,6 +163,7 @@ def operate_ticket(
             actor=actor,
             repair_id=str(body.get("repair_id") or "") or None,
             notes=str(body.get("notes") or ""),
+            expected_revision=expected_revision,
         )
     if operation_id == "close":
         return {
@@ -154,6 +172,7 @@ def operate_ticket(
                 reason=str(body.get("reason") or "closed"),
                 actor=actor,
                 evidence_refs=refs,
+                expected_revision=expected_revision,
             )
         }
     if operation_id == "reopen":
@@ -163,6 +182,26 @@ def operate_ticket(
                 actor=actor,
                 reason=str(body.get("reason") or ""),
                 evidence_refs=refs,
+                expected_revision=expected_revision,
+            )
+        }
+    if operation_id == "duplicate":
+        return {
+            "ticket": service.duplicate_ticket(
+                ticket_id,
+                duplicate_of=str(body.get("duplicate_of") or ""),
+                actor=actor,
+                expected_revision=expected_revision,
+            )
+        }
+    if operation_id in {"related", "relate"}:
+        return {
+            "ticket": service.relate_ticket(
+                ticket_id,
+                related_ticket_id=str(body.get("related_ticket_id") or ""),
+                relation=str(body.get("relation") or "related"),
+                actor=actor,
+                expected_revision=expected_revision,
             )
         }
     if operation_id == "core_transition":
@@ -176,12 +215,17 @@ def operate_ticket(
             release_ref=body.get("release_ref") if isinstance(body.get("release_ref"), Mapping) else None,
             capability_ref=body.get("capability_ref") if isinstance(body.get("capability_ref"), Mapping) else None,
             publish_pending_actions=bool(body.get("publish_pending_actions", True)),
+            expected_revision=expected_revision,
         )
     raise ValueError(f"unsupported Dev Ticket operation: {operation_id}")
 
 
 def list_events(**filters: Any) -> list[dict[str, Any]]:
     return _service().list_lifecycle_events(**filters)
+
+
+def read_feed(**filters: Any) -> dict[str, Any]:
+    return _service().read_change_feed(**filters)
 
 
 def list_artifacts(ticket_id: str | None = None) -> list[dict[str, Any]]:
@@ -198,6 +242,7 @@ __all__ = [
     "get_ticket",
     "list_artifacts",
     "list_events",
+    "read_feed",
     "list_tickets",
     "operate_ticket",
 ]

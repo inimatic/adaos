@@ -265,6 +265,10 @@ def _normalize_relation_refs(*groups: Sequence[Mapping[str, Any]]) -> list[dict[
 
 def _normalized_ticket(ticket: Mapping[str, Any]) -> dict[str, Any]:
     out = dict(ticket)
+    try:
+        out["revision"] = max(1, int(out.get("revision") or 1))
+    except (TypeError, ValueError):
+        out["revision"] = 1
     out["status_group"] = ticket_status_group(_text(out.get("status")))
     out["owner_area"] = _text(out.get("owner_area")) or _owner_area_from_scope(
         _mapping(out.get("target_scope")),
@@ -1230,6 +1234,7 @@ class DevelopmentTicketService:
             ticket = {
                 "schema": DEV_TICKET_SCHEMA,
                 "ticket_id": ticket_id,
+                "revision": 1,
                 "kind": ticket_kind,
                 "status": _text(status) or "captured",
                 "summary": text,
@@ -1528,6 +1533,7 @@ class DevelopmentTicketService:
         *,
         actor: str,
         reason: str = "",
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         ticket = self.get_ticket(ticket_id)
         if not ticket:
@@ -1538,6 +1544,7 @@ class DevelopmentTicketService:
                 transition="deferred",
                 actor=actor,
                 reason=reason,
+                expected_revision=expected_revision,
             )["ticket"]
         return self._update_ticket(
             ticket_id,
@@ -1547,6 +1554,7 @@ class DevelopmentTicketService:
                 "actor": _text(actor) or "system",
                 "reason": _text(reason) or None,
             },
+            expected_revision=expected_revision,
         )
 
     def handoff_ticket(
@@ -2387,6 +2395,7 @@ class DevelopmentTicketService:
         release_ref: Mapping[str, Any] | None = None,
         capability_ref: Mapping[str, Any] | None = None,
         publish_pending_actions: bool = True,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         transition_token = _text(transition).lower()
         allowed = {
@@ -2414,6 +2423,7 @@ class DevelopmentTicketService:
             ticket = state["tickets"].get(_text(ticket_id))
             if not ticket:
                 raise KeyError(ticket_id)
+            self._assert_expected_revision(ticket, expected_revision)
             if _text(ticket.get("owner_area")) != "core" and _text(_mapping(ticket.get("target_scope")).get("type")) != "core":
                 raise ValueError("core lifecycle transition requires a Core Dev Ticket")
             semantic_type = f"core_ticket.{transition_token}"
@@ -2827,12 +2837,14 @@ class DevelopmentTicketService:
         reason: str,
         actor: str,
         evidence_refs: Sequence[Mapping[str, Any]] = (),
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         return self._close_ticket(
             ticket_id,
             reason=reason,
             actor=_text(actor) or "system",
             evidence_refs=evidence_refs,
+            expected_revision=expected_revision,
         )
 
     def update_ticket_summary(
@@ -2841,6 +2853,7 @@ class DevelopmentTicketService:
         *,
         summary: str,
         actor: str,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         text = _text(summary)
         if not text:
@@ -2851,6 +2864,7 @@ class DevelopmentTicketService:
             ticket = state["tickets"].get(_text(ticket_id))
             if not ticket:
                 raise KeyError(ticket_id)
+            self._assert_expected_revision(ticket, expected_revision)
             if _text(ticket.get("status")) in TERMINAL_TICKET_STATES:
                 raise ValueError("terminal Dev Ticket cannot be edited")
             previous = _text(ticket.get("summary"))
@@ -2881,6 +2895,7 @@ class DevelopmentTicketService:
         actor: str,
         reason: str,
         expected_updated_at: str | None = None,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         """Replace the bounded Builder repair envelope with an audited revision."""
 
@@ -2927,6 +2942,7 @@ class DevelopmentTicketService:
             ticket = state["tickets"].get(_text(ticket_id))
             if not ticket:
                 raise KeyError(ticket_id)
+            self._assert_expected_revision(ticket, expected_revision)
             ticket_status = _text(ticket.get("status"))
             if ticket_status in {*TERMINAL_TICKET_STATES, "resolved", "verified"}:
                 raise ValueError("completed Dev Ticket cannot be requalified")
@@ -2965,6 +2981,7 @@ class DevelopmentTicketService:
         *,
         actor: str,
         owner: str | None = None,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         actor_token = _text(actor) or "system"
         owner_token = _text(owner) or actor_token
@@ -2980,6 +2997,7 @@ class DevelopmentTicketService:
                 "actor": actor_token,
                 "owner": owner_token,
             },
+            expected_revision=expected_revision,
         )
 
     def start_ticket(
@@ -2987,6 +3005,7 @@ class DevelopmentTicketService:
         ticket_id: str,
         *,
         actor: str,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         return self._update_ticket(
             ticket_id,
@@ -2995,6 +3014,7 @@ class DevelopmentTicketService:
                 "kind": "in_progress",
                 "actor": _text(actor) or "system",
             },
+            expected_revision=expected_revision,
         )
 
     def comment_ticket(
@@ -3004,6 +3024,7 @@ class DevelopmentTicketService:
         body: str,
         actor: str,
         evidence_refs: Sequence[Mapping[str, Any]] = (),
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         text = _text(body)
         if not text:
@@ -3015,6 +3036,7 @@ class DevelopmentTicketService:
             ticket = state["tickets"].get(_text(ticket_id))
             if not ticket:
                 raise KeyError(ticket_id)
+            self._assert_expected_revision(ticket, expected_revision)
             if _text(ticket.get("status")) in TERMINAL_TICKET_STATES:
                 raise ValueError("terminal Dev Ticket cannot be commented")
             now = _now()
@@ -3057,6 +3079,7 @@ class DevelopmentTicketService:
         capability_works: bool = True,
         regression_free: bool = True,
         accept_reduced_scope: bool = False,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         refs = _sequence_of_mappings(evidence_refs)
         if not refs:
@@ -3095,6 +3118,7 @@ class DevelopmentTicketService:
             stored = state["tickets"].get(ticket["ticket_id"])
             if not stored:
                 raise KeyError(ticket["ticket_id"])
+            self._assert_expected_revision(stored, expected_revision)
             blockers = self._unresolved_core_blockers(stored, state)
             if blockers and not accept_reduced_scope:
                 raise ValueError(
@@ -3155,6 +3179,7 @@ class DevelopmentTicketService:
         actor: str,
         repair_id: str | None = None,
         notes: str = "",
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         refs = _sequence_of_mappings(evidence_refs)
         if not refs:
@@ -3172,6 +3197,7 @@ class DevelopmentTicketService:
                 actor=actor_token,
                 notes=notes,
                 evidence_refs=refs,
+                expected_revision=expected_revision,
             )
             return {
                 "ok": True,
@@ -3186,6 +3212,7 @@ class DevelopmentTicketService:
             ticket = state["tickets"].get(_text(ticket_id))
             if not ticket:
                 raise KeyError(ticket_id)
+            self._assert_expected_revision(ticket, expected_revision)
             if _text(ticket.get("status")) != "resolved":
                 raise ValueError("ticket verification requires resolved status")
             now = _now()
@@ -3219,6 +3246,7 @@ class DevelopmentTicketService:
         actor: str,
         reason: str,
         evidence_refs: Sequence[Mapping[str, Any]] = (),
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         reason_token = _text(reason)
         if not reason_token:
@@ -3235,12 +3263,14 @@ class DevelopmentTicketService:
                 actor=actor_token,
                 reason=reason_token,
                 evidence_refs=refs,
+                expected_revision=expected_revision,
             )["ticket"]
         with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
             state = self._read()
             ticket = state["tickets"].get(_text(ticket_id))
             if not ticket:
                 raise KeyError(ticket_id)
+            self._assert_expected_revision(ticket, expected_revision)
             previous_status = _text(ticket.get("status"))
             previous_verification = _mapping(ticket.pop("verification", None))
             previous_closure = _mapping(ticket.pop("closure", None))
@@ -3281,6 +3311,7 @@ class DevelopmentTicketService:
         related_ticket_id: str,
         relation: str = "related",
         actor: str,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         related = _text(related_ticket_id)
         if not related:
@@ -3294,6 +3325,7 @@ class DevelopmentTicketService:
             ticket = state["tickets"].get(_text(ticket_id))
             if not ticket:
                 raise KeyError(ticket_id)
+            self._assert_expected_revision(ticket, expected_revision)
             if related not in state["tickets"]:
                 raise KeyError(related)
             now = _now()
@@ -3362,6 +3394,7 @@ class DevelopmentTicketService:
         *,
         duplicate_of: str,
         actor: str,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         duplicate_target = _text(duplicate_of)
         if not duplicate_target:
@@ -3373,6 +3406,7 @@ class DevelopmentTicketService:
             ticket = state["tickets"].get(_text(ticket_id))
             if not ticket:
                 raise KeyError(ticket_id)
+            self._assert_expected_revision(ticket, expected_revision)
             relation_ref = {
                 "type": "duplicate_of",
                 "relation": "duplicate_of",
@@ -3633,6 +3667,81 @@ class DevelopmentTicketService:
             )
             events = events[index + 1 :] if index is not None else []
         return events[-max(1, min(int(limit), 2000)) :]
+
+    def read_change_feed(
+        self,
+        *,
+        after: str | None = None,
+        updated_since: str | None = None,
+        include_snapshot: bool = True,
+        status_group: str = "open",
+        target_tokens: Sequence[str] = (),
+        project_id: str | None = None,
+        scenario_id: str | None = None,
+        skill_id: str | None = None,
+        modal_id: str | None = None,
+        component: str | None = None,
+        kind: str | None = None,
+        owner_area: str | None = None,
+        component_ref: str | None = None,
+        search: str | None = None,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        scope_tokens = [*target_tokens]
+        if _text(project_id):
+            scope_tokens.extend([_text(project_id), f"project:{_text(project_id)}"])
+        relevant = self.list_tickets(
+            target_tokens=scope_tokens,
+            scenario_id=scenario_id,
+            skill_id=skill_id,
+            modal_id=modal_id,
+            component=component,
+            kind=kind,
+            owner_area=owner_area,
+            component_ref=component_ref,
+            search=search,
+        )
+        relevant_ids = {_text(ticket.get("ticket_id")) for ticket in relevant}
+        scanned_events = self.list_lifecycle_events(
+            after=after,
+            updated_since=updated_since,
+            owner_area=owner_area,
+            limit=limit,
+        )
+        events = [event for event in scanned_events if _text(event.get("ticket_id")) in relevant_ids]
+        snapshot: list[dict[str, Any]] = []
+        if include_snapshot and not _text(after):
+            allowed_statuses: set[str] = set()
+            for group in _text(status_group).split(","):
+                allowed_statuses.update(TICKET_STATUS_GROUPS.get(_text(group), {_text(group)}))
+            snapshot = [
+                ticket
+                for ticket in relevant
+                if not allowed_statuses or _text(ticket.get("status")) in allowed_statuses
+            ]
+        cursor = (
+            _text(scanned_events[-1].get("event_id"))
+            if scanned_events
+            else _text(after) or None
+        )
+        return {
+            "schema": "adaos.dev_ticket.change_feed.v1",
+            "snapshot": snapshot,
+            "events": events,
+            "cursor": cursor,
+            "scanned_event_count": len(scanned_events),
+            "matched_event_count": len(events),
+            "relevance": {
+                "target_tokens": sorted({_text(item) for item in scope_tokens if _text(item)}),
+                "scenario_id": _text(scenario_id) or None,
+                "skill_id": _text(skill_id) or None,
+                "modal_id": _text(modal_id) or None,
+                "component": _text(component) or None,
+                "owner_area": _text(owner_area) or None,
+                "component_ref": _text(component_ref) or None,
+                "search": _text(search) or None,
+            },
+        }
 
     @staticmethod
     def _publish_lifecycle_event(event: Mapping[str, Any]) -> None:
@@ -4015,12 +4124,20 @@ class DevelopmentTicketService:
             self._write(state)
             return _normalized_ticket(ticket)
 
-    def _update_ticket(self, ticket_id: str, *, history_item: Mapping[str, Any] | None = None, **patch: Any) -> dict[str, Any]:
+    def _update_ticket(
+        self,
+        ticket_id: str,
+        *,
+        history_item: Mapping[str, Any] | None = None,
+        expected_revision: int | None = None,
+        **patch: Any,
+    ) -> dict[str, Any]:
         with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
             state = self._read()
             ticket = state["tickets"].get(_text(ticket_id))
             if not ticket:
                 raise KeyError(ticket_id)
+            self._assert_expected_revision(ticket, expected_revision)
             for key, value in patch.items():
                 ticket[key] = value
             ticket["updated_at"] = _now()
@@ -4049,6 +4166,7 @@ class DevelopmentTicketService:
         reason: str,
         actor: str,
         evidence_refs: Sequence[Mapping[str, Any]] = (),
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         reason_token = _text(reason) or "closed"
         normal_close = reason_token in {"closed", "closed_from_client", "done", "verified"}
@@ -4070,6 +4188,7 @@ class DevelopmentTicketService:
             ticket = state["tickets"].get(_text(ticket_id))
             if not ticket:
                 raise KeyError(ticket_id)
+            self._assert_expected_revision(ticket, expected_revision)
             if normal_close and _text(ticket.get("status")) != "verified":
                 raise ValueError("normal Dev Ticket closure requires verified status")
             now = _now()
@@ -4108,6 +4227,20 @@ class DevelopmentTicketService:
         history.append(dict(item))
         record["history"] = history[-100:]
 
+    @staticmethod
+    def _assert_expected_revision(ticket: Mapping[str, Any], expected_revision: int | None) -> None:
+        if expected_revision is None:
+            return
+        try:
+            expected = int(expected_revision)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("expected_revision must be a positive integer") from exc
+        if expected < 1:
+            raise ValueError("expected_revision must be a positive integer")
+        current = max(1, int(ticket.get("revision") or 1))
+        if current != expected:
+            raise ValueError(f"Dev Ticket revision conflict: expected {expected}, current {current}")
+
     def _read(self) -> dict[str, Any]:
         if not self.state_path.is_file():
             return {"schema": STATE_SCHEMA, "signals": {}, "tickets": {}}
@@ -4118,9 +4251,39 @@ class DevelopmentTicketService:
         tickets = value.get("tickets")
         if not isinstance(signals, Mapping) or not isinstance(tickets, Mapping):
             raise ValueError("development ticket state is corrupt")
-        return {"schema": STATE_SCHEMA, "signals": dict(signals), "tickets": dict(tickets)}
+        normalized_tickets: dict[str, Any] = {}
+        for ticket_id, raw_ticket in tickets.items():
+            ticket = dict(raw_ticket) if isinstance(raw_ticket, Mapping) else raw_ticket
+            if isinstance(ticket, dict):
+                try:
+                    ticket["revision"] = max(1, int(ticket.get("revision") or 1))
+                except (TypeError, ValueError):
+                    ticket["revision"] = 1
+            normalized_tickets[str(ticket_id)] = ticket
+        return {"schema": STATE_SCHEMA, "signals": dict(signals), "tickets": normalized_tickets}
 
     def _write(self, state: Mapping[str, Any]) -> None:
+        previous_tickets: Mapping[str, Any] = {}
+        if self.state_path.is_file():
+            try:
+                previous = json.loads(self.state_path.read_text(encoding="utf-8"))
+                if isinstance(previous, Mapping) and isinstance(previous.get("tickets"), Mapping):
+                    previous_tickets = previous["tickets"]
+            except Exception:
+                previous_tickets = {}
+        tickets = state.get("tickets") if isinstance(state, Mapping) else None
+        if isinstance(tickets, Mapping):
+            for ticket_id, raw_ticket in tickets.items():
+                if not isinstance(raw_ticket, dict):
+                    continue
+                previous_ticket = previous_tickets.get(ticket_id)
+                if not isinstance(previous_ticket, Mapping):
+                    raw_ticket["revision"] = max(1, int(raw_ticket.get("revision") or 1))
+                    continue
+                previous_revision = max(1, int(previous_ticket.get("revision") or 1))
+                current_content = {key: value for key, value in raw_ticket.items() if key != "revision"}
+                previous_content = {key: value for key, value in previous_ticket.items() if key != "revision"}
+                raw_ticket["revision"] = previous_revision + (1 if current_content != previous_content else 0)
         atomic_write_json(self.state_path, dict(state))
 
     @staticmethod

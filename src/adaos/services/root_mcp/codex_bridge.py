@@ -446,7 +446,7 @@ class CodexRootMcpBridge:
             },
             {
                 "name": "list_dev_ticket_events",
-                "description": "Read the durable Dev Ticket lifecycle feed after an optional cursor.",
+                "description": "Read a relevant Dev Ticket initial snapshot and durable lifecycle changes after an optional cursor.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -454,6 +454,16 @@ class CodexRootMcpBridge:
                         "updated_since": {"type": "string"},
                         "ticket_id": {"type": "string"},
                         "owner_area": {"type": "string"},
+                        "project_id": {"type": "string"},
+                        "scenario_id": {"type": "string"},
+                        "skill_id": {"type": "string"},
+                        "modal_id": {"type": "string"},
+                        "component": {"type": "string"},
+                        "component_ref": {"type": "string"},
+                        "kind": {"type": "string"},
+                        "search": {"type": "string"},
+                        "status_group": {"type": "string"},
+                        "include_snapshot": {"type": "boolean", "default": True},
                         "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 100},
                     },
                     "additionalProperties": False,
@@ -482,18 +492,19 @@ class CodexRootMcpBridge:
             },
             {
                 "name": "operate_dev_ticket",
-                "description": "Claim, comment, defer, resolve, verify, close, reopen, or transition an owned Core Dev Ticket.",
+                "description": "Claim, comment, relate, deduplicate, resolve, verify, close, reopen, or transition an owned Core Dev Ticket.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "ticket_id": {"type": "string"},
                         "operation": {
                             "type": "string",
-                            "enum": ["claim", "start", "comment", "defer", "resolve", "verify", "close", "reopen", "core_transition"],
+                            "enum": ["claim", "start", "comment", "defer", "resolve", "verify", "close", "reopen", "duplicate", "related", "core_transition"],
                         },
                         "actor": {"type": "string"},
                         "payload": {"type": "object"},
                         "evidence_refs": {"type": "array", "items": {"type": "object"}},
+                        "expected_revision": {"type": "integer", "minimum": 1},
                     },
                     "required": ["ticket_id", "operation"],
                     "additionalProperties": False,
@@ -1300,6 +1311,11 @@ class CodexRootMcpBridge:
                     actor=_normalize_text(args.get("actor")),
                     payload=args.get("payload") if isinstance(args.get("payload"), Mapping) else {},
                     evidence_refs=evidence_refs,
+                    expected_revision=(
+                        int(args["expected_revision"])
+                        if args.get("expected_revision") is not None
+                        else None
+                    ),
                 )
             )
         if tool == "list_dev_ticket_artifacts":

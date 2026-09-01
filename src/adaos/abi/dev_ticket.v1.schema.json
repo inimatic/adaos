@@ -7,6 +7,7 @@
   "required": [
     "schema",
     "ticket_id",
+    "revision",
     "kind",
     "status",
     "summary",
@@ -25,6 +26,7 @@
   "properties": {
     "schema": { "const": "adaos.dev_ticket.v1" },
     "ticket_id": { "type": "string", "minLength": 1 },
+    "revision": { "type": "integer", "minimum": 1 },
     "kind": {
       "enum": [
         "feedback",

@@ -370,8 +370,23 @@ Completed skill and scenario/project repairs can now be exposed to the user's
 workspace as a dev-to-workspace `.runtime` candidate without silently
 replacing stable workspace source. Explicit trial acceptance records the
 ProjectRelease evidence used for verification and closure. Delayed completion
-notifications, realtime subscriptions, optimistic SDK revisions, and client
-UI for duplicate/related relations remain open.
+notifications, realtime subscriptions, direct artifact preview, and client UI
+for duplicate/related relations remain open.
+
+Implementation note, 2026-09-02: the authoritative Dev Ticket ABI now carries
+a monotonic `revision`; lifecycle and relation mutations accept
+`expected_revision` and reject stale writes atomically. Legacy workspace inbox
+records are read as revision 1 and gain a persisted revision on their next
+mutation. HTTP returns `409` for revision conflicts, and the same contract is
+available through the Python SDK, Root MCP, and the Codex MCP bridge. Agent
+operations now include `duplicate` and `related` as well as the existing
+lifecycle transitions. The durable change-feed projection accepts project,
+scenario, skill, modal, component, owner, kind, and text relevance filters and
+returns an initial open-ticket snapshot plus cursor-based changes. This closes
+the SDK optimistic-write and initial-snapshot gaps, but `DS5-13`, `DS5-18`, and
+`DS5-19` remain open for client relation controls, direct artifact-open UX, and
+a realtime push transport; the current feed is deliberately a durable polling
+contract rather than a claimed subscription transport.
 
 E2E acceptance note, 2026-08-31: a real autonomous repair for
 `subscription_status_skill` materialized source that was absent from DEV,

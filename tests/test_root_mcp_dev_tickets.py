@@ -21,6 +21,16 @@ def test_root_mcp_dev_ticket_read_tools(monkeypatch) -> None:
     monkeypatch.setattr(sdk, "list_tickets", lambda **filters: [{**ticket, "filters": filters}])
     monkeypatch.setattr(sdk, "get_ticket", lambda ticket_id: ticket if ticket_id == "dticket.test" else None)
     monkeypatch.setattr(sdk, "list_events", lambda **filters: [{**event, "filters": filters}])
+    monkeypatch.setattr(
+        sdk,
+        "read_feed",
+        lambda **filters: {
+            "schema": "adaos.dev_ticket.change_feed.v1",
+            "snapshot": [],
+            "events": [{**event, "filters": filters}],
+            "cursor": "dtevent.test",
+        },
+    )
     monkeypatch.setattr(sdk, "list_artifacts", lambda ticket_id=None: [{"artifact_id": "artifact.test", "ticket_id": ticket_id}])
     monkeypatch.setattr(sdk, "get_artifact", lambda artifact_id: {"artifact_id": artifact_id, "exists": True})
 
@@ -85,13 +95,20 @@ def test_root_mcp_dev_ticket_write_tools_and_dry_run(monkeypatch) -> None:
     )
     operated = _invoke(
         "dev_ticket.operate",
-        {"ticket_id": "dticket.new", "operation": "claim", "actor": "codex:test"},
+        {
+            "ticket_id": "dticket.new",
+            "operation": "related",
+            "actor": "codex:test",
+            "expected_revision": 3,
+            "payload": {"related_ticket_id": "dticket.parent", "relation": "blocks"},
+        },
         "development.write.tickets",
     )
 
     assert dry_run.result["would_create"] is True
     assert calls[0][0] == "create"
-    assert calls[1][1]["operation"] == "claim"
+    assert calls[1][1]["operation"] == "related"
+    assert calls[1][1]["expected_revision"] == 3
     assert created.result["ticket"]["ticket_id"] == "dticket.new"
     assert operated.result["ticket"]["status"] == "claimed"
 

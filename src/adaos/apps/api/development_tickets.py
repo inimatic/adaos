@@ -73,6 +73,7 @@ class DevTicketArtifactUploadRequest(BaseModel):
 class DevTicketUpdateRequest(BaseModel):
     summary: str | None = Field(default=None, min_length=1)
     actor: str = Field(default="ui", min_length=1)
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class DevTicketBuilderQualificationRequest(BaseModel):
@@ -80,6 +81,7 @@ class DevTicketBuilderQualificationRequest(BaseModel):
     reason: str = Field(..., min_length=1)
     actor: str = Field(default="builder", min_length=1)
     expected_updated_at: str | None = None
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class DevTicketResponseRequest(BaseModel):
@@ -92,6 +94,7 @@ class DevTicketResponseRequest(BaseModel):
 class DevTicketDeferRequest(BaseModel):
     reason: str = ""
     actor: str = "ui"
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class DevTicketHandoffRequest(BaseModel):
@@ -144,23 +147,27 @@ class DevTicketResolveRequest(BaseModel):
     capability_works: bool = True
     regression_free: bool = True
     accept_reduced_scope: bool = False
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class DevTicketCloseRequest(BaseModel):
     reason: str = Field(..., min_length=1)
     actor: str = "ui"
     evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class DevTicketClaimRequest(BaseModel):
     actor: str = "ui"
     owner: str | None = None
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class DevTicketCommentRequest(BaseModel):
     body: str = Field(..., min_length=1)
     actor: str = "ui"
     evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class DevTicketVerifyRequest(BaseModel):
@@ -168,23 +175,27 @@ class DevTicketVerifyRequest(BaseModel):
     actor: str = Field(default="ui", min_length=1)
     repair_id: str | None = None
     notes: str = ""
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class DevTicketReopenRequest(BaseModel):
     reason: str = Field(..., min_length=1)
     actor: str = "ui"
     evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class DevTicketDuplicateRequest(BaseModel):
     duplicate_of: str = Field(..., min_length=1)
     actor: str = "ui"
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class DevTicketRelatedRequest(BaseModel):
     related_ticket_id: str = Field(..., min_length=1)
     relation: str = "related"
     actor: str = "ui"
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class CoreCapabilityRequest(BaseModel):
@@ -213,6 +224,7 @@ class CoreTicketTransitionRequest(BaseModel):
     reason: str = ""
     notes: str = ""
     evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+    expected_revision: int | None = Field(default=None, ge=1)
     release_ref: dict[str, Any] = Field(default_factory=dict)
     capability_ref: dict[str, Any] = Field(default_factory=dict)
     publish_pending_actions: bool = True
@@ -307,6 +319,11 @@ def _not_found(ticket_id: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"ticket_not_found:{ticket_id}")
 
 
+def _ticket_mutation_error(exc: ValueError) -> HTTPException:
+    code = status.HTTP_409_CONFLICT if "revision conflict" in str(exc) else status.HTTP_400_BAD_REQUEST
+    return HTTPException(status_code=code, detail=str(exc))
+
+
 def _ticket_detail(service: DevelopmentTicketService, ticket: dict[str, Any]) -> dict[str, Any]:
     signals = [
         signal
@@ -343,6 +360,7 @@ def _ticket_list_item(ticket: Mapping[str, Any]) -> dict[str, Any]:
         for key in (
             "schema",
             "ticket_id",
+            "revision",
             "kind",
             "status",
             "status_group",
@@ -1011,28 +1029,54 @@ def list_ticket_events(
     updated_since: str | None = None,
     ticket_id: str | None = None,
     owner_area: str | None = None,
+    project_id: str | None = None,
+    scenario_id: str | None = None,
+    skill_id: str | None = None,
+    modal_id: str | None = None,
+    component: str | None = None,
+    component_ref: str | None = None,
+    kind: str | None = None,
+    search: str | None = None,
+    status_group: str = "open",
     include_snapshot: bool = True,
     limit: int = Query(default=500, ge=1, le=2000),
     service: DevelopmentTicketService = Depends(_get_service),
 ) -> dict[str, Any]:
-    events = service.list_lifecycle_events(
+    if ticket_id:
+        events = service.list_lifecycle_events(
+            after=after,
+            updated_since=updated_since,
+            ticket_id=ticket_id,
+            owner_area=owner_area,
+            limit=limit,
+        )
+        ticket = service.get_ticket(ticket_id)
+        return {
+            "ok": True,
+            "schema": "adaos.dev_ticket.change_feed.v1",
+            "snapshot": [ticket] if include_snapshot and not after and ticket else [],
+            "events": events,
+            "cursor": events[-1]["event_id"] if events else after,
+        }
+    feed = service.read_change_feed(
         after=after,
         updated_since=updated_since,
-        ticket_id=ticket_id,
+        include_snapshot=include_snapshot,
+        status_group=status_group,
+        project_id=project_id,
+        scenario_id=scenario_id,
+        skill_id=skill_id,
+        modal_id=modal_id,
+        component=component,
+        component_ref=component_ref,
+        kind=kind,
         owner_area=owner_area,
+        search=search,
         limit=limit,
-    )
-    snapshot = (
-        service.list_tickets(status_group="open", owner_area=owner_area)
-        if include_snapshot and not after
-        else []
     )
     return {
         "ok": True,
-        "schema": "adaos.dev_ticket.change_feed.v1",
-        "snapshot": snapshot,
-        "events": events,
-        "cursor": events[-1]["event_id"] if events else after,
+        **feed,
     }
 
 
@@ -1082,11 +1126,12 @@ def transition_core_ticket(
             release_ref=body.release_ref,
             capability_ref=body.capability_ref,
             publish_pending_actions=body.publish_pending_actions,
+            expected_revision=body.expected_revision,
         )
     except KeyError as exc:
         raise _not_found(ticket_id) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise _ticket_mutation_error(exc) from exc
 
 
 @router.post("/sdk-understanding", status_code=status.HTTP_201_CREATED)
@@ -1347,12 +1392,13 @@ def update_ticket(
             ticket_id,
             summary=body.summary,
             actor=body.actor,
+            expected_revision=body.expected_revision,
         )
         return {"ok": True, **_ticket_detail(service, ticket)}
     except KeyError as exc:
         raise _not_found(ticket_id) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise _ticket_mutation_error(exc) from exc
 
 
 @router.post("/{ticket_id}/builder-qualification")
@@ -1368,12 +1414,13 @@ def requalify_builder_repair(
             actor=body.actor,
             reason=body.reason,
             expected_updated_at=body.expected_updated_at,
+            expected_revision=body.expected_revision,
         )
         return {"ok": True, "ticket": ticket, "detail": _ticket_detail(service, ticket)}
     except KeyError as exc:
         raise _not_found(ticket_id) from exc
     except ValueError as exc:
-        code = status.HTTP_409_CONFLICT if "changed since" in str(exc) else status.HTTP_400_BAD_REQUEST
+        code = status.HTTP_409_CONFLICT if "changed since" in str(exc) or "revision conflict" in str(exc) else status.HTTP_400_BAD_REQUEST
         raise HTTPException(status_code=code, detail=str(exc)) from exc
 
 
@@ -1401,12 +1448,17 @@ def claim_ticket(
     service: DevelopmentTicketService = Depends(_get_service),
 ) -> dict[str, Any]:
     try:
-        ticket = service.claim_ticket(ticket_id, actor=body.actor, owner=body.owner)
+        ticket = service.claim_ticket(
+            ticket_id,
+            actor=body.actor,
+            owner=body.owner,
+            expected_revision=body.expected_revision,
+        )
         return {"ok": True, "ticket": ticket, "detail": _ticket_detail(service, ticket)}
     except KeyError as exc:
         raise _not_found(ticket_id) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise _ticket_mutation_error(exc) from exc
 
 
 @router.post("/{ticket_id}/start")
@@ -1416,12 +1468,16 @@ def start_ticket(
     service: DevelopmentTicketService = Depends(_get_service),
 ) -> dict[str, Any]:
     try:
-        ticket = service.start_ticket(ticket_id, actor=body.actor)
+        ticket = service.start_ticket(
+            ticket_id,
+            actor=body.actor,
+            expected_revision=body.expected_revision,
+        )
         return {"ok": True, "ticket": ticket, "detail": _ticket_detail(service, ticket)}
     except KeyError as exc:
         raise _not_found(ticket_id) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise _ticket_mutation_error(exc) from exc
 
 
 @router.post("/{ticket_id}/comment")
@@ -1436,12 +1492,13 @@ def comment_ticket(
             body=body.body,
             actor=body.actor,
             evidence_refs=body.evidence_refs,
+            expected_revision=body.expected_revision,
         )
         return {"ok": True, "ticket": ticket, "detail": _ticket_detail(service, ticket)}
     except KeyError as exc:
         raise _not_found(ticket_id) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise _ticket_mutation_error(exc) from exc
 
 
 @router.post("/{ticket_id}/respond")
@@ -1473,10 +1530,17 @@ def defer_ticket(
     service: DevelopmentTicketService = Depends(_get_service),
 ) -> dict[str, Any]:
     try:
-        ticket = service.defer_ticket(ticket_id, actor=body.actor, reason=body.reason)
+        ticket = service.defer_ticket(
+            ticket_id,
+            actor=body.actor,
+            reason=body.reason,
+            expected_revision=body.expected_revision,
+        )
         return {"ok": True, "ticket": ticket, "detail": _ticket_detail(service, ticket)}
     except KeyError as exc:
         raise _not_found(ticket_id) from exc
+    except ValueError as exc:
+        raise _ticket_mutation_error(exc) from exc
 
 
 @router.post("/{ticket_id}/handoff")
@@ -1566,12 +1630,13 @@ def resolve_ticket(
             capability_works=body.capability_works,
             regression_free=body.regression_free,
             accept_reduced_scope=body.accept_reduced_scope,
+            expected_revision=body.expected_revision,
         )
         return {"ok": True, **result, "detail": _ticket_detail(service, result["ticket"])}
     except KeyError as exc:
         raise _not_found(ticket_id) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise _ticket_mutation_error(exc) from exc
 
 
 @router.post("/{ticket_id}/close")
@@ -1586,12 +1651,13 @@ def close_ticket(
             reason=body.reason,
             actor=body.actor,
             evidence_refs=body.evidence_refs,
+            expected_revision=body.expected_revision,
         )
         return {"ok": True, "ticket": ticket, "detail": _ticket_detail(service, ticket)}
     except KeyError as exc:
         raise _not_found(ticket_id) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise _ticket_mutation_error(exc) from exc
 
 
 @router.post("/{ticket_id}/verify")
@@ -1607,12 +1673,13 @@ def verify_ticket(
             actor=body.actor,
             repair_id=body.repair_id,
             notes=body.notes,
+            expected_revision=body.expected_revision,
         )
         return {"ok": True, **result, "detail": _ticket_detail(service, result["ticket"])}
     except KeyError as exc:
         raise _not_found(ticket_id) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise _ticket_mutation_error(exc) from exc
 
 
 @router.post("/{ticket_id}/reopen")
@@ -1627,12 +1694,13 @@ def reopen_ticket(
             actor=body.actor,
             reason=body.reason,
             evidence_refs=body.evidence_refs,
+            expected_revision=body.expected_revision,
         )
         return {"ok": True, "ticket": ticket, "detail": _ticket_detail(service, ticket)}
     except KeyError as exc:
         raise _not_found(ticket_id) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise _ticket_mutation_error(exc) from exc
 
 
 @router.post("/{ticket_id}/duplicate")
@@ -1642,12 +1710,17 @@ def duplicate_ticket(
     service: DevelopmentTicketService = Depends(_get_service),
 ) -> dict[str, Any]:
     try:
-        ticket = service.duplicate_ticket(ticket_id, duplicate_of=body.duplicate_of, actor=body.actor)
+        ticket = service.duplicate_ticket(
+            ticket_id,
+            duplicate_of=body.duplicate_of,
+            actor=body.actor,
+            expected_revision=body.expected_revision,
+        )
         return {"ok": True, "ticket": ticket, "detail": _ticket_detail(service, ticket)}
     except KeyError as exc:
         raise _not_found(str(exc).strip("'")) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise _ticket_mutation_error(exc) from exc
 
 
 @router.post("/{ticket_id}/related")
@@ -1662,9 +1735,10 @@ def related_ticket(
             related_ticket_id=body.related_ticket_id,
             relation=body.relation,
             actor=body.actor,
+            expected_revision=body.expected_revision,
         )
         return {"ok": True, "ticket": ticket, "detail": _ticket_detail(service, ticket)}
     except KeyError as exc:
         raise _not_found(str(exc).strip("'")) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise _ticket_mutation_error(exc) from exc

@@ -195,6 +195,7 @@ class RootMcpClient:
         actor: str | None = None,
         payload: Mapping[str, Any] | None = None,
         evidence_refs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] = (),
+        expected_revision: int | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {
@@ -205,6 +206,8 @@ class RootMcpClient:
         }
         if actor:
             arguments["actor"] = str(actor)
+        if expected_revision is not None:
+            arguments["expected_revision"] = int(expected_revision)
         return self.call("dev_ticket.operate", arguments=arguments, dry_run=dry_run)
 
     def list_dev_ticket_artifacts(self, ticket_id: str | None = None) -> dict[str, Any]:

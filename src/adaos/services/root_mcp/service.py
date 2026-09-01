@@ -521,6 +521,16 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                     "updated_since": {"type": "string"},
                     "ticket_id": {"type": "string"},
                     "owner_area": {"type": "string"},
+                    "project_id": {"type": "string"},
+                    "scenario_id": {"type": "string"},
+                    "skill_id": {"type": "string"},
+                    "modal_id": {"type": "string"},
+                    "component": {"type": "string"},
+                    "component_ref": {"type": "string"},
+                    "kind": {"type": "string"},
+                    "search": {"type": "string"},
+                    "status_group": {"type": "string"},
+                    "include_snapshot": {"type": "boolean"},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 2000},
                 },
             ),
@@ -565,11 +575,12 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                     "ticket_id": {"type": "string"},
                     "operation": {
                         "type": "string",
-                        "enum": ["claim", "start", "comment", "defer", "resolve", "verify", "close", "reopen", "core_transition"],
+                        "enum": ["claim", "start", "comment", "defer", "resolve", "verify", "close", "reopen", "duplicate", "related", "core_transition"],
                     },
                     "actor": {"type": "string"},
                     "payload": {"type": "object"},
                     "evidence_refs": {"type": "array", "items": {"type": "object"}},
+                    "expected_revision": {"type": "integer", "minimum": 1},
                 },
                 required=["ticket_id", "operation"],
             ),
@@ -3423,14 +3434,41 @@ def _handle_dev_ticket_events(arguments: dict[str, Any], *, dry_run: bool) -> di
     filters = {
         key: value
         for key, value in arguments.items()
-        if key in {"after", "updated_since", "ticket_id", "owner_area", "limit"}
+        if key in {
+            "after",
+            "updated_since",
+            "ticket_id",
+            "owner_area",
+            "project_id",
+            "scenario_id",
+            "skill_id",
+            "modal_id",
+            "component",
+            "component_ref",
+            "kind",
+            "search",
+            "status_group",
+            "include_snapshot",
+            "limit",
+        }
     }
-    events = _development_ticket_sdk().list_events(**filters)
-    return {
-        "events": events,
-        "count": len(events),
-        "cursor": events[-1]["event_id"] if events else str(arguments.get("after") or "").strip() or None,
-    }
+    ticket_id = str(filters.pop("ticket_id", "") or "").strip()
+    if ticket_id:
+        event_filters = {
+            key: value
+            for key, value in filters.items()
+            if key in {"after", "updated_since", "owner_area", "limit"}
+        }
+        events = _development_ticket_sdk().list_events(ticket_id=ticket_id, **event_filters)
+        ticket = _development_ticket_sdk().get_ticket(ticket_id)
+        return {
+            "snapshot": [ticket] if filters.get("include_snapshot", True) and not filters.get("after") and ticket else [],
+            "events": events,
+            "count": len(events),
+            "cursor": events[-1]["event_id"] if events else str(arguments.get("after") or "").strip() or None,
+        }
+    feed = _development_ticket_sdk().read_feed(**filters)
+    return {**feed, "count": len(feed.get("events") or [])}
 
 
 def _handle_dev_ticket_create(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:

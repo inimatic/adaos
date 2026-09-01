@@ -1066,3 +1066,81 @@ def test_development_ticket_api_core_lifecycle_and_change_feed(tmp_path: Path) -
     assert feed.json()["snapshot"][0]["ticket_id"] == core_ticket_id
     assert feed.json()["events"][-1]["semantic_type"] == "core_ticket.verified"
     assert service.get_ticket(project["ticket_id"])["status"] == "ready_for_builder"
+
+
+def test_development_ticket_api_rejects_stale_revision(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    client = _client(service)
+    created = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "summary": "Original wording",
+            "target_scope": {"type": "skill", "id": "demo_metrics_skill"},
+        },
+    ).json()["ticket"]
+
+    updated = client.patch(
+        f"/api/development-tickets/{created['ticket_id']}",
+        headers=_headers(),
+        json={
+            "summary": "Updated wording",
+            "actor": "user:owner",
+            "expected_revision": created["revision"],
+        },
+    )
+    stale = client.post(
+        f"/api/development-tickets/{created['ticket_id']}/comment",
+        headers=_headers(),
+        json={
+            "body": "This was loaded before the edit",
+            "actor": "builder:worker",
+            "expected_revision": created["revision"],
+        },
+    )
+
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["ticket"]["revision"] == created["revision"] + 1
+    assert stale.status_code == 409, stale.text
+    assert "revision conflict" in stale.json()["detail"]
+    assert service.get_ticket(created["ticket_id"]).get("comments", []) == []
+
+
+def test_development_ticket_change_feed_is_project_relevant_and_cursor_safe(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    client = _client(service)
+
+    def create(project_id: str, summary: str) -> dict:
+        return client.post(
+            "/api/development-tickets",
+            headers=_headers(),
+            json={
+                "summary": summary,
+                "target_scope": {
+                    "type": "skill",
+                    "id": f"{project_id}_skill",
+                    "project_id": project_id,
+                    "project_ref": f"project:{project_id}",
+                },
+            },
+        ).json()["ticket"]
+
+    alpha = create("alpha", "Alpha ticket")
+    beta = create("beta", "Beta ticket")
+    initial = client.get(
+        "/api/development-tickets/events?project_id=alpha&include_snapshot=true",
+        headers=_headers(),
+    ).json()
+
+    service.comment_ticket(beta["ticket_id"], body="Beta changed", actor="builder:beta")
+    service.comment_ticket(alpha["ticket_id"], body="Alpha changed", actor="builder:alpha")
+    changed = client.get(
+        f"/api/development-tickets/events?project_id=alpha&after={initial['cursor']}",
+        headers=_headers(),
+    ).json()
+
+    assert [item["ticket_id"] for item in initial["snapshot"]] == [alpha["ticket_id"]]
+    assert {item["ticket_id"] for item in changed["events"]} == {alpha["ticket_id"]}
+    assert changed["scanned_event_count"] == 2
+    assert changed["matched_event_count"] == 1
+    assert changed["cursor"] != initial["cursor"]
