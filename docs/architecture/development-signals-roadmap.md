@@ -273,20 +273,20 @@ Ticket and signals, and closes only with evidence.
   `builder.task.v1`, `builder.repair_task.v1`, or `builder.realize_request.v1`.
 - [x] `[must]` `DS5-02` Add Pending Action response handlers for
   `start_autonomous_repair` and `open_builder`.
-- [ ] `[must]` `DS5-03` Materialize a development context for installed,
+- [x] `[must]` `DS5-03` Materialize a development context for installed,
   catalog, remote, or read-only artifacts through existing DEV source,
   local fork/overlay, upstream proposal, deferred state, or
   `not_design_time_fixable`.
-- [ ] `[must]` `DS5-04` Include Development Signal context in Builder packets:
+- [x] `[must]` `DS5-04` Include Development Signal context in Builder packets:
   original words, scopes, versions, digests, evidence refs, NLU refs, privacy
   constraints, and acceptance expectations.
-- [ ] `[must]` `DS5-05` Close signals only through verified version, verified
+- [x] `[must]` `DS5-05` Close signals only through verified version, verified
   overlay, acceptance evidence, explicit rejection, supersession, stale
   revalidation, or not-design-time-fixable state.
 - [ ] `[should]` `DS5-06` Add delayed completion notifications that deep-link to
   signal, repair, Builder run, release, and verification evidence without
   making notifications authoritative.
-- [ ] `[should]` `DS5-07` Support user-visible status labels: recorded,
+- [x] `[should]` `DS5-07` Support user-visible status labels: recorded,
   postponed, waiting for approval, in autonomous repair, in Builder, fixed in
   version, still blocked, or cannot be fixed locally.
 - [ ] `[could]` `DS5-08` Add comparison/evaluation hooks for multiple repair
@@ -315,13 +315,13 @@ Ticket and signals, and closes only with evidence.
 - [x] `[must]` `DS5-16` Add batch repair planning for related tickets under the
   same project, source tree, skill/scenario/modal/component family, or shared
   core blocker, while keeping per-ticket comments and evidence.
-- [ ] `[must]` `DS5-17` Make the absent-dev-source choice explicit:
+- [x] `[must]` `DS5-17` Make the absent-dev-source choice explicit:
   `materialize`, `fork project`, `runtime overlay`, or `defer`.
 - [x] `[must]` `DS5-24` Publish completed Dev Ticket skill repairs to the user
   as a dev-to-workspace `.runtime` overlay: prepare and test the default
   workspace runtime slot from DEV source, preserve workspace source, rebuild
   the target webspace, and record an `aprobation_runtime_overlay` receipt.
-- [ ] `[must]` `DS5-25` Complete scenario/project acceptance publication with
+- [x] `[must]` `DS5-25` Complete scenario/project acceptance publication with
   the same rule: materialize the user's workspace projection from DEV
   scenario/project source without replacing workspace source, keep an explicit
   receipt, and provide rollback/acceptance controls for the overlay.
@@ -332,7 +332,7 @@ Ticket and signals, and closes only with evidence.
 - [ ] `[should]` `DS5-19` Add subscription support:
   initial snapshot plus ticket change events so Builder, Codex, and the client
   do not rely on polling.
-- [ ] `[should]` `DS5-20` Add cost estimates before autonomous repair:
+- [x] `[should]` `DS5-20` Add cost estimates before autonomous repair:
   approximate token budget, runtime/test cost, expected source scope, and
   confidence/risk.
 - [x] `[must]` `DS5-21` Split the user Dev Ticket lifecycle from Builder work
@@ -343,7 +343,7 @@ Ticket and signals, and closes only with evidence.
   handoff metadata: autonomous and interactive repairs use `codex.api.tokens`,
   and failed, errored, or cancelled provider calls remain billable usage events
   in the Subscription/economic stream.
-- [ ] `[should]` `DS5-23` Add a richer ticket history feed that interleaves the
+- [x] `[should]` `DS5-23` Add a richer ticket history feed that interleaves the
   original user report, follow-up comments, Builder work items, validation
   evidence, user rejection, reopen notes, and delayed completion notices.
 
@@ -366,14 +366,12 @@ requirement; actual usage remains authoritative in the root economic stream,
 including failed, errored, or cancelled provider calls with reported billable
 tokens. Resolution is evidence-gated, `resolved` is non-terminal, `verify`
 requires verification evidence, and normal closure requires verified status.
-Completed skill repairs can now be exposed to the user's workspace as a
-dev-to-workspace `.runtime` overlay without replacing workspace source. The
-same acceptance rule for full scenario/project source remains open: DEV source
-must feed the user-visible materialized projection with explicit rollback and
-acceptance controls, not silently replace stable workspace source. Delayed
-completion notifications, subscriptions, artifact-open helpers, autonomous
-cost estimates, richer user-ticket/Builder history, and full Builder repair
-execution over ticket batches remain open.
+Completed skill and scenario/project repairs can now be exposed to the user's
+workspace as a dev-to-workspace `.runtime` candidate without silently
+replacing stable workspace source. Explicit trial acceptance records the
+ProjectRelease evidence used for verification and closure. Delayed completion
+notifications, realtime subscriptions, optimistic SDK revisions, and client
+UI for duplicate/related relations remain open.
 
 E2E acceptance note, 2026-08-31: a real autonomous repair for
 `subscription_status_skill` materialized source that was absent from DEV,
@@ -385,9 +383,25 @@ leases admitted bounded task context without secrets. Failed Codex iterations
 reported `2,874,058` tokens to Root in total; the validation-only continuation
 reported zero additional model usage. Automation then synchronized validation,
 commit, and runtime-overlay evidence back to the repair and moved the user
-ticket only to non-terminal `resolved`. Full owning-project discovery remains
-open when a standalone skill target has no `project_id`; DS5-03, DS5-17, and
-DS5-25 retain that project/scenario publication work.
+ticket only to non-terminal `resolved`. That run exposed missing owning-project
+identity on standalone skill targets; subsequent project-scoped handoff and
+scenario/project acceptance work closes the bounded path while retaining a
+compatibility fallback for legacy tickets without `project_id`.
+
+E2E acceptance update, 2026-09-02: the real
+`dticket.01M1F7TZRSS92GV1X52V77Z79H` run started from a Home Shopping List
+scenario that was absent from DEV, materialized its owning project, executed a
+qualified zero-model structured repair, published
+`shopping_list_14504c40@0.2.3`, exposed the candidate in the user's runtime,
+recorded accepted trial and ProjectRelease evidence, and completed
+`resolved -> verified -> closed`. The successful terminal usage receipt was
+reported to Root with zero billable tokens; failed precursor attempts remain
+visible as separate Builder work/evidence. Builder context and package
+handoffs now retain canonical `project_ref`/`project_id`, and packages reject
+same-component tickets from different or partially unknown projects before
+spending tokens. The remaining absent-source risk is legacy tickets that lack
+project identity entirely; they may run singly for compatibility but cannot be
+mixed with project-scoped tickets in a batch.
 
 ## DS6. Analytics, Campaigns, And Policy Hardening
 
@@ -467,7 +481,7 @@ is released and verified.
 - [x] `[must]` `DS8-04` Link project tickets to core tickets with
   `blocked_by`/`blocks` relations and a user-visible `waiting_for_core`
   status or status group.
-- [ ] `[must]` `DS8-05` Add core ticket lifecycle events:
+- [x] `[must]` `DS8-05` Add core ticket lifecycle events:
   `core_ticket.created`, `core_ticket.qualified`, `core_ticket.accepted`,
   `core_ticket.deferred`, `core_ticket.released`,
   `core_ticket.verified`, `core_ticket.reopened`, and
@@ -475,7 +489,7 @@ is released and verified.
 - [ ] `[must]` `DS8-06` Fan out signed core lifecycle events to linked project
   tickets, affected subnet Builders, Pending Actions, and user notifications
   where policy allows.
-- [ ] `[must]` `DS8-07` Prevent project Builder runs from closing tickets that
+- [x] `[must]` `DS8-07` Prevent project Builder runs from closing tickets that
   are still blocked by unresolved core tickets unless the user explicitly
   accepts a reduced-scope result.
 - [ ] `[should]` `DS8-08` Add a core backlog view for maintainers with filters
@@ -489,16 +503,19 @@ is released and verified.
 - [ ] `[could]` `DS8-11` Add advanced-user inspection and subscription controls
   for core tickets that affect their projects.
 
-Implementation note, 2026-08-31: the first core rail is implemented in the
+Implementation note, updated 2026-09-02: the first core rail is implemented in the
 Dev Ticket service, API, CLI, and Builder intake. Builder or Codex can create
 `core_capability_request` tickets with `owner_area = core`, stable
 `component_ref`, impact taxonomy, motivation, desired contract, observed
 limitation, rejected workarounds, expected validation, and blocked project
 ticket refs. Project tickets can be linked with `blocked_by`/`blocks` and move
 to `waiting_for_core`; Builder qualification then forbids ordinary project
-repair against unresolved core blockers. Core lifecycle events, signed fanout,
-maintainer backlog UI, and optional redacted external issue projection remain
-open.
+repair and evidence closure against unresolved core blockers unless reduced
+scope is explicitly accepted. Core tickets emit created, qualified, accepted,
+deferred, released, verified, and reopened lifecycle events. Verified
+capabilities update linked project tickets, signals, and Pending Actions so
+Builder can resume. Signed cross-subnet fanout, maintainer backlog UI, and
+optional redacted external issue projection remain open.
 
 ## DS9. SDK Understanding And Agent Product UX
 

@@ -2,7 +2,7 @@
 
 Status: target architecture with an explicit current implementation baseline.
 
-Last reviewed: 2026-09-01.
+Last reviewed: 2026-09-02.
 
 This document defines the target AdaOS context resolution, compilation, and
 compression architecture for LLM-facing development, Builder, Research
@@ -522,41 +522,41 @@ Priority labels:
 - [x] `[must]` Keep descriptor payloads omitted by default in
   `builder.get_context`, with `include_payloads` available for trusted local
   debugging.
-- [ ] `[must]` Define a common overview-row schema for SDK methods, MCP tools,
+- [x] `[must]` Define a common overview-row schema for SDK methods, MCP tools,
   ABI schemas, skills, scenarios, NLU actions, voice capabilities, voice
   affordances, named entities, templates, and training targets.
-- [ ] `[must]` Add drill-down ids and hashes to every compact overview row.
-- [ ] `[should]` Add deterministic rankers for overview selection before
+- [x] `[must]` Add drill-down ids and hashes to every compact overview row.
+- [x] `[should]` Add deterministic rankers for overview selection before
   asking the model to pick detail ids.
 - [ ] `[could]` Add vector search over descriptor cards and resource overviews.
 
 ### Phase 1A. Governed Context Control Plane
 
-- [ ] `[must]` Publish versioned schemas for capsule nodes, typed relationship
+- [x] `[must]` Publish versioned schemas for capsule nodes, typed relationship
   edges, mutable subject bindings, context plans, memory candidates, and
   attribution receipts.
-- [ ] `[must]` Replace single project `scope_ref` resolution with typed
+- [x] `[must]` Replace single project `scope_ref` resolution with typed
   `subject_refs`, purpose, audience, authority, trust, and `as_of` inputs while
   retaining a compatibility adapter for project-only callers.
 - [ ] `[must]` Implement Context Registry, Resolver, Compiler, and Memory
   Curator as separate SDK/API services; expose Root MCP as an adapter rather
   than the persistence authority.
-- [ ] `[must]` Define authoritative knowledge, procedural memory, episodic
+- [x] `[must]` Define authoritative knowledge, procedural memory, episodic
   memory, and disposable working-context persistence semantics.
-- [ ] `[must]` Implement deterministic identity/dependency/freshness selection
+- [x] `[must]` Implement deterministic identity/dependency/freshness selection
   before semantic ranking, with explicit required, selected, omitted, denied,
   and unavailable reasons.
-- [ ] `[must]` Add trust, taint, sensitivity, license, retention, authority, and
+- [x] `[must]` Add trust, taint, sensitivity, license, retention, authority, and
   origin fields with propagation and revocation tests.
-- [ ] `[must]` Add evidence-gated memory promotion and rollback; an LLM run or
+- [x] `[must]` Add evidence-gated memory promotion and rollback; an LLM run or
   successful trajectory cannot promote itself.
-- [ ] `[must]` Add valid-time/recorded-time semantics, immutable supersession,
+- [x] `[must]` Add valid-time/recorded-time semantics, immutable supersession,
   exact `as_of` reconstruction, and independent invalidation by typed edge.
 - [ ] `[must]` Store content-addressed packet/checkpoint/result/provenance
   artifacts once and replace nested execution-state copies with refs.
-- [ ] `[should]` Add optimistic subject bindings and explicit branch,
+- [x] `[should]` Add optimistic subject bindings and explicit branch,
   merge/conflict, and concurrent-writer diagnostics.
-- [ ] `[should]` Add provider-neutral canonical units plus model-specific layout
+- [x] `[should]` Add provider-neutral canonical units plus model-specific layout
   profiles and authorization-partitioned prompt-cache plans.
 - [ ] `[should]` Add adversarial memory-poisoning, cross-project leakage,
   stale-context, and denied-drilldown fixtures.
@@ -571,15 +571,15 @@ Priority labels:
 - [x] `[must]` Keep canonical MCP `structuredContent` as JSON.
 - [x] `[must]` Keep ABI and JSON Schema as canonical validation contracts.
 - [x] `[should]` Maintain compact SDK JSONL export for minimal SDK overview.
-- [ ] `[must]` Add `model_text_format` support to the Codex Root MCP bridge for
+- [x] `[must]` Add `model_text_format` support to the Codex Root MCP bridge for
   selected tools, initially `json`, `min_json`, `jsonl`, and `toon`.
-- [ ] `[must]` Add a TOON encoder for uniform overview arrays sourced from
+- [x] `[must]` Add a TOON encoder for uniform overview arrays sourced from
   canonical JSON.
-- [ ] `[must]` Record `canonical_format`, `model_text_format`, and
+- [x] `[must]` Record `canonical_format`, `model_text_format`, and
   `token_estimate` in bridge/tool metadata.
-- [ ] `[should]` Add a feature flag or request argument so compact text can be
+- [x] `[should]` Add a feature flag or request argument so compact text can be
   rolled out per tool without changing default behavior for all clients.
-- [ ] `[should]` Add tests proving `structuredContent` stays unchanged while
+- [x] `[should]` Add tests proving `structuredContent` stays unchanged while
   `content[].text` changes format.
 - [ ] `[could]` Add Markdown card output for human-inspection flows where TOON
   is too terse.
@@ -596,10 +596,10 @@ Priority labels:
 - [ ] `[must]` Make `builder_skill` consume context packets, retrieved evidence
   refs, scoped memory, and Pending Actions instead of raw UI chat state across
   all Builder entry surfaces.
-- [ ] `[must]` Add Builder prompt pack sections for role, authority, compact
+- [x] `[must]` Add Builder prompt pack sections for role, authority, compact
   overview, selected details, task, and output contract.
 - [ ] `[must]` Add delta prompt support for follow-up Builder turns.
-- [ ] `[must]` Materialize the typed platform/domain/project/component/task
+- [x] `[must]` Materialize the typed platform/domain/project/component/task
   capsule graph and purpose-specific projections. Keep the model executor
   replaceable and treat warm provider sessions as disposable caches.
 - [ ] `[must]` Replace repeated stringified packet/provenance copies in Skill
@@ -610,28 +610,44 @@ Priority labels:
 - [ ] `[must]` Build a semantic source index that resolves qualified widget,
   modal, event, projection, route, and workflow refs to exact source slices
   before a bounded repair starts.
-- [ ] `[must]` Emit `adaos.agent.context_receipt.v1` with per-layer unique
+- [x] `[must]` Emit `adaos.agent.context_receipt.v1` with per-layer unique
   bytes/tokens, tool-boundary counts, cache use, source coverage,
   selected/omitted/denied refs, context misses, and validation outcome.
-- [ ] `[must]` Invalidate current capsule bindings on exact ProjectRelease,
+- [x] `[must]` Invalidate current capsule bindings on exact ProjectRelease,
   component source, SDK, ABI, client schema, role policy, and accepted
   changeset events.
 - [ ] `[should]` Add suspend/restore checkpoints that retain decisions, open
   questions, candidate refs, and capsule digests without retaining complete
   tool transcripts.
-- [ ] `[should]` Add a Builder Context Inspector through Declarative Resource
+- [x] `[should]` Add a Builder Context Inspector through Declarative Resource
   Workbench for layer sizes, provenance, freshness, omitted refs, access
   decisions, and measured token cost.
 - [ ] `[should]` Support optional warm role/focus caches keyed by exact subject,
   session, source, and agent-profile digests, with replay tests proving the
   cache is not authoritative.
-- [ ] `[should]` Add compact TOON/JSONL views for Builder descriptor summaries
+- [x] `[should]` Add compact TOON/JSONL views for Builder descriptor summaries
   and NLU action surface overviews.
 - [ ] `[should]` Extend Builder golden fixtures to validate compact context
   behavior for clarification, validation failure, approval, rejection, and
   repair turns.
 - [ ] `[could]` Add a developer UI preview of the exact compact context pack
   sent to the model.
+
+Implementation verification, 2026-09-02: the local Context Control Plane now
+persists content-addressed capsules, typed relationships, bitemporal optimistic
+bindings, plans, compiled packets, memory candidates, invalidations, and
+attribution receipts behind one SDK/API authority. Root MCP is an adapter and
+supports `json`, `min_json`, `jsonl`, and `toon` model projections while
+preserving canonical `structuredContent`. Builder Automation materializes
+platform/project/component/task capsules, compiles a bounded prompt pack, and
+exposes the resulting plan and receipt through Context Inspector. Release,
+component, SDK/API/ABI, role, policy, and accepted-change events invalidate
+matching bindings. Tests cover cross-project denial, taint, stale source,
+independent memory qualification, rollback, branch conflicts, exact `as_of`
+reconstruction, and unchanged MCP structured content. The service is still a
+single implementation unit rather than separately deployable Registry,
+Resolver, Compiler, and Curator services; source indexing, follow-up deltas,
+cold replay, and measured quality/cost evaluations remain open.
 
 ### Phase 4. NLU Teacher Context Compression
 

@@ -1914,7 +1914,7 @@ envelopes. Architecture and generic sequencing remain in
 - [ ] `[must]` Resolve every qualification, planning, Automation, Codex,
   validation, and re-entry run from exact DevelopmentSession subject refs,
   purpose, audience, policy, source generation, and agent profile.
-- [ ] `[must]` Persist one Context Plan and Context Attribution Receipt per run;
+- [x] `[must]` Persist one Context Plan and Context Attribution Receipt per run;
   show selected/omitted/denied refs, context misses, provider/local-Codex usage,
   cache contribution, latency, and evidence in Builder observability.
 - [ ] `[must]` Replace nested packet, snapshot, task, readiness, result, and
@@ -1931,10 +1931,10 @@ envelopes. Architecture and generic sequencing remain in
 - [ ] `[must]` Route successful/failing runs, user rejection, and validation
   findings to episodic memory candidates only. Reusable repair/SDK guidance
   requires independent evidence-gated promotion and rollback.
-- [ ] `[should]` Add a Context Inspector to the Builder Workbench using
+- [x] `[should]` Add a Context Inspector to the Builder Workbench using
   Declarative Resource Workbench projections, with hidden/sealed content shown
   only as denied metadata rather than disclosed text.
-- [ ] `[should]` Batch related Dev Tickets or ImplementationTracks against one
+- [x] `[should]` Batch related Dev Tickets or ImplementationTracks against one
   stable Project capsule while preserving independent Change, budget,
   acceptance, and rollback lifecycles.
 - [ ] `[should]` Enable warm role/focus caches only after cold-replay equivalence
@@ -1942,6 +1942,20 @@ envelopes. Architecture and generic sequencing remain in
 - [ ] `[could]` Add model-assisted context ranking after deterministic identity,
   dependency, authority, trust, and freshness selection; retain the selected
   plan and deterministic fallback for audit.
+
+Implementation verification, 2026-09-02: bounded Builder Automation runs now
+compile a typed platform/project/component/task capsule graph, retain the
+Context Plan and Attribution Receipt refs, and expose them through the
+Workbench Context Inspector. Dev Ticket handoff carries canonical project
+identity through materialization, context compilation, publication, Trial,
+verification, and Subscription receipts. Package planning rejects mixed or
+partially unknown project scope before worker launch, preserving one stable
+Project capsule and independent user-ticket lifecycles. The Home Shopping List
+absent-DEV-source run proves project materialization, zero-model structured
+repair, ProjectRelease publication, accepted Trial, and ticket closure. Cold
+restoration after a process restart, full removal of nested compatibility
+copies, episodic-memory routing, and the deferred Research Workbench proof are
+still open.
 
 ## Cross-Document Anchors
 
