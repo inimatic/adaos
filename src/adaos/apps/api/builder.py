@@ -112,6 +112,11 @@ class BuilderAutomationTurnRequest(BaseModel):
     execution_budget: dict[str, Any] | None = None
 
 
+class BuilderAutomationRecoveryRequest(BaseModel):
+    object_type: str = Field(..., pattern="^(skill|scenario|project)$")
+    object_id: str = Field(..., min_length=1)
+
+
 class BuilderWorkflowTransitionRequest(BaseModel):
     object_type: str = Field(..., pattern="^(skill|scenario|project)$")
     object_id: str = Field(..., min_length=1)
@@ -342,6 +347,22 @@ def automation_status(
     service: BuilderAutomationService = Depends(_get_automation_service),
 ) -> dict[str, Any]:
     return service.status(object_type=object_type, object_id=object_id)
+
+
+@router.post("/automation/recover-validated")
+def recover_validated_automation(
+    body: BuilderAutomationRecoveryRequest,
+    service: BuilderAutomationService = Depends(_get_automation_service),
+) -> dict[str, Any]:
+    """Resume validated post-Codex work inside the initialized node context."""
+
+    try:
+        return service.recover_validated_result(
+            object_type=body.object_type,
+            object_id=body.object_id,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/trial/decision")

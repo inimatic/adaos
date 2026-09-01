@@ -122,6 +122,84 @@ def _brief_digest(value: Any) -> str | None:
     return str(decoded.get("digest") or "").strip() or None
 
 
+def _brief_payload(value: Any) -> dict[str, Any]:
+    try:
+        decoded = json.loads(str(value or ""))
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return dict(decoded) if isinstance(decoded, Mapping) else {}
+
+
+def _brief_summary(value: Any) -> str:
+    brief = str(value or "").strip()
+    payload = _brief_payload(brief)
+    repair_hints = (
+        payload.get("repair_hints")
+        if isinstance(payload.get("repair_hints"), Mapping)
+        else {}
+    )
+    summary = str(
+        payload.get("summary")
+        or repair_hints.get("change_summary")
+        or brief
+    ).strip()
+    return " ".join(summary.split())
+
+
+def _workflow_request_projection(value: Any) -> str:
+    """Project a full implementation brief into the bounded Change request."""
+
+    brief = str(value or "").strip()
+    payload = _brief_payload(brief)
+    if not payload:
+        return " ".join(brief.split())[:3800]
+    repair_hints = (
+        dict(payload.get("repair_hints"))
+        if isinstance(payload.get("repair_hints"), Mapping)
+        else {}
+    )
+    target = (
+        dict(payload.get("target"))
+        if isinstance(payload.get("target"), Mapping)
+        else {}
+    )
+
+    def _items(name: str, *, count: int, length: int) -> list[str]:
+        return [
+            " ".join(str(item).split())[:length]
+            for item in repair_hints.get(name) or []
+            if str(item).strip()
+        ][:count]
+
+    projection = {
+        "schema": "adaos.builder.workflow_request.v1",
+        "ticket_id": str(payload.get("ticket_id") or "").strip() or None,
+        "summary": _brief_summary(brief)[:700],
+        "target": {
+            "object_type": str(target.get("object_type") or "").strip() or None,
+            "object_id": str(target.get("object_id") or "").strip() or None,
+            "component_ref": str(payload.get("component_ref") or "").strip() or None,
+        },
+        "profile": str(repair_hints.get("profile") or "").strip() or None,
+        "target_files": _items("target_files", count=6, length=140),
+        "target_refs": _items("target_refs", count=6, length=180),
+        "acceptance": _items("acceptance_checks", count=4, length=240),
+        "brief_digest": "sha256:" + hashlib.sha256(brief.encode("utf-8")).hexdigest(),
+    }
+    request = json.dumps(projection, ensure_ascii=False, separators=(",", ":"))
+    if len(request) <= 3800:
+        return request
+    fallback = {
+        "schema": projection["schema"],
+        "ticket_id": projection["ticket_id"],
+        "summary": str(projection["summary"])[:1200],
+        "target": projection["target"],
+        "profile": projection["profile"],
+        "brief_digest": projection["brief_digest"],
+    }
+    return json.dumps(fallback, ensure_ascii=False, separators=(",", ":"))
+
+
 def _cleanup_dev_skill_runtime(skill_id: str) -> dict[str, Any]:
     """Invoke the core-owned DEV runtime lifecycle without deleting source."""
 
@@ -774,6 +852,8 @@ class BuilderAutomationService:
             request_digest = hashlib.sha256(
                 f"{kind}:{project_id}:{brief}:{planned_at}".encode("utf-8")
             ).hexdigest()[:20]
+            workflow_request = _workflow_request_projection(brief)
+            issue_summary = _brief_summary(brief)
             planned = self._workflow().transition(
                 kind,
                 project_id,
@@ -783,15 +863,15 @@ class BuilderAutomationService:
                 metadata={
                     "change_set_id": f"CH-automation-{request_digest}",
                     "run_id": f"RUN-plan-{request_digest}",
-                    "request": brief,
+                    "request": workflow_request,
                     "issues": [
                         {
                             "issue_id": f"automation-{request_digest}",
-                            "title": " ".join(brief.split())[:240],
+                            "title": issue_summary[:240],
                             "lane": "automation",
                             "status": "open",
                             "acceptance_criteria": [
-                                f"The implementation and its tests satisfy: {' '.join(brief.split())}"[:500]
+                                f"The implementation and its tests satisfy: {issue_summary}"[:500]
                             ],
                         }
                     ],
@@ -1963,20 +2043,50 @@ class BuilderAutomationService:
         rollback: dict[str, Any] | None = None
         if not accepted:
             rollback = self._rollback_aprobation_overlay(current, aprobation)
-        decision_result = lifecycle.decide_trial(
-            kind,
-            project_id,
-            accepted=accepted,
-            actor=actor_token,
-            idempotency_key=f"trial-decision:{candidate_id}:{decision_token}",
+        workflow_before = self._workflow().describe(kind, project_id)
+        governed_before = (
+            dict(workflow_before.get("governed"))
+            if isinstance(workflow_before.get("governed"), Mapping)
+            else {}
         )
-        publication: dict[str, Any] | None = None
-        if accepted:
-            publication = lifecycle.publish_candidate(
+        governed_state = str(governed_before.get("state") or "").strip()
+        accepted_already = accepted and governed_state in {
+            "publication_ready",
+            "publication_waiting",
+            "published",
+        }
+        published_already = accepted and governed_state == "published"
+        if accepted_already:
+            decision_result = {
+                "ok": True,
+                "accepted": True,
+                "duplicate": True,
+                "workflow": workflow_before,
+            }
+        else:
+            decision_result = lifecycle.decide_trial(
                 kind,
                 project_id,
+                accepted=accepted,
                 actor=actor_token,
-                idempotency_key=f"trial-publication:{candidate_id}",
+                idempotency_key=f"trial-decision:{candidate_id}:{decision_token}",
+            )
+        publication: dict[str, Any] | None = None
+        if accepted:
+            publication = (
+                {
+                    "ok": True,
+                    "status": "published",
+                    "duplicate": True,
+                    "workflow": workflow_before,
+                }
+                if published_already
+                else lifecycle.publish_candidate(
+                    kind,
+                    project_id,
+                    actor=actor_token,
+                    idempotency_key=f"trial-publication:{candidate_id}",
+                )
             )
             if not bool(publication.get("ok", True)) or publication.get("error"):
                 raise RuntimeError(
@@ -4341,25 +4451,53 @@ class BuilderAutomationService:
                         raise RuntimeError(
                             "Primary Forge checkpoint is missing change, package, or source identity"
                         )
-                    readiness["workflow_checkpoint"] = self._workflow().transition(
-                        object_type,
-                        object_id,
-                        "checkpoint_recorded",
-                        actor="builder.automation",
-                        reason="Automation result checkpointed in Forge",
-                        metadata={
-                            # This is a system-authored acknowledgement of the exact
-                            # Forge checkpoint identities below, not a human Trial
-                            # approval.  The workflow still requires an explicit
-                            # accept_trial command before publication can proceed.
-                            "confirmed": True,
-                            "change_id": change_id,
-                            "package_digest": package_digest,
-                            "source_revision": source_revision,
-                            "version": self._project_version(object_type, object_id),
-                            "task_id": current.get("current_task_id"),
-                        },
+                    workflow = self._workflow().describe(object_type, object_id)
+                    delivery = (
+                        dict(workflow.get("delivery"))
+                        if isinstance(workflow.get("delivery"), Mapping)
+                        else {}
                     )
+                    delivery_status = str(delivery.get("status") or "").strip()
+                    existing_package_digest = str(delivery.get("package_digest") or "").strip()
+                    existing_source_revision = str(delivery.get("source_revision") or "").strip()
+                    existing_change_id = str(delivery.get("checkpoint_change_id") or "").strip()
+                    exact_checkpoint_in_progress = bool(
+                        delivery_status in {"checkpoint", "activating"}
+                        and existing_package_digest == package_digest
+                        and existing_source_revision == source_revision
+                        and existing_change_id == change_id
+                    )
+                    exact_candidate_in_progress = bool(
+                        delivery_status in {"trial", "accepted", "published"}
+                        and existing_package_digest == package_digest
+                    )
+                    if exact_checkpoint_in_progress or exact_candidate_in_progress:
+                        readiness["workflow_checkpoint"] = {
+                            "ok": True,
+                            "duplicate": True,
+                            "reconciled_from": "canonical_builder_workflow",
+                            "delivery_status": delivery_status,
+                            "workflow": workflow,
+                        }
+                    else:
+                        readiness["workflow_checkpoint"] = self._workflow().transition(
+                            object_type,
+                            object_id,
+                            "checkpoint_recorded",
+                            actor="builder.automation",
+                            reason="Automation result checkpointed in Forge",
+                            metadata={
+                                # This acknowledges exact Forge identities, not
+                                # human Trial approval. Publication still needs
+                                # an explicit accept_trial command.
+                                "confirmed": True,
+                                "change_id": change_id,
+                                "package_digest": package_digest,
+                                "source_revision": source_revision,
+                                "version": self._project_version(object_type, object_id),
+                                "task_id": current.get("current_task_id"),
+                            },
+                        )
                 if self._session_requires_aprobation_overlay(current):
                     readiness["aprobation"] = self._ensure_governed_aprobation_trial(
                         current,
@@ -4646,7 +4784,7 @@ class BuilderAutomationService:
         )
         delivery_status = str(delivery.get("status") or "").strip()
         result: dict[str, Any] = {}
-        if delivery_status == "checkpoint":
+        if delivery_status in {"checkpoint", "activating"}:
             from adaos.sdk.builder import lifecycle
 
             task_id = str(session.get("current_task_id") or "").strip()

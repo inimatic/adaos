@@ -210,3 +210,56 @@ def test_builder_work_item_keeps_user_visible_trial_receipt(tmp_path: Path) -> N
     )
 
     assert linked["context"]["trial"]["trial"]["candidate_id"] == "candidate.trial"
+
+
+def test_builder_work_item_aggregates_usage_across_continuation_tasks(tmp_path: Path) -> None:
+    service = BuilderRepairService(state_dir=tmp_path)
+    task = service.report(
+        project_id="demo_metrics",
+        signal_type="other",
+        summary="Keep the complete Builder cost",
+    )["task"]
+
+    linked = service.link_automation(
+        task["repair_id"],
+        actor="builder:automation",
+        automation={
+            "automation": {
+                "session_id": "automation.usage",
+                "task_id": "task.continuation",
+                "status": "completed",
+            },
+            "session": {
+                "session_id": "automation.usage",
+                "current_task_id": "task.continuation",
+                "codex_usage_history": [
+                    {
+                        "task_id": "task.initial",
+                        "status": "reported",
+                        "accuracy": "exact",
+                        "root_event_id": "codex_usage.initial",
+                        "input_tokens": 153_933,
+                        "cached_input_tokens": 133_888,
+                        "output_tokens": 1_835,
+                        "total_tokens": 155_768,
+                    }
+                ],
+                "codex_usage_accounting": {
+                    "task_id": "task.continuation",
+                    "status": "reported",
+                    "accuracy": "exact",
+                    "input_tokens": 0,
+                    "cached_input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                },
+            },
+        },
+    )
+
+    usage = linked["context"]["usage"]
+    assert usage["total_tokens"] == 155_768
+    assert usage["output_tokens"] == 1_835
+    assert usage["attempts"] == 1
+    assert "billable_tokens" not in usage
+    assert usage["root_event_ids"] == ["codex_usage.initial"]

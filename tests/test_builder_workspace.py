@@ -838,3 +838,29 @@ def test_builder_api_exposes_trial_decision() -> None:
             "reason": "The label is still unclear",
         }
     ]
+
+
+def test_builder_api_recovers_validated_result_in_node_context() -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _Automation:
+        def recover_validated_result(self, **kwargs):
+            calls.append(dict(kwargs))
+            return {"ok": True, "recovered": True, "worker": {"model_started": False}}
+
+    app = FastAPI()
+    app.include_router(builder_api.router, prefix="/api/builder")
+    app.dependency_overrides[require_token] = lambda: None
+    app.dependency_overrides[builder_api._get_automation_service] = lambda: _Automation()
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/builder/automation/recover-validated",
+        json={"object_type": "skill", "object_id": "demo_metrics_skill"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["worker"]["model_started"] is False
+    assert calls == [
+        {"object_type": "skill", "object_id": "demo_metrics_skill"}
+    ]

@@ -70,8 +70,9 @@ def prepare_trial(
     change = _mapping(state.get("change") or state.get("change_set"))
     if str(automation_state.get("status") or "") != "completed":
         raise ValueError("Trial requires completed Automation")
-    if str(delivery.get("status") or "") != "checkpoint":
-        raise ValueError("Trial requires an exact Automation checkpoint")
+    delivery_status = str(delivery.get("status") or "")
+    if delivery_status not in {"checkpoint", "activating"}:
+        raise ValueError("Trial requires an exact Automation checkpoint or resumable activation")
     change_ids = list(
         dict.fromkeys(
             [
@@ -85,17 +86,19 @@ def prepare_trial(
         )
     )
     change_ids = [item for item in change_ids if item]
-    started = workflow.transition(
-        object_type,
-        object_id,
-        "candidate_preparation_started",
-        actor=actor,
-        metadata={
-            "confirmed": True,
-            "run_id": f"trial:{idempotency_key}",
-            "idempotency_key": idempotency_key,
-        },
-    )
+    started: dict[str, Any] | None = None
+    if delivery_status == "checkpoint":
+        started = workflow.transition(
+            object_type,
+            object_id,
+            "candidate_preparation_started",
+            actor=actor,
+            metadata={
+                "confirmed": True,
+                "run_id": f"trial:{idempotency_key}",
+                "idempotency_key": f"{idempotency_key}:start",
+            },
+        )
     validation_evidence = {
         "status": "passed",
         "validator": "builder.release.preflight",
@@ -145,7 +148,10 @@ def prepare_trial(
             object_id,
             "candidate_preparation_unknown",
             actor=actor,
-            metadata={"error": str(exc), "idempotency_key": idempotency_key},
+            metadata={
+                "error": str(exc),
+                "idempotency_key": f"{idempotency_key}:unknown",
+            },
         )
         raise
     if not bool(result.get("ok", True)) or result.get("error"):
@@ -158,7 +164,7 @@ def prepare_trial(
                 "error": result.get("error")
                 or result.get("status")
                 or "trial_failed",
-                "idempotency_key": idempotency_key,
+                "idempotency_key": f"{idempotency_key}:failure",
             },
         )
         return {**dict(result), "ok": False, "workflow": failed.get("workflow")}
@@ -177,7 +183,7 @@ def prepare_trial(
             actor=actor,
             metadata={
                 "error": "candidate_identity_incomplete",
-                "idempotency_key": idempotency_key,
+                "idempotency_key": f"{idempotency_key}:unknown",
             },
         )
         raise ValueError("Candidate preparation returned incomplete immutable identity")
@@ -196,7 +202,7 @@ def prepare_trial(
             "base_release_digest": candidate.get("base_release_digest"),
             "trial_workspace": result.get("trial_workspace"),
             "run_id": f"candidate:{candidate_id}:prepare",
-            "idempotency_key": idempotency_key,
+            "idempotency_key": f"{idempotency_key}:success",
         },
     )
     completed_workflow = _mapping(completed.get("workflow"))
@@ -229,7 +235,12 @@ def prepare_trial(
             expected_generation=int(completed_workflow.get("generation") or 0),
         )
         completed_workflow = _mapping(placed.get("workflow"))
-    return {**dict(result), "workflow": completed_workflow, "started": started}
+    return {
+        **dict(result),
+        "workflow": completed_workflow,
+        "started": started,
+        "resumed": delivery_status == "activating",
+    }
 
 
 def decide_trial(
@@ -282,17 +293,27 @@ def publish_candidate(
     state = workflow.get_state(object_type, object_id)
     candidate_id, candidate_digest = _candidate_identity(state)
     automation_state = _mapping(state.get("automation"))
-    workflow.transition(
-        object_type,
-        object_id,
-        "publication_started",
-        actor=actor,
-        metadata={
-            "confirmed": True,
-            "run_id": f"candidate:{candidate_id}:publish",
-            "idempotency_key": idempotency_key,
-        },
-    )
+    publication_state = _mapping(state.get("publication"))
+    publication_status = str(publication_state.get("status") or "not_started").strip()
+    if publication_status == "published":
+        return {
+            "ok": True,
+            "status": "published",
+            "duplicate": True,
+            "workflow": workflow.get_state(object_type, object_id),
+        }
+    if publication_status != "publishing":
+        workflow.transition(
+            object_type,
+            object_id,
+            "publication_started",
+            actor=actor,
+            metadata={
+                "confirmed": True,
+                "run_id": f"candidate:{candidate_id}:publish",
+                "idempotency_key": f"{idempotency_key}:start",
+            },
+        )
     try:
         result = projects.promote_candidate(
             candidate_id,
@@ -309,7 +330,10 @@ def publish_candidate(
             object_id,
             "publication_unknown",
             actor=actor,
-            metadata={"error": str(exc), "idempotency_key": idempotency_key},
+            metadata={
+                "error": str(exc),
+                "idempotency_key": f"{idempotency_key}:unknown",
+            },
         )
         raise
     status = str(result.get("status") or "").strip().lower()
@@ -319,7 +343,10 @@ def publish_candidate(
             object_id,
             "publication_failed",
             actor=actor,
-            metadata={"error": "candidate_stale", "idempotency_key": idempotency_key},
+            metadata={
+                "error": "candidate_stale",
+                "idempotency_key": f"{idempotency_key}:failure",
+            },
         )
         stale = workflow.transition(
             object_type,
@@ -329,7 +356,7 @@ def publish_candidate(
             metadata={
                 "candidate_id": candidate_id,
                 "rebase_plan": result.get("rebase_plan"),
-                "idempotency_key": idempotency_key,
+                "idempotency_key": f"{idempotency_key}:stale",
             },
         )
         return {**dict(result), "workflow": stale.get("workflow")}
@@ -341,7 +368,7 @@ def publish_candidate(
             actor=actor,
             metadata={
                 "error": result.get("error") or status or "publication_failed",
-                "idempotency_key": idempotency_key,
+                "idempotency_key": f"{idempotency_key}:failure",
             },
         )
         return {**dict(result), "ok": False, "workflow": failed.get("workflow")}
@@ -358,7 +385,7 @@ def publish_candidate(
             "task_id": automation_state.get("head_task_id"),
             "apply_evidence": result.get("apply_evidence"),
             "run_id": f"candidate:{candidate_id}:published",
-            "idempotency_key": idempotency_key,
+            "idempotency_key": f"{idempotency_key}:success",
         },
     )
     return {**dict(result), "workflow": completed.get("workflow")}

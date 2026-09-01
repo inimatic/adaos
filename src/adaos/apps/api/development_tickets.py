@@ -317,7 +317,7 @@ def _mapping_list(value: Any) -> list[dict[str, Any]]:
 
 
 def _builder_work_id(ref: Mapping[str, Any], index: int) -> str:
-    for key in ("repair_id", "task_id", "work_id", "id"):
+    for key in ("automation_task_id", "task_id", "work_id", "repair_id", "id"):
         token = str(ref.get(key) or "").strip()
         if token:
             return token
@@ -342,6 +342,11 @@ def _builder_token_accounting(ref: Mapping[str, Any], task: Mapping[str, Any]) -
         else task.get("token_usage")
         if isinstance(task.get("token_usage"), Mapping)
         else context.get("usage")
+        if isinstance(context.get("usage"), Mapping)
+        else {}
+    )
+    aggregate_usage = (
+        context.get("usage")
         if isinstance(context.get("usage"), Mapping)
         else {}
     )
@@ -384,6 +389,7 @@ def _builder_token_accounting(ref: Mapping[str, Any], task: Mapping[str, Any]) -
             or "record provider-reported billable tokens even when repair work fails"
         ),
         "reported_usage": dict(usage) if isinstance(usage, Mapping) else {},
+        "aggregate_usage": dict(aggregate_usage),
         "estimate": dict(estimate) if isinstance(estimate, Mapping) else {},
     }
 
@@ -439,7 +445,8 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
         )
     for index, ref in enumerate(refs):
         work_id = _builder_work_id(ref, index)
-        task = repair_tasks.get(work_id) or {}
+        repair_id = str(ref.get("repair_id") or "").strip()
+        task = repair_tasks.get(repair_id) or {}
         context = task.get("context") if isinstance(task.get("context"), Mapping) else {}
         automation = _builder_automation_context(ref, task)
         item = {

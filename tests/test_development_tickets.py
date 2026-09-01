@@ -598,7 +598,7 @@ def test_builder_package_uses_one_work_item_budget_and_automation(tmp_path: Path
         == "factory.task.1"
         for ticket_id in ticket_ids
     )
-    assert started["rollup"]["total_tokens"] == 150
+    assert started["rollup"]["total_tokens"] == 175
 
 
 def test_autonomous_repair_links_builder_automation_and_resolves_with_evidence(tmp_path: Path) -> None:

@@ -238,6 +238,22 @@ def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, A
     }
 
 
+def _codex_budget_observed_tokens(
+    usage: Mapping[str, Any],
+    *,
+    metric: str,
+) -> int:
+    if metric == "fresh_plus_output":
+        input_tokens = int(usage.get("input_tokens") or 0)
+        cached_tokens = int(usage.get("cached_input_tokens") or 0)
+        output_tokens = int(usage.get("output_tokens") or 0)
+        return max(0, input_tokens - cached_tokens) + output_tokens
+    return int(
+        usage.get("model_tokens")
+        or int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
+    )
+
+
 def _context_packet_prompt_projection(value: Any, *, implementation_brief: str = "") -> dict[str, Any]:
     """Keep Codex context useful and bounded without replacing exact evidence."""
 
@@ -1050,6 +1066,12 @@ def _codex_execution_token_budget(assignment: Mapping[str, Any] | None) -> dict[
                     "source": source,
                     "field": key,
                     "max_model_tokens": value,
+                    "metric": (
+                        "fresh_plus_output"
+                        if str(raw_budget.get("token_budget_metric") or "").strip()
+                        == "fresh_plus_output"
+                        else "model_tokens"
+                    ),
                     "raw": dict(raw_budget),
                 }
     return {}
@@ -1176,6 +1198,7 @@ class SubprocessCodexExecutor:
         output_dir: Path,
         root_mcp: Mapping[str, Any] | None = None,
         max_model_tokens: int | None = None,
+        token_budget_metric: str = "model_tokens",
         cancel_check: Callable[[], bool] | None = None,
     ) -> CodexRunResult:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -1256,8 +1279,14 @@ class SubprocessCodexExecutor:
                                 live_events_path,
                                 prompt=prompt,
                             )
-                            provider_tokens = int(provider_usage.get("model_tokens") or 0)
-                            estimated_tokens = int(live_estimate.get("model_tokens") or 0)
+                            provider_tokens = _codex_budget_observed_tokens(
+                                provider_usage,
+                                metric=token_budget_metric,
+                            )
+                            estimated_tokens = _codex_budget_observed_tokens(
+                                live_estimate,
+                                metric=token_budget_metric,
+                            )
                             observed = max(provider_tokens, estimated_tokens)
                             if observed > int(max_model_tokens):
                                 usage: dict[str, Any] = (
@@ -1268,6 +1297,9 @@ class SubprocessCodexExecutor:
                                 budget_exceeded = {
                                     "schema": "adaos.skill_factory.codex_token_budget_receipt.v1",
                                     "status": "exceeded",
+                                    "metric": token_budget_metric,
+                                    "max_tokens": int(max_model_tokens),
+                                    "observed_tokens": observed,
                                     "max_model_tokens": int(max_model_tokens),
                                     "observed_model_tokens": observed,
                                     "usage": usage,
@@ -1294,8 +1326,14 @@ class SubprocessCodexExecutor:
         if budget_exceeded is None and max_model_tokens is not None and max_model_tokens > 0:
             provider_usage = _codex_jsonl_usage(live_events_path)
             live_estimate = _codex_jsonl_live_budget_estimate(live_events_path, prompt=prompt)
-            provider_tokens = int(provider_usage.get("model_tokens") or 0)
-            estimated_tokens = int(live_estimate.get("model_tokens") or 0)
+            provider_tokens = _codex_budget_observed_tokens(
+                provider_usage,
+                metric=token_budget_metric,
+            )
+            estimated_tokens = _codex_budget_observed_tokens(
+                live_estimate,
+                metric=token_budget_metric,
+            )
             observed = max(provider_tokens, estimated_tokens)
             if observed > int(max_model_tokens):
                 usage = (
@@ -1306,6 +1344,9 @@ class SubprocessCodexExecutor:
                 budget_exceeded = {
                     "schema": "adaos.skill_factory.codex_token_budget_receipt.v1",
                     "status": "exceeded",
+                    "metric": token_budget_metric,
+                    "max_tokens": int(max_model_tokens),
+                    "observed_tokens": observed,
                     "max_model_tokens": int(max_model_tokens),
                     "observed_model_tokens": observed,
                     "usage": usage,
@@ -1315,8 +1356,9 @@ class SubprocessCodexExecutor:
             stderr = (
                 stderr.rstrip()
                 + "\nCodex token budget exceeded: "
-                + f"observed {budget_exceeded['observed_model_tokens']} "
-                + f"of {budget_exceeded['max_model_tokens']} model tokens."
+                + f"observed {budget_exceeded['observed_tokens']} "
+                + f"of {budget_exceeded['max_tokens']} "
+                + f"{budget_exceeded['metric']} tokens."
                 + "\n"
             )
         sdk_snapshot = (
@@ -2352,6 +2394,7 @@ class LocalSkillFactoryWorker:
             )
             token_budget = _codex_execution_token_budget(assignment)
             max_model_tokens = int(token_budget.get("max_model_tokens") or 0) or None
+            token_budget_metric = str(token_budget.get("metric") or "model_tokens")
             if profile or timeout_seconds != self.executor.timeout_seconds:
                 executor = SubprocessCodexExecutor(
                     executable=self.executor.executable,
@@ -2367,6 +2410,7 @@ class LocalSkillFactoryWorker:
                 output_dir=output_dir,
                 root_mcp=root_mcp,
                 max_model_tokens=max_model_tokens,
+                token_budget_metric=token_budget_metric,
                 cancel_check=lambda: self._task_status(task_id) in {"cancelled", "expired"},
             )
         return self.executor(workspace=workspace, prompt=prompt, output_dir=output_dir)

@@ -93,6 +93,7 @@ DEFAULT_AUTONOMOUS_REPAIR_BUDGET = {
     "schema": "adaos.builder.execution_budget.v1",
     "source": "development_ticket.default",
     "max_tokens": 200000,
+    "token_budget_metric": "fresh_plus_output",
     "max_wall_seconds": 1800,
 }
 INVERSE_TICKET_RELATION = {
@@ -1372,6 +1373,7 @@ class DevelopmentTicketService:
         repair_id = _text(repair.get("repair_id"))
         brief = _autonomous_repair_brief(handoff["ticket"], repair, target=target)
         bounded_budget = dict(execution_budget) if isinstance(execution_budget, Mapping) else dict(DEFAULT_AUTONOMOUS_REPAIR_BUDGET)
+        bounded_budget.setdefault("token_budget_metric", "fresh_plus_output")
         automation_links = {
             "development_ticket_id": ticket["ticket_id"],
             "builder_repair_id": repair_id,
@@ -1628,6 +1630,7 @@ class DevelopmentTicketService:
 
         package = _mapping(_mapping(repair.get("context")).get("package"))
         budget = _mapping(package.get("execution_budget")) or dict(DEFAULT_AUTONOMOUS_REPAIR_BUDGET)
+        budget.setdefault("token_budget_metric", "fresh_plus_output")
         brief = _autonomous_package_brief(ticket_list, repair, target=target)
         links = {
             "development_ticket_id": ticket_ids[0],

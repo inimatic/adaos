@@ -101,6 +101,90 @@ def _automation_work_status(automation: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _aggregate_codex_usage(session: Mapping[str, Any]) -> dict[str, Any]:
+    receipts = [
+        dict(item)
+        for item in session.get("codex_usage_history") or []
+        if isinstance(item, Mapping)
+    ]
+    current = session.get("codex_usage_accounting")
+    if isinstance(current, Mapping):
+        receipts.append(dict(current))
+    unique: dict[str, dict[str, Any]] = {}
+    for index, receipt in enumerate(receipts):
+        identity = str(
+            receipt.get("root_event_id")
+            or receipt.get("idempotency_key")
+            or receipt.get("task_id")
+            or f"receipt:{index}"
+        ).strip()
+        unique[identity] = receipt
+    usable = [
+        receipt
+        for receipt in unique.values()
+        if any(
+            isinstance(receipt.get(key), (int, float))
+            for key in ("model_tokens", "total_tokens", "input_tokens", "output_tokens")
+        )
+    ]
+    if not usable:
+        return {}
+    numeric_fields = (
+        "model_tokens",
+        "input_tokens",
+        "cached_input_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+        "total_tokens",
+        "billable_tokens",
+    )
+    aggregate: dict[str, Any] = {
+        "status": "reported",
+        "receipt_status": "reported",
+        "attempts": sum(
+            int(receipt.get("attempts"))
+            if isinstance(receipt.get("attempts"), (int, float))
+            else 1
+            if int(receipt.get("total_tokens") or 0) > 0
+            else 0
+            for receipt in usable
+        ),
+        "receipt_count": len(usable),
+        "root_event_ids": [
+            str(receipt.get("root_event_id"))
+            for receipt in usable
+            if str(receipt.get("root_event_id") or "").strip()
+        ],
+    }
+    for key in numeric_fields:
+        eligible = [
+            receipt
+            for receipt in usable
+            if str(receipt.get("status") or "").strip() != "not_applicable"
+        ]
+        values = [receipt.get(key) for receipt in eligible]
+        if any(isinstance(value, (int, float)) for value in values):
+            aggregate[key] = sum(
+                int(value) for value in values if isinstance(value, (int, float))
+            )
+    accuracies = {
+        str(receipt.get("accuracy") or "").strip()
+        for receipt in usable
+        if str(receipt.get("accuracy") or "").strip()
+    }
+    if accuracies:
+        aggregate["accuracy"] = (
+            "estimated"
+            if "estimated" in accuracies
+            else "provider_reported"
+            if "provider_reported" in accuracies
+            else sorted(accuracies)[0]
+        )
+    if aggregate["root_event_ids"]:
+        aggregate["root_event_id"] = aggregate["root_event_ids"][-1]
+    return aggregate
+
+
 def _schema() -> dict[str, Any]:
     path = Path(__file__).resolve().parents[2] / "abi" / "builder.repair_task.v1.schema.json"
     return json.loads(path.read_text(encoding="utf-8"))
@@ -423,6 +507,7 @@ class BuilderRepairService:
             if isinstance(session.get("codex_usage_accounting"), Mapping)
             else {}
         )
+        aggregate_usage = _aggregate_codex_usage(session)
         completion_readiness = (
             session.get("completion_readiness")
             if isinstance(session.get("completion_readiness"), Mapping)
@@ -434,7 +519,7 @@ class BuilderRepairService:
             else {}
         )
         reported_usage = dict(observed) if observed else {}
-        if usage_receipt:
+        if aggregate_usage:
             for key in (
                 "model_tokens",
                 "input_tokens",
@@ -444,12 +529,24 @@ class BuilderRepairService:
                 "total_tokens",
                 "billable_tokens",
             ):
-                if usage_receipt.get(key) is not None:
-                    reported_usage[key] = usage_receipt.get(key)
+                if aggregate_usage.get(key) is not None:
+                    reported_usage[key] = aggregate_usage.get(key)
+        elif usage_receipt:
             if usage_receipt.get("status"):
                 reported_usage["receipt_status"] = usage_receipt.get("status")
-            if usage_receipt.get("root_event_id"):
-                reported_usage["root_event_id"] = usage_receipt.get("root_event_id")
+            if usage_receipt.get("reason"):
+                reported_usage["reason"] = usage_receipt.get("reason")
+        if aggregate_usage:
+            for key in (
+                "accuracy",
+                "attempts",
+                "receipt_count",
+                "receipt_status",
+                "root_event_id",
+                "root_event_ids",
+            ):
+                if aggregate_usage.get(key) is not None:
+                    reported_usage[key] = aggregate_usage.get(key)
         link = {
             "schema": "adaos.builder.repair_automation_link.v1",
             "session_id": session_id or None,
@@ -470,6 +567,8 @@ class BuilderRepairService:
         }
         if usage_receipt:
             link["codex_usage_accounting"] = dict(usage_receipt)
+        if aggregate_usage:
+            link["codex_usage_summary"] = aggregate_usage
         refs = []
         if session_id:
             refs.append({"type": "builder_automation_session", "id": session_id})

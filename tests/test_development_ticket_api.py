@@ -604,6 +604,29 @@ def test_development_ticket_api_starts_autonomous_repair_and_exposes_builder_usa
     assert synced.json()["detail"]["work_stream"]["builder_work_items"][0]["automation_status"] == "completed"
 
 
+def test_builder_work_stream_keeps_task_usage_and_repair_aggregate_separate() -> None:
+    ref = {
+        "repair_id": "repair.1",
+        "automation_task_id": "task.continuation",
+        "token_usage": {"total_tokens": 0, "receipt_status": "not_applicable"},
+    }
+    task = {
+        "context": {
+            "usage": {
+                "total_tokens": 155_768,
+                "output_tokens": 1_835,
+                "root_event_ids": ["codex_usage.initial"],
+            }
+        }
+    }
+
+    accounting = tickets_api._builder_token_accounting(ref, task)
+
+    assert tickets_api._builder_work_id(ref, 0) == "task.continuation"
+    assert accounting["reported_usage"]["total_tokens"] == 0
+    assert accounting["aggregate_usage"]["total_tokens"] == 155_768
+
+
 def test_development_ticket_api_delegates_trial_decision_to_scoped_builder_target(tmp_path: Path) -> None:
     service = DevelopmentTicketService(state_dir=tmp_path)
     automation = _FakeAutomationService()

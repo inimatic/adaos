@@ -166,6 +166,44 @@ def test_dev_ticket_repair_projects_minimal_diff_constraints(tmp_path: Path) -> 
     assert "Governed Development Session inputs" not in prompt
 
 
+def test_large_dev_ticket_brief_uses_bounded_workflow_projection(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    brief_payload = {
+        "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+        "ticket_id": "dticket.large",
+        "summary": "Rename one visible section heading.",
+        "target": {"object_type": "scenario", "object_id": "recipes"},
+        "component_ref": "scenario:recipes.controls",
+        "repair_hints": {
+            "profile": "surgical_ui",
+            "target_files": [f"scenarios/recipes/path-{index}.json" for index in range(30)],
+            "target_refs": [f"view:recipes.section-{index}.title" for index in range(30)],
+            "acceptance_checks": ["The exact heading is changed and behavior is preserved. " * 12] * 12,
+        },
+        "guardrails": ["Do not change unrelated behavior. " * 20] * 20,
+    }
+    brief = json.dumps(brief_payload)
+    assert len(brief) > 4000
+
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief=brief,
+        links={"development_ticket_id": "dticket.large"},
+    )
+
+    assert started["ok"] is True
+    session = started["session"]
+    assert session["implementation_brief"] == brief
+    workflow = service._workflow().describe("scenario", "recipes")
+    request = workflow["change_set"]["request"]
+    assert len(request) <= 3800
+    projected = json.loads(request)
+    assert projected["summary"] == "Rename one visible section heading."
+    assert projected["ticket_id"] == "dticket.large"
+    assert projected["brief_digest"].startswith("sha256:")
+
+
 def test_terminal_skill_candidate_runtime_release_is_exact_and_idempotent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2878,9 +2916,11 @@ def test_dev_ticket_repair_defaults_to_aprobation_overlay() -> None:
     )
 
 
+@pytest.mark.parametrize("delivery_status", ["checkpoint", "activating"])
 def test_governed_aprobation_trial_binds_candidate_and_changelog(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    delivery_status: str,
 ) -> None:
     from adaos.sdk.builder import lifecycle
 
@@ -2888,7 +2928,7 @@ def test_governed_aprobation_trial_binds_candidate_and_changelog(
     checkpoint = {
         "generation": 4,
         "delivery": {
-            "status": "checkpoint",
+            "status": delivery_status,
             "package_digest": "sha256:" + "1" * 64,
         },
     }

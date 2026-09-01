@@ -27,6 +27,7 @@ from adaos.services.skill_factory_worker import (
     LocalSkillFactoryWorker,
     SubprocessCodexExecutor,
     _codex_failure_detail,
+    _codex_budget_observed_tokens,
     _codex_jsonl_live_budget_estimate,
     _codex_prompt_budget_check,
     _context_packet_prompt_projection,
@@ -2165,6 +2166,18 @@ def test_codex_live_budget_estimate_counts_growing_tool_context(tmp_path: Path) 
     assert usage["accuracy"] == "estimated"
     assert usage["tool_rounds"] == 4
     assert usage["model_tokens"] > 12_000
+
+
+def test_codex_fresh_budget_excludes_cached_input_but_keeps_output() -> None:
+    usage = {
+        "model_tokens": 155_768,
+        "input_tokens": 153_933,
+        "cached_input_tokens": 133_888,
+        "output_tokens": 1_835,
+    }
+
+    assert _codex_budget_observed_tokens(usage, metric="model_tokens") == 155_768
+    assert _codex_budget_observed_tokens(usage, metric="fresh_plus_output") == 21_880
 
 
 def test_context_packet_omits_intent_duplicated_by_implementation_brief() -> None:
