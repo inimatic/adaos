@@ -21,6 +21,11 @@ The core rule is:
 This layer does not replace Root MCP, JSON-RPC, JSON Schema, or AdaOS ABI. It is
 an LLM-facing projection over those contracts.
 
+Persistent and project-scoped model context is governed by
+[Agent And Project Context Capsules](agent-context-capsules.md). Context
+Compression owns how those capsules are projected and packed; the capsules
+remain AdaOS-owned, digest-bound state rather than opaque provider memory.
+
 ## Current Implementation Baseline
 
 AdaOS already has several pieces of this architecture:
@@ -427,6 +432,11 @@ Required metrics:
 - latency impact
 - hallucinated id rate
 - stale descriptor use rate
+- unique and cumulative input by capsule layer
+- repeated tool-read bytes and model/tool boundary count
+- source-slice coverage before first model call
+- prompt/assignment duplicate-field bytes
+- deterministic, bounded-agent, and full-Codex route share
 
 Existing conversation eval metrics already track context packet count, token
 estimate p95, utilization, and budget exhaustion. Those should be extended to
@@ -506,6 +516,32 @@ Priority labels:
 - [ ] `[must]` Add Builder prompt pack sections for role, authority, compact
   overview, selected details, task, and output contract.
 - [ ] `[must]` Add delta prompt support for follow-up Builder turns.
+- [ ] `[must]` Materialize hierarchical platform, project, component, and task
+  capsule projections. Keep the model executor replaceable and treat warm
+  provider sessions as disposable caches.
+- [ ] `[must]` Replace repeated stringified packet/provenance copies in Skill
+  Factory assignments with one canonical packet plus digest-bound refs.
+- [ ] `[must]` Exclude resolved repair histories and complete workflow/ABI
+  catalogs from task projections unless deterministic relevance selection
+  admits them.
+- [ ] `[must]` Build a semantic source index that resolves qualified widget,
+  modal, event, projection, route, and workflow refs to exact source slices
+  before a bounded repair starts.
+- [ ] `[must]` Emit `adaos.agent.context_receipt.v1` with per-layer unique
+  bytes/tokens, tool-boundary counts, cache use, source coverage, selected refs,
+  context misses, and validation outcome.
+- [ ] `[must]` Invalidate current capsule bindings on exact ProjectRelease,
+  component source, SDK, ABI, client schema, role policy, and accepted
+  changeset events.
+- [ ] `[should]` Add suspend/restore checkpoints that retain decisions, open
+  questions, candidate refs, and capsule digests without retaining complete
+  tool transcripts.
+- [ ] `[should]` Add a Builder Context Inspector through Declarative Resource
+  Workbench for layer sizes, provenance, freshness, omitted refs, access
+  decisions, and measured token cost.
+- [ ] `[should]` Support optional warm project-agent caches keyed by project,
+  component, and agent-profile digests, with replay tests proving the cache is
+  not authoritative.
 - [ ] `[should]` Add compact TOON/JSONL views for Builder descriptor summaries
   and NLU action surface overviews.
 - [ ] `[should]` Extend Builder golden fixtures to validate compact context

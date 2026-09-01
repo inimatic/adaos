@@ -185,6 +185,7 @@ nav:
       - Root MCP Foundation: architecture/root-mcp-foundation.md
       - Root MCP Roadmap: architecture/root-mcp-roadmap.md
       - Context Compression: architecture/context-compression.md
+      - Agent And Project Context Capsules: architecture/agent-context-capsules.md
       - Skill Factory: architecture/skill-factory.md
       - Builder: architecture/builder.md
       - Builder Conversational Development: architecture/builder-conversational-development.md
