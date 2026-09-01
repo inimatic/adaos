@@ -125,6 +125,10 @@ class _FakeRootMcpClient:
         self.calls.append(("get_dev_ticket", ticket_id, {}))
         return {"ticket": {"ticket_id": ticket_id, "status": "accepted"}}
 
+    def get_core_dev_ticket_backlog(self, **filters) -> dict:
+        self.calls.append(("get_core_dev_ticket_backlog", "", dict(filters)))
+        return {"items": [{"ticket_id": "dticket.core", "impact": "blocker"}], "count": 1}
+
     def list_dev_ticket_events(self, **filters) -> dict:
         self.calls.append(("list_dev_ticket_events", "", dict(filters)))
         return {"events": [{"event_id": "dtevent.demo"}], "cursor": "dtevent.demo"}
@@ -748,6 +752,10 @@ def test_codex_bridge_exposes_dev_ticket_workflow(monkeypatch) -> None:
         "list_dev_tickets",
         {"status_group": "open", "component_ref": "skill:demo", "model_text_format": "min_json"},
     )
+    backlog = bridge.call_tool(
+        "get_core_dev_ticket_backlog",
+        {"impact": "blocker", "model_text_format": "min_json"},
+    )
     created = bridge.call_tool(
         "create_dev_ticket",
         {"summary": "Demo improvement", "component_ref": "skill:demo"},
@@ -765,6 +773,7 @@ def test_codex_bridge_exposes_dev_ticket_workflow(monkeypatch) -> None:
     assert {
         "list_dev_tickets",
         "get_dev_ticket",
+        "get_core_dev_ticket_backlog",
         "list_dev_ticket_events",
         "create_dev_ticket",
         "operate_dev_ticket",
@@ -772,6 +781,7 @@ def test_codex_bridge_exposes_dev_ticket_workflow(monkeypatch) -> None:
         "get_dev_ticket_artifact",
     } <= definitions.keys()
     assert listed["structuredContent"]["count"] == 1
+    assert backlog["structuredContent"]["items"][0]["impact"] == "blocker"
     assert listed["_meta"]["adaos/modelProjection"]["model_text_format"] == "min_json"
     assert created["structuredContent"]["ticket"]["ticket_id"] == "dticket.new"
     assert operated["structuredContent"]["ticket"]["status"] == "comment"

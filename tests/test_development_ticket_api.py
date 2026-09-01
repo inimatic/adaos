@@ -1144,3 +1144,151 @@ def test_development_ticket_change_feed_is_project_relevant_and_cursor_safe(tmp_
     assert changed["scanned_event_count"] == 2
     assert changed["matched_event_count"] == 1
     assert changed["cursor"] != initial["cursor"]
+
+
+def test_core_backlog_ranks_and_filters_affected_projects(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    client = _client(service)
+    project = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "summary": "Project is blocked by missing SDK method",
+            "target_scope": {
+                "type": "skill",
+                "id": "demo_metrics_skill",
+                "project_id": "demo_metrics",
+                "project_ref": "project:demo_metrics",
+                "subnet_id": "subnet:local",
+            },
+        },
+    ).json()["ticket"]
+    blocker = client.post(
+        "/api/development-tickets/core-capability-requests",
+        headers=_headers(),
+        json={
+            "summary": "Expose a typed metrics query",
+            "component_ref": "core:sdk",
+            "desired_contract": "sdk.metrics.query",
+            "impact": "blocker",
+            "blocked_ticket_ids": [project["ticket_id"]],
+            "metadata": {"release_target": {"version": "1.4"}},
+        },
+    )
+    client.post(
+        "/api/development-tickets/core-capability-requests",
+        headers=_headers(),
+        json={
+            "summary": "Make metrics query faster",
+            "component_ref": "core:sdk",
+            "desired_contract": "sdk.metrics.query.batch",
+            "impact": "speed",
+        },
+    )
+    backlog = client.get(
+        "/api/development-tickets/core-backlog?affected_project_id=demo_metrics&release_target=1.4",
+        headers=_headers(),
+    )
+
+    assert blocker.status_code == 201, blocker.text
+    assert backlog.status_code == 200, backlog.text
+    assert [item["ticket_id"] for item in backlog.json()["items"]] == [
+        blocker.json()["ticket"]["ticket_id"]
+    ]
+    item = backlog.json()["items"][0]
+    assert item["impact"] == "blocker"
+    assert item["affected_project_ids"] == ["demo_metrics"]
+    assert item["affected_subnet_ids"] == ["subnet:local"]
+    assert item["priority_score"] >= 125
+
+
+def test_external_issue_projection_is_redacted_and_human_approved(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    client = _client(service)
+    created = client.post(
+        "/api/development-tickets/core-capability-requests",
+        headers=_headers(),
+        json={
+            "summary": "SDK fails at C:\\Users\\Dmitry\\private\\state.json",
+            "component_ref": "core:sdk",
+            "desired_contract": "sdk.metrics.query without access_token=secret-value",
+            "impact": "contract_gap",
+            "motivation": "Bearer rmcp_private_token must never leave the subnet",
+            "observed_limitation": "See /home/adaos/private/runtime.log",
+            "evidence_refs": [
+                {"type": "screenshot", "artifact_id": "private-shot"},
+                {"type": "trace", "id": "private-trace"},
+                {"type": "release", "version": "1.3.0", "digest": "sha256:public"},
+            ],
+        },
+    ).json()["ticket"]
+    prepared = client.post(
+        f"/api/development-tickets/{created['ticket_id']}/external-drafts",
+        headers=_headers(),
+        json={
+            "actor": "builder:worker",
+            "policy_mode": "public_upstream_issue",
+            "provider": "github",
+            "repository": "inimatic/adaos",
+            "visibility": "public",
+            "expected_revision": created["revision"],
+        },
+    )
+    assert prepared.status_code == 200, prepared.text
+    payload = prepared.json()
+    draft = payload["draft"]
+    serialized = json.dumps(draft, ensure_ascii=False)
+    assert "Dmitry" not in serialized
+    assert "rmcp_private_token" not in serialized
+    assert "/home/adaos" not in serialized
+    assert draft["issue_id"] is None
+    assert draft["status"] == "awaiting_approval"
+    assert draft["redaction"]["excluded_evidence_types"] == ["screenshot", "trace"]
+    assert draft["draft"]["safe_evidence_refs"] == [
+        {"type": "release", "version": "1.3.0", "digest": "sha256:public"}
+    ]
+
+    denied = client.post(
+        f"/api/development-tickets/{created['ticket_id']}/external-drafts/{draft['external_ref_id']}/approve",
+        headers=_headers(),
+        json={"actor": "builder:worker", "expected_revision": payload["ticket"]["revision"]},
+    )
+    approved = client.post(
+        f"/api/development-tickets/{created['ticket_id']}/external-drafts/{draft['external_ref_id']}/approve",
+        headers=_headers(),
+        json={"actor": "user:owner", "expected_revision": payload["ticket"]["revision"]},
+    )
+
+    assert denied.status_code == 400, denied.text
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["draft"]["status"] == "approved_for_export"
+    assert approved.json()["draft"]["issue_id"] is None
+
+
+def test_existing_external_issue_can_be_linked_without_becoming_authoritative(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    client = _client(service)
+    created = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={"summary": "Link an existing private issue"},
+    ).json()["ticket"]
+    linked = client.post(
+        f"/api/development-tickets/{created['ticket_id']}/external-links",
+        headers=_headers(),
+        json={
+            "provider": "github",
+            "repository": "inimatic/private",
+            "issue_id": "42",
+            "actor": "user:owner",
+            "privacy": "private",
+            "sync_mode": "link_only",
+            "expected_revision": created["revision"],
+        },
+    )
+
+    assert linked.status_code == 200, linked.text
+    ref = linked.json()["external_ref"]
+    assert ref["issue_id"] == "42"
+    assert ref["sync_mode"] == "link_only"
+    assert linked.json()["ticket"]["status"] == created["status"]

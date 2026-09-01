@@ -37,6 +37,10 @@ def get_ticket(ticket_id: str) -> dict[str, Any] | None:
     return _service().get_ticket(ticket_id)
 
 
+def list_core_backlog(**filters: Any) -> dict[str, Any]:
+    return _service().list_core_backlog(**filters)
+
+
 def create_ticket(
     summary: str,
     *,
@@ -204,6 +208,35 @@ def operate_ticket(
                 expected_revision=expected_revision,
             )
         }
+    if operation_id == "external_draft":
+        return service.prepare_external_issue_draft(
+            ticket_id,
+            actor=actor,
+            policy_mode=str(body.get("policy_mode") or "draft_export"),
+            provider=str(body.get("provider") or "github"),
+            repository=str(body.get("repository") or ""),
+            visibility=str(body.get("visibility") or "private"),
+            expected_revision=expected_revision,
+        )
+    if operation_id == "external_approve":
+        return service.approve_external_issue_draft(
+            ticket_id,
+            external_ref_id=str(body.get("external_ref_id") or ""),
+            actor=actor,
+            expected_revision=expected_revision,
+        )
+    if operation_id == "external_link":
+        return service.link_external_issue(
+            ticket_id,
+            provider=str(body.get("provider") or "github"),
+            repository=str(body.get("repository") or ""),
+            issue_id=str(body.get("issue_id") or ""),
+            actor=actor,
+            target_path=str(body.get("target_path") or ""),
+            privacy=str(body.get("privacy") or "private"),
+            sync_mode=str(body.get("sync_mode") or "link_only"),
+            expected_revision=expected_revision,
+        )
     if operation_id == "core_transition":
         return service.transition_core_ticket(
             ticket_id,
@@ -241,6 +274,7 @@ __all__ = [
     "get_artifact",
     "get_ticket",
     "list_artifacts",
+    "list_core_backlog",
     "list_events",
     "read_feed",
     "list_tickets",

@@ -1042,6 +1042,82 @@ def _artifact_id_from_ref(ref: Mapping[str, Any]) -> str:
     return ""
 
 
+_EXTERNAL_ISSUE_POLICY_MODES = {
+    "none",
+    "link_only",
+    "draft_export",
+    "private_repo_issue",
+    "public_upstream_issue",
+    "mirror_status",
+}
+_EXTERNAL_ISSUE_SAFE_EVIDENCE_TYPES = {"commit", "release", "test", "version", "project_release"}
+_EXTERNAL_ISSUE_UNSAFE_EVIDENCE_TYPES = {
+    "audio",
+    "dom",
+    "file",
+    "log",
+    "nlu_example",
+    "runtime_guard",
+    "screenshot",
+    "state_snapshot",
+    "trace",
+    "voice_transcript",
+}
+_CORE_IMPACT_PRIORITY = {
+    "blocker": 100,
+    "security_governance": 90,
+    "policy_boundary": 80,
+    "compatibility_debt": 70,
+    "lifecycle_gap": 65,
+    "contract_gap": 60,
+    "observability_gap": 50,
+    "generalization": 40,
+    "speed": 30,
+}
+
+
+def _redact_external_issue_text(value: Any) -> tuple[str, list[str]]:
+    text = _text(value)
+    findings: list[str] = []
+    substitutions = (
+        (r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]+=*", "[redacted credential]", "credential"),
+        (
+            r"(?i)\b(api[_-]?key|access[_-]?token|client[_-]?secret|password)\s*[:=]\s*[^\s,;]+",
+            r"\1=[redacted]",
+            "credential",
+        ),
+        (r"(?i)https?://[^\s/@]+:[^\s/@]+@", "https://[redacted]@", "credential_url"),
+        (r"(?i)\b[A-Z]:\\(?:[^\s<>\"']+\\)*[^\s<>\"']*", "[local path]", "local_path"),
+        (r"(?i)(?:/home/|/Users/|/root/|/var/lib/adaos/|\.adaos/)[^\s<>\"']*", "[local path]", "local_path"),
+    )
+    for pattern, replacement, finding in substitutions:
+        updated, count = re.subn(pattern, replacement, text)
+        if count:
+            findings.append(finding)
+            text = updated
+    return text, sorted(set(findings))
+
+
+def _safe_external_evidence(refs: Sequence[Mapping[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    safe: list[dict[str, Any]] = []
+    excluded: list[str] = []
+    for ref in refs:
+        evidence_type = _text(ref.get("type") or ref.get("kind")).lower()
+        if evidence_type in _EXTERNAL_ISSUE_UNSAFE_EVIDENCE_TYPES or evidence_type not in _EXTERNAL_ISSUE_SAFE_EVIDENCE_TYPES:
+            excluded.append(evidence_type or "unknown")
+            continue
+        item: dict[str, Any] = {"type": evidence_type}
+        for key in ("id", "version", "digest", "status", "name"):
+            if ref.get(key) in (None, ""):
+                continue
+            cleaned, findings = _redact_external_issue_text(ref.get(key))
+            if findings:
+                excluded.extend(findings)
+            item[key] = cleaned
+        safe.append(item)
+    return _merge_refs([], safe), sorted(set(excluded))
+
+
 @dataclass(slots=True)
 class DevelopmentTicketService:
     state_dir: Path | None = None
@@ -3573,6 +3649,399 @@ class DevelopmentTicketService:
         if limit is not None and int(limit) >= 0:
             sorted_tickets = sorted_tickets[-int(limit):]
         return [_clone(item) for item in sorted_tickets]
+
+    def list_core_backlog(
+        self,
+        *,
+        component_ref: str | None = None,
+        impact: str | None = None,
+        status_group: str | None = "open",
+        affected_project_id: str | None = None,
+        affected_subnet_id: str | None = None,
+        release_target: str | None = None,
+        verification_state: str | None = None,
+        search: str | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        state = self._read()
+        tickets = {
+            _text(ticket_id): _normalized_ticket(ticket)
+            for ticket_id, ticket in state["tickets"].items()
+        }
+        core_tickets = self.list_tickets(
+            owner_area="core",
+            component_ref=component_ref,
+            status_group=status_group,
+            search=search,
+        )
+        impact_filter = {_text(item) for item in _text(impact).split(",") if _text(item)}
+        items: list[dict[str, Any]] = []
+        for ticket in core_tickets:
+            metadata = _mapping(ticket.get("metadata"))
+            relation_ids = {
+                _text(ref.get("ticket_id"))
+                for ref in _sequence_of_mappings(ticket.get("relation_refs") or [])
+                if _text(ref.get("relation") or ref.get("type")) == "blocks"
+                and _text(ref.get("ticket_id"))
+            }
+            relation_ids.update(
+                _text(item)
+                for item in metadata.get("blocked_ticket_ids") or []
+                if _text(item)
+            )
+            affected = [tickets[ticket_id] for ticket_id in sorted(relation_ids) if ticket_id in tickets]
+            project_ids = sorted(
+                {
+                    identity["project_id"]
+                    for item in affected
+                    for identity in [_project_identity_from_ticket(item)]
+                    if identity.get("project_id")
+                }
+            )
+            subnet_ids = sorted(
+                {
+                    _text(source.get("subnet_id"))
+                    for item in affected
+                    for source in (_mapping(item.get("target_scope")), _mapping(item.get("metadata")))
+                    if _text(source.get("subnet_id"))
+                }
+            )
+            impact_token = _text(metadata.get("impact") or "contract_gap")
+            lifecycle = _mapping(metadata.get("core_lifecycle"))
+            target = metadata.get("release_target") or lifecycle.get("release_ref")
+            target_text = json.dumps(target, ensure_ascii=False, sort_keys=True, default=str) if target else ""
+            status_token = _text(ticket.get("status"))
+            verification = (
+                "verified"
+                if status_token in {"verified", "closed"}
+                else "awaiting_verification"
+                if status_token == "resolved"
+                else "pending"
+            )
+            if impact_filter and impact_token not in impact_filter:
+                continue
+            if _text(affected_project_id) and _text(affected_project_id) not in project_ids:
+                continue
+            if _text(affected_subnet_id) and _text(affected_subnet_id) not in subnet_ids:
+                continue
+            if _text(release_target).lower() not in target_text.lower():
+                continue
+            if _text(verification_state) and verification != _text(verification_state):
+                continue
+            blocked_count = len(affected)
+            priority_score = (
+                _CORE_IMPACT_PRIORITY.get(impact_token, 20)
+                + min(50, blocked_count * 10)
+                + min(20, max(0, int(ticket.get("occurrence_count") or 1) - 1) * 4)
+                + (15 if bool(ticket.get("blocking")) else 0)
+                + (10 if target else 0)
+            )
+            items.append(
+                {
+                    "ticket_id": ticket["ticket_id"],
+                    "revision": ticket["revision"],
+                    "summary": ticket.get("summary"),
+                    "status": status_token,
+                    "status_group": ticket.get("status_group"),
+                    "component_ref": ticket.get("component_ref"),
+                    "impact": impact_token,
+                    "blocking": bool(ticket.get("blocking")),
+                    "priority_score": priority_score,
+                    "affected_ticket_ids": [item["ticket_id"] for item in affected],
+                    "affected_project_ids": project_ids,
+                    "affected_subnet_ids": subnet_ids,
+                    "release_target": _clone(target) if target else None,
+                    "verification_state": verification,
+                    "occurrence_count": int(ticket.get("occurrence_count") or 1),
+                    "updated_at": ticket.get("updated_at"),
+                }
+            )
+        items.sort(
+            key=lambda item: (
+                -int(item["priority_score"]),
+                _text(item.get("updated_at")),
+                _text(item.get("ticket_id")),
+            )
+        )
+        bounded = items[: max(1, min(int(limit), 1000))]
+        return {
+            "schema": "adaos.dev_ticket.core_backlog.v1",
+            "items": bounded,
+            "count": len(bounded),
+            "total": len(items),
+            "filters": {
+                "component_ref": _text(component_ref) or None,
+                "impact": sorted(impact_filter),
+                "status_group": _text(status_group) or None,
+                "affected_project_id": _text(affected_project_id) or None,
+                "affected_subnet_id": _text(affected_subnet_id) or None,
+                "release_target": _text(release_target) or None,
+                "verification_state": _text(verification_state) or None,
+                "search": _text(search) or None,
+            },
+        }
+
+    def prepare_external_issue_draft(
+        self,
+        ticket_id: str,
+        *,
+        actor: str,
+        policy_mode: str = "draft_export",
+        provider: str = "github",
+        repository: str = "",
+        visibility: str = "private",
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        mode = (_text(policy_mode) or "draft_export").lower()
+        if mode not in _EXTERNAL_ISSUE_POLICY_MODES or mode in {"none", "link_only", "mirror_status"}:
+            raise ValueError(f"policy mode does not allow issue draft export: {mode}")
+        visibility_token = (_text(visibility) or "private").lower()
+        if visibility_token not in {"private", "public"}:
+            raise ValueError("external issue visibility must be private or public")
+        if mode == "public_upstream_issue" and visibility_token != "public":
+            raise ValueError("public_upstream_issue requires public visibility")
+        provider_token = (_text(provider) or "github").lower()
+        repository_token = _text(repository)
+        if mode in {"private_repo_issue", "public_upstream_issue"} and not repository_token:
+            raise ValueError(f"{mode} requires repository")
+        if provider_token == "github" and repository_token and not re.fullmatch(
+            r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",
+            repository_token,
+        ):
+            raise ValueError("GitHub repository must use owner/name format")
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                raise KeyError(ticket_id)
+            self._assert_expected_revision(ticket, expected_revision)
+            metadata = _mapping(ticket.get("metadata"))
+            title, title_findings = _redact_external_issue_text(ticket.get("summary"))
+            sections: list[tuple[str, str]] = []
+            for heading, key in (
+                ("Motivation", "motivation"),
+                ("Observed limitation", "observed_limitation"),
+                ("Desired public contract", "desired_contract"),
+            ):
+                value, findings = _redact_external_issue_text(metadata.get(key))
+                title_findings.extend(findings)
+                if value:
+                    sections.append((heading, value))
+            workarounds: list[str] = []
+            for raw in _sequence_of_mappings(metadata.get("rejected_workarounds") or []):
+                value, findings = _redact_external_issue_text(
+                    raw.get("reason") or raw.get("description") or raw.get("summary")
+                )
+                title_findings.extend(findings)
+                if value:
+                    workarounds.append(value)
+            if workarounds:
+                sections.append(("Rejected workarounds", "\n".join(f"- {item}" for item in workarounds)))
+            safe_evidence, excluded_evidence = _safe_external_evidence(
+                _sequence_of_mappings(ticket.get("evidence_refs") or [])
+            )
+            if safe_evidence:
+                evidence_lines = [
+                    "- " + ", ".join(f"{key}: {value}" for key, value in ref.items())
+                    for ref in safe_evidence
+                ]
+                sections.append(("Public evidence", "\n".join(evidence_lines)))
+            sections.append(
+                (
+                    "AdaOS provenance",
+                    "Prepared from an internal Dev Ticket. Private evidence and local runtime context remain in AdaOS.",
+                )
+            )
+            body = "\n\n".join(f"## {heading}\n\n{value}" for heading, value in sections)
+            final_title, final_title_findings = _redact_external_issue_text(title)
+            final_body, final_body_findings = _redact_external_issue_text(body)
+            redaction_findings = sorted(
+                set(title_findings + final_title_findings + final_body_findings + excluded_evidence)
+            )
+            draft_id = f"dissue.{new_id()}"
+            now = _now()
+            draft = {
+                "schema": "adaos.dev_ticket.external_issue_draft.v1",
+                "external_ref_id": draft_id,
+                "provider": provider_token,
+                "repository": repository_token or None,
+                "issue_id": None,
+                "target_path": f"{provider_token}:{repository_token or 'unassigned'}:issues/new",
+                "privacy": visibility_token,
+                "sync_mode": mode,
+                "status": "awaiting_approval",
+                "approval_required": True,
+                "approved": False,
+                "redaction": {
+                    "passed": True,
+                    "findings": redaction_findings,
+                    "excluded_evidence_types": excluded_evidence,
+                    "private_evidence_retained_locally": True,
+                },
+                "draft": {
+                    "title": final_title,
+                    "body": final_body,
+                    "labels": [
+                        "adaos-core" if _text(ticket.get("owner_area")) == "core" else "adaos-project",
+                        f"impact:{_text(metadata.get('impact') or 'development')}",
+                    ],
+                    "safe_evidence_refs": safe_evidence,
+                },
+                "provenance": {
+                    "ticket_id": ticket["ticket_id"],
+                    "ticket_revision": int(ticket.get("revision") or 1),
+                    "prepared_by": _text(actor) or "builder",
+                    "prepared_at": now,
+                },
+            }
+            ticket["external_refs"] = _merge_refs(ticket.get("external_refs") or [], [draft])
+            ticket["updated_at"] = now
+            self._append_history(
+                ticket,
+                {
+                    "kind": "external_issue_draft_prepared",
+                    "actor": _text(actor) or "builder",
+                    "external_ref_id": draft_id,
+                    "policy_mode": mode,
+                    "recorded_at": now,
+                },
+            )
+            self._validate_ticket(ticket)
+            self._write(state)
+            return {"ticket": _normalized_ticket(ticket), "draft": _clone(draft)}
+
+    def approve_external_issue_draft(
+        self,
+        ticket_id: str,
+        *,
+        external_ref_id: str,
+        actor: str,
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        actor_token = _text(actor)
+        if not actor_token.startswith(("user:", "owner:", "core:maintainer")):
+            raise ValueError("external issue draft approval requires a human owner or core maintainer")
+        ref_token = _text(external_ref_id)
+        if not ref_token:
+            raise ValueError("external_ref_id is required")
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                raise KeyError(ticket_id)
+            self._assert_expected_revision(ticket, expected_revision)
+            refs = [dict(ref) for ref in ticket.get("external_refs") or [] if isinstance(ref, Mapping)]
+            selected: dict[str, Any] | None = None
+            now = _now()
+            for index, ref in enumerate(refs):
+                if _text(ref.get("external_ref_id")) != ref_token:
+                    continue
+                if _text(ref.get("status")) != "awaiting_approval":
+                    raise ValueError("external issue draft is not awaiting approval")
+                if not bool(_mapping(ref.get("redaction")).get("passed")):
+                    raise ValueError("external issue draft did not pass redaction")
+                selected = {
+                    **ref,
+                    "status": "approved_for_export",
+                    "approved": True,
+                    "approved_by": actor_token,
+                    "approved_at": now,
+                }
+                refs[index] = selected
+                break
+            if selected is None:
+                raise KeyError(ref_token)
+            ticket["external_refs"] = refs
+            ticket["updated_at"] = now
+            self._append_history(
+                ticket,
+                {
+                    "kind": "external_issue_draft_approved",
+                    "actor": actor_token,
+                    "external_ref_id": ref_token,
+                    "recorded_at": now,
+                },
+            )
+            self._validate_ticket(ticket)
+            self._write(state)
+            return {"ticket": _normalized_ticket(ticket), "draft": _clone(selected)}
+
+    def link_external_issue(
+        self,
+        ticket_id: str,
+        *,
+        provider: str,
+        repository: str,
+        issue_id: str,
+        actor: str,
+        target_path: str = "",
+        privacy: str = "private",
+        sync_mode: str = "link_only",
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        actor_token = _text(actor)
+        if not actor_token.startswith(("user:", "owner:", "core:maintainer")):
+            raise ValueError("external issue linking requires a human owner or core maintainer")
+        mode = (_text(sync_mode) or "link_only").lower()
+        if mode not in _EXTERNAL_ISSUE_POLICY_MODES or mode == "none":
+            raise ValueError(f"unsupported external issue sync mode: {mode}")
+        provider_token = (_text(provider) or "github").lower()
+        repository_token = _text(repository)
+        issue_token = _text(issue_id)
+        if not repository_token or not issue_token:
+            raise ValueError("external issue repository and issue_id are required")
+        if provider_token == "github" and not re.fullmatch(
+            r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",
+            repository_token,
+        ):
+            raise ValueError("GitHub repository must use owner/name format")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", issue_token):
+            raise ValueError("external issue_id is invalid")
+        privacy_token = (_text(privacy) or "private").lower()
+        if privacy_token not in {"private", "public"}:
+            raise ValueError("external issue privacy must be private or public")
+        target_token = _text(target_path) or f"{provider_token}:{repository_token}:issues/{issue_token}"
+        cleaned_target, target_findings = _redact_external_issue_text(target_token)
+        if target_findings or cleaned_target != target_token:
+            raise ValueError("external issue target_path contains private or credential-like data")
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                raise KeyError(ticket_id)
+            self._assert_expected_revision(ticket, expected_revision)
+            now = _now()
+            ref = {
+                "schema": "adaos.dev_ticket.external_issue_ref.v1",
+                "external_ref_id": f"dissue.{new_id()}",
+                "provider": provider_token,
+                "repository": repository_token,
+                "issue_id": issue_token,
+                "target_path": target_token,
+                "privacy": privacy_token,
+                "sync_mode": mode,
+                "status": "linked",
+                "provenance": {
+                    "ticket_id": ticket["ticket_id"],
+                    "ticket_revision": int(ticket.get("revision") or 1),
+                    "linked_by": actor_token,
+                    "linked_at": now,
+                },
+            }
+            ticket["external_refs"] = _merge_refs(ticket.get("external_refs") or [], [ref])
+            ticket["updated_at"] = now
+            self._append_history(
+                ticket,
+                {
+                    "kind": "external_issue_linked",
+                    "actor": actor_token,
+                    "external_ref_id": ref["external_ref_id"],
+                    "recorded_at": now,
+                },
+            )
+            self._validate_ticket(ticket)
+            self._write(state)
+            return {"ticket": _normalized_ticket(ticket), "external_ref": _clone(ref)}
 
     @staticmethod
     def _history_lifecycle_event(

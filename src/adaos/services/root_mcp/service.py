@@ -511,6 +511,28 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             metadata={"published_by": "plane:adaos_dev", "handler": "dev_ticket_show"},
         ),
         RootMcpToolContract(
+            id="dev_ticket.core_backlog",
+            title="Inspect Core Dev Ticket backlog",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Read the ranked Core backlog by component, impact, affected projects or subnets, release target, and verification state.",
+            input_schema=schema_object(
+                properties={
+                    "component_ref": {"type": "string"},
+                    "impact": {"type": "string"},
+                    "status_group": {"type": "string"},
+                    "affected_project_id": {"type": "string"},
+                    "affected_subnet_id": {"type": "string"},
+                    "release_target": {"type": "string"},
+                    "verification_state": {"type": "string"},
+                    "search": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
+                },
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.tickets",
+            metadata={"published_by": "plane:adaos_dev", "handler": "dev_ticket_core_backlog"},
+        ),
+        RootMcpToolContract(
             id="dev_ticket.events",
             title="Read Dev Ticket change feed",
             surface=RootMcpSurface.DEVELOPMENT,
@@ -575,7 +597,7 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                     "ticket_id": {"type": "string"},
                     "operation": {
                         "type": "string",
-                        "enum": ["claim", "start", "comment", "defer", "resolve", "verify", "close", "reopen", "duplicate", "related", "core_transition"],
+                        "enum": ["claim", "start", "comment", "defer", "resolve", "verify", "close", "reopen", "duplicate", "related", "external_draft", "core_transition"],
                     },
                     "actor": {"type": "string"},
                     "payload": {"type": "object"},
@@ -3430,6 +3452,26 @@ def _handle_dev_ticket_show(arguments: dict[str, Any], *, dry_run: bool) -> dict
     return {"ticket": ticket}
 
 
+def _handle_dev_ticket_core_backlog(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    filters = {
+        key: value
+        for key, value in arguments.items()
+        if key
+        in {
+            "component_ref",
+            "impact",
+            "status_group",
+            "affected_project_id",
+            "affected_subnet_id",
+            "release_target",
+            "verification_state",
+            "search",
+            "limit",
+        }
+    }
+    return _development_ticket_sdk().list_core_backlog(**filters)
+
+
 def _handle_dev_ticket_events(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     filters = {
         key: value
@@ -3576,6 +3618,7 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "builder.get_context": lambda arguments, dry_run=False: _handle_builder_context(arguments, dry_run=dry_run),
     "dev_ticket.list": lambda arguments, dry_run=False: _handle_dev_ticket_list(arguments, dry_run=dry_run),
     "dev_ticket.show": lambda arguments, dry_run=False: _handle_dev_ticket_show(arguments, dry_run=dry_run),
+    "dev_ticket.core_backlog": lambda arguments, dry_run=False: _handle_dev_ticket_core_backlog(arguments, dry_run=dry_run),
     "dev_ticket.events": lambda arguments, dry_run=False: _handle_dev_ticket_events(arguments, dry_run=dry_run),
     "dev_ticket.create": lambda arguments, dry_run=False: _handle_dev_ticket_create(arguments, dry_run=dry_run),
     "dev_ticket.operate": lambda arguments, dry_run=False: _handle_dev_ticket_operate(arguments, dry_run=dry_run),

@@ -180,6 +180,10 @@ class RootMcpClient:
     def get_dev_ticket(self, ticket_id: str) -> dict[str, Any]:
         return self.call("dev_ticket.show", arguments={"ticket_id": str(ticket_id)})
 
+    def get_core_dev_ticket_backlog(self, **filters: Any) -> dict[str, Any]:
+        arguments = {key: value for key, value in filters.items() if value is not None}
+        return self.call("dev_ticket.core_backlog", arguments=arguments)
+
     def list_dev_ticket_events(self, **filters: Any) -> dict[str, Any]:
         arguments = {key: value for key, value in filters.items() if value is not None}
         return self.call("dev_ticket.events", arguments=arguments)

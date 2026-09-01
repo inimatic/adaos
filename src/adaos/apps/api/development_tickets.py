@@ -198,6 +198,37 @@ class DevTicketRelatedRequest(BaseModel):
     expected_revision: int | None = Field(default=None, ge=1)
 
 
+class DevTicketExternalDraftRequest(BaseModel):
+    actor: str = Field(default="builder", min_length=1)
+    policy_mode: str = Field(
+        default="draft_export",
+        pattern="^(draft_export|private_repo_issue|public_upstream_issue)$",
+    )
+    provider: str = Field(default="github", min_length=1)
+    repository: str = ""
+    visibility: str = Field(default="private", pattern="^(private|public)$")
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
+class DevTicketExternalDraftApprovalRequest(BaseModel):
+    actor: str = Field(default="user:owner", min_length=1)
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
+class DevTicketExternalLinkRequest(BaseModel):
+    provider: str = Field(default="github", min_length=1)
+    repository: str = Field(..., min_length=1)
+    issue_id: str = Field(..., min_length=1)
+    actor: str = Field(default="user:owner", min_length=1)
+    target_path: str = ""
+    privacy: str = Field(default="private", pattern="^(private|public)$")
+    sync_mode: str = Field(
+        default="link_only",
+        pattern="^(link_only|draft_export|private_repo_issue|public_upstream_issue|mirror_status)$",
+    )
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
 class CoreCapabilityRequest(BaseModel):
     summary: str = Field(..., min_length=1)
     component_ref: str = Field(..., min_length=1)
@@ -1080,6 +1111,35 @@ def list_ticket_events(
     }
 
 
+@router.get("/core-backlog")
+def list_core_backlog(
+    component_ref: str | None = None,
+    impact: str | None = None,
+    status_group: str | None = "open",
+    affected_project_id: str | None = None,
+    affected_subnet_id: str | None = None,
+    release_target: str | None = None,
+    verification_state: str | None = None,
+    search: str | None = None,
+    limit: int = Query(default=200, ge=1, le=1000),
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        **service.list_core_backlog(
+            component_ref=component_ref,
+            impact=impact,
+            status_group=status_group,
+            affected_project_id=affected_project_id,
+            affected_subnet_id=affected_subnet_id,
+            release_target=release_target,
+            verification_state=verification_state,
+            search=search,
+            limit=limit,
+        ),
+    }
+
+
 @router.post("/core-capability-requests", status_code=status.HTTP_201_CREATED)
 def create_core_capability_request(
     body: CoreCapabilityRequest,
@@ -1738,6 +1798,75 @@ def related_ticket(
             expected_revision=body.expected_revision,
         )
         return {"ok": True, "ticket": ticket, "detail": _ticket_detail(service, ticket)}
+    except KeyError as exc:
+        raise _not_found(str(exc).strip("'")) from exc
+    except ValueError as exc:
+        raise _ticket_mutation_error(exc) from exc
+
+
+@router.post("/{ticket_id}/external-drafts")
+def prepare_external_issue_draft(
+    ticket_id: str,
+    body: DevTicketExternalDraftRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        result = service.prepare_external_issue_draft(
+            ticket_id,
+            actor=body.actor,
+            policy_mode=body.policy_mode,
+            provider=body.provider,
+            repository=body.repository,
+            visibility=body.visibility,
+            expected_revision=body.expected_revision,
+        )
+        return {"ok": True, **result}
+    except KeyError as exc:
+        raise _not_found(str(exc).strip("'")) from exc
+    except ValueError as exc:
+        raise _ticket_mutation_error(exc) from exc
+
+
+@router.post("/{ticket_id}/external-drafts/{external_ref_id}/approve")
+def approve_external_issue_draft(
+    ticket_id: str,
+    external_ref_id: str,
+    body: DevTicketExternalDraftApprovalRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        result = service.approve_external_issue_draft(
+            ticket_id,
+            external_ref_id=external_ref_id,
+            actor=body.actor,
+            expected_revision=body.expected_revision,
+        )
+        return {"ok": True, **result}
+    except KeyError as exc:
+        raise _not_found(str(exc).strip("'")) from exc
+    except ValueError as exc:
+        raise _ticket_mutation_error(exc) from exc
+
+
+@router.post("/{ticket_id}/external-links")
+def link_external_issue(
+    ticket_id: str,
+    body: DevTicketExternalLinkRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        result = service.link_external_issue(
+            ticket_id,
+            provider=body.provider,
+            repository=body.repository,
+            issue_id=body.issue_id,
+            actor=body.actor,
+            target_path=body.target_path,
+            privacy=body.privacy,
+            sync_mode=body.sync_mode,
+            expected_revision=body.expected_revision,
+        )
+        return {"ok": True, **result}
     except KeyError as exc:
         raise _not_found(str(exc).strip("'")) from exc
     except ValueError as exc:

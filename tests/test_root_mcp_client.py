@@ -239,6 +239,7 @@ def test_root_mcp_client_exposes_dev_ticket_lifecycle() -> None:
 
     client.list_dev_tickets(status_group="open", component_ref="skill:demo")
     client.get_dev_ticket("dticket.test")
+    client.get_core_dev_ticket_backlog(impact="blocker", affected_project_id="demo")
     client.list_dev_ticket_events(after="dtevent.previous", limit=10)
     client.create_dev_ticket({"summary": "Demo improvement", "component_ref": "skill:demo"})
     client.operate_dev_ticket(
@@ -255,6 +256,7 @@ def test_root_mcp_client_exposes_dev_ticket_lifecycle() -> None:
     assert tool_ids == [
         "dev_ticket.list",
         "dev_ticket.show",
+        "dev_ticket.core_backlog",
         "dev_ticket.events",
         "dev_ticket.create",
         "dev_ticket.operate",
@@ -262,4 +264,4 @@ def test_root_mcp_client_exposes_dev_ticket_lifecycle() -> None:
         "dev_ticket.get_artifact",
     ]
     assert stub.calls[0][2]["json"]["arguments"]["component_ref"] == "skill:demo"
-    assert stub.calls[4][2]["json"]["arguments"]["payload"]["resolved_by_version"] == "1.2.3"
+    assert stub.calls[5][2]["json"]["arguments"]["payload"]["resolved_by_version"] == "1.2.3"

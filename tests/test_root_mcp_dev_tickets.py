@@ -20,6 +20,11 @@ def test_root_mcp_dev_ticket_read_tools(monkeypatch) -> None:
     event = {"event_id": "dtevent.test", "ticket_id": "dticket.test"}
     monkeypatch.setattr(sdk, "list_tickets", lambda **filters: [{**ticket, "filters": filters}])
     monkeypatch.setattr(sdk, "get_ticket", lambda ticket_id: ticket if ticket_id == "dticket.test" else None)
+    monkeypatch.setattr(
+        sdk,
+        "list_core_backlog",
+        lambda **filters: {"items": [{"ticket_id": "dticket.core", "filters": filters}], "count": 1},
+    )
     monkeypatch.setattr(sdk, "list_events", lambda **filters: [{**event, "filters": filters}])
     monkeypatch.setattr(
         sdk,
@@ -40,6 +45,11 @@ def test_root_mcp_dev_ticket_read_tools(monkeypatch) -> None:
         "development.read.tickets",
     )
     shown = _invoke("dev_ticket.show", {"ticket_id": "dticket.test"}, "development.read.tickets")
+    backlog = _invoke(
+        "dev_ticket.core_backlog",
+        {"impact": "blocker", "affected_project_id": "demo"},
+        "development.read.tickets",
+    )
     events = _invoke(
         "dev_ticket.events",
         {"after": "dtevent.previous", "limit": 5},
@@ -59,6 +69,7 @@ def test_root_mcp_dev_ticket_read_tools(monkeypatch) -> None:
     assert listed.ok is True
     assert listed.result["tickets"][0]["filters"]["status_group"] == "open"
     assert shown.result["ticket"]["ticket_id"] == "dticket.test"
+    assert backlog.result["items"][0]["filters"]["impact"] == "blocker"
     assert events.result["cursor"] == "dtevent.test"
     assert artifacts.result["artifacts"][0]["ticket_id"] == "dticket.test"
     assert artifact.result["artifact"]["exists"] is True
@@ -117,6 +128,7 @@ def test_root_mcp_dev_ticket_capabilities_are_explicit() -> None:
     contracts = {item.id: item for item in root_mcp_service.list_tool_contracts()}
 
     assert contracts["dev_ticket.list"].required_capability == "development.read.tickets"
+    assert contracts["dev_ticket.core_backlog"].required_capability == "development.read.tickets"
     assert contracts["dev_ticket.get_artifact"].required_capability == "development.read.ticket_artifacts"
     assert contracts["dev_ticket.operate"].required_capability == "development.write.tickets"
     assert contracts["dev_ticket.operate"].side_effects == "write"

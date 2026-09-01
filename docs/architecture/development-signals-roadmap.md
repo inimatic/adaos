@@ -455,15 +455,15 @@ Exit proof: one internal Dev Ticket can link to an existing GitHub issue and
 one redacted draft can be prepared for human approval, while private evidence
 remains local.
 
-- [ ] `[should]` `DS7-01` Add `external_refs` to Dev Tickets with provider,
+- [x] `[should]` `DS7-01` Add `external_refs` to Dev Tickets with provider,
   repository, issue id, target path, privacy, sync mode, and provenance.
-- [ ] `[should]` `DS7-02` Support `none`, `link_only`, `draft_export`,
+- [x] `[should]` `DS7-02` Support `none`, `link_only`, `draft_export`,
   `private_repo_issue`, `public_upstream_issue`, and `mirror_status` policy
   modes.
-- [ ] `[should]` `DS7-03` Generate redacted GitHub issue drafts from ticket
+- [x] `[should]` `DS7-03` Generate redacted GitHub issue drafts from ticket
   summaries, public artifact versions, expected/actual behavior, and safe
   reproduction steps.
-- [ ] `[must]` `DS7-04` Block automatic public issue creation for screenshots,
+- [x] `[must]` `DS7-04` Block automatic public issue creation for screenshots,
   logs, NLU examples, DOM state, local paths, device names, runtime traces, or
   private workspace evidence unless redaction and explicit approval pass.
 - [ ] `[could]` `DS7-05` Add status-only mirroring for private team repos after
@@ -510,10 +510,10 @@ is released and verified.
 - [ ] `[should]` `DS8-08` Add a core backlog view for maintainers with filters
   by component, impact, affected projects/subnets, release target, and
   verification state.
-- [ ] `[should]` `DS8-09` Add approved projection from Core Dev Tickets to
+- [x] `[should]` `DS8-09` Add approved projection from Core Dev Tickets to
   AdaOS Issues, private repository issues, or GitHub issue drafts after
   redaction and ownership checks.
-- [ ] `[should]` `DS8-10` Add priority/ranking signals based on repeated
+- [x] `[should]` `DS8-10` Add priority/ranking signals based on repeated
   blockers, generalization pressure, safety impact, and release proximity.
 - [ ] `[could]` `DS8-11` Add advanced-user inspection and subscription controls
   for core tickets that affect their projects.
@@ -529,8 +529,15 @@ repair and evidence closure against unresolved core blockers unless reduced
 scope is explicitly accepted. Core tickets emit created, qualified, accepted,
 deferred, released, verified, and reopened lifecycle events. Verified
 capabilities update linked project tickets, signals, and Pending Actions so
-Builder can resume. Signed cross-subnet fanout, maintainer backlog UI, and
-optional redacted external issue projection remain open.
+Builder can resume. A ranked Core backlog read model is available to API, SDK,
+Root MCP, and Codex by component, impact, affected projects/subnets, release
+target, verification state, and deterministic pressure score. Core or project
+tickets can prepare redacted GitHub-compatible drafts or link an existing
+issue while the internal ticket remains authoritative. Screenshot, trace, log,
+local-path, device, and credential-like material is excluded or redacted;
+draft export remains approval-gated, and Builder/Codex cannot approve it.
+Signed cross-subnet fanout, maintainer backlog UI, automatic public issue
+creation, and status mirroring remain open.
 
 ## DS9. SDK Understanding And Agent Product UX
 

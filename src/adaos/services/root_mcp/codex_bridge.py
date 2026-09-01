@@ -72,6 +72,7 @@ _COMPACT_MODEL_TEXT_TOOLS = {
     "context_inspect",
     "list_dev_tickets",
     "get_dev_ticket",
+    "get_core_dev_ticket_backlog",
     "list_dev_ticket_events",
 }
 
@@ -445,6 +446,25 @@ class CodexRootMcpBridge:
                 },
             },
             {
+                "name": "get_core_dev_ticket_backlog",
+                "description": "Read the ranked Core Dev Ticket backlog by impact, affected scope, release target, and verification state.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "component_ref": {"type": "string"},
+                        "impact": {"type": "string"},
+                        "status_group": {"type": "string"},
+                        "affected_project_id": {"type": "string"},
+                        "affected_subnet_id": {"type": "string"},
+                        "release_target": {"type": "string"},
+                        "verification_state": {"type": "string"},
+                        "search": {"type": "string"},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
                 "name": "list_dev_ticket_events",
                 "description": "Read a relevant Dev Ticket initial snapshot and durable lifecycle changes after an optional cursor.",
                 "inputSchema": {
@@ -499,7 +519,7 @@ class CodexRootMcpBridge:
                         "ticket_id": {"type": "string"},
                         "operation": {
                             "type": "string",
-                            "enum": ["claim", "start", "comment", "defer", "resolve", "verify", "close", "reopen", "duplicate", "related", "core_transition"],
+                            "enum": ["claim", "start", "comment", "defer", "resolve", "verify", "close", "reopen", "duplicate", "related", "external_draft", "core_transition"],
                         },
                         "actor": {"type": "string"},
                         "payload": {"type": "object"},
@@ -1292,6 +1312,13 @@ class CodexRootMcpBridge:
         if tool == "get_dev_ticket":
             return _tool_text(
                 client.get_dev_ticket(str(args.get("ticket_id") or "")),
+                model_text_format=model_text_format,
+            )
+        if tool == "get_core_dev_ticket_backlog":
+            return _tool_text(
+                client.get_core_dev_ticket_backlog(
+                    **{key: value for key, value in args.items() if key != "model_text_format"}
+                ),
                 model_text_format=model_text_format,
             )
         if tool == "list_dev_ticket_events":
