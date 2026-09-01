@@ -91,7 +91,7 @@
       "id": "adaos_connect",
       "version": "android-poc.3",
       "descriptor": "adaos_connect.webui.json",
-      "sha256": "3fe0926fb8c8767338bd3b6bd6a23570ae15192e83c13b8f0c251f0d71d1488b"
+      "sha256": "74d2936f9f63a91affeb9a187689a6d9278b56a61cf4dad4b0fbdae1084ec7d6"
     },
     {
       "id": "browsers_skill",
