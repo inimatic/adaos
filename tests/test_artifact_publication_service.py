@@ -191,6 +191,11 @@ def _promote(service: ArtifactPublicationService, candidate_id: str, **kwargs):
 
 def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path) -> None:
     dev = _scenario(tmp_path / "dev")
+    (dev / "tests").mkdir()
+    (dev / "tests" / "test_scenario.py").write_text(
+        "def test_recipe_scenario():\n    assert True\n",
+        encoding="utf-8",
+    )
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "primary-marker.txt").write_text("unchanged", encoding="utf-8")
@@ -239,6 +244,7 @@ def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path
     assert trial_lock is not None
     assert trial_lock.slots[0].data_mode == "empty"
     assert (prepared.trial_workspace / "scenarios" / "recipes" / "scenario.yaml").is_file()
+    assert not (prepared.trial_workspace / "scenarios" / "recipes" / "tests").exists()
     assert not (workspace / "scenarios" / "recipes").exists()
     assert (workspace / "primary-marker.txt").read_text(encoding="utf-8") == "unchanged"
 
@@ -257,6 +263,12 @@ def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path
 
     assert result.pointer.release == "recipes@1.0.0"
     assert (workspace / "scenarios" / "recipes" / "scenario.yaml").is_file()
+    assert (
+        workspace / "scenarios" / "recipes" / "tests" / "test_scenario.py"
+    ).read_text(encoding="utf-8").startswith("def test_recipe_scenario")
+    promotion = service.load_promotion(accepted.candidate_id)
+    assert promotion is not None
+    assert promotion["receipts"]["development_sources_projected"]["status"] == "completed"
     assert service.subscriptions.load()["recipes"].installed_digest == result.pointer.release_digest
     registry = (workspace / "registry.json").read_text(encoding="utf-8")
     assert '"stable"' in registry

@@ -891,8 +891,14 @@ def test_terminal_codex_usage_marks_preserved_candidate_validation_as_exact_zero
     tmp_path: Path,
 ) -> None:
     service = _service(tmp_path)
-    service.codex_usage_reporter = lambda _event: pytest.fail(
-        "a no-model continuation must not report usage"
+    calls: list[dict] = []
+    service.codex_usage_reporter = lambda event: (
+        calls.append(dict(event))
+        or {
+            "ok": True,
+            "duplicate": False,
+            "event": {"event_id": "codex_usage_zero"},
+        }
     )
     session = {
         "session_id": "automation.skill.demo",
@@ -912,10 +918,18 @@ def test_terminal_codex_usage_marks_preserved_candidate_validation_as_exact_zero
     result = service._report_terminal_codex_usage(session, task_status="completed")
 
     receipt = result["codex_usage_accounting"]
-    assert receipt["status"] == "not_applicable"
+    assert receipt["status"] == "reported"
     assert receipt["accuracy"] == "exact"
     assert receipt["total_tokens"] == 0
     assert receipt["billable_tokens"] == 0
+    assert receipt["root_event_id"] == "codex_usage_zero"
+    assert len(calls) == 1
+    assert calls[0]["idempotency_key"] == receipt["idempotency_key"]
+    assert calls[0]["run_id"] == "task.finalizer"
+    assert calls[0]["project_id"] == "demo"
+    assert calls[0]["total_tokens"] == 0
+    assert calls[0]["billable_tokens"] == 0
+    assert calls[0]["note"] == "builder_status=completed; deterministic_continuation=true"
     assert result["codex_usage_history"] == [receipt]
     assert result["updated_at"]
 

@@ -3345,7 +3345,13 @@ class BuilderAutomationService:
             else {}
         )
         if (
-            accounting.get("status") in {"reported", "not_applicable"}
+            (
+                accounting.get("status") == "reported"
+                or (
+                    accounting.get("status") == "not_applicable"
+                    and self.codex_usage_reporter is None
+                )
+            )
             and str(accounting.get("task_id") or "") == task_id
         ):
             return current
@@ -3383,6 +3389,55 @@ class BuilderAutomationService:
                     "reason": "Validated a preserved candidate without starting a model turn.",
                     "checked_at": _now_iso(),
                 }
+                if self.codex_usage_reporter is not None:
+                    event = {
+                        "idempotency_key": receipt["idempotency_key"],
+                        "run_id": task_id,
+                        "job_id": task_id,
+                        "status": task_status,
+                        "source": "builder_automation",
+                        "accuracy": "reported",
+                        "input_tokens": 0,
+                        "cached_input_tokens": 0,
+                        "output_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "total_tokens": 0,
+                        "billable_tokens": 0,
+                        "occurred_at": str(current.get("updated_at") or _now_iso()),
+                        "change_id": str(current.get("change_id") or "").strip() or None,
+                        "note": (
+                            f"builder_status={task_status}; "
+                            "deterministic_continuation=true"
+                        ),
+                    }
+                    object_type = str(current.get("object_type") or "").strip()
+                    object_id = str(current.get("object_id") or "").strip()
+                    if object_type == "scenario" and object_id:
+                        event["scenario_id"] = object_id
+                    elif object_id:
+                        event["project_id"] = object_id
+                    try:
+                        reported = dict(self.codex_usage_reporter(event))
+                        root_event = (
+                            reported.get("event")
+                            if isinstance(reported.get("event"), Mapping)
+                            else {}
+                        )
+                        receipt.update(
+                            {
+                                "status": "reported",
+                                "root_event_id": root_event.get("event_id"),
+                                "duplicate": bool(reported.get("duplicate")),
+                                "reported_at": _now_iso(),
+                            }
+                        )
+                    except Exception as exc:
+                        receipt.update(
+                            {
+                                "status": "report_failed",
+                                "error": f"{type(exc).__name__}: {exc}"[:2000],
+                            }
+                        )
             else:
                 receipt = {
                     "schema": "adaos.builder.codex_usage_receipt.v1",

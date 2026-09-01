@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -94,6 +96,7 @@ from adaos.services.skill.setup_plan import publication_setup_evidence
 PUSHED_SOURCE_SCHEMA = "adaos.artifact.pushed_source.v1"
 REBASE_PLAN_SCHEMA = "adaos.artifact.rebase_plan.v1"
 PROMOTION_OPERATION_SCHEMA = "adaos.artifact.promotion_operation.v1"
+_DEVELOPMENT_SOURCE_ROOTS = ("tests",)
 
 
 class PublicationError(RuntimeError):
@@ -349,6 +352,146 @@ class ArtifactPublicationService:
             workspace_root=self.workspace_root,
             remote=self.remote,
         )
+
+    def _candidate_development_source_root(self, candidate_id: str) -> Path:
+        return (
+            self.state_root
+            / "candidate-development-sources"
+            / self.candidate_store.path(candidate_id).stem
+        )
+
+    @staticmethod
+    def _development_source_manifest(root: Path) -> dict[str, Any]:
+        files = []
+        for path in sorted(item for item in root.rglob("*") if item.is_file()):
+            relative = path.relative_to(root).as_posix()
+            data = path.read_bytes()
+            files.append(
+                {
+                    "path": relative,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "bytes": len(data),
+                }
+            )
+        payload: dict[str, Any] = {
+            "schema": "adaos.artifact.development_source_snapshot.v1",
+            "files": files,
+        }
+        payload["digest"] = canonical_payload_digest(payload)
+        return payload
+
+    def _snapshot_candidate_development_sources(
+        self,
+        candidate_id: str,
+        artifact_dir: Path,
+    ) -> dict[str, Any]:
+        target = self._candidate_development_source_root(candidate_id)
+        if target.is_dir():
+            return self._development_source_manifest(target)
+        staging = target.with_name(f".{target.name}.staging")
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True, exist_ok=False)
+        try:
+            for name in _DEVELOPMENT_SOURCE_ROOTS:
+                source = Path(artifact_dir).resolve() / name
+                if source.is_dir():
+                    shutil.copytree(source, staging / name)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            replace_with_retry(staging, target)
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        return self._development_source_manifest(target)
+
+    def _workspace_package_target(self, package: ArtifactPackageRef) -> Path:
+        relative = package.materialization_path or (
+            f"skills/{package.artifact_id}"
+            if package.kind == "skill"
+            else f"scenarios/{package.artifact_id}"
+        )
+        target = (self.workspace_root / Path(relative)).resolve()
+        if self.workspace_root not in target.parents:
+            raise PublicationError(f"package target escapes Workspace: {target}")
+        return target
+
+    def _prepare_development_source_projection(
+        self,
+        *,
+        candidate: CandidateRecord,
+        plan: ReleasePlan,
+    ) -> dict[str, Any]:
+        root = (
+            self.state_root
+            / "promotion-development-sources"
+            / self.candidate_store.path(candidate.candidate_id).stem
+        )
+        entries = []
+        candidate_source = self._candidate_development_source_root(candidate.candidate_id)
+        for package in plan.packages:
+            source_root = (
+                candidate_source
+                if package.artifact_id == candidate.project_id and candidate_source.is_dir()
+                else self._workspace_package_target(package)
+            )
+            package_root = root / package.kind / package.artifact_id
+            copied = []
+            for name in _DEVELOPMENT_SOURCE_ROOTS:
+                source = source_root / name
+                target = package_root / name
+                if source.is_dir() and not target.exists():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copytree(source, target)
+                    copied.append(name)
+            entries.append(
+                {
+                    "package": package.key,
+                    "snapshot_root": str(package_root),
+                    "roots": copied,
+                }
+            )
+        payload: dict[str, Any] = {
+            "schema": "adaos.artifact.development_source_projection.v1",
+            "candidate_id": candidate.candidate_id,
+            "entries": entries,
+        }
+        payload["digest"] = canonical_payload_digest(payload)
+        return payload
+
+    def _project_development_sources(
+        self,
+        projection: Mapping[str, Any],
+        *,
+        plan: ReleasePlan,
+    ) -> dict[str, Any]:
+        packages = {item.key: item for item in plan.packages}
+        projected = []
+        for raw in projection.get("entries") or []:
+            if not isinstance(raw, Mapping):
+                continue
+            package = packages.get(str(raw.get("package") or ""))
+            if package is None:
+                raise PublicationError("development source projection references an unknown package")
+            snapshot_root = Path(str(raw.get("snapshot_root") or "")).resolve()
+            target_root = self._workspace_package_target(package)
+            roots = []
+            for raw_name in raw.get("roots") or []:
+                name = str(raw_name or "").strip()
+                if name not in _DEVELOPMENT_SOURCE_ROOTS:
+                    raise PublicationError("development source projection contains an unsafe root")
+                source = snapshot_root / name
+                target = target_root / name
+                if not source.is_dir():
+                    raise PublicationError("development source projection item is missing")
+                if target.exists():
+                    shutil.rmtree(target)
+                shutil.copytree(source, target)
+                roots.append(name)
+            projected.append({"package": package.key, "roots": roots})
+        return {
+            "status": "completed",
+            "candidate_id": str(projection.get("candidate_id") or ""),
+            "packages": projected,
+        }
 
     def _record_builder_repair(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         from adaos.services.builder.repair import BuilderRepairService
@@ -1453,6 +1596,7 @@ class ArtifactPublicationService:
             activation_record = self.trial_activations.save(activation_record)
         except TrialActivationError as exc:
             raise PublicationError(str(exc)) from exc
+        self._snapshot_candidate_development_sources(candidate_id, artifact_dir)
         self.candidate_store.save(candidate)
         return PreparedCandidate(
             candidate,
@@ -1719,6 +1863,7 @@ class ArtifactPublicationService:
             raise PublicationError("promotion operation is bound to another release digest")
         terminal_receipts = {
             "channel_moved",
+            "development_sources_projected",
             "workspace_activated",
             "projection_recorded",
             "subscription_saved",
@@ -1730,12 +1875,11 @@ class ArtifactPublicationService:
             else {}
         )
         terminal_receipts_complete = terminal_receipts.issubset(operation_receipts)
-        if operation is not None and (
+        if operation is not None and terminal_receipts_complete and (
             operation.get("status") == "completed"
             or (
                 operation.get("phase") == "completed"
                 and bool(operation.get("completed_at"))
-                and terminal_receipts_complete
             )
         ):
             if operation.get("status") != "completed":
@@ -1960,6 +2104,18 @@ class ArtifactPublicationService:
                         {"attestation_set": bound.to_dict()},
                     )
 
+            source_preparation = receipts.get("development_sources_prepared")
+            if not isinstance(source_preparation, Mapping):
+                source_preparation = self._prepare_development_source_projection(
+                    candidate=candidate,
+                    plan=plan,
+                )
+                self._promotion_receipt(
+                    operation,
+                    "development_sources_prepared",
+                    source_preparation,
+                )
+
             channel_receipt = receipts.get("channel_moved")
             if isinstance(channel_receipt, Mapping):
                 pointer = ChannelPointer.from_mapping(channel_receipt["pointer"])
@@ -2056,6 +2212,17 @@ class ArtifactPublicationService:
                         "reload_receipt": activation_operation["reload_receipt"],
                         "health_receipt": activation_operation["health_receipt"],
                     },
+                )
+
+            if not isinstance(receipts.get("development_sources_projected"), Mapping):
+                projected_sources = self._project_development_sources(
+                    source_preparation,
+                    plan=plan,
+                )
+                self._promotion_receipt(
+                    operation,
+                    "development_sources_projected",
+                    projected_sources,
                 )
 
             if not isinstance(receipts.get("projection_recorded"), Mapping):
