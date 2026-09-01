@@ -18,9 +18,11 @@ self-readiness from becoming an implementation handoff. Clean from-raw
 research compilation, autonomous TLP campaigns, and comparative multi-task
 evaluation remain target work. Distributed
 execution/Ray is explicitly deferred; the current path executes on the
-selected AdaOS member node.
+selected AdaOS member node. Research Workbench context adaptation is now
+specified against the generic typed Context Graph/Compiler and remains an open
+ARF7.4 delivery track.
 
-Last reviewed: 2026-08-30.
+Last reviewed: 2026-09-01.
 
 This page defines a general research framework for AdaOS and uses Tropical
 Learnable Pooling (TLP) as its first reference case. It intentionally does not
@@ -1021,6 +1023,53 @@ AutomationBrief inputs. Project entrypoints may bind the stable direction and
 presentation. This separation lets Builder retain full compatibility context
 without turning a distributable composition into a second workflow-state
 authority.
+
+### Context graph and role projections
+
+Research Fabric is the reference workload that prevents a project-only context
+model. Its context is projected from the generic
+[Agent Context Graph And Capsules](agent-context-capsules.md):
+
+```text
+Platform capsule
+  + ResearchDirection capsule
+      -> selected ResearchTask capsule
+          -> accepted ResearchCompilation capsule
+          -> ImplementationTrack handoff
+  + Project capsule
+      -> target Component projection
+  + SourceBundle / Evidence / ProjectRelease refs
+      -> DevelopmentSession or result-review overlay
+```
+
+The same canonical nodes produce different bounded views:
+
+| Actor/purpose | Restore key | Required projection | Explicitly excluded by default |
+| --- | --- | --- | --- |
+| Researcher/formulation | Direction, Task, prototype revision | prepared sources, task branch, formulation stages, decisions | Builder transcript, unrelated Projects, hidden evaluator material |
+| Builder/qualification | ImplementationTrack, DevelopmentSession, Project digest | accepted Compilation, AutomationBrief, Project composition, capability contracts | exploratory discussion and unrelated task history |
+| Codex/implementation | task overlay, target component digest | exact source slices, public contracts, tests, prohibitions | full portfolio, raw activity journal, scientific authority mutation |
+| Evaluator/result review | Study/Evidence ref, exact ProjectRelease | protocol, observations, artifacts, validation and claim criteria | mutable DEV state and unrelated Builder exploration |
+
+The Project capsule remains the engineering composition boundary. It references
+the accepted scientific handoff but never owns or rewrites Direction, Task, or
+Compilation meaning. Researcher checkpoints do not serialize Builder state;
+Builder checkpoints do not copy the Researcher transcript. Result review binds
+the exact release and evidence instead of whichever Project source is current.
+
+Research-specific invalidation follows typed edges. A source/prototype change
+invalidates dependent formulation candidates; an accepted Compilation revision
+invalidates its AutomationBrief/track projections; source or ProjectRelease
+changes invalidate engineering projections; new Study evidence invalidates
+result-review/synthesis projections. None retroactively mutates a prior accepted
+Compilation, release, or Evidence record.
+
+The current TLP automation state demonstrates why projections must reference
+canonical nodes: one `skill.tlp_structured_proof_02` automation record is about
+4.6 MB and repeats task, readiness, result, provenance, and context packet data.
+The target checkpoint stores workflow progress and content-addressed refs once;
+Context Compiler materializes only the selected role/purpose view and emits a
+Context Attribution Receipt.
 
 Opening Builder durably binds the Development Session, opens a reusable named
 browser window, and emits `builder.context.selected` through the API host in

@@ -1,12 +1,13 @@
-# Context Compression Layer
+# Context Resolution, Compilation, And Compression Layer
 
 Status: target architecture with an explicit current implementation baseline.
 
-Last reviewed: 2026-08-07.
+Last reviewed: 2026-09-01.
 
-This document defines the target AdaOS context compression architecture for
-LLM-facing development, Builder, NLU Teacher, Root MCP, SDK, ABI, and future
-resource-catalog workflows.
+This document defines the target AdaOS context resolution, compilation, and
+compression architecture for LLM-facing development, Builder, Research
+Workbench, NLU Teacher, Root MCP, SDK, ABI, and future resource-catalog
+workflows.
 
 The core rule is:
 
@@ -21,10 +22,15 @@ The core rule is:
 This layer does not replace Root MCP, JSON-RPC, JSON Schema, or AdaOS ABI. It is
 an LLM-facing projection over those contracts.
 
-Persistent and project-scoped model context is governed by
-[Agent And Project Context Capsules](agent-context-capsules.md). Context
-Compression owns how those capsules are projected and packed; the capsules
-remain AdaOS-owned, digest-bound state rather than opaque provider memory.
+Persistent domain-, project-, and task-scoped model context is governed by
+[Agent Context Graph And Capsules](agent-context-capsules.md). This layer owns
+purpose/audience resolution, selection, model-specific projection, packing,
+and evaluation; capsules remain AdaOS-owned, digest-bound state rather than
+opaque provider memory.
+
+Compression is only the final representation step. It must not choose context
+before authority, trust, dependency closure, and task utility have been
+resolved.
 
 ## Current Implementation Baseline
 
@@ -335,6 +341,33 @@ entities[3]{ref,kind,label,aliases,scope,owner}:
   scenario:desktop,scenario,Desktop,home|workspace,workspace,registry
 ```
 
+## Context Resolution And Compilation
+
+The model-facing packet is a compiled view of an admissible context graph, not
+a search result or serialized session. The compilation pipeline is:
+
+```text
+subject refs + purpose + audience
+  -> authority/RBAC/trust resolution
+  -> freshness and dependency closure
+  -> required/candidate context units
+  -> utility, risk, and marginal-cost selection
+  -> model/profile-specific packing and cache layout
+  -> context packet + attribution receipt
+```
+
+The resolver is deterministic for the same graph, policy, time view, and
+request. A deterministic ranker should handle exact identity, dependencies,
+freshness, and required contracts before an optional model ranks ambiguous
+semantic candidates. Selection returns explicit `required`, `selected`,
+`omitted`, `denied`, and `unavailable` sets with reasons.
+
+Canonical context units remain provider-neutral. The compiler may vary layout,
+summary depth, multimodal encoding, and stable prompt prefixes by model
+profile, but it may not mutate or promote knowledge. Memory promotion is a
+separate governed operation owned by the context control plane and the domain
+workflow that owns the candidate meaning.
+
 ## Prompt Packing Policy
 
 Every LLM request should separate:
@@ -412,9 +445,16 @@ Rules:
 - include freshness/fingerprint/hash when context can go stale
 - distinguish root-local descriptors from live target evidence
 - include policy denials and unavailable retrieval channels in diagnostics
+- preserve trust, sensitivity, license, retention, and origin labels through
+  summaries and derived views
+- prevent source text, tool output, or prior trajectories from granting
+  authority or promoting themselves into reusable memory
+- partition provider caches by authorization, residency, model profile, and
+  exact capsule digests
 - never let a compact row become the only source of truth for a mutation
 - validate all mutation proposals against canonical JSON/ABI contracts
-- log context hash, prompt hash, selected aliases, and descriptor versions
+- log context hash, prompt hash, selected/omitted/denied refs, compiler version,
+  policy decision, and descriptor versions
 
 ## Evaluation
 
@@ -432,11 +472,17 @@ Required metrics:
 - latency impact
 - hallucinated id rate
 - stale descriptor use rate
+- required-context recall and selected-context precision
+- wrong-project/wrong-task negative-transfer rate
+- trust/taint policy violation and memory-promotion rejection rate
 - unique and cumulative input by capsule layer
 - repeated tool-read bytes and model/tool boundary count
 - source-slice coverage before first model call
 - prompt/assignment duplicate-field bytes
 - deterministic, bounded-agent, and full-Codex route share
+- provider-billable, fresh-plus-output, cache-read/write, and end-to-end
+  subscription cost
+- restart/reconnect equivalence and `as_of` replay success
 
 Existing conversation eval metrics already track context packet count, token
 estimate p95, utilization, and budget exhaustion. Those should be extended to
@@ -462,8 +508,9 @@ Priority labels:
 - [x] `[must]` Establish thread-aware conversation context packets with token
   estimates, budgets, evidence refs, diagnostics, messages, segments, and
   scoped memory.
-- [ ] `[must]` Adopt this document as the canonical context compression target
-  for Builder, NLU Teacher, SDK, ABI, and Root MCP model-facing context.
+- [x] `[must]` Adopt this document as the canonical context
+  resolution/compilation/compression target for Builder, Research Workbench,
+  NLU Teacher, SDK, ABI, and Root MCP model-facing context.
 
 ### Phase 1. Canonical Overview And Drill-Down Contracts
 
@@ -482,6 +529,42 @@ Priority labels:
 - [ ] `[should]` Add deterministic rankers for overview selection before
   asking the model to pick detail ids.
 - [ ] `[could]` Add vector search over descriptor cards and resource overviews.
+
+### Phase 1A. Governed Context Control Plane
+
+- [ ] `[must]` Publish versioned schemas for capsule nodes, typed relationship
+  edges, mutable subject bindings, context plans, memory candidates, and
+  attribution receipts.
+- [ ] `[must]` Replace single project `scope_ref` resolution with typed
+  `subject_refs`, purpose, audience, authority, trust, and `as_of` inputs while
+  retaining a compatibility adapter for project-only callers.
+- [ ] `[must]` Implement Context Registry, Resolver, Compiler, and Memory
+  Curator as separate SDK/API services; expose Root MCP as an adapter rather
+  than the persistence authority.
+- [ ] `[must]` Define authoritative knowledge, procedural memory, episodic
+  memory, and disposable working-context persistence semantics.
+- [ ] `[must]` Implement deterministic identity/dependency/freshness selection
+  before semantic ranking, with explicit required, selected, omitted, denied,
+  and unavailable reasons.
+- [ ] `[must]` Add trust, taint, sensitivity, license, retention, authority, and
+  origin fields with propagation and revocation tests.
+- [ ] `[must]` Add evidence-gated memory promotion and rollback; an LLM run or
+  successful trajectory cannot promote itself.
+- [ ] `[must]` Add valid-time/recorded-time semantics, immutable supersession,
+  exact `as_of` reconstruction, and independent invalidation by typed edge.
+- [ ] `[must]` Store content-addressed packet/checkpoint/result/provenance
+  artifacts once and replace nested execution-state copies with refs.
+- [ ] `[should]` Add optimistic subject bindings and explicit branch,
+  merge/conflict, and concurrent-writer diagnostics.
+- [ ] `[should]` Add provider-neutral canonical units plus model-specific layout
+  profiles and authorization-partitioned prompt-cache plans.
+- [ ] `[should]` Add adversarial memory-poisoning, cross-project leakage,
+  stale-context, and denied-drilldown fixtures.
+- [ ] `[could]` Learn utility estimates from validated outcomes after the
+  deterministic and policy gates, retaining an auditable non-LLM fallback.
+- [ ] `[deferred]` Add live multi-writer context federation across independent
+  subnet authorities until distributed ACL, conflict, and revocation contracts
+  are proven.
 
 ### Phase 2. Compact Model Text Formats
 
@@ -516,9 +599,9 @@ Priority labels:
 - [ ] `[must]` Add Builder prompt pack sections for role, authority, compact
   overview, selected details, task, and output contract.
 - [ ] `[must]` Add delta prompt support for follow-up Builder turns.
-- [ ] `[must]` Materialize hierarchical platform, project, component, and task
-  capsule projections. Keep the model executor replaceable and treat warm
-  provider sessions as disposable caches.
+- [ ] `[must]` Materialize the typed platform/domain/project/component/task
+  capsule graph and purpose-specific projections. Keep the model executor
+  replaceable and treat warm provider sessions as disposable caches.
 - [ ] `[must]` Replace repeated stringified packet/provenance copies in Skill
   Factory assignments with one canonical packet plus digest-bound refs.
 - [ ] `[must]` Exclude resolved repair histories and complete workflow/ABI
@@ -528,8 +611,8 @@ Priority labels:
   modal, event, projection, route, and workflow refs to exact source slices
   before a bounded repair starts.
 - [ ] `[must]` Emit `adaos.agent.context_receipt.v1` with per-layer unique
-  bytes/tokens, tool-boundary counts, cache use, source coverage, selected refs,
-  context misses, and validation outcome.
+  bytes/tokens, tool-boundary counts, cache use, source coverage,
+  selected/omitted/denied refs, context misses, and validation outcome.
 - [ ] `[must]` Invalidate current capsule bindings on exact ProjectRelease,
   component source, SDK, ABI, client schema, role policy, and accepted
   changeset events.
@@ -539,9 +622,9 @@ Priority labels:
 - [ ] `[should]` Add a Builder Context Inspector through Declarative Resource
   Workbench for layer sizes, provenance, freshness, omitted refs, access
   decisions, and measured token cost.
-- [ ] `[should]` Support optional warm project-agent caches keyed by project,
-  component, and agent-profile digests, with replay tests proving the cache is
-  not authoritative.
+- [ ] `[should]` Support optional warm role/focus caches keyed by exact subject,
+  session, source, and agent-profile digests, with replay tests proving the
+  cache is not authoritative.
 - [ ] `[should]` Add compact TOON/JSONL views for Builder descriptor summaries
   and NLU action surface overviews.
 - [ ] `[should]` Extend Builder golden fixtures to validate compact context
@@ -599,8 +682,19 @@ Priority labels:
   `structuredContent`.
 - [ ] `[must]` Track model action/tool selection accuracy for compact NLU and
   Builder contexts.
+- [ ] `[must]` Add matched-task comparisons for full history, project-only,
+  semantic retrieval, and typed Context Compiler projections at fixed model,
+  authority, and total-system budgets.
+- [ ] `[must]` Measure required-context recall, selected-context precision,
+  wrong-subject negative transfer, stale-context failures, task completion,
+  and validation quality together.
+- [ ] `[must]` Add restart/reconnect and `as_of` replay fixtures for Builder and
+  Research Workbench role/focus projections.
 - [ ] `[should]` Track hallucinated ids, stale fingerprints, and invalid
   drill-down selections.
+- [ ] `[should]` Add ablation of the highest-utility selected unit and
+  counterfactual wrong-project/wrong-task candidates to test causal
+  sufficiency rather than packet size alone.
 - [ ] `[should]` Add regression thresholds for token reduction and validation
   pass rate.
 - [ ] `[could]` Add model-specific tokenizer support beyond the current stable
@@ -653,3 +747,20 @@ The first production-useful context compression slice is complete when:
 - mutation-producing workflows still require validated JSON output.
 - docs and examples clearly state that TOON is an LLM input projection, not the
   canonical AdaOS wire format.
+
+The first production-useful governed-context slice is complete when:
+
+- one Builder task and one Research Workbench implementation track resolve a
+  typed subject graph and produce an inspectable context plan;
+- canonical domain, project, component, source, evidence, and release units are
+  stored once and execution state references them by digest;
+- accepted knowledge, episodic history, procedural memory, and working context
+  follow different write/promotion rules;
+- restart/reconnect reconstructs the same authority and subject identities
+  without a provider transcript;
+- adversarial untrusted input cannot grant authority or enter reusable memory;
+- full-history, project-only, retrieval, and compiled-context arms are compared
+  at fixed models and end-to-end budgets;
+- Subscription and Context Inspector expose provider usage, cached/fresh input,
+  local Codex usage, selected context cost, and avoided model work without
+  double counting.

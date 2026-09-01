@@ -473,7 +473,7 @@ silently enlarge the session.
 ### Context projection
 
 The persisted and restorable form of these exposure tiers is defined by
-[Agent And Project Context Capsules](agent-context-capsules.md). A project may
+[Agent Context Graph And Capsules](agent-context-capsules.md). A project may
 have a warm model session, but the authoritative context remains an AdaOS-owned
 capsule selected by exact Project/source/SDK digests. Per-project model memory
 is only a disposable cache and cannot replace Development Session authority or

@@ -2,7 +2,7 @@
 
 Status: high-level sequencing for the AdaOS Builder vertical slice.
 
-Last reviewed: 2026-08-31.
+Last reviewed: 2026-09-01.
 
 This roadmap tracks how AdaOS evolves from separate skill/scenario/runtime
 surfaces into a coherent Builder workflow: idea -> governed artifact -> preview
@@ -143,6 +143,7 @@ gate easy to read by priority.
 | 10. Skill Factory | Complete for the single isolated-node scope: task-scoped access leases, User Hub validation/staging/approval, exact assignment, sparse path enforcement, and six golden outcomes are implemented. | Complete: success and failure rails are replayed through the real service contracts. | Open: multi-node pools and parallel dev tasks. | None. |
 | 11. Conversational Development | Locally validated semantic foundation: canonical Change/Run/Project model, shared statechart/resolver, capability negotiation, context capsules, risk-aware controls, dependent Process projection, durable prose continuation, outcome-oriented stable installation/placement, runtime-only Trial activation, chat-first Workbench, neutral channel ingress, cross-topology navigation, conversational package contract, output IR, story/static reports, and one non-Builder semantic proof. Open must gates include the executable-prototype foundation: bounded local CRUD/provider mocks, semantic activity requirements and simulation trace, compact composition slices, and the constrained conversational workflow profile and Automation handoff; plus one production IntentProposal rail, compatibility-rail retirement, complete registered activity/reply recovery, and one fresh operational empty-scenario acceptance run through the runtime-only Trial path. | Open: complete Builder-caller migration, deterministic representative-state profiles, structured renderer composition evidence, durable external delivery receipts, live English/Russian mutating Telegram parity, human wide/compact acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. Web/Voice consumed-control parity is locally complete. | Open: additional semantic operations, education-on-the-go exports, and optional rich-channel adapters. | Explicitly deferred: screenshot/multimodal context, general workflow prototype slices and round trips, protected-node migration/retirement, reverse/legacy workflow inference, visual workflow studio, non-conversational/advanced workflow prototyping, full Trial data isolation, simultaneous shared-skill versions, public alpha/beta rollout channels, hard Telegram parity, miniapp, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
 | 12. Project Composition And Scoped Development | Specified: Project is a distribution definition; Development Session, presentations, fallback skill preview, local artifact context, and canonical navigation have target contracts. | Open: registry/Catalog Project projection and portable artifact groups. | None. | External artifact providers/MCP and remote multi-component Project install/remove are deferred until local TLP proof. |
+| 13. Context-Compiled Execution | Open: typed subject resolution, ref-only automation state, role-scoped restoration, Context Receipts, domain handoff isolation, and Subscription accounting proofs. | Open: Context Inspector, related-work batching, and evidence-gated warm caches. | Open: model-assisted ranking behind deterministic policy gates. | Distributed context federation remains owned by the context/distributed roadmaps. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -1902,6 +1903,46 @@ Architecture owner:
   transactional install/remove, and shared-dependency reference accounting in
   the artifact/registry roadmaps; these do not block the local pre-Codex proof.
 
+## Phase 13. Context-Compiled Builder Execution
+
+Goal: make Builder a purpose-scoped consumer of the generic Context Graph and
+Compiler instead of a producer of self-contained, repeatedly nested context
+envelopes. Architecture and generic sequencing remain in
+[Agent Context Graph And Capsules](agent-context-capsules.md) and
+[Context Resolution, Compilation, And Compression](context-compression.md).
+
+- [ ] `[must]` Resolve every qualification, planning, Automation, Codex,
+  validation, and re-entry run from exact DevelopmentSession subject refs,
+  purpose, audience, policy, source generation, and agent profile.
+- [ ] `[must]` Persist one Context Plan and Context Attribution Receipt per run;
+  show selected/omitted/denied refs, context misses, provider/local-Codex usage,
+  cache contribution, latency, and evidence in Builder observability.
+- [ ] `[must]` Replace nested packet, snapshot, task, readiness, result, and
+  provenance copies in Builder/Skill Factory automation state with
+  content-addressed refs and a bounded workflow checkpoint. Keep historical
+  assignments readable through a compatibility projection.
+- [ ] `[must]` Consume domain handoffs as immutable read-only refs. Builder may
+  return clarification, feasibility, SDK ambiguity, capability gap, or core
+  issue proposals, but cannot mutate the owning domain contract.
+- [ ] `[must]` Prove cold restoration for a simple Dev Ticket project and a
+  Research Workbench ImplementationTrack after process/model restart, including
+  write-scope enforcement, publication, Trial/acceptance evidence, and
+  continuous Subscription accounting.
+- [ ] `[must]` Route successful/failing runs, user rejection, and validation
+  findings to episodic memory candidates only. Reusable repair/SDK guidance
+  requires independent evidence-gated promotion and rollback.
+- [ ] `[should]` Add a Context Inspector to the Builder Workbench using
+  Declarative Resource Workbench projections, with hidden/sealed content shown
+  only as denied metadata rather than disclosed text.
+- [ ] `[should]` Batch related Dev Tickets or ImplementationTracks against one
+  stable Project capsule while preserving independent Change, budget,
+  acceptance, and rollback lifecycles.
+- [ ] `[should]` Enable warm role/focus caches only after cold-replay equivalence
+  and matched-budget evidence show a net benefit.
+- [ ] `[could]` Add model-assisted context ranking after deterministic identity,
+  dependency, authority, trust, and freshness selection; retain the selected
+  plan and deterministic fallback for audit.
+
 ## Cross-Document Anchors
 
 Builder is intentionally cross-cutting. Detailed work remains in:
@@ -1914,6 +1955,10 @@ Builder is intentionally cross-cutting. Detailed work remains in:
 - [Project Composition, Presentation, and Development Context](project-composition-and-development-context.md):
   Project distribution, Application/presentation resolution, local artifact
   context, registry classification, and Builder Development Session boundary
+- [Agent Context Graph And Capsules](agent-context-capsules.md): typed subject
+  graph, context state classes, trust, invalidation, and restoration boundaries
+- [Context Resolution, Compilation, And Compression](context-compression.md):
+  generic registry/resolver/compiler/curator sequencing and evaluation gates
 - [Builder Conversational Development Architecture](builder-conversational-development.md):
   chat-first product model, canonical Change/Run terminology, interaction
   frames, semantic UI operations, and future proposal collaboration

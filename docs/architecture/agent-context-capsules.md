@@ -1,18 +1,21 @@
-# Agent And Project Context Capsules
+# Agent Context Graph And Capsules
 
-Status: target architecture informed by a measured Builder run.
+Status: target architecture informed by measured Builder and Research Workbench
+runs.
 
 Last reviewed: 2026-09-01.
 
 ## Problem
 
-AdaOS development work has several kinds of context with very different
+AdaOS agent work has several kinds of context with different owners and
 lifetimes:
 
 - stable platform contracts and public SDK/API knowledge;
+- durable domain aggregates such as a ResearchDirection and ResearchTask;
 - project composition, decisions, constraints, and component relationships;
 - current component source and semantic target locations;
 - one Change, Dev Ticket, Builder repair, or validation attempt;
+- accepted evidence, releases, and cross-project dependency state;
 - transient tool output, runtime diagnostics, and conversation turns.
 
 Putting all of them into one long conversation makes restoration expensive,
@@ -66,20 +69,51 @@ source indexes, or unnecessary model turns.
 
 ## Decision
 
-AdaOS uses hierarchical, immutable context capsules and ephemeral task
-overlays. A warm model session is an optional cache only.
+AdaOS uses a typed, immutable context graph, purpose-specific projections, and
+ephemeral task overlays. A warm model session is an optional cache only.
 
 ```text
-Platform Knowledge Capsule
-  -> Project Context Capsule
-     -> Component Context Projection
-        -> Change / Task Overlay
-           -> bounded tool working set
+                         Platform Knowledge Capsule
+                                      |
+       +------------------------------+----------------------------+
+       |                                                           |
+Domain Aggregate Capsule                                   Project Context Capsule
+Direction -> Task -> Accepted Compilation                  Project -> Component
+       |                                                           |
+       +------------> Implementation Track Handoff <---------------+
+                                      |
+                          Development Session / Change Overlay
+                                      |
+                             bounded tool working set
+
+SourceBundle, Evidence, ProjectRelease, policy, and SDK contract capsules are
+shared immutable nodes referenced from more than one branch.
 ```
 
-Each lower layer contains only its delta and references the digest of its base.
-Canonical contracts and source remain outside summaries and are retrieved by
-typed reference when needed.
+This is a directed acyclic graph, not a storage tree. Project is the primary
+engineering boundary, but it is not the universal owner of domain knowledge.
+A domain aggregate may outlive many Projects; one Project may serve several
+tasks or tracks. Every projection contains only its delta and digest-bound refs
+to canonical nodes. Canonical contracts, source, evidence, and accepted
+decisions remain outside summaries and are retrieved by typed reference.
+
+## Context State Classes
+
+The graph separates four classes that have different persistence and mutation
+semantics:
+
+| Class | Examples | Mutation rule |
+| --- | --- | --- |
+| Authoritative knowledge | accepted contracts, ResearchCompilation, policy, ProjectRelease | only an owning workflow may supersede or revoke it |
+| Procedural memory | validated playbooks, repair strategies, SDK usage guidance | evidence-gated promotion with version and rollback |
+| Episodic memory | runs, failures, comments, rejected paths, user feedback | append-only evidence with retention policy; never grants authority |
+| Working context | selected cards, source slices, recent observations, model transcript | disposable projection scoped to one run |
+
+An LLM may propose a memory candidate but cannot promote an observation,
+summary, or successful trajectory into authoritative or procedural state by
+writing its own context. Promotion follows a governed sequence:
+`propose -> qualify -> validate -> accept -> supersede/revoke`. It records the
+source episodes and evaluator and may require human or policy approval.
 
 ### Platform Knowledge Capsule
 
@@ -100,6 +134,26 @@ client_schema_digest
 The capsule can be shared by many projects. A project agent must not maintain
 its own divergent copy of platform semantics.
 
+### Domain Aggregate Capsule
+
+A domain capsule is owned by a typed domain workflow rather than by Builder or
+the model provider. It binds exact aggregate identities, revisions, accepted
+decisions, authority, and downstream refs. Examples include a research
+Direction/Task/Compilation chain, a governed workflow instance, or another
+long-lived resource aggregate whose lifecycle crosses Projects.
+
+A domain projection declares:
+
+- aggregate and selected-subject refs, revisions, and branch lineage;
+- accepted knowledge and unresolved decision refs;
+- source/evidence visibility and trust policy;
+- downstream Project, ImplementationTrack, release, or execution refs;
+- purpose-specific overview indexes without copying full activity history.
+
+The generic context layer does not define domain transitions. Research Fabric,
+Governed Workflow Runtime, or another owning capability validates those
+transitions and publishes immutable capsule nodes or binding events.
+
 ### Project Context Capsule
 
 The project capsule is scoped to one `ProjectDefinition` and base
@@ -119,6 +173,10 @@ Full ticket histories, Builder timelines, screenshots, source files, schemas,
 and logs are referenced rather than embedded. The capsule belongs to the
 project/workspace and remains usable when the executor changes from Codex to
 another model or deterministic worker.
+
+It does not own accepted scientific meaning, user feedback lifecycle, or
+cross-project platform knowledge. Those arrive as declared read-only refs with
+their original authority and trust classification intact.
 
 ### Component Context Projection
 
@@ -150,21 +208,45 @@ Previous runs are represented by outcome, candidate digest, unresolved reason,
 and evidence refs. Their full timelines are retrieved only for recovery or
 audit.
 
+### Shared Reference Capsules
+
+Large immutable objects that participate in several contexts remain independent
+nodes rather than being copied under each subject:
+
+- SourceBundle and bounded prepared-source views;
+- Evidence, validation receipts, traces, and screenshots;
+- ProjectRelease, candidate release, and source-generation manifests;
+- SDK/API/ABI contract sets and capability-gap records;
+- policies, mandates, role bindings, locale resources, and model profiles.
+
+Audience-specific views may redact or summarize a node, but retain a link to
+the same canonical digest. A view cannot silently change the authority,
+sensitivity, license, or trust class of its source.
+
 ## Agent Granularity
 
-Builder opens a project-scoped Development Session. It does not require a
-permanent model process for that project.
+Builder opens a project-scoped Development Session. Researcher opens a
+direction/task focus. Evaluator opens an evidence/release focus. None requires
+a permanent model process for that subject.
 
-An implementation may keep a warm execution session keyed by:
+An implementation may keep warm execution sessions, but the cache key follows
+the active role and work focus:
 
 ```text
-(project_context_digest, component_projection_digest, agent_profile_digest)
+Researcher: (direction_id, task_id, accepted_revision, agent_profile_digest)
+Builder:    (track_id, development_session_id, project_context_digest,
+             agent_profile_digest)
+Codex:      (task_overlay_digest, component_projection_digest,
+             agent_profile_digest)
+Evaluator:  (study_or_evidence_ref, project_release_digest,
+             evaluator_profile_digest)
 ```
 
 The warm session has these constraints:
 
 - it is disposable and cannot be the only copy of a decision;
-- switching projects creates a new scope instead of merging memories;
+- switching the selected subject creates a new scope instead of merging
+  memories;
 - a source, ProjectRelease, SDK, ABI, policy, or role digest change invalidates
   affected layers;
 - restoration reconstructs the prompt from capsules and refs, not from an
@@ -178,58 +260,133 @@ Suspending work writes a small checkpoint: current goal, completed decisions,
 open questions, candidate/evidence refs, and exact capsule digests. It does not
 serialize every tool result or conversation message.
 
-## Context Broker
+## Context Control Plane
 
-Root MCP is the agent-facing context front door. The target Context Broker
-provides typed operations equivalent to:
+The generic control plane has four separate responsibilities:
+
+| Service | Responsibility |
+| --- | --- |
+| Context Registry | immutable capsule metadata, typed graph edges, current bindings, lineage, retention |
+| Context Resolver | subject, purpose, audience, authority, policy, freshness, and dependency closure |
+| Context Compiler | utility/risk selection, budget packing, model-specific layout, source slices, cache plan |
+| Memory Curator | candidate qualification, evidence-gated promotion, supersession, revocation, and rollback |
+
+Root MCP is one agent-facing adapter over this control plane, not the authority
+or persistence model. API and SDK consumers use the same typed services without
+shelling out to MCP or CLI.
+
+The target operations are equivalent to:
 
 ```text
-context.resolve(scope_ref, task_intent, budget)
-context.overview(capsule_ref)
-context.drilldown(refs, byte_budget)
+context.resolve(subject_refs, purpose, audience, policy_ref)
+context.plan(resolution_ref, model_profile, token_budget, latency_budget)
+context.compile(plan_ref, output_format)
+context.overview(capsule_ref, audience)
+context.drilldown(refs, byte_budget, audience)
 context.source_slices(target_refs, base_digest)
+context.propose_memory(source_refs, candidate_kind)
+context.promote(candidate_ref, validation_refs, authority_ref)
 context.checkpoint(run_ref, outcome)
 context.invalidate(event_ref)
 context.inspect(run_ref)
 ```
 
-`resolve` returns a deterministic packing plan before model submission. It
-selects compact overviews first and exact details second. The model may request
-more detail, but core enforces scope, byte budget, freshness, and RBAC.
+`resolve` computes the admissible graph; `plan` selects the minimal sufficient
+working set; `compile` creates the provider/model-specific representation.
+Selection accounts for required dependency closure, relevance, decision
+utility, negative-transfer risk, freshness, sensitivity, and marginal token
+cost rather than using unqualified top-k retrieval.
 
-The canonical packet may retain rich evidence by reference. The model-facing
-projection must not stringify that complete packet into provenance and then
-embed it again elsewhere.
+The resulting plan records required, candidate, selected, omitted, denied, and
+unavailable refs with reasons. The model may request more detail, but core
+enforces subject scope, byte/token budget, freshness, trust, and RBAC. The
+canonical packet may retain rich evidence by reference; its model projection
+must not stringify and embed the same packet as provenance elsewhere.
 
 ## Storage And Events
 
 Capsule metadata is relational/resource data; larger immutable projections are
-content-addressed artifacts. The minimum generic records are:
+content-addressed artifacts. The minimum generic resources are Capsule,
+Relationship, SubjectBinding, ContextPlan, MemoryCandidate, and ContextReceipt.
+The capsule envelope starts with:
 
 ```json
 {
-  "schema": "adaos.context.capsule.v1",
+  "schema": "adaos.context.capsule.v2",
   "capsule_id": "ctxcap.<id>",
-  "scope_ref": "project:<id>",
+  "subject_refs": ["project:<id>", "component:<id>"],
   "kind": "project",
-  "base_refs": ["ctxcap.<platform-id>"],
+  "relationship_refs": [
+    {"type": "uses", "ref": "ctxcap.<platform-id>"}
+  ],
+  "authority_ref": "project:<id>",
+  "trust_class": "accepted",
+  "sensitivity": "workspace",
+  "retention_class": "accepted_release_lineage",
   "source_digests": {},
   "summary_ref": "artifact://context/<digest>",
   "index_refs": [],
   "policy_ref": "policy:<id>",
   "locale": "en",
+  "valid_from": "<timestamp>",
+  "valid_to": null,
+  "recorded_at": "<timestamp>",
+  "supersedes_refs": [],
   "created_at": "<timestamp>",
   "digest": "sha256:<digest>"
 }
 ```
 
 The record is immutable. A mutable binding selects the current capsule for a
-project/session. Signed operational events invalidate or advance bindings when
-source, release, SDK, ABI, role policy, tickets, or accepted changesets change.
+subject, role focus, or session. Signed operational events invalidate or
+advance bindings when source, release, SDK, ABI, role policy, tickets, accepted
+changesets, domain revisions, or evidence change.
+
+`valid_from/valid_to` describe when a claim or contract applies in its domain;
+`recorded_at` describes when AdaOS observed it. `as_of` reconstruction uses
+both, so a replay can recover the exact admissible context at decision time.
+Supersession does not erase prior accepted state. Compaction may deduplicate
+physical artifacts by digest while preserving all logical refs and events.
+
+### Trust, Privacy, And Taint
+
+Content addressing proves identity, not truth or safety. Every capsule and
+derived view carries authority, trust, sensitivity, license, retention, and
+origin metadata. Untrusted source text, screenshots, voice/Telegram input,
+tool output, repositories, and prior agent trajectories remain tainted through
+derived summaries until an owning validator explicitly promotes a claim.
+
+Source content cannot grant tools, widen write paths, reveal denied refs, or
+change a mandate. Provider/model caches are partitioned by authorization and
+data-residency policy. Revocation removes current bindings and future
+retrieval, while durable audit retains the permitted minimum evidence.
 
 This model fits Declarative Resource Workbench: Builder can inspect capsule
 layers, included/omitted refs, freshness, access decisions, and measured costs
 without exposing hidden model state.
+
+### Independent Invalidation Domains
+
+Invalidation follows typed graph edges instead of clearing one project-wide
+memory:
+
+| Event | Invalidates | Does not rewrite |
+| --- | --- | --- |
+| prepared source or prototype revision | dependent formulation/compilation candidates | prior accepted compilation |
+| accepted compilation revision | AutomationBrief and track handoff projections | unrelated Project history |
+| component source or ProjectRelease change | project/component execution projections | scientific task meaning |
+| SDK/API/ABI revision | affected platform and project contract projections | domain evidence |
+| new Study/evidence result | result-review and synthesis projections | historical release or compilation |
+| role/policy/sensitivity change | audience views and provider cache bindings | canonical artifact bytes |
+
+### Provider-Neutral State And Model Layout
+
+Canonical capsules do not encode one model's prompt format. Context Compiler
+selects ordering, detail level, tool descriptions, multimodal representation,
+and stable-prefix/mutable-suffix layout for an exact model profile. Prompt
+cache identity includes the selected capsule digests, model/provider profile,
+authorization partition, and compiler version. Cache hits are an optimization;
+they are never a restoration or audit mechanism.
 
 ## Execution Routing
 
@@ -252,7 +409,10 @@ context/SDK gap.
 
 Every model or agent run records `adaos.agent.context_receipt.v1` with:
 
-- capsule and task-overlay digests;
+- subject, purpose, audience, capsule, and task-overlay digests;
+- resolver/compiler/model-profile versions and policy decision ref;
+- required, selected, omitted, denied, unavailable, and drill-down refs with
+  reasons;
 - unique bytes and estimated tokens per layer;
 - provider input, cached input, output, and reasoning tokens;
 - tool/model boundary count;
@@ -281,7 +441,15 @@ The first gates are comparative rather than model-specific absolute promises:
 - the same acceptance fixture passes before and after compression;
 - fresh input, output, tool boundaries, latency, and validation retries improve
   against the recorded Subscription baseline;
-- cache reuse is reported but cannot conceal growth in unique context.
+- cache reuse is reported but cannot conceal growth in unique context;
+- a counterfactual wrong-project or wrong-task candidate is rejected even when
+  semantically similar;
+- removing a required context unit causes a detected context miss or measurable
+  acceptance regression rather than silent success;
+- restart/reconnect reconstructs the same authoritative refs and an equivalent
+  working projection without restoring a hidden provider transcript;
+- evaluation reports task success, context recall/precision, stale-context
+  failures, negative transfer, latency, and provider/accounting cost together.
 
 ## Failure Modes
 
@@ -295,6 +463,48 @@ The first gates are comparative rather than model-specific absolute promises:
 | Warm agent becomes authority | disposable cache contract and replay test |
 | Missing source detail causes exploration | semantic source index and coverage gate |
 | Compact context hides a core limitation | typed SDK/core capability escalation |
+| Successful episode becomes trusted guidance | governed memory promotion with evidence and rollback |
+| Untrusted input poisons later sessions | taint propagation, authority filtering, revocation, adversarial tests |
+| Domain meaning is forced under Project | typed subject graph and independent authority refs |
+| Concurrent branches overwrite focus | optimistic bindings, immutable branches, explicit merge/conflict |
+| Provider-specific layout becomes canonical | provider-neutral capsules and versioned compiler profiles |
+
+## State-Of-The-Art Alignment And Claim Boundary
+
+The architecture composes established directions rather than claiming a new
+memory algorithm:
+
+- hierarchical/virtual context movement follows
+  [MemGPT](https://arxiv.org/abs/2310.08560);
+- modular working, episodic, semantic, and procedural memory follows
+  [CoALA](https://arxiv.org/abs/2309.02427);
+- incremental curated context avoids repeated-summary collapse described by
+  [Agentic Context Engineering](https://arxiv.org/abs/2510.04618);
+- bounded handoff filtering and replaceable sessions are consistent with
+  [OpenAI Agents SDK handoffs](https://openai.github.io/openai-agents-python/handoffs/);
+- event history and cold replay follow durable-execution practice represented
+  by [Temporal](https://docs.temporal.io/workflow-execution);
+- Entity/Activity/Agent lineage maps to
+  [W3C PROV-O](https://www.w3.org/TR/prov-o/);
+- comparative retrieval/trajectory evaluation is informed by
+  [ContextBench](https://arxiv.org/abs/2602.05892);
+- tainted persistent-memory tests respond to the memory-poisoning threat model
+  in [From Untrusted Input to Trusted Memory](https://arxiv.org/abs/2606.04329).
+
+AdaOS's candidate systems contribution is continuity across user/domain
+intent, scientific or workflow authority, software Project composition,
+agent execution, evidence, release, human acceptance, subscription accounting,
+and subnet evolution while agents and providers remain replaceable. The typed
+multi-authority graph, purpose/audience compiler, evidence-gated memory
+promotion, and exact Context Receipt form one governed context control plane.
+
+That composition is a hypothesis, not a performance claim. A novelty or SOTA
+claim requires fixed-model, fixed-tool, fixed-authority, and matched-total-cost
+comparisons against full history, project-only packets, and retrieval
+baselines. Required outcomes include task/evidence validity, context
+recall/precision, negative transfer, security violations, recovery, latency,
+and cost across Builder and at least one non-development domain such as
+Research Workbench.
 
 ## Relationship To Existing Contracts
 
@@ -306,8 +516,13 @@ The first gates are comparative rather than model-specific absolute promises:
   and should reference the selected capsule layers.
 - `adaos.builder.development_session.v1` remains the authority boundary for
   targets, context members, artifacts, budget, and agent profile.
-- Context Compression owns overview/detail projections and prompt packing.
-- Root MCP owns agent-facing retrieval and audit.
+- Context Compression owns resolution planning, overview/detail projections,
+  model-specific prompt packing, and comparative context evaluation.
+- Root MCP owns one agent-facing retrieval adapter and audit surface; it is not
+  capsule storage or workflow authority.
 - Development Signals and Dev Tickets provide change intent and lifecycle, not
   project memory storage.
+- Research Fabric owns Direction/Task/Compilation/ImplementationTrack
+  transitions and publishes their context nodes; the generic context plane does
+  not infer scientific acceptance from chat or Builder activity.
 

@@ -99,8 +99,8 @@ Current target-state control-plane extensions are documented in:
 - [Skill Projection Runtime SDK](skill-projection-runtime-sdk.md): target SDK/core rails for projection slots, stream receivers, dirty routing, fingerprinted Yjs writes, and skill migration checklists
 - [Root MCP Foundation](root-mcp-foundation.md): root-hosted agent-facing foundation for future MCP development and operations surfaces
 - [Root MCP Roadmap](root-mcp-roadmap.md): sequencing for planes, descriptor cache, session leases, and companion slices such as `ProfileOps`
-- [Context Compression Layer](context-compression.md): lossless machine contracts, compact model views, drill-down, token budgets, and validation for LLM-facing surfaces
-- [Agent And Project Context Capsules](agent-context-capsules.md): hierarchical platform/project/component/task context, disposable warm agents, invalidation, restoration, and context-cost attribution
+- [Context Resolution, Compilation, And Compression Layer](context-compression.md): governed subject resolution, model-neutral context selection, compact model views, drill-down, token budgets, and comparative validation
+- [Agent Context Graph And Capsules](agent-context-capsules.md): typed platform/domain/project/component/task graph, memory classes and promotion, disposable warm agents, trust, invalidation, restoration, and context-cost attribution
 - [AdaOS Supervisor](adaos-supervisor.md): local always-on process and update supervision authority above the restartable runtime
 - [AdaOS Android Full Node](android-full-node.md): experimental target architecture for an arm64 Android APK with embedded Python, an Android-owned lifecycle, an immutable skill bundle, browser access through zone LO, and optional member-hub connectivity
 - [AdaOS Android Full Node Roadmap](android-full-node-roadmap.md): first-runnable-draft sequence from an embedded-Python sentinel and Android `y-py` wheel through the curated skill, browser, member-link, and 2 GB device proofs

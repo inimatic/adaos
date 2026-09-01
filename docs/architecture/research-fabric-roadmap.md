@@ -2,7 +2,7 @@
 
 Status: domain roadmap for the proposed AdaOS Research Fabric.
 
-Last reviewed: 2026-08-29.
+Last reviewed: 2026-09-01.
 
 This roadmap sequences the implementation of the
 [AdaOS Research Fabric](research-fabric.md). TLP is the first transparent
@@ -27,12 +27,15 @@ and provider failures, and export a portable evidence bundle from which the
 declared primary analysis can be reproduced.
 
 The target then extends the same substrate so a user can open one shared
-Research Workbench, create and focus a research Project plus its primary
-direction skill through Builder SDK, add local manifested artifact groups,
-develop and accept a typed Research Prototype with an LLM, create an explicit
-Builder Development Session, let Codex adapt only its admitted targets,
-publish the Project, and instantiate a governed Experiment Campaign.
-With an explicit Research Mandate, the same project can run unattended through
+Research Workbench, create and focus a ResearchDirection and bounded task, add
+local manifested artifact groups, develop and accept a typed ResearchPrototype
+with an LLM, and create/select an ImplementationTrack and engineering Project
+only at the realization boundary. Builder opens an explicit DevelopmentSession,
+Codex adapts only admitted targets, and publication creates an exact
+ProjectRelease before a governed ExperimentCampaign consumes it. The context
+control plane restores Researcher, Builder/Codex, and Evaluator from typed
+domain/project/evidence capsule projections rather than one Project transcript.
+With an explicit Research Mandate, the same direction can run unattended through
 exploration, bounded software adaptation, confirmation, ClaimSet, and
 ResearchRelease. A later writer may derive a neutral draft essay from that
 release, but external publication remains separately authorized.
@@ -185,10 +188,10 @@ scientific conclusion. A local demo is not production acceptance.
 | ARF5 | Ray is a conforming optional executor service skill | `deferred` | resume only after the complete local/member-node loop |
 | ARF6 | TLP passes the deterministic scientific and operational reference proof | `hypothesis` | next scientific gate |
 | ARF7.0 | Builder-embedded precursor proves SourceBundle, ResearchPrototype acceptance, and AutomationBrief contracts | `validated-local` | technical precursor complete |
-| ARF7.1 | Research Workbench creates/focuses a local research Project, admits local artifact groups, exposes provenance/coverage and a deterministic formulation review, and creates a scoped pre-Codex Development Session | `validated-local`, including strengthened TLP admission; authenticated browser reload receipt pending | active UX acceptance gate |
+| ARF7.1 | Research Workbench creates/focuses a local direction precursor, admits local artifact groups, exposes provenance/coverage and a deterministic formulation review, and creates a scoped pre-Codex Development Session | `validated-local`, including strengthened TLP admission; authenticated browser reload receipt pending | active UX acceptance gate; ARF7.4 owns normalized identities |
 | ARF7.2 | Codex realizes the exact brief as a validated and published TLP direction skill | `validated-local`; task-006 also has an immutable ProjectRelease | complete locally |
 | ARF7.3 | Clean from-raw research compilation is calibrated under matched C0-C4 TLP arms; the published direction then instantiates and runs the accepted local workflow | `validated-local-operability`; v32 is negative/inconclusive for probability and task-006 closes only the end-to-end C3 operability gate | paired probability proof remains open alongside ARF6 |
-| ARF7.4 | Workbench separates live Direction/Agenda/Task/ImplementationTrack from distributable Project, migrates TLP calibration into one task lineage, and proves generic outline/full-page navigation | `implemented-partial` | domain normalization, Project contracts, generic navigation, and TLP lineage are locally proven; release/export and full recovery proof remain open |
+| ARF7.4 | Workbench separates live Direction/Agenda/Task/ImplementationTrack from distributable Project, migrates TLP calibration into one task lineage, adopts the typed Context Graph/Compiler, and proves generic navigation plus role-scoped restoration | `implemented-partial` | domain normalization, Project contracts, generic navigation, and TLP lineage are locally proven; context adaptation, release/export, and full recovery proof remain open |
 | ARF7.5 | Research Fabric admits conceptual inquiry through typed projection and ProblemDisposition before conceptual framework synthesis, then admits AcceptedResearchSynthesis, traced DraftCandidate, and Gate A1 freeze before any implementation handoff | typed inquiry is `implemented` and calibrated; synthesis is `implemented` for ABI/schema/SDK/template and `specified` for remaining Workbench integration | before Evolnomics implementation |
 | ARF8 | aResearcher completes a mandate-bound autonomous TLP loop through ResearchRelease | `hypothesis` | after ARF7.4 |
 | ARF9 | ResearchCompilerBench/ARRB measures artifact-to-experiment compilation and replication on frozen multi-domain tasks and matched budgets | `hypothesis` | compilation track after ARF7.3; autonomous replication track after ARF8 |
@@ -1828,6 +1831,9 @@ sessions, or UI nodes into research-direction identities.
 records remain readable. Core layout variants, typed navigation targets,
 Project/Development Session contracts, and Artifact Pipeline release services
 are available for extension without a Workbench-private transport or renderer.
+The generic Context Registry/Resolver/Compiler schemas are stable enough to
+represent domain, project, component, source, evidence, and task-overlay nodes
+without making Research Fabric transitions core-owned.
 
 **Exit proof:** after restart and reconnect, an operator opens the portfolio,
 selects the canonical TLP calibration direction, navigates one bounded task and
@@ -1835,7 +1841,10 @@ its C0-C4 development/evaluation lineage, opens the exact Project-scoped Builder
 session, and returns without identity drift. A new accepted task produces a
 task-scoped ResearchCompilation, ImplementationTrack, candidate ProjectRelease,
 Study refs, and one joined activity trail. No calibration candidate appears as
-a top-level direction or ordinary Desktop application.
+a top-level direction or ordinary Desktop application. Researcher,
+Builder/Codex, and Evaluator each receive a bounded role/purpose projection;
+their Context Attribution Receipts prove exact selected/omitted/denied refs,
+cost, trust, and restart reconstruction without a provider transcript.
 
 #### Domain identities, ownership, and migration
 
@@ -2004,6 +2013,66 @@ a top-level direction or ordinary Desktop application.
   `master/slave` in the ABI; the relationship is orchestration and lifecycle,
   not inherited data authority.
 
+#### Context graph and Research Workbench adaptation
+
+- [ ] `[must]` `ARF7.4-36` Publish ResearchDirection, ResearchTask, accepted
+  ResearchCompilation, ImplementationTrack, SourceBundle, Evidence, and
+  ProjectRelease as immutable domain-owned context nodes with typed edges,
+  authority, trust, sensitivity, retention, valid-time, recorded-time, and
+  supersession metadata. Do not make capsule bindings a second domain store.
+- [ ] `[must]` `ARF7.4-37` Implement purpose/audience projections and restore
+  keys for Researcher formulation, Builder qualification, Codex
+  implementation, and Evaluator result review. Close the Research Workbench
+  part of `ARF7.4-14` only when each actor receives least-read/least-write
+  context and denied/hidden refs remain non-disclosed.
+- [ ] `[must]` `ARF7.4-38` Bind every DevelopmentSession and AutomationBrief to
+  exact Direction, Task, Compilation, Track, Project, target, SourceBundle,
+  policy, and agent-profile capsule digests. Store task, readiness, result,
+  checkpoint, and provenance payloads once as content-addressed artifacts;
+  migrate existing multi-megabyte TLP automation records to ref-only state
+  while retaining backward-readable evidence.
+- [ ] `[must]` `ARF7.4-39` Implement research invalidation edges and `as_of`
+  replay: source/prototype changes affect formulation candidates; accepted
+  compilation changes affect handoffs; source/release changes affect
+  engineering views; new Study evidence affects review/synthesis. Prior
+  accepted compilations, releases, and evidence remain immutable.
+- [ ] `[must]` `ARF7.4-40` Propagate origin/trust/taint through prepared sources,
+  chat, voice, Telegram, screenshots, repositories, tool output, summaries, and
+  retrieved episodes. Prove that source text or a successful prior run cannot
+  widen a ResearchMandate, reveal hidden evaluation material, or promote itself
+  into accepted knowledge/procedural memory.
+- [ ] `[must]` `ARF7.4-41` Emit one inspectable Context Plan and Context
+  Attribution Receipt per Researcher/Builder/Codex/Evaluator run with required,
+  selected, omitted, denied, unavailable, and drill-down refs; unique/cached
+  tokens; tool boundaries; latency; subscription cost; and terminal evidence.
+  Expose the joined lineage in Builder/Resource Workbench without exposing
+  hidden prompt or sealed evaluator content.
+- [ ] `[must]` `ARF7.4-42` Add matched-budget TLP comparisons for full history,
+  Project-only context, semantic retrieval, and typed Context Compiler
+  projections. Measure evidence-valid completion, required-context recall,
+  selected-context precision, wrong-task/project negative transfer, stale-state
+  failures, provider/local-Codex usage, latency, and human intervention.
+- [ ] `[should]` `ARF7.4-43` Introduce governed research memory curation:
+  failures, rejected tracks, clarifications, and user feedback remain episodic;
+  reusable formulation or SDK guidance requires an evidence-backed candidate,
+  owner acceptance, version, rollback, and cross-task validation.
+- [ ] `[should]` `ARF7.4-44` Reuse one Project capsule and stable platform/source
+  refs across multiple task/ImplementationTrack batches while keeping each
+  DevelopmentSession overlay and budget independent. Demonstrate lower context
+  and token overhead without cross-task decision leakage.
+- [ ] `[must]` `ARF7.4-45` Extend `ARF7.4-30` with a process/model restart proof:
+  reopen Workbench at Direction/Task focus, Builder at Track/Session/Project,
+  and result review at Evidence/ProjectRelease; verify identity, authority,
+  hidden-material isolation, equivalent context plans, and continuous cost
+  attribution.
+- [ ] `[could]` `ARF7.4-46` Keep disposable warm caches per exact role/focus and
+  model profile when repeated-run evidence shows a net latency/token benefit.
+  Eviction must pass the same replay suite as a cold restore.
+- [ ] `[deferred]` `ARF7.4-47` Replicate and merge live context bindings across
+  independent subnet authorities. Resume only with distributed ACL, conflict,
+  revocation, retention, sealed-data, and offline reconciliation contracts;
+  immutable portable snapshots remain the interim exchange mechanism.
+
 #### ARF7.4 implementation checkpoint (2026-08-18)
 
 The completed boxes above are backed by local contract tests and the installed
@@ -2037,7 +2106,11 @@ and activity federation beyond Orchestrator/evaluator records.
 for all records that exist, but the historical calibration has no retained
 DevelopmentSession ref or candidate ProjectRelease. `ARF7.4-30` has local API,
 schema, migration, and Forge-route evidence but not yet the complete
-restart/reconnect, ProjectRelease, and joined-journal acceptance proof. Thus
+restart/reconnect, ProjectRelease, and joined-journal acceptance proof.
+`ARF7.4-36..45` now own the Research Workbench adaptation to the generic typed
+Context Graph/Compiler, state de-duplication, trust/taint, role projections,
+receipts, comparative cost evidence, and cold restoration. `ARF7.4-46` is an
+optional cache optimization; `ARF7.4-47` remains deferred federation. Thus
 ARF7.4 is materially implemented but not closed.
 
 Published local checkpoint: Research Orchestrator `0.27.0` (workspace release
