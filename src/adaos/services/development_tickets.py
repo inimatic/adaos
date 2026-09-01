@@ -1665,17 +1665,49 @@ class DevelopmentTicketService:
             if can_followup
             else automation_service.start_from_execute
         )
-        started = start_method(
-            object_type=target["object_type"],
-            object_id=target["object_id"],
-            implementation_brief=brief,
-            webspace_id=_text(webspace_id) or "desktop",
-            conversation_id=_text(conversation_id) or f"dev-ticket:{ticket['ticket_id']}",
-            execution_budget=bounded_budget,
-            agent_profile=dict(agent_profile) if isinstance(agent_profile, Mapping) else None,
-            mcp=dict(mcp) if isinstance(mcp, Mapping) else None,
-            links=automation_links,
-        )
+        try:
+            started = start_method(
+                object_type=target["object_type"],
+                object_id=target["object_id"],
+                implementation_brief=brief,
+                webspace_id=_text(webspace_id) or "desktop",
+                conversation_id=_text(conversation_id) or f"dev-ticket:{ticket['ticket_id']}",
+                execution_budget=bounded_budget,
+                agent_profile=dict(agent_profile) if isinstance(agent_profile, Mapping) else None,
+                mcp=dict(mcp) if isinstance(mcp, Mapping) else None,
+                links=automation_links,
+            )
+        except Exception as exc:
+            # Handoff is durable before Automation is queued. Reconcile a
+            # failed session when available, then always release the user
+            # ticket from the misleading in_builder state.
+            try:
+                self.sync_builder_repair(
+                    ticket["ticket_id"],
+                    repair_id=repair_id,
+                    actor=_text(actor) or "builder.automation",
+                    repair_service=service,
+                    automation_service=automation_service,
+                )
+            except Exception:
+                _log.exception(
+                    "failed to reconcile autonomous Builder launch ticket=%s repair=%s",
+                    ticket["ticket_id"],
+                    repair_id,
+                )
+            current_ticket = self.get_ticket(ticket["ticket_id"])
+            if current_ticket and _text(current_ticket.get("status")) == "in_builder":
+                self._update_ticket(
+                    ticket["ticket_id"],
+                    status="ready_for_builder",
+                    history_item={
+                        "kind": "builder_automation_start_failed",
+                        "actor": _text(actor) or "builder.automation",
+                        "repair_id": repair_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+            raise
         correlated, correlation = _automation_matches_work(
             started,
             ticket_ids=[ticket["ticket_id"]],

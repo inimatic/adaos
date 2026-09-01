@@ -223,6 +223,14 @@ class _FakeFailingBuilderAutomation(_FakeBuilderAutomation):
         }
 
 
+class _FakeLaunchErrorBuilderAutomation(_FakeFailingBuilderAutomation):
+    def start_from_execute(self, **kwargs):
+        self.counter += 1
+        self.calls.append(dict(kwargs))
+        self.latest_links = dict(kwargs.get("links") or {})
+        raise ValueError("Builder Context Plan is insufficient for Automation")
+
+
 def _schema(name: str) -> dict:
     return json.loads((Path(__file__).parents[1] / "src" / "adaos" / "abi" / name).read_text(encoding="utf-8"))
 
@@ -1002,6 +1010,37 @@ def test_failed_autonomous_repair_returns_ticket_to_builder_queue_with_evidence(
     assert repair["status"] == "in_progress"
     assert repair["context"]["automation"]["status"] == "failed"
     assert repair["context"]["usage"]["receipt_status"] == "unavailable"
+
+
+def test_autonomous_launch_error_releases_ticket_from_in_builder(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    automation = _FakeLaunchErrorBuilderAutomation()
+    ticket = _bounded_demo_ticket(
+        service,
+        summary="Rename the Demo Metrics heading",
+        target_files=["skills/demo_metrics_skill/webui.json"],
+        acceptance="The heading is renamed.",
+    )
+
+    with pytest.raises(ValueError, match="Context Plan is insufficient"):
+        service.start_autonomous_repair(
+            ticket["ticket_id"],
+            actor="builder:automation",
+            repair_service=repair_service,
+            automation_service=automation,
+            webspace_id="desktop",
+        )
+
+    updated = service.get_ticket(ticket["ticket_id"])
+    assert updated is not None
+    assert updated["status"] == "ready_for_builder"
+    assert any(
+        item["kind"] == "builder_automation_failed"
+        for item in updated["history"]
+    )
+    repair = repair_service.list(project_id="demo_metrics_skill")[0]
+    assert repair["work_status"] == "failed"
 
 
 def test_builder_sync_rejects_completed_result_from_another_ticket_repair(tmp_path: Path) -> None:

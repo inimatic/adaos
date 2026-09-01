@@ -15,6 +15,7 @@ from adaos.services.builder import automation as automation_module
 from adaos.services.builder.automation import (
     BuilderAutomationService,
     _brief_has_structured_edits,
+    _iteration_context_projection,
 )
 from adaos.services.builder.workspace import BuilderWorkspaceService
 from adaos.services.root.service import _rewrite_skill_template_identity
@@ -1025,6 +1026,48 @@ def test_structured_edit_brief_supersedes_failed_model_continuation(
     assert service._qualified_continuation_checkpoint(
         {"implementation_brief": "Implement the requested change."}
     ) == {"mode": "validate_preserved_candidate"}
+
+
+def test_structured_edit_context_projection_keeps_authority_without_prompt_payload() -> None:
+    brief = json.dumps(
+        {
+            "ticket_id": "dticket.demo",
+            "repair_hints": {
+                "profile": "surgical_ui",
+                "target_files": ["skills/demo/webui.json"],
+                "target_refs": ["widget:chart.title"],
+                "acceptance_checks": ["The title is Current metric trend."],
+                "structured_edits": {
+                    "schema": "adaos.builder.structured_edit_set.v1",
+                    "operations": [
+                        {
+                            "op": "replace_text",
+                            "path": "skills/demo/webui.json",
+                            "old": "Selected metric trend",
+                            "new": "Current metric trend",
+                            "expected_count": 2,
+                        }
+                    ],
+                },
+            },
+        }
+    )
+
+    projection = _iteration_context_projection(
+        {"digest": "sha256:packet", "large_payload": "x" * 100_000},
+        implementation_brief=brief,
+        packet_ref="artifact://context/sha256/packet",
+        packet_digest="sha256:packet",
+        kind="skill",
+        project_id="demo",
+    )
+
+    assert projection["schema"] == "adaos.builder.deterministic_context_projection.v1"
+    assert projection["context_packet"]["ref"] == "artifact://context/sha256/packet"
+    assert projection["repair"]["operation_count"] == 1
+    assert projection["authority"]["execution_strategy"] == "structured_edits"
+    assert "large_payload" not in projection
+    assert len(json.dumps(projection).encode("utf-8")) < 2_000
 
 
 def test_path_guard_failure_reuses_original_budget_candidate_after_requalification(

@@ -221,6 +221,76 @@ def _brief_has_structured_edits(value: Any) -> bool:
     )
 
 
+def _iteration_context_projection(
+    context_packet: Mapping[str, Any],
+    *,
+    implementation_brief: str,
+    packet_ref: str,
+    packet_digest: str | None,
+    kind: str,
+    project_id: str,
+) -> dict[str, Any]:
+    projection = context_packet_prompt_projection(
+        context_packet,
+        implementation_brief=implementation_brief,
+    )
+    if not _brief_has_structured_edits(implementation_brief):
+        return projection
+    payload = _brief_payload(implementation_brief)
+    repair_hints = (
+        dict(payload.get("repair_hints"))
+        if isinstance(payload.get("repair_hints"), Mapping)
+        else {}
+    )
+    structured = (
+        dict(repair_hints.get("structured_edits"))
+        if isinstance(repair_hints.get("structured_edits"), Mapping)
+        else {}
+    )
+    structured_digest = "sha256:" + hashlib.sha256(
+        json.dumps(
+            structured,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "schema": "adaos.builder.deterministic_context_projection.v1",
+        "target": {"object_type": kind, "object_id": project_id},
+        "context_packet": {
+            "ref": packet_ref,
+            "digest": packet_digest,
+        },
+        "repair": {
+            "ticket_id": str(payload.get("ticket_id") or "").strip() or None,
+            "profile": str(repair_hints.get("profile") or "").strip() or None,
+            "target_files": [
+                str(item).replace("\\", "/").strip("/")
+                for item in repair_hints.get("target_files") or []
+                if str(item).strip()
+            ][:12],
+            "target_refs": [
+                " ".join(str(item).split())[:300]
+                for item in repair_hints.get("target_refs") or []
+                if str(item).strip()
+            ][:20],
+            "acceptance_checks": [
+                " ".join(str(item).split())[:500]
+                for item in repair_hints.get("acceptance_checks") or []
+                if str(item).strip()
+            ][:12],
+            "structured_edit_set_digest": structured_digest,
+            "operation_count": len(structured.get("operations") or []),
+        },
+        "authority": {
+            "write_scope": f"{kind}:{project_id}",
+            "core_mutation": "denied",
+            "execution_strategy": "structured_edits",
+        },
+    }
+
+
 def _cleanup_dev_skill_runtime(skill_id: str) -> dict[str, Any]:
     """Invoke the core-owned DEV runtime lifecycle without deleting source."""
 
@@ -500,9 +570,13 @@ class BuilderAutomationService:
         run_ref = f"builder-run:{session.get('session_id')}:{int(session.get('iteration') or 0)}"
         change_ref = f"change:{session.get('change_set_id')}"
         packet_artifact = service.put_artifact(dict(context_packet))
-        projection = context_packet_prompt_projection(
+        projection = _iteration_context_projection(
             context_packet,
             implementation_brief=implementation_brief,
+            packet_ref=packet_artifact["ref"],
+            packet_digest=str(context_packet.get("digest") or "").strip() or None,
+            kind=kind,
+            project_id=project_id,
         )
         platform = service.register_capsule(
             {
