@@ -30,6 +30,7 @@ from adaos.services.skill_factory_worker import (
     _codex_budget_observed_tokens,
     _codex_jsonl_usage,
     _codex_jsonl_live_budget_estimate,
+    _codex_jsonl_root_mcp_evidence,
     _codex_prompt_budget_check,
     _context_packet_prompt_projection,
     _root_mcp_profile_from_assignment,
@@ -61,6 +62,96 @@ def test_codex_jsonl_usage_accepts_reasoning_output_tokens(tmp_path: Path) -> No
         "reasoning_tokens": 7,
         "model_tokens": 120,
     }
+
+
+def test_codex_jsonl_root_mcp_evidence_is_bounded_and_target_scoped(tmp_path: Path) -> None:
+    journal = tmp_path / "codex.jsonl"
+    journal.write_text(
+        json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "mcp_tool_call",
+                    "status": "completed",
+                    "server": "builder_e2e",
+                    "tool": "get_status",
+                    "arguments": {"target_id": "hub:sn_demo"},
+                    "result": {
+                        "structured_content": {
+                            "target_id": "hub:sn_demo",
+                            "state": "connected_hub",
+                            "private_detail": "not copied to evidence",
+                        }
+                    },
+                    "error": None,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assignment = {
+        "realize_request": {
+            "artifacts": {"repair_hints": {"requires_root_mcp": True}}
+        }
+    }
+
+    evidence = _codex_jsonl_root_mcp_evidence(
+        journal,
+        assignment=assignment,
+        root_mcp={
+            "enabled": True,
+            "server_name": "builder_e2e",
+            "enabled_tools": ["get_status"],
+            "bound_target_id": "hub:sn_demo",
+        },
+    )
+
+    assert evidence is not None
+    assert evidence["status"] == "passed"
+    assert evidence["tool"] == "get_status"
+    assert evidence["bound_target_id"] == "hub:sn_demo"
+    assert evidence["result_state"] == "connected_hub"
+    assert "private_detail" not in evidence
+    assert evidence["result_digest"].startswith("sha256:")
+
+
+def test_codex_jsonl_root_mcp_evidence_rejects_wrong_target(tmp_path: Path) -> None:
+    journal = tmp_path / "codex.jsonl"
+    journal.write_text(
+        json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "mcp_tool_call",
+                    "status": "completed",
+                    "server": "builder_e2e",
+                    "tool": "get_status",
+                    "arguments": {"target_id": "skill:demo"},
+                    "result": {"structured_content": {"target_id": "skill:demo"}},
+                    "error": None,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="requires successful Root MCP evidence"):
+        _codex_jsonl_root_mcp_evidence(
+            journal,
+            assignment={
+                "realize_request": {
+                    "artifacts": {"repair_hints": {"requires_root_mcp": True}}
+                }
+            },
+            root_mcp={
+                "enabled": True,
+                "server_name": "builder_e2e",
+                "enabled_tools": ["get_status"],
+                "bound_target_id": "hub:sn_demo",
+            },
+        )
 
 
 def test_codex_failure_detail_prefers_structured_jsonl_errors() -> None:

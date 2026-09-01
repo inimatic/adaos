@@ -264,6 +264,107 @@ def _codex_jsonl_usage(path: Path) -> dict[str, int]:
         return {}
 
 
+def _root_mcp_required(assignment: Mapping[str, Any]) -> bool:
+    request = assignment.get("realize_request")
+    request = dict(request) if isinstance(request, Mapping) else {}
+    artifacts = request.get("artifacts")
+    artifacts = dict(artifacts) if isinstance(artifacts, Mapping) else {}
+    hints = artifacts.get("repair_hints")
+    hints = dict(hints) if isinstance(hints, Mapping) else {}
+    return hints.get("requires_root_mcp") is True
+
+
+def _codex_jsonl_root_mcp_evidence(
+    path: Path,
+    *,
+    assignment: Mapping[str, Any],
+    root_mcp: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return bounded trusted evidence for a required successful Root MCP call."""
+
+    if not _root_mcp_required(assignment):
+        return None
+    profile = dict(root_mcp or {})
+    if not profile or profile.get("enabled") is False:
+        raise ValueError("repair requires Root MCP but no task-scoped route was admitted")
+    expected_server = _safe_config_token(profile.get("server_name") or "adaos_root")
+    allowed_tools = {
+        str(item).strip()
+        for item in profile.get("enabled_tools") or []
+        if str(item).strip()
+    }
+    bound_target_id = str(
+        profile.get("bound_target_id") or profile.get("target_id") or ""
+    ).strip()
+    if not path.is_file():
+        raise ValueError("repair requires Root MCP evidence but the Codex event trace is unavailable")
+    try:
+        if path.stat().st_size > 16 * 1024 * 1024:
+            raise ValueError("Root MCP evidence trace exceeds the trusted parser limit")
+        for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                event = json.loads(raw_line)
+            except json.JSONDecodeError:
+                continue
+            item = event.get("item") if isinstance(event.get("item"), Mapping) else {}
+            if (
+                event.get("type") != "item.completed"
+                or item.get("type") != "mcp_tool_call"
+                or item.get("status") != "completed"
+                or item.get("error") not in (None, "", {})
+            ):
+                continue
+            server = str(item.get("server") or "").strip()
+            tool = str(item.get("tool") or item.get("name") or "").strip()
+            if server != expected_server or (allowed_tools and tool not in allowed_tools):
+                continue
+            arguments = item.get("arguments") if isinstance(item.get("arguments"), Mapping) else {}
+            argument_target = str(arguments.get("target_id") or "").strip()
+            result = item.get("result") if isinstance(item.get("result"), Mapping) else {}
+            structured = (
+                result.get("structured_content")
+                if isinstance(result.get("structured_content"), Mapping)
+                else result.get("structuredContent")
+                if isinstance(result.get("structuredContent"), Mapping)
+                else {}
+            )
+            result_target = str(structured.get("target_id") or "").strip()
+            if bound_target_id and (
+                (argument_target and argument_target != bound_target_id)
+                or (result_target and result_target != bound_target_id)
+                or (not argument_target and not result_target)
+            ):
+                continue
+            result_digest = "sha256:" + hashlib.sha256(
+                json.dumps(
+                    result,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            return {
+                "schema": "adaos.skill_factory.root_mcp_evidence.v1",
+                "status": "passed",
+                "server": server,
+                "tool": tool,
+                "bound_target_id": bound_target_id or None,
+                "argument_target_id": argument_target or None,
+                "result_target_id": result_target or None,
+                "result_state": str(structured.get("state") or "").strip() or None,
+                "result_digest": result_digest,
+                "trace_path": str(path),
+                "recorded_at": _now_iso(),
+            }
+    except OSError as exc:
+        raise ValueError("Root MCP evidence trace could not be read") from exc
+    allowed_label = ", ".join(sorted(allowed_tools)) or "an admitted tool"
+    raise ValueError(
+        "repair requires successful Root MCP evidence for "
+        f"{expected_server}:{allowed_label} on {bound_target_id or 'the admitted target'}"
+    )
+
+
 def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, Any]:
     """Estimate cumulative and fresh input while Codex executes tool rounds.
 
@@ -2308,8 +2409,12 @@ class LocalSkillFactoryWorker:
                     f"for declared {prompt_budget['declared']['max_model_tokens']} model tokens"
                 )
             structured_edit_receipt: dict[str, Any] | None = None
+            root_mcp_evidence: dict[str, Any] | None = None
             if continuation:
                 self._progress(task_id, "tests_running", "Validating preserved Codex candidate")
+                root_mcp_evidence = (
+                    dict(continuation.get("root_mcp_evidence") or {}) or None
+                )
                 codex_result = CodexRunResult(
                     returncode=0,
                     final_message=(
@@ -2319,6 +2424,10 @@ class LocalSkillFactoryWorker:
                 )
                 _write_json(runtime_dir / "continuation.json", continuation)
             elif structured_edits:
+                if _root_mcp_required(assignment):
+                    raise ValueError(
+                        "structured edits cannot satisfy a required Root MCP check without trusted evidence"
+                    )
                 self._progress(
                     task_id,
                     "in_progress",
@@ -2359,6 +2468,11 @@ class LocalSkillFactoryWorker:
                         f"Codex exited with code {codex_result.returncode}: "
                         f"{_codex_failure_detail(codex_result)}"
                     )
+                root_mcp_evidence = _codex_jsonl_root_mcp_evidence(
+                    output_dir / "codex-live.jsonl",
+                    assignment=assignment,
+                    root_mcp=root_mcp,
+                )
 
             test_report: dict[str, Any] = {}
             for repair_attempt in range(self.max_repair_attempts + 1):
@@ -2444,6 +2558,17 @@ class LocalSkillFactoryWorker:
                         f"{_codex_failure_detail(codex_result)}"
                     )
             self._cleanup_generated_files(workspace)
+            if root_mcp_evidence:
+                test_report.setdefault("checks", []).append(
+                    {
+                        "id": "required_root_mcp",
+                        "status": "passed",
+                        "server": root_mcp_evidence.get("server"),
+                        "tool": root_mcp_evidence.get("tool"),
+                        "target_id": root_mcp_evidence.get("bound_target_id"),
+                        "result_digest": root_mcp_evidence.get("result_digest"),
+                    }
+                )
             _write_json(output_dir / "test_report.json", test_report)
             if not test_report["ok"]:
                 raise RuntimeError("Generated project validation failed: " + "; ".join(test_report["errors"]))
@@ -2453,6 +2578,8 @@ class LocalSkillFactoryWorker:
             evidence_root.mkdir(parents=True, exist_ok=True)
             (evidence_root / "changed_files.txt").write_text("\n".join(changed_paths) + "\n", encoding="utf-8")
             shutil.copy2(output_dir / "test_report.json", evidence_root / "test_report.json")
+            if root_mcp_evidence:
+                _write_json(evidence_root / "root_mcp_evidence.json", root_mcp_evidence)
             provenance = {
                 "schema": "adaos.skill_factory.task_provenance.v1",
                 "runner_version": RUNNER_VERSION,
@@ -2470,6 +2597,7 @@ class LocalSkillFactoryWorker:
                 "tool_versions": {"python": sys.version.split()[0]},
                 "sdk_snapshot": dict(codex_result.sdk_snapshot or {}) or None,
                 "root_mcp": _public_root_mcp_profile(root_mcp),
+                "root_mcp_evidence": root_mcp_evidence,
                 "continuation": continuation or None,
                 "execution_strategy": (
                     "structured_edits"
@@ -2900,6 +3028,16 @@ class LocalSkillFactoryWorker:
         if not previous_digest or previous_digest != current_digest:
             raise ValueError("continuation candidate source snapshot is stale")
 
+        root_mcp = _root_mcp_profile_from_assignment(
+            previous_assignment,
+            include_private_token=True,
+        )
+        root_mcp_evidence = _codex_jsonl_root_mcp_evidence(
+            source_run / "output" / "codex-live.jsonl",
+            assignment=assignment,
+            root_mcp=root_mcp,
+        )
+
         changed_paths = self._changed_from_baseline(previous_workspace)
         if not changed_paths:
             # A live token guard can stop Codex during source discovery, before
@@ -2945,6 +3083,7 @@ class LocalSkillFactoryWorker:
             "failure_id": str(failure.get("failure_id") or "").strip() or None,
             "source_snapshot_digest": current_digest,
             "changed_paths": restored_paths,
+            "root_mcp_evidence": root_mcp_evidence,
             "restored_at": _now_iso(),
         }
 
