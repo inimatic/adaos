@@ -40,6 +40,20 @@ def test_local_development_root_keeps_http() -> None:
     )
 
 
+def test_websocket_member_endpoint_derives_https_root() -> None:
+    module = _load_module()
+
+    assert module._root_http_base_url("wss://ru.api.inimatic.com/ws/subnet") == (
+        "https://ru.api.inimatic.com"
+    )
+    assert module._root_http_base_url("https://ru.api.inimatic.com/hubs/sn_test") == (
+        "https://ru.api.inimatic.com"
+    )
+    assert module._root_http_base_url(
+        "wss://ru.api.inimatic.com/hubs/sn_test/ws/subnet"
+    ) == "https://ru.api.inimatic.com"
+
+
 def test_https_join_rejects_root_protocol_downgrade() -> None:
     module = _load_module()
 
@@ -84,6 +98,38 @@ def test_existing_public_plaintext_config_is_migrated_without_rejoin(
     )
 
     assert link.snapshot()["hub_url"] == "https://ru.api.inimatic.com/hubs/sn_test"
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["root_url"] == "https://ru.api.inimatic.com"
+
+
+def test_existing_websocket_config_derives_root_without_rejoin(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    path = tmp_path / "android-member-link.json"
+    path.write_text(
+        json.dumps(
+            {
+                "enabled": True,
+                "hub_url": "wss://ru.api.inimatic.com/ws/subnet",
+                "subnet_id": "sn_test",
+                "token": "signed-member-token",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    link = module.AndroidMemberLink(
+        tmp_path,
+        node_id="android-test",
+        local_subnet_id="local-test",
+        status_provider=lambda: {},
+        document_provider=lambda: {},
+        apply_yjs_update=lambda _update: True,
+        state_changed=lambda _state: None,
+    )
+
+    assert link.snapshot()["root_url"] == "https://ru.api.inimatic.com"
     persisted = json.loads(path.read_text(encoding="utf-8"))
     assert persisted["root_url"] == "https://ru.api.inimatic.com"
 

@@ -63,6 +63,20 @@ def _canonical_root_url(value: str) -> str:
     return urlunparse((scheme, parsed.netloc, parsed.path.rstrip("/"), "", "", ""))
 
 
+def _root_http_base_url(value: str) -> str:
+    parsed = urlparse(str(value or "").strip().rstrip("/"))
+    if parsed.scheme not in {"http", "https", "ws", "wss"} or not parsed.netloc:
+        raise ValueError("member_root_url_invalid")
+    scheme = {"ws": "http", "wss": "https"}.get(parsed.scheme, parsed.scheme)
+    path = parsed.path.rstrip("/")
+    hub_marker = "/hubs/"
+    if hub_marker in path:
+        path = path.split(hub_marker, 1)[0].rstrip("/")
+    elif path.endswith("/ws/subnet"):
+        path = path[: -len("/ws/subnet")]
+    return _canonical_root_url(urlunparse((scheme, parsed.netloc, path, "", "", "")))
+
+
 def _joined_hub_url(root_url: str, response_url: str) -> str:
     """Do not accept a Root response which downgrades an HTTPS join to plaintext."""
 
@@ -298,6 +312,7 @@ class AndroidMemberLink:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
             if not isinstance(payload, dict):
                 return {}
+            changed = False
             hub = urlparse(str(payload.get("hub_url") or ""))
             hostname = str(hub.hostname or "").lower()
             if hub.scheme == "http" and (
@@ -308,6 +323,17 @@ class AndroidMemberLink:
                 )
                 payload.setdefault("root_url", f"https://{hub.netloc}")
                 payload["updated_at"] = time.time()
+                changed = True
+            root_candidate = str(payload.get("root_url") or payload.get("hub_url") or "")
+            try:
+                root_url = _root_http_base_url(root_candidate)
+            except ValueError:
+                root_url = ""
+            if root_url and root_url != str(payload.get("root_url") or ""):
+                payload["root_url"] = root_url
+                payload["updated_at"] = time.time()
+                changed = True
+            if changed:
                 self._persist_config(payload)
             return payload
         except (OSError, ValueError, TypeError):
@@ -376,7 +402,9 @@ class AndroidMemberLink:
             "updated_at": time.time(),
         }
         if str(root_url or "").strip():
-            payload["root_url"] = _canonical_root_url(root_url)
+            payload["root_url"] = _root_http_base_url(root_url)
+        else:
+            payload["root_url"] = _root_http_base_url(hub)
         with self._lock:
             previous_identity = (
                 str(self._config.get("hub_url") or ""),
@@ -476,12 +504,9 @@ class AndroidMemberLink:
             raise ValueError("root_http_path_invalid")
         with self._lock:
             config = dict(self._config)
-        root = str(config.get("root_url") or "").strip()
-        if not root:
-            hub = urlparse(str(config.get("hub_url") or ""))
-            if hub.scheme in {"http", "https"} and hub.netloc:
-                root = urlunparse((hub.scheme, hub.netloc, "", "", "", ""))
-        root = _canonical_root_url(root)
+        root = _root_http_base_url(
+            str(config.get("root_url") or config.get("hub_url") or "").strip()
+        )
         token = str(config.get("token") or "").strip()
         subnet_id = str(config.get("subnet_id") or "").strip()
         if not token:
