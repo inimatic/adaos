@@ -1702,6 +1702,11 @@ def test_structured_edit_worker_never_calls_codex(tmp_path: Path) -> None:
             "target": {"type": "skill", "id": "structured_demo"},
             "artifacts": {
                 "implementation_brief": "Use plain language in the skill response.",
+                "execution_budget": {
+                    "source": "test.zero_model",
+                    "max_tokens": 1000,
+                    "max_wall_seconds": 300,
+                },
                 "repair_hints": {
                     "profile": "surgical_ui",
                     "target_files": ["skills/structured_demo/handlers/main.py"],
@@ -1752,6 +1757,17 @@ def test_structured_edit_worker_never_calls_codex(tmp_path: Path) -> None:
     assert result["result"]["provenance"]["structured_edit_receipt"][
         "model_tokens"
     ] == 0
+    preflight = json.loads(
+        (
+            tmp_path
+            / "runs"
+            / submitted["task"]["task_id"]
+            / "input"
+            / "token_budget_preflight.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert preflight["status"] == "not_applicable"
+    assert preflight["reason"] == "structured_edits_without_model"
     assert result["assignment"]["task_id"] == submitted["task"]["task_id"]
     assert "Current usage" in handler.read_text(encoding="utf-8")
 

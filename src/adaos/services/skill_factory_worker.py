@@ -2214,7 +2214,22 @@ class LocalSkillFactoryWorker:
             _write_json(input_dir / "assignment.json", dict(assignment))
             packet = self._build_packet(assignment, workspace, input_dir)
             prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+            packet_hash = "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+
+            self._init_git_workspace(workspace, str((assignment.get("forge") or {}).get("branch") or f"realize/{task_id}"))
+            continuation = self._restore_continuation_candidate(assignment, workspace)
+            structured_edits = self._structured_edits_from_assignment(assignment)
             prompt_budget = _codex_prompt_budget_check(assignment, prompt)
+            if continuation or structured_edits:
+                prompt_budget = {
+                    **prompt_budget,
+                    "status": "not_applicable",
+                    "reason": (
+                        "validation_only_continuation"
+                        if continuation
+                        else "structured_edits_without_model"
+                    ),
+                }
             _write_json(input_dir / "token_budget_preflight.json", prompt_budget)
             if prompt_budget.get("status") == "blocked":
                 raise ValueError(
@@ -2223,10 +2238,6 @@ class LocalSkillFactoryWorker:
                     f"limit {prompt_budget['prompt_token_limit']} "
                     f"for declared {prompt_budget['declared']['max_model_tokens']} model tokens"
                 )
-            packet_hash = "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-
-            self._init_git_workspace(workspace, str((assignment.get("forge") or {}).get("branch") or f"realize/{task_id}"))
-            continuation = self._restore_continuation_candidate(assignment, workspace)
             structured_edit_receipt: dict[str, Any] | None = None
             if continuation:
                 self._progress(task_id, "tests_running", "Validating preserved Codex candidate")
@@ -2238,7 +2249,7 @@ class LocalSkillFactoryWorker:
                     ),
                 )
                 _write_json(runtime_dir / "continuation.json", continuation)
-            elif self._structured_edits_from_assignment(assignment):
+            elif structured_edits:
                 self._progress(
                     task_id,
                     "in_progress",

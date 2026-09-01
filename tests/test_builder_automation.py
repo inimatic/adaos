@@ -211,6 +211,56 @@ def test_dev_ticket_repair_projects_minimal_diff_constraints(tmp_path: Path) -> 
     assert "Governed Development Session inputs" not in prompt
 
 
+def test_dev_ticket_repair_canonicalizes_component_relative_structured_paths(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief=json.dumps(
+            {
+                "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+                "ticket_id": "dticket.relative-path",
+                "repair_hints": {
+                    "profile": "surgical_ui",
+                    "target_files": ["webui.json"],
+                    "structured_edits": {
+                        "schema": "adaos.builder.structured_edit_set.v1",
+                        "operations": [
+                            {
+                                "op": "replace_text",
+                                "path": "webui.json",
+                                "old": "Old title",
+                                "new": "New title",
+                                "expected_count": 1,
+                            }
+                        ],
+                    },
+                },
+            }
+        ),
+        links={"development_ticket_id": "dticket.relative-path"},
+        execution_budget={"max_wall_seconds": 300, "max_tokens": 20000},
+    )
+
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == started["session"]["current_task_id"]
+    )
+    artifacts = task["realize_request"]["artifacts"]
+    expected_path = "scenarios/recipes/webui.json"
+    assert task["realize_request"]["constraints"]["exact_changed_paths"] == [
+        expected_path
+    ]
+    assert artifacts["repair_hints"]["target_files"] == [expected_path]
+    assert artifacts["repair_hints"]["structured_edits"]["operations"][0][
+        "path"
+    ] == expected_path
+
+
 def test_large_dev_ticket_brief_uses_bounded_workflow_projection(tmp_path: Path) -> None:
     service = _service(tmp_path)
     brief_payload = {

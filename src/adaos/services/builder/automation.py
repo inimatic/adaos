@@ -221,6 +221,49 @@ def _brief_has_structured_edits(value: Any) -> bool:
     )
 
 
+def _canonical_repair_path(value: Any, *, kind: str, object_id: str) -> str:
+    path = str(value or "").replace("\\", "/").strip("/")
+    if not path:
+        return ""
+    if path.split("/", 1)[0] in {"skills", "scenarios", "docs"}:
+        return path
+    prefix = {"skill": "skills", "scenario": "scenarios"}.get(str(kind).strip())
+    target = _safe_token(object_id, fallback="")
+    return f"{prefix}/{target}/{path}" if prefix and target else path
+
+
+def _canonical_repair_hints(
+    value: Mapping[str, Any],
+    *,
+    kind: str,
+    object_id: str,
+) -> dict[str, Any]:
+    hints = copy.deepcopy(dict(value))
+    hints["target_files"] = [
+        path
+        for item in hints.get("target_files") or []
+        for path in [_canonical_repair_path(item, kind=kind, object_id=object_id)]
+        if path
+    ]
+    structured = hints.get("structured_edits")
+    if isinstance(structured, Mapping):
+        structured_copy = copy.deepcopy(dict(structured))
+        operations = []
+        for raw in structured_copy.get("operations") or []:
+            if not isinstance(raw, Mapping):
+                continue
+            operation = copy.deepcopy(dict(raw))
+            operation["path"] = _canonical_repair_path(
+                operation.get("path"),
+                kind=kind,
+                object_id=object_id,
+            )
+            operations.append(operation)
+        structured_copy["operations"] = operations
+        hints["structured_edits"] = structured_copy
+    return hints
+
+
 def _iteration_context_projection(
     context_packet: Mapping[str, Any],
     *,
@@ -4508,6 +4551,11 @@ class BuilderAutomationService:
             dict(repair_brief.get("repair_hints"))
             if isinstance(repair_brief.get("repair_hints"), Mapping)
             else {}
+        )
+        repair_hints = _canonical_repair_hints(
+            repair_hints,
+            kind=kind,
+            object_id=project_id,
         )
         realization_constraints = {
             "no_external_api": True,
