@@ -1552,6 +1552,132 @@ class BuilderWorkbenchService:
             "archive_root": str(archive_dir),
         }
 
+    def context_inspector(
+        self,
+        source_webspace_id: str | None = None,
+        *,
+        run_ref: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        from adaos.services.context_control import ContextControlService
+
+        source_id = self.resolve_source_webspace_id(source_webspace_id)
+        binding = self.get_workspace_binding(source_id)
+        selection = dict(binding.get("selection") or {})
+        object_type = str(selection.get("object_type") or "").strip().lower()
+        object_id = str(selection.get("object_id") or "").strip()
+        project_ref = f"project:{object_id}" if object_id else None
+        component_ref = f"{object_type}:{object_id}" if object_type and object_id else None
+        context = ContextControlService(state_dir=self.state_dir)
+        selected_run = str(run_ref or "").strip()
+        plans = context.list_plans(limit=max(20, min(int(limit) * 5, 500)))
+
+        def applies(plan: Mapping[str, Any]) -> bool:
+            if selected_run and selected_run in (plan.get("subject_refs") or []):
+                return True
+            refs = {str(item) for item in plan.get("subject_refs") or []}
+            if project_ref and project_ref in refs:
+                return True
+            for item in plan.get("selected") or []:
+                if not isinstance(item, Mapping):
+                    continue
+                subject_refs = {str(ref) for ref in item.get("subject_refs") or []}
+                if project_ref and project_ref in subject_refs:
+                    return True
+                if component_ref and component_ref in subject_refs:
+                    return True
+            return False
+
+        matched_plans = [dict(item) for item in plans if applies(item)][: max(1, min(int(limit), 100))]
+        plan_refs = {str(item.get("plan_ref") or "") for item in matched_plans}
+        if selected_run:
+            receipt_candidates = context.list_receipts(
+                run_ref=selected_run,
+                limit=max(50, min(int(limit) * 10, 1000)),
+            )
+        elif plan_refs:
+            receipt_candidates = context.list_receipts(
+                limit=max(50, min(int(limit) * 10, 1000)),
+            )
+        else:
+            receipt_candidates = []
+        receipts = [
+            dict(item)
+            for item in receipt_candidates
+            if not plan_refs or str(item.get("plan_ref") or "") in plan_refs
+        ]
+
+        usage_by_route: dict[str, dict[str, int]] = {}
+        for receipt in receipts:
+            route = str(receipt.get("execution_route") or "unknown").strip() or "unknown"
+            usage = dict(receipt.get("usage") or {})
+            aggregate = usage_by_route.setdefault(
+                route,
+                {
+                    "provider_input_tokens": 0,
+                    "cached_input_tokens": 0,
+                    "fresh_input_tokens": 0,
+                    "output_tokens": 0,
+                    "fresh_plus_output": 0,
+                },
+            )
+            for key in aggregate:
+                aggregate[key] += int(usage.get(key) or 0)
+
+        plan_rows = [
+            {
+                "plan_id": plan.get("plan_id"),
+                "plan_ref": plan.get("plan_ref"),
+                "subject_refs": list(plan.get("subject_refs") or []),
+                "purpose": plan.get("purpose"),
+                "audience": plan.get("audience"),
+                "status": plan.get("status"),
+                "estimated_tokens": int(plan.get("estimated_tokens") or 0),
+                "token_budget": int(plan.get("token_budget") or 0),
+                "selected": [
+                    {
+                        key: item.get(key)
+                        for key in ("ref", "kind", "digest", "trust_class", "tainted", "estimated_tokens", "selection_reason")
+                    }
+                    for item in plan.get("selected") or []
+                    if isinstance(item, Mapping)
+                ],
+                "omitted": list(plan.get("omitted") or []),
+                "denied": list(plan.get("denied") or []),
+                "unavailable": list(plan.get("unavailable") or []),
+                "created_at": plan.get("created_at"),
+            }
+            for plan in matched_plans
+        ]
+        return {
+            "schema": "adaos.builder.context_inspector.v1",
+            "source_webspace_id": source_id,
+            "scope": {
+                "project_ref": project_ref,
+                "component_ref": component_ref,
+                "run_ref": selected_run or None,
+            },
+            "summary": {
+                "plan_count": len(plan_rows),
+                "receipt_count": len(receipts),
+                "selected_units": sum(len(item["selected"]) for item in plan_rows),
+                "denied_units": sum(len(item["denied"]) for item in plan_rows),
+                "estimated_context_tokens": sum(int(item["estimated_tokens"]) for item in plan_rows),
+            },
+            "usage_by_route": usage_by_route,
+            "plans": plan_rows,
+            "receipts": receipts,
+            "privacy": {
+                "sealed_content_disclosed": False,
+                "denied_units_are_metadata_only": True,
+            },
+            "i18n": {
+                "title": {"en": "Context Inspector", "ru": "Инспектор контекста"},
+                "empty": {"en": "No context runs for this project yet.", "ru": "Для этого проекта еще нет запусков с контекстом."},
+            },
+            "updated_at": _now(),
+        }
+
     def snapshot(self, source_webspace_id: str | None = None, *, preview_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
         source_id = self.resolve_source_webspace_id(source_webspace_id)
         binding = self.get_workspace_binding(source_id)
@@ -1564,6 +1690,7 @@ class BuilderWorkbenchService:
             "development_skills": self.list_development_skills(source_id).get("items", []),
             "preview_runtime": self.reconciler.describe(source_id),
             "preview_state": dict(preview_state or {}),
+            "context_inspector": self.context_inspector(source_id),
             "updated_at": _now(),
         }
         _write_json(self.snapshot_path(source_id), snapshot)
@@ -1593,6 +1720,7 @@ class BuilderWorkbenchService:
             },
             "preview_runtime": _preview_runtime_projection(self.reconciler.describe(source_id)),
             "preview_state": _preview_state_projection(preview_state),
+            "context_inspector": self.context_inspector(source_id),
             "updated_at": _now(),
         }
 

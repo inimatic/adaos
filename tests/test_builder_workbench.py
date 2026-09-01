@@ -18,6 +18,7 @@ from adaos.services.builder.workbench import (
     source_webspace_id_for,
 )
 from adaos.services.builder.repair import BuilderRepairService
+from adaos.services.context_control import ContextControlService
 from adaos.services.development_tickets import DevelopmentTicketService
 
 
@@ -677,6 +678,73 @@ def test_builder_api_exposes_workbench_endpoints(tmp_path: Path) -> None:
     response = client.get("/api/builder/workbench/development-skills", params={"webspace_id": "desktop"})
     assert response.status_code == 200
     assert response.json()["items"] == []
+
+
+def test_builder_context_inspector_is_project_scoped_and_metadata_only(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    service = BuilderWorkbenchService(state_dir=state_dir)
+    service.set_selected_project(
+        source_webspace_id="desktop",
+        object_type="scenario",
+        object_id="demo_metrics",
+    )
+    contexts = ContextControlService(state_dir=state_dir)
+    capsule = contexts.register_capsule(
+        {
+            "kind": "project",
+            "subject_refs": ["project:demo_metrics", "scenario:demo_metrics"],
+            "authority_ref": "project:demo_metrics",
+            "trust_class": "accepted",
+            "sensitivity": "workspace",
+            "license": "internal",
+            "retention_class": "project_generation",
+            "summary": "Demo Metrics governed context",
+            "content": {"secret_detail": "must-not-be-projected"},
+        }
+    )
+    contexts.bind_subject(
+        subject_ref="project:demo_metrics",
+        capsule_id=capsule["capsule_id"],
+        purpose="builder.automation",
+        audience="builder",
+    )
+    resolution = contexts.resolve(
+        {
+            "subject_refs": ["project:demo_metrics"],
+            "purpose": "builder.automation",
+            "audience": "builder",
+        }
+    )
+    plan = contexts.plan({"resolution": resolution, "token_budget": 2_000})
+    contexts.record_receipt(
+        {
+            "run_ref": "builder-run:demo-metrics",
+            "plan_ref": plan["plan_ref"],
+            "subject_refs": ["project:demo_metrics"],
+            "selected_refs": [capsule["capsule_id"]],
+            "usage": {"provider_input_tokens": 900, "cached_input_tokens": 700, "output_tokens": 100},
+            "execution_route": "skill_factory.local_codex",
+            "validation": {"status": "passed"},
+        }
+    )
+
+    app = FastAPI()
+    app.include_router(builder_api.router, prefix="/api/builder")
+    app.dependency_overrides[require_token] = lambda: None
+    app.dependency_overrides[builder_api._get_workbench_service] = lambda: service
+    response = TestClient(app).get(
+        "/api/builder/workbench/context-inspector",
+        params={"webspace_id": "desktop"},
+    )
+
+    assert response.status_code == 200
+    inspector = response.json()["inspector"]
+    assert inspector["scope"]["project_ref"] == "project:demo_metrics"
+    assert inspector["summary"]["plan_count"] == 1
+    assert inspector["summary"]["receipt_count"] == 1
+    assert inspector["usage_by_route"]["skill_factory.local_codex"]["fresh_plus_output"] == 300
+    assert inspector["privacy"]["sealed_content_disclosed"] is False
+    assert "must-not-be-projected" not in json.dumps(inspector)
 
 
 def test_builder_workbench_open_selects_development_ticket_context(tmp_path: Path) -> None:

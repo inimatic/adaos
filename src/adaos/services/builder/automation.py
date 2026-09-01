@@ -566,7 +566,7 @@ class BuilderAutomationService:
         )
         resolution = service.resolve(
             {
-                "subject_refs": [run_ref],
+                "subject_refs": [run_ref, project_ref],
                 "purpose": "builder.automation",
                 "audience": "builder",
                 "policy": {
@@ -3270,7 +3270,14 @@ class BuilderAutomationService:
                 {
                     "run_ref": run_ref,
                     "plan_ref": plan_ref,
-                    "subject_refs": [run_ref],
+                    "subject_refs": [
+                        run_ref,
+                        *(
+                            [f"project:{current.get('object_id')}"]
+                            if current.get("object_id")
+                            else []
+                        ),
+                    ],
                     "purpose": "builder.automation",
                     "audience": "builder",
                     "selected_refs": control.get("selected_refs") or [],

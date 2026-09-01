@@ -449,6 +449,23 @@ def get_workbench_binding(
     return {"ok": True, "binding": service.get_workspace_binding(webspace_id)}
 
 
+@router.get("/workbench/context-inspector")
+def get_workbench_context_inspector(
+    webspace_id: str | None = None,
+    run_ref: str | None = None,
+    limit: int = 20,
+    service: BuilderWorkbenchService = Depends(_get_workbench_service),
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "inspector": service.context_inspector(
+            webspace_id,
+            run_ref=run_ref,
+            limit=max(1, min(int(limit), 100)),
+        ),
+    }
+
+
 @router.get("/workbench/projects")
 async def list_workbench_projects(
     kind: str | None = None,
