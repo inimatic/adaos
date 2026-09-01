@@ -303,6 +303,12 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/node/member/status":
             self._json(200, _member_link_snapshot())
             return
+        if path == "/api/node/member/mtls/status":
+            self._json(200, _member_link_mtls_status())
+            return
+        if path == "/api/node/member/mtls/probe":
+            self._json(200, _member_link_mtls_probe())
+            return
         if path == "/api/node/voice/listening":
             if _voice_policy is None:
                 self._json(503, {"ok": False, "error": "voice_policy_not_ready"})
@@ -459,6 +465,9 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(400, {"ok": False, "error": str(exc)})
                 return
             self._json(200, {"ok": True, "result": result})
+            return
+        if path == "/api/node/member/mtls/probe":
+            self._json(200, _member_link_mtls_probe())
             return
         if path == "/api/node/yjs/webspaces/desktop/go-home":
             try:
@@ -1251,6 +1260,27 @@ def _member_link_snapshot() -> dict[str, Any]:
             "last_error": "member_link_not_ready",
         }
     return member_link.snapshot()
+
+
+def _member_link_mtls_status() -> dict[str, Any]:
+    member_link = _member_link
+    if member_link is None:
+        return {"ok": False, "error": "member_link_not_ready", "configured": False}
+    try:
+        status = member_link.mtls_status()
+        return {"ok": True, "mtls": status, **status}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}:{str(exc)[:240]}"}
+
+
+def _member_link_mtls_probe() -> dict[str, Any]:
+    member_link = _member_link
+    if member_link is None:
+        return {"ok": False, "error": "member_link_not_ready"}
+    try:
+        return member_link.probe_mtls()
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}:{str(exc)[:240]}"}
 
 
 def _member_link_request_state_refresh() -> None:

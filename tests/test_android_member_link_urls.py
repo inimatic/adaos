@@ -54,6 +54,12 @@ def test_websocket_member_endpoint_derives_https_root() -> None:
     ) == "https://ru.api.inimatic.com"
 
 
+def test_android_mtls_csr_der_uses_sha256_rsa_oid() -> None:
+    module = _load_module()
+
+    assert module._der_oid("1.2.840.113549.1.1.11").hex() == "06092a864886f70d01010b"
+
+
 def test_https_join_rejects_root_protocol_downgrade() -> None:
     module = _load_module()
 

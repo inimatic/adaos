@@ -39,6 +39,7 @@ class MainActivity : Activity() {
     private lateinit var modelButton: Button
     private lateinit var ttsTestButton: Button
     private lateinit var ttsSettingsButton: Button
+    private lateinit var mtlsTestButton: Button
     private val main = Handler(Looper.getMainLooper())
     private val controlWorker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "adaos-node-controls").apply { isDaemon = true }
@@ -47,6 +48,7 @@ class MainActivity : Activity() {
     private var sttProviderMode = "system"
     private var ttsProbe: TextToSpeech? = null
     private var ttsProbeStatus = ""
+    private var mtlsProbeStatus = ""
     private val voiceStatusPoll = object : Runnable {
         override fun run() {
             refreshVoiceControls()
@@ -174,6 +176,8 @@ class MainActivity : Activity() {
         content.addView(ttsTestButton)
         ttsSettingsButton = button("Open TTS settings") { openTtsSettings() }
         content.addView(ttsSettingsButton)
+        mtlsTestButton = button("Test root mTLS") { testRootMtls() }
+        content.addView(mtlsTestButton)
         scroll.addView(
             content,
             ViewGroup.LayoutParams(
@@ -222,6 +226,7 @@ class MainActivity : Activity() {
         controlWorker.execute {
             val voice = getJson("$LOOPBACK/api/node/voice/listening")
             val models = getJson("$LOOPBACK/api/node/voice/stt/models")
+            val member = getJson("$LOOPBACK/api/node/member/status")
             main.post {
                 val service = voice?.optJSONObject("service")
                 val runtime = voice?.optJSONObject("runtime")
@@ -235,6 +240,7 @@ class MainActivity : Activity() {
                 val input = if (voiceListeningMode == "off") "Mic off" else "Phone"
                 val provider = if (activeProvider == "vosk") "Vosk" else "System STT"
                 val install = models?.optJSONObject("install")
+                val mtls = member?.optJSONObject("mtls")
                 val installState = install?.optString("state", "idle") ?: "idle"
                 val installError = install?.optString("error", "")?.takeIf { it.isNotBlank() }
                 val voiceDetails = listOfNotNull(
@@ -259,8 +265,11 @@ class MainActivity : Activity() {
                     },
                     native?.let { ttsRuntimeSummary(it, "System TTS") },
                     vosk?.let { ttsRuntimeSummary(it, "Vosk TTS") },
+                    memberLinkSummary(member),
+                    mtls?.let { mtlsSummary(it) },
                     installError?.let { "Install error: ${it.take(120)}" },
                     ttsProbeStatus.takeIf { it.isNotBlank() },
+                    mtlsProbeStatus.takeIf { it.isNotBlank() },
                 ).joinToString("\n")
                 voiceRouteView.text = "🎙 $input · $provider → General · Assistant → 🔊 Phone\n$voiceDetails"
                 listeningButton.text = if (voiceListeningMode == "off") {
@@ -280,8 +289,35 @@ class MainActivity : Activity() {
                     else -> "Install Vosk Russian · compact"
                 }
                 modelButton.isEnabled = installState !in setOf("downloading", "installing")
+                mtlsTestButton.text = when {
+                    mtls?.optJSONObject("last_probe")?.optBoolean("ok", false) == true -> "mTLS: OK"
+                    mtls?.optBoolean("configured", false) == true -> "Test root mTLS"
+                    else -> "Enroll and test mTLS"
+                }
             }
         }
+    }
+
+    private fun memberLinkSummary(member: JSONObject?): String? {
+        if (member == null) return null
+        return "Member: state=${member.optString("state", "unknown")} " +
+            "connected=${member.optBoolean("connected", false)} " +
+            "root=${member.optString("root_url", "")} " +
+            "subnet=${member.optString("subnet_id", "")}"
+    }
+
+    private fun mtlsSummary(mtls: JSONObject): String {
+        val last = mtls.optJSONObject("last_probe")
+        val identity = last?.optJSONObject("identity")
+        val identityText = identity?.let {
+            "${it.optString("type", "")}:${it.optString("node_id", it.optString("subnet_id", ""))}"
+        } ?: "none"
+        val lastText = last?.let {
+            " last=${it.optBoolean("ok", false)} status=${jsonValue(it, "status")} id=$identityText"
+        } ?: ""
+        return "mTLS: configured=${mtls.optBoolean("configured", false)} " +
+            "cert=${mtls.optBoolean("cert_present", false)} " +
+            "key=${mtls.optBoolean("key_present", false)}$lastText"
     }
 
     private fun ttsRuntimeSummary(runtime: JSONObject, label: String): String? {
@@ -436,6 +472,26 @@ class MainActivity : Activity() {
                 ttsProbeStatus = "TTS settings failed: ${installError.javaClass.simpleName}"
                 refreshVoiceControls()
                 startActivity(Intent(Settings.ACTION_SETTINGS))
+            }
+        }
+    }
+
+    private fun testRootMtls() {
+        mtlsTestButton.isEnabled = false
+        mtlsProbeStatus = "mTLS probe: running"
+        refreshVoiceControls()
+        controlWorker.execute {
+            val result = postJson("$LOOPBACK/api/node/member/mtls/probe", JSONObject())
+            main.post {
+                mtlsProbeStatus = if (result?.optBoolean("ok", false) == true) {
+                    val identity = result.optJSONObject("identity")
+                    val subject = identity?.optString("node_id", identity.optString("subnet_id", "")) ?: ""
+                    "mTLS probe: ok status=${result.optInt("status", 200)} $subject"
+                } else {
+                    "mTLS probe: failed ${result?.optString("error", "no_response") ?: "no_response"}"
+                }
+                mtlsTestButton.isEnabled = true
+                refreshVoiceControls()
             }
         }
     }

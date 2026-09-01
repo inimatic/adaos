@@ -27,6 +27,7 @@ _MAX_MEMBER_YJS_UPDATE_BYTES = 512 * 1024
 _MAX_ROOT_HTTP_RESPONSE_BYTES = 8 * 1024 * 1024
 _HUB_ACTIVITY_STALE_AFTER_SECONDS = 15.0
 _ALLOWED_MEMBER_EVENTS = frozenset({"nlp.intent.not_obtained"})
+_MTLS_KEY_BITS = 2048
 
 
 def _redacted_url(value: str) -> str:
@@ -91,6 +92,139 @@ def _joined_hub_url(root_url: str, response_url: str) -> str:
     if root.scheme == "https" and scheme in {"http", "ws"}:
         scheme = "https" if scheme == "http" else "wss"
     return urlunparse((scheme, joined.netloc, joined.path.rstrip("/"), "", "", ""))
+
+
+def _der_length(length: int) -> bytes:
+    if length < 0:
+        raise ValueError("der_length_invalid")
+    if length < 128:
+        return bytes([length])
+    octets = bytearray()
+    value = length
+    while value:
+        octets.insert(0, value & 0xFF)
+        value >>= 8
+    return bytes([0x80 | len(octets), *octets])
+
+
+def _der(tag: int, payload: bytes) -> bytes:
+    return bytes([tag]) + _der_length(len(payload)) + payload
+
+
+def _der_sequence(*items: bytes) -> bytes:
+    return _der(0x30, b"".join(items))
+
+
+def _der_set(*items: bytes) -> bytes:
+    return _der(0x31, b"".join(items))
+
+
+def _der_integer_zero() -> bytes:
+    return b"\x02\x01\x00"
+
+
+def _der_null() -> bytes:
+    return b"\x05\x00"
+
+
+def _der_utf8(value: str) -> bytes:
+    return _der(0x0C, str(value).encode("utf-8"))
+
+
+def _der_bit_string(value: bytes) -> bytes:
+    return _der(0x03, b"\x00" + bytes(value))
+
+
+def _der_oid(value: str) -> bytes:
+    parts = [int(part) for part in str(value).split(".")]
+    if len(parts) < 2 or parts[0] > 2 or parts[1] > 39:
+        raise ValueError("oid_invalid")
+    encoded = bytearray([parts[0] * 40 + parts[1]])
+    for part in parts[2:]:
+        if part < 0:
+            raise ValueError("oid_invalid")
+        stack = [part & 0x7F]
+        part >>= 7
+        while part:
+            stack.insert(0, 0x80 | (part & 0x7F))
+            part >>= 7
+        encoded.extend(stack)
+    return _der(0x06, bytes(encoded))
+
+
+def _csr_subject(node_id: str, subnet_id: str) -> bytes:
+    rdns = [
+        _der_set(
+            _der_sequence(
+                _der_oid("2.5.4.3"),
+                _der_utf8(f"node:{str(node_id or '').strip()}"),
+            )
+        )
+    ]
+    if str(subnet_id or "").strip():
+        rdns.append(
+            _der_set(
+                _der_sequence(
+                    _der_oid("2.5.4.10"),
+                    _der_utf8(f"subnet:{str(subnet_id).strip()}"),
+                )
+            )
+        )
+    return _der_sequence(*rdns)
+
+
+def _signature_algorithm_sha256_rsa() -> bytes:
+    return _der_sequence(_der_oid("1.2.840.113549.1.1.11"), _der_null())
+
+
+def _pem(label: str, payload: bytes) -> str:
+    encoded = base64.b64encode(payload).decode("ascii")
+    lines = [encoded[index : index + 64] for index in range(0, len(encoded), 64)]
+    return f"-----BEGIN {label}-----\n" + "\n".join(lines) + f"\n-----END {label}-----\n"
+
+
+def _java_bytes(value: Any) -> bytes:
+    if isinstance(value, bytes):
+        return value
+    return bytes((int(item) + 256) % 256 for item in value)
+
+
+def _generate_node_csr_and_key(node_id: str, subnet_id: str) -> tuple[str, str]:
+    try:
+        from java.security import KeyPairGenerator, Signature  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("java_crypto_unavailable") from exc
+
+    generator = KeyPairGenerator.getInstance("RSA")
+    generator.initialize(_MTLS_KEY_BITS)
+    key_pair = generator.generateKeyPair()
+    private_key = key_pair.getPrivate()
+    public_key_der = _java_bytes(key_pair.getPublic().getEncoded())
+    private_key_der = _java_bytes(private_key.getEncoded())
+    certification_request_info = _der_sequence(
+        _der_integer_zero(),
+        _csr_subject(node_id, subnet_id),
+        public_key_der,
+        b"\xa0\x00",
+    )
+    signer = Signature.getInstance("SHA256withRSA")
+    signer.initSign(private_key)
+    signer.update(certification_request_info)
+    signature = _java_bytes(signer.sign())
+    csr_der = _der_sequence(
+        certification_request_info,
+        _signature_algorithm_sha256_rsa(),
+        _der_bit_string(signature),
+    )
+    return _pem("PRIVATE KEY", private_key_der), _pem("CERTIFICATE REQUEST", csr_der)
+
+
+def _json_from_bytes(payload: bytes) -> dict[str, Any]:
+    try:
+        value = json.loads(payload.decode("utf-8"))
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _read_exact(connection: socket.socket, length: int) -> bytes:
@@ -264,6 +398,7 @@ class AndroidMemberLink:
         rpc_handler: Callable[[str, dict[str, Any]], Any] | None = None,
     ) -> None:
         self.path = Path(data_root) / "android-member-link.json"
+        self.mtls_dir = Path(data_root) / "member-mtls"
         self.node_id = str(node_id)
         self.local_subnet_id = str(local_subnet_id)
         self.status_provider = status_provider
@@ -302,6 +437,7 @@ class AndroidMemberLink:
         self._rpc_failed_total = 0
         self._inbound_rpc_total = 0
         self._inbound_rpc_failed_total = 0
+        self._mtls_last_status: dict[str, Any] = {}
         self._config = self._load_config()
         self._worker_generation = 0
         if not self._config.get("enabled"):
@@ -347,6 +483,218 @@ class AndroidMemberLink:
             encoding="utf-8",
         )
         temporary.replace(self.path)
+
+    def _mtls_default_paths(self) -> dict[str, str]:
+        return {
+            "cert_path": str(self.mtls_dir / "node.crt.pem"),
+            "key_path": str(self.mtls_dir / "node.key.pem"),
+            "ca_path": str(self.mtls_dir / "root.ca.pem"),
+        }
+
+    def _mtls_paths_from_config(self, config: dict[str, Any]) -> dict[str, str]:
+        defaults = self._mtls_default_paths()
+        mtls = config.get("mtls") if isinstance(config.get("mtls"), dict) else {}
+        return {
+            key: str(mtls.get(key) or defaults[key])
+            for key in ("cert_path", "key_path", "ca_path")
+        }
+
+    def _mtls_status_from_config(self, config: dict[str, Any]) -> dict[str, Any]:
+        paths = self._mtls_paths_from_config(config)
+        mtls = config.get("mtls") if isinstance(config.get("mtls"), dict) else {}
+        cert_present = Path(paths["cert_path"]).is_file()
+        key_present = Path(paths["key_path"]).is_file()
+        ca_present = Path(paths["ca_path"]).is_file()
+        status = {
+            "configured": bool(cert_present and key_present),
+            "cert_present": cert_present,
+            "key_present": key_present,
+            "ca_present": ca_present,
+            "node_id": str(mtls.get("node_id") or self.node_id),
+            "subnet_id": str(mtls.get("subnet_id") or config.get("subnet_id") or ""),
+            "root_url": _redacted_url(str(mtls.get("root_url") or config.get("root_url") or "")),
+            "enrolled_at": mtls.get("enrolled_at") or 0.0,
+        }
+        if self._mtls_last_status:
+            status["last_probe"] = dict(self._mtls_last_status)
+        return status
+
+    def mtls_status(self) -> dict[str, Any]:
+        with self._lock:
+            return self._mtls_status_from_config(dict(self._config))
+
+    def _record_mtls_status(self, payload: dict[str, Any]) -> dict[str, Any]:
+        snapshot = {
+            "checked_at": time.time(),
+            **dict(payload),
+        }
+        with self._lock:
+            self._mtls_last_status = snapshot
+        return snapshot
+
+    def _write_private_text(self, path: Path, value: str, mode: int) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(value, encoding="utf-8")
+        try:
+            os.chmod(temporary, mode)
+        except OSError:
+            pass
+        temporary.replace(path)
+        try:
+            os.chmod(path, mode)
+        except OSError:
+            pass
+
+    def _store_mtls_material(
+        self,
+        *,
+        private_key_pem: str,
+        cert_pem: str,
+        ca_pem: str,
+        node_id: str,
+        subnet_id: str,
+        root_url: str,
+        source: str,
+    ) -> dict[str, Any]:
+        if "BEGIN PRIVATE KEY" not in private_key_pem:
+            raise ValueError("mtls_private_key_invalid")
+        if "BEGIN CERTIFICATE" not in cert_pem:
+            raise ValueError("mtls_certificate_invalid")
+        paths = self._mtls_default_paths()
+        self._write_private_text(Path(paths["key_path"]), private_key_pem, 0o600)
+        self._write_private_text(Path(paths["cert_path"]), cert_pem, 0o644)
+        if ca_pem:
+            self._write_private_text(Path(paths["ca_path"]), ca_pem, 0o644)
+        with self._lock:
+            config = dict(self._config)
+            config["mtls"] = {
+                "schema": "adaos.android.member_mtls.v1",
+                "node_id": str(node_id or self.node_id),
+                "subnet_id": str(subnet_id or config.get("subnet_id") or ""),
+                "root_url": _root_http_base_url(root_url or config.get("root_url") or ""),
+                "cert_path": paths["cert_path"],
+                "key_path": paths["key_path"],
+                "ca_path": paths["ca_path"] if ca_pem else "",
+                "source": source,
+                "enrolled_at": time.time(),
+            }
+            self._persist_config(config)
+            self._config = config
+            self._config_revision += 1
+            return self._mtls_status_from_config(config)
+
+    def _mtls_ssl_context(self, config: dict[str, Any]) -> ssl.SSLContext:
+        paths = self._mtls_paths_from_config(config)
+        context = ssl.create_default_context()
+        ca_path = paths.get("ca_path") or ""
+        if ca_path and Path(ca_path).is_file():
+            try:
+                context.load_verify_locations(cafile=ca_path)
+            except ssl.SSLError:
+                pass
+        context.load_cert_chain(paths["cert_path"], paths["key_path"])
+        return context
+
+    def ensure_node_mtls(self) -> dict[str, Any]:
+        with self._lock:
+            config = dict(self._config)
+            existing = self._mtls_status_from_config(config)
+        if existing.get("configured"):
+            return existing
+        root = _root_http_base_url(str(config.get("root_url") or config.get("hub_url") or ""))
+        token = str(config.get("token") or "").strip()
+        subnet_id = str(config.get("subnet_id") or "").strip()
+        if not token:
+            return self._record_mtls_status({"ok": False, "error": "member_token_required"})
+        if not subnet_id:
+            return self._record_mtls_status({"ok": False, "error": "member_subnet_id_required"})
+        try:
+            private_key_pem, csr_pem = _generate_node_csr_and_key(self.node_id, subnet_id)
+            status, headers, content = self.root_http_post_json(
+                "/v1/subnets/node-mtls/enroll",
+                {"node_id": self.node_id, "subnet_id": subnet_id, "csr_pem": csr_pem},
+                accept="application/json",
+                timeout=45.0,
+            )
+            payload = _json_from_bytes(content)
+            if status < 200 or status >= 300:
+                return self._record_mtls_status(
+                    {
+                        "ok": False,
+                        "error": "node_mtls_enroll_failed",
+                        "status": status,
+                        "detail": str(payload.get("error") or content[:240]),
+                    }
+                )
+            cert_pem = str(payload.get("cert_pem") or "")
+            ca_pem = str(payload.get("ca_pem") or payload.get("chain_pem") or "")
+            node_id = str(payload.get("node_id") or self.node_id)
+            stored = self._store_mtls_material(
+                private_key_pem=private_key_pem,
+                cert_pem=cert_pem,
+                ca_pem=ca_pem,
+                node_id=node_id,
+                subnet_id=str(payload.get("subnet_id") or subnet_id),
+                root_url=root,
+                source="join_session",
+            )
+            self._record_mtls_status(
+                {
+                    "ok": True,
+                    "status": status,
+                    "content_type": str(headers.get("content-type") or ""),
+                    "enrolled": True,
+                }
+            )
+            return stored
+        except Exception as exc:
+            return self._record_mtls_status(
+                {"ok": False, "error": f"{type(exc).__name__}:{str(exc)[:220]}"}
+            )
+
+    def probe_mtls(self) -> dict[str, Any]:
+        enrolled = self.ensure_node_mtls()
+        if not enrolled.get("configured"):
+            return {"ok": False, "mtls": self.mtls_status(), "error": "node_mtls_not_configured"}
+        with self._lock:
+            config = dict(self._config)
+        root = _root_http_base_url(str(config.get("root_url") or config.get("hub_url") or ""))
+        if not root.startswith("https://"):
+            result = {"ok": False, "error": "mtls_requires_https", "root_url": _redacted_url(root)}
+            self._record_mtls_status(result)
+            return {"ok": False, "mtls": self.mtls_status(), **result}
+        request = Request(
+            f"{root}/v1/mtls/whoami",
+            headers={"Accept": "application/json"},
+            method="GET",
+        )
+        try:
+            with urlopen(
+                request,
+                timeout=10,
+                context=self._mtls_ssl_context(config),
+            ) as opened:
+                data = opened.read(256 * 1024)
+                payload = _json_from_bytes(data)
+                result = {
+                    "ok": 200 <= int(getattr(opened, "status", 200)) < 300,
+                    "status": int(getattr(opened, "status", 200)),
+                    "identity": payload.get("identity") if isinstance(payload, dict) else None,
+                    "transport": str(payload.get("transport") or "mtls"),
+                }
+        except HTTPError as exc:
+            data = exc.read(64 * 1024)
+            payload = _json_from_bytes(data)
+            result = {
+                "ok": False,
+                "status": int(exc.code),
+                "error": str(payload.get("error") or payload.get("detail") or f"http_{exc.code}"),
+            }
+        except Exception as exc:
+            result = {"ok": False, "error": f"{type(exc).__name__}:{str(exc)[:220]}"}
+        self._record_mtls_status(result)
+        return {"ok": bool(result.get("ok")), "mtls": self.mtls_status(), **result}
 
     def start(self, *, replace: bool = False) -> None:
         with self._lock:
@@ -441,9 +789,23 @@ class AndroidMemberLink:
             or status.get("primary_node_name")
             or "Android phone"
         ).strip()
-        body = json.dumps(
-            {"code": join_code, "node_id": self.node_id, "hostname": node_label}
-        ).encode("utf-8")
+        join_payload: dict[str, Any] = {
+            "code": join_code,
+            "node_id": self.node_id,
+            "hostname": node_label,
+        }
+        private_key_pem = ""
+        try:
+            private_key_pem, csr_pem = _generate_node_csr_and_key(
+                self.node_id,
+                self.local_subnet_id,
+            )
+            join_payload["csr_pem"] = csr_pem
+        except Exception as exc:
+            self._record_mtls_status(
+                {"ok": False, "error": f"csr_failed:{type(exc).__name__}:{str(exc)[:160]}"}
+            )
+        body = json.dumps(join_payload).encode("utf-8")
         errors: list[str] = []
         response: dict[str, Any] | None = None
         for endpoint in ("/v1/subnets/join", "/api/node/join"):
@@ -487,6 +849,37 @@ class AndroidMemberLink:
             token=str(response.get("token") or ""),
             root_url=response_root,
         )
+        node_mtls = response.get("node_mtls")
+        if isinstance(node_mtls, dict) and private_key_pem:
+            try:
+                self._store_mtls_material(
+                    private_key_pem=private_key_pem,
+                    cert_pem=str(node_mtls.get("cert_pem") or ""),
+                    ca_pem=str(node_mtls.get("ca_pem") or node_mtls.get("chain_pem") or ""),
+                    node_id=str(node_mtls.get("node_id") or self.node_id),
+                    subnet_id=str(node_mtls.get("subnet_id") or response.get("subnet_id") or ""),
+                    root_url=response_root,
+                    source="join_code",
+                )
+                result = self.snapshot()
+                result["node_mtls_enrolled"] = True
+            except Exception as exc:
+                self._record_mtls_status(
+                    {
+                        "ok": False,
+                        "error": f"store_failed:{type(exc).__name__}:{str(exc)[:160]}",
+                    }
+                )
+        elif "csr_pem" in join_payload:
+            diagnostics = response.get("diagnostics")
+            detail = (
+                str(diagnostics.get("node_mtls_error") or "")
+                if isinstance(diagnostics, dict)
+                else ""
+            )
+            self._record_mtls_status(
+                {"ok": False, "error": detail or "node_mtls_not_returned"}
+            )
         result["joined"] = True
         result["root_url"] = _redacted_url(response_root)
         return result
@@ -755,6 +1148,7 @@ class AndroidMemberLink:
                 "subnet_id": str(config.get("subnet_id") or self.local_subnet_id),
                 "token_present": bool(config.get("token")),
                 "transport_security": transport_security,
+                "mtls": self._mtls_status_from_config(config),
                 "connected_at": self._connected_at,
                 "last_message_at": self._last_message_at,
                 "last_message_ago_s": (
