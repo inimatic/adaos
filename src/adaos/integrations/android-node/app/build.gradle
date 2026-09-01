@@ -36,8 +36,8 @@ android {
         applicationId = "dev.adaos.androidnode"
         minSdk = 26
         targetSdk = 36
-        versionCode = 24
-        versionName = "0.1.0-poc24"
+        versionCode = 25
+        versionName = "0.1.0-poc25"
         buildConfigField("String", "VOSK_MODEL_MIRROR_BASE", buildConfigString(adaosVoskMirrorBase))
 
         ndk {

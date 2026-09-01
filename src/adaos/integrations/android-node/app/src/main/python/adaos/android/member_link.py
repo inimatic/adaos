@@ -78,6 +78,26 @@ def _root_http_base_url(value: str) -> str:
     return _canonical_root_url(urlunparse((scheme, parsed.netloc, path, "", "", "")))
 
 
+def _config_root_candidates(config: dict[str, Any]) -> list[str]:
+    mtls = config.get("mtls") if isinstance(config.get("mtls"), dict) else {}
+    return [
+        str(config.get("root_url") or ""),
+        str(mtls.get("root_url") or ""),
+        str(config.get("hub_url") or ""),
+    ]
+
+
+def _config_root_http_base_url(config: dict[str, Any]) -> str:
+    for candidate in _config_root_candidates(config):
+        if not candidate.strip():
+            continue
+        try:
+            return _root_http_base_url(candidate)
+        except ValueError:
+            continue
+    return ""
+
+
 def _joined_hub_url(root_url: str, response_url: str) -> str:
     """Do not accept a Root response which downgrades an HTTPS join to plaintext."""
 
@@ -460,11 +480,7 @@ class AndroidMemberLink:
                 payload.setdefault("root_url", f"https://{hub.netloc}")
                 payload["updated_at"] = time.time()
                 changed = True
-            root_candidate = str(payload.get("root_url") or payload.get("hub_url") or "")
-            try:
-                root_url = _root_http_base_url(root_candidate)
-            except ValueError:
-                root_url = ""
+            root_url = _config_root_http_base_url(payload)
             if root_url and root_url != str(payload.get("root_url") or ""):
                 payload["root_url"] = root_url
                 payload["updated_at"] = time.time()
@@ -512,7 +528,7 @@ class AndroidMemberLink:
             "ca_present": ca_present,
             "node_id": str(mtls.get("node_id") or self.node_id),
             "subnet_id": str(mtls.get("subnet_id") or config.get("subnet_id") or ""),
-            "root_url": _redacted_url(str(mtls.get("root_url") or config.get("root_url") or "")),
+            "root_url": _redacted_url(_config_root_http_base_url(config)),
             "enrolled_at": mtls.get("enrolled_at") or 0.0,
         }
         if self._mtls_last_status:
@@ -602,7 +618,9 @@ class AndroidMemberLink:
             existing = self._mtls_status_from_config(config)
         if existing.get("configured"):
             return existing
-        root = _root_http_base_url(str(config.get("root_url") or config.get("hub_url") or ""))
+        root = _config_root_http_base_url(config)
+        if not root:
+            return self._record_mtls_status({"ok": False, "error": "member_root_url_required"})
         token = str(config.get("token") or "").strip()
         subnet_id = str(config.get("subnet_id") or "").strip()
         if not token:
@@ -656,10 +674,18 @@ class AndroidMemberLink:
     def probe_mtls(self) -> dict[str, Any]:
         enrolled = self.ensure_node_mtls()
         if not enrolled.get("configured"):
-            return {"ok": False, "mtls": self.mtls_status(), "error": "node_mtls_not_configured"}
+            return {
+                "ok": False,
+                "mtls": self.mtls_status(),
+                "error": str(enrolled.get("error") or "node_mtls_not_configured"),
+            }
         with self._lock:
             config = dict(self._config)
-        root = _root_http_base_url(str(config.get("root_url") or config.get("hub_url") or ""))
+        root = _config_root_http_base_url(config)
+        if not root:
+            result = {"ok": False, "error": "member_root_url_required"}
+            self._record_mtls_status(result)
+            return {"ok": False, "mtls": self.mtls_status(), **result}
         if not root.startswith("https://"):
             result = {"ok": False, "error": "mtls_requires_https", "root_url": _redacted_url(root)}
             self._record_mtls_status(result)
@@ -897,9 +923,9 @@ class AndroidMemberLink:
             raise ValueError("root_http_path_invalid")
         with self._lock:
             config = dict(self._config)
-        root = _root_http_base_url(
-            str(config.get("root_url") or config.get("hub_url") or "").strip()
-        )
+        root = _config_root_http_base_url(config)
+        if not root:
+            raise ValueError("member_root_url_required")
         token = str(config.get("token") or "").strip()
         subnet_id = str(config.get("subnet_id") or "").strip()
         if not token:

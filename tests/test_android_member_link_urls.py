@@ -60,6 +60,29 @@ def test_android_mtls_csr_der_uses_sha256_rsa_oid() -> None:
     assert module._der_oid("1.2.840.113549.1.1.11").hex() == "06092a864886f70d01010b"
 
 
+def test_android_mtls_root_resolver_uses_hub_when_root_is_invalid() -> None:
+    module = _load_module()
+
+    assert module._config_root_http_base_url(
+        {
+            "root_url": "not-a-url",
+            "hub_url": "wss://ru.api.inimatic.com/hubs/sn_test/ws/subnet",
+        }
+    ) == "https://ru.api.inimatic.com"
+
+
+def test_android_mtls_root_resolver_uses_stored_mtls_root() -> None:
+    module = _load_module()
+
+    assert module._config_root_http_base_url(
+        {
+            "root_url": "",
+            "hub_url": "",
+            "mtls": {"root_url": "https://ru.api.inimatic.com/hubs/sn_test"},
+        }
+    ) == "https://ru.api.inimatic.com"
+
+
 def test_https_join_rejects_root_protocol_downgrade() -> None:
     module = _load_module()
 
@@ -138,6 +161,39 @@ def test_existing_websocket_config_derives_root_without_rejoin(
     assert link.snapshot()["root_url"] == "https://ru.api.inimatic.com"
     persisted = json.loads(path.read_text(encoding="utf-8"))
     assert persisted["root_url"] == "https://ru.api.inimatic.com"
+
+
+def test_mtls_probe_reports_missing_root_without_traceback(tmp_path: Path) -> None:
+    module = _load_module()
+    path = tmp_path / "android-member-link.json"
+    path.write_text(
+        json.dumps(
+            {
+                "enabled": True,
+                "hub_url": "",
+                "root_url": "not-a-url",
+                "subnet_id": "sn_test",
+                "token": "signed-member-token",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    link = module.AndroidMemberLink(
+        tmp_path,
+        node_id="android-test",
+        local_subnet_id="local-test",
+        status_provider=lambda: {},
+        document_provider=lambda: {},
+        apply_yjs_update=lambda _update: True,
+        state_changed=lambda _state: None,
+    )
+
+    result = link.probe_mtls()
+
+    assert result["ok"] is False
+    assert result["error"] == "member_root_url_required"
+    assert not str(result["error"]).startswith("ValueError:")
 
 
 def test_connected_snapshot_requires_fresh_hub_activity(
