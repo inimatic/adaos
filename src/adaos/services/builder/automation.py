@@ -433,6 +433,38 @@ class BuilderAutomationService:
             self.context_service = ContextControlService(state_dir=self.state_dir)
         return self.context_service
 
+    def current_workflow_head(
+        self,
+        *,
+        object_type: str,
+        object_id: str,
+    ) -> dict[str, Any]:
+        """Return the live Change head used for lifecycle routing decisions."""
+
+        kind, project_id = self._project_ref(object_type, object_id)
+        workflow = self._workflow().describe(kind, project_id)
+        governed = (
+            workflow.get("governed")
+            if isinstance(workflow.get("governed"), Mapping)
+            else {}
+        )
+        change_set = (
+            workflow.get("change_set")
+            if isinstance(workflow.get("change_set"), Mapping)
+            else {}
+        )
+        return {
+            "schema": "adaos.builder.workflow_head.v1",
+            "object_type": kind,
+            "object_id": project_id,
+            "state": str(governed.get("state") or "").strip() or None,
+            "generation": governed.get("generation"),
+            "change_set_id": str(change_set.get("change_set_id") or "").strip()
+            or None,
+            "change_set_status": str(change_set.get("status") or "").strip()
+            or None,
+        }
+
     def _compile_iteration_context(
         self,
         *,

@@ -162,6 +162,18 @@ class _FakeFollowupBuilderAutomation(_FakeBuilderAutomation):
         )
 
 
+class _FakePublishedBuilderAutomation(_FakeFollowupBuilderAutomation):
+    def current_workflow_head(self, *, object_type: str, object_id: str):
+        return {
+            "schema": "adaos.builder.workflow_head.v1",
+            "object_type": object_type,
+            "object_id": object_id,
+            "state": "published",
+            "change_set_id": "CH-published",
+            "change_set_status": "published",
+        }
+
+
 class _FakeFailingBuilderAutomation(_FakeBuilderAutomation):
     def status(self, *, object_type: str, object_id: str):
         suffix = str(self.counter or 1)
@@ -911,6 +923,38 @@ def test_autonomous_repair_joins_completed_builder_trial_as_followup(tmp_path: P
     assert automation.calls == []
     assert len(automation.followup_calls) == 1
     assert automation.followup_calls[0]["links"]["development_ticket_id"] == ticket["ticket_id"]
+
+
+def test_autonomous_repair_starts_successor_after_published_workflow(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    automation = _FakePublishedBuilderAutomation()
+    signal = service.capture_signal(
+        kind="development_request",
+        summary="Rename the next selected metric trend heading",
+        target_scope={"type": "skill", "id": "demo_metrics_skill", "source": "dev"},
+        source="client_feedback",
+        owner_area="skill",
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="ready_for_builder",
+        owner_area="skill",
+    )["ticket"]
+
+    result = service.start_autonomous_repair(
+        ticket["ticket_id"],
+        actor="builder:automation",
+        repair_service=repair_service,
+        automation_service=automation,
+        webspace_id="desktop",
+    )
+
+    assert result["started"] is True
+    assert len(automation.calls) == 1
+    assert automation.followup_calls == []
+    assert automation.calls[0]["links"]["development_ticket_id"] == ticket["ticket_id"]
 
 
 def test_failed_autonomous_repair_returns_ticket_to_builder_queue_with_evidence(tmp_path: Path) -> None:

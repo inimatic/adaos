@@ -1628,11 +1628,35 @@ class DevelopmentTicketService:
                 and _text(current_links.get("development_ticket_id")) == ticket["ticket_id"]
             )
             readiness = _mapping(current_session.get("completion_readiness"))
+            workflow_head_method = getattr(
+                automation_service,
+                "current_workflow_head",
+                None,
+            )
+            workflow_head = (
+                _mapping(
+                    workflow_head_method(
+                        object_type=target["object_type"],
+                        object_id=target["object_id"],
+                    )
+                )
+                if callable(workflow_head_method)
+                else {}
+            )
+            workflow_state = _text(workflow_head.get("state"))
+            followup_state_ready = not workflow_state or workflow_state in {
+                "verification",
+                "trial_ready",
+                "trial_review",
+                "publication_ready",
+                "reconciliation_required",
+            }
             can_followup = (
                 callable(start_followup)
                 and _text(current_session.get("status")) == "completed"
                 and bool(readiness.get("ok"))
                 and bool(_mapping(readiness.get("aprobation")).get("ok"))
+                and followup_state_ready
             )
         start_method = (
             resume_failed
