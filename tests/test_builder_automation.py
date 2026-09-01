@@ -3642,6 +3642,135 @@ def test_governed_aprobation_trial_binds_candidate_and_changelog(
         "Rename the Metrics table.",
         "Move Refresh before Create.",
     ]
+    assert receipt["component_update"]["stage"] == "alpha"
+    assert receipt["component_update"]["version"] == "0.2.0"
+
+
+@pytest.mark.parametrize(
+    ("trial", "expected_source", "expected_skill_mode"),
+    [
+        ({"status": "trial"}, "devspace_runtime_overlay", "dev"),
+        (
+            {"status": "published", "decision": "accept"},
+            "component_update_notice",
+            "workspace",
+        ),
+    ],
+)
+def test_component_update_notice_refreshes_user_runtime_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    trial: dict[str, str],
+    expected_source: str,
+    expected_skill_mode: str | None,
+) -> None:
+    from adaos.services import runtime_refresh
+    from adaos.services.scenario import webspace_runtime
+
+    service = _service(tmp_path)
+    invalidations: list[dict[str, object]] = []
+    rebuilds: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        webspace_runtime,
+        "invalidate_webspace_materialization_cache",
+        lambda webspace_id, **kwargs: invalidations.append(
+            {"webspace_id": webspace_id, **kwargs}
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_refresh,
+        "rebuild_webspace_projection_sync",
+        lambda **kwargs: rebuilds.append(dict(kwargs))
+        or {"ok": True, "materialization": {"ready": True}},
+    )
+
+    result = service._refresh_component_update_projection(
+        {
+            "object_type": "skill",
+            "object_id": "demo_metrics_skill",
+            "webspace_id": "desktop",
+        },
+        {
+            "mode": "devspace_to_workspace_runtime_overlay",
+            "webspace_id": "desktop",
+            "skills": [{"id": "demo_metrics_skill"}],
+            "trial": trial,
+        },
+    )
+
+    assert result is not None and result["ok"] is True
+    assert invalidations[0]["reason"] == "component_update_notice_changed"
+    assert rebuilds[0]["source_of_truth"] == expected_source
+    assert rebuilds[0]["skill_source_mode"] == expected_skill_mode
+
+
+def test_completed_session_reconciles_missing_component_update_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.skill.demo_metrics_skill",
+        "object_type": "skill",
+        "object_id": "demo_metrics_skill",
+        "status": "completed",
+        "current_task_id": "task.demo",
+        "links": {"development_ticket_id": "dticket.1"},
+        "implementation_brief": json.dumps(
+            {
+                "execution_mode": "surgical_dev_ticket_repair",
+                "policy": {"publication_required": True},
+            }
+        ),
+        "completion_readiness": {
+            "ok": True,
+            "aprobation": {
+                "ok": True,
+                "mode": "devspace_to_workspace_runtime_overlay",
+                "webspace_id": "desktop",
+                "skills": [
+                    {
+                        "id": "demo_metrics_skill",
+                        "webspace_projection": {
+                            "ok": True,
+                            "materialization": {"ready": True},
+                        },
+                    }
+                ],
+                "trial": {
+                    "status": "trial",
+                    "candidate_id": "candidate.demo",
+                    "candidate_digest": "sha256:" + "2" * 64,
+                    "version": "0.2.0",
+                },
+            },
+        },
+    }
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_record_component_update",
+        lambda self, current, aprobation: {
+            "notice_id": "cupdate.demo",
+            "stage": "alpha",
+        },
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_refresh_component_update_projection",
+        lambda self, current, aprobation: {
+            "ok": True,
+            "materialization": {"ready": True},
+        },
+    )
+
+    reconciled = service._reconcile_required_aprobation(session)
+
+    aprobation = reconciled["completion_readiness"]["aprobation"]
+    assert aprobation["component_update"]["notice_id"] == "cupdate.demo"
+    assert aprobation["component_update_projection"]["ok"] is True
+    persisted = service.get_session("skill", "demo_metrics_skill")
+    assert persisted["completion_readiness"]["aprobation"]["component_update_projection"]["ok"] is True
 
 
 def test_accepting_aprobation_publishes_and_closes_resolved_ticket(

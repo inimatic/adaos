@@ -3084,6 +3084,58 @@ class BuilderAutomationService:
                 ]
             )
         )
+        now = _now_iso()
+        with _LOCK:
+            persisted = self.get_session(kind, project_id) or current
+            persisted_readiness = (
+                dict(persisted.get("completion_readiness"))
+                if isinstance(persisted.get("completion_readiness"), Mapping)
+                else {}
+            )
+            persisted_aprobation = (
+                dict(persisted_readiness.get("aprobation"))
+                if isinstance(persisted_readiness.get("aprobation"), Mapping)
+                else dict(aprobation)
+            )
+            persisted_trial = (
+                dict(persisted_aprobation.get("trial"))
+                if isinstance(persisted_aprobation.get("trial"), Mapping)
+                else dict(trial)
+            )
+            persisted_trial.update(
+                {
+                    "status": "published" if accepted else "rejected",
+                    "decision": decision_token,
+                    "decided_by": actor_token,
+                    "decided_at": now,
+                }
+            )
+            persisted_aprobation["trial"] = persisted_trial
+            if rollback is not None:
+                persisted_aprobation["rollback"] = rollback
+            persisted_readiness["aprobation"] = persisted_aprobation
+            persisted["completion_readiness"] = persisted_readiness
+            persisted["updated_at"] = now
+            self._save_session(persisted)
+
+        component_update = self._record_component_update(persisted, persisted_aprobation)
+        if component_update is None:
+            raise RuntimeError("Builder Trial component update notice was not persisted")
+        component_update_projection = self._refresh_component_update_projection(
+            persisted,
+            persisted_aprobation,
+        )
+        persisted_aprobation["component_update"] = component_update
+        if component_update_projection is not None:
+            persisted_aprobation["component_update_projection"] = component_update_projection
+        with _LOCK:
+            persisted_readiness["aprobation"] = persisted_aprobation
+            persisted["completion_readiness"] = persisted_readiness
+            persisted["updated_at"] = _now_iso()
+            self._save_session(persisted)
+
+        # Tickets become verified/closed only after the accepted release and
+        # its user-visible notice are both projected into the target runtime.
         tickets: list[dict[str, Any]] = []
         for ticket_id in (item for item in ticket_ids if item):
             ticket = ticket_service.get_ticket(ticket_id)
@@ -3129,41 +3181,6 @@ class BuilderAutomationService:
                 )
             tickets.append(ticket)
 
-        now = _now_iso()
-        with _LOCK:
-            persisted = self.get_session(kind, project_id) or current
-            persisted_readiness = (
-                dict(persisted.get("completion_readiness"))
-                if isinstance(persisted.get("completion_readiness"), Mapping)
-                else {}
-            )
-            persisted_aprobation = (
-                dict(persisted_readiness.get("aprobation"))
-                if isinstance(persisted_readiness.get("aprobation"), Mapping)
-                else dict(aprobation)
-            )
-            persisted_trial = (
-                dict(persisted_aprobation.get("trial"))
-                if isinstance(persisted_aprobation.get("trial"), Mapping)
-                else dict(trial)
-            )
-            persisted_trial.update(
-                {
-                    "status": "published" if accepted else "rejected",
-                    "decision": decision_token,
-                    "decided_by": actor_token,
-                    "decided_at": now,
-                }
-            )
-            persisted_aprobation["trial"] = persisted_trial
-            if rollback is not None:
-                persisted_aprobation["rollback"] = rollback
-            persisted_readiness["aprobation"] = persisted_aprobation
-            persisted["completion_readiness"] = persisted_readiness
-            persisted["updated_at"] = now
-            self._save_session(persisted)
-            self._record_component_update(persisted, persisted_aprobation)
-
         return {
             "ok": True,
             "decision": decision_token,
@@ -3174,6 +3191,8 @@ class BuilderAutomationService:
             "workflow": workflow,
             "tickets": tickets,
             "evidence_refs": evidence_refs,
+            "component_update": component_update,
+            "component_update_projection": component_update_projection,
         }
 
     def projection(
@@ -3242,6 +3261,31 @@ class BuilderAutomationService:
                     current.get("change_id"),
                 )
             return reconciled or current
+        if (
+            str(current.get("status") or "").strip() == "completed"
+            and bool(readiness.get("ok"))
+            and self._session_requires_aprobation_overlay(current)
+            and self._aprobation_overlay_ready(aprobation)
+            and not isinstance(aprobation.get("component_update_projection"), Mapping)
+        ):
+            _log.info(
+                "reconciling missing component update projection session=%s task=%s",
+                current.get("session_id"),
+                current.get("current_task_id"),
+            )
+            notice = self._record_component_update(current, aprobation)
+            if notice is None:
+                raise RuntimeError("Builder Trial component update notice was not persisted")
+            projection = self._refresh_component_update_projection(current, aprobation)
+            reconciled_aprobation = dict(aprobation)
+            reconciled_aprobation["component_update"] = notice
+            if projection is not None:
+                reconciled_aprobation["component_update_projection"] = projection
+            reconciled_readiness = dict(readiness)
+            reconciled_readiness["aprobation"] = reconciled_aprobation
+            current["completion_readiness"] = reconciled_readiness
+            current["updated_at"] = _now_iso()
+            self._save_session(current)
         return current
 
     @staticmethod
@@ -6165,14 +6209,20 @@ class BuilderAutomationService:
                 "ticket_ids": ticket_ids,
             },
         }
-        self._record_component_update(session, receipt)
+        component_update = self._record_component_update(session, receipt)
+        if component_update is None:
+            raise RuntimeError("Builder Trial component update notice was not persisted")
+        receipt["component_update"] = component_update
+        projection = self._refresh_component_update_projection(session, receipt)
+        if projection is not None:
+            receipt["component_update_projection"] = projection
         return receipt
 
     def _record_component_update(
         self,
         session: Mapping[str, Any],
         aprobation: Mapping[str, Any],
-    ) -> None:
+    ) -> dict[str, Any] | None:
         try:
             from adaos.services.component_updates import ComponentUpdateService
 
@@ -6189,7 +6239,7 @@ class BuilderAutomationService:
                     ]
                 )
             )
-            ComponentUpdateService(state_dir=self.state_dir).record_aprobation(
+            notice = ComponentUpdateService(state_dir=self.state_dir).record_aprobation(
                 component_type=str(session.get("object_type") or "").strip(),
                 component_id=str(session.get("object_id") or "").strip(),
                 aprobation=aprobation,
@@ -6197,11 +6247,96 @@ class BuilderAutomationService:
                 or "desktop",
                 ticket_ids=tuple(item for item in ticket_ids if item),
             )
+            return dict(notice) if isinstance(notice, Mapping) else None
         except Exception:
             _log.exception(
                 "failed to persist component update notice session=%s",
                 session.get("session_id"),
             )
+            raise
+
+    def _refresh_component_update_projection(
+        self,
+        session: Mapping[str, Any],
+        aprobation: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Make a persisted review notice visible in the same runtime transition."""
+
+        if str(aprobation.get("mode") or "").strip() != "devspace_to_workspace_runtime_overlay":
+            return None
+        skills = [
+            dict(item)
+            for item in aprobation.get("skills") or []
+            if isinstance(item, Mapping) and str(item.get("id") or "").strip()
+        ]
+        scenario = (
+            dict(aprobation.get("scenario"))
+            if isinstance(aprobation.get("scenario"), Mapping)
+            else {}
+        )
+        if not skills and (not scenario or bool(scenario.get("skipped"))):
+            return None
+
+        from adaos.services.runtime_refresh import rebuild_webspace_projection_sync
+        from adaos.services.scenario.webspace_runtime import invalidate_webspace_materialization_cache
+
+        webspace_id = str(
+            aprobation.get("webspace_id") or session.get("webspace_id") or "desktop"
+        ).strip() or "desktop"
+        trial = (
+            dict(aprobation.get("trial"))
+            if isinstance(aprobation.get("trial"), Mapping)
+            else {}
+        )
+        trial_status = str(trial.get("status") or "").strip().lower()
+        trial_pending = trial_status == "trial" and not str(trial.get("decision") or "").strip()
+        object_type = str(session.get("object_type") or "").strip().lower()
+        object_id = str(session.get("object_id") or "").strip()
+
+        invalidate_webspace_materialization_cache(
+            webspace_id,
+            reason="component_update_notice_changed",
+            action="builder_component_update_sync",
+            source_of_truth="component_update_notice",
+        )
+        if trial_pending and object_type == "scenario" and scenario and not bool(scenario.get("skipped")):
+            refreshed = self._prepare_and_activate_aprobation_scenario(
+                object_id,
+                webspace_id=webspace_id,
+            )
+            projection = (
+                dict(refreshed.get("webspace_projection"))
+                if isinstance(refreshed.get("webspace_projection"), Mapping)
+                else {}
+            )
+        else:
+            projection = rebuild_webspace_projection_sync(
+                webspace_id=webspace_id,
+                action="builder_component_update_sync",
+                source_of_truth=(
+                    "devspace_runtime_overlay" if trial_pending else "component_update_notice"
+                ),
+                scenario_resolution=("builder_aprobation_overlay" if trial_pending else None),
+                skill_source_mode=("dev" if trial_pending else "workspace"),
+            )
+        materialization = (
+            dict(projection.get("materialization"))
+            if isinstance(projection.get("materialization"), Mapping)
+            else {}
+        )
+        if not bool(projection.get("ok")) or materialization.get("ready") is not True:
+            raise RuntimeError(
+                str(
+                    projection.get("error")
+                    or "Component update notice webspace materialization is not ready"
+                )
+            )
+        return {
+            "ok": True,
+            "webspace_id": webspace_id,
+            "stage": "alpha" if trial_pending else "published_or_reverted",
+            "materialization": materialization,
+        }
 
     def _rollback_aprobation_overlay(
         self,
