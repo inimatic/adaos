@@ -502,6 +502,8 @@ def test_builder_repair_requalification_is_bounded_and_audited(tmp_path: Path) -
         builder_repair={
             "profile": "surgical_ui",
             "change_summary": "Rename only the selected action label.",
+            "target_object_type": "skill",
+            "target_object_id": "demo_metrics_skill",
             "target_files": [
                 "skills/demo_metrics_skill/webui.json",
                 "skills/demo_metrics_skill/tests/test_resource_workbench.py",
@@ -518,6 +520,8 @@ def test_builder_repair_requalification_is_bounded_and_audited(tmp_path: Path) -
     assert updated["metadata"]["builder_repair"]["target_files"][-1].endswith(
         "test_resource_workbench.py"
     )
+    assert updated["metadata"]["builder_repair"]["target_object_type"] == "skill"
+    assert updated["metadata"]["builder_repair"]["target_object_id"] == "demo_metrics_skill"
     history = updated["history"][-1]
     assert history["kind"] == "builder_repair_requalified"
     assert history["previous_builder_repair"]["target_files"] == [
@@ -536,6 +540,55 @@ def test_builder_repair_requalification_is_bounded_and_audited(tmp_path: Path) -
                 "max_changed_files": 1,
             },
         )
+
+
+def test_qualified_modal_ticket_targets_its_owner_skill(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    automation = _FakeBuilderAutomation()
+    signal = service.capture_signal(
+        kind="development_request",
+        summary="Open Subscription details only once",
+        target_scope={
+            "type": "modal",
+            "id": "subscription_status_modal",
+            "source": "dev",
+            "component_ref": "modal:subscription_status_modal",
+        },
+        source="client_feedback",
+        owner_area="project",
+        component_ref="modal:subscription_status_modal",
+        metadata={
+            "builder_repair": {
+                "profile": "surgical_ui",
+                "target_object_type": "skill",
+                "target_object_id": "subscription_status_skill",
+                "target_files": ["skills/subscription_status_skill/webui.json"],
+                "acceptance_checks": ["One Details click opens one modal."],
+                "max_changed_files": 1,
+            }
+        },
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="ready_for_builder",
+        owner_area="project",
+        component_ref="modal:subscription_status_modal",
+    )["ticket"]
+
+    result = service.start_autonomous_repair(
+        ticket["ticket_id"],
+        actor="builder:automation",
+        repair_service=repair_service,
+        automation_service=automation,
+        webspace_id="desktop",
+    )
+
+    assert result["started"] is True
+    assert automation.calls[0]["object_type"] == "skill"
+    assert automation.calls[0]["object_id"] == "subscription_status_skill"
+    assert result["repair"]["project_id"] == "subscription_status_skill"
 
 
 def test_builder_package_requires_qualification_before_spending_tokens(tmp_path: Path) -> None:

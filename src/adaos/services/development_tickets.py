@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -382,6 +383,11 @@ def _automation_target_from_ticket(ticket: Mapping[str, Any]) -> dict[str, str]:
     component = _text(ticket.get("component_ref") or _component_ref_from_scopes(target, _mapping(ticket.get("origin_scope")), meta))
     if owner_area in {"core", "api", "runtime", "sdk"} or component.startswith(("core:", "api:", "runtime:", "sdk:")):
         raise ValueError("Dev Ticket is owned by core/API/SDK/runtime and cannot be repaired by project Builder automation")
+    repair_hints = _bounded_repair_hints(ticket)
+    qualified_type = _text(repair_hints.get("target_object_type")).lower()
+    qualified_id = _text(repair_hints.get("target_object_id"))
+    if qualified_type in {"skill", "scenario"} and qualified_id:
+        return {"object_type": qualified_type, "object_id": qualified_id}
     target_type = _text(target.get("type")).lower().rstrip("s")
     target_id = _text(target.get("id") or target.get("name"))
     if target_type in {"skill", "scenario"} and target_id:
@@ -406,6 +412,23 @@ def _automation_target_from_ticket(ticket: Mapping[str, Any]) -> dict[str, str]:
         if _ref_tail(value, "scenario"):
             return {"object_type": "scenario", "object_id": _ref_tail(value, "scenario")}
     raise ValueError("Dev Ticket target must resolve to a skill or scenario before autonomous repair")
+
+
+def _development_source_scope(
+    ticket: Mapping[str, Any],
+    target: Mapping[str, str],
+) -> dict[str, Any]:
+    scope = _mapping(ticket.get("target_scope"))
+    resolved = {
+        **scope,
+        "type": _text(target.get("object_type")),
+        "id": _text(target.get("object_id")),
+    }
+    metadata = _mapping(ticket.get("metadata"))
+    for key in ("project_id", "project_ref"):
+        if not _text(resolved.get(key)) and _text(metadata.get(key)):
+            resolved[key] = metadata[key]
+    return resolved
 
 
 def _project_id_for_materialization(ticket: Mapping[str, Any], development_source: Mapping[str, Any]) -> str | None:
@@ -604,6 +627,12 @@ def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
         for value in raw.get("acceptance_checks") or []
         if _text(value)
     ][:12]
+    target_object_type = _text(raw.get("target_object_type")).lower()
+    target_object_id = _text(raw.get("target_object_id"))
+    if target_object_type not in {"skill", "scenario"}:
+        target_object_type = ""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", target_object_id):
+        target_object_id = ""
     try:
         max_changed_files = max(1, min(12, int(raw.get("max_changed_files") or len(target_files) or 1)))
     except (TypeError, ValueError):
@@ -616,6 +645,8 @@ def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
         "acceptance_checks": acceptance_checks,
         "max_changed_files": max_changed_files,
         "requires_root_mcp": raw.get("requires_root_mcp") is True,
+        "target_object_type": target_object_type or None,
+        "target_object_id": target_object_id or None,
     }
     return {key: value for key, value in hints.items() if value not in (None, "", [])}
 
@@ -1394,7 +1425,7 @@ class DevelopmentTicketService:
         if _text(ticket.get("status")) in TERMINAL_TICKET_STATES:
             raise ValueError("terminal Dev Ticket cannot start autonomous repair")
         target = _automation_target_from_ticket(ticket)
-        development_source = development_source_options(_mapping(ticket.get("target_scope")))
+        development_source = development_source_options(_development_source_scope(ticket, target))
         strategy = _text(source_strategy)
         materialization: dict[str, Any] | None = None
         if automation_service is None:
@@ -1697,7 +1728,7 @@ class DevelopmentTicketService:
         if len({(item["object_type"], item["object_id"]) for item in targets}) != 1:
             raise ValueError("Builder package target changed since planning")
         target = targets[0]
-        development_source = development_source_options(_mapping(ticket_list[0].get("target_scope")))
+        development_source = development_source_options(_development_source_scope(ticket_list[0], target))
         materialization: dict[str, Any] | None = None
         if automation_service is None:
             from adaos.services.builder.automation import BuilderAutomationService
@@ -2222,6 +2253,14 @@ class DevelopmentTicketService:
         profile = _text(raw.get("profile")).lower()
         if profile not in _REPAIR_HINT_PROFILES:
             raise ValueError(f"unsupported Builder repair profile: {profile or '<missing>'}")
+        requested_target_type = _text(raw.get("target_object_type")).lower()
+        requested_target_id = _text(raw.get("target_object_id"))
+        if bool(requested_target_type) != bool(requested_target_id):
+            raise ValueError("Builder repair target_object_type and target_object_id must be provided together")
+        if requested_target_type and requested_target_type not in {"skill", "scenario"}:
+            raise ValueError("Builder repair target_object_type must be skill or scenario")
+        if requested_target_id and not re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", requested_target_id):
+            raise ValueError("Builder repair target_object_id is invalid")
         requested_files = [
             _text(value).replace("\\", "/").strip("/")
             for value in raw.get("target_files") or []
@@ -2860,6 +2899,7 @@ class DevelopmentTicketService:
     ) -> dict[str, Any]:
         service = repair_service or BuilderRepairService(state_dir=self.state_dir)
         target = _mapping(ticket.get("target_scope"))
+        automation_target = _automation_target_from_ticket(ticket)
         ticket_id = _text(ticket.get("ticket_id"))
         signal_ids = [_text(item) for item in ticket.get("signal_ids") or [] if _text(item)]
         source_refs = [
@@ -2868,7 +2908,7 @@ class DevelopmentTicketService:
             *_sequence_of_mappings(ticket.get("evidence_refs") or []),
         ]
         report = service.report(
-            project_id=_project_id_from_target(target),
+            project_id=automation_target["object_id"],
             signal_type="guard",
             summary=_text(ticket.get("summary")) or "Runtime compatibility debt",
             source_refs=source_refs,
