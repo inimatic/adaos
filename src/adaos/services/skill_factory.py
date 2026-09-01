@@ -250,6 +250,9 @@ def _normalize_root_mcp_profile(value: Any) -> dict[str, Any]:
     )
     if token_env:
         normalized["bearer_token_env_var"] = token_env
+    bound_target_id = _text(root.get("bound_target_id") or root.get("target_id"))
+    if bound_target_id:
+        normalized["bound_target_id"] = bound_target_id
     enabled_tools = _string_list(root.get("enabled_tools"))
     if enabled_tools:
         normalized["enabled_tools"] = enabled_tools

@@ -907,6 +907,54 @@ def test_automation_budget_projection_marks_legacy_max_tokens_overrun(tmp_path: 
     assert projected["budget_usage"]["overrun_tokens"] == 800
 
 
+def test_automation_budget_projection_uses_fresh_plus_output_metric(tmp_path: Path) -> None:
+    run_root = tmp_path / "run"
+    runtime_root = run_root / "runtime"
+    runtime_root.mkdir(parents=True)
+    journal = runtime_root / "codex-events.jsonl"
+    journal.write_text(
+        json.dumps(
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 46_600,
+                    "cached_input_tokens": 40_192,
+                    "output_tokens": 427,
+                    "reasoning_output_tokens": 183,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    session = {
+        "status": "completed",
+        "task": {
+            "assigned_at": "2026-09-01T23:00:00Z",
+            "updated_at": "2026-09-01T23:01:00Z",
+            "realize_request": {
+                "artifacts": {
+                    "execution_budget": {
+                        "max_model_tokens": 12_000,
+                        "token_budget_metric": "fresh_plus_output",
+                    }
+                }
+            },
+        },
+        "local_run": {"path": str(run_root), "events_path": str(journal)},
+    }
+
+    projected = BuilderAutomationService.project_session(session)
+
+    observed = projected["budget_usage"]["observed"]
+    assert observed["model_tokens"] == 47_027
+    assert observed["reasoning_tokens"] == 183
+    assert observed["budget_metric"] == "fresh_plus_output"
+    assert observed["budget_tokens"] == 6_835
+    assert projected["budget_usage"]["status"] == "within_budget"
+    assert projected["budget_usage"]["overrun_tokens"] == 0
+
+
 def test_terminal_codex_usage_is_reported_once_with_provider_counts(tmp_path: Path) -> None:
     service = _service(tmp_path)
     contexts = service._contexts()

@@ -3483,12 +3483,19 @@ class BuilderAutomationService:
             except (TypeError, ValueError):
                 declared_model_tokens = 0
         observed_model_tokens = int(usage.get("model_tokens") or 0)
+        budget_metric = str((declared or {}).get("token_budget_metric") or "model_tokens").strip()
+        observed_budget_tokens = observed_model_tokens
+        if budget_metric == "fresh_plus_output":
+            observed_budget_tokens = max(
+                0,
+                int(usage.get("input_tokens") or 0) - int(usage.get("cached_input_tokens") or 0),
+            ) + int(usage.get("output_tokens") or 0)
         budget_status = "unknown"
         overrun_tokens = 0
-        if declared_model_tokens > 0 and observed_model_tokens > 0:
-            if observed_model_tokens > declared_model_tokens:
+        if declared_model_tokens > 0 and observed_budget_tokens > 0:
+            if observed_budget_tokens > declared_model_tokens:
                 budget_status = "exceeded"
-                overrun_tokens = observed_model_tokens - declared_model_tokens
+                overrun_tokens = observed_budget_tokens - declared_model_tokens
             else:
                 budget_status = "within_budget"
         return {
@@ -3498,6 +3505,9 @@ class BuilderAutomationService:
                 "input_tokens": int(usage.get("input_tokens") or 0),
                 "cached_input_tokens": int(usage.get("cached_input_tokens") or 0),
                 "output_tokens": int(usage.get("output_tokens") or 0),
+                "reasoning_tokens": int(usage.get("reasoning_tokens") or 0),
+                "budget_metric": budget_metric,
+                "budget_tokens": observed_budget_tokens,
                 "attempts": int(usage.get("attempts") or 0),
                 "wall_seconds": wall_seconds,
                 "terminal": status in _TERMINAL_STATUSES,
@@ -3526,14 +3536,16 @@ class BuilderAutomationService:
                     usage = turn.get("usage") if isinstance(turn.get("usage"), Mapping) else None
                 if usage is None:
                     continue
-                for key in (
-                    "input_tokens",
-                    "cached_input_tokens",
-                    "output_tokens",
-                    "reasoning_tokens",
-                ):
+                aliases = {
+                    "input_tokens": ("input_tokens",),
+                    "cached_input_tokens": ("cached_input_tokens",),
+                    "output_tokens": ("output_tokens",),
+                    "reasoning_tokens": ("reasoning_tokens", "reasoning_output_tokens"),
+                }
+                for key, candidates in aliases.items():
                     try:
-                        values[key] = max(values.get(key, 0), int(usage.get(key) or 0))
+                        observed = next((usage.get(candidate) for candidate in candidates if usage.get(candidate) is not None), 0)
+                        values[key] = max(values.get(key, 0), int(observed or 0))
                     except (TypeError, ValueError):
                         continue
             if values:

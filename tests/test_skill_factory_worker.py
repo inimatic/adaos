@@ -28,11 +28,39 @@ from adaos.services.skill_factory_worker import (
     SubprocessCodexExecutor,
     _codex_failure_detail,
     _codex_budget_observed_tokens,
+    _codex_jsonl_usage,
     _codex_jsonl_live_budget_estimate,
     _codex_prompt_budget_check,
     _context_packet_prompt_projection,
     _root_mcp_profile_from_assignment,
 )
+
+
+def test_codex_jsonl_usage_accepts_reasoning_output_tokens(tmp_path: Path) -> None:
+    journal = tmp_path / "codex.jsonl"
+    journal.write_text(
+        json.dumps(
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 100,
+                    "cached_input_tokens": 80,
+                    "output_tokens": 20,
+                    "reasoning_output_tokens": 7,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert _codex_jsonl_usage(journal) == {
+        "input_tokens": 100,
+        "cached_input_tokens": 80,
+        "output_tokens": 20,
+        "reasoning_tokens": 7,
+        "model_tokens": 120,
+    }
 
 
 def test_codex_failure_detail_prefers_structured_jsonl_errors() -> None:
@@ -1335,6 +1363,14 @@ def test_bounded_repair_prompt_requires_targeted_reads(
             "repair_profile": repair_profile,
             "minimal_diff": True,
         },
+        "mcp": {
+            "root_mcp": {
+                "url": "https://ru.api.inimatic.com/v1/root/mcp",
+                "required": True,
+                "bound_target_id": "hub:sn_demo",
+                "enabled_tools": ["get_status"],
+            }
+        },
         "realize_request": {
             "artifacts": {
                 "implementation_brief": "adaos.dev_ticket.autonomous_repair_brief.v1",
@@ -1357,6 +1393,9 @@ def test_bounded_repair_prompt_requires_targeted_reads(
     assert "Never use `rg -A`, `rg -B`, or `rg -C`" in prompt
     assert "at most 400 source lines before the first edit" in prompt
     assert "Do not run tests or validation commands in the Codex turn" in prompt
+    assert "Task-scoped Root MCP route" in prompt
+    assert "hub:sn_demo" in prompt
+    assert "Never substitute a skill, scenario, project, or component ID" in prompt
     expected_title = (
         "AdaOS bounded surgical UI repair"
         if repair_profile == "surgical_ui"
@@ -2230,6 +2269,7 @@ def test_codex_executor_projects_root_mcp_config_without_prompt_secret(
         "server_name": "adaos-root",
         "bearer_token_env_var": "ADAOS_ROOT_MCP_AUTH",
         "enabled_tools": "get_status",
+        "bound_target_id": "hub:sn_demo",
         "disabled_tools": ["unsafe_write", "unsafe_write"],
         "tool_timeout_sec": 45,
     }
@@ -2271,9 +2311,12 @@ def test_codex_executor_projects_root_mcp_config_without_prompt_secret(
     prompt = (input_dir / "task.md").read_text(encoding="utf-8")
 
     assert packet["root_mcp"]["server_name"] == "adaos_root"
+    assert packet["root_mcp"]["bound_target_id"] == "hub:sn_demo"
     assert packet["root_mcp"]["bearer_env_present"] is True
     assert "Task-scoped Root MCP route" in prompt
     assert "adaos_root" in prompt
+    assert "Never substitute a skill, scenario, project, or component ID" in prompt
+    assert "hub:sn_demo" in prompt
     assert "secret-token-value" not in prompt
 
 

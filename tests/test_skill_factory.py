@@ -539,6 +539,7 @@ def test_skill_factory_projects_root_mcp_profile_without_secret(tmp_path: Path) 
                     "bearer_token_env_var": "ADAOS_ROOT_MCP_AUTH",
                     "access_token": "must-not-persist",
                     "enabled_tools": ["get_status", "get_builder_context"],
+                    "target_id": "hub:sn_demo",
                 }
             },
         }
@@ -548,6 +549,7 @@ def test_skill_factory_projects_root_mcp_profile_without_secret(tmp_path: Path) 
     assert persisted_root_mcp["server_name"] == "adaos_root"
     assert persisted_root_mcp["url"] == "https://ru.api.inimatic.com/v1/root/mcp"
     assert persisted_root_mcp["bearer_token_env_var"] == "ADAOS_ROOT_MCP_AUTH"
+    assert persisted_root_mcp["bound_target_id"] == "hub:sn_demo"
     assert "access_token" not in persisted_root_mcp
 
     service.register_dev_node({"node_id": "devnode.mcp"})

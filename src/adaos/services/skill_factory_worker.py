@@ -243,14 +243,16 @@ def _codex_jsonl_usage(path: Path) -> dict[str, int]:
                 usage = turn.get("usage") if isinstance(turn.get("usage"), Mapping) else None
             if usage is None:
                 continue
-            for key in (
-                "input_tokens",
-                "cached_input_tokens",
-                "output_tokens",
-                "reasoning_tokens",
-            ):
+            aliases = {
+                "input_tokens": ("input_tokens",),
+                "cached_input_tokens": ("cached_input_tokens",),
+                "output_tokens": ("output_tokens",),
+                "reasoning_tokens": ("reasoning_tokens", "reasoning_output_tokens"),
+            }
+            for key, candidates in aliases.items():
                 try:
-                    values[key] = max(values.get(key, 0), int(usage.get(key) or 0))
+                    observed = next((usage.get(candidate) for candidate in candidates if usage.get(candidate) is not None), 0)
+                    values[key] = max(values.get(key, 0), int(observed or 0))
                 except (TypeError, ValueError):
                     continue
         if values:
@@ -894,6 +896,9 @@ def _root_mcp_profile_from_assignment(
     if env_var:
         profile["bearer_token_env_var"] = env_var
         profile["bearer_env_present"] = bool(token or os.getenv(env_var))
+    bound_target_id = str(root.get("bound_target_id") or root.get("target_id") or "").strip()
+    if bound_target_id:
+        profile["bound_target_id"] = bound_target_id
     for key in ("enabled_tools", "disabled_tools", "scope"):
         values = _string_list(root.get(key))
         if values:
@@ -3195,6 +3200,17 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
             if root_mcp
             else "No task-scoped Root MCP route was admitted."
         )
+        root_mcp_section = f"""## Task-scoped Root MCP route
+
+```json
+{root_mcp_context}
+```
+
+When `bound_target_id` is present, it is the only authorized Root target for
+this task. Never substitute a skill, scenario, project, or component ID. Omit
+`target_id` when the tool permits it; otherwise pass `bound_target_id` exactly.
+Do not read, print, or inspect bearer-token environment values.
+"""
         if bounded_repair:
             bounded_prompt_title = (
                 "AdaOS bounded surgical UI repair"
@@ -3243,6 +3259,8 @@ the requested change, edit directly and do not rediscover the same structures.
 ## Current repair instruction
 
 {iteration_text}
+
+{root_mcp_section if root_mcp else ''}
 
 ## Required result
 
@@ -3307,18 +3325,7 @@ contract, not this convenience projection.
 {contract_execution_checklist}
 ```
 
-## Task-scoped Root MCP route
-
-When the following profile is present, a Codex MCP server with the shown
-`server_name` may be configured for this task. Use it for compact live
-root/subnet context only when it materially reduces guessing or helps validate
-runtime state. Do not read, print, or inspect bearer-token environment values.
-If the MCP route is unavailable, continue from admitted local context and state
-the limitation in the final summary.
-
-```json
-{root_mcp_context}
-```
+{root_mcp_section}
 
 {dev_ticket_repair_requirements}
 
