@@ -5697,6 +5697,7 @@ def test_phase3_resolver_outputs_are_explicit_and_reusable(monkeypatch) -> None:
             source_mode="dev",
             scenario_application={
                 "id": "prompt-root",
+                "version": "0.8.0",
                 "modals": {"scenario_modal": {"title": "Scenario"}},
                 "desktop": {
                     "pageSchema": {
@@ -5715,6 +5716,13 @@ def test_phase3_resolver_outputs_are_explicit_and_reusable(monkeypatch) -> None:
                 {
                     "skill": "prompt_skill",
                     "space": "dev",
+                    "version": "0.4.2",
+                    "source_authority": "dev",
+                    "component_update": {
+                        "notice_id": "update-1",
+                        "stage": "alpha",
+                        "summary": "Try the prompt controls.",
+                    },
                     "apps": [{"id": "skill-app", "title": "Skill App"}],
                     "widgets": [{"id": "skill-widget", "title": "Skill Widget"}],
                     "registry": {
@@ -5760,6 +5768,18 @@ def test_phase3_resolver_outputs_are_explicit_and_reusable(monkeypatch) -> None:
     assert resolved.installed["apps"] == ["scenario-app", "scenario:other_scenario", "skill-app"]
     assert resolved.application["modals"]["scenario_modal"]["title"] == "Scenario"
     assert resolved.application["modals"]["skill_modal"]["title"] == "Skill Modal"
+    assert resolved.application["desktop"]["pageSchema"]["_adaos"]["version"] == "0.8.0"
+    modal_metadata = resolved.application["modals"]["skill_modal"]["_adaos"]
+    assert modal_metadata["component"] == {"type": "skill", "id": "prompt_skill"}
+    assert modal_metadata["version"] == "0.4.2"
+    assert modal_metadata["sourceAuthority"] == "dev"
+    assert modal_metadata["componentUpdate"] == {
+        "notice_id": "update-1",
+        "stage": "alpha",
+        "summary": "Try the prompt controls.",
+    }
+    assert modal_metadata["releaseStage"] == "alpha"
+    assert next(item for item in resolved.catalog["apps"] if item["id"] == "skill-app")["release_stage"] == "alpha"
     assert resolved.application["modals"]["apps_catalog"]["load"]["focus"] == "off_focus"
     assert resolved.application["modals"]["apps_catalog"]["schema"]["load"]["data"] == "deferred"
     assert resolved.application["modals"]["widgets_catalog"]["schema"]["widgets"][0]["load"]["offFocusReadyState"] == "hydrating"

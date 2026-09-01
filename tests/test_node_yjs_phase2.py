@@ -2348,6 +2348,14 @@ def test_materialize_catalog_items_uses_matching_materialized_payload_when_live_
                         "title": "Weather",
                         "icon": "cloud-outline",
                         "launchModal": "weather_modal",
+                        "version": "0.3.0",
+                        "release_stage": "beta",
+                        "source_authority": "dev",
+                        "component_update": {"notice_id": "update.weather", "stage": "beta"},
+                        "_adaos": {
+                            "component": {"type": "skill", "id": "weather_skill"},
+                            "version": "0.3.0",
+                        },
                     }
                 ],
                 "widgets": [],
@@ -2375,6 +2383,11 @@ def test_materialize_catalog_items_uses_matching_materialized_payload_when_live_
     assert result[0]["id"] == "weather_app"
     assert result[0]["installed"] is True
     assert result[0]["icon"] == "cloud-outline"
+    assert result[0]["version"] == "0.3.0"
+    assert result[0]["release_stage"] == "beta"
+    assert result[0]["source_authority"] == "dev"
+    assert result[0]["component_update"]["notice_id"] == "update.weather"
+    assert result[0]["_adaos"]["component"] == {"type": "skill", "id": "weather_skill"}
 
 
 def test_materialize_catalog_items_rejects_mismatched_materialized_payload(monkeypatch) -> None:

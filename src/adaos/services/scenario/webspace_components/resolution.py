@@ -77,6 +77,38 @@ class WebspaceResolutionOperations:
     workspace_index: Any
 
 
+def _apply_component_metadata(
+    value: Mapping[str, Any],
+    *,
+    component_type: str,
+    component_id: str,
+    version: str = "",
+    source_authority: str = "",
+    component_update: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    data = dict(value)
+    metadata = dict(data.get("_adaos") or {}) if isinstance(data.get("_adaos"), Mapping) else {}
+    component = {
+        "type": str(component_type or "").strip(),
+        "id": str(component_id or "").strip(),
+    }
+    metadata["component"] = component
+    if version:
+        metadata["version"] = str(version)
+        data.setdefault("version", str(version))
+    if source_authority:
+        metadata["sourceAuthority"] = str(source_authority)
+        data.setdefault("source_authority", str(source_authority))
+    if isinstance(component_update, Mapping) and component_update:
+        update = dict(component_update)
+        metadata["componentUpdate"] = update
+        metadata["releaseStage"] = str(update.get("stage") or "").strip() or None
+        data["component_update"] = update
+        data["release_stage"] = metadata["releaseStage"]
+    data["_adaos"] = metadata
+    return data
+
+
 class WebspaceResolutionService:
     def collect_inputs(
         self,
@@ -296,6 +328,29 @@ class WebspaceResolutionService:
         base_registry_widgets = [str(x) for x in (scenario_registry.get("widgets") or [])]
 
         skill_decls = list(inputs.skill_decls or [])
+        try:
+            from adaos.services.component_updates import ComponentUpdateService
+
+            component_updates = ComponentUpdateService()
+        except Exception:
+            component_updates = None
+        scenario_update = (
+            component_updates.active_component_metadata("scenario", scenario_id)
+            if component_updates is not None
+            else None
+        )
+        try:
+            scenario_manifest = operations.coerce_dict(
+                operations.scenarios_loader.read_manifest(scenario_id, space=scenario_space)
+            )
+        except Exception:
+            scenario_manifest = {}
+        scenario_version = str(
+            scenario_application.get("version")
+            or inputs.metadata.get("scenario_version")
+            or scenario_manifest.get("version")
+            or ""
+        ).strip()
         skill_apps: List[Dict[str, Any]] = []
         skill_widgets: List[Dict[str, Any]] = []
         skill_resources: Dict[str, Any] = {}
@@ -325,17 +380,40 @@ class WebspaceResolutionService:
                 decl_display = local_display
             source = f"skill:{skill_name}"
             dev_flag = space == "dev"
+            skill_version = str(decl.get("runtime_version") or decl.get("version") or "").strip()
+            skill_source_authority = str(decl.get("source_authority") or "").strip()
+            skill_update = (
+                dict(decl.get("component_update"))
+                if isinstance(decl.get("component_update"), Mapping)
+                else None
+            )
             reg = decl.get("registry") or {}
             modal_id_map = operations.node_scoped_modal_ids(reg, node_id=node_id) if node_owned else {}
             for app in decl.get("apps") or []:
                 if isinstance(app, dict):
                     entry = operations.mark_entry(app, source=source, dev=dev_flag)
+                    entry = _apply_component_metadata(
+                        entry,
+                        component_type="skill",
+                        component_id=str(skill_name),
+                        version=skill_version,
+                        source_authority=skill_source_authority,
+                        component_update=skill_update,
+                    )
                     if node_owned and node_id:
                         entry = operations.apply_node_context_to_ui(entry, decl_display, node_id=node_id, modal_id_map=modal_id_map)
                     skill_apps.append(operations.apply_node_display_to_entry(entry, decl_display, node_id=node_id))
             for widget in decl.get("widgets") or []:
                 if isinstance(widget, dict):
                     entry = operations.mark_entry(widget, source=source, dev=dev_flag)
+                    entry = _apply_component_metadata(
+                        entry,
+                        component_type="skill",
+                        component_id=str(skill_name),
+                        version=skill_version,
+                        source_authority=skill_source_authority,
+                        component_update=skill_update,
+                    )
                     if node_owned and node_id:
                         entry = operations.apply_node_context_to_ui(entry, decl_display, node_id=node_id, modal_id_map=modal_id_map)
                     skill_widgets.append(operations.apply_node_display_to_entry(entry, decl_display, node_id=node_id))
@@ -403,7 +481,13 @@ class WebspaceResolutionService:
 
         merged_apps = [
             operations.apply_node_display_to_entry(
-                operations.mark_entry(it, source=f"scenario:{scenario_id}", dev=False),
+                _apply_component_metadata(
+                    operations.mark_entry(it, source=f"scenario:{scenario_id}", dev=False),
+                    component_type="scenario",
+                    component_id=scenario_id,
+                    version=scenario_version,
+                    component_update=scenario_update,
+                ),
                 local_display,
                 node_id=operations.local_node_id(),
             )
@@ -411,7 +495,13 @@ class WebspaceResolutionService:
         ]
         merged_widgets = [
             operations.apply_node_display_to_entry(
-                operations.mark_entry(it, source=f"scenario:{scenario_id}", dev=False),
+                _apply_component_metadata(
+                    operations.mark_entry(it, source=f"scenario:{scenario_id}", dev=False),
+                    component_type="scenario",
+                    component_id=scenario_id,
+                    version=scenario_version,
+                    component_update=scenario_update,
+                ),
                 local_display,
                 node_id=operations.local_node_id(),
             )
@@ -425,15 +515,24 @@ class WebspaceResolutionService:
             app_id = f"scenario:{sid}"
             extra_apps.append(
                 operations.apply_node_display_to_entry(
-                    operations.mark_entry(
-                        {
-                            "id": app_id,
-                            "title": title,
-                            "icon": "apps-outline",
-                            "scenario_id": sid,
-                        },
-                        source=f"scenario:{sid}",
-                        dev=False,
+                    _apply_component_metadata(
+                        operations.mark_entry(
+                            {
+                                "id": app_id,
+                                "title": title,
+                                "icon": "apps-outline",
+                                "scenario_id": sid,
+                            },
+                            source=f"scenario:{sid}",
+                            dev=False,
+                        ),
+                        component_type="scenario",
+                        component_id=sid,
+                        component_update=(
+                            component_updates.active_component_metadata("scenario", sid)
+                            if component_updates is not None
+                            else None
+                        ),
                     ),
                     local_display,
                     node_id=operations.local_node_id(),
@@ -526,6 +625,18 @@ class WebspaceResolutionService:
                         source=f"skill:{skill_name}" if skill_name else "skill:unknown",
                         skill=skill_name,
                         dev=str(decl.get("space") or "default").strip().lower() == "dev",
+                    )
+                    merged_modals_map[token] = _apply_component_metadata(
+                        merged_modals_map[token],
+                        component_type="skill",
+                        component_id=skill_name,
+                        version=str(decl.get("runtime_version") or decl.get("version") or "").strip(),
+                        source_authority=str(decl.get("source_authority") or "").strip(),
+                        component_update=(
+                            dict(decl.get("component_update"))
+                            if isinstance(decl.get("component_update"), Mapping)
+                            else None
+                        ),
                     )
 
         if supports_catalog_controls and "apps_catalog" not in merged_modals_map:
@@ -625,7 +736,13 @@ class WebspaceResolutionService:
             detached_remote_node_ids=detached_remote_node_ids,
         )
 
-        app_with_modals: Dict[str, Any] = dict(scenario_application)
+        app_with_modals: Dict[str, Any] = _apply_component_metadata(
+            scenario_application,
+            component_type="scenario",
+            component_id=scenario_id,
+            version=scenario_version,
+            component_update=scenario_update,
+        )
         if merged_modals_map:
             app_with_modals["modals"] = merged_modals_map
         if merged_resources:
@@ -641,7 +758,13 @@ class WebspaceResolutionService:
             app_with_modals["interfaces"] = merged_interfaces
         desktop_config = operations.coerce_dict(app_with_modals.get("desktop") or {})
         desktop_config["topbar"] = scenario_topbar
-        desktop_config["pageSchema"] = scenario_page_schema
+        desktop_config["pageSchema"] = _apply_component_metadata(
+            scenario_page_schema,
+            component_type="scenario",
+            component_id=scenario_id,
+            version=scenario_version,
+            component_update=scenario_update,
+        )
         pinned_widgets_source = overlay_pinned_widgets if overlay_has_pinned_widgets else scenario_pinned_widgets
         desktop_config["pinnedWidgets"] = operations.refresh_pinned_widgets_from_catalog_entries(
             pinned_widgets_source,

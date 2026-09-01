@@ -3338,6 +3338,15 @@ async def _materialize_catalog_items(webspace_id: str, kind: str) -> list[dict[s
                 "source": source or None,
                 "origin": str(raw.get("origin") or "").strip() or None,
                 "dev": bool(raw.get("dev")),
+                "version": str(raw.get("version") or "").strip() or None,
+                "release_stage": str(raw.get("release_stage") or "").strip() or None,
+                "source_authority": str(raw.get("source_authority") or "").strip() or None,
+                "component_update": (
+                    dict(raw.get("component_update"))
+                    if isinstance(raw.get("component_update"), Mapping)
+                    else None
+                ),
+                "_adaos": dict(raw.get("_adaos")) if isinstance(raw.get("_adaos"), Mapping) else None,
                 "node_id": str(raw.get("node_id") or "").strip() or None,
                 "node_label": str(raw.get("node_label") or "").strip() or None,
                 "node_compact_label": str(raw.get("node_compact_label") or "").strip() or None,

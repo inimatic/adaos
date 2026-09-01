@@ -2237,6 +2237,7 @@ class BuilderAutomationService:
             persisted["completion_readiness"] = persisted_readiness
             persisted["updated_at"] = now
             self._save_session(persisted)
+            self._record_component_update(persisted, persisted_aprobation)
 
         return {
             "ok": True,
@@ -4863,7 +4864,7 @@ class BuilderAutomationService:
             )
         )
         ticket_ids = [item for item in ticket_ids if item]
-        return {
+        receipt = {
             **dict(overlay_receipt),
             "ok": bool(overlay_receipt.get("ok")),
             "audience": "alpha",
@@ -4908,6 +4909,43 @@ class BuilderAutomationService:
                 "ticket_ids": ticket_ids,
             },
         }
+        self._record_component_update(session, receipt)
+        return receipt
+
+    def _record_component_update(
+        self,
+        session: Mapping[str, Any],
+        aprobation: Mapping[str, Any],
+    ) -> None:
+        try:
+            from adaos.services.component_updates import ComponentUpdateService
+
+            links = session.get("links") if isinstance(session.get("links"), Mapping) else {}
+            ticket_ids = list(
+                dict.fromkeys(
+                    [
+                        str(links.get("development_ticket_id") or "").strip(),
+                        *[
+                            str(item).strip()
+                            for item in links.get("development_ticket_ids") or []
+                            if str(item).strip()
+                        ],
+                    ]
+                )
+            )
+            ComponentUpdateService(state_dir=self.state_dir).record_aprobation(
+                component_type=str(session.get("object_type") or "").strip(),
+                component_id=str(session.get("object_id") or "").strip(),
+                aprobation=aprobation,
+                webspace_id=str(session.get("webspace_id") or "desktop").strip()
+                or "desktop",
+                ticket_ids=tuple(item for item in ticket_ids if item),
+            )
+        except Exception:
+            _log.exception(
+                "failed to persist component update notice session=%s",
+                session.get("session_id"),
+            )
 
     def _rollback_aprobation_overlay(
         self,

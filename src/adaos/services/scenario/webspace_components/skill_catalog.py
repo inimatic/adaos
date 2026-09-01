@@ -125,6 +125,17 @@ class WebspaceSkillCatalogService:
                 operations.logger.debug("webui.json missing for %s (%s) caller=%s", skill_name, space, stack)
             return {}
         cache_key = str(path.resolve())
+        component_update_service = None
+        try:
+            from adaos.services.component_updates import ComponentUpdateService
+
+            component_update_service = ComponentUpdateService()
+        except Exception:
+            operations.logger.debug(
+                "failed to initialize component update projection for %s",
+                skill_name,
+                exc_info=True,
+            )
         try:
             stat = path.stat()
             stamp_parts: list[Any] = [cache_key, int(stat.st_mtime_ns), int(stat.st_size)]
@@ -135,6 +146,15 @@ class WebspaceSkillCatalogService:
                         str(manifest_path.resolve()),
                         int(manifest_stat.st_mtime_ns),
                         int(manifest_stat.st_size),
+                    ]
+                )
+            if component_update_service is not None and component_update_service.state_path.is_file():
+                update_stat = component_update_service.state_path.stat()
+                stamp_parts.extend(
+                    [
+                        str(component_update_service.state_path.resolve()),
+                        int(update_stat.st_mtime_ns),
+                        int(update_stat.st_size),
                     ]
                 )
             stamp = tuple(stamp_parts)
@@ -172,10 +192,12 @@ class WebspaceSkillCatalogService:
         webio_raw = raw.get("webio") or {}
         webio_receivers_raw = webio_raw.get("receivers") if isinstance(webio_raw, dict) else {}
         ui_owner = "shared" if skill_name == "web_desktop_skill" else "node"
+        manifest_version = ""
         try:
             if manifest_path.exists():
                 manifest_raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
                 if isinstance(manifest_raw, dict):
+                    manifest_version = str(manifest_raw.get("version") or "").strip()
                     owner_token = str(manifest_raw.get("webui_owner") or manifest_raw.get("ui_owner") or "").strip().lower()
                     if owner_token in {"shared", "node"}:
                         ui_owner = owner_token
@@ -215,6 +237,23 @@ class WebspaceSkillCatalogService:
                 ),
             },
         }
+        version = str((runtime_source or {}).get("version") or manifest_version).strip()
+        if version:
+            payload["version"] = version
+        if component_update_service is not None:
+            try:
+                component_update = component_update_service.active_component_metadata(
+                    "skill",
+                    skill_name,
+                )
+                if component_update:
+                    payload["component_update"] = component_update
+            except Exception:
+                operations.logger.debug(
+                    "failed to project component update for %s",
+                    skill_name,
+                    exc_info=True,
+                )
         if runtime_source is not None:
             payload["runtime_version"] = str(runtime_source["version"])
             payload["runtime_slot"] = str(runtime_source["slot"])
