@@ -177,7 +177,7 @@ def get_plan(plan_id: str, service: ContextControlService = Depends(_get_service
 def compile_context(body: dict[str, Any], service: ContextControlService = Depends(_get_service)) -> dict[str, Any]:
     try:
         return {"ok": True, "compilation": service.compile(body)}
-    except (ValueError, KeyError) as exc:
+    except (ValueError, KeyError, ContextAccessDenied) as exc:
         _raise(exc)
 
 

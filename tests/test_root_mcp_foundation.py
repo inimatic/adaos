@@ -122,6 +122,7 @@ def test_root_mcp_foundation_and_contracts(monkeypatch) -> None:
     assert "nlu_teacher_schema" in descriptor_ids
     assert "descriptor_overview_row_schema" in descriptor_ids
     assert "context_capsule_schema" in descriptor_ids
+    assert "context_delta_schema" in descriptor_ids
     assert all(item["fingerprint"].startswith("sha256:") for item in descriptor_items)
     assert all(item["drill_down"]["descriptor_id"] == item["descriptor_id"] for item in descriptor_items)
 
@@ -152,6 +153,7 @@ def test_root_mcp_foundation_and_contracts(monkeypatch) -> None:
     assert "NLUTeacherRead" in nlu_plane["capability_profiles"]
     context_plane = next(item for item in plane_registry_payload["planes"] if item["plane_id"] == "context_control")
     assert "context_relationship_schema" in context_plane["descriptor_ids"]
+    assert "context_delta_schema" in context_plane["descriptor_ids"]
     assert "ContextAgent" in context_plane["capability_profiles"]
 
     context_schema = client.get("/v1/root/mcp/descriptors/context_capsule_schema", headers=scoped_headers)

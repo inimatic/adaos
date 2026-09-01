@@ -56,6 +56,22 @@ def test_context_api_resolve_plan_compile_and_inspect(tmp_path: Path) -> None:
         json={"plan_id": plan["plan_id"], "output_format": "min_json"},
     )
     assert compiled.status_code == 200
+    compilation = compiled.json()["compilation"]
+    delta = client.post(
+        "/api/context/compile",
+        headers=_headers(),
+        json={
+            "plan_id": plan["plan_id"],
+            "output_format": "min_json",
+            "base_packet_ref": compilation["packet_ref"],
+        },
+    )
+    assert delta.status_code == 200
+    delta_compilation = delta.json()["compilation"]
+    assert delta_compilation["delta_mode"] == "full"
+    assert delta_compilation["base_packet_ref"] == compilation["packet_ref"]
+    assert delta_compilation["delta"]["changed"] == 0
+    assert delta_compilation["delta"]["saved_bytes"] == 0
 
     receipt_response = client.post(
         "/api/context/receipts",

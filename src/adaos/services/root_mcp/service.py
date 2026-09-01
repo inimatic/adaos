@@ -648,6 +648,7 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                     "plan": {"type": "object"},
                     "plan_id": {"type": "string"},
                     "plan_ref": {"type": "string"},
+                    "base_packet_ref": {"type": "string"},
                     "output_format": {"type": "string", "enum": ["json", "min_json", "jsonl", "toon"]},
                     "role_authority": {"type": "object"},
                     "output_contract": {"type": "object"},

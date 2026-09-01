@@ -558,6 +558,7 @@ class CodexRootMcpBridge:
                         "plan": {"type": "object"},
                         "plan_id": {"type": "string"},
                         "plan_ref": {"type": "string"},
+                        "base_packet_ref": {"type": "string"},
                         "output_format": {"type": "string", "enum": sorted(_MODEL_TEXT_FORMATS)},
                         "role_authority": {"type": "object"},
                         "output_contract": {"type": "object"},

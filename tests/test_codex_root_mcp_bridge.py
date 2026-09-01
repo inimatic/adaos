@@ -719,6 +719,9 @@ def test_model_text_formats_preserve_canonical_structured_content(monkeypatch) -
         },
     )
     definition = next(item for item in bridge.tool_definitions() if item["name"] == "context_resolve")
+    compile_definition = next(
+        item for item in bridge.tool_definitions() if item["name"] == "context_compile"
+    )
 
     assert response["structuredContent"]["resolution"]["status"] == "ready"
     assert response["_meta"]["adaos/modelProjection"]["model_text_format"] == "toon"
@@ -727,6 +730,7 @@ def test_model_text_formats_preserve_canonical_structured_content(monkeypatch) -
         "purpose": "builder.automation",
     }
     assert "model_text_format" in definition["inputSchema"]["properties"]
+    assert "base_packet_ref" in compile_definition["inputSchema"]["properties"]
 
 
 def test_codex_bridge_exposes_dev_ticket_workflow(monkeypatch) -> None:

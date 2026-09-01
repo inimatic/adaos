@@ -122,6 +122,51 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["local_run"]["events_path"].endswith("codex-live.jsonl")
 
 
+def test_completed_builder_context_restores_from_cold_service(tmp_path: Path) -> None:
+    first = _service(tmp_path)
+    completed = first.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipe search and detail actions.",
+        webspace_id="prompt-dev",
+        links={
+            "development_ticket_id": "dticket.cold-restore",
+            "development_ticket_project_ref": "project:recipe_suite",
+            "development_ticket_project_id": "recipe_suite",
+        },
+    )
+    control = completed["session"]["context_control"]
+    first_inspection = first._contexts().inspect(control["run_ref"])
+
+    restored_service = BuilderAutomationService(
+        state_dir=first.state_dir,
+        repo_root=first.repo_root,
+        dev_skills_root=first.dev_skills_root,
+        dev_scenarios_root=first.dev_scenarios_root,
+        runs_root=first.runs_root,
+        worker_factory=first.worker_factory,
+        workspace_service=first.workspace_service,
+        background=False,
+        materialize_on_completion=False,
+    )
+    restored = restored_service.status(
+        object_type="scenario",
+        object_id="recipes",
+    )["session"]
+    restored_control = restored["context_control"]
+    restored_inspection = restored_service._contexts().inspect(control["run_ref"])
+
+    assert restored["status"] == "completed"
+    assert restored_control["project_ref"] == "project:recipe_suite"
+    assert restored_control["plan_ref"] == control["plan_ref"]
+    assert restored_control["compiled_context_ref"] == control["compiled_context_ref"]
+    assert restored_service._contexts().get_plan(control["plan_id"])["plan_ref"] == (
+        control["plan_ref"]
+    )
+    assert restored_inspection == first_inspection
+    assert restored_inspection["receipt_count"] == 1
+
+
 def test_compact_status_omits_private_session_payload_and_stays_bounded(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -211,6 +256,19 @@ def test_dev_ticket_repair_projects_minimal_diff_constraints(tmp_path: Path) -> 
     plan = service._contexts().get_plan(context_control["plan_id"])
     assert "project:recipe_suite" in plan["subject_refs"]
     assert "project:recipes" not in plan["subject_refs"]
+    inspection = service._contexts().inspect(context_control["run_ref"])
+    assert inspection["receipt_count"] == 1
+    receipt = inspection["receipts"][0]
+    assert receipt["subject_refs"] == [
+        context_control["run_ref"],
+        "project:recipe_suite",
+    ]
+    assert {item["layer"] for item in receipt["layer_usage"]} == {
+        "stable_prefix",
+        "task_context",
+        "model_projection",
+    }
+    assert receipt["tool_boundary_count"] == 1
     project_capsules = service._contexts().list_capsules(subject_ref="project:recipe_suite")
     assert project_capsules[0]["subject_refs"] == ["project:recipe_suite", "scenario:recipes"]
     compact = service.compact_session(started["session"])

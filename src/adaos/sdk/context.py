@@ -131,8 +131,23 @@ def plan(
     )
 
 
-def compile(plan_value: Mapping[str, Any], *, output_format: str = "json") -> dict[str, Any]:
-    return _service().compile({"plan": dict(plan_value), "output_format": output_format})
+def compile(
+    plan_value: Mapping[str, Any],
+    *,
+    output_format: str = "json",
+    base_packet_ref: str | None = None,
+    role_authority: Mapping[str, Any] | None = None,
+    output_contract: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return _service().compile(
+        {
+            "plan": dict(plan_value),
+            "output_format": output_format,
+            "base_packet_ref": base_packet_ref,
+            "role_authority": dict(role_authority or {}),
+            "output_contract": dict(output_contract or {}),
+        }
+    )
 
 
 def record_receipt(value: Mapping[str, Any]) -> dict[str, Any]:

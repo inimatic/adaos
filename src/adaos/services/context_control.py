@@ -22,6 +22,8 @@ PLAN_SCHEMA = "adaos.context.plan.v1"
 RECEIPT_SCHEMA = "adaos.agent.context_receipt.v1"
 MEMORY_CANDIDATE_SCHEMA = "adaos.context.memory_candidate.v1"
 INVALIDATION_SCHEMA = "adaos.context.invalidation.v1"
+COMPILED_PACKET_SCHEMA = "adaos.context.compiled_packet.v1"
+DELTA_SCHEMA = "adaos.context.delta.v1"
 
 _TRUST_ORDER = {
     "quarantined": 0,
@@ -113,6 +115,24 @@ def _applies_at(valid_from: str, valid_to: str | None, as_of: str) -> bool:
 
 def _estimate_tokens(byte_count: int) -> int:
     return max(1, (max(0, int(byte_count)) + 3) // 4)
+
+
+def _compiled_units(packet: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return [
+        *_mappings(packet.get("stable_prefix")),
+        *_mappings(packet.get("task_context")),
+    ]
+
+
+def _compiled_unit_key(unit: Mapping[str, Any]) -> str:
+    subject_refs = [
+        ref
+        for ref in _strings(unit.get("subject_refs"))
+        if not ref.startswith(("builder-run:", "change:", "dev-ticket:"))
+    ]
+    if subject_refs:
+        return f"{_text(unit.get('kind'))}:{'|'.join(sorted(subject_refs))}"
+    return _text(unit.get("ref")) or _digest(unit)
 
 
 @dataclass(slots=True)
@@ -1135,6 +1155,7 @@ class ContextControlService:
             units.append({
                 "ref": selected.get("ref"),
                 "kind": selected.get("kind"),
+                "subject_refs": _strings(selected.get("subject_refs")),
                 "digest": selected.get("digest"),
                 "trust_class": selected.get("trust_class"),
                 "tainted": selected.get("tainted"),
@@ -1143,7 +1164,7 @@ class ContextControlService:
         stable = [item for item in units if item.get("kind") in _SHARED_KINDS]
         mutable = [item for item in units if item.get("kind") not in _SHARED_KINDS]
         canonical = {
-            "schema": "adaos.context.compiled_packet.v1",
+            "schema": COMPILED_PACKET_SCHEMA,
             "plan_id": plan.get("plan_id"),
             "subject_refs": plan.get("subject_refs") or [],
             "purpose": plan.get("purpose"),
@@ -1153,28 +1174,195 @@ class ContextControlService:
             "task_context": mutable,
             "output_contract": _mapping(query.get("output_contract")),
         }
-        if output_format == "json":
-            model_text = json.dumps(canonical, ensure_ascii=False, indent=2)
-        elif output_format == "min_json":
-            model_text = _json(canonical)
-        elif output_format == "jsonl":
-            model_text = "\n".join(_json(item) for item in units)
-        else:
-            model_text = self._toon(units)
         artifact = self.put_artifact(canonical)
+        full_model_text = self._render_compilation_text(
+            canonical,
+            output_format=output_format,
+        )
+        model_text = full_model_text
+        projection_ref = artifact["ref"]
+        projection_digest = artifact["digest"]
+        delta_mode = "full"
+        delta_summary: dict[str, Any] | None = None
+        base_packet_ref = _text(query.get("base_packet_ref"))
+        if base_packet_ref:
+            base_packet = self.get_artifact(base_packet_ref)
+            if not isinstance(base_packet, Mapping):
+                raise ValueError("base context packet must be an object")
+            delta = self._compiled_packet_delta(
+                canonical,
+                base_packet,
+                base_packet_ref=base_packet_ref,
+                target_packet_ref=artifact["ref"],
+                target_packet_digest=artifact["digest"],
+            )
+            delta_artifact = self.put_artifact(delta)
+            delta_text = self._render_compilation_text(
+                delta,
+                output_format=output_format,
+            )
+            delta_summary = {
+                "changed": len(delta["changed"]),
+                "removed": len(delta["removed"]),
+                "unchanged": len(delta["unchanged"]),
+                "delta_ref": delta_artifact["ref"],
+                "delta_digest": delta_artifact["digest"],
+                "full_bytes": len(full_model_text.encode("utf-8")),
+                "delta_bytes": len(delta_text.encode("utf-8")),
+            }
+            if delta_summary["delta_bytes"] < delta_summary["full_bytes"]:
+                model_text = delta_text
+                projection_ref = delta_artifact["ref"]
+                projection_digest = delta_artifact["digest"]
+                delta_mode = "delta"
+            delta_summary["saved_bytes"] = max(
+                0,
+                delta_summary["full_bytes"] - len(model_text.encode("utf-8")),
+            )
+        layer_usage = [
+            {
+                "layer": name,
+                "unit_count": len(items),
+                "unique_bytes": len(_canonical_bytes(items)),
+                "estimated_tokens": _estimate_tokens(len(_canonical_bytes(items))),
+            }
+            for name, items in (("stable_prefix", stable), ("task_context", mutable))
+        ]
+        layer_usage.append(
+            {
+                "layer": "model_projection",
+                "unit_count": len(units),
+                "unique_bytes": len(model_text.encode("utf-8")),
+                "estimated_tokens": _estimate_tokens(len(model_text.encode("utf-8"))),
+                "delta_mode": delta_mode,
+            }
+        )
         return {
             "schema": "adaos.context.compilation.v1",
             "canonical_format": "json",
             "model_text_format": output_format,
             "packet_ref": artifact["ref"],
             "packet_digest": artifact["digest"],
+            "model_projection_ref": projection_ref,
+            "model_projection_digest": projection_digest,
+            "delta_mode": delta_mode,
+            "base_packet_ref": base_packet_ref or None,
+            "delta": delta_summary,
             "stable_prefix_digest": _digest(stable),
             "model_text": model_text,
             "bytes": len(model_text.encode("utf-8")),
             "token_estimate": _estimate_tokens(len(model_text.encode("utf-8"))),
+            "full_token_estimate": _estimate_tokens(len(full_model_text.encode("utf-8"))),
+            "layer_usage": layer_usage,
             "selected_refs": [item.get("ref") for item in units],
             "cache_partition": plan.get("cache_partition"),
         }
+
+    @staticmethod
+    def _compiled_packet_delta(
+        current: Mapping[str, Any],
+        base: Mapping[str, Any],
+        *,
+        base_packet_ref: str,
+        target_packet_ref: str,
+        target_packet_digest: str,
+    ) -> dict[str, Any]:
+        if _text(base.get("schema")) != COMPILED_PACKET_SCHEMA:
+            raise ValueError("base context packet has an unsupported schema")
+        for field in ("purpose", "audience"):
+            if _text(base.get(field)) != _text(current.get(field)):
+                raise ValueError(f"base context packet {field} does not match")
+        base_projects = {
+            ref for ref in _strings(base.get("subject_refs")) if ref.startswith("project:")
+        }
+        current_projects = {
+            ref for ref in _strings(current.get("subject_refs")) if ref.startswith("project:")
+        }
+        if base_projects and current_projects and base_projects != current_projects:
+            raise ContextAccessDenied("base context packet belongs to another project")
+
+        base_units = {_compiled_unit_key(item): item for item in _compiled_units(base)}
+        current_units = {_compiled_unit_key(item): item for item in _compiled_units(current)}
+        changed = [
+            {"logical_ref": key, **item}
+            for key, item in current_units.items()
+            if key not in base_units
+            or _text(base_units[key].get("digest")) != _text(item.get("digest"))
+        ]
+        removed = [
+            {
+                "logical_ref": key,
+                "ref": item.get("ref"),
+                "digest": item.get("digest"),
+            }
+            for key, item in base_units.items()
+            if key not in current_units
+        ]
+        unchanged = [
+            {
+                "logical_ref": key,
+                "ref": item.get("ref"),
+                "digest": item.get("digest"),
+            }
+            for key, item in current_units.items()
+            if key in base_units
+            and _text(base_units[key].get("digest")) == _text(item.get("digest"))
+        ]
+        replacement_sections = {
+            field: current.get(field)
+            for field in ("role_authority", "output_contract")
+            if current.get(field) != base.get(field)
+        }
+        return {
+            "schema": DELTA_SCHEMA,
+            "base_packet_ref": base_packet_ref,
+            "base_packet_digest": _digest(base),
+            "target_packet_ref": target_packet_ref,
+            "target_packet_digest": target_packet_digest,
+            "subject_refs": _strings(current.get("subject_refs")),
+            "purpose": _text(current.get("purpose")),
+            "audience": _text(current.get("audience")),
+            "changed": changed,
+            "removed": removed,
+            "unchanged": unchanged,
+            "replacement_sections": replacement_sections,
+        }
+
+    def _render_compilation_text(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        output_format: str,
+    ) -> str:
+        if output_format == "json":
+            return json.dumps(payload, ensure_ascii=False, indent=2)
+        if output_format == "min_json":
+            return _json(payload)
+        if _text(payload.get("schema")) == DELTA_SCHEMA:
+            delta_head = {
+                key: payload.get(key)
+                for key in (
+                    "schema",
+                    "base_packet_ref",
+                    "base_packet_digest",
+                    "target_packet_ref",
+                    "target_packet_digest",
+                    "purpose",
+                    "audience",
+                    "removed",
+                    "unchanged",
+                    "replacement_sections",
+                )
+            }
+            if output_format == "jsonl":
+                return "\n".join(
+                    [_json(delta_head), *[_json(item) for item in _mappings(payload.get("changed"))]]
+                )
+            return _json(delta_head) + "\n" + self._toon(_mappings(payload.get("changed")))
+        units = _compiled_units(payload)
+        if output_format == "jsonl":
+            return "\n".join(_json(item) for item in units)
+        return self._toon(units)
 
     @staticmethod
     def _toon(units: Sequence[Mapping[str, Any]]) -> str:

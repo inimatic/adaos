@@ -100,6 +100,85 @@ def test_capsule_graph_plan_compile_and_receipt(tmp_path: Path) -> None:
     Draft202012Validator(_schema("agent.context_receipt.v1")).validate(receipt)
 
 
+def test_compile_emits_smaller_digest_bound_delta_for_acknowledged_base(
+    tmp_path: Path,
+) -> None:
+    service = ContextControlService(tmp_path)
+    platform = _capsule(
+        service,
+        subject_ref="platform:adaos",
+        kind="platform",
+        summary="Stable SDK surface with enough descriptive content for the full packet.",
+    )
+    project = _capsule(
+        service,
+        subject_ref="project:demo",
+        summary="Demo project generation with bounded source and acceptance context.",
+    )
+    service.add_relationship(
+        {
+            "from_capsule_id": project["capsule_id"],
+            "to_capsule_id": platform["capsule_id"],
+            "relation_type": "uses",
+            "required": True,
+        }
+    )
+    service.bind_subject(subject_ref="project:demo", capsule_id=project["capsule_id"])
+    resolution = service.resolve({"subject_refs": ["project:demo"]})
+    plan = service.plan({"resolution": resolution, "token_budget": 2_000})
+    full = service.compile({"plan": plan, "output_format": "min_json"})
+
+    followup = service.compile(
+        {
+            "plan": plan,
+            "output_format": "min_json",
+            "base_packet_ref": full["packet_ref"],
+        }
+    )
+    delta = json.loads(followup["model_text"])
+
+    assert followup["delta_mode"] == "delta"
+    assert followup["packet_ref"] == full["packet_ref"]
+    assert followup["model_projection_ref"] != followup["packet_ref"]
+    assert followup["token_estimate"] < followup["full_token_estimate"]
+    assert followup["delta"]["saved_bytes"] > 0
+    assert delta["schema"] == "adaos.context.delta.v1"
+    assert delta["changed"] == []
+    assert delta["removed"] == []
+    assert len(delta["unchanged"]) == 2
+    Draft202012Validator(_schema("context.delta.v1")).validate(delta)
+    assert service.get_artifact(followup["packet_ref"])["schema"] == (
+        "adaos.context.compiled_packet.v1"
+    )
+
+
+def test_compile_rejects_delta_base_from_another_project(tmp_path: Path) -> None:
+    service = ContextControlService(tmp_path)
+    compiled: dict[str, dict] = {}
+    plans: dict[str, dict] = {}
+    for project_id in ("alpha", "beta"):
+        capsule = _capsule(service, subject_ref=f"project:{project_id}")
+        service.bind_subject(
+            subject_ref=f"project:{project_id}",
+            capsule_id=capsule["capsule_id"],
+        )
+        resolution = service.resolve({"subject_refs": [f"project:{project_id}"]})
+        plan = service.plan({"resolution": resolution, "token_budget": 1_000})
+        plans[project_id] = plan
+        compiled[project_id] = service.compile(
+            {"plan": plan, "output_format": "min_json"}
+        )
+
+    with pytest.raises(ContextAccessDenied, match="another project"):
+        service.compile(
+            {
+                "plan": plans["beta"],
+                "output_format": "min_json",
+                "base_packet_ref": compiled["alpha"]["packet_ref"],
+            }
+        )
+
+
 def test_binding_is_optimistic_and_reconstructs_as_of(tmp_path: Path) -> None:
     service = ContextControlService(tmp_path)
     first = _capsule(service, subject_ref="project:demo", summary="first", valid_from="2027-01-01T00:00:00+00:00")

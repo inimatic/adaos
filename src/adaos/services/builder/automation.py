@@ -618,6 +618,7 @@ class BuilderAutomationService:
         source_snapshot: Mapping[str, Any],
         implementation_brief: str,
     ) -> dict[str, Any]:
+        compile_started_at = time.perf_counter()
         service = self._contexts()
         now = _now_iso()
         component_ref = f"{kind}:{project_id}"
@@ -804,12 +805,20 @@ class BuilderAutomationService:
             "plan_ref": plan["plan_ref"],
             "compiled_context_ref": compilation["packet_ref"],
             "compiled_context_digest": compilation["packet_digest"],
+            "model_projection_ref": compilation["model_projection_ref"],
+            "model_projection_digest": compilation["model_projection_digest"],
+            "context_delta_mode": compilation["delta_mode"],
+            "layer_usage": compilation["layer_usage"],
             "selected_refs": compilation["selected_refs"],
             "omitted": plan["omitted"],
             "denied": plan["denied"],
             "unavailable": plan["unavailable"],
             "estimated_tokens": plan["estimated_tokens"],
             "token_budget": plan["token_budget"],
+            "context_latency_ms": max(
+                0,
+                int((time.perf_counter() - compile_started_at) * 1000),
+            ),
         }
 
     def _context_project_ref(
@@ -3602,6 +3611,30 @@ class BuilderAutomationService:
         execution = BuilderAutomationService._zero_model_execution(session, task_id)
         return bool(execution and execution.get("strategy") == "preserved_candidate")
 
+    @staticmethod
+    def _source_slice_coverage(session: Mapping[str, Any]) -> dict[str, Any] | None:
+        local_run = (
+            dict(session.get("local_run"))
+            if isinstance(session.get("local_run"), Mapping)
+            else {}
+        )
+        run_path = str(local_run.get("path") or "").strip()
+        if not run_path:
+            return None
+        packet_path = Path(run_path) / "input" / "packet.json"
+        try:
+            packet = json.loads(packet_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        target = (
+            dict(packet.get("repair_target_context"))
+            if isinstance(packet, Mapping)
+            and isinstance(packet.get("repair_target_context"), Mapping)
+            else {}
+        )
+        coverage = target.get("coverage")
+        return dict(coverage) if isinstance(coverage, Mapping) else None
+
     def _record_context_attribution(
         self,
         session: Mapping[str, Any],
@@ -3655,6 +3688,7 @@ class BuilderAutomationService:
                     "omitted": control.get("omitted") or [],
                     "denied": control.get("denied") or [],
                     "unavailable": control.get("unavailable") or [],
+                    "layer_usage": control.get("layer_usage") or [],
                     "usage": {
                         "provider_input_tokens": int(usage_value.get("input_tokens") or 0),
                         "cached_input_tokens": int(usage_value.get("cached_input_tokens") or 0),
@@ -3662,6 +3696,8 @@ class BuilderAutomationService:
                         "reasoning_tokens": int(usage_value.get("reasoning_tokens") or 0),
                         "model_tokens": int(usage_value.get("model_tokens") or 0),
                     },
+                    "tool_boundary_count": 1,
+                    "source_slice_coverage": self._source_slice_coverage(current),
                     "execution_route": "skill_factory.local_codex",
                     "validation": {
                         "task_status": task_status,
@@ -3671,11 +3707,23 @@ class BuilderAutomationService:
                     "evidence_refs": [
                         {"type": "builder_task", "ref": task_id},
                         *(
+                            [
+                                {
+                                    "type": "context_model_projection",
+                                    "ref": control.get("model_projection_ref"),
+                                    "digest": control.get("model_projection_digest"),
+                                }
+                            ]
+                            if control.get("model_projection_ref")
+                            else []
+                        ),
+                        *(
                             [{"type": "root_usage_event", "ref": usage_value.get("root_event_id")}]
                             if usage_value.get("root_event_id")
                             else []
                         ),
                     ],
+                    "latency_ms": int(control.get("context_latency_ms") or 0),
                     "created_at": str(current.get("updated_at") or _now_iso()),
                 }
             )
@@ -4635,12 +4683,17 @@ class BuilderAutomationService:
                     "plan_ref",
                     "compiled_context_ref",
                     "compiled_context_digest",
+                    "model_projection_ref",
+                    "model_projection_digest",
+                    "context_delta_mode",
+                    "layer_usage",
                     "selected_refs",
                     "omitted",
                     "denied",
                     "unavailable",
                     "estimated_tokens",
                     "token_budget",
+                    "context_latency_ms",
                 )
             }
         acceptance_checks = [
