@@ -174,6 +174,30 @@ def test_builder_work_item_lifecycle_is_revisioned_and_not_a_user_ticket(tmp_pat
         )
 
 
+def test_builder_work_item_can_fail_during_launch_preflight(tmp_path: Path) -> None:
+    service = BuilderRepairService(state_dir=tmp_path)
+    task = service.report(
+        project_id="demo_metrics",
+        signal_type="other",
+        summary="Rename the selected metric action",
+    )["task"]
+
+    failed = service.transition_work_item(
+        task["repair_id"],
+        status="failed",
+        actor="builder:automation",
+        reason="automation_start:ValueError",
+    )
+
+    assert failed["status"] == "open"
+    assert failed["work_status"] == "failed"
+    assert failed["timeline"][-1]["details"] == {
+        "from": "planned",
+        "to": "failed",
+        "reason": "automation_start:ValueError",
+    }
+
+
 def test_builder_work_item_keeps_user_visible_trial_receipt(tmp_path: Path) -> None:
     service = BuilderRepairService(state_dir=tmp_path)
     task = service.report(

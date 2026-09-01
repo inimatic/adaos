@@ -223,11 +223,10 @@ class _FakeFailingBuilderAutomation(_FakeBuilderAutomation):
         }
 
 
-class _FakeLaunchErrorBuilderAutomation(_FakeFailingBuilderAutomation):
+class _FakeLaunchErrorBuilderAutomation(_FakeBuilderAutomation):
     def start_from_execute(self, **kwargs):
         self.counter += 1
         self.calls.append(dict(kwargs))
-        self.latest_links = dict(kwargs.get("links") or {})
         raise ValueError("Builder Context Plan is insufficient for Automation")
 
 
@@ -1079,8 +1078,12 @@ def test_autonomous_launch_error_releases_ticket_from_in_builder(tmp_path: Path)
     updated = service.get_ticket(ticket["ticket_id"])
     assert updated is not None
     assert updated["status"] == "ready_for_builder"
+    builder_ref = updated["builder_refs"][0]
+    assert builder_ref["status"] == "failed"
+    assert builder_ref["work_status"] == "failed"
+    assert builder_ref["automation_status"] == "start_failed"
     assert any(
-        item["kind"] == "builder_automation_failed"
+        item["kind"] == "builder_automation_start_failed"
         for item in updated["history"]
     )
     repair = repair_service.list(project_id="demo_metrics_skill")[0]

@@ -30,7 +30,7 @@ WORK_ITEM_STATES = {
 }
 ACTIVE_WORK_ITEM_STATES = WORK_ITEM_STATES - {"completed", "superseded"}
 WORK_ITEM_TRANSITIONS = {
-    "planned": {"claimed", "blocked", "superseded"},
+    "planned": {"claimed", "blocked", "failed", "superseded"},
     "claimed": {"in_progress", "blocked", "failed", "superseded"},
     "in_progress": {"validating", "blocked", "failed", "superseded"},
     "validating": {"published", "in_progress", "blocked", "failed", "superseded"},

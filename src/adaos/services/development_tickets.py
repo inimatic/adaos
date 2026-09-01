@@ -1813,18 +1813,25 @@ class DevelopmentTicketService:
                     ticket["ticket_id"],
                     repair_id,
                 )
-            current_ticket = self.get_ticket(ticket["ticket_id"])
-            if current_ticket and _text(current_ticket.get("status")) == "in_builder":
-                self._update_ticket(
-                    ticket["ticket_id"],
-                    status="ready_for_builder",
-                    history_item={
-                        "kind": "builder_automation_start_failed",
-                        "actor": _text(actor) or "builder.automation",
-                        "repair_id": repair_id,
-                        "error_type": type(exc).__name__,
-                    },
+            try:
+                service.transition_work_item(
+                    repair_id,
+                    status="failed",
+                    actor=_text(actor) or "builder.automation",
+                    reason=f"automation_start:{type(exc).__name__}",
                 )
+            except Exception:
+                _log.exception(
+                    "failed to mark autonomous Builder launch repair failed ticket=%s repair=%s",
+                    ticket["ticket_id"],
+                    repair_id,
+                )
+            self._release_builder_start_failure(
+                ticket["ticket_id"],
+                repair_id=repair_id,
+                actor=_text(actor) or "builder.automation",
+                error_type=type(exc).__name__,
+            )
             raise
         correlated, correlation = _automation_matches_work(
             started,
@@ -4401,6 +4408,66 @@ class DevelopmentTicketService:
                         "handoff_mode": mode,
                     }
                     signal["updated_at"] = ticket["updated_at"]
+                    self._validate_signal(signal)
+            self._validate_ticket(ticket)
+            self._write(state)
+            return _normalized_ticket(ticket)
+
+    def _release_builder_start_failure(
+        self,
+        ticket_id: str,
+        *,
+        repair_id: str,
+        actor: str,
+        error_type: str,
+    ) -> dict[str, Any]:
+        """Return a ticket to the queue when Automation never produced a task."""
+
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                raise KeyError(ticket_id)
+            now = _now()
+            refs = [dict(ref) for ref in ticket.get("builder_refs") or [] if isinstance(ref, Mapping)]
+            for ref in refs:
+                if _text(ref.get("repair_id")) != _text(repair_id):
+                    continue
+                ref["status"] = "failed"
+                ref["work_status"] = "failed"
+                ref.setdefault("automation_status", "start_failed")
+                ref["error_type"] = _text(error_type) or "Error"
+                ref["updated_at"] = now
+            ticket["builder_refs"] = refs[-100:]
+            if _text(ticket.get("status")) not in {"resolved", "verified", "closed", *TERMINAL_TICKET_STATES}:
+                ticket["status"] = "ready_for_builder"
+            ticket["updated_at"] = now
+            if not any(
+                _text(item.get("kind")) == "builder_automation_start_failed"
+                and _text(item.get("repair_id")) == _text(repair_id)
+                for item in _sequence_of_mappings(ticket.get("history") or [])
+            ):
+                self._append_history(
+                    ticket,
+                    {
+                        "kind": "builder_automation_start_failed",
+                        "actor": _text(actor) or "builder.automation",
+                        "repair_id": _text(repair_id),
+                        "error_type": _text(error_type) or "Error",
+                        "recorded_at": now,
+                    },
+                )
+            for signal_id in ticket.get("signal_ids") or []:
+                signal = state["signals"].get(signal_id)
+                if signal:
+                    signal["status"] = "in_progress"
+                    signal["builder_ref"] = {
+                        **_mapping(signal.get("builder_ref")),
+                        "repair_id": _text(repair_id),
+                        "handoff_mode": "autonomous",
+                        "automation_status": "start_failed",
+                    }
+                    signal["updated_at"] = now
                     self._validate_signal(signal)
             self._validate_ticket(ticket)
             self._write(state)
