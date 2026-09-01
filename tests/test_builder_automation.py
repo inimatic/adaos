@@ -1426,7 +1426,7 @@ def test_followup_turn_can_replace_bounded_execution_budget(tmp_path: Path) -> N
         execution_budget={
             "schema": "adaos.builder.execution_budget.v1",
             "source": "test.initial",
-            "max_tokens": 120000,
+            "max_model_tokens": 120000,
             "max_wall_seconds": 1200,
         },
     )
@@ -1437,20 +1437,20 @@ def test_followup_turn_can_replace_bounded_execution_budget(tmp_path: Path) -> N
         object_id="recipes",
         execution_budget={
             "source": "test.continuation",
-            "max_tokens": 200000,
+            "max_model_tokens": 200000,
             "max_wall_seconds": 1800,
         },
     )
 
     session = followed["session"]
-    assert session["execution_budget"]["max_tokens"] == 200000
-    assert session["execution_budget_history"][-1]["max_tokens"] == 120000
+    assert session["execution_budget"]["max_model_tokens"] == 200000
+    assert session["execution_budget_history"][-1]["max_model_tokens"] == 120000
     task = next(
         item
         for item in service.factory.snapshot(include_tasks=True)["tasks"]
         if item["task_id"] == session["current_task_id"]
     )
-    assert task["realize_request"]["artifacts"]["execution_budget"]["max_tokens"] == 200000
+    assert task["realize_request"]["artifacts"]["execution_budget"]["max_model_tokens"] == 200000
 
 
 def test_background_automation_launches_durable_worker_process(tmp_path: Path, monkeypatch) -> None:

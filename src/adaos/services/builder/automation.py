@@ -2108,12 +2108,18 @@ class BuilderAutomationService:
                 )
                 next_budget = {**previous_budget, **dict(execution_budget)}
                 try:
-                    max_tokens = int(next_budget.get("max_tokens") or 0)
+                    max_model_tokens = int(
+                        next_budget.get("max_model_tokens")
+                        or next_budget.get("max_tokens")
+                        or 0
+                    )
                     max_wall_seconds = int(next_budget.get("max_wall_seconds") or 0)
                 except (TypeError, ValueError) as exc:
                     raise ValueError("execution budget limits must be integers") from exc
-                if not 1024 <= max_tokens <= 20_000_000:
-                    raise ValueError("execution budget max_tokens must be between 1024 and 20000000")
+                if not 1024 <= max_model_tokens <= 20_000_000:
+                    raise ValueError(
+                        "execution budget max_model_tokens must be between 1024 and 20000000"
+                    )
                 if not 60 <= max_wall_seconds <= 86_400:
                     raise ValueError("execution budget max_wall_seconds must be between 60 and 86400")
                 next_budget.update(
@@ -2121,7 +2127,7 @@ class BuilderAutomationService:
                         "schema": "adaos.builder.execution_budget.v1",
                         "source": str(next_budget.get("source") or "builder.continuation").strip()
                         or "builder.continuation",
-                        "max_tokens": max_tokens,
+                        "max_model_tokens": max_model_tokens,
                         "max_wall_seconds": max_wall_seconds,
                     }
                 )
