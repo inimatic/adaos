@@ -390,7 +390,9 @@ def test_development_ticket_api_handoff_and_resolution_require_evidence(tmp_path
     assert work_stream["lifecycle_split"]["one_user_ticket_can_spawn_many_builder_items"] is True
     assert work_stream["builder_work_count"] == 1
     assert work_stream["builder_work_items"][0]["repair_id"] == handoff_payload["repair"]["repair_id"]
-    assert work_stream["builder_work_items"][0]["status"] == "open"
+    assert work_stream["builder_work_items"][0]["status"] == "planned"
+    assert work_stream["builder_work_items"][0]["compatibility_status"] == "open"
+    assert work_stream["builder_work_items"][0]["authority"] == "adaos.builder.work_item"
     assert work_stream["builder_work_items"][0]["human_manageable"] is False
     assert work_stream["builder_work_items"][0]["token_accounting"]["subscription_resource"] == "codex.api.tokens"
 

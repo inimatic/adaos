@@ -424,11 +424,16 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
         item = {
             "entry_id": f"{ticket_id}:builder:{work_id}",
             "kind": "builder_work_item",
-            "authority": "adaos.builder.repair_task",
+            "authority": "adaos.builder.work_item",
             "work_id": work_id,
+            "work_item_id": task.get("work_item_id") or work_id,
             "work_type": str(ref.get("type") or "builder_repair_task"),
             "mode": str(ref.get("mode") or ref.get("handoff_mode") or "").strip() or None,
-            "status": task.get("status") or ref.get("status") or "linked",
+            "status": task.get("work_status") or task.get("status") or ref.get("status") or "linked",
+            "compatibility_status": task.get("status") or ref.get("status") or "linked",
+            "revision": task.get("revision"),
+            "package_id": task.get("package_id"),
+            "ticket_ids": list(task.get("ticket_ids") or []),
             "summary": task.get("summary") or ref.get("summary") or "",
             "project_id": task.get("project_id") or context.get("project_id") or None,
             "repair_id": str(ref.get("repair_id") or task.get("repair_id") or "").strip() or None,
@@ -442,6 +447,7 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
             "automation_task_id": automation.get("task_id") or ref.get("automation_task_id"),
             "automation_status": automation.get("status") or ref.get("automation_status"),
             "token_accounting": _builder_token_accounting(ref, task),
+            "timeline": _mapping_list(task.get("timeline")),
         }
         builder_items.append(item)
         entries.append(item)
@@ -451,7 +457,7 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
         "ticket_id": ticket_id,
         "authority": {
             "user_ticket": "adaos.dev.ticket",
-            "builder_work": "adaos.builder.repair_task",
+            "builder_work": "adaos.builder.work_item",
             "token_usage": "adaos.root_mgmnt.codex_usage_event.v1",
         },
         "lifecycle_split": {

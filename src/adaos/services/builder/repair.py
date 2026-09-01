@@ -17,6 +17,29 @@ from adaos.services.runtime_paths import current_state_dir
 
 REPAIR_TASK_SCHEMA = "adaos.builder.repair_task.v1"
 ACTIVE_REPAIR_STATES = {"open", "in_progress"}
+WORK_ITEM_STATES = {
+    "planned",
+    "claimed",
+    "in_progress",
+    "validating",
+    "published",
+    "blocked",
+    "failed",
+    "completed",
+    "superseded",
+}
+ACTIVE_WORK_ITEM_STATES = WORK_ITEM_STATES - {"completed", "superseded"}
+WORK_ITEM_TRANSITIONS = {
+    "planned": {"claimed", "blocked", "superseded"},
+    "claimed": {"in_progress", "blocked", "failed", "superseded"},
+    "in_progress": {"validating", "blocked", "failed", "superseded"},
+    "validating": {"published", "in_progress", "blocked", "failed", "superseded"},
+    "published": {"completed", "in_progress", "blocked", "failed", "superseded"},
+    "blocked": {"planned", "claimed", "superseded"},
+    "failed": {"claimed", "in_progress", "superseded"},
+    "completed": {"in_progress", "superseded"},
+    "superseded": set(),
+}
 TASK_EVIDENCE_SIGNAL_MAP = {
     "failed_tests": "test_failure",
     "import_errors": "import_error",
@@ -33,6 +56,49 @@ def _now() -> str:
 
 def _clone(value: Any) -> Any:
     return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+
+
+def _ticket_ids(source_refs: Sequence[Mapping[str, Any]]) -> list[str]:
+    return sorted(
+        {
+            str(ref.get("ticket_id") or ref.get("id") or "").strip()
+            for ref in source_refs
+            if str(ref.get("type") or "").strip() in {"dev_ticket", "development_ticket"}
+            and str(ref.get("ticket_id") or ref.get("id") or "").strip()
+        }
+    )
+
+
+def _work_status_for_legacy(status: Any) -> str:
+    return {
+        "open": "planned",
+        "in_progress": "in_progress",
+        "resolved": "completed",
+        "superseded": "superseded",
+        "not_design_time_fixable": "blocked",
+    }.get(str(status or "").strip(), "planned")
+
+
+def _automation_work_status(automation: Mapping[str, Any]) -> str | None:
+    projection = automation.get("automation") if isinstance(automation.get("automation"), Mapping) else automation
+    session = automation.get("session") if isinstance(automation.get("session"), Mapping) else {}
+    task = session.get("task") if isinstance(session.get("task"), Mapping) else automation.get("task")
+    task = task if isinstance(task, Mapping) else {}
+    status = str(
+        projection.get("status")
+        or session.get("status")
+        or task.get("status")
+        or ""
+    ).strip().lower()
+    if status in {"queued", "submitted", "waiting", "pending"}:
+        return "claimed"
+    if status in {"running", "in_progress", "busy"}:
+        return "in_progress"
+    if status in {"failed", "errored", "cancelled"}:
+        return "failed"
+    if status in {"completed", "succeeded", "success"}:
+        return "validating"
+    return None
 
 
 def _schema() -> dict[str, Any]:
@@ -98,7 +164,17 @@ class BuilderRepairService:
                 if task.get("dedup_key") == key and task.get("status") in ACTIVE_REPAIR_STATES:
                     task["occurrence_count"] = int(task.get("occurrence_count") or 1) + 1
                     task["source_refs"] = self._merge_refs(task.get("source_refs") or [], source_refs)
+                    task["ticket_ids"] = sorted(
+                        set(task.get("ticket_ids") or []) | set(_ticket_ids(source_refs))
+                    )
+                    task["revision"] = int(task.get("revision") or 1) + 1
                     task["updated_at"] = _now()
+                    self._append_work_timeline(
+                        task,
+                        event="occurrence_recorded",
+                        actor="builder.repair_registry",
+                        details={"occurrence_count": task["occurrence_count"]},
+                    )
                     self._write(state)
                     return {"ok": True, "duplicate": True, "task": _clone(task)}
             now = _now()
@@ -106,8 +182,14 @@ class BuilderRepairService:
             task = {
                 "schema": REPAIR_TASK_SCHEMA,
                 "repair_id": repair_id,
+                "work_item_id": repair_id,
                 "project_id": project,
                 "status": "open" if design_time_fixable else "not_design_time_fixable",
+                "work_status": "planned" if design_time_fixable else "blocked",
+                "revision": 1,
+                "ticket_ids": _ticket_ids(source_refs),
+                "package_id": str(details.get("package_id") or "").strip() or None,
+                "timeline": [],
                 "signal_type": kind if kind in {
                     "guard", "quarantine", "post_activation", "test_failure", "import_error",
                     "route_pressure", "memory_growth", "nlu_miss", "conversation_eval", "other",
@@ -129,12 +211,28 @@ class BuilderRepairService:
                 "created_at": now,
                 "updated_at": now,
             }
+            self._append_work_timeline(
+                task,
+                event="created",
+                actor="builder.repair_registry",
+                details={"work_status": task["work_status"]},
+                recorded_at=now,
+            )
             for old_id in task["supersedes"]:
                 old = state["tasks"].get(old_id)
                 if old and old.get("status") in ACTIVE_REPAIR_STATES:
                     old["status"] = "superseded"
+                    old["work_status"] = "superseded"
                     old["superseded_by"] = repair_id
                     old["updated_at"] = now
+                    old["revision"] = int(old.get("revision") or 1) + 1
+                    self._append_work_timeline(
+                        old,
+                        event="superseded",
+                        actor="builder.repair_registry",
+                        details={"superseded_by": repair_id},
+                        recorded_at=now,
+                    )
             self._validate(task)
             state["tasks"][repair_id] = task
             self._write(state)
@@ -142,6 +240,54 @@ class BuilderRepairService:
 
     def start(self, repair_id: str) -> dict[str, Any]:
         return self._set_status(repair_id, "in_progress")
+
+    def transition_work_item(
+        self,
+        repair_id: str,
+        *,
+        status: str,
+        actor: str,
+        reason: str = "",
+        evidence_refs: Sequence[Mapping[str, Any]] = (),
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        target = str(status or "").strip()
+        if target not in WORK_ITEM_STATES:
+            raise ValueError(f"unsupported Builder work item status: {target or '<missing>'}")
+        actor_token = str(actor or "").strip()
+        if not actor_token:
+            raise ValueError("Builder work item transition requires actor identity")
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            task = state["tasks"].get(str(repair_id))
+            if not task:
+                raise KeyError(repair_id)
+            current = str(task.get("work_status") or _work_status_for_legacy(task.get("status"))).strip()
+            revision = int(task.get("revision") or 1)
+            if expected_revision is not None and int(expected_revision) != revision:
+                raise ValueError("Builder work item changed since it was read")
+            if current == target:
+                return _clone(task)
+            if target not in WORK_ITEM_TRANSITIONS.get(current, set()):
+                raise ValueError(f"invalid Builder work item transition: {current} -> {target}")
+            self._set_work_status_locked(
+                task,
+                target,
+                actor=actor_token,
+                reason=reason,
+                evidence_refs=evidence_refs,
+            )
+            self._validate(task)
+            self._write(state)
+            return _clone(task)
+
+    def claim(self, repair_id: str, *, actor: str, expected_revision: int | None = None) -> dict[str, Any]:
+        return self.transition_work_item(
+            repair_id,
+            status="claimed",
+            actor=actor,
+            expected_revision=expected_revision,
+        )
 
     def ingest_task_evidence(
         self,
@@ -190,7 +336,8 @@ class BuilderRepairService:
         active = [
             item
             for item in self.list(project_id=project_id)
-            if item.get("status") in ACTIVE_REPAIR_STATES
+            if str(item.get("work_status") or _work_status_for_legacy(item.get("status")))
+            in ACTIVE_WORK_ITEM_STATES
         ][-max(1, min(int(limit or 30), 100)):]
         return {
             "schema": "adaos.builder.repair_context.v1",
@@ -226,7 +373,14 @@ class BuilderRepairService:
                 "actor": str(actor),
             }
             task["status"] = "resolved" if capability_works and regression_free else "in_progress"
-            task["updated_at"] = _now()
+            self._set_work_status_locked(
+                task,
+                "completed" if capability_works and regression_free else "in_progress",
+                actor=str(actor),
+                reason="acceptance_passed" if capability_works and regression_free else "acceptance_failed",
+                evidence_refs=evidence_refs,
+                allow_any=True,
+            )
             self._validate(task)
             self._write(state)
             return _clone(task)
@@ -328,19 +482,69 @@ class BuilderRepairService:
             repair["source_refs"] = self._merge_refs(repair.get("source_refs") or [], refs)
             if repair.get("status") == "open":
                 repair["status"] = "in_progress"
-            repair["updated_at"] = _now()
+            automation_work_status = _automation_work_status(automation)
+            if automation_work_status:
+                self._set_work_status_locked(
+                    repair,
+                    automation_work_status,
+                    actor=str(actor),
+                    reason=f"automation:{status or 'linked'}",
+                    allow_any=True,
+                )
+            else:
+                repair["updated_at"] = _now()
             self._validate(repair)
             self._write(state)
             return _clone(repair)
 
-    def list(self, *, project_id: str | None = None, status: str | None = None) -> list[dict[str, Any]]:
+    def list(
+        self,
+        *,
+        project_id: str | None = None,
+        status: str | None = None,
+        work_status: str | None = None,
+        package_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         state = self._read()
-        tasks = list(state["tasks"].values())
+        tasks = [self._normalized_task(item) for item in state["tasks"].values()]
         if project_id:
             tasks = [item for item in tasks if item.get("project_id") == project_id]
         if status:
             tasks = [item for item in tasks if item.get("status") == status]
+        if work_status:
+            tasks = [item for item in tasks if item.get("work_status") == work_status]
+        if package_id:
+            tasks = [item for item in tasks if item.get("package_id") == package_id]
         return [_clone(item) for item in sorted(tasks, key=lambda item: item.get("created_at") or "")]
+
+    def package_rollup(self, package_id: str) -> dict[str, Any]:
+        token = str(package_id or "").strip()
+        if not token:
+            raise ValueError("package_id is required")
+        items = self.list(package_id=token)
+        total_tokens = 0
+        fresh_tokens = 0
+        for item in items:
+            context = item.get("context") if isinstance(item.get("context"), Mapping) else {}
+            usage = context.get("usage") if isinstance(context.get("usage"), Mapping) else {}
+            input_tokens = int(usage.get("input_tokens") or 0)
+            cached_tokens = int(usage.get("cached_input_tokens") or 0)
+            output_tokens = int(usage.get("output_tokens") or 0)
+            total_tokens += int(usage.get("total_tokens") or usage.get("model_tokens") or 0)
+            fresh_tokens += max(0, input_tokens - cached_tokens) + output_tokens
+        return {
+            "schema": "adaos.builder.work_package_rollup.v1",
+            "package_id": token,
+            "work_item_count": len(items),
+            "ticket_ids": sorted({ticket_id for item in items for ticket_id in item.get("ticket_ids") or []}),
+            "status_counts": {
+                status: sum(1 for item in items if item.get("work_status") == status)
+                for status in sorted(WORK_ITEM_STATES)
+                if any(item.get("work_status") == status for item in items)
+            },
+            "total_tokens": total_tokens,
+            "fresh_plus_output_tokens": fresh_tokens,
+        }
 
     def _set_status(self, repair_id: str, status: str) -> dict[str, Any]:
         with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
@@ -351,7 +555,13 @@ class BuilderRepairService:
             if task.get("status") in {"resolved", "superseded", "not_design_time_fixable"}:
                 raise ValueError(f"repair task is terminal: {task.get('status')}")
             task["status"] = status
-            task["updated_at"] = _now()
+            self._set_work_status_locked(
+                task,
+                "in_progress" if status == "in_progress" else _work_status_for_legacy(status),
+                actor="builder.repair_registry",
+                reason=f"legacy_status:{status}",
+                allow_any=True,
+            )
             self._validate(task)
             self._write(state)
             return _clone(task)
@@ -363,6 +573,72 @@ class BuilderRepairService:
         if not isinstance(value, Mapping) or not isinstance(value.get("tasks"), Mapping):
             raise ValueError("Builder repair state is corrupt")
         return {"schema": "adaos.builder.repair_state.v1", "tasks": dict(value["tasks"])}
+
+    @staticmethod
+    def _normalized_task(task: Mapping[str, Any]) -> dict[str, Any]:
+        item = dict(task)
+        repair_id = str(item.get("repair_id") or "").strip()
+        item.setdefault("work_item_id", repair_id)
+        item.setdefault("work_status", _work_status_for_legacy(item.get("status")))
+        item.setdefault("revision", 1)
+        item.setdefault("ticket_ids", _ticket_ids(item.get("source_refs") or []))
+        item.setdefault("package_id", None)
+        item.setdefault("timeline", [])
+        return item
+
+    @staticmethod
+    def _append_work_timeline(
+        task: dict[str, Any],
+        *,
+        event: str,
+        actor: str,
+        details: Mapping[str, Any] | None = None,
+        evidence_refs: Sequence[Mapping[str, Any]] = (),
+        recorded_at: str | None = None,
+    ) -> None:
+        timeline = [dict(item) for item in task.get("timeline") or [] if isinstance(item, Mapping)]
+        timeline.append(
+            {
+                "event": str(event),
+                "actor": str(actor),
+                "details": dict(details or {}),
+                "evidence_refs": [dict(ref) for ref in evidence_refs if isinstance(ref, Mapping)],
+                "recorded_at": recorded_at or _now(),
+            }
+        )
+        task["timeline"] = timeline[-200:]
+
+    @classmethod
+    def _set_work_status_locked(
+        cls,
+        task: dict[str, Any],
+        status: str,
+        *,
+        actor: str,
+        reason: str = "",
+        evidence_refs: Sequence[Mapping[str, Any]] = (),
+        allow_any: bool = False,
+    ) -> None:
+        current = str(task.get("work_status") or _work_status_for_legacy(task.get("status"))).strip()
+        target = str(status or "").strip()
+        if target not in WORK_ITEM_STATES:
+            raise ValueError(f"unsupported Builder work item status: {target}")
+        if current == target:
+            task["updated_at"] = _now()
+            return
+        if not allow_any and target not in WORK_ITEM_TRANSITIONS.get(current, set()):
+            raise ValueError(f"invalid Builder work item transition: {current} -> {target}")
+        task["work_status"] = target
+        task["revision"] = int(task.get("revision") or 1) + 1
+        task["updated_at"] = _now()
+        cls._append_work_timeline(
+            task,
+            event="status_changed",
+            actor=actor,
+            details={"from": current, "to": target, "reason": str(reason or "").strip() or None},
+            evidence_refs=evidence_refs,
+            recorded_at=task["updated_at"],
+        )
 
     def _write(self, state: Mapping[str, Any]) -> None:
         atomic_write_json(self.state_path, dict(state))
@@ -387,8 +663,11 @@ class BuilderRepairService:
 
 
 __all__ = [
+    "ACTIVE_WORK_ITEM_STATES",
     "ACTIVE_REPAIR_STATES",
     "BuilderRepairService",
     "REPAIR_TASK_SCHEMA",
     "TASK_EVIDENCE_SIGNAL_MAP",
+    "WORK_ITEM_STATES",
+    "WORK_ITEM_TRANSITIONS",
 ]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from jsonschema import Draft202012Validator
 
 from adaos.services.builder.repair import BuilderRepairService
@@ -104,3 +105,70 @@ def test_runtime_evidence_bundle_becomes_bounded_builder_task_context(tmp_path: 
         "memory_growth",
         "nlu_miss",
     }
+
+
+def test_builder_work_item_lifecycle_is_revisioned_and_not_a_user_ticket(tmp_path: Path) -> None:
+    service = BuilderRepairService(state_dir=tmp_path)
+    created = service.report(
+        project_id="demo_metrics",
+        signal_type="other",
+        summary="Rename the selected metric action",
+        source_refs=[
+            {"type": "dev_ticket", "id": "dticket.1"},
+            {"type": "dev_ticket", "id": "dticket.2"},
+        ],
+        context={"package_id": "bpackage.1"},
+    )["task"]
+
+    assert created["work_item_id"] == created["repair_id"]
+    assert created["work_status"] == "planned"
+    assert created["ticket_ids"] == ["dticket.1", "dticket.2"]
+    assert created["package_id"] == "bpackage.1"
+
+    claimed = service.claim(
+        created["repair_id"],
+        actor="builder:worker",
+        expected_revision=created["revision"],
+    )
+    running = service.transition_work_item(
+        created["repair_id"],
+        status="in_progress",
+        actor="builder:worker",
+        expected_revision=claimed["revision"],
+    )
+    validating = service.transition_work_item(
+        created["repair_id"],
+        status="validating",
+        actor="builder:validator",
+        expected_revision=running["revision"],
+    )
+    published = service.transition_work_item(
+        created["repair_id"],
+        status="published",
+        actor="builder:publisher",
+        evidence_refs=[{"type": "runtime_overlay", "id": "trial.1"}],
+        expected_revision=validating["revision"],
+    )
+
+    completed = service.record_acceptance(
+        created["repair_id"],
+        capability_works=True,
+        regression_free=True,
+        evidence_refs=[{"type": "runtime_guard", "id": "guard.1", "status": "passed"}],
+        actor="builder:acceptance",
+    )
+
+    assert published["work_status"] == "published"
+    assert completed["work_status"] == "completed"
+    assert completed["status"] == "resolved"
+    assert completed["revision"] > created["revision"]
+    assert [entry["event"] for entry in completed["timeline"]].count("status_changed") == 5
+    assert service.package_rollup("bpackage.1")["ticket_ids"] == ["dticket.1", "dticket.2"]
+
+    with pytest.raises(ValueError, match="changed since"):
+        service.transition_work_item(
+            created["repair_id"],
+            status="in_progress",
+            actor="builder:worker",
+            expected_revision=created["revision"],
+        )
