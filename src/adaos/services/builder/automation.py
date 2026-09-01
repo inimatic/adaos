@@ -203,6 +203,24 @@ def _workflow_request_projection(value: Any) -> str:
     return json.dumps(fallback, ensure_ascii=False, separators=(",", ":"))
 
 
+def _brief_has_structured_edits(value: Any) -> bool:
+    payload = _brief_payload(value)
+    repair_hints = (
+        payload.get("repair_hints")
+        if isinstance(payload.get("repair_hints"), Mapping)
+        else {}
+    )
+    structured = (
+        repair_hints.get("structured_edits")
+        if isinstance(repair_hints.get("structured_edits"), Mapping)
+        else {}
+    )
+    return bool(
+        str(structured.get("schema") or "").strip()
+        and any(isinstance(item, Mapping) for item in structured.get("operations") or [])
+    )
+
+
 def _cleanup_dev_skill_runtime(skill_id: str) -> dict[str, Any]:
     """Invoke the core-owned DEV runtime lifecycle without deleting source."""
 
@@ -1785,6 +1803,14 @@ class BuilderAutomationService:
         session["companion_skill_id"] = companions[0] if companions else None
         return companions
 
+    def _qualified_continuation_checkpoint(
+        self,
+        session: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        if _brief_has_structured_edits(session.get("implementation_brief")):
+            return None
+        return self._budget_continuation_checkpoint(session)
+
     def submit_turn(
         self,
         *,
@@ -1826,7 +1852,10 @@ class BuilderAutomationService:
                     "session": session,
                     "automation": self.project_session(session),
                 }
-            continuation_checkpoint = self._budget_continuation_checkpoint(session)
+            # A newly qualified deterministic repair supersedes a preserved
+            # candidate from an earlier model-budget failure. Reusing that
+            # candidate would validate stale source and skip the exact edits.
+            continuation_checkpoint = self._qualified_continuation_checkpoint(session)
             if continuation_checkpoint:
                 session["pending_continuation_checkpoint"] = continuation_checkpoint
             else:
@@ -3258,13 +3287,47 @@ class BuilderAutomationService:
         session["codex_usage_history"] = history[-50:]
 
     @staticmethod
-    def _is_zero_model_continuation(session: Mapping[str, Any], task_id: str) -> bool:
-        return any(
+    def _zero_model_execution(
+        session: Mapping[str, Any],
+        task_id: str,
+    ) -> dict[str, str] | None:
+        preserved_candidate = any(
             str(item.get("mode") or "").strip() == "validate_preserved_candidate"
             and str(item.get("resumed_by_task_id") or "").strip() == task_id
             for item in session.get("continuation_history") or []
             if isinstance(item, Mapping)
         )
+        if preserved_candidate:
+            return {
+                "strategy": "preserved_candidate",
+                "reason": "Validated a preserved candidate without starting a model turn.",
+            }
+        result = (
+            dict(session.get("last_result"))
+            if isinstance(session.get("last_result"), Mapping)
+            else {}
+        )
+        provenance = (
+            dict(result.get("provenance"))
+            if isinstance(result.get("provenance"), Mapping)
+            else {}
+        )
+        strategy = str(
+            result.get("execution_strategy")
+            or provenance.get("execution_strategy")
+            or ""
+        ).strip()
+        if strategy == "structured_edits":
+            return {
+                "strategy": strategy,
+                "reason": "Applied qualified structured edits and validation without starting a model turn.",
+            }
+        return None
+
+    @staticmethod
+    def _is_zero_model_continuation(session: Mapping[str, Any], task_id: str) -> bool:
+        execution = BuilderAutomationService._zero_model_execution(session, task_id)
+        return bool(execution and execution.get("strategy") == "preserved_candidate")
 
     def _record_context_attribution(
         self,
@@ -3394,14 +3457,14 @@ class BuilderAutomationService:
         )
         usage = self._codex_run_usage(local_run)
         if not usage:
-            zero_model_continuation = self._is_zero_model_continuation(current, task_id)
+            zero_model_execution = self._zero_model_execution(current, task_id)
             if (
-                not zero_model_continuation
+                not zero_model_execution
                 and accounting.get("status") == "unavailable"
                 and str(accounting.get("task_id") or "") == task_id
             ):
                 return current
-            if zero_model_continuation:
+            if zero_model_execution:
                 receipt = {
                     "schema": "adaos.builder.codex_usage_receipt.v1",
                     "task_id": task_id,
@@ -3418,7 +3481,8 @@ class BuilderAutomationService:
                         f"builder:{current.get('session_id') or 'session'}:"
                         f"{task_id}:codex-usage:v1"
                     ),
-                    "reason": "Validated a preserved candidate without starting a model turn.",
+                    "execution_strategy": zero_model_execution["strategy"],
+                    "reason": zero_model_execution["reason"],
                     "checked_at": _now_iso(),
                 }
                 if self.codex_usage_reporter is not None:
@@ -3440,7 +3504,7 @@ class BuilderAutomationService:
                         "change_id": str(current.get("change_id") or "").strip() or None,
                         "note": (
                             f"builder_status={task_status}; "
-                            "deterministic_continuation=true"
+                            f"deterministic_strategy={zero_model_execution['strategy']}"
                         ),
                     }
                     object_type = str(current.get("object_type") or "").strip()
@@ -3483,13 +3547,13 @@ class BuilderAutomationService:
                 }
             current["codex_usage_accounting"] = receipt
             self._retain_codex_usage_receipt(current, receipt)
-            if zero_model_continuation or accounting:
+            if zero_model_execution or accounting:
                 current["updated_at"] = _now_iso()
             return self._record_context_attribution(
                 current,
                 task_id=task_id,
                 task_status=task_status,
-                usage=receipt if zero_model_continuation else None,
+                usage=receipt if zero_model_execution else None,
             )
         if self.codex_usage_reporter is None:
             usage_accuracy = str(usage.get("accuracy") or "provider_reported")

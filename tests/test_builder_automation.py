@@ -12,7 +12,10 @@ import pytest
 import yaml
 
 from adaos.services.builder import automation as automation_module
-from adaos.services.builder.automation import BuilderAutomationService
+from adaos.services.builder.automation import (
+    BuilderAutomationService,
+    _brief_has_structured_edits,
+)
 from adaos.services.builder.workspace import BuilderWorkspaceService
 from adaos.services.root.service import _rewrite_skill_template_identity
 from adaos.services.skill_factory_worker import CodexRunResult, LocalSkillFactoryWorker
@@ -930,9 +933,98 @@ def test_terminal_codex_usage_marks_preserved_candidate_validation_as_exact_zero
     assert calls[0]["metering_disposition"] == "zero_model"
     assert calls[0]["total_tokens"] == 0
     assert calls[0]["billable_tokens"] == 0
-    assert calls[0]["note"] == "builder_status=completed; deterministic_continuation=true"
+    assert calls[0]["note"] == (
+        "builder_status=completed; deterministic_strategy=preserved_candidate"
+    )
     assert result["codex_usage_history"] == [receipt]
     assert result["updated_at"]
+
+
+def test_terminal_codex_usage_marks_structured_edits_as_exact_zero(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    calls: list[dict] = []
+    service.codex_usage_reporter = lambda event: (
+        calls.append(dict(event))
+        or {
+            "ok": True,
+            "duplicate": False,
+            "event": {"event_id": "codex_usage_structured_zero"},
+        }
+    )
+    session = {
+        "session_id": "automation.skill.demo",
+        "object_type": "skill",
+        "object_id": "demo",
+        "current_task_id": "task.structured",
+        "local_run": {"path": str(tmp_path / "missing")},
+        "last_result": {
+            "execution_strategy": "structured_edits",
+            "provenance": {"execution_strategy": "structured_edits"},
+        },
+    }
+
+    result = service._report_terminal_codex_usage(session, task_status="completed")
+
+    receipt = result["codex_usage_accounting"]
+    assert receipt["status"] == "reported"
+    assert receipt["execution_strategy"] == "structured_edits"
+    assert receipt["total_tokens"] == 0
+    assert receipt["billable_tokens"] == 0
+    assert receipt["root_event_id"] == "codex_usage_structured_zero"
+    assert len(calls) == 1
+    assert calls[0]["idempotency_key"] == receipt["idempotency_key"]
+    assert calls[0]["run_id"] == "task.structured"
+    assert calls[0]["metering_disposition"] == "zero_model"
+    assert calls[0]["total_tokens"] == 0
+    assert calls[0]["billable_tokens"] == 0
+    assert calls[0]["note"] == (
+        "builder_status=completed; deterministic_strategy=structured_edits"
+    )
+    assert calls[0]["project_id"] == "demo"
+
+
+def test_structured_edit_brief_supersedes_failed_model_continuation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    brief = json.dumps(
+        {
+            "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+            "repair_hints": {
+                "structured_edits": {
+                    "schema": "adaos.builder.structured_edits.v1",
+                    "operations": [
+                        {
+                            "operation": "replace_text",
+                            "path": "skills/demo/webui.json",
+                            "old": "Selected metric trend",
+                            "new": "Current metric trend",
+                            "expected_count": 2,
+                        }
+                    ],
+                }
+            },
+        }
+    )
+
+    assert _brief_has_structured_edits(brief) is True
+    assert _brief_has_structured_edits("Implement the requested change.") is False
+    assert _brief_has_structured_edits(
+        json.dumps({"repair_hints": {"structured_edits": {"operations": []}}})
+    ) is False
+
+    service = _service(tmp_path)
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_budget_continuation_checkpoint",
+        lambda _service, _session: {"mode": "validate_preserved_candidate"},
+    )
+    assert service._qualified_continuation_checkpoint(
+        {"implementation_brief": brief}
+    ) is None
+    assert service._qualified_continuation_checkpoint(
+        {"implementation_brief": "Implement the requested change."}
+    ) == {"mode": "validate_preserved_candidate"}
 
 
 def test_path_guard_failure_reuses_original_budget_candidate_after_requalification(
