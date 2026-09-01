@@ -916,6 +916,7 @@ def test_terminal_codex_usage_is_reported_once_with_provider_counts(tmp_path: Pa
         "local_run": {"path": str(run_root), "events_path": str(journal)},
         "context_control": {
             "run_ref": "builder-run:usage-test",
+            "project_ref": "project:recipe_suite",
             "plan_ref": plan["plan_ref"],
             "selected_refs": [capsule["capsule_id"]],
         },
@@ -937,7 +938,12 @@ def test_terminal_codex_usage_is_reported_once_with_provider_counts(tmp_path: Pa
     assert attribution["usage"]["provider_input_tokens"] == 1200
     assert attribution["usage"]["cached_input_tokens"] == 300
     assert attribution["usage"]["fresh_plus_output"] == 1300
-    assert contexts.inspect("builder-run:usage-test")["receipt_count"] == 1
+    inspection = contexts.inspect("builder-run:usage-test")
+    assert inspection["receipt_count"] == 1
+    assert inspection["receipts"][0]["subject_refs"] == [
+        "builder-run:usage-test",
+        "project:recipe_suite",
+    ]
 
 
 def test_terminal_codex_usage_missing_journal_is_unavailable_not_zero(tmp_path: Path) -> None:

@@ -793,6 +793,7 @@ class BuilderAutomationService:
         )
         return {
             "run_ref": run_ref,
+            "project_ref": project_ref,
             "capsule_refs": [task["capsule_id"], project["capsule_id"], platform["capsule_id"]],
             "context_packet_ref": packet_artifact["ref"],
             "context_packet_digest": context_packet.get("digest"),
@@ -3632,6 +3633,13 @@ class BuilderAutomationService:
             if isinstance(current.get("last_validation"), Mapping)
             else {}
         )
+        project_ref = str(control.get("project_ref") or "").strip()
+        if not project_ref:
+            project_ref = (
+                f"project:{current.get('object_id')}"
+                if current.get("object_id")
+                else ""
+            )
         try:
             receipt = self._contexts().record_receipt(
                 {
@@ -3639,11 +3647,7 @@ class BuilderAutomationService:
                     "plan_ref": plan_ref,
                     "subject_refs": [
                         run_ref,
-                        *(
-                            [f"project:{current.get('object_id')}"]
-                            if current.get("object_id")
-                            else []
-                        ),
+                        *([project_ref] if project_ref else []),
                     ],
                     "purpose": "builder.automation",
                     "audience": "builder",
@@ -4621,6 +4625,7 @@ class BuilderAutomationService:
                 key: copy.deepcopy(context_control.get(key))
                 for key in (
                     "run_ref",
+                    "project_ref",
                     "capsule_refs",
                     "context_packet_ref",
                     "context_packet_digest",
