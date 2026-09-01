@@ -273,6 +273,23 @@ def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path
     registry = (workspace / "registry.json").read_text(encoding="utf-8")
     assert '"stable"' in registry
 
+    promotion["receipts"].pop("development_sources_prepared")
+    promotion["receipts"].pop("development_sources_projected")
+    service.promotion_path(accepted.candidate_id).write_text(
+        json.dumps(promotion),
+        encoding="utf-8",
+    )
+    shutil.rmtree(workspace / "scenarios" / "recipes" / "tests")
+    channel_writes = remote.channel_writes
+
+    replay = _promote(service, accepted.candidate_id)
+
+    assert replay.activation.idempotent_replay
+    assert remote.channel_writes == channel_writes
+    assert (
+        workspace / "scenarios" / "recipes" / "tests" / "test_scenario.py"
+    ).is_file()
+
 
 def test_workflow_publication_admission_precedes_channel_and_binds_all_locks(
     tmp_path: Path,

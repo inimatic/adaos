@@ -438,9 +438,10 @@ class ArtifactPublicationService:
             for name in _DEVELOPMENT_SOURCE_ROOTS:
                 source = source_root / name
                 target = package_root / name
-                if source.is_dir() and not target.exists():
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copytree(source, target)
+                if source.is_dir():
+                    if not target.exists():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copytree(source, target)
                     copied.append(name)
             entries.append(
                 {
@@ -1875,6 +1876,44 @@ class ArtifactPublicationService:
             else {}
         )
         terminal_receipts_complete = terminal_receipts.issubset(operation_receipts)
+        legacy_terminal_receipts = terminal_receipts - {"development_sources_projected"}
+        legacy_completed = (
+            operation is not None
+            and (
+                operation.get("status") == "completed"
+                or (
+                    operation.get("phase") == "completed"
+                    and bool(operation.get("completed_at"))
+                )
+            )
+            and legacy_terminal_receipts.issubset(operation_receipts)
+        )
+        if legacy_completed and not terminal_receipts_complete:
+            source_preparation = operation_receipts.get("development_sources_prepared")
+            if not isinstance(source_preparation, Mapping):
+                source_preparation = self._prepare_development_source_projection(
+                    candidate=candidate,
+                    plan=plan,
+                )
+                self._promotion_receipt(
+                    operation,
+                    "development_sources_prepared",
+                    source_preparation,
+                )
+            projected_sources = self._project_development_sources(
+                source_preparation,
+                plan=plan,
+            )
+            self._promotion_receipt(
+                operation,
+                "development_sources_projected",
+                projected_sources,
+            )
+            operation["status"] = "completed"
+            operation["phase"] = "completed"
+            operation["source_projection_reconciled_at"] = _now()
+            self._write_promotion(operation)
+            return self._completed_promotion_result(candidate, plan, operation)
         if operation is not None and terminal_receipts_complete and (
             operation.get("status") == "completed"
             or (
