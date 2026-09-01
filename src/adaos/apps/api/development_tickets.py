@@ -124,6 +124,12 @@ class DevTicketPackageStartRequest(BaseModel):
     mcp: dict[str, Any] | None = None
 
 
+class DevTicketTrialDecisionRequest(BaseModel):
+    decision: str = Field(..., pattern="^(accept|revise|rollback)$")
+    actor: str = Field(default="user:owner", min_length=1)
+    reason: str = ""
+
+
 class DevTicketBuilderSyncRequest(BaseModel):
     actor: str = "ui"
     repair_id: str | None = None
@@ -458,6 +464,9 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
             "updated_at": task.get("updated_at") or ref.get("updated_at") or ref.get("created_at"),
             "acceptance": task.get("acceptance") if isinstance(task.get("acceptance"), Mapping) else {},
             "automation": automation,
+            "trial": dict(context.get("trial"))
+            if isinstance(context.get("trial"), Mapping)
+            else {},
             "automation_session_id": automation.get("session_id") or ref.get("automation_session_id"),
             "automation_task_id": automation.get("task_id") or ref.get("automation_task_id"),
             "automation_status": automation.get("status") or ref.get("automation_status"),
@@ -917,6 +926,33 @@ def get_builder_package(
         "work_items": items,
         "rollup": repair_service.package_rollup(package_id),
     }
+
+
+@router.post("/{ticket_id}/trial/decision")
+def decide_ticket_trial(
+    ticket_id: str,
+    body: DevTicketTrialDecisionRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+    automation: Any = Depends(_get_automation_service),
+) -> dict[str, Any]:
+    try:
+        target = service.builder_target(ticket_id)
+        result = automation.decide_aprobation(
+            object_type=target["object_type"],
+            object_id=target["object_id"],
+            decision=body.decision,
+            actor=body.actor,
+            reason=body.reason,
+        )
+        updated = service.get_ticket(ticket_id)
+        return {
+            **result,
+            "detail": _ticket_detail(service, updated) if updated else None,
+        }
+    except KeyError as exc:
+        raise _not_found(str(exc).strip("'")) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.post("/artifacts", status_code=status.HTTP_201_CREATED)

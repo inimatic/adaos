@@ -2784,6 +2784,19 @@ def test_finalize_activates_dev_ticket_aprobation_overlay_after_checkpoint(
         "_prepare_and_activate_aprobation_overlay",
         fake_overlay,
     )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_ensure_governed_aprobation_trial",
+        lambda self, session, receipt: calls.append("trial")
+        or {
+            **dict(receipt),
+            "trial": {
+                "status": "trial",
+                "candidate_id": "candidate.recipes",
+                "candidate_digest": "sha256:" + "2" * 64,
+            },
+        },
+    )
 
     class FakeWorkbench:
         def __init__(self, **kwargs):  # noqa: ARG002
@@ -2825,7 +2838,14 @@ def test_finalize_activates_dev_ticket_aprobation_overlay_after_checkpoint(
         }
     )
 
-    assert calls == ["dev:recipes_skill", "checkpoint", "overlay", "ensure", "notify"]
+    assert calls == [
+        "dev:recipes_skill",
+        "checkpoint",
+        "overlay",
+        "ensure",
+        "trial",
+        "notify",
+    ]
     assert saved[-1]["completion_readiness"]["aprobation"]["ok"] is True
     assert (
         saved[-1]["completion_readiness"]["aprobation"]["mode"]
@@ -2858,10 +2878,287 @@ def test_dev_ticket_repair_defaults_to_aprobation_overlay() -> None:
     )
 
 
+def test_governed_aprobation_trial_binds_candidate_and_changelog(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.sdk.builder import lifecycle
+
+    service = _service(tmp_path)
+    checkpoint = {
+        "generation": 4,
+        "delivery": {
+            "status": "checkpoint",
+            "package_digest": "sha256:" + "1" * 64,
+        },
+    }
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_workflow",
+        lambda self: SimpleNamespace(describe=lambda *_: checkpoint),
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "prepare_trial",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "candidate": {
+                "candidate_id": "candidate.demo",
+                "package_digest": "sha256:" + "2" * 64,
+                "release_digest": "sha256:" + "3" * 64,
+            },
+            "release": {"version": "0.2.0"},
+            "trial_workspace": "trials/demo",
+            "workflow": {
+                "generation": 6,
+                "delivery": {
+                    "status": "trial",
+                    "candidate_id": "candidate.demo",
+                    "package_digest": "sha256:" + "2" * 64,
+                    "release_digest": "sha256:" + "3" * 64,
+                    "version": "0.2.0",
+                },
+            },
+        },
+    )
+
+    receipt = service._ensure_governed_aprobation_trial(
+        {
+            "object_type": "skill",
+            "object_id": "demo_metrics_skill",
+            "current_task_id": "task.demo",
+            "webspace_id": "desktop",
+            "links": {
+                "development_ticket_id": "dticket.1",
+                "development_ticket_ids": ["dticket.1", "dticket.2"],
+            },
+            "implementation_brief": json.dumps(
+                {
+                    "summary": "Improve Demo Metrics",
+                    "issues": [
+                        {"summary": "Rename the Metrics table."},
+                        {"summary": "Move Refresh before Create."},
+                    ],
+                }
+            ),
+        },
+        {"ok": True, "mode": "devspace_to_workspace_runtime_overlay"},
+    )
+
+    assert receipt["trial"]["status"] == "trial"
+    assert receipt["trial"]["candidate_id"] == "candidate.demo"
+    assert receipt["trial"]["version"] == "0.2.0"
+    assert receipt["audience"] == "alpha"
+    assert receipt["changelog"]["ticket_ids"] == ["dticket.1", "dticket.2"]
+    assert receipt["changelog"]["changes"] == [
+        "Rename the Metrics table.",
+        "Move Refresh before Create.",
+    ]
+
+
+def test_accepting_aprobation_publishes_and_closes_resolved_ticket(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.sdk.builder import lifecycle
+    from adaos.services.development_tickets import DevelopmentTicketService
+
+    service = _service(tmp_path)
+    tickets = DevelopmentTicketService(state_dir=service.state_dir)
+    signal = tickets.capture_signal(
+        kind="development_request",
+        summary="Improve Demo Metrics",
+        target_scope={"type": "skill", "id": "demo_metrics_skill", "source": "dev"},
+        source="client_feedback",
+        owner_area="skill",
+    )["signal"]
+    ticket = tickets.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="accepted",
+        owner_area="skill",
+    )["ticket"]
+    tickets.record_resolution(
+        ticket["ticket_id"],
+        actor="builder.automation",
+        evidence_refs=[{"type": "test", "id": "demo-focused", "status": "passed"}],
+        resolved_by_overlay="candidate.demo",
+    )
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.skill.demo_metrics_skill",
+        "object_type": "skill",
+        "object_id": "demo_metrics_skill",
+        "status": "completed",
+        "links": {"development_ticket_id": ticket["ticket_id"]},
+        "completion_readiness": {
+            "ok": True,
+            "aprobation": {
+                "ok": True,
+                "trial": {
+                    "status": "trial",
+                    "candidate_id": "candidate.demo",
+                    "candidate_digest": "sha256:" + "2" * 64,
+                    "release_digest": "sha256:" + "3" * 64,
+                    "version": "0.2.0",
+                },
+            },
+        },
+        "created_at": "2026-09-01T10:00:00+00:00",
+        "updated_at": "2026-09-01T10:00:00+00:00",
+    }
+    service._save_session(session)
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "refresh_session",
+        lambda self, value: dict(value),
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "decide_trial",
+        lambda *args, **kwargs: {"ok": True, "accepted": True},
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "publish_candidate",
+        lambda *args, **kwargs: {"ok": True, "version": "0.2.0"},
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_workflow",
+        lambda self: SimpleNamespace(
+            describe=lambda *_: {
+                "delivery": {
+                    "status": "published",
+                    "release": "demo_metrics_skill@0.2.0",
+                    "release_digest": "sha256:" + "3" * 64,
+                },
+                "publication": {"status": "published", "version": "0.2.0"},
+            }
+        ),
+    )
+
+    result = service.decide_aprobation(
+        object_type="skill",
+        object_id="demo_metrics_skill",
+        decision="accept",
+        actor="user:owner",
+    )
+
+    assert result["decision"] == "accept"
+    assert result["tickets"][0]["status"] == "closed"
+    assert tickets.get_ticket(ticket["ticket_id"])["verification"]["kind"] == "verified"
+    persisted = service.get_session("skill", "demo_metrics_skill")
+    assert persisted["completion_readiness"]["aprobation"]["trial"]["status"] == "published"
+
+
+def test_revising_aprobation_rolls_back_and_reopens_ticket(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.sdk.builder import lifecycle
+    from adaos.services.development_tickets import DevelopmentTicketService
+
+    service = _service(tmp_path)
+    tickets = DevelopmentTicketService(state_dir=service.state_dir)
+    signal = tickets.capture_signal(
+        kind="development_request",
+        summary="Move Demo Metrics Refresh",
+        target_scope={"type": "skill", "id": "demo_metrics_skill", "source": "dev"},
+        source="client_feedback",
+        owner_area="skill",
+    )["signal"]
+    ticket = tickets.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="accepted",
+        owner_area="skill",
+    )["ticket"]
+    tickets._link_builder_repair(
+        ticket["ticket_id"],
+        {
+            "repair_id": "repair.demo",
+            "status": "in_progress",
+            "created_at": "2026-09-01T10:00:00+00:00",
+        },
+        mode="autonomous",
+        actor="builder.automation",
+    )
+    tickets.record_resolution(
+        ticket["ticket_id"],
+        actor="builder.automation",
+        evidence_refs=[{"type": "test", "id": "demo-focused", "status": "passed"}],
+        resolved_by_overlay="candidate.demo",
+    )
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.skill.demo_metrics_skill",
+        "object_type": "skill",
+        "object_id": "demo_metrics_skill",
+        "status": "completed",
+        "links": {"development_ticket_id": ticket["ticket_id"]},
+        "completion_readiness": {
+            "ok": True,
+            "aprobation": {
+                "ok": True,
+                "trial": {
+                    "status": "trial",
+                    "candidate_id": "candidate.demo",
+                    "candidate_digest": "sha256:" + "2" * 64,
+                },
+            },
+        },
+        "created_at": "2026-09-01T10:00:00+00:00",
+        "updated_at": "2026-09-01T10:00:00+00:00",
+    }
+    service._save_session(session)
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "refresh_session",
+        lambda self, value: dict(value),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_rollback_aprobation_overlay",
+        lambda self, current, receipt: {"ok": True, "mode": "restore_workspace_runtime"},
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "decide_trial",
+        lambda *args, **kwargs: {"ok": True, "accepted": False},
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_workflow",
+        lambda self: SimpleNamespace(
+            describe=lambda *_: {"delivery": {"status": "rejected"}}
+        ),
+    )
+
+    result = service.decide_aprobation(
+        object_type="skill",
+        object_id="demo_metrics_skill",
+        decision="revise",
+        actor="user:owner",
+        reason="Refresh must stay visible on a narrow screen.",
+    )
+
+    assert result["rollback"]["ok"] is True
+    assert result["tickets"][0]["status"] == "in_progress"
+    assert result["tickets"][0]["comments"][-1]["body"] == (
+        "Refresh must stay visible on a narrow screen."
+    )
+
+
 def test_aprobation_overlay_requires_ready_webspace_materialization() -> None:
     assert not BuilderAutomationService._aprobation_overlay_ready(
         {
             "ok": True,
+            "trial": {
+                "status": "trial",
+                "candidate_id": "candidate.demo",
+                "candidate_digest": "sha256:" + "1" * 64,
+            },
             "skills": [
                 {
                     "id": "demo_metrics_skill",
@@ -2877,6 +3174,11 @@ def test_aprobation_overlay_requires_ready_webspace_materialization() -> None:
     assert BuilderAutomationService._aprobation_overlay_ready(
         {
             "ok": True,
+            "trial": {
+                "status": "trial",
+                "candidate_id": "candidate.demo",
+                "candidate_digest": "sha256:" + "1" * 64,
+            },
             "skills": [
                 {
                     "id": "demo_metrics_skill",
@@ -2938,6 +3240,18 @@ def test_completed_workflow_reconciliation_backfills_aprobation_overlay(
         BuilderAutomationService,
         "_prepare_and_activate_aprobation_overlay",
         activate,
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_ensure_governed_aprobation_trial",
+        lambda self, session, receipt: {
+            **dict(receipt),
+            "trial": {
+                "status": "trial",
+                "candidate_id": "candidate.subscription",
+                "candidate_digest": "sha256:" + "2" * 64,
+            },
+        },
     )
 
     reconciled = service._reconcile_completed_workflow(

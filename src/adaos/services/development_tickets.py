@@ -1689,6 +1689,12 @@ class DevelopmentTicketService:
             "rollup": service.package_rollup(_text(package_id)),
         }
 
+    def builder_target(self, ticket_id: str) -> dict[str, str]:
+        ticket = self.get_ticket(ticket_id)
+        if not ticket:
+            raise KeyError(ticket_id)
+        return _automation_target_from_ticket(ticket)
+
     def sync_builder_repair(
         self,
         ticket_id: str,

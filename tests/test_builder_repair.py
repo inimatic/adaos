@@ -172,3 +172,41 @@ def test_builder_work_item_lifecycle_is_revisioned_and_not_a_user_ticket(tmp_pat
             actor="builder:worker",
             expected_revision=created["revision"],
         )
+
+
+def test_builder_work_item_keeps_user_visible_trial_receipt(tmp_path: Path) -> None:
+    service = BuilderRepairService(state_dir=tmp_path)
+    task = service.report(
+        project_id="demo_metrics",
+        signal_type="other",
+        summary="Review the generated trial",
+    )["task"]
+
+    linked = service.link_automation(
+        task["repair_id"],
+        actor="builder:automation",
+        automation={
+            "automation": {
+                "session_id": "automation.trial",
+                "task_id": "task.trial",
+                "status": "completed",
+                "terminal": True,
+            },
+            "session": {
+                "session_id": "automation.trial",
+                "current_task_id": "task.trial",
+                "completion_readiness": {
+                    "aprobation": {
+                        "ok": True,
+                        "trial": {
+                            "candidate_id": "candidate.trial",
+                            "candidate_digest": "sha256:" + "1" * 64,
+                            "status": "trial",
+                        },
+                    }
+                },
+            },
+        },
+    )
+
+    assert linked["context"]["trial"]["trial"]["candidate_id"] == "candidate.trial"

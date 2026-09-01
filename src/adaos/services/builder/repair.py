@@ -423,6 +423,16 @@ class BuilderRepairService:
             if isinstance(session.get("codex_usage_accounting"), Mapping)
             else {}
         )
+        completion_readiness = (
+            session.get("completion_readiness")
+            if isinstance(session.get("completion_readiness"), Mapping)
+            else {}
+        )
+        trial = (
+            completion_readiness.get("aprobation")
+            if isinstance(completion_readiness.get("aprobation"), Mapping)
+            else {}
+        )
         reported_usage = dict(observed) if observed else {}
         if usage_receipt:
             for key in (
@@ -478,6 +488,8 @@ class BuilderRepairService:
                 context["cost_estimate"] = dict(declared)
             if reported_usage:
                 context["usage"] = reported_usage
+            if trial:
+                context["trial"] = dict(trial)
             repair["context"] = context
             repair["source_refs"] = self._merge_refs(repair.get("source_refs") or [], refs)
             if repair.get("status") == "open":

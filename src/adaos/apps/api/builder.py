@@ -122,6 +122,14 @@ class BuilderWorkflowTransitionRequest(BaseModel):
     expected_generation: int | None = Field(default=None, ge=0)
 
 
+class BuilderTrialDecisionRequest(BaseModel):
+    object_type: str = Field(..., pattern="^(skill|scenario|project)$")
+    object_id: str = Field(..., min_length=1)
+    decision: str = Field(..., pattern="^(accept|revise|rollback)$")
+    actor: str = Field(default="user:owner", min_length=1)
+    reason: str = ""
+
+
 @router.get("/approval-profiles")
 def approval_profiles(service: BuilderWorkspaceService = Depends(_get_service)) -> dict[str, Any]:
     return {"ok": True, "profiles": service.approval_profiles()}
@@ -334,6 +342,23 @@ def automation_status(
     service: BuilderAutomationService = Depends(_get_automation_service),
 ) -> dict[str, Any]:
     return service.status(object_type=object_type, object_id=object_id)
+
+
+@router.post("/trial/decision")
+def decide_trial(
+    body: BuilderTrialDecisionRequest,
+    service: BuilderAutomationService = Depends(_get_automation_service),
+) -> dict[str, Any]:
+    try:
+        return service.decide_aprobation(
+            object_type=body.object_type,
+            object_id=body.object_id,
+            decision=body.decision,
+            actor=body.actor,
+            reason=body.reason,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/workflow")

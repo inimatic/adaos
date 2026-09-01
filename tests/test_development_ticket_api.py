@@ -33,6 +33,17 @@ class _FakeAutomationService:
     def status(self, *, object_type: str, object_id: str):
         return self._payload(status="completed", object_type=object_type, object_id=object_id)
 
+    def decide_aprobation(self, **kwargs):
+        return {
+            "ok": True,
+            "decision": kwargs["decision"],
+            "candidate_id": "candidate.api",
+            "target": {
+                "object_type": kwargs["object_type"],
+                "object_id": kwargs["object_id"],
+            },
+        }
+
     def _payload(self, *, status: str, object_type: str = "skill", object_id: str = "demo_metrics_skill") -> dict:
         result = {
             "commit_hash": "abc123",
@@ -591,6 +602,35 @@ def test_development_ticket_api_starts_autonomous_repair_and_exposes_builder_usa
     assert synced.status_code == 200, synced.text
     assert synced.json()["detail"]["work_stream"]["builder_work_count"] == 1
     assert synced.json()["detail"]["work_stream"]["builder_work_items"][0]["automation_status"] == "completed"
+
+
+def test_development_ticket_api_delegates_trial_decision_to_scoped_builder_target(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    automation = _FakeAutomationService()
+    client = _client(service)
+    client.app.dependency_overrides[tickets_api._get_automation_service] = lambda: automation
+    created = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "summary": "Review Demo Metrics trial",
+            "kind": "development_request",
+            "target_scope": {"type": "skill", "id": "demo_metrics_skill", "source": "dev"},
+        },
+    )
+    ticket_id = created.json()["ticket"]["ticket_id"]
+
+    response = client.post(
+        f"/api/development-tickets/{ticket_id}/trial/decision",
+        headers=_headers(),
+        json={"decision": "accept", "actor": "user:owner", "reason": "Checked in UI"},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["decision"] == "accept"
+    assert payload["target"] == {"object_type": "skill", "object_id": "demo_metrics_skill"}
+    assert payload["detail"]["ticket"]["ticket_id"] == ticket_id
 
 
 def test_development_ticket_api_requalifies_builder_envelope_with_revision_guard(tmp_path: Path) -> None:

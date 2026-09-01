@@ -800,3 +800,41 @@ def test_builder_api_exposes_draft_and_preview(tmp_path: Path) -> None:
     assert preview["summary"]["approval_profile"] == "low_risk_auto_apply"
     assert preview["conversation"]["conversation_id"] == "conv.skill.builder_skill.default"
     assert preview["source_refs"]["conversation_id"] == "conv.skill.builder_skill.default"
+
+
+def test_builder_api_exposes_trial_decision() -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _Automation:
+        def decide_aprobation(self, **kwargs):
+            calls.append(dict(kwargs))
+            return {"ok": True, "decision": kwargs["decision"], "candidate_id": "candidate.api"}
+
+    app = FastAPI()
+    app.include_router(builder_api.router, prefix="/api/builder")
+    app.dependency_overrides[require_token] = lambda: None
+    app.dependency_overrides[builder_api._get_automation_service] = lambda: _Automation()
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/builder/trial/decision",
+        json={
+            "object_type": "skill",
+            "object_id": "demo_metrics_skill",
+            "decision": "revise",
+            "actor": "user:owner",
+            "reason": "The label is still unclear",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["candidate_id"] == "candidate.api"
+    assert calls == [
+        {
+            "object_type": "skill",
+            "object_id": "demo_metrics_skill",
+            "decision": "revise",
+            "actor": "user:owner",
+            "reason": "The label is still unclear",
+        }
+    ]
