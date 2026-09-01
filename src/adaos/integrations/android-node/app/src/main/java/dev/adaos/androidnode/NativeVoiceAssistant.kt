@@ -36,6 +36,10 @@ class NativeVoiceAssistant(
     private val worker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "adaos-native-voice-http").apply { isDaemon = true }
     }
+    private val ttsWorker = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "adaos-native-tts-http").apply { isDaemon = true }
+    }
+    private val loopbackTts = LoopbackTtsAudioPlayer(context)
     private val stopped = AtomicBoolean(true)
     private var recognizer: SpeechRecognizer? = null
     private var textToSpeech: TextToSpeech? = null
@@ -111,6 +115,7 @@ class NativeVoiceAssistant(
             desired = false
             captureEligible = false
             stopRecognizer()
+            loopbackTts.stop()
             textToSpeech?.stop()
             textToSpeech?.shutdown()
             textToSpeech = null
@@ -118,6 +123,7 @@ class NativeVoiceAssistant(
             publishRuntime("stopped", JSONObject().put("reason", "node_service_stopped"))
         }
         worker.shutdownNow()
+        ttsWorker.shutdownNow()
     }
 
     private fun evaluatePolicy() {
@@ -258,6 +264,7 @@ class NativeVoiceAssistant(
                 if (accepted) acceptedCount += 1 else ignoredCount += 1
                 if (accepted && speaking) {
                     textToSpeech?.stop()
+                    loopbackTts.stop()
                     speaking = false
                     currentSpeechText = ""
                 }
@@ -344,6 +351,10 @@ class NativeVoiceAssistant(
             if (!ttsReady) {
                 lastTtsError = "tts_init_failed:$status"
                 publishRuntime("tts_unavailable", JSONObject().put("tts_init_status", status))
+                pendingSpeech?.also { (text, profile) ->
+                    pendingSpeech = null
+                    speakViaLoopbackTts(text, profile, "ru-RU", lastTtsError)
+                }
             } else {
                 ttsReady = configureTtsLanguage("ru-RU")
                 if (!ttsReady) {
@@ -380,6 +391,10 @@ class NativeVoiceAssistant(
     private fun speak(text: String, voiceProfile: String) {
         ttsAttemptCount += 1
         if (!ttsReady) {
+            if (textToSpeech != null && lastTtsError.isNotBlank()) {
+                speakViaLoopbackTts(text, voiceProfile, "ru-RU", lastTtsError)
+                return
+            }
             pendingSpeech = text to voiceProfile
             initializeTts()
             publishRuntime("tts_pending", JSONObject().put("tts_ready", false).put("tts_error", lastTtsError))
@@ -394,9 +409,7 @@ class NativeVoiceAssistant(
         textToSpeech?.setSpeechRate(1.0f)
         val language = if (voiceProfile.startsWith("en", ignoreCase = true)) "en-US" else "ru-RU"
         if (!configureTtsLanguage(language)) {
-            ttsFailedCount += 1
-            publishRuntime("tts_unavailable", JSONObject().put("tts_error", lastTtsError))
-            finishSpeaking()
+            speakViaLoopbackTts(text, voiceProfile, language, lastTtsError)
             return
         }
         val utteranceId = "adaos-${System.currentTimeMillis()}"
@@ -413,11 +426,75 @@ class NativeVoiceAssistant(
             ttsFailedCount += 1
             lastTtsError = "tts_speak_failed"
             publishRuntime("tts_failed", JSONObject().put("tts_utterance_id", utteranceId))
-            finishSpeaking()
+            speakViaLoopbackTts(text, voiceProfile, language, lastTtsError)
         }
         else {
             ttsQueuedCount += 1
             if (bargeInEnabled) scheduleRestart(250)
+        }
+    }
+
+    private fun speakViaLoopbackTts(text: String, voiceProfile: String, language: String, reason: String) {
+        speaking = true
+        currentSpeechText = text
+        recentSpeechText = text
+        onNativeCaptureChanged(false)
+        val utteranceId = "adaos-net-${System.currentTimeMillis()}"
+        publishRuntime(
+            "tts_network_requested",
+            JSONObject()
+                .put("tts_utterance_id", utteranceId)
+                .put("voice_profile", voiceProfile)
+                .put("lang", language)
+                .put("fallback_reason", reason)
+                .put("half_duplex", true),
+        )
+        ttsWorker.execute {
+            val audio = loopbackTts.requestAudio(text, language, voiceProfile)
+            main.post {
+                if (!audio.ok || audio.file == null) {
+                    ttsFailedCount += 1
+                    lastTtsError = "tts_network_failed:${audio.error}"
+                    publishRuntime(
+                        "tts_failed",
+                        JSONObject()
+                            .put("tts_utterance_id", utteranceId)
+                            .put("tts_error", lastTtsError),
+                    )
+                    finishSpeaking()
+                    return@post
+                }
+                val started = loopbackTts.play(
+                    audio.file,
+                    onDone = { main.post { finishSpeaking() } },
+                    onError = { error ->
+                        main.post {
+                            ttsFailedCount += 1
+                            lastTtsError = "tts_network_playback_failed:$error"
+                            publishRuntime(
+                                "tts_failed",
+                                JSONObject()
+                                    .put("tts_utterance_id", utteranceId)
+                                    .put("tts_error", lastTtsError),
+                            )
+                            finishSpeaking()
+                        }
+                    },
+                )
+                if (started) {
+                    ttsQueuedCount += 1
+                    publishRuntime(
+                        "speaking",
+                        JSONObject()
+                            .put("tts_utterance_id", utteranceId)
+                            .put("voice_profile", voiceProfile)
+                            .put("tts_provider", "root_audio")
+                            .put("audio_bytes", audio.bytes)
+                            .put("content_type", audio.contentType)
+                            .put("half_duplex", true),
+                    )
+                }
+            }
         }
     }
 
@@ -463,6 +540,7 @@ class NativeVoiceAssistant(
     private fun stopRecognizer() {
         main.removeCallbacks(restartRecognition)
         try { recognizer?.cancel() } catch (_: Throwable) {}
+        loopbackTts.stop()
         recreateRecognizer()
         listening = false
         processing = false

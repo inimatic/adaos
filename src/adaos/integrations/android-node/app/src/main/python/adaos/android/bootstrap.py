@@ -506,6 +506,57 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             self._json(200, result)
             return
+        if path == "/api/node/voice/tts/synthesize":
+            text = str(body.get("text") or body.get("input") or "").strip()[:4096]
+            if not text:
+                self._json(400, {"ok": False, "error": "tts_text_required"})
+                return
+            member_link = _member_link
+            if member_link is None:
+                self._json(503, {"ok": False, "error": "member_link_not_ready"})
+                return
+            try:
+                status, headers, content = member_link.root_http_post_json(
+                    "/api/tts/synthesize",
+                    {
+                        "text": text,
+                        "lang": str(body.get("lang") or "ru-RU"),
+                        "voice": str(body.get("voice") or ""),
+                        "response_format": "mp3",
+                    },
+                    accept="audio/mpeg, audio/*;q=0.9, application/json;q=0.3",
+                    timeout=45.0,
+                )
+            except Exception as exc:
+                self._json(
+                    502,
+                    {
+                        "ok": False,
+                        "error": "root_tts_request_failed",
+                        "detail": f"{type(exc).__name__}:{str(exc)[:240]}",
+                    },
+                )
+                return
+            content_type = str(headers.get("content-type") or "audio/mpeg").split(";", 1)[0].strip()
+            if status < 200 or status >= 300 or not content_type.startswith("audio/"):
+                detail = ""
+                try:
+                    detail = content.decode("utf-8", "replace")[:500]
+                except Exception:
+                    detail = f"{len(content)} bytes"
+                self._json(
+                    status if 400 <= status <= 599 else 502,
+                    {
+                        "ok": False,
+                        "error": "root_tts_failed",
+                        "status": status,
+                        "content_type": content_type,
+                        "detail": detail,
+                    },
+                )
+                return
+            self._bytes(200, content, content_type)
+            return
         if path == "/api/node/voice/native/transcript":
             if _voice_policy is None or _skills is None:
                 self._json(503, {"ok": False, "accepted": False, "error": "native_voice_not_ready"})
@@ -659,6 +710,15 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
         self.wfile.write(encoded)
+
+    def _bytes(self, status: int, payload: bytes, content_type: str) -> None:
+        self.send_response(status)
+        self._cors_headers()
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Type", content_type or "application/octet-stream")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
 
     def _cors_headers(self) -> None:
         origin = str(self.headers.get("Origin") or "").strip()

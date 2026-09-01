@@ -24,6 +24,7 @@ _WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 _MAX_FRAME_BYTES = 4 * 1024 * 1024
 _MAX_OUTBOUND_MESSAGES = 128
 _MAX_MEMBER_YJS_UPDATE_BYTES = 512 * 1024
+_MAX_ROOT_HTTP_RESPONSE_BYTES = 8 * 1024 * 1024
 _HUB_ACTIVITY_STALE_AFTER_SECONDS = 15.0
 _ALLOWED_MEMBER_EVENTS = frozenset({"nlp.intent.not_obtained"})
 
@@ -461,6 +462,65 @@ class AndroidMemberLink:
         result["joined"] = True
         result["root_url"] = _redacted_url(response_root)
         return result
+
+    def root_http_post_json(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        accept: str = "application/json",
+        timeout: float = 40.0,
+    ) -> tuple[int, dict[str, str], bytes]:
+        normalized_path = str(path or "").strip()
+        if not normalized_path.startswith("/"):
+            raise ValueError("root_http_path_invalid")
+        with self._lock:
+            config = dict(self._config)
+        root = str(config.get("root_url") or "").strip()
+        if not root:
+            hub = urlparse(str(config.get("hub_url") or ""))
+            if hub.scheme in {"http", "https"} and hub.netloc:
+                root = urlunparse((hub.scheme, hub.netloc, "", "", "", ""))
+        root = _canonical_root_url(root)
+        token = str(config.get("token") or "").strip()
+        subnet_id = str(config.get("subnet_id") or "").strip()
+        if not token:
+            raise PermissionError("member_token_required")
+        if not subnet_id:
+            raise PermissionError("member_subnet_id_required")
+        body = json.dumps(dict(payload or {}), ensure_ascii=False).encode("utf-8")
+        request = Request(
+            f"{root}{normalized_path}",
+            data=body,
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "Accept": accept,
+                "Authorization": f"Bearer {token}",
+                "X-AdaOS-Token": token,
+                "X-AdaOS-Subnet-Id": subnet_id,
+                "X-AdaOS-Node-Id": self.node_id,
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=max(1.0, float(timeout))) as opened:
+                data = opened.read(_MAX_ROOT_HTTP_RESPONSE_BYTES + 1)
+                if len(data) > _MAX_ROOT_HTTP_RESPONSE_BYTES:
+                    raise ValueError("root_http_response_too_large")
+                return (
+                    int(getattr(opened, "status", 200)),
+                    {str(key).lower(): str(value) for key, value in opened.headers.items()},
+                    data,
+                )
+        except HTTPError as exc:
+            data = exc.read(_MAX_ROOT_HTTP_RESPONSE_BYTES + 1)
+            if len(data) > _MAX_ROOT_HTTP_RESPONSE_BYTES:
+                data = data[:_MAX_ROOT_HTTP_RESPONSE_BYTES]
+            return (
+                int(exc.code),
+                {str(key).lower(): str(value) for key, value in exc.headers.items()},
+                data,
+            )
 
     def disconnect(self, *, forget: bool = False) -> dict[str, Any]:
         with self._lock:

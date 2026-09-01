@@ -42,6 +42,10 @@ class VoskVoiceAssistant(
     private val dispatchWorker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "adaos-vosk-dispatch").apply { isDaemon = true }
     }
+    private val ttsWorker = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "adaos-vosk-tts-http").apply { isDaemon = true }
+    }
+    private val loopbackTts = LoopbackTtsAudioPlayer(context)
     private val stopped = AtomicBoolean(true)
     private val captureRunning = AtomicBoolean(false)
     private val dispatchBusy = AtomicBoolean(false)
@@ -118,6 +122,8 @@ class VoskVoiceAssistant(
         stopCapture()
         dispatchWorker.shutdownNow()
         captureWorker.shutdownNow()
+        ttsWorker.shutdownNow()
+        loopbackTts.stop()
         textToSpeech?.stop()
         textToSpeech?.shutdown()
         textToSpeech = null
@@ -438,6 +444,7 @@ class VoskVoiceAssistant(
     private fun stopCapture() {
         captureRunning.set(false)
         try { audioRecord?.stop() } catch (_: Throwable) {}
+        loopbackTts.stop()
     }
 
     private fun initializeTts() {
@@ -448,6 +455,10 @@ class VoskVoiceAssistant(
             if (!ttsReady) {
                 lastTtsError = "tts_init_failed:$status"
                 publishRuntime("tts_unavailable", JSONObject().put("tts_init_status", status))
+                pendingSpeech?.also { (text, profile) ->
+                    pendingSpeech = null
+                    speakViaLoopbackTts(text, profile, "ru-RU", lastTtsError)
+                }
             } else {
                 ttsReady = configureTtsLanguage("ru-RU")
                 if (!ttsReady) {
@@ -484,6 +495,10 @@ class VoskVoiceAssistant(
     private fun speak(text: String, voiceProfile: String) {
         ttsAttemptCount += 1
         if (!ttsReady) {
+            if (textToSpeech != null && lastTtsError.isNotBlank()) {
+                speakViaLoopbackTts(text, voiceProfile, "ru-RU", lastTtsError)
+                return
+            }
             pendingSpeech = text to voiceProfile
             initializeTts()
             publishRuntime("tts_pending", JSONObject().put("tts_ready", false).put("tts_error", lastTtsError))
@@ -491,8 +506,7 @@ class VoskVoiceAssistant(
         }
         val language = if (voiceProfile.startsWith("en", ignoreCase = true)) "en-US" else "ru-RU"
         if (!configureTtsLanguage(language)) {
-            ttsFailedCount += 1
-            publishRuntime("tts_unavailable", JSONObject().put("tts_error", lastTtsError))
+            speakViaLoopbackTts(text, voiceProfile, language, lastTtsError)
             return
         }
         speaking = true
@@ -513,9 +527,59 @@ class VoskVoiceAssistant(
             ttsFailedCount += 1
             lastTtsError = "tts_speak_failed"
             publishRuntime("tts_failed", JSONObject().put("tts_error", lastTtsError))
-            finishSpeaking()
+            speakViaLoopbackTts(text, voiceProfile, language, lastTtsError)
         } else {
             ttsQueuedCount += 1
+        }
+    }
+
+    private fun speakViaLoopbackTts(text: String, voiceProfile: String, language: String, reason: String) {
+        speaking = true
+        recentSpeechText = text
+        echoGuardUntil = Long.MAX_VALUE
+        publishRuntime(
+            "tts_network_requested",
+            JSONObject()
+                .put("capture_owner", "vosk_streaming")
+                .put("decode_paused", true)
+                .put("voice_profile", voiceProfile)
+                .put("lang", language)
+                .put("fallback_reason", reason),
+        )
+        ttsWorker.execute {
+            val audio = loopbackTts.requestAudio(text, language, voiceProfile)
+            main.post {
+                if (!audio.ok || audio.file == null) {
+                    ttsFailedCount += 1
+                    lastTtsError = "tts_network_failed:${audio.error}"
+                    publishRuntime("tts_failed", JSONObject().put("tts_error", lastTtsError))
+                    finishSpeaking()
+                    return@post
+                }
+                val started = loopbackTts.play(
+                    audio.file,
+                    onDone = { main.post { finishSpeaking() } },
+                    onError = { error ->
+                        main.post {
+                            ttsFailedCount += 1
+                            lastTtsError = "tts_network_playback_failed:$error"
+                            publishRuntime("tts_failed", JSONObject().put("tts_error", lastTtsError))
+                            finishSpeaking()
+                        }
+                    },
+                )
+                if (started) {
+                    ttsQueuedCount += 1
+                    publishRuntime(
+                        "speaking",
+                        JSONObject()
+                            .put("capture_owner", "vosk_streaming")
+                            .put("tts_provider", "root_audio")
+                            .put("audio_bytes", audio.bytes)
+                            .put("content_type", audio.contentType),
+                    )
+                }
+            }
         }
     }
 
