@@ -781,6 +781,33 @@ def test_automation_budget_projection_marks_legacy_max_tokens_overrun(tmp_path: 
 
 def test_terminal_codex_usage_is_reported_once_with_provider_counts(tmp_path: Path) -> None:
     service = _service(tmp_path)
+    contexts = service._contexts()
+    capsule = contexts.register_capsule(
+        {
+            "kind": "task",
+            "subject_refs": ["builder-run:usage-test"],
+            "authority_ref": "change:usage-test",
+            "trust_class": "validated",
+            "sensitivity": "workspace",
+            "license": "internal",
+            "retention_class": "episodic_run",
+            "summary": "usage attribution test",
+        }
+    )
+    contexts.bind_subject(
+        subject_ref="builder-run:usage-test",
+        capsule_id=capsule["capsule_id"],
+        purpose="builder.automation",
+        audience="builder",
+    )
+    resolution = contexts.resolve(
+        {
+            "subject_refs": ["builder-run:usage-test"],
+            "purpose": "builder.automation",
+            "audience": "builder",
+        }
+    )
+    plan = contexts.plan({"resolution": resolution, "token_budget": 1_000})
     calls: list[dict] = []
     service.codex_usage_reporter = lambda event: (
         calls.append(dict(event))
@@ -817,6 +844,11 @@ def test_terminal_codex_usage_is_reported_once_with_provider_counts(tmp_path: Pa
         "current_task_id": "task.1",
         "updated_at": "2026-08-29T06:00:00+00:00",
         "local_run": {"path": str(run_root), "events_path": str(journal)},
+        "context_control": {
+            "run_ref": "builder-run:usage-test",
+            "plan_ref": plan["plan_ref"],
+            "selected_refs": [capsule["capsule_id"]],
+        },
     }
 
     first = service._report_terminal_codex_usage(session, task_status="failed")
@@ -830,6 +862,12 @@ def test_terminal_codex_usage_is_reported_once_with_provider_counts(tmp_path: Pa
     assert second["codex_usage_accounting"]["status"] == "reported"
     assert second["codex_usage_accounting"]["total_tokens"] == 1600
     assert second["codex_usage_accounting"]["model_tokens"] == 1600
+    attribution = second["context_attribution_receipt"]
+    assert attribution["status"] == "recorded"
+    assert attribution["usage"]["provider_input_tokens"] == 1200
+    assert attribution["usage"]["cached_input_tokens"] == 300
+    assert attribution["usage"]["fresh_plus_output"] == 1300
+    assert contexts.inspect("builder-run:usage-test")["receipt_count"] == 1
 
 
 def test_terminal_codex_usage_missing_journal_is_unavailable_not_zero(tmp_path: Path) -> None:

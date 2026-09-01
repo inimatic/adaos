@@ -130,6 +130,67 @@ def test_binding_is_optimistic_and_reconstructs_as_of(tmp_path: Path) -> None:
         )
 
 
+def test_bitemporal_comparisons_normalize_timezone_offsets(tmp_path: Path) -> None:
+    service = ContextControlService(tmp_path)
+    platform = service.register_capsule(
+        {
+            "kind": "platform",
+            "subject_refs": ["platform:adaos"],
+            "authority_ref": "core:adaos",
+            "trust_class": "accepted",
+            "sensitivity": "workspace",
+            "license": "internal",
+            "retention_class": "accepted_release_lineage",
+            "valid_from": "2026-09-01T17:00:00+03:00",
+            "recorded_at": "2026-09-01T17:00:00+03:00",
+            "summary": "same instant in Moscow time",
+        }
+    )
+    project = service.register_capsule(
+        {
+            "kind": "project",
+            "subject_refs": ["project:demo"],
+            "authority_ref": "project:demo",
+            "trust_class": "accepted",
+            "sensitivity": "workspace",
+            "license": "internal",
+            "retention_class": "project_generation",
+            "valid_from": "2026-09-01T14:00:00+00:00",
+            "recorded_at": "2026-09-01T14:00:00+00:00",
+            "summary": "same instant in UTC",
+        }
+    )
+    service.add_relationship(
+        {
+            "from_capsule_id": project["capsule_id"],
+            "to_capsule_id": platform["capsule_id"],
+            "relation_type": "uses",
+            "valid_from": "2026-09-01T17:00:00+03:00",
+            "recorded_at": "2026-09-01T17:00:00+03:00",
+        }
+    )
+    service.bind_subject(
+        subject_ref="project:demo",
+        capsule_id=project["capsule_id"],
+        valid_from="2026-09-01T17:00:00+03:00",
+    )
+
+    historical = service.get_binding(
+        subject_ref="project:demo",
+        as_of="2030-01-01T00:00:00+00:00",
+    )
+    resolution = service.resolve(
+        {
+            "subject_refs": [project["capsule_id"]],
+            "as_of": "2026-09-01T14:00:01+00:00",
+        }
+    )
+
+    assert historical["capsule_id"] == project["capsule_id"]
+    assert resolution["status"] == "ready"
+    assert [item["kind"] for item in resolution["required"]] == ["project", "platform"]
+
+
 def test_resolution_denies_cross_project_and_tainted_dependencies(tmp_path: Path) -> None:
     service = ContextControlService(tmp_path)
     project = _capsule(service, subject_ref="project:alpha")

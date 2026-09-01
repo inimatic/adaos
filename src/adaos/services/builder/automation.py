@@ -21,13 +21,15 @@ from typing import Any, Callable, Mapping, Sequence
 import psutil
 import yaml
 
+from adaos.build_info import BUILD_INFO
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from adaos.services.builder.workspace import BuilderWorkspaceService
 from adaos.services.builder.workflow import BuilderWorkflowService
+from adaos.services.context_control import ContextControlService
 from adaos.services.runtime_paths import current_repo_root, current_state_dir
 from adaos.services.skill_factory import SkillFactoryService
 from adaos.services.skill_factory_sources import capture_source_snapshot
-from adaos.services.skill_factory_worker import LocalSkillFactoryWorker
+from adaos.services.skill_factory_worker import LocalSkillFactoryWorker, context_packet_prompt_projection
 
 
 AUTOMATION_SESSION_SCHEMA = "adaos.builder.automation_session.v1"
@@ -378,6 +380,7 @@ class BuilderAutomationService:
     event_sink: Callable[[Mapping[str, Any]], None] | None = None
     workspace_service: BuilderWorkspaceService | None = None
     workflow_service: BuilderWorkflowService | None = None
+    context_service: ContextControlService | None = None
     codex_usage_reporter: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None
     background: bool = True
     materialize_on_completion: bool = True
@@ -424,6 +427,203 @@ class BuilderAutomationService:
                 state_dir=self.state_dir,
             )
         return self.workflow_service
+
+    def _contexts(self) -> ContextControlService:
+        if self.context_service is None:
+            self.context_service = ContextControlService(state_dir=self.state_dir)
+        return self.context_service
+
+    def _compile_iteration_context(
+        self,
+        *,
+        session: Mapping[str, Any],
+        kind: str,
+        project_id: str,
+        context_packet: Mapping[str, Any],
+        source_snapshot: Mapping[str, Any],
+        implementation_brief: str,
+    ) -> dict[str, Any]:
+        service = self._contexts()
+        now = _now_iso()
+        project_ref = f"project:{project_id}"
+        component_ref = f"{kind}:{project_id}"
+        run_ref = f"builder-run:{session.get('session_id')}:{int(session.get('iteration') or 0)}"
+        change_ref = f"change:{session.get('change_set_id')}"
+        packet_artifact = service.put_artifact(dict(context_packet))
+        projection = context_packet_prompt_projection(
+            context_packet,
+            implementation_brief=implementation_brief,
+        )
+        platform = service.register_capsule(
+            {
+                "kind": "platform",
+                "subject_refs": ["platform:adaos"],
+                "authority_ref": "core:adaos",
+                "trust_class": "accepted",
+                "sensitivity": "workspace",
+                "license": "internal",
+                "retention_class": "accepted_release_lineage",
+                "source_digests": {
+                    "core": f"git:{BUILD_INFO.git_commit}" if BUILD_INFO.git_commit else BUILD_INFO.version,
+                    "prompt_profile": STANDARD_PROMPT_VERSION,
+                },
+                "valid_from": BUILD_INFO.build_date,
+                "recorded_at": BUILD_INFO.build_date,
+                "summary": f"AdaOS {BUILD_INFO.version} public Builder and SDK contracts.",
+                "content": {
+                    "build_version": BUILD_INFO.version,
+                    "git_commit": BUILD_INFO.git_commit or None,
+                    "standard_prompt_version": STANDARD_PROMPT_VERSION,
+                    "authority": "Public SDK/API/ABI only; project Builder cannot mutate core.",
+                },
+                "metadata": {"utility": 1.0, "cache_class": "stable_prefix"},
+            }
+        )
+        project = service.register_capsule(
+            {
+                "kind": "project",
+                "subject_refs": [project_ref, component_ref],
+                "authority_ref": project_ref,
+                "trust_class": "accepted",
+                "sensitivity": "workspace",
+                "license": "internal",
+                "retention_class": "project_generation",
+                "source_digests": {
+                    "source_snapshot": source_snapshot.get("digest"),
+                    "builder_context_packet": context_packet.get("digest"),
+                },
+                "valid_from": str(source_snapshot.get("created_at") or now),
+                "recorded_at": now,
+                "summary": f"Current {component_ref} source generation and governed Change.",
+                "index": [
+                    {"kind": "canonical_builder_packet", "ref": packet_artifact["ref"], "digest": packet_artifact["digest"]},
+                ],
+                "content": projection,
+                "metadata": {"utility": 1.0, "source_generation": source_snapshot.get("digest")},
+            }
+        )
+        ticket_ids = [
+            str(item).strip()
+            for item in [
+                dict(session.get("links") or {}).get("development_ticket_id"),
+                *(dict(session.get("links") or {}).get("development_ticket_ids") or []),
+            ]
+            if str(item or "").strip()
+        ]
+        task = service.register_capsule(
+            {
+                "kind": "task",
+                "subject_refs": [run_ref, change_ref, *[f"dev-ticket:{item}" for item in ticket_ids]],
+                "authority_ref": change_ref,
+                "trust_class": "validated",
+                "sensitivity": "workspace",
+                "license": "internal",
+                "retention_class": "episodic_run",
+                "source_digests": {"builder_context_packet": context_packet.get("digest")},
+                "valid_from": now,
+                "recorded_at": now,
+                "summary": implementation_brief[:2000],
+                "content": {
+                    "implementation_brief": implementation_brief,
+                    "links": dict(session.get("links") or {}),
+                    "change_set_id": session.get("change_set_id"),
+                    "iteration": session.get("iteration"),
+                },
+                "metadata": {"utility": 1.0, "working_context": True},
+            }
+        )
+        service.add_relationship(
+            {
+                "from_capsule_id": task["capsule_id"],
+                "to_capsule_id": project["capsule_id"],
+                "relation_type": "implements",
+                "required": True,
+            }
+        )
+        service.add_relationship(
+            {
+                "from_capsule_id": project["capsule_id"],
+                "to_capsule_id": platform["capsule_id"],
+                "relation_type": "uses",
+                "required": True,
+            }
+        )
+        service.bind_subject(
+            subject_ref=project_ref,
+            capsule_id=project["capsule_id"],
+            purpose="builder.automation",
+            audience="builder",
+            actor_ref="builder.automation",
+            reason="source_generation_selected",
+        )
+        service.bind_subject(
+            subject_ref=run_ref,
+            capsule_id=task["capsule_id"],
+            purpose="builder.automation",
+            audience="builder",
+            actor_ref="builder.automation",
+            reason="automation_iteration_started",
+        )
+        resolution = service.resolve(
+            {
+                "subject_refs": [run_ref],
+                "purpose": "builder.automation",
+                "audience": "builder",
+                "policy": {
+                    "minimum_trust": "validated",
+                    "allowed_sensitivity": ["public", "subnet", "workspace"],
+                    "allow_tainted": False,
+                },
+            }
+        )
+        execution_budget = (
+            dict(session.get("execution_budget"))
+            if isinstance(session.get("execution_budget"), Mapping)
+            else {}
+        )
+        explicit_context_budget = int(execution_budget.get("max_context_tokens") or 0)
+        model_budget = int(execution_budget.get("max_model_tokens") or execution_budget.get("max_tokens") or 0)
+        context_budget = explicit_context_budget or max(8_000, min(32_000, model_budget // 4 if model_budget else 16_000))
+        plan = service.plan(
+            {
+                "resolution": resolution,
+                "token_budget": context_budget,
+                "model_profile": dict(session.get("agent_profile") or {}),
+            }
+        )
+        if plan["status"] != "ready":
+            raise ValueError("Builder Context Plan is insufficient for Automation")
+        compilation = service.compile(
+            {
+                "plan": plan,
+                "output_format": "min_json",
+                "role_authority": {
+                    "role": "project_builder",
+                    "write_scope": component_ref,
+                    "core_mutation": "denied",
+                },
+                "output_contract": {"result": "skill_factory.dev_result.v1"},
+            }
+        )
+        return {
+            "run_ref": run_ref,
+            "capsule_refs": [task["capsule_id"], project["capsule_id"], platform["capsule_id"]],
+            "context_packet_ref": packet_artifact["ref"],
+            "context_packet_digest": context_packet.get("digest"),
+            "context_packet_artifact_digest": packet_artifact["digest"],
+            "context_projection": projection,
+            "resolution_ref": resolution["resolution_ref"],
+            "plan_id": plan["plan_id"],
+            "plan_ref": plan["plan_ref"],
+            "compiled_context_ref": compilation["packet_ref"],
+            "compiled_context_digest": compilation["packet_digest"],
+            "selected_refs": compilation["selected_refs"],
+            "omitted": plan["omitted"],
+            "denied": plan["denied"],
+            "unavailable": plan["unavailable"],
+            "estimated_tokens": plan["estimated_tokens"],
+            "token_budget": plan["token_budget"],
+        }
 
     def _load_development_session(
         self,
@@ -3034,6 +3234,92 @@ class BuilderAutomationService:
             if isinstance(item, Mapping)
         )
 
+    def _record_context_attribution(
+        self,
+        session: Mapping[str, Any],
+        *,
+        task_id: str,
+        task_status: str,
+        usage: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        current = dict(session)
+        control = (
+            dict(current.get("context_control"))
+            if isinstance(current.get("context_control"), Mapping)
+            else {}
+        )
+        run_ref = str(control.get("run_ref") or "").strip()
+        plan_ref = str(control.get("plan_ref") or "").strip()
+        if not run_ref or not plan_ref:
+            return current
+        existing = (
+            dict(current.get("context_attribution_receipt"))
+            if isinstance(current.get("context_attribution_receipt"), Mapping)
+            else {}
+        )
+        if existing.get("status") == "recorded" and existing.get("task_id") == task_id:
+            return current
+        usage_value = dict(usage or {})
+        validation = (
+            dict(current.get("last_validation"))
+            if isinstance(current.get("last_validation"), Mapping)
+            else {}
+        )
+        try:
+            receipt = self._contexts().record_receipt(
+                {
+                    "run_ref": run_ref,
+                    "plan_ref": plan_ref,
+                    "subject_refs": [run_ref],
+                    "purpose": "builder.automation",
+                    "audience": "builder",
+                    "selected_refs": control.get("selected_refs") or [],
+                    "omitted": control.get("omitted") or [],
+                    "denied": control.get("denied") or [],
+                    "unavailable": control.get("unavailable") or [],
+                    "usage": {
+                        "provider_input_tokens": int(usage_value.get("input_tokens") or 0),
+                        "cached_input_tokens": int(usage_value.get("cached_input_tokens") or 0),
+                        "output_tokens": int(usage_value.get("output_tokens") or 0),
+                        "reasoning_tokens": int(usage_value.get("reasoning_tokens") or 0),
+                        "model_tokens": int(usage_value.get("model_tokens") or 0),
+                    },
+                    "execution_route": "skill_factory.local_codex",
+                    "validation": {
+                        "task_status": task_status,
+                        "ok": task_status == "completed",
+                        "summary": validation.get("summary"),
+                    },
+                    "evidence_refs": [
+                        {"type": "builder_task", "ref": task_id},
+                        *(
+                            [{"type": "root_usage_event", "ref": usage_value.get("root_event_id")}]
+                            if usage_value.get("root_event_id")
+                            else []
+                        ),
+                    ],
+                    "created_at": str(current.get("updated_at") or _now_iso()),
+                }
+            )
+            current["context_attribution_receipt"] = {
+                "status": "recorded",
+                "task_id": task_id,
+                "run_ref": run_ref,
+                "plan_ref": plan_ref,
+                "receipt_id": receipt.get("receipt_id"),
+                "receipt_ref": receipt.get("receipt_ref"),
+                "usage": receipt.get("usage"),
+            }
+        except Exception as exc:
+            current["context_attribution_receipt"] = {
+                "status": "record_failed",
+                "task_id": task_id,
+                "run_ref": run_ref,
+                "plan_ref": plan_ref,
+                "error": f"{type(exc).__name__}: {exc}"[:2000],
+            }
+        return current
+
     def _report_terminal_codex_usage(
         self,
         session: Mapping[str, Any],
@@ -3104,7 +3390,12 @@ class BuilderAutomationService:
             self._retain_codex_usage_receipt(current, receipt)
             if zero_model_continuation or accounting:
                 current["updated_at"] = _now_iso()
-            return current
+            return self._record_context_attribution(
+                current,
+                task_id=task_id,
+                task_status=task_status,
+                usage=receipt if zero_model_continuation else None,
+            )
         if self.codex_usage_reporter is None:
             usage_accuracy = str(usage.get("accuracy") or "provider_reported")
             receipt = {
@@ -3119,7 +3410,12 @@ class BuilderAutomationService:
             current["codex_usage_accounting"] = receipt
             self._retain_codex_usage_receipt(current, receipt)
             current["updated_at"] = _now_iso()
-            return current
+            return self._record_context_attribution(
+                current,
+                task_id=task_id,
+                task_status=task_status,
+                usage=receipt,
+            )
         idempotency_key = f"builder:{current.get('session_id') or 'session'}:{task_id}:codex-usage:v1"
         object_type = str(current.get("object_type") or "").strip()
         object_id = str(current.get("object_id") or "").strip()
@@ -3175,7 +3471,12 @@ class BuilderAutomationService:
         current["codex_usage_accounting"] = receipt
         self._retain_codex_usage_receipt(current, receipt)
         current["updated_at"] = _now_iso()
-        return current
+        return self._record_context_attribution(
+            current,
+            task_id=task_id,
+            task_status=task_status,
+            usage=receipt,
+        )
 
     @staticmethod
     def _phase_for_status(status: str) -> str:
@@ -3861,6 +4162,37 @@ class BuilderAutomationService:
         if isinstance(session, dict):
             session["canonical_change_id"] = canonical_change_id
             session["context_packet_digest"] = context_packet.get("digest")
+        context_control = self._compile_iteration_context(
+            session=session,
+            kind=kind,
+            project_id=project_id,
+            context_packet=context_packet,
+            source_snapshot=source_snapshot,
+            implementation_brief=iteration_instruction
+            or str(session.get("implementation_brief") or ""),
+        )
+        if isinstance(session, dict):
+            session["context_control"] = {
+                key: copy.deepcopy(context_control.get(key))
+                for key in (
+                    "run_ref",
+                    "capsule_refs",
+                    "context_packet_ref",
+                    "context_packet_digest",
+                    "context_packet_artifact_digest",
+                    "resolution_ref",
+                    "plan_id",
+                    "plan_ref",
+                    "compiled_context_ref",
+                    "compiled_context_digest",
+                    "selected_refs",
+                    "omitted",
+                    "denied",
+                    "unavailable",
+                    "estimated_tokens",
+                    "token_budget",
+                )
+            }
         acceptance_checks = [
             str(criterion).strip()
             for issue in change_set.get("issues") or []
@@ -3927,6 +4259,11 @@ class BuilderAutomationService:
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
                 "change_set": dict(change_set) if change_set else None,
                 "context_packet": context_packet,
+                "context_packet_ref": context_control["context_packet_ref"],
+                "context_packet_digest": context_control["context_packet_digest"],
+                "context_projection": context_control["context_projection"],
+                "context_plan_ref": context_control["plan_ref"],
+                "compiled_context_ref": context_control["compiled_context_ref"],
                 "development_context": development_context,
                 "prototype_handoff": copy.deepcopy(session.get("prototype_handoff")),
                 "continuation_checkpoint": copy.deepcopy(
@@ -3972,6 +4309,10 @@ class BuilderAutomationService:
                 "change_set_id": session.get("change_set_id"),
                 "canonical_change_id": canonical_change_id,
                 "context_packet_digest": context_packet.get("digest"),
+                "context_run_ref": context_control["run_ref"],
+                "context_plan_id": context_control["plan_id"],
+                "context_plan_ref": context_control["plan_ref"],
+                "compiled_context_ref": context_control["compiled_context_ref"],
                 "prototype_handoff_digest": str(
                     dict(session.get("prototype_handoff") or {}).get("digest") or ""
                 ) or None,
@@ -3984,6 +4325,30 @@ class BuilderAutomationService:
                     if isinstance(session.get("links"), Mapping)
                     else {}
                 ),
+            },
+            "snapshot_context": {
+                "schema": "adaos.skill_factory.task_context.v1",
+                "generated_at": _now_iso(),
+                "freshness": {
+                    "generated_at": _now_iso(),
+                    "source_generation": source_snapshot.get("digest"),
+                },
+                "redaction": {
+                    "level": "workspace_governed",
+                    "secrets_absent": True,
+                    "raw_user_data_absent": True,
+                },
+                "privacy": {
+                    "secrets_absent": True,
+                    "raw_user_data_absent": True,
+                },
+                "provenance": [
+                    {"kind": "context_plan", "ref": context_control["plan_ref"]},
+                    {"kind": "compiled_context", "ref": context_control["compiled_context_ref"]},
+                    {"kind": "source_snapshot", "ref": source_snapshot.get("digest")},
+                ],
+                "mock_data": {"deterministic": True, "fixture_ids": [], "seed": request_id},
+                "byte_budget": 32_768,
             },
         }
         execution_budget = (

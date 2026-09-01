@@ -10,9 +10,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterator, Mapping, Sequence
 
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+from adaos.services.context_control import ContextControlService
 from adaos.services.id_gen import new_id
 from adaos.services.runtime_paths import current_state_dir
 
@@ -342,9 +343,24 @@ def _snapshot_context(raw: Mapping[str, Any], artifacts: Mapping[str, Any], *, n
     provenance = [dict(item) for item in _list(raw_provenance) if isinstance(item, Mapping)]
     if not provenance:
         for key, value in artifacts.items():
-            token = _text(value)
-            if token:
-                provenance.append({"kind": str(key), "ref": token})
+            tokens: list[str] = []
+            if isinstance(value, Mapping):
+                tokens = _string_list(
+                    value.get("ref")
+                    or value.get("artifact_ref")
+                    or value.get("digest")
+                )
+            elif isinstance(value, (str, int, float, bool)):
+                token = _text(value)
+                tokens = [token] if token else []
+            elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+                tokens = [
+                    token
+                    for item in value
+                    if isinstance(item, (str, int, float, bool))
+                    and (token := _text(item))
+                ]
+            provenance.extend({"kind": str(key), "ref": token} for token in tokens[:20])
 
     mock_data = _mapping(explicit.get("mock_data"))
     fixture_ids = _string_list(mock_data.get("fixture_ids") or raw.get("mock_fixture_ids"))
@@ -440,6 +456,43 @@ class SkillFactoryService:
         path = Path(self.state_dir or current_state_dir()) / "skill_factory"
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def _contexts(self) -> ContextControlService:
+        return ContextControlService(state_dir=self.state_dir)
+
+    def _store_realize_request(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        return self._contexts().put_artifact(dict(request))
+
+    def _realize_request(self, task: Mapping[str, Any]) -> dict[str, Any]:
+        embedded = _mapping(task.get("realize_request"))
+        if embedded:
+            return embedded
+        artifact_ref = _text(task.get("realize_request_ref"))
+        if artifact_ref:
+            try:
+                value = self._contexts().get_artifact(artifact_ref)
+            except KeyError:
+                value = None
+            if isinstance(value, Mapping):
+                return dict(value)
+        return _mapping(task.get("realize_request_summary"))
+
+    def _compat_task(self, task: Mapping[str, Any]) -> dict[str, Any]:
+        value = _json_clone(task)
+        if not isinstance(value.get("realize_request"), Mapping):
+            value["realize_request"] = self._realize_request(task)
+        return value
+
+    def _assignment_realize_request(self, task: Mapping[str, Any]) -> dict[str, Any]:
+        request = self._realize_request(task)
+        artifacts = _mapping(request.get("artifacts"))
+        if isinstance(artifacts.get("context_projection"), Mapping):
+            # The exact canonical packet remains content-addressed. The worker
+            # receives its bounded projection and refs, avoiding a second full
+            # packet copy in every assignment and local-run checkpoint.
+            artifacts.pop("context_packet", None)
+            request["artifacts"] = artifacts
+        return request
 
     @property
     def state_path(self) -> Path:
@@ -608,12 +661,13 @@ class SkillFactoryService:
 
     def submit_realize_request(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         request = self.normalize_realize_request(payload)
+        request_artifact = self._store_realize_request(request)
         with self._state_lock():
             state = self._read_state()
             for existing in state["tasks"].values():
                 refs = _mapping(existing.get("source_refs"))
                 if refs.get("request_id") == request["request_id"] and existing.get("status") not in TASK_TERMINAL_STATES:
-                    return {"ok": True, "duplicate": True, "task": _json_clone(existing), "queue": self._queue_summary(state)}
+                    return {"ok": True, "duplicate": True, "task": self._compat_task(existing), "queue": self._queue_summary(state)}
 
             task_id = _text(payload.get("task_id")) or f"task.{new_id()}"
             branch = f"{TASK_BRANCH_PREFIX}{_safe_branch_fragment(task_id)}"
@@ -664,7 +718,17 @@ class SkillFactoryService:
                     "source_conversation_id": request.get("source_conversation_id"),
                     "source_session_id": request.get("source_session_id"),
                 },
-                "realize_request": request,
+                "realize_request_ref": request_artifact["ref"],
+                "realize_request_digest": request_artifact["digest"],
+                "realize_request_summary": {
+                    "schema": request.get("schema"),
+                    "request_id": request.get("request_id"),
+                    "status": request.get("status"),
+                    "target": _mapping(request.get("target")),
+                    "links": _mapping(request.get("links")),
+                    "context_packet_digest": _mapping(request.get("links")).get("context_packet_digest"),
+                    "context_plan_ref": _mapping(request.get("links")).get("context_plan_ref"),
+                },
                 "assigned_node_id": None,
                 "progress": [],
                 "failure_history": [],
@@ -675,7 +739,7 @@ class SkillFactoryService:
             state["tasks"][task_id] = task
             self._append_event(state, "skill_factory.task_queued", {"task_id": task_id, "request_id": request["request_id"]})
             self._write_state(state)
-            return {"ok": True, "duplicate": False, "task": _json_clone(task), "queue": self._queue_summary(state)}
+            return {"ok": True, "duplicate": False, "task": self._compat_task(task), "queue": self._queue_summary(state)}
 
     def register_dev_node(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         raw = _mapping(payload.get("registration")) or _mapping(payload)
@@ -1283,7 +1347,7 @@ class SkillFactoryService:
             "forge": state.get("forge", self.forge_policy()),
             "queue": self._queue_summary(state),
             "dev_nodes": [_json_clone(item) for item in nodes],
-            "tasks": [_json_clone(item) for item in tasks],
+            "tasks": [self._compat_task(item) for item in tasks],
             "ready_events": _json_clone(state.get("ready_events", []))[-50:],
             "diagnostics": {
                 "node_count": len(nodes),
@@ -1301,7 +1365,7 @@ class SkillFactoryService:
         if not task_token:
             raise ValueError("task_id is required")
         state = self._read_state()
-        return _json_clone(self._require_task(state, task_token))
+        return self._compat_task(self._require_task(state, task_token))
 
     def expire_overdue_tasks(self) -> dict[str, Any]:
         """Apply timeout transitions explicitly from an owning control loop."""
@@ -1524,7 +1588,10 @@ class SkillFactoryService:
 
     def _normalize_result(self, raw: Mapping[str, Any], task: Mapping[str, Any]) -> dict[str, Any]:
         changed_paths = [_normalize_repo_path(item, directory=False) for item in _string_list(raw.get("changed_paths"))]
-        provenance = _result_provenance(raw, task)
+        provenance = _result_provenance(
+            raw,
+            {**dict(task), "realize_request": self._realize_request(task)},
+        )
         dependency_delta = _dependency_delta(raw, changed_paths)
         return {
             **dict(raw),
@@ -1605,7 +1672,7 @@ class SkillFactoryService:
         forge = _mapping(task.get("forge"))
         mcp = _mapping(task.get("mcp"))
         lease = _mapping(task.get("access_lease"))
-        realize_request = _mapping(task.get("realize_request"))
+        realize_request = self._assignment_realize_request(task)
         agent_profile = _mapping(_mapping(realize_request.get("artifacts")).get("agent_profile"))
         assignment_mcp = {
             "enabled": mcp.get("enabled") is not False,
@@ -1625,7 +1692,7 @@ class SkillFactoryService:
             "schema": DEV_TASK_ASSIGNMENT_SCHEMA,
             "task_id": task_id,
             "request_id": task.get("request_id"),
-            "subnet_id": _mapping(task.get("realize_request")).get("user_subnet_id"),
+            "subnet_id": self._realize_request(task).get("user_subnet_id"),
             "target": _mapping(task.get("target")),
             "forge": {
                 "repo_url": forge.get("repo_url"),
@@ -1654,10 +1721,9 @@ class SkillFactoryService:
                 "realization": _mapping(task.get("realization_policy")),
             },
             "snapshot_context": _mapping(task.get("snapshot_context")),
-            # The worker needs the normalized Builder payload to construct a
-            # deterministic instruction packet.  Keep it task-scoped and
-            # already redacted instead of asking the worker to reconstruct
-            # requirements from conversation history.
+            # The worker gets a bounded, task-scoped projection plus immutable
+            # context refs. Older producers without a projection retain their
+            # normalized request for compatibility.
             "realize_request": realize_request,
             "evidence": _mapping(task.get("evidence")) or {
                 "schema": "adaos.skill_factory.task_evidence.v1",
@@ -1678,7 +1744,7 @@ class SkillFactoryService:
             "schema": DEV_READY_EVENT_SCHEMA,
             "event_id": f"ready.{task_id}.{_stable_suffix(result)}",
             "task_id": task_id,
-            "subnet_id": _mapping(task.get("realize_request")).get("user_subnet_id"),
+            "subnet_id": self._realize_request(task).get("user_subnet_id"),
             "target": _mapping(task.get("target")),
             "forge": {
                 "repo_url": _mapping(task.get("forge")).get("repo_url"),

@@ -597,13 +597,22 @@ class ContextControlService:
         params = (_text(subject_ref), _text(purpose) or "*", _text(audience) or "*", _text(branch) or "main")
         with self._connect() as connection:
             if as_of:
-                row = connection.execute(
+                rows = connection.execute(
                     """SELECT * FROM binding_events
                        WHERE subject_ref = ? AND purpose = ? AND audience = ? AND branch = ?
-                         AND valid_from <= ? AND (valid_to IS NULL OR valid_to > ?) AND recorded_at <= ?
-                       ORDER BY revision DESC LIMIT 1""",
-                    (*params, as_of, as_of, as_of),
-                ).fetchone()
+                       ORDER BY revision DESC""",
+                    params,
+                ).fetchall()
+                instant = _instant(as_of)
+                row = next(
+                    (
+                        candidate
+                        for candidate in rows
+                        if _applies_at(candidate["valid_from"], candidate["valid_to"], as_of)
+                        and _instant(candidate["recorded_at"]) <= instant
+                    ),
+                    None,
+                )
             else:
                 row = connection.execute(
                     "SELECT * FROM bindings WHERE subject_ref = ? AND purpose = ? AND audience = ? AND branch = ?",
@@ -762,7 +771,10 @@ class ContextControlService:
                 ).fetchall()
                 for row in rows:
                     edge = self._relationship_row(row)
-                    if not _applies_at(edge["valid_from"], edge["valid_to"], as_of) or edge["recorded_at"] > as_of:
+                    if (
+                        not _applies_at(edge["valid_from"], edge["valid_to"], as_of)
+                        or _instant(edge["recorded_at"]) > _instant(as_of)
+                    ):
                         omitted.append({"ref": edge["relationship_id"], "reason": "relationship_not_effective"})
                         continue
                     relationships.append(edge)
@@ -811,11 +823,12 @@ class ContextControlService:
         root_projects: set[str],
         path: Sequence[str],
     ) -> str | None:
-        if capsule.get("revoked_at") and capsule["revoked_at"] <= as_of:
+        as_of_instant = _instant(as_of)
+        if capsule.get("revoked_at") and _instant(capsule["revoked_at"]) <= as_of_instant:
             return "revoked"
         if not _applies_at(str(capsule["valid_from"]), capsule.get("valid_to"), as_of):
             return "not_effective"
-        if str(capsule["recorded_at"]) > as_of:
+        if _instant(str(capsule["recorded_at"])) > as_of_instant:
             return "not_recorded_as_of"
         if capsule["sensitivity"] not in allowed_sensitivity:
             return "sensitivity_denied"

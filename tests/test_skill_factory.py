@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import shutil
 from types import SimpleNamespace
@@ -126,6 +127,47 @@ def test_skill_factory_queue_assigns_and_accepts_valid_result(tmp_path: Path) ->
     assert completed["ready_event"]["schema"] == "adaos.skill_factory.dev_ready_event.v1"
     assert completed["ready_event"]["next_action"] == ["pull_revision", "validate_locally", "show_to_user"]
     assert completed["task"]["provenance"]["schema"] == "adaos.skill_factory.task_provenance.v1"
+
+
+def test_queue_persists_request_by_ref_and_assigns_bounded_context(tmp_path: Path) -> None:
+    service = SkillFactoryService(state_dir=tmp_path)
+    full_packet = {
+        "schema": "adaos.builder.context_packet.v1",
+        "digest": "sha256:" + "a" * 64,
+        "requirements": {"detail": "large-context-marker-" + "x" * 20_000},
+    }
+    projection = {
+        "schema": "adaos.builder.context_projection.v1",
+        "requirements": {"summary": "bounded-context-marker"},
+    }
+    submitted = service.submit_realize_request(
+        {
+            "request_id": "realize.ref-only-context",
+            "target": {"type": "skill", "id": "ref_only_context"},
+            "artifacts": {
+                "context_packet": full_packet,
+                "context_packet_ref": "artifact:sha256:" + "b" * 64,
+                "context_packet_digest": full_packet["digest"],
+                "context_projection": projection,
+            },
+        }
+    )
+
+    raw_state = json.loads(service.state_path.read_text(encoding="utf-8"))
+    persisted = raw_state["tasks"][submitted["task"]["task_id"]]
+    assert "realize_request" not in persisted
+    assert persisted["realize_request_ref"].startswith("artifact://context/sha256/")
+    assert "large-context-marker" not in service.state_path.read_text(encoding="utf-8")
+    assert service.read_task(submitted["task"]["task_id"])["realize_request"]["artifacts"][
+        "context_packet"
+    ] == full_packet
+
+    service.register_dev_node({"node_id": "devnode.ref-only"})
+    assignment = service.poll_assignment("devnode.ref-only")["assignment"]
+    assigned_artifacts = assignment["realize_request"]["artifacts"]
+    assert "context_packet" not in assigned_artifacts
+    assert assigned_artifacts["context_projection"] == projection
+    assert assigned_artifacts["context_packet_ref"].startswith("artifact:sha256:")
 
 
 def test_targeted_poll_assigns_the_requested_task_not_an_older_queue_item(tmp_path: Path) -> None:
