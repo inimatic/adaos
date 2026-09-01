@@ -2810,11 +2810,19 @@ def test_refresh_preserves_finalization_progress_after_worker_completion(
             "finalizing_task_id": "task.1",
             "status": "commit_ready",
             "progress": {"status": "commit_ready", "message": "Forge finalization"},
+            "completion_readiness": {
+                "ok": False,
+                "task_id": "task.1",
+                "stage": "activation",
+                "stage_message": "Activating exact package",
+                "completed_at": None,
+            },
         }
     )
 
     assert refreshed["status"] == "commit_ready"
     assert refreshed["progress"]["message"] == "Forge finalization"
+    assert "last_failure" not in refreshed
 
 
 def test_finalization_stage_projects_durable_substage_and_heartbeat(

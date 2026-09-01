@@ -4023,7 +4023,16 @@ class BuilderAutomationService:
             and self.materialize_on_completion
             and not isinstance(current.get("completion_readiness"), Mapping)
         )
-        current["status"] = "commit_ready" if materialization_pending else task_status
+        finalization_in_progress = bool(
+            task_status == "completed"
+            and self.materialize_on_completion
+            and str(current.get("finalizing_task_id") or "").strip() == task_id
+        )
+        current["status"] = (
+            "commit_ready"
+            if materialization_pending or finalization_in_progress
+            else task_status
+        )
         if materialization_pending:
             # The Skill Factory result is only an intermediate checkpoint.
             # Mark finalization ownership before publishing any projection so
@@ -4073,10 +4082,12 @@ class BuilderAutomationService:
             current["last_failure"] = task.get("failure_history")[-1]
             current.pop("last_result", None)
         readiness = current.get("completion_readiness")
+        finalizing = str(current.get("finalizing_task_id") or "").strip() == task_id
         if (
             task_status == "completed"
             and isinstance(readiness, Mapping)
             and str(readiness.get("task_id") or "").strip() == task_id
+            and not finalizing
         ):
             checkpoints = [
                 item
@@ -4132,7 +4143,6 @@ class BuilderAutomationService:
             if reconciled is not None:
                 return reconciled
         task_progress = task.get("progress") if isinstance(task.get("progress"), list) else []
-        finalizing = str(current.get("finalizing_task_id") or "").strip() == task_id
         if terminal_readiness:
             existing_progress = (
                 current.get("progress")
