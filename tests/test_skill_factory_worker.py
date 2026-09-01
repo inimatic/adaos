@@ -1530,6 +1530,90 @@ def test_bounded_repair_prompt_includes_only_qualified_json_target_slices(
     assert "Keep the chart sibling unchanged." in prompt
 
 
+def test_bounded_repair_resolves_semantic_refs_in_json_and_yaml(
+    tmp_path: Path,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    workspace = tmp_path / "workspace"
+    input_dir = tmp_path / "input"
+    scenario = workspace / "scenarios" / "demo"
+    scenario.mkdir(parents=True)
+    (scenario / "webui.json").write_text(
+        json.dumps(
+            {
+                "widgets": [
+                    {"id": "metrics-table", "title": "Metrics", "kind": "table"},
+                    {"id": "metrics-chart", "title": "Trend", "kind": "chart"},
+                ],
+                "events": {"refresh": {"target": "demo_metrics.refresh"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (scenario / "scenario.yaml").write_text(
+        "id: demo\ntitle: Demo Metrics\nversion: 0.1.0\n",
+        encoding="utf-8",
+    )
+    (scenario / "handlers.py").write_text(
+        'TARGET_WIDGET = "metrics-table"\n',
+        encoding="utf-8",
+    )
+    assignment = {
+        "task_id": "task.semantic-context",
+        "target": {"type": "scenario", "id": "demo"},
+        "forge": {"sparse_paths": ["scenarios/demo/"]},
+        "constraints": {
+            "mode": "dev_ticket_repair",
+            "repair_profile": "surgical_ui",
+            "minimal_diff": True,
+        },
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": "Rename only the qualified targets.",
+                "repair_hints": {
+                    "target_files": [
+                        "scenarios/demo/webui.json",
+                        "scenarios/demo/scenario.yaml",
+                        "scenarios/demo/handlers.py",
+                    ],
+                    "target_refs": [
+                        "widget:metrics-table.title",
+                        "event:refresh.target",
+                        "scenario:demo.title",
+                    ],
+                },
+            }
+        },
+    }
+
+    worker._build_packet(assignment, workspace, input_dir)
+    packet = json.loads((input_dir / "packet.json").read_text(encoding="utf-8"))
+    context = packet["repair_target_context"]
+
+    assert [item["value"] for item in context["resolved"]] == [
+        "Metrics",
+        "demo_metrics.refresh",
+        "Demo Metrics",
+    ]
+    assert [item["resolved_by"] for item in context["resolved"]] == [
+        "semantic_id",
+        "semantic_key",
+        "semantic_id",
+    ]
+    assert context["missing"] == []
+    assert context["coverage"]["complete"] is True
+    assert context["source_slices"][0]["file"] == "scenarios/demo/scenario.yaml"
+    assert any(
+        item["file"] == "scenarios/demo/handlers.py"
+        for item in context["source_slices"]
+    )
+
+
 def test_fully_qualified_surgical_ui_prompt_forbids_model_discovery(
     tmp_path: Path,
 ) -> None:

@@ -603,6 +603,39 @@ def _find_unique_json_id(
     return matches[0] if len(matches) == 1 else None
 
 
+def _find_unique_structured_key(
+    document: Any,
+    item_key: str,
+) -> tuple[Any, Sequence[Any] | None, int, str] | None:
+    matches: list[tuple[Any, Sequence[Any] | None, int, str]] = []
+
+    def visit(value: Any, path: str) -> None:
+        if isinstance(value, Mapping):
+            for key, child in value.items():
+                child_path = f"{path}.{key}" if path else str(key)
+                if str(key) == item_key:
+                    matches.append((child, None, -1, child_path))
+                visit(child, child_path)
+        elif isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            for index, child in enumerate(value):
+                visit(child, f"{path}[{index}]")
+
+    visit(document, "")
+    return matches[0] if len(matches) == 1 else None
+
+
+def _semantic_target_parts(target_ref: str) -> tuple[str, str, str] | None:
+    match = re.fullmatch(
+        r"(widget|modal|event|projection|route|workflow|scenario|skill):([^.#/]+)(?:\.(.+))?",
+        str(target_ref or "").strip(),
+    )
+    if match is None:
+        return None
+    return match.group(1), match.group(2), str(match.group(3) or "").strip()
+
+
 def _bounded_repair_target_context(
     workspace: Path,
     repair_hints: Mapping[str, Any],
@@ -614,17 +647,28 @@ def _bounded_repair_target_context(
         str(item).replace("\\", "/").strip("/")
         for item in _string_list(repair_hints.get("target_files"))
     ][:6]
-    json_files = [item for item in target_files if item.lower().endswith(".json")]
+    structured_files = [
+        item
+        for item in target_files
+        if item.lower().endswith((".json", ".yaml", ".yml"))
+    ]
     if not refs or not target_files:
         return {}
     documents: list[tuple[str, Any]] = []
-    for relative in json_files:
+    for relative in structured_files:
         path = (workspace / relative).resolve(strict=False)
         if workspace.resolve() not in path.parents or not path.is_file():
             continue
         try:
-            documents.append((relative, json.loads(path.read_text(encoding="utf-8"))))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            raw = path.read_text(encoding="utf-8")
+            document = (
+                json.loads(raw)
+                if relative.lower().endswith(".json")
+                else yaml.safe_load(raw)
+            )
+            if isinstance(document, (Mapping, list)):
+                documents.append((relative, document))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, yaml.YAMLError):
             continue
 
     resolved: list[dict[str, Any]] = []
@@ -640,14 +684,32 @@ def _bounded_repair_target_context(
                 value = _resolve_json_target_ref(document, target_ref)
             except (KeyError, IndexError):
                 selector_match = re.search(r"\[id=([^\]]+)\]$", target_ref)
-                fallback = (
-                    _find_unique_json_id(document, selector_match.group(1))
-                    if selector_match
-                    else None
-                )
+                semantic = _semantic_target_parts(target_ref)
+                fallback = None
+                resolved_by = "unique_id"
+                suffix = ""
+                if selector_match:
+                    fallback = _find_unique_json_id(
+                        document,
+                        selector_match.group(1),
+                    )
+                elif semantic:
+                    _kind, semantic_id, suffix = semantic
+                    fallback = _find_unique_json_id(document, semantic_id)
+                    if fallback is None:
+                        fallback = _find_unique_structured_key(document, semantic_id)
+                        resolved_by = "semantic_key"
                 if fallback is None:
                     continue
                 value, siblings, selected_index, resolved_path = fallback
+                if suffix:
+                    try:
+                        value = _resolve_json_target_ref(value, suffix)
+                    except (KeyError, IndexError):
+                        continue
+                    resolved_path = f"{resolved_path}.{suffix}"
+                if semantic and resolved_by == "unique_id":
+                    resolved_by = "semantic_id"
             candidate = {
                 "target_ref": target_ref,
                 "file": relative,
@@ -655,7 +717,7 @@ def _bounded_repair_target_context(
             }
             if resolved_path != target_ref:
                 candidate["resolved_path"] = resolved_path
-                candidate["resolved_by"] = "unique_id"
+                candidate["resolved_by"] = resolved_by
             selector_match = re.search(r"\[id=([^\]]+)\]$", target_ref)
             if selector_match and siblings is None:
                 try:
@@ -708,8 +770,10 @@ def _bounded_repair_target_context(
     anchors: list[str] = []
     for target_ref in refs:
         selector_match = re.search(r"\[id=([^\]]+)\]", target_ref)
-        if selector_match and selector_match.group(1) not in anchors:
-            anchors.append(selector_match.group(1))
+        semantic = _semantic_target_parts(target_ref)
+        anchor = selector_match.group(1) if selector_match else semantic[1] if semantic else ""
+        if anchor and anchor not in anchors:
+            anchors.append(anchor)
     source_slices: list[dict[str, Any]] = []
     for relative in target_files:
         if relative.lower().endswith(".json"):
