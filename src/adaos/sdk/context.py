@@ -51,6 +51,48 @@ def bind(
     )
 
 
+def compare_bindings(
+    subject_ref: str,
+    *,
+    purpose: str = "*",
+    audience: str = "*",
+    left_branch: str = "main",
+    right_branch: str = "main",
+) -> dict[str, Any]:
+    return _service().compare_bindings(
+        subject_ref=subject_ref,
+        purpose=purpose,
+        audience=audience,
+        left_branch=left_branch,
+        right_branch=right_branch,
+    )
+
+
+def merge_binding(
+    subject_ref: str,
+    *,
+    source_branch: str,
+    target_branch: str = "main",
+    purpose: str = "*",
+    audience: str = "*",
+    base_capsule_id: str | None = None,
+    expected_target_revision: int | None = None,
+    actor_ref: str = "sdk",
+    reason: str = "branch_merge",
+) -> dict[str, Any]:
+    return _service().merge_binding(
+        subject_ref=subject_ref,
+        source_branch=source_branch,
+        target_branch=target_branch,
+        purpose=purpose,
+        audience=audience,
+        base_capsule_id=base_capsule_id,
+        expected_target_revision=expected_target_revision,
+        actor_ref=actor_ref,
+        reason=reason,
+    )
+
+
 def resolve(
     subject_refs: Sequence[str] | None = None,
     *,
@@ -105,12 +147,46 @@ def inspect(run_ref: str) -> dict[str, Any]:
     return _service().inspect(run_ref)
 
 
+def invalidate(
+    subject_ref: str,
+    *,
+    reason: str,
+    event_ref: str,
+    source_digest: str | None = None,
+    edge_type: str | None = None,
+) -> dict[str, Any]:
+    return _service().invalidate(
+        subject_ref=subject_ref,
+        reason=reason,
+        event_ref=event_ref,
+        source_digest=source_digest,
+        edge_type=edge_type,
+    )
+
+
+def list_invalidations(
+    *,
+    subject_ref: str | None = None,
+    event_ref: str | None = None,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    return _service().list_invalidations(
+        subject_ref=subject_ref,
+        event_ref=event_ref,
+        limit=limit,
+    )
+
+
 __all__ = [
     "add_relationship",
     "bind",
+    "compare_bindings",
     "compile",
     "get_capsule",
     "inspect",
+    "invalidate",
+    "list_invalidations",
+    "merge_binding",
     "plan",
     "propose_memory",
     "record_receipt",

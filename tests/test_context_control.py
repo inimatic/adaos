@@ -130,6 +130,53 @@ def test_binding_is_optimistic_and_reconstructs_as_of(tmp_path: Path) -> None:
         )
 
 
+def test_branch_merge_requires_unchanged_target_base(tmp_path: Path) -> None:
+    service = ContextControlService(tmp_path)
+    base = _capsule(service, subject_ref="project:demo", summary="base")
+    branch_change = _capsule(service, subject_ref="project:demo", summary="branch")
+    target_change = _capsule(service, subject_ref="project:demo", summary="target")
+    service.bind_subject(subject_ref="project:demo", capsule_id=base["capsule_id"])
+    service.bind_subject(
+        subject_ref="project:demo",
+        capsule_id=base["capsule_id"],
+        branch="repair-1",
+    )
+    service.bind_subject(
+        subject_ref="project:demo",
+        capsule_id=branch_change["capsule_id"],
+        branch="repair-1",
+        expected_revision=1,
+    )
+
+    comparison = service.compare_bindings(
+        subject_ref="project:demo",
+        left_branch="main",
+        right_branch="repair-1",
+    )
+    merged = service.merge_binding(
+        subject_ref="project:demo",
+        source_branch="repair-1",
+        base_capsule_id=base["capsule_id"],
+        expected_target_revision=1,
+    )
+
+    assert comparison["status"] == "diverged"
+    assert merged["target"]["capsule_id"] == branch_change["capsule_id"]
+    Draft202012Validator(_schema("context.binding_comparison.v1")).validate(comparison)
+    Draft202012Validator(_schema("context.binding_merge.v1")).validate(merged)
+    service.bind_subject(
+        subject_ref="project:demo",
+        capsule_id=target_change["capsule_id"],
+        expected_revision=2,
+    )
+    with pytest.raises(ContextConflict, match="declared base"):
+        service.merge_binding(
+            subject_ref="project:demo",
+            source_branch="repair-1",
+            base_capsule_id=base["capsule_id"],
+        )
+
+
 def test_bitemporal_comparisons_normalize_timezone_offsets(tmp_path: Path) -> None:
     service = ContextControlService(tmp_path)
     platform = service.register_capsule(
@@ -218,6 +265,54 @@ def test_resolution_denies_cross_project_and_tainted_dependencies(tmp_path: Path
     assert "cross_project_dependency_denied" in reasons
     assert "tainted" in reasons
     assert resolution["status"] == "insufficient"
+
+
+def test_invalidation_denies_stale_capsule_but_admits_matching_generation(tmp_path: Path) -> None:
+    service = ContextControlService(tmp_path)
+    old = service.register_capsule(
+        {
+            "kind": "project",
+            "subject_refs": ["project:demo", "skill:demo_skill"],
+            "authority_ref": "project:demo",
+            "trust_class": "accepted",
+            "source_digests": {"release": "sha256:old"},
+            "summary": "old generation",
+        }
+    )
+    service.bind_subject(subject_ref="project:demo", capsule_id=old["capsule_id"])
+    invalidation = service.invalidate(
+        subject_ref="skill:demo_skill",
+        source_digest="sha256:new",
+        reason="skills.updated",
+        event_ref="event:skill-update-1",
+    )
+
+    stale = service.resolve({"subject_refs": ["project:demo"]})
+
+    assert stale["status"] == "insufficient"
+    assert stale["denied"][0]["reason"] == "source_invalidated"
+    assert stale["denied"][0]["invalidation_refs"] == [invalidation["invalidation_id"]]
+    assert service.list_invalidations(subject_ref="skill:demo_skill") == [invalidation]
+    Draft202012Validator(_schema("context.invalidation.v1")).validate(invalidation)
+
+    current = service.register_capsule(
+        {
+            "kind": "project",
+            "subject_refs": ["project:demo", "skill:demo_skill"],
+            "authority_ref": "project:demo",
+            "trust_class": "accepted",
+            "source_digests": {"release": "sha256:new"},
+            "summary": "current generation",
+        }
+    )
+    service.bind_subject(
+        subject_ref="project:demo",
+        capsule_id=current["capsule_id"],
+        expected_revision=1,
+    )
+    fresh = service.resolve({"subject_refs": ["project:demo"]})
+    assert fresh["status"] == "ready"
+    assert fresh["required"][0]["ref"] == current["capsule_id"]
 
 
 def test_memory_requires_independent_evidence_and_supports_rollback(tmp_path: Path) -> None:

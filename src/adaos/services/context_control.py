@@ -21,6 +21,7 @@ BINDING_SCHEMA = "adaos.context.subject_binding.v1"
 PLAN_SCHEMA = "adaos.context.plan.v1"
 RECEIPT_SCHEMA = "adaos.agent.context_receipt.v1"
 MEMORY_CANDIDATE_SCHEMA = "adaos.context.memory_candidate.v1"
+INVALIDATION_SCHEMA = "adaos.context.invalidation.v1"
 
 _TRUST_ORDER = {
     "quarantined": 0,
@@ -42,7 +43,7 @@ class ContextAccessDenied(PermissionError):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _text(value: Any) -> str:
@@ -672,6 +673,111 @@ class ContextControlService:
             for row in rows
         ]
 
+    def compare_bindings(
+        self,
+        *,
+        subject_ref: str,
+        purpose: str = "*",
+        audience: str = "*",
+        left_branch: str = "main",
+        right_branch: str = "main",
+    ) -> dict[str, Any]:
+        def load(branch: str) -> dict[str, Any] | None:
+            try:
+                return self.get_binding(
+                    subject_ref=subject_ref,
+                    purpose=purpose,
+                    audience=audience,
+                    branch=branch,
+                )
+            except KeyError:
+                return None
+
+        left = load(_text(left_branch) or "main")
+        right = load(_text(right_branch) or "main")
+        if left is None or right is None:
+            status = "missing"
+        elif left["capsule_id"] == right["capsule_id"]:
+            status = "same"
+        else:
+            status = "diverged"
+        return {
+            "schema": "adaos.context.binding_comparison.v1",
+            "subject_ref": _text(subject_ref),
+            "purpose": _text(purpose) or "*",
+            "audience": _text(audience) or "*",
+            "left_branch": _text(left_branch) or "main",
+            "right_branch": _text(right_branch) or "main",
+            "status": status,
+            "left": left,
+            "right": right,
+        }
+
+    def merge_binding(
+        self,
+        *,
+        subject_ref: str,
+        source_branch: str,
+        target_branch: str = "main",
+        purpose: str = "*",
+        audience: str = "*",
+        base_capsule_id: str | None = None,
+        expected_target_revision: int | None = None,
+        actor_ref: str = "system",
+        reason: str = "branch_merge",
+    ) -> dict[str, Any]:
+        source = self.get_binding(
+            subject_ref=subject_ref,
+            purpose=purpose,
+            audience=audience,
+            branch=source_branch,
+        )
+        try:
+            target = self.get_binding(
+                subject_ref=subject_ref,
+                purpose=purpose,
+                audience=audience,
+                branch=target_branch,
+            )
+        except KeyError:
+            target = None
+        if target and target["capsule_id"] == source["capsule_id"]:
+            return {
+                "schema": "adaos.context.binding_merge.v1",
+                "status": "noop",
+                "source": source,
+                "target": target,
+            }
+        base = _text(base_capsule_id)
+        if target and base and target["capsule_id"] != base:
+            raise ContextConflict(
+                "context branch merge conflict: target binding changed since the declared base"
+            )
+        if target and expected_target_revision is not None and target["revision"] != int(expected_target_revision):
+            raise ContextConflict(
+                "context branch merge conflict: target revision changed"
+            )
+        merged = self.bind_subject(
+            subject_ref=subject_ref,
+            capsule_id=source["capsule_id"],
+            purpose=purpose,
+            audience=audience,
+            branch=target_branch,
+            expected_revision=(
+                int(expected_target_revision)
+                if expected_target_revision is not None
+                else int(target["revision"]) if target else 0
+            ),
+            actor_ref=actor_ref,
+            reason=reason,
+        )
+        return {
+            "schema": "adaos.context.binding_merge.v1",
+            "status": "merged",
+            "source": source,
+            "target": merged,
+        }
+
     def resolve(self, request: Mapping[str, Any]) -> dict[str, Any]:
         query = dict(request)
         subject_refs = _strings(query.get("subject_refs"))
@@ -720,6 +826,7 @@ class ContextControlService:
         denied: list[dict[str, Any]] = []
         omitted: list[dict[str, Any]] = []
         relationships: list[dict[str, Any]] = []
+        invalidations: list[dict[str, Any]] = []
         seen: set[str] = set()
         queue: deque[tuple[str, bool, list[str], bool]] = deque((root, True, [], False) for root in roots)
         root_projects = {ref for ref in subject_refs if ref.startswith("project:")}
@@ -745,6 +852,13 @@ class ContextControlService:
                     root_projects=root_projects,
                     path=path,
                 )
+                applicable_invalidations = self._applicable_invalidations(
+                    connection,
+                    capsule=capsule,
+                    as_of=as_of,
+                )
+                if applicable_invalidations and not reason:
+                    reason = "source_invalidated"
                 unit = {
                     "ref": capsule_id,
                     "kind": capsule["kind"],
@@ -762,7 +876,16 @@ class ContextControlService:
                     "utility": float(capsule["metadata"].get("utility", 1.0)),
                 }
                 if reason:
-                    denied.append({**unit, "reason": reason})
+                    denial = {**unit, "reason": reason}
+                    if applicable_invalidations:
+                        denial["invalidation_refs"] = [
+                            item["invalidation_id"] for item in applicable_invalidations
+                        ]
+                        denial["invalidation_reasons"] = [
+                            item["reason"] for item in applicable_invalidations
+                        ]
+                        invalidations.extend(applicable_invalidations)
+                    denied.append(denial)
                     continue
                 selected.append(unit)
                 rows = connection.execute(
@@ -771,6 +894,23 @@ class ContextControlService:
                 ).fetchall()
                 for row in rows:
                     edge = self._relationship_row(row)
+                    edge_invalidations = self._applicable_invalidations(
+                        connection,
+                        capsule=capsule,
+                        as_of=as_of,
+                        edge_type=edge["relation_type"],
+                        recorded_after=edge["recorded_at"],
+                    )
+                    if edge_invalidations:
+                        invalidations.extend(edge_invalidations)
+                        omitted.append({
+                            "ref": edge["relationship_id"],
+                            "reason": "relationship_invalidated",
+                            "invalidation_refs": [
+                                item["invalidation_id"] for item in edge_invalidations
+                            ],
+                        })
+                        continue
                     if (
                         not _applies_at(edge["valid_from"], edge["valid_to"], as_of)
                         or _instant(edge["recorded_at"]) > _instant(as_of)
@@ -799,6 +939,9 @@ class ContextControlService:
             "denied": denied,
             "unavailable": unavailable,
             "relationships": relationships,
+            "invalidations": list({
+                item["invalidation_id"]: item for item in invalidations
+            }.values()),
             "created_at": _now(),
         }
         artifact = self.put_artifact(resolution_body)
@@ -842,6 +985,52 @@ class ContextControlService:
         if path and root_projects and capsule_projects and capsule_projects.isdisjoint(root_projects) and capsule["kind"] not in _SHARED_KINDS:
             return "cross_project_dependency_denied"
         return None
+
+    def _applicable_invalidations(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        capsule: Mapping[str, Any],
+        as_of: str,
+        edge_type: str | None = None,
+        recorded_after: str | None = None,
+    ) -> list[dict[str, Any]]:
+        subject_refs = _strings(capsule.get("subject_refs"))
+        if not subject_refs:
+            return []
+        placeholders = ",".join("?" for _ in subject_refs)
+        rows = connection.execute(
+            f"""SELECT * FROM invalidations
+                WHERE subject_ref IN ({placeholders})
+                ORDER BY recorded_at DESC""",
+            subject_refs,
+        ).fetchall()
+        capsule_recorded_at = _instant(_text(recorded_after) or _text(capsule.get("recorded_at")))
+        as_of_instant = _instant(as_of)
+        source_values = {
+            _text(value)
+            for value in _mapping(capsule.get("source_digests")).values()
+            if _text(value)
+        }
+        source_values.add(_text(capsule.get("digest")))
+        expected_edge = _text(edge_type)
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            if _instant(row["recorded_at"]) > as_of_instant:
+                continue
+            row_edge = _text(row["edge_type"])
+            if expected_edge:
+                if row_edge != expected_edge:
+                    continue
+            elif row_edge:
+                continue
+            if _instant(row["recorded_at"]) < capsule_recorded_at:
+                continue
+            current_source_digest = _text(row["source_digest"])
+            if current_source_digest and current_source_digest in source_values:
+                continue
+            result.append(self._invalidation_row(row))
+        return result
 
     def plan(self, request: Mapping[str, Any]) -> dict[str, Any]:
         query = dict(request)
@@ -1253,6 +1442,7 @@ class ContextControlService:
         if not _text(subject_ref) or not _text(reason) or not _text(event_ref):
             raise ValueError("context invalidation requires subject_ref, reason, and event_ref")
         payload = {
+            "schema": INVALIDATION_SCHEMA,
             "invalidation_id": f"ctxinv.{new_id()}",
             "subject_ref": _text(subject_ref),
             "source_digest": _text(source_digest) or None,
@@ -1262,11 +1452,70 @@ class ContextControlService:
             "recorded_at": _now(),
         }
         with self._connect() as connection:
+            existing = connection.execute(
+                """SELECT * FROM invalidations
+                   WHERE subject_ref = ? AND event_ref = ?
+                     AND COALESCE(source_digest, '') = ?
+                     AND COALESCE(edge_type, '') = ?""",
+                (
+                    payload["subject_ref"],
+                    payload["event_ref"],
+                    payload["source_digest"] or "",
+                    payload["edge_type"] or "",
+                ),
+            ).fetchone()
+            if existing is not None:
+                return self._invalidation_row(existing)
             connection.execute(
                 "INSERT INTO invalidations VALUES (?, ?, ?, ?, ?, ?, ?)",
-                tuple(payload.values()),
+                (
+                    payload["invalidation_id"],
+                    payload["subject_ref"],
+                    payload["source_digest"],
+                    payload["edge_type"],
+                    payload["reason"],
+                    payload["event_ref"],
+                    payload["recorded_at"],
+                ),
             )
         return payload
+
+    @staticmethod
+    def _invalidation_row(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "schema": INVALIDATION_SCHEMA,
+            "invalidation_id": row["invalidation_id"],
+            "subject_ref": row["subject_ref"],
+            "source_digest": row["source_digest"],
+            "edge_type": row["edge_type"],
+            "reason": row["reason"],
+            "event_ref": row["event_ref"],
+            "recorded_at": row["recorded_at"],
+        }
+
+    def list_invalidations(
+        self,
+        *,
+        subject_ref: str | None = None,
+        event_ref: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        for column, value in (("subject_ref", subject_ref), ("event_ref", event_ref)):
+            if _text(value):
+                clauses.append(f"{column} = ?")
+                params.append(_text(value))
+        query = "SELECT * FROM invalidations"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY recorded_at DESC LIMIT ?"
+        params.append(max(1, min(int(limit), 2000)))
+        with self._connect() as connection:
+            return [
+                self._invalidation_row(row)
+                for row in connection.execute(query, params).fetchall()
+            ]
 
     def inspect(self, run_ref: str) -> dict[str, Any]:
         receipts = self.list_receipts(run_ref=run_ref)
@@ -1290,6 +1539,7 @@ __all__ = [
     "ContextAccessDenied",
     "ContextConflict",
     "ContextControlService",
+    "INVALIDATION_SCHEMA",
     "MEMORY_CANDIDATE_SCHEMA",
     "PLAN_SCHEMA",
     "RECEIPT_SCHEMA",

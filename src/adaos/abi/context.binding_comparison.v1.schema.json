@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.context.binding_comparison.v1",
+  "title": "AdaOS Context Binding Comparison",
+  "type": "object",
+  "required": ["schema", "subject_ref", "purpose", "audience", "left_branch", "right_branch", "status", "left", "right"],
+  "properties": {
+    "schema": {"const": "adaos.context.binding_comparison.v1"},
+    "subject_ref": {"type": "string", "minLength": 1},
+    "purpose": {"type": "string", "minLength": 1},
+    "audience": {"type": "string", "minLength": 1},
+    "left_branch": {"type": "string", "minLength": 1},
+    "right_branch": {"type": "string", "minLength": 1},
+    "status": {"enum": ["same", "diverged", "missing"]},
+    "left": {"type": ["object", "null"]},
+    "right": {"type": ["object", "null"]}
+  },
+  "additionalProperties": false
+}

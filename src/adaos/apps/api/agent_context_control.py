@@ -107,6 +107,48 @@ def bind_subject(body: dict[str, Any], service: ContextControlService = Depends(
         _raise(exc)
 
 
+@router.get("/bindings/compare")
+def compare_bindings(
+    subject_ref: str,
+    purpose: str = "*",
+    audience: str = "*",
+    left_branch: str = "main",
+    right_branch: str = "main",
+    service: ContextControlService = Depends(_get_service),
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "comparison": service.compare_bindings(
+            subject_ref=subject_ref,
+            purpose=purpose,
+            audience=audience,
+            left_branch=left_branch,
+            right_branch=right_branch,
+        ),
+    }
+
+
+@router.post("/bindings/merge")
+def merge_binding(body: dict[str, Any], service: ContextControlService = Depends(_get_service)) -> dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            "merge": service.merge_binding(
+                subject_ref=str(body.get("subject_ref") or ""),
+                source_branch=str(body.get("source_branch") or ""),
+                target_branch=str(body.get("target_branch") or "main"),
+                purpose=str(body.get("purpose") or "*"),
+                audience=str(body.get("audience") or "*"),
+                base_capsule_id=str(body.get("base_capsule_id") or "") or None,
+                expected_target_revision=body.get("expected_target_revision"),
+                actor_ref=str(body.get("actor_ref") or "api"),
+                reason=str(body.get("reason") or "branch_merge"),
+            ),
+        }
+    except (ValueError, KeyError, ContextConflict) as exc:
+        _raise(exc)
+
+
 @router.post("/resolve")
 def resolve_context(body: dict[str, Any], service: ContextControlService = Depends(_get_service)) -> dict[str, Any]:
     try:
@@ -233,3 +275,17 @@ def invalidate_context(body: dict[str, Any], service: ContextControlService = De
     except ValueError as exc:
         _raise(exc)
 
+
+@router.get("/invalidations")
+def list_invalidations(
+    subject_ref: str | None = None,
+    event_ref: str | None = None,
+    limit: int = Query(default=500, ge=1, le=2000),
+    service: ContextControlService = Depends(_get_service),
+) -> dict[str, Any]:
+    items = service.list_invalidations(
+        subject_ref=subject_ref,
+        event_ref=event_ref,
+        limit=limit,
+    )
+    return {"ok": True, "items": items, "count": len(items)}

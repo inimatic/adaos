@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.context.binding_merge.v1",
+  "title": "AdaOS Context Binding Merge",
+  "type": "object",
+  "required": ["schema", "status", "source", "target"],
+  "properties": {
+    "schema": {"const": "adaos.context.binding_merge.v1"},
+    "status": {"enum": ["noop", "merged"]},
+    "source": {"type": "object"},
+    "target": {"type": "object"}
+  },
+  "additionalProperties": false
+}

@@ -96,3 +96,62 @@ def test_context_api_reports_binding_conflict(tmp_path: Path) -> None:
     )
     assert first.status_code == 200
     assert conflict.status_code == 409
+
+
+def test_context_api_lists_invalidations_and_merges_branch(tmp_path: Path) -> None:
+    service = ContextControlService(tmp_path)
+    client = _client(service)
+    base = service.register_capsule(
+        {
+            "kind": "project",
+            "subject_refs": ["project:demo"],
+            "authority_ref": "project:demo",
+            "trust_class": "accepted",
+            "summary": "base",
+        }
+    )
+    changed = service.register_capsule(
+        {
+            "kind": "project",
+            "subject_refs": ["project:demo"],
+            "authority_ref": "project:demo",
+            "trust_class": "accepted",
+            "summary": "changed",
+        }
+    )
+    service.bind_subject(subject_ref="project:demo", capsule_id=base["capsule_id"])
+    service.bind_subject(
+        subject_ref="project:demo",
+        capsule_id=changed["capsule_id"],
+        branch="repair",
+    )
+
+    merged = client.post(
+        "/api/context/bindings/merge",
+        headers=_headers(),
+        json={
+            "subject_ref": "project:demo",
+            "source_branch": "repair",
+            "base_capsule_id": base["capsule_id"],
+            "expected_target_revision": 1,
+        },
+    )
+    invalidated = client.post(
+        "/api/context/invalidate",
+        headers=_headers(),
+        json={
+            "subject_ref": "project:demo",
+            "reason": "project.release.changed",
+            "event_ref": "event:release-1",
+        },
+    )
+    listed = client.get(
+        "/api/context/invalidations?subject_ref=project%3Ademo",
+        headers=_headers(),
+    )
+
+    assert merged.status_code == 200
+    assert merged.json()["merge"]["target"]["capsule_id"] == changed["capsule_id"]
+    assert invalidated.status_code == 200
+    assert listed.status_code == 200
+    assert listed.json()["count"] == 1
