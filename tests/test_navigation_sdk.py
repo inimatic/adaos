@@ -15,6 +15,29 @@ def test_registration_url_uses_intent_as_the_only_discriminator() -> None:
     assert navigation.parse_url(url) == destination
 
 
+def test_node_connect_url_carries_root_join_code_and_local_hint() -> None:
+    destination = navigation.node_connect_destination(
+        "ABCD-EFGH",
+        root_url="https://ru.api.inimatic.com/",
+        zone="ru",
+        subnet_id="sn_test",
+    )
+
+    url = navigation.build_url(destination)
+
+    assert url == (
+        "https://inimatic.com/?intent=node.connect&zone=ru&subnet_id=sn_test"
+        "&root_url=https%3A%2F%2Fru.api.inimatic.com&join_code=ABCD-EFGH&try_local_hub=1"
+    )
+    assert navigation.parse_url(url) == destination
+    resolution = navigation.resolve_destination(destination, current={})
+    assert (resolution["status"], resolution["action"], resolution["reason"]) == (
+        "ready",
+        "connect_node",
+        "node_connect_intent_ready",
+    )
+
+
 def test_webspace_url_preserves_the_full_expected_context() -> None:
     destination = navigation.webspace_destination(
         zone="ru",

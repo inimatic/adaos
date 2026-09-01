@@ -191,6 +191,20 @@ def test_node_current_falls_back_to_root_token_and_embeds_zone_bootstrap_args(mo
     assert calls[1]["headers"] == {"X-Root-Token": "root-secret"}
     assert current["status"] == "ready"
     assert current["code"] == "ABCD-EFGH"
+    assert current["link"] == (
+        "https://inimatic.com/?intent=node.connect&zone=ru&subnet_id=sn_test"
+        "&root_url=https%3A%2F%2Fru.api.inimatic.com&join_code=ABCD-EFGH&try_local_hub=1"
+    )
+    assert current["qr_text"] == current["link"]
+    assert current["navigation_destination"] == {
+        "schema": "adaos.navigation.destination.v1",
+        "intent": "node.connect",
+        "zone": "ru",
+        "subnet_id": "sn_test",
+        "root_url": "https://ru.api.inimatic.com",
+        "join_code": "ABCD-EFGH",
+        "try_local_hub": True,
+    }
     assert "raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh" in current["linux_command"]
     assert "--zone ru" in current["linux_command"]
     assert "https://ru.api.inimatic.com" in current["linux_command"]
@@ -202,7 +216,7 @@ def test_node_current_falls_back_to_root_token_and_embeds_zone_bootstrap_args(mo
     assert '-ZoneId "ru"' in current["windows_cmd_command"]
     assert current["expires_at"] == expires_at_utc
     assert current["expires_at_display"] == "2030-01-02 03:04:05 UTC"
-    assert "add a node to subnet sn_test in zone RU" in current["summary"]
+    assert "add its local AdaOS Node to subnet sn_test in zone RU" in current["summary"]
 
 
 @pytest.mark.asyncio

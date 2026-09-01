@@ -19,12 +19,13 @@ DESTINATION_SCHEMA = "adaos.navigation.destination.v1"
 RESOLUTION_SCHEMA = "adaos.navigation.resolution.v1"
 
 CONNECT_REGISTER = "connect.register"
+NODE_CONNECT = "node.connect"
 AUTH_LOGIN = "auth.login"
 WEBSPACE_OPEN = "webspace.open"
 DRIVE_DOWNLOAD = "drive.download"
 DRIVE_VIEW = "drive.view"
 
-INTENTS = frozenset({CONNECT_REGISTER, AUTH_LOGIN, WEBSPACE_OPEN, DRIVE_DOWNLOAD, DRIVE_VIEW})
+INTENTS = frozenset({CONNECT_REGISTER, NODE_CONNECT, AUTH_LOGIN, WEBSPACE_OPEN, DRIVE_DOWNLOAD, DRIVE_VIEW})
 SPACE_KINDS = frozenset({"workspace", "development", "preview", "trial"})
 PREVIEW_STAGES = frozenset({"prototype", "automation", "trial", "publication"})
 
@@ -33,6 +34,8 @@ _QUERY_ORDER = (
     "zone",
     "public_token",
     "subnet_id",
+    "root_url",
+    "join_code",
     "webspace_id",
     "space_kind",
     "expected_scenario_id",
@@ -60,6 +63,13 @@ def _bool(value: Any) -> bool | None:
     if token in {"0", "false", "no", "off"}:
         return False
     return None
+
+
+def _validate_absolute_http_url(value: str, *, field: str) -> str:
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"{field} must be an absolute HTTP(S) URL")
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
 
 
 def _clean_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -107,6 +117,14 @@ def validate_destination(destination: Mapping[str, Any]) -> dict[str, Any]:
         normalized["preview_stage"] = stage
     if intent == CONNECT_REGISTER and not _text(normalized.get("user_code")):
         raise ValueError("connect.register requires user_code")
+    if intent == NODE_CONNECT:
+        missing = [key for key in ("root_url", "join_code") if not _text(normalized.get(key))]
+        if missing:
+            raise ValueError(f"node.connect requires: {', '.join(missing)}")
+        normalized["root_url"] = _validate_absolute_http_url(
+            _text(normalized.get("root_url")),
+            field="node.connect root_url",
+        )
     if intent in {DRIVE_DOWNLOAD, DRIVE_VIEW}:
         missing = [key for key in ("zone", "public_token") if not _text(normalized.get(key))]
         if missing:
@@ -134,6 +152,26 @@ def registration_destination(
             "user_code": user_code,
             "zone": zone,
             "subnet_id": subnet_id,
+        }
+    )
+
+
+def node_connect_destination(
+    join_code: str,
+    *,
+    root_url: str,
+    zone: str | None = None,
+    subnet_id: str | None = None,
+    try_local_hub: bool = True,
+) -> dict[str, Any]:
+    return validate_destination(
+        {
+            "intent": NODE_CONNECT,
+            "zone": zone,
+            "subnet_id": subnet_id,
+            "root_url": root_url,
+            "join_code": join_code,
+            "try_local_hub": try_local_hub,
         }
     )
 
@@ -295,6 +333,8 @@ def resolve_destination(
     intent = target["intent"]
     if intent == CONNECT_REGISTER:
         return _resolution("ready", "register", "registration_intent_ready", target, context)
+    if intent == NODE_CONNECT:
+        return _resolution("ready", "connect_node", "node_connect_intent_ready", target, context)
     if intent == AUTH_LOGIN:
         return _resolution("ready", "login", "login_intent_ready", target, context)
     if intent == DRIVE_DOWNLOAD:
@@ -374,6 +414,7 @@ __all__ = [
     "DRIVE_DOWNLOAD",
     "DRIVE_VIEW",
     "INTENTS",
+    "NODE_CONNECT",
     "PREVIEW_STAGES",
     "RESOLUTION_SCHEMA",
     "SPACE_KINDS",
@@ -382,6 +423,7 @@ __all__ = [
     "drive_download_destination",
     "drive_view_destination",
     "login_destination",
+    "node_connect_destination",
     "parse_url",
     "registration_destination",
     "resolve_destination",
