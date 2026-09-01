@@ -10,6 +10,9 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import android.view.Gravity
 import android.view.View
@@ -22,6 +25,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
@@ -33,12 +37,16 @@ class MainActivity : Activity() {
     private lateinit var listeningButton: Button
     private lateinit var providerButton: Button
     private lateinit var modelButton: Button
+    private lateinit var ttsTestButton: Button
+    private lateinit var ttsSettingsButton: Button
     private val main = Handler(Looper.getMainLooper())
     private val controlWorker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "adaos-node-controls").apply { isDaemon = true }
     }
     private var voiceListeningMode = "activation"
     private var sttProviderMode = "system"
+    private var ttsProbe: TextToSpeech? = null
+    private var ttsProbeStatus = ""
     private val voiceStatusPoll = object : Runnable {
         override fun run() {
             refreshVoiceControls()
@@ -78,6 +86,9 @@ class MainActivity : Activity() {
         Log.i(TAG, "onDestroy instance=${System.identityHashCode(this)}")
         main.removeCallbacks(voiceStatusPoll)
         controlWorker.shutdownNow()
+        ttsProbe?.stop()
+        ttsProbe?.shutdown()
+        ttsProbe = null
         super.onDestroy()
     }
 
@@ -159,15 +170,10 @@ class MainActivity : Activity() {
         content.addView(button("Stop node") { stopNode() })
         openButton = button("Open AdaOS") { openAdaos() }.apply { isEnabled = false }
         content.addView(openButton)
-        content.addView(
-            label(
-                "Native Yjs and local Notebook state are persistent. Weather, AdaOS " +
-                    "Connect, Notebook, and Taiga UI run from the fixed in-process bundle.",
-                14f,
-                Color.rgb(156, 163, 175),
-                false,
-            )
-        )
+        ttsTestButton = button("Test phone TTS") { testPhoneTts() }
+        content.addView(ttsTestButton)
+        ttsSettingsButton = button("Open TTS settings") { openTtsSettings() }
+        content.addView(ttsSettingsButton)
         scroll.addView(
             content,
             ViewGroup.LayoutParams(
@@ -251,7 +257,10 @@ class MainActivity : Activity() {
                     vosk?.optString("last_error", "")?.takeIf { it.isNotBlank() }?.let {
                         "Vosk error: ${it.take(120)}"
                     },
+                    native?.let { ttsRuntimeSummary(it, "System TTS") },
+                    vosk?.let { ttsRuntimeSummary(it, "Vosk TTS") },
                     installError?.let { "Install error: ${it.take(120)}" },
+                    ttsProbeStatus.takeIf { it.isNotBlank() },
                 ).joinToString("\n")
                 voiceRouteView.text = "🎙 $input · $provider → General · Assistant → 🔊 Phone\n$voiceDetails"
                 listeningButton.text = if (voiceListeningMode == "off") {
@@ -274,6 +283,25 @@ class MainActivity : Activity() {
             }
         }
     }
+
+    private fun ttsRuntimeSummary(runtime: JSONObject, label: String): String? {
+        if (!runtime.has("tts_ready") && !runtime.has("last_tts_error")) return null
+        val skipped = runtime.optString("last_tts_skipped_reason", "")
+        val error = runtime.optString("last_tts_error", "")
+        return listOfNotNull(
+            "$label: ready=${runtime.optBoolean("tts_ready", false)} " +
+                "init=${jsonValue(runtime, "tts_init_status")} " +
+                "lang=${jsonValue(runtime, "tts_language_status")} " +
+                "speak=${jsonValue(runtime, "last_tts_speak_status")} " +
+                "queued=${runtime.optLong("tts_queued_count", 0)} " +
+                "done=${runtime.optLong("tts_done_count", 0)}",
+            skipped.takeIf { it.isNotBlank() }?.let { "$label skipped: $it" },
+            error.takeIf { it.isNotBlank() }?.let { "$label error: ${it.take(80)}" },
+        ).joinToString("\n")
+    }
+
+    private fun jsonValue(payload: JSONObject, key: String): String =
+        if (!payload.has(key) || payload.isNull(key)) "null" else payload.opt(key)?.toString() ?: "null"
 
     private fun toggleListeningMode() {
         val next = if (voiceListeningMode == "off") "activation" else "off"
@@ -333,6 +361,83 @@ class MainActivity : Activity() {
                     .put("macos"),
             )
         return payload.put("descriptor", descriptor)
+    }
+
+    private fun testPhoneTts() {
+        ttsTestButton.isEnabled = false
+        ttsProbeStatus = "TTS test: initializing"
+        refreshVoiceControls()
+        val existing = ttsProbe
+        if (existing != null) {
+            speakTtsProbe(existing)
+            return
+        }
+        ttsProbe = TextToSpeech(this) { status ->
+            main.post {
+                if (status != TextToSpeech.SUCCESS) {
+                    ttsProbeStatus = "TTS test: init failed status=$status"
+                    ttsTestButton.isEnabled = true
+                    refreshVoiceControls()
+                    return@post
+                }
+                speakTtsProbe(ttsProbe ?: return@post)
+            }
+        }
+    }
+
+    private fun speakTtsProbe(tts: TextToSpeech) {
+        val requested = Locale.forLanguageTag("ru-RU")
+        var languageStatus = tts.setLanguage(requested)
+        var languageTag = requested.toLanguageTag()
+        if (languageStatus in setOf(TextToSpeech.LANG_MISSING_DATA, TextToSpeech.LANG_NOT_SUPPORTED)) {
+            val fallback = Locale.getDefault()
+            languageStatus = tts.setLanguage(fallback)
+            languageTag = fallback.toLanguageTag()
+        }
+        val engine = tts.defaultEngine ?: "unknown"
+        val engines = tts.engines.joinToString(limit = 4) { it.name }
+        tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) = Unit
+            override fun onDone(utteranceId: String?) {
+                main.post {
+                    ttsProbeStatus = "$ttsProbeStatus · done"
+                    ttsTestButton.isEnabled = true
+                    refreshVoiceControls()
+                }
+            }
+            @Deprecated("Deprecated in Java")
+            override fun onError(utteranceId: String?) {
+                main.post {
+                    ttsProbeStatus = "$ttsProbeStatus · error"
+                    ttsTestButton.isEnabled = true
+                    refreshVoiceControls()
+                }
+            }
+        })
+        val speakStatus = tts.speak(
+            "Проверка голосового ответа AdaOS.",
+            TextToSpeech.QUEUE_FLUSH,
+            Bundle(),
+            "adaos-tts-test-${System.currentTimeMillis()}",
+        )
+        ttsProbeStatus = "TTS test: engine=$engine lang=$languageTag langStatus=$languageStatus " +
+            "speak=$speakStatus engines=$engines"
+        ttsTestButton.isEnabled = speakStatus != TextToSpeech.SUCCESS
+        refreshVoiceControls()
+    }
+
+    private fun openTtsSettings() {
+        try {
+            startActivity(Intent("com.android.settings.TTS_SETTINGS"))
+        } catch (error: Throwable) {
+            try {
+                startActivity(Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA))
+            } catch (installError: Throwable) {
+                ttsProbeStatus = "TTS settings failed: ${installError.javaClass.simpleName}"
+                refreshVoiceControls()
+                startActivity(Intent(Settings.ACTION_SETTINGS))
+            }
+        }
     }
 
     private fun postVoicePolicy(payload: JSONObject) {

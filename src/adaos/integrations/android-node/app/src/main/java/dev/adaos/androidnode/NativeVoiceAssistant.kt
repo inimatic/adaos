@@ -42,8 +42,15 @@ class NativeVoiceAssistant(
     private var ttsReady = false
     private var ttsInitStatus: Int? = null
     private var ttsLanguageStatus: Int? = null
+    private var ttsLanguageTag = ""
     private var lastTtsSpeakStatus: Int? = null
     private var lastTtsError = ""
+    private var lastTtsSkippedReason = ""
+    private var ttsAttemptCount = 0L
+    private var ttsQueuedCount = 0L
+    private var ttsDoneCount = 0L
+    private var ttsFailedCount = 0L
+    private var ttsSkippedCount = 0L
     private var pendingSpeech: Pair<String, String>? = null
     private var listening = false
     private var processing = false
@@ -262,12 +269,29 @@ class NativeVoiceAssistant(
                         .put("capture_id", captureId)
                         .put("recognizer", recognizerKind)
                         .put("accepted", accepted)
+                        .put("render_here", renderHere)
+                        .put("response_chars", response.length)
                         .put("response_source", result.optString("response_source", ""))
                         .put("arbitration", result.optJSONObject("arbitration")),
                 )
                 if (accepted && renderHere && response.isNotEmpty()) {
                     speak(response, result.optString("active_agent_voice", ""))
                 } else {
+                    if (accepted) {
+                        lastTtsSkippedReason = when {
+                            !renderHere -> "render_elsewhere"
+                            response.isEmpty() -> "empty_response"
+                            else -> "not_accepted"
+                        }
+                        ttsSkippedCount += 1
+                        publishRuntime(
+                            "tts_skipped",
+                            JSONObject()
+                                .put("reason", lastTtsSkippedReason)
+                                .put("render_here", renderHere)
+                                .put("response_chars", response.length),
+                        )
+                    }
                     scheduleRestart(if (accepted) 250 else 450)
                 }
             }
@@ -321,15 +345,16 @@ class NativeVoiceAssistant(
                 lastTtsError = "tts_init_failed:$status"
                 publishRuntime("tts_unavailable", JSONObject().put("tts_init_status", status))
             } else {
-                ttsLanguageStatus = textToSpeech?.setLanguage(Locale.forLanguageTag("ru-RU"))
-                if (ttsLanguageStatus in setOf(TextToSpeech.LANG_MISSING_DATA, TextToSpeech.LANG_NOT_SUPPORTED)) {
+                ttsReady = configureTtsLanguage("ru-RU")
+                if (!ttsReady) {
                     ttsReady = false
-                    lastTtsError = "tts_language_unavailable:$ttsLanguageStatus"
                     publishRuntime(
                         "tts_unavailable",
                         JSONObject()
                             .put("tts_init_status", status)
-                            .put("tts_language_status", ttsLanguageStatus),
+                            .put("tts_language_status", ttsLanguageStatus)
+                            .put("tts_language_tag", ttsLanguageTag)
+                            .put("tts_error", lastTtsError),
                     )
                 } else {
                     lastTtsError = ""
@@ -353,6 +378,7 @@ class NativeVoiceAssistant(
     }
 
     private fun speak(text: String, voiceProfile: String) {
+        ttsAttemptCount += 1
         if (!ttsReady) {
             pendingSpeech = text to voiceProfile
             initializeTts()
@@ -366,6 +392,13 @@ class NativeVoiceAssistant(
         onNativeCaptureChanged(false)
         textToSpeech?.setPitch(if (voiceProfile.contains("male") && !voiceProfile.contains("female")) 0.9f else 1.08f)
         textToSpeech?.setSpeechRate(1.0f)
+        val language = if (voiceProfile.startsWith("en", ignoreCase = true)) "en-US" else "ru-RU"
+        if (!configureTtsLanguage(language)) {
+            ttsFailedCount += 1
+            publishRuntime("tts_unavailable", JSONObject().put("tts_error", lastTtsError))
+            finishSpeaking()
+            return
+        }
         val utteranceId = "adaos-${System.currentTimeMillis()}"
         publishRuntime(
             "speaking",
@@ -377,19 +410,43 @@ class NativeVoiceAssistant(
         val status = textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, Bundle(), utteranceId)
         lastTtsSpeakStatus = status
         if (status == TextToSpeech.ERROR) {
+            ttsFailedCount += 1
             lastTtsError = "tts_speak_failed"
             publishRuntime("tts_failed", JSONObject().put("tts_utterance_id", utteranceId))
             finishSpeaking()
         }
-        else if (bargeInEnabled) scheduleRestart(250)
+        else {
+            ttsQueuedCount += 1
+            if (bargeInEnabled) scheduleRestart(250)
+        }
     }
 
     private fun finishSpeaking() {
+        if (speaking) ttsDoneCount += 1
         speaking = false
         currentSpeechText = ""
         ttsEchoGuardUntil = System.currentTimeMillis() + TTS_ECHO_GUARD_MS
         publishRuntime("tts_complete", JSONObject().put("half_duplex", true))
         scheduleRestart(350)
+    }
+
+    private fun configureTtsLanguage(languageTag: String): Boolean {
+        val requested = Locale.forLanguageTag(languageTag)
+        ttsLanguageTag = requested.toLanguageTag()
+        ttsLanguageStatus = textToSpeech?.setLanguage(requested)
+        if (ttsLanguageStatus !in setOf(TextToSpeech.LANG_MISSING_DATA, TextToSpeech.LANG_NOT_SUPPORTED)) {
+            return true
+        }
+        val requestedStatus = ttsLanguageStatus
+        val fallback = Locale.getDefault()
+        ttsLanguageTag = fallback.toLanguageTag()
+        ttsLanguageStatus = textToSpeech?.setLanguage(fallback)
+        if (ttsLanguageStatus !in setOf(TextToSpeech.LANG_MISSING_DATA, TextToSpeech.LANG_NOT_SUPPORTED)) {
+            lastTtsError = "tts_language_fallback:$languageTag:$requestedStatus->$ttsLanguageTag:$ttsLanguageStatus"
+            return true
+        }
+        lastTtsError = "tts_language_unavailable:$languageTag:$requestedStatus->$ttsLanguageTag:$ttsLanguageStatus"
+        return false
     }
 
     private fun scheduleRestart(delayMs: Long) {
@@ -446,8 +503,15 @@ class NativeVoiceAssistant(
                 .put("tts_ready", ttsReady)
                 .put("tts_init_status", ttsInitStatus ?: JSONObject.NULL)
                 .put("tts_language_status", ttsLanguageStatus ?: JSONObject.NULL)
+                .put("tts_language_tag", ttsLanguageTag)
                 .put("last_tts_speak_status", lastTtsSpeakStatus ?: JSONObject.NULL)
                 .put("last_tts_error", lastTtsError)
+                .put("last_tts_skipped_reason", lastTtsSkippedReason)
+                .put("tts_attempt_count", ttsAttemptCount)
+                .put("tts_queued_count", ttsQueuedCount)
+                .put("tts_done_count", ttsDoneCount)
+                .put("tts_failed_count", ttsFailedCount)
+                .put("tts_skipped_count", ttsSkippedCount)
             fields.keys().forEach { key -> payload.put(key, fields.opt(key)) }
             runtimeFile.parentFile?.mkdirs()
             val temporary = File(runtimeFile.parentFile, "${runtimeFile.name}.tmp")

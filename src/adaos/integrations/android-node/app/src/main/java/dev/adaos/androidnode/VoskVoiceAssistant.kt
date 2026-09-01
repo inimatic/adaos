@@ -55,8 +55,16 @@ class VoskVoiceAssistant(
     private var ttsReady = false
     private var ttsInitStatus: Int? = null
     private var ttsLanguageStatus: Int? = null
+    private var ttsLanguageTag = ""
     private var lastTtsSpeakStatus: Int? = null
     private var lastTtsError = ""
+    private var lastTtsSkippedReason = ""
+    private var ttsAttemptCount = 0L
+    private var ttsQueuedCount = 0L
+    private var ttsDoneCount = 0L
+    private var ttsFailedCount = 0L
+    private var ttsSkippedCount = 0L
+    private var pendingSpeech: Pair<String, String>? = null
     private var currentModelId = ""
     private var currentModel: Model? = null
     private var currentRecognizer: Recognizer? = null
@@ -342,11 +350,26 @@ class VoskVoiceAssistant(
                     .put("model_id", modelId)
                     .put("accepted", accepted)
                     .put("render_here", renderHere)
+                    .put("response_chars", response.length)
                     .put("activation_detected", activation != null)
                     .put("activation_alias", activation?.alias ?: ""),
             )
             if (accepted && renderHere && response.isNotEmpty()) main.post {
                 speak(response, result.optString("active_agent_voice", ""))
+            } else if (accepted) {
+                lastTtsSkippedReason = when {
+                    !renderHere -> "render_elsewhere"
+                    response.isEmpty() -> "empty_response"
+                    else -> "not_accepted"
+                }
+                ttsSkippedCount += 1
+                publishRuntime(
+                    "tts_skipped",
+                    JSONObject()
+                        .put("reason", lastTtsSkippedReason)
+                        .put("render_here", renderHere)
+                        .put("response_chars", response.length),
+                )
             }
         }
     }
@@ -426,15 +449,16 @@ class VoskVoiceAssistant(
                 lastTtsError = "tts_init_failed:$status"
                 publishRuntime("tts_unavailable", JSONObject().put("tts_init_status", status))
             } else {
-                ttsLanguageStatus = textToSpeech?.setLanguage(Locale.forLanguageTag("ru-RU"))
-                if (ttsLanguageStatus in setOf(TextToSpeech.LANG_MISSING_DATA, TextToSpeech.LANG_NOT_SUPPORTED)) {
+                ttsReady = configureTtsLanguage("ru-RU")
+                if (!ttsReady) {
                     ttsReady = false
-                    lastTtsError = "tts_language_unavailable:$ttsLanguageStatus"
                     publishRuntime(
                         "tts_unavailable",
                         JSONObject()
                             .put("tts_init_status", status)
-                            .put("tts_language_status", ttsLanguageStatus),
+                            .put("tts_language_status", ttsLanguageStatus)
+                            .put("tts_language_tag", ttsLanguageTag)
+                            .put("tts_error", lastTtsError),
                     )
                 } else {
                     lastTtsError = ""
@@ -449,12 +473,25 @@ class VoskVoiceAssistant(
                         main.post { finishSpeaking() }
                     }
                 })
+                pendingSpeech?.also { (text, profile) ->
+                    pendingSpeech = null
+                    speak(text, profile)
+                }
             }
         }
     }
 
     private fun speak(text: String, voiceProfile: String) {
+        ttsAttemptCount += 1
         if (!ttsReady) {
+            pendingSpeech = text to voiceProfile
+            initializeTts()
+            publishRuntime("tts_pending", JSONObject().put("tts_ready", false).put("tts_error", lastTtsError))
+            return
+        }
+        val language = if (voiceProfile.startsWith("en", ignoreCase = true)) "en-US" else "ru-RU"
+        if (!configureTtsLanguage(language)) {
+            ttsFailedCount += 1
             publishRuntime("tts_unavailable", JSONObject().put("tts_error", lastTtsError))
             return
         }
@@ -465,8 +502,6 @@ class VoskVoiceAssistant(
             "tts_output_guard",
             JSONObject().put("capture_owner", "vosk_streaming").put("decode_paused", true),
         )
-        val language = if (voiceProfile.startsWith("en", ignoreCase = true)) "en-US" else "ru-RU"
-        ttsLanguageStatus = textToSpeech?.setLanguage(Locale.forLanguageTag(language))
         val result = textToSpeech?.speak(
             text,
             TextToSpeech.QUEUE_FLUSH,
@@ -475,13 +510,17 @@ class VoskVoiceAssistant(
         )
         lastTtsSpeakStatus = result
         if (result == TextToSpeech.ERROR) {
+            ttsFailedCount += 1
             lastTtsError = "tts_speak_failed"
             publishRuntime("tts_failed", JSONObject().put("tts_error", lastTtsError))
             finishSpeaking()
+        } else {
+            ttsQueuedCount += 1
         }
     }
 
     private fun finishSpeaking() {
+        if (speaking) ttsDoneCount += 1
         speaking = false
         resumeRecognitionAt = System.currentTimeMillis() + TTS_DRAIN_MS
         recognizerResetRequested.set(true)
@@ -491,6 +530,25 @@ class VoskVoiceAssistant(
                 .put("capture_owner", "vosk_streaming")
                 .put("resume_in_ms", TTS_DRAIN_MS),
         )
+    }
+
+    private fun configureTtsLanguage(languageTag: String): Boolean {
+        val requested = Locale.forLanguageTag(languageTag)
+        ttsLanguageTag = requested.toLanguageTag()
+        ttsLanguageStatus = textToSpeech?.setLanguage(requested)
+        if (ttsLanguageStatus !in setOf(TextToSpeech.LANG_MISSING_DATA, TextToSpeech.LANG_NOT_SUPPORTED)) {
+            return true
+        }
+        val requestedStatus = ttsLanguageStatus
+        val fallback = Locale.getDefault()
+        ttsLanguageTag = fallback.toLanguageTag()
+        ttsLanguageStatus = textToSpeech?.setLanguage(fallback)
+        if (ttsLanguageStatus !in setOf(TextToSpeech.LANG_MISSING_DATA, TextToSpeech.LANG_NOT_SUPPORTED)) {
+            lastTtsError = "tts_language_fallback:$languageTag:$requestedStatus->$ttsLanguageTag:$ttsLanguageStatus"
+            return true
+        }
+        lastTtsError = "tts_language_unavailable:$languageTag:$requestedStatus->$ttsLanguageTag:$ttsLanguageStatus"
+        return false
     }
 
     private fun isLikelyEcho(text: String): Boolean {
@@ -612,8 +670,15 @@ class VoskVoiceAssistant(
             .put("tts_ready", ttsReady)
             .put("tts_init_status", ttsInitStatus ?: JSONObject.NULL)
             .put("tts_language_status", ttsLanguageStatus ?: JSONObject.NULL)
+            .put("tts_language_tag", ttsLanguageTag)
             .put("last_tts_speak_status", lastTtsSpeakStatus ?: JSONObject.NULL)
             .put("last_tts_error", lastTtsError)
+            .put("last_tts_skipped_reason", lastTtsSkippedReason)
+            .put("tts_attempt_count", ttsAttemptCount)
+            .put("tts_queued_count", ttsQueuedCount)
+            .put("tts_done_count", ttsDoneCount)
+            .put("tts_failed_count", ttsFailedCount)
+            .put("tts_skipped_count", ttsSkippedCount)
             .put("updated_at_epoch_ms", System.currentTimeMillis())
             .put("details", details)
         try {
