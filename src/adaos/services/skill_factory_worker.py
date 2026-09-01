@@ -2541,6 +2541,13 @@ class LocalSkillFactoryWorker:
                     + "fix every reported issue, rerun relevant checks, and leave the workspace in a valid state.\n\n"
                     + "\n".join(f"- {item}" for item in test_report["errors"][:40])
                 )
+                repair_root_mcp = root_mcp
+                if root_mcp_evidence:
+                    repair_prompt += (
+                        "\n\nThe required Root MCP gate already has trusted evidence from this "
+                        "candidate. Do not call Root MCP again during deterministic validation repair."
+                    )
+                    repair_root_mcp = None
                 codex_result = self._execute_codex(
                     task_id=task_id,
                     assignment=assignment,
@@ -2548,7 +2555,7 @@ class LocalSkillFactoryWorker:
                     prompt=repair_prompt,
                     output_dir=output_dir,
                     agent_profile=agent_profile,
-                    root_mcp=root_mcp,
+                    root_mcp=repair_root_mcp,
                 )
                 self._ensure_task_active(task_id)
                 self._record_codex_attempt(runtime_dir, codex_result, attempt=repair_attempt + 1)
