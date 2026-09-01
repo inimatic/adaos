@@ -131,6 +131,30 @@ class _FakeResumableBuilderAutomation(_FakeBuilderAutomation):
         )
 
 
+class _FakeFollowupBuilderAutomation(_FakeBuilderAutomation):
+    def __init__(self) -> None:
+        super().__init__()
+        self.followup_calls: list[dict] = []
+
+    def status(self, *, object_type: str, object_id: str):
+        result = self._payload(
+            status="completed",
+            suffix=str(self.counter or 1),
+            links={"object_type": object_type, "object_id": object_id},
+        )
+        result["session"]["completion_readiness"]["aprobation"] = {"ok": True}
+        return result
+
+    def start_followup_dev_ticket_repair(self, **kwargs):
+        self.followup_calls.append(dict(kwargs))
+        self.counter += 1
+        return self._payload(
+            status="running",
+            suffix=f"followup-{self.counter}",
+            links=kwargs.get("links") or {},
+        )
+
+
 class _FakeFailingBuilderAutomation(_FakeBuilderAutomation):
     def status(self, *, object_type: str, object_id: str):
         suffix = str(self.counter or 1)
@@ -705,6 +729,48 @@ def test_autonomous_repair_links_builder_automation_and_resolves_with_evidence(t
         "factory.task.1",
         "factory.task.2",
     ]
+
+
+def test_autonomous_repair_joins_completed_builder_trial_as_followup(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    automation = _FakeFollowupBuilderAutomation()
+    signal = service.capture_signal(
+        kind="development_request",
+        summary="Rename the selected metric trend heading",
+        target_scope={"type": "skill", "id": "demo_metrics_skill", "source": "dev"},
+        source="client_feedback",
+        owner_area="skill",
+        metadata={
+            "builder_repair": {
+                "profile": "surgical_ui",
+                "target_files": ["skills/demo_metrics_skill/webui.json"],
+                "target_refs": ["widget:metric-trend.title"],
+                "acceptance_checks": ["The heading is Selected metric trend."],
+                "max_changed_files": 1,
+                "requires_root_mcp": False,
+            }
+        },
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="ready_for_builder",
+        owner_area="skill",
+    )["ticket"]
+
+    result = service.start_autonomous_repair(
+        ticket["ticket_id"],
+        actor="builder:automation",
+        repair_service=repair_service,
+        automation_service=automation,
+        webspace_id="desktop",
+    )
+
+    assert result["started"] is True
+    assert automation.calls == []
+    assert len(automation.followup_calls) == 1
+    assert automation.followup_calls[0]["links"]["development_ticket_id"] == ticket["ticket_id"]
 
 
 def test_failed_autonomous_repair_returns_ticket_to_builder_queue_with_evidence(tmp_path: Path) -> None:

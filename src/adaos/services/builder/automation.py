@@ -33,6 +33,7 @@ from adaos.services.skill_factory_worker import LocalSkillFactoryWorker
 AUTOMATION_SESSION_SCHEMA = "adaos.builder.automation_session.v1"
 STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.12.0"
 FINALIZATION_HEARTBEAT_SECONDS = 10.0
+TRIAL_PREPARATION_RECOVERY_GRACE_SECONDS = 300.0
 AUTOMATION_PROJECTION_SCHEMA = "adaos.builder.automation_projection.v1"
 _LOCK = threading.RLock()
 _WORKER_LOCK = threading.Lock()
@@ -1139,6 +1140,228 @@ class BuilderAutomationService:
             execution_budget=execution_budget,
         )
         result["resumed_failed_dev_ticket"] = True
+        return result
+
+    def start_followup_dev_ticket_repair(
+        self,
+        *,
+        object_type: str,
+        object_id: str,
+        implementation_brief: str,
+        links: Mapping[str, Any],
+        webspace_id: str = "desktop",
+        conversation_id: str | None = None,
+        execution_budget: Mapping[str, Any] | None = None,
+        agent_profile: Mapping[str, Any] | None = None,
+        mcp: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Add a qualified repair as a new iteration of the active trial Change."""
+
+        kind, project_id = self._project_ref(object_type, object_id)
+        brief = str(implementation_brief or "").strip()
+        if not brief:
+            raise ValueError("follow-up Dev Ticket repair requires its implementation brief")
+        _reject_transport_corruption(brief, field="implementation_brief")
+        incoming_links = dict(links or {})
+        ticket_ids = list(
+            dict.fromkeys(
+                [
+                    str(incoming_links.get("development_ticket_id") or "").strip(),
+                    *[
+                        str(item).strip()
+                        for item in incoming_links.get("development_ticket_ids") or []
+                        if str(item).strip()
+                    ],
+                ]
+            )
+        )
+        ticket_ids = [item for item in ticket_ids if item]
+        if not ticket_ids:
+            raise ValueError("follow-up Dev Ticket repair requires a ticket link")
+
+        with _LOCK:
+            session = self.get_session(kind, project_id)
+            if not session:
+                raise ValueError("automation_session_not_found")
+            session = self.refresh_session(session)
+            if str(session.get("status") or "").strip() != "completed":
+                raise ValueError("follow-up Dev Ticket repair requires a completed Automation trial")
+            workflow = self._workflow().describe(kind, project_id)
+            governed = workflow.get("governed") if isinstance(workflow.get("governed"), Mapping) else {}
+            governed_state = str(governed.get("state") or "").strip()
+            change_set = (
+                workflow.get("change_set")
+                if isinstance(workflow.get("change_set"), Mapping)
+                else {}
+            )
+            change_set_id = str(change_set.get("change_set_id") or "").strip()
+            if governed_state == "trial_waiting":
+                delivery = (
+                    workflow.get("delivery")
+                    if isinstance(workflow.get("delivery"), Mapping)
+                    else {}
+                )
+                started_raw = str(delivery.get("activation_started_at") or "").strip()
+                age_seconds: float | None = None
+                if started_raw:
+                    try:
+                        started_at = datetime.fromisoformat(started_raw.replace("Z", "+00:00"))
+                        if started_at.tzinfo is None:
+                            started_at = started_at.replace(tzinfo=timezone.utc)
+                        age_seconds = max(
+                            0.0,
+                            (datetime.now(timezone.utc) - started_at).total_seconds(),
+                        )
+                    except ValueError:
+                        age_seconds = None
+                if age_seconds is not None and age_seconds < TRIAL_PREPARATION_RECOVERY_GRACE_SECONDS:
+                    raise ValueError(
+                        "follow-up Dev Ticket repair is waiting for active Trial preparation"
+                    )
+                recovered = self._workflow().transition(
+                    kind,
+                    project_id,
+                    "candidate_preparation_unknown",
+                    actor="builder.automation.recovery",
+                    reason="stale Trial preparation was interrupted before immutable candidate identity",
+                    metadata={
+                        "error": "stale_trial_preparation_without_candidate_identity",
+                        "idempotency_key": (
+                            f"builder-automation-stale-trial:{change_set_id or project_id}:"
+                            f"{str(delivery.get('activity_attempt_id') or 'unknown')}"
+                        ),
+                    },
+                )
+                workflow = (
+                    recovered.get("workflow")
+                    if isinstance(recovered.get("workflow"), Mapping)
+                    else self._workflow().describe(kind, project_id)
+                )
+                governed = (
+                    workflow.get("governed")
+                    if isinstance(workflow.get("governed"), Mapping)
+                    else {}
+                )
+                governed_state = str(governed.get("state") or "").strip()
+                change_set = (
+                    workflow.get("change_set")
+                    if isinstance(workflow.get("change_set"), Mapping)
+                    else {}
+                )
+                change_set_id = str(change_set.get("change_set_id") or "").strip()
+            if governed_state not in {
+                "verification",
+                "trial_ready",
+                "trial_review",
+                "publication_ready",
+                "reconciliation_required",
+            }:
+                raise ValueError(
+                    "follow-up Dev Ticket repair requires an active verification or trial Change"
+                )
+            if not change_set_id or str(change_set.get("status") or "").strip() in {
+                "published",
+                "rejected",
+                "superseded",
+            }:
+                raise ValueError("follow-up Dev Ticket repair requires a non-terminal Change")
+
+            summary = _brief_summary(brief)
+            existing_issue_ids = {
+                str(item.get("issue_id") or "").strip()
+                for item in change_set.get("issues") or []
+                if isinstance(item, Mapping)
+            }
+            issues = []
+            for ticket_id in ticket_ids:
+                issue_id = f"automation-followup-{ticket_id}"[:160]
+                if issue_id in existing_issue_ids:
+                    repair_revision = str(
+                        incoming_links.get("builder_repair_id")
+                        or incoming_links.get("repair_id")
+                        or ""
+                    ).strip()
+                    revision_seed = repair_revision or brief
+                    revision_suffix = hashlib.sha256(
+                        revision_seed.encode("utf-8")
+                    ).hexdigest()[:12]
+                    issue_id = f"{issue_id[:147]}-{revision_suffix}"
+                if issue_id in existing_issue_ids:
+                    continue
+                issues.append(
+                    {
+                        "issue_id": issue_id,
+                        "title": summary[:240],
+                        "lane": "automation",
+                        "status": "open",
+                        "acceptance_criteria": [
+                            f"The follow-up implementation satisfies: {summary}"[:500]
+                        ],
+                    }
+                )
+            if issues:
+                self._workflow().transition(
+                    kind,
+                    project_id,
+                    "change_issues_added",
+                    actor="builder.automation.dev_ticket",
+                    reason="qualified Dev Tickets joined the active trial batch",
+                    metadata={
+                        "change_set_id": change_set_id,
+                        "request": summary,
+                        "issues": issues,
+                        "source_message_ids": ticket_ids,
+                        "idempotency_key": (
+                            f"builder-automation-followup:{change_set_id}:"
+                            f"{hashlib.sha256('|'.join(ticket_ids).encode('utf-8')).hexdigest()[:20]}"
+                        ),
+                    },
+                )
+
+            current_links = (
+                dict(session.get("links") or {})
+                if isinstance(session.get("links"), Mapping)
+                else {}
+            )
+            all_ticket_ids = list(
+                dict.fromkeys(
+                    [
+                        str(current_links.get("development_ticket_id") or "").strip(),
+                        *[
+                            str(item).strip()
+                            for item in current_links.get("development_ticket_ids") or []
+                            if str(item).strip()
+                        ],
+                        *ticket_ids,
+                    ]
+                )
+            )
+            session["links"] = {
+                **current_links,
+                **incoming_links,
+                "development_ticket_ids": [item for item in all_ticket_ids if item],
+            }
+            session["implementation_brief"] = brief
+            session["webspace_id"] = str(webspace_id or session.get("webspace_id") or "desktop")
+            if str(conversation_id or "").strip():
+                session["conversation_id"] = str(conversation_id).strip()
+            if isinstance(agent_profile, Mapping):
+                session["agent_profile"] = dict(agent_profile)
+            admitted_mcp = _sanitized_mcp_profile(mcp)
+            if admitted_mcp:
+                session["mcp"] = admitted_mcp
+            session["updated_at"] = _now_iso()
+            self._save_session(session)
+
+        result = self.submit_turn(
+            text="Apply the newly qualified Dev Ticket repair from implementation_brief.",
+            object_type=kind,
+            object_id=project_id,
+            webspace_id=webspace_id,
+            conversation_id=conversation_id,
+            execution_budget=execution_budget,
+        )
+        result["followup_dev_ticket_repair"] = True
         return result
 
     def _ensure_automation_artifacts_created(

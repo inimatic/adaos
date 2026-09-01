@@ -1382,8 +1382,10 @@ class DevelopmentTicketService:
             "development_source_materialization": materialization,
         }
         resume_failed = getattr(automation_service, "resume_failed_dev_ticket_repair", None)
+        start_followup = getattr(automation_service, "start_followup_dev_ticket_repair", None)
         can_resume = False
-        if callable(resume_failed):
+        can_followup = False
+        if callable(resume_failed) or callable(start_followup):
             current = automation_service.status(
                 object_type=target["object_type"],
                 object_id=target["object_id"],
@@ -1394,7 +1396,20 @@ class DevelopmentTicketService:
                 _text(current_session.get("status")) == "failed"
                 and _text(current_links.get("development_ticket_id")) == ticket["ticket_id"]
             )
-        start_method = resume_failed if can_resume else automation_service.start_from_execute
+            readiness = _mapping(current_session.get("completion_readiness"))
+            can_followup = (
+                callable(start_followup)
+                and _text(current_session.get("status")) == "completed"
+                and bool(readiness.get("ok"))
+                and bool(_mapping(readiness.get("aprobation")).get("ok"))
+            )
+        start_method = (
+            resume_failed
+            if can_resume
+            else start_followup
+            if can_followup
+            else automation_service.start_from_execute
+        )
         started = start_method(
             object_type=target["object_type"],
             object_id=target["object_id"],
@@ -1650,9 +1665,22 @@ class DevelopmentTicketService:
             and _text(current_links.get("builder_package_id")) == _text(package_id)
             and callable(getattr(automation_service, "resume_failed_dev_ticket_repair", None))
         )
+        followup = (
+            not resume
+            and _text(current_session.get("status")) == "completed"
+            and bool(_mapping(current_session.get("completion_readiness")).get("ok"))
+            and bool(
+                _mapping(
+                    _mapping(current_session.get("completion_readiness")).get("aprobation")
+                ).get("ok")
+            )
+            and callable(getattr(automation_service, "start_followup_dev_ticket_repair", None))
+        )
         start_method = (
             automation_service.resume_failed_dev_ticket_repair
             if resume
+            else automation_service.start_followup_dev_ticket_repair
+            if followup
             else automation_service.start_from_execute
         )
         started = start_method(

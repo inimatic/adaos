@@ -2166,6 +2166,14 @@ def test_codex_live_budget_estimate_counts_growing_tool_context(tmp_path: Path) 
     assert usage["accuracy"] == "estimated"
     assert usage["tool_rounds"] == 4
     assert usage["model_tokens"] > 12_000
+    assert usage["cached_input_tokens"] > 0
+    assert usage["estimated_fresh_input_tokens"] == (
+        usage["input_tokens"] - usage["cached_input_tokens"]
+    )
+    assert _codex_budget_observed_tokens(
+        usage,
+        metric="fresh_plus_output",
+    ) < usage["model_tokens"]
 
 
 def test_codex_fresh_budget_excludes_cached_input_but_keeps_output() -> None:

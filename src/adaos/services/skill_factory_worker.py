@@ -189,13 +189,15 @@ def _codex_jsonl_usage(path: Path) -> dict[str, int]:
 
 
 def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, Any]:
-    """Estimate cumulative input while Codex is still executing tool rounds.
+    """Estimate cumulative and fresh input while Codex executes tool rounds.
 
     ``codex exec --json`` emits authoritative usage only when the turn ends.  A
     tool-driven run can therefore exceed its budget before provider usage is
     visible.  The event stream does expose each completed tool result; summing
     the growing visible context at those model boundaries gives a conservative
-    live guard without treating it as provider-reported accounting.
+    total-token guard.  For a ``fresh_plus_output`` budget, repeated exact
+    prefixes are projected as cacheable while every newly visible byte remains
+    fresh.  Provider-reported usage replaces this estimate when available.
     """
 
     context_bytes = len(str(prompt or "").encode("utf-8", errors="replace"))
@@ -223,15 +225,22 @@ def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, A
         except OSError:
             return {}
     cumulative_tokens += max(1, (context_bytes + 3) // 4)
+    unique_tokens = max(1, (context_bytes + 3) // 4)
     estimated = max(1, int(cumulative_tokens * CODEX_LIVE_BUDGET_SAFETY_FACTOR))
+    estimated_fresh = min(
+        estimated,
+        max(1, int(unique_tokens * CODEX_LIVE_BUDGET_SAFETY_FACTOR)),
+    )
     return {
         "accuracy": "estimated",
         "model_tokens": estimated,
         "input_tokens": estimated,
-        "cached_input_tokens": 0,
+        "cached_input_tokens": max(0, estimated - estimated_fresh),
         "output_tokens": 0,
         "reasoning_tokens": 0,
         "visible_cumulative_tokens": cumulative_tokens,
+        "visible_unique_tokens": unique_tokens,
+        "estimated_fresh_input_tokens": estimated_fresh,
         "visible_context_bytes": context_bytes,
         "tool_rounds": tool_rounds,
         "safety_factor": CODEX_LIVE_BUDGET_SAFETY_FACTOR,

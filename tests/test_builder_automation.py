@@ -1384,6 +1384,126 @@ def test_dev_ticket_followup_extends_active_trial_batch(tmp_path: Path) -> None:
     assert started["session"]["current_task_id"] != "task.first"
 
 
+def test_followup_recovers_stale_trial_preparation_without_candidate(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement the first accepted repair.",
+        webspace_id="prompt-dev",
+    )
+    session = service.status(object_type="scenario", object_id="recipes")["session"]
+    assert session["status"] == "completed"
+    workflow = service._workflow()
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "automation_completed",
+        metadata={"task_id": session["current_task_id"], "version": "0.1.1"},
+    )
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata={
+            "confirmed": True,
+            "change_id": session["change_id"],
+            "package_digest": "sha256:" + "1" * 64,
+            "source_revision": "a" * 40,
+        },
+    )
+    before = workflow.describe("scenario", "recipes")
+    assert before["governed"]["state"] == "trial_ready"
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "candidate_preparation_started",
+        metadata={
+            "confirmed": True,
+            "activity_attempt_id": "trial-attempt.interrupted",
+            "idempotency_key": "trial-attempt.interrupted",
+        },
+    )
+    state_path = workflow._state_path("scenario", "recipes")
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    persisted["workflow"]["delivery"]["activation_started_at"] = "2000-01-01T00:00:00+00:00"
+    state_path.write_text(json.dumps(persisted), encoding="utf-8")
+
+    result = service.start_followup_dev_ticket_repair(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Rename the selected metric heading.",
+        links={"development_ticket_id": "dticket.followup"},
+        webspace_id="prompt-dev",
+    )
+
+    projected = workflow.describe("scenario", "recipes")
+    actions = [item["action"] for item in projected["history"]]
+    assert result["followup_dev_ticket_repair"] is True
+    assert "candidate_preparation_unknown" in actions
+    assert "change_issues_added" in actions
+    assert any(
+        item["issue_id"] == "automation-followup-dticket.followup"
+        for item in projected["change_set"]["issues"]
+    )
+
+
+def test_followup_does_not_interrupt_active_trial_preparation(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement the first accepted repair.",
+        webspace_id="prompt-dev",
+    )
+    session = service.status(object_type="scenario", object_id="recipes")["session"]
+    assert session["status"] == "completed"
+    workflow = service._workflow()
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "automation_completed",
+        metadata={"task_id": session["current_task_id"], "version": "0.1.1"},
+    )
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata={
+            "confirmed": True,
+            "change_id": session["change_id"],
+            "package_digest": "sha256:" + "1" * 64,
+            "source_revision": "a" * 40,
+        },
+    )
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "candidate_preparation_started",
+        metadata={
+            "confirmed": True,
+            "activity_attempt_id": "trial-attempt.active",
+            "idempotency_key": "trial-attempt.active",
+        },
+    )
+
+    with pytest.raises(ValueError, match="waiting for active Trial preparation"):
+        service.start_followup_dev_ticket_repair(
+            object_type="scenario",
+            object_id="recipes",
+            implementation_brief="Rename the selected metric heading.",
+            links={"development_ticket_id": "dticket.followup"},
+            webspace_id="prompt-dev",
+        )
+
+    projected = workflow.describe("scenario", "recipes")
+    assert projected["governed"]["state"] == "trial_waiting"
+    assert not any(
+        item["issue_id"] == "automation-followup-dticket.followup"
+        for item in projected["change_set"]["issues"]
+    )
+
+
 def test_reopened_dev_ticket_adds_a_revision_to_active_trial_batch(tmp_path: Path) -> None:
     service = _service(tmp_path)
     workflow = service._workflow()
