@@ -51,6 +51,7 @@ def _load_service_skill_schema() -> dict:
         "builder.change.v1.schema.json",
         "builder.run.v1.schema.json",
         "builder.context_packet.v1.schema.json",
+        "builder.structured_edit_set.v1.schema.json",
         "builder.action_risk.v1.schema.json",
         "builder.interaction_frame.v1.schema.json",
         "builder.semantic_ui_change.v1.schema.json",

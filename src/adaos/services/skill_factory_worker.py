@@ -43,7 +43,7 @@ from adaos.services.workflow_artifacts import (
 )
 
 
-RUNNER_VERSION = "adaos-local-codex-worker/0.8.0"
+RUNNER_VERSION = "adaos-local-codex-worker/0.9.0"
 PACKET_SCHEMA = "adaos.skill_factory.codex_packet.v1"
 LOCAL_SESSION_SCHEMA = "adaos.skill_factory.local_run.v1"
 _log = logging.getLogger("adaos.skill_factory.local_worker")
@@ -66,6 +66,7 @@ BOUNDED_REPAIR_COMMAND_OUTPUT_BYTES = 8 * 1024
 BOUNDED_REPAIR_COMMAND_OUTPUT_LINES = 120
 BOUNDED_REPAIR_DISCOVERY_LINES = 400
 BOUNDED_REPAIR_TARGET_CONTEXT_BYTES = 48 * 1024
+STRUCTURED_EDIT_SCHEMA = "adaos.builder.structured_edit_set.v1"
 
 
 def _now_iso() -> str:
@@ -82,6 +83,79 @@ def _safe_config_token(value: Any, *, fallback: str = "adaos_root") -> str:
     if token and not (token[0].isalpha() or token[0] == "_"):
         token = f"mcp_{token}"
     return token or fallback
+
+
+def _text_for_newline_style(value: str, newline: str) -> str:
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    return normalized if newline == "\n" else normalized.replace("\n", newline)
+
+
+def _json_pointer_tokens(pointer: str) -> list[str]:
+    if not isinstance(pointer, str) or not pointer.startswith("/"):
+        raise ValueError("structured JSON edit requires a non-root RFC 6901 pointer")
+    tokens: list[str] = []
+    for raw in pointer[1:].split("/"):
+        if re.search(r"~(?![01])", raw):
+            raise ValueError(f"invalid RFC 6901 pointer escape: {pointer}")
+        tokens.append(raw.replace("~1", "/").replace("~0", "~"))
+    return tokens
+
+
+def _json_pointer_parent(document: Any, pointer: str) -> tuple[Any, str]:
+    tokens = _json_pointer_tokens(pointer)
+    current = document
+    for token in tokens[:-1]:
+        if isinstance(current, list):
+            if not token.isdigit() or int(token) >= len(current):
+                raise ValueError(f"JSON pointer does not resolve: {pointer}")
+            current = current[int(token)]
+        elif isinstance(current, Mapping):
+            if token not in current:
+                raise ValueError(f"JSON pointer does not resolve: {pointer}")
+            current = current[token]
+        else:
+            raise ValueError(f"JSON pointer crosses a scalar: {pointer}")
+    return current, tokens[-1]
+
+
+def _json_pointer_get(document: Any, pointer: str) -> Any:
+    parent, token = _json_pointer_parent(document, pointer)
+    if isinstance(parent, list):
+        if not token.isdigit() or int(token) >= len(parent):
+            raise ValueError(f"JSON pointer does not resolve: {pointer}")
+        return parent[int(token)]
+    if isinstance(parent, Mapping) and token in parent:
+        return parent[token]
+    raise ValueError(f"JSON pointer does not resolve: {pointer}")
+
+
+def _json_pointer_remove(document: Any, pointer: str) -> Any:
+    parent, token = _json_pointer_parent(document, pointer)
+    if isinstance(parent, list):
+        if not token.isdigit() or int(token) >= len(parent):
+            raise ValueError(f"JSON pointer does not resolve: {pointer}")
+        return parent.pop(int(token))
+    if isinstance(parent, dict) and token in parent:
+        return parent.pop(token)
+    raise ValueError(f"JSON pointer does not resolve: {pointer}")
+
+
+def _json_pointer_add(document: Any, pointer: str, value: Any) -> None:
+    parent, token = _json_pointer_parent(document, pointer)
+    if isinstance(parent, list):
+        if token == "-":
+            parent.append(value)
+            return
+        if not token.isdigit() or int(token) > len(parent):
+            raise ValueError(f"JSON add pointer does not resolve: {pointer}")
+        parent.insert(int(token), value)
+        return
+    if isinstance(parent, dict):
+        if token in parent:
+            raise ValueError(f"JSON add target already exists: {pointer}")
+        parent[token] = value
+        return
+    raise ValueError(f"JSON add pointer crosses a scalar: {pointer}")
 
 
 def _string_list(value: Any) -> list[str]:
@@ -2149,6 +2223,7 @@ class LocalSkillFactoryWorker:
 
             self._init_git_workspace(workspace, str((assignment.get("forge") or {}).get("branch") or f"realize/{task_id}"))
             continuation = self._restore_continuation_candidate(assignment, workspace)
+            structured_edit_receipt: dict[str, Any] | None = None
             if continuation:
                 self._progress(task_id, "tests_running", "Validating preserved Codex candidate")
                 codex_result = CodexRunResult(
@@ -2159,6 +2234,28 @@ class LocalSkillFactoryWorker:
                     ),
                 )
                 _write_json(runtime_dir / "continuation.json", continuation)
+            elif self._structured_edits_from_assignment(assignment):
+                self._progress(
+                    task_id,
+                    "in_progress",
+                    "Applying qualified structured edits without a model call",
+                )
+                self._ensure_task_active(task_id)
+                structured_edit_receipt = self._apply_structured_edits(
+                    assignment,
+                    workspace,
+                )
+                _write_json(
+                    runtime_dir / "structured-edit-receipt.json",
+                    structured_edit_receipt,
+                )
+                codex_result = CodexRunResult(
+                    returncode=0,
+                    final_message=(
+                        "Applied qualified structured edits and delegated validation "
+                        "to the trusted Builder worker."
+                    ),
+                )
             else:
                 self._progress(task_id, "in_progress", "Codex is implementing the requested skill changes")
                 self._ensure_task_active(task_id)
@@ -2234,6 +2331,8 @@ class LocalSkillFactoryWorker:
                 _write_json(output_dir / "test_report.json", test_report)
                 if test_report["ok"]:
                     break
+                if structured_edit_receipt is not None:
+                    break
                 if repair_attempt >= self.max_repair_attempts:
                     break
                 self._progress(task_id, "in_progress", "Codex is repairing deterministic validation failures")
@@ -2288,6 +2387,14 @@ class LocalSkillFactoryWorker:
                 "sdk_snapshot": dict(codex_result.sdk_snapshot or {}) or None,
                 "root_mcp": _public_root_mcp_profile(root_mcp),
                 "continuation": continuation or None,
+                "execution_strategy": (
+                    "structured_edits"
+                    if structured_edit_receipt is not None
+                    else "preserved_candidate"
+                    if continuation
+                    else "codex"
+                ),
+                "structured_edit_receipt": structured_edit_receipt,
                 "created_at": _now_iso(),
             }
             _write_json(evidence_root / "provenance.json", provenance)
@@ -2327,6 +2434,7 @@ class LocalSkillFactoryWorker:
                 "evidence": self._evidence_manifest(evidence_root, evidence_paths),
                 "summary": codex_result.final_message.strip(),
                 "local_run_dir": str(run_root),
+                "execution_strategy": provenance["execution_strategy"],
             }
             _write_json(output_dir / "result.json", result)
             completed = self.factory.complete_task(result)
@@ -2379,6 +2487,151 @@ class LocalSkillFactoryWorker:
             raise TaskExecutionCancelled(f"Skill Factory task is {status}")
         if status in {"completed", "failed", "missing"}:
             raise RuntimeError(f"Skill Factory task is no longer active: {status}")
+
+    @staticmethod
+    def _structured_edits_from_assignment(
+        assignment: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        constraints = dict(assignment.get("constraints") or {})
+        if str(constraints.get("mode") or "").strip() != "dev_ticket_repair":
+            return {}
+        artifacts = dict(dict(assignment.get("realize_request") or {}).get("artifacts") or {})
+        hints = dict(artifacts.get("repair_hints") or {})
+        structured = dict(hints.get("structured_edits") or {})
+        if not structured:
+            return {}
+        if str(structured.get("schema") or "").strip() != STRUCTURED_EDIT_SCHEMA:
+            raise ValueError(f"structured edit schema must be {STRUCTURED_EDIT_SCHEMA}")
+        operations = structured.get("operations")
+        if not isinstance(operations, list) or not 1 <= len(operations) <= 24:
+            raise ValueError("structured edit set requires 1..24 operations")
+        return structured
+
+    def _apply_structured_edits(
+        self,
+        assignment: Mapping[str, Any],
+        workspace: Path,
+    ) -> dict[str, Any] | None:
+        structured = self._structured_edits_from_assignment(assignment)
+        if not structured:
+            return None
+        constraints = dict(assignment.get("constraints") or {})
+        artifacts = dict(dict(assignment.get("realize_request") or {}).get("artifacts") or {})
+        hints = dict(artifacts.get("repair_hints") or {})
+        allowed = {
+            str(item).replace("\\", "/").strip("/")
+            for item in constraints.get("exact_changed_paths")
+            or hints.get("target_files")
+            or []
+            if str(item).strip()
+        }
+        if not allowed:
+            raise ValueError("structured edits require exact_changed_paths")
+        root = workspace.resolve()
+        receipts: list[dict[str, Any]] = []
+        changed_files: set[str] = set()
+        for index, raw in enumerate(structured["operations"]):
+            if not isinstance(raw, Mapping):
+                raise ValueError(f"structured edit {index} must be an object")
+            operation = dict(raw)
+            op = str(operation.get("op") or "").strip().lower()
+            relative = str(operation.get("path") or "").replace("\\", "/").strip("/")
+            if relative not in allowed:
+                raise ValueError(f"structured edit path is outside exact_changed_paths: {relative}")
+            path = (root / Path(relative)).resolve()
+            try:
+                path.relative_to(root)
+            except ValueError as exc:
+                raise ValueError(f"structured edit path escapes workspace: {relative}") from exc
+            if not path.is_file():
+                raise ValueError(f"structured edit file is missing: {relative}")
+            before_bytes = path.read_bytes()
+            before_digest = "sha256:" + hashlib.sha256(before_bytes).hexdigest()
+            if op == "replace_text":
+                text = before_bytes.decode("utf-8")
+                old = operation.get("old")
+                new = operation.get("new")
+                expected_count = int(operation.get("expected_count") or 1)
+                if not isinstance(old, str) or not old or not isinstance(new, str):
+                    raise ValueError("replace_text requires non-empty old and string new")
+                newline = "\r\n" if "\r\n" in text else "\r" if "\r" in text else "\n"
+                matched_old = _text_for_newline_style(old, newline)
+                matched_new = _text_for_newline_style(new, newline)
+                observed_count = text.count(matched_old)
+                if observed_count != expected_count:
+                    raise ValueError(
+                        f"replace_text precondition failed for {relative}: "
+                        f"expected {expected_count}, observed {observed_count}"
+                    )
+                path.write_bytes(text.replace(matched_old, matched_new).encode("utf-8"))
+            elif op in {"json_add", "json_remove", "json_replace", "json_move"}:
+                if path.suffix.lower() != ".json":
+                    raise ValueError(f"{op} requires a JSON file: {relative}")
+                original_text = before_bytes.decode("utf-8")
+                document = json.loads(original_text)
+                pointer = str(operation.get("pointer") or "")
+                if op == "json_add":
+                    _json_pointer_add(document, pointer, copy.deepcopy(operation.get("value")))
+                elif op == "json_replace":
+                    observed = _json_pointer_get(document, pointer)
+                    if observed != operation.get("expected"):
+                        raise ValueError(f"json_replace precondition failed for {relative}:{pointer}")
+                    parent, token = _json_pointer_parent(document, pointer)
+                    if isinstance(parent, list):
+                        parent[int(token)] = copy.deepcopy(operation.get("value"))
+                    else:
+                        parent[token] = copy.deepcopy(operation.get("value"))
+                elif op == "json_remove":
+                    observed = _json_pointer_get(document, pointer)
+                    if observed != operation.get("expected"):
+                        raise ValueError(f"json_remove precondition failed for {relative}:{pointer}")
+                    _json_pointer_remove(document, pointer)
+                else:
+                    from_pointer = str(operation.get("from_pointer") or "")
+                    source_tokens = _json_pointer_tokens(from_pointer)
+                    target_tokens = _json_pointer_tokens(pointer)
+                    if target_tokens[: len(source_tokens)] == source_tokens:
+                        raise ValueError("json_move cannot move a value into its own child")
+                    observed = _json_pointer_get(document, from_pointer)
+                    if observed != operation.get("expected"):
+                        raise ValueError(f"json_move precondition failed for {relative}:{from_pointer}")
+                    moved = _json_pointer_remove(document, from_pointer)
+                    _json_pointer_add(document, pointer, moved)
+                newline = "\r\n" if "\r\n" in original_text else "\n"
+                trailing = original_text.endswith(("\n", "\r"))
+                rendered = json.dumps(document, ensure_ascii=False, indent=2)
+                if newline != "\n":
+                    rendered = rendered.replace("\n", newline)
+                if trailing:
+                    rendered += newline
+                path.write_bytes(rendered.encode("utf-8"))
+            else:
+                raise ValueError(f"unsupported structured edit operation: {op or '<missing>'}")
+            after_bytes = path.read_bytes()
+            if after_bytes == before_bytes:
+                raise ValueError(f"structured edit produced no change: {relative}")
+            changed_files.add(relative)
+            receipts.append(
+                {
+                    "id": str(operation.get("id") or f"operation-{index + 1}"),
+                    "op": op,
+                    "path": relative,
+                    "before_digest": before_digest,
+                    "after_digest": "sha256:" + hashlib.sha256(after_bytes).hexdigest(),
+                }
+            )
+        max_changed_files = int(constraints.get("max_changed_files") or len(allowed))
+        if len(changed_files) > max_changed_files:
+            raise ValueError("structured edits changed more files than max_changed_files")
+        return {
+            "schema": "adaos.skill_factory.structured_edit_receipt.v1",
+            "strategy": "structured_edits",
+            "operation_count": len(receipts),
+            "changed_files": sorted(changed_files),
+            "operations": receipts,
+            "model_tokens": 0,
+            "created_at": _now_iso(),
+        }
 
     def _execute_codex(
         self,

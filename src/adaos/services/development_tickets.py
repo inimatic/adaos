@@ -629,6 +629,93 @@ _REPAIR_HINT_PROFILES = {
     "resource_crud",
     "subnet_data_integration",
 }
+_STRUCTURED_EDIT_SCHEMA = "adaos.builder.structured_edit_set.v1"
+_STRUCTURED_EDIT_OPS = {
+    "replace_text",
+    "json_add",
+    "json_remove",
+    "json_replace",
+    "json_move",
+}
+
+
+def _normalize_structured_edits(
+    value: Any,
+    *,
+    target_files: Sequence[str],
+    strict: bool = False,
+) -> dict[str, Any]:
+    try:
+        raw = _mapping(value)
+        if not raw:
+            return {}
+        if _text(raw.get("schema")) != _STRUCTURED_EDIT_SCHEMA:
+            raise ValueError(f"structured_edits.schema must be {_STRUCTURED_EDIT_SCHEMA}")
+        if set(raw) != {"schema", "operations"}:
+            raise ValueError("structured_edits contains unsupported fields")
+        operations = raw.get("operations")
+        if not isinstance(operations, list) or not 1 <= len(operations) <= 24:
+            raise ValueError("structured_edits requires 1..24 operations")
+        allowed_files = {_text(item).replace("\\", "/").strip("/") for item in target_files}
+        normalized: list[dict[str, Any]] = []
+        for index, candidate in enumerate(operations):
+            if not isinstance(candidate, Mapping):
+                raise ValueError(f"structured edit {index} must be an object")
+            item = dict(candidate)
+            op = _text(item.get("op")).lower()
+            if op not in _STRUCTURED_EDIT_OPS:
+                raise ValueError(f"unsupported structured edit operation: {op or '<missing>'}")
+            path = _text(item.get("path")).replace("\\", "/").strip("/")
+            if not path or ":" in path or ".." in path.split("/") or path not in allowed_files:
+                raise ValueError(f"structured edit path is outside target_files: {path or '<missing>'}")
+            edit: dict[str, Any] = {"op": op, "path": path}
+            operation_id = _text(item.get("id"))
+            if operation_id:
+                if not re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", operation_id):
+                    raise ValueError(f"structured edit {index} id is invalid")
+                edit["id"] = operation_id
+            if op == "replace_text":
+                allowed_keys = {"id", "op", "path", "old", "new", "expected_count"}
+                if set(item) - allowed_keys:
+                    raise ValueError(f"structured edit {index} contains unsupported fields")
+                old = item.get("old")
+                new = item.get("new")
+                if not isinstance(old, str) or not old or not isinstance(new, str):
+                    raise ValueError("replace_text requires non-empty old and string new")
+                expected_count = int(item.get("expected_count") or 1)
+                if not 1 <= expected_count <= 20:
+                    raise ValueError("replace_text expected_count must be 1..20")
+                edit.update({"old": old, "new": new, "expected_count": expected_count})
+            else:
+                allowed_keys = {"id", "op", "path", "pointer", "from_pointer", "value", "expected"}
+                if set(item) - allowed_keys:
+                    raise ValueError(f"structured edit {index} contains unsupported fields")
+                pointer = item.get("pointer")
+                if not isinstance(pointer, str) or not pointer.startswith("/"):
+                    raise ValueError(f"structured edit {index} requires an RFC 6901 pointer")
+                edit["pointer"] = pointer
+                if op in {"json_replace", "json_remove", "json_move"}:
+                    if "expected" not in item:
+                        raise ValueError(f"{op} requires an expected precondition")
+                    edit["expected"] = json.loads(json.dumps(item["expected"], ensure_ascii=False))
+                if op in {"json_add", "json_replace"}:
+                    if "value" not in item:
+                        raise ValueError(f"{op} requires value")
+                    edit["value"] = json.loads(json.dumps(item["value"], ensure_ascii=False))
+                if op == "json_move":
+                    from_pointer = item.get("from_pointer")
+                    if not isinstance(from_pointer, str) or not from_pointer.startswith("/"):
+                        raise ValueError("json_move requires from_pointer")
+                    edit["from_pointer"] = from_pointer
+            normalized.append(edit)
+        result = {"schema": _STRUCTURED_EDIT_SCHEMA, "operations": normalized}
+        if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > 64 * 1024:
+            raise ValueError("structured_edits exceeds 64 KiB")
+        return result
+    except (TypeError, ValueError, json.JSONDecodeError):
+        if strict:
+            raise
+        return {}
 
 
 def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
@@ -674,6 +761,12 @@ def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
         "target_object_type": target_object_type or None,
         "target_object_id": target_object_id or None,
     }
+    structured_edits = _normalize_structured_edits(
+        raw.get("structured_edits"),
+        target_files=target_files,
+    )
+    if structured_edits:
+        hints["structured_edits"] = structured_edits
     return {key: value for key, value in hints.items() if value not in (None, "", [])}
 
 
@@ -2387,6 +2480,14 @@ class DevelopmentTicketService:
             raise ValueError("Builder repair qualification requires target_files")
         if int(normalized.get("max_changed_files") or 0) < len(target_files):
             raise ValueError("max_changed_files must cover every qualified target file")
+        if raw.get("structured_edits") is not None:
+            structured_edits = _normalize_structured_edits(
+                raw.get("structured_edits"),
+                target_files=target_files,
+                strict=True,
+            )
+            if structured_edits != normalized.get("structured_edits"):
+                raise ValueError("structured_edits changed during qualification normalization")
         reason_token = _text(reason)
         if not reason_token:
             raise ValueError("Builder repair requalification reason is required")

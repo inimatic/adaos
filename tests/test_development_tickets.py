@@ -514,6 +514,19 @@ def test_builder_repair_requalification_is_bounded_and_audited(tmp_path: Path) -
             "acceptance_checks": ["The action id and order are unchanged."],
             "max_changed_files": 2,
             "requires_root_mcp": False,
+            "structured_edits": {
+                "schema": "adaos.builder.structured_edit_set.v1",
+                "operations": [
+                    {
+                        "id": "rename-action",
+                        "op": "json_replace",
+                        "path": "skills/demo_metrics_skill/webui.json",
+                        "pointer": "/widgets/0/title",
+                        "expected": "Metrics",
+                        "value": "Live metrics",
+                    }
+                ],
+            },
         },
     )
 
@@ -522,6 +535,9 @@ def test_builder_repair_requalification_is_bounded_and_audited(tmp_path: Path) -
     )
     assert updated["metadata"]["builder_repair"]["target_object_type"] == "skill"
     assert updated["metadata"]["builder_repair"]["target_object_id"] == "demo_metrics_skill"
+    assert updated["metadata"]["builder_repair"]["structured_edits"]["operations"][0]["id"] == (
+        "rename-action"
+    )
     history = updated["history"][-1]
     assert history["kind"] == "builder_repair_requalified"
     assert history["previous_builder_repair"]["target_files"] == [
@@ -538,6 +554,29 @@ def test_builder_repair_requalification_is_bounded_and_audited(tmp_path: Path) -
                 "profile": "surgical_ui",
                 "target_files": ["../outside.py"],
                 "max_changed_files": 1,
+            },
+        )
+
+    with pytest.raises(ValueError, match="outside target_files"):
+        service.requalify_builder_repair(
+            ticket["ticket_id"],
+            actor="builder:qualifier",
+            reason="invalid structured edit",
+            builder_repair={
+                "profile": "surgical_ui",
+                "target_files": ["skills/demo_metrics_skill/webui.json"],
+                "max_changed_files": 1,
+                "structured_edits": {
+                    "schema": "adaos.builder.structured_edit_set.v1",
+                    "operations": [
+                        {
+                            "op": "replace_text",
+                            "path": "skills/other/handlers/main.py",
+                            "old": "before",
+                            "new": "after",
+                        }
+                    ],
+                },
             },
         )
 

@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.structured_edit_set.v1",
+  "title": "AdaOS Builder Structured Edit Set",
+  "type": "object",
+  "required": ["schema", "operations"],
+  "properties": {
+    "schema": { "const": "adaos.builder.structured_edit_set.v1" },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 24,
+      "items": { "$ref": "#/$defs/operation" }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[A-Za-z0-9_.-]+$"
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000
+    },
+    "pointer": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "replace_text": {
+      "type": "object",
+      "required": ["op", "path", "old", "new"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "op": { "const": "replace_text" },
+        "path": { "$ref": "#/$defs/path" },
+        "old": { "type": "string", "minLength": 1 },
+        "new": { "type": "string" },
+        "expected_count": { "type": "integer", "minimum": 1, "maximum": 20 }
+      },
+      "additionalProperties": false
+    },
+    "json_add": {
+      "type": "object",
+      "required": ["op", "path", "pointer", "value"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "op": { "const": "json_add" },
+        "path": { "$ref": "#/$defs/path" },
+        "pointer": { "$ref": "#/$defs/pointer" },
+        "value": true
+      },
+      "additionalProperties": false
+    },
+    "json_remove": {
+      "type": "object",
+      "required": ["op", "path", "pointer", "expected"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "op": { "const": "json_remove" },
+        "path": { "$ref": "#/$defs/path" },
+        "pointer": { "$ref": "#/$defs/pointer" },
+        "expected": true
+      },
+      "additionalProperties": false
+    },
+    "json_replace": {
+      "type": "object",
+      "required": ["op", "path", "pointer", "expected", "value"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "op": { "const": "json_replace" },
+        "path": { "$ref": "#/$defs/path" },
+        "pointer": { "$ref": "#/$defs/pointer" },
+        "expected": true,
+        "value": true
+      },
+      "additionalProperties": false
+    },
+    "json_move": {
+      "type": "object",
+      "required": ["op", "path", "pointer", "from_pointer", "expected"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "op": { "const": "json_move" },
+        "path": { "$ref": "#/$defs/path" },
+        "pointer": { "$ref": "#/$defs/pointer" },
+        "from_pointer": { "$ref": "#/$defs/pointer" },
+        "expected": true
+      },
+      "additionalProperties": false
+    },
+    "operation": {
+      "oneOf": [
+        { "$ref": "#/$defs/replace_text" },
+        { "$ref": "#/$defs/json_add" },
+        { "$ref": "#/$defs/json_remove" },
+        { "$ref": "#/$defs/json_replace" },
+        { "$ref": "#/$defs/json_move" }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

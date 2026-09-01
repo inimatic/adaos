@@ -1595,6 +1595,167 @@ def test_fully_qualified_surgical_ui_prompt_forbids_model_discovery(
     assert "Locate one exact target ID" not in prompt
 
 
+def test_structured_edits_apply_with_exact_preconditions(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    skill = workspace / "skills" / "demo"
+    (skill / "handlers").mkdir(parents=True)
+    (skill / "webui.json").write_text(
+        json.dumps(
+            {
+                "title": "Metrics",
+                "actions": [
+                    {"id": "refresh", "label": "Refresh"},
+                    {"id": "create", "label": "Create"},
+                ],
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (skill / "handlers" / "main.py").write_text(
+        'SUMMARY = "Technical status"\n',
+        encoding="utf-8",
+    )
+    structured = {
+        "schema": "adaos.builder.structured_edit_set.v1",
+        "operations": [
+            {
+                "id": "rename",
+                "op": "json_replace",
+                "path": "skills/demo/webui.json",
+                "pointer": "/title",
+                "expected": "Metrics",
+                "value": "Live metrics",
+            },
+            {
+                "id": "move-create",
+                "op": "json_move",
+                "path": "skills/demo/webui.json",
+                "from_pointer": "/actions/1",
+                "pointer": "/actions/0",
+                "expected": {"id": "create", "label": "Create"},
+            },
+            {
+                "id": "plain-language",
+                "op": "replace_text",
+                "path": "skills/demo/handlers/main.py",
+                "old": 'SUMMARY = "Technical status"',
+                "new": 'SUMMARY = "Current usage"',
+                "expected_count": 1,
+            },
+        ],
+    }
+    assignment = {
+        "constraints": {
+            "mode": "dev_ticket_repair",
+            "exact_changed_paths": [
+                "skills/demo/webui.json",
+                "skills/demo/handlers/main.py",
+            ],
+            "max_changed_files": 2,
+        },
+        "realize_request": {
+            "artifacts": {
+                "repair_hints": {
+                    "target_files": [
+                        "skills/demo/webui.json",
+                        "skills/demo/handlers/main.py",
+                    ],
+                    "structured_edits": structured,
+                }
+            }
+        },
+    }
+    worker = object.__new__(LocalSkillFactoryWorker)
+
+    receipt = worker._apply_structured_edits(assignment, workspace)
+
+    webui = json.loads((skill / "webui.json").read_text(encoding="utf-8"))
+    assert webui["title"] == "Live metrics"
+    assert [item["id"] for item in webui["actions"]] == ["create", "refresh"]
+    assert 'SUMMARY = "Current usage"' in (
+        skill / "handlers" / "main.py"
+    ).read_text(encoding="utf-8")
+    assert receipt["strategy"] == "structured_edits"
+    assert receipt["model_tokens"] == 0
+    assert receipt["changed_files"] == [
+        "skills/demo/handlers/main.py",
+        "skills/demo/webui.json",
+    ]
+
+    with pytest.raises(ValueError, match="precondition failed"):
+        worker._apply_structured_edits(assignment, workspace)
+
+
+def test_structured_edit_worker_never_calls_codex(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    state_dir = tmp_path / "state"
+    dev_skills = tmp_path / "dev" / "skills"
+    skill = _core_created_skill_fixture(repo_root, dev_skills, "structured_demo")
+    handler = skill / "handlers" / "main.py"
+    old = "def lang_res() -> dict[str, str]:\n    return {}"
+    assert old in handler.read_text(encoding="utf-8")
+    factory = SkillFactoryService(state_dir=state_dir)
+    submitted = factory.submit_realize_request(
+        {
+            "target": {"type": "skill", "id": "structured_demo"},
+            "artifacts": {
+                "implementation_brief": "Use plain language in the skill response.",
+                "repair_hints": {
+                    "profile": "surgical_ui",
+                    "target_files": ["skills/structured_demo/handlers/main.py"],
+                    "structured_edits": {
+                        "schema": "adaos.builder.structured_edit_set.v1",
+                        "operations": [
+                            {
+                                "id": "plain-language",
+                                "op": "replace_text",
+                                "path": "skills/structured_demo/handlers/main.py",
+                                "old": old,
+                                "new": (
+                                    "def lang_res() -> dict[str, str]:\n"
+                                    '    return {"status": "Current usage"}'
+                                ),
+                                "expected_count": 1,
+                            }
+                        ],
+                    },
+                },
+            },
+            "repo": {"sparse_paths": ["skills/structured_demo/"]},
+            "constraints": {
+                "mode": "dev_ticket_repair",
+                "repair_profile": "surgical_ui",
+                "exact_changed_paths": ["skills/structured_demo/handlers/main.py"],
+                "max_changed_files": 1,
+            },
+        }
+    )
+
+    def forbidden_codex(**kwargs):  # noqa: ARG001
+        raise AssertionError("Codex must not run for admitted structured edits")
+
+    worker = LocalSkillFactoryWorker(
+        state_dir=state_dir,
+        repo_root=repo_root,
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+        executor=forbidden_codex,
+    )
+
+    result = worker.run_once()
+
+    assert result["ok"] is True, result
+    assert result["result"]["execution_strategy"] == "structured_edits"
+    assert result["result"]["provenance"]["structured_edit_receipt"][
+        "model_tokens"
+    ] == 0
+    assert result["assignment"]["task_id"] == submitted["task"]["task_id"]
+    assert "Current usage" in handler.read_text(encoding="utf-8")
+
+
 def test_bounded_dev_ticket_rejects_large_manifest_collapse(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     scenario = workspace / "scenarios" / "demo"
