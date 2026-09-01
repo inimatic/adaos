@@ -35,6 +35,7 @@ class PythonHost(context: Context) {
                         BuildConfig.VERSION_NAME,
                         8777,
                         deviceLabel(),
+                        BuildConfig.DEFAULT_ROOT_URL,
                     )
                     .toString()
                 val parsed = JSONObject(payload)

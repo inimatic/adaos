@@ -39,6 +39,7 @@ _MAX_YJS_UPDATES = 512
 _MAX_YJS_JOURNAL_BYTES = 8 * 1024 * 1024
 _MAX_LOOPBACK_REQUEST_THREADS = 32
 _LOOPBACK_ACCEPT_BACKLOG = 16
+_DEFAULT_MEMBER_ROOT_URL = "https://ru.api.inimatic.com"
 _BUNDLE_ROOT = Path(__file__).with_name("bundle")
 _SKILL_WEBUI_FILES = (
     ("web_desktop_skill", "web_desktop_skill.webui.json"),
@@ -2066,6 +2067,7 @@ def start(
     app_version: str,
     port: int = 8777,
     device_label: str = "Android phone",
+    default_root_url: str = "",
 ) -> str:
     """Start the loopback runtime and return a JSON lifecycle payload."""
 
@@ -2080,6 +2082,9 @@ def start(
             return json.dumps(_snapshot(), sort_keys=True)
         _resource_sampler.reset()
         normalized_device_label = str(device_label or "Android phone").strip()[:64]
+        effective_default_root_url = str(
+            default_root_url or _DEFAULT_MEMBER_ROOT_URL
+        ).strip()
         node_id, subnet_id = _load_identity(root)
         _voice_policy = AndroidVoicePolicyStore(root)
         _install_descriptor = _load_verified_install_descriptor()
@@ -2109,6 +2114,7 @@ def start(
             taiga_application=copy.deepcopy(taiga_ui.get("application") or {}),
             publish_yjs=_publish_yjs_update,
             publish_event=_broadcast_control_event,
+            default_root_url=effective_default_root_url,
         )
         activation_catalog_path = root / "voice-activation-catalog.json"
         activation_catalog_tmp = activation_catalog_path.with_suffix(".tmp")
@@ -2140,6 +2146,7 @@ def start(
             "node_id": node_id,
             "subnet_id": subnet_id,
             "device_label": normalized_device_label,
+            "default_root_url": effective_default_root_url,
             "started_at": started_at,
             "startup_duration_ms": int(
                 max(0.0, time.perf_counter() - bootstrap_started) * 1000
@@ -2164,6 +2171,7 @@ def start(
             apply_yjs_update=_apply_member_yjs_update,
             state_changed=_member_link_state_changed,
             rpc_handler=_handle_member_rpc,
+            default_root_url=effective_default_root_url,
         )
         _member_link = member_link
         _skills.attach_member_link(member_link)

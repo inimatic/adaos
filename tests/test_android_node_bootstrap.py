@@ -192,14 +192,23 @@ def test_loopback_runtime_persists_identity_and_reports_member_status(tmp_path: 
     try:
         assert first["runtime_profile"] == "android_poc"
         assert first["host"] == "127.0.0.1"
+        assert first["default_root_url"] == "https://ru.api.inimatic.com"
         with urllib.request.urlopen(
             f"http://127.0.0.1:{first['port']}/api/node/status",
             timeout=2,
         ) as response:
             status = json.load(response)
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{first['port']}/api/node/member/status",
+            timeout=2,
+        ) as response:
+            member_status = json.load(response)
         assert status["node_id"] == first["node_id"]
         assert status["subnet_id"] == first["subnet_id"]
         assert status["role"] == "member"
+        assert member_status["configured"] is False
+        assert member_status["root_url"] == "https://ru.api.inimatic.com"
+        assert member_status["mtls"]["root_url"] == "https://ru.api.inimatic.com"
         assert status["environment"]["local_auth_required"] is False
         assert status["runtime"]["yjs_ready"] is True
         assert status["runtime"]["yjs_mode"] == "native_y_py_sqlite_ystore"

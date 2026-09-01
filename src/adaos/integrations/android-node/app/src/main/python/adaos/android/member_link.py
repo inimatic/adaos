@@ -78,17 +78,24 @@ def _root_http_base_url(value: str) -> str:
     return _canonical_root_url(urlunparse((scheme, parsed.netloc, path, "", "", "")))
 
 
-def _config_root_candidates(config: dict[str, Any]) -> list[str]:
+def _config_root_candidates(
+    config: dict[str, Any],
+    default_root_url: str = "",
+) -> list[str]:
     mtls = config.get("mtls") if isinstance(config.get("mtls"), dict) else {}
     return [
         str(config.get("root_url") or ""),
         str(mtls.get("root_url") or ""),
         str(config.get("hub_url") or ""),
+        str(default_root_url or ""),
     ]
 
 
-def _config_root_http_base_url(config: dict[str, Any]) -> str:
-    for candidate in _config_root_candidates(config):
+def _config_root_http_base_url(
+    config: dict[str, Any],
+    default_root_url: str = "",
+) -> str:
+    for candidate in _config_root_candidates(config, default_root_url):
         if not candidate.strip():
             continue
         try:
@@ -416,11 +423,13 @@ class AndroidMemberLink:
         apply_yjs_update: Callable[[bytes], bool],
         state_changed: Callable[[dict[str, Any]], None],
         rpc_handler: Callable[[str, dict[str, Any]], Any] | None = None,
+        default_root_url: str = "",
     ) -> None:
         self.path = Path(data_root) / "android-member-link.json"
         self.mtls_dir = Path(data_root) / "member-mtls"
         self.node_id = str(node_id)
         self.local_subnet_id = str(local_subnet_id)
+        self.default_root_url = self._normalize_default_root_url(default_root_url)
         self.status_provider = status_provider
         self.document_provider = document_provider
         self.apply_yjs_update = apply_yjs_update
@@ -463,6 +472,15 @@ class AndroidMemberLink:
         if not self._config.get("enabled"):
             self._last_error = "not_configured"
 
+    def _normalize_default_root_url(self, value: str) -> str:
+        try:
+            return _root_http_base_url(str(value or ""))
+        except ValueError:
+            return ""
+
+    def _root_http_base_url_for_config(self, config: dict[str, Any]) -> str:
+        return _config_root_http_base_url(config, self.default_root_url)
+
     def _load_config(self) -> dict[str, Any]:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
@@ -480,7 +498,7 @@ class AndroidMemberLink:
                 payload.setdefault("root_url", f"https://{hub.netloc}")
                 payload["updated_at"] = time.time()
                 changed = True
-            root_url = _config_root_http_base_url(payload)
+            root_url = self._root_http_base_url_for_config(payload)
             if root_url and root_url != str(payload.get("root_url") or ""):
                 payload["root_url"] = root_url
                 payload["updated_at"] = time.time()
@@ -528,7 +546,7 @@ class AndroidMemberLink:
             "ca_present": ca_present,
             "node_id": str(mtls.get("node_id") or self.node_id),
             "subnet_id": str(mtls.get("subnet_id") or config.get("subnet_id") or ""),
-            "root_url": _redacted_url(_config_root_http_base_url(config)),
+            "root_url": _redacted_url(self._root_http_base_url_for_config(config)),
             "enrolled_at": mtls.get("enrolled_at") or 0.0,
         }
         if self._mtls_last_status:
@@ -588,7 +606,9 @@ class AndroidMemberLink:
                 "schema": "adaos.android.member_mtls.v1",
                 "node_id": str(node_id or self.node_id),
                 "subnet_id": str(subnet_id or config.get("subnet_id") or ""),
-                "root_url": _root_http_base_url(root_url or config.get("root_url") or ""),
+                "root_url": _root_http_base_url(
+                    root_url or config.get("root_url") or self.default_root_url
+                ),
                 "cert_path": paths["cert_path"],
                 "key_path": paths["key_path"],
                 "ca_path": paths["ca_path"] if ca_pem else "",
@@ -618,7 +638,7 @@ class AndroidMemberLink:
             existing = self._mtls_status_from_config(config)
         if existing.get("configured"):
             return existing
-        root = _config_root_http_base_url(config)
+        root = self._root_http_base_url_for_config(config)
         if not root:
             return self._record_mtls_status({"ok": False, "error": "member_root_url_required"})
         token = str(config.get("token") or "").strip()
@@ -681,7 +701,7 @@ class AndroidMemberLink:
             }
         with self._lock:
             config = dict(self._config)
-        root = _config_root_http_base_url(config)
+        root = self._root_http_base_url_for_config(config)
         if not root:
             result = {"ok": False, "error": "member_root_url_required"}
             self._record_mtls_status(result)
@@ -923,7 +943,7 @@ class AndroidMemberLink:
             raise ValueError("root_http_path_invalid")
         with self._lock:
             config = dict(self._config)
-        root = _config_root_http_base_url(config)
+        root = self._root_http_base_url_for_config(config)
         if not root:
             raise ValueError("member_root_url_required")
         token = str(config.get("token") or "").strip()
@@ -1170,7 +1190,7 @@ class AndroidMemberLink:
                 "connected": connected,
                 "state": state,
                 "hub_url": hub_url,
-                "root_url": _redacted_url(str(config.get("root_url") or "")),
+                "root_url": _redacted_url(self._root_http_base_url_for_config(config)),
                 "subnet_id": str(config.get("subnet_id") or self.local_subnet_id),
                 "token_present": bool(config.get("token")),
                 "transport_security": transport_security,

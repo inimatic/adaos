@@ -65,6 +65,7 @@ _LONG_FORM_STOP_INTENT = "voice.long_form.stop"
 _LONG_FORM_SETTING = "voice_long_form_session"
 _NATIVE_ACTIVATION_SETTING = "voice_native_activation_session"
 _NATIVE_ACTIVATION_FOLLOW_UP_SECONDS = 12.0
+_DEFAULT_MEMBER_ROOT_URL = "https://ru.api.inimatic.com"
 _GENERAL_DIALOG_AGENT_ID = "agent:android:local"
 _ARSENI_AGENT_ID = "agent:conversation_companions:arseni"
 _NIKA_AGENT_ID = "agent:conversation_companions:nika"
@@ -145,6 +146,13 @@ _DIALOG_CHANNEL_DEFAULTS = {
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _clean_root_url(value: str) -> str:
+    root_url = str(value or "").strip().rstrip("/")
+    if root_url.startswith(("http://", "https://")):
+        return root_url
+    return ""
 
 
 def _plain_at_path(snapshot: dict[str, Any], path: str) -> Any:
@@ -246,11 +254,15 @@ class AndroidSkillRuntime:
         taiga_application: dict[str, Any],
         publish_yjs: Callable[[bytes], None],
         publish_event: Callable[[str, dict[str, Any], str], None],
+        default_root_url: str = "",
     ) -> None:
         self.store = store
         self.node_id = node_id
         self.subnet_id = subnet_id
         self.default_node_label = str(default_node_label or "Android phone").strip()
+        self.default_root_url = (
+            _clean_root_url(default_root_url) or _DEFAULT_MEMBER_ROOT_URL
+        )
         self.desktop_application = copy.deepcopy(desktop_application)
         self.desktop_catalog = copy.deepcopy(desktop_catalog)
         self.desktop_installed = copy.deepcopy(desktop_installed)
@@ -311,6 +323,13 @@ class AndroidSkillRuntime:
             self._database.execute(
                 "INSERT INTO notebook_notes VALUES (?, ?, ?, ?, ?)",
                 ("note-1", "", now, now, 1),
+            )
+        if self.default_root_url and not self._database.execute(
+            "SELECT 1 FROM android_settings WHERE setting_key = 'member_root_url' LIMIT 1"
+        ).fetchone():
+            self._database.execute(
+                "INSERT INTO android_settings VALUES (?, ?, ?)",
+                ("member_root_url", self.default_root_url, _utc_now()),
             )
         self._database.commit()
         self._selected_note_id = "note-1"
@@ -908,7 +927,9 @@ class AndroidSkillRuntime:
                 "windows_cmd_command": "",
                 "windows_cmd_language": "bat",
                 "root_url": str(
-                    member.get("root_url") or self._setting("member_root_url", "")
+                    member.get("root_url")
+                    or self._setting("member_root_url", self.default_root_url)
+                    or self.default_root_url
                 ),
                 "hub_url": str(member.get("hub_url") or ""),
                 "join_code": "",
@@ -1019,7 +1040,8 @@ class AndroidSkillRuntime:
                         ),
                         "root_url": str(
                             member.get("root_url")
-                            or self._setting("member_root_url", "")
+                            or self._setting("member_root_url", self.default_root_url)
+                            or self.default_root_url
                         ),
                         "hub_url": str(member.get("hub_url") or ""),
                         "subnet_id": str(member.get("subnet_id") or self.subnet_id),
@@ -1081,7 +1103,9 @@ class AndroidSkillRuntime:
         if self.member_link is None:
             raise AndroidSkillError("android_member_link_not_ready")
         root_url = str(
-            arguments.get("root_url") or self._setting("member_root_url", "")
+            arguments.get("root_url")
+            or self._setting("member_root_url", self.default_root_url)
+            or self.default_root_url
         ).strip()
         code = str(arguments.get("code") or arguments.get("join_code") or "").strip()
         if not root_url.startswith(("http://", "https://")):

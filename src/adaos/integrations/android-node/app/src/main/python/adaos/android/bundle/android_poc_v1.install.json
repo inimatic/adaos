@@ -91,7 +91,7 @@
       "id": "adaos_connect",
       "version": "android-poc.3",
       "descriptor": "adaos_connect.webui.json",
-      "sha256": "cc86d947a424b447d45ea52d3ad78ef2f1a781ee4eb6b80d6159b30616b8d519"
+      "sha256": "3fe0926fb8c8767338bd3b6bd6a23570ae15192e83c13b8f0c251f0d71d1488b"
     },
     {
       "id": "browsers_skill",
@@ -119,10 +119,10 @@
   ],
   "runtime_module": {
     "path": "../skills.py",
-    "sha256": "b83459ffc1305787160214e06b911aab6c6ec1fcf5d6a93f5dead412575b6e60"
+    "sha256": "ef608045a773196a67eab0ea07fd6a871bd2988606594ac100ef526bd711d0e2"
   },
   "member_link_module": {
     "path": "../member_link.py",
-    "sha256": "12f92d53d689aef3cb7cd4bb7ab7958ee677f1d8a5ea0726371ec008971608a7"
+    "sha256": "b6bc42001df90b1c7752a1cc6857b2441de9e7a38842b52f8449cf496d6819ce"
   }
 }

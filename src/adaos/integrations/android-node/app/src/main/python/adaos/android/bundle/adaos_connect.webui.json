@@ -149,7 +149,7 @@
               },
               "inputs": {
                 "bindField": "root_url",
-                "placeholder": "https://root.example",
+                "placeholder": "https://ru.api.inimatic.com",
                 "commitMode": "manual",
                 "saveLabel": "Use Root"
               },
@@ -429,7 +429,7 @@
         "windows_ps_language": "powershell",
         "windows_cmd_command": "",
         "windows_cmd_language": "bat",
-        "root_url": "",
+        "root_url": "https://ru.api.inimatic.com",
         "hub_url": "",
         "join_code": "",
         "subnet_id": "",

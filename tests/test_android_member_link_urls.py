@@ -83,6 +83,15 @@ def test_android_mtls_root_resolver_uses_stored_mtls_root() -> None:
     ) == "https://ru.api.inimatic.com"
 
 
+def test_android_mtls_root_resolver_uses_default_root() -> None:
+    module = _load_module()
+
+    assert module._config_root_http_base_url(
+        {"root_url": "", "hub_url": ""},
+        "https://ru.api.inimatic.com",
+    ) == "https://ru.api.inimatic.com"
+
+
 def test_https_join_rejects_root_protocol_downgrade() -> None:
     module = _load_module()
 
