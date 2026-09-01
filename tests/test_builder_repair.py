@@ -220,6 +220,32 @@ def test_builder_work_item_aggregates_usage_across_continuation_tasks(tmp_path: 
         summary="Keep the complete Builder cost",
     )["task"]
 
+    service.link_automation(
+        task["repair_id"],
+        actor="builder:automation",
+        automation={
+            "automation": {
+                "session_id": "automation.usage",
+                "task_id": "task.initial",
+                "status": "failed",
+            },
+            "session": {
+                "session_id": "automation.usage",
+                "current_task_id": "task.initial",
+                "codex_usage_accounting": {
+                    "task_id": "task.initial",
+                    "status": "reported",
+                    "accuracy": "exact",
+                    "root_event_id": "codex_usage.initial",
+                    "input_tokens": 153_933,
+                    "cached_input_tokens": 133_888,
+                    "output_tokens": 1_835,
+                    "total_tokens": 155_768,
+                },
+            },
+        },
+    )
+
     linked = service.link_automation(
         task["repair_id"],
         actor="builder:automation",
@@ -263,3 +289,46 @@ def test_builder_work_item_aggregates_usage_across_continuation_tasks(tmp_path: 
     assert usage["attempts"] == 1
     assert "billable_tokens" not in usage
     assert usage["root_event_ids"] == ["codex_usage.initial"]
+
+
+def test_completed_builder_repair_is_not_reopened_by_automation_poll(tmp_path: Path) -> None:
+    service = BuilderRepairService(state_dir=tmp_path)
+    task = service.report(
+        project_id="demo_metrics",
+        signal_type="other",
+        summary="Keep accepted repair terminal",
+    )["task"]
+    automation = {
+        "automation": {
+            "session_id": "automation.accepted",
+            "task_id": "task.accepted",
+            "status": "completed",
+        },
+        "session": {
+            "session_id": "automation.accepted",
+            "current_task_id": "task.accepted",
+        },
+    }
+    service.link_automation(
+        task["repair_id"],
+        actor="builder:automation",
+        automation=automation,
+    )
+    accepted = service.record_acceptance(
+        task["repair_id"],
+        capability_works=True,
+        regression_free=True,
+        evidence_refs=[{"type": "test", "id": "tests/passed.json"}],
+        actor="builder:automation",
+    )
+
+    polled = service.link_automation(
+        task["repair_id"],
+        actor="builder:automation",
+        automation=automation,
+    )
+
+    assert accepted["work_status"] == "completed"
+    assert polled["status"] == "resolved"
+    assert polled["work_status"] == "completed"
+    assert polled["revision"] == accepted["revision"]

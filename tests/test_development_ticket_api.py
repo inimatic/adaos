@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -723,6 +724,49 @@ def test_development_ticket_api_delegates_trial_decision_to_scoped_builder_targe
     assert payload["decision"] == "accept"
     assert payload["target"] == {"object_type": "skill", "object_id": "demo_metrics_skill"}
     assert payload["detail"]["ticket"]["ticket_id"] == ticket_id
+
+
+def test_ticket_detail_uses_qualified_modal_owner_for_development_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    signal = service.capture_signal(
+        kind="development_request",
+        summary="Open Subscription details only once",
+        target_scope={
+            "type": "modal",
+            "id": "subscription_status_modal",
+            "source": "dev",
+        },
+        source="client_feedback",
+        owner_area="project",
+        metadata={
+            "builder_repair": {
+                "profile": "surgical_ui",
+                "target_object_type": "skill",
+                "target_object_id": "subscription_status_skill",
+            }
+        },
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="ready_for_builder",
+    )["ticket"]
+    observed_scope: dict = {}
+
+    def _source_options(scope):
+        observed_scope.update(scope)
+        return {"status": "source_available"}
+
+    monkeypatch.setattr(tickets_api, "development_source_options", _source_options)
+
+    detail = tickets_api._ticket_detail(service, ticket)
+
+    assert detail["development_source"]["status"] == "source_available"
+    assert observed_scope["type"] == "skill"
+    assert observed_scope["id"] == "subscription_status_skill"
 
 
 def test_development_ticket_api_requalifies_builder_envelope_with_revision_guard(tmp_path: Path) -> None:

@@ -300,10 +300,22 @@ def _ticket_detail(service: DevelopmentTicketService, ticket: dict[str, Any]) ->
         if signal
     ]
     work_stream = _builder_work_stream(service, ticket)
+    source_scope = dict(ticket.get("target_scope") or {})
+    try:
+        builder_target = service.builder_target(str(ticket.get("ticket_id") or ""))
+    except (KeyError, ValueError):
+        builder_target = {}
+    if builder_target:
+        source_scope.update(
+            {
+                "type": builder_target["object_type"],
+                "id": builder_target["object_id"],
+            }
+        )
     return {
         "ticket": ticket,
         "signals": signals,
-        "development_source": development_source_options(ticket.get("target_scope") or {}),
+        "development_source": development_source_options(source_scope),
         "evidence": _evidence_view(ticket, signals),
         "work_stream": work_stream,
         "builder_work_items": work_stream["builder_work_items"],

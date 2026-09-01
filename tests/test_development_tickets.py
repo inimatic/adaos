@@ -685,7 +685,7 @@ def test_builder_package_uses_one_work_item_budget_and_automation(tmp_path: Path
         == "factory.task.1"
         for ticket_id in ticket_ids
     )
-    assert started["rollup"]["total_tokens"] == 175
+    assert started["rollup"]["total_tokens"] == 150
 
 
 def test_autonomous_repair_links_builder_automation_and_resolves_with_evidence(tmp_path: Path) -> None:
@@ -761,10 +761,7 @@ def test_autonomous_repair_links_builder_automation_and_resolves_with_evidence(t
         for ref in result["ticket"]["closure"]["evidence_refs"]
         if ref["type"] == "codex_usage"
     ]
-    assert {ref["id"] for ref in usage_refs} == {
-        "codex.usage.previous.1",
-        "codex.usage.1",
-    }
+    assert {ref["id"] for ref in usage_refs} == {"codex.usage.1"}
 
     repair = next(item for item in repair_service.list(status="resolved") if item["repair_id"] == result["repair"]["repair_id"])
     assert repair["context"]["automation"]["session_id"] == "automation.session.1"

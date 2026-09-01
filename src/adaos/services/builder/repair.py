@@ -101,7 +101,12 @@ def _automation_work_status(automation: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _aggregate_codex_usage(session: Mapping[str, Any]) -> dict[str, Any]:
+def _aggregate_codex_usage(
+    session: Mapping[str, Any],
+    *,
+    allowed_task_ids: Sequence[str] = (),
+) -> dict[str, Any]:
+    current_task_id = str(session.get("current_task_id") or "").strip()
     receipts = [
         dict(item)
         for item in session.get("codex_usage_history") or []
@@ -109,7 +114,17 @@ def _aggregate_codex_usage(session: Mapping[str, Any]) -> dict[str, Any]:
     ]
     current = session.get("codex_usage_accounting")
     if isinstance(current, Mapping):
-        receipts.append(dict(current))
+        current_receipt = dict(current)
+        if current_task_id:
+            current_receipt.setdefault("task_id", current_task_id)
+        receipts.append(current_receipt)
+    allowed = {str(item).strip() for item in allowed_task_ids if str(item).strip()}
+    if allowed:
+        receipts = [
+            receipt
+            for receipt in receipts
+            if str(receipt.get("task_id") or "").strip() in allowed
+        ]
     unique: dict[str, dict[str, Any]] = {}
     for index, receipt in enumerate(receipts):
         identity = str(
@@ -507,7 +522,6 @@ class BuilderRepairService:
             if isinstance(session.get("codex_usage_accounting"), Mapping)
             else {}
         )
-        aggregate_usage = _aggregate_codex_usage(session)
         completion_readiness = (
             session.get("completion_readiness")
             if isinstance(session.get("completion_readiness"), Mapping)
@@ -518,35 +532,6 @@ class BuilderRepairService:
             if isinstance(completion_readiness.get("aprobation"), Mapping)
             else {}
         )
-        reported_usage = dict(observed) if observed else {}
-        if aggregate_usage:
-            for key in (
-                "model_tokens",
-                "input_tokens",
-                "cached_input_tokens",
-                "output_tokens",
-                "reasoning_tokens",
-                "total_tokens",
-                "billable_tokens",
-            ):
-                if aggregate_usage.get(key) is not None:
-                    reported_usage[key] = aggregate_usage.get(key)
-        elif usage_receipt:
-            if usage_receipt.get("status"):
-                reported_usage["receipt_status"] = usage_receipt.get("status")
-            if usage_receipt.get("reason"):
-                reported_usage["reason"] = usage_receipt.get("reason")
-        if aggregate_usage:
-            for key in (
-                "accuracy",
-                "attempts",
-                "receipt_count",
-                "receipt_status",
-                "root_event_id",
-                "root_event_ids",
-            ):
-                if aggregate_usage.get(key) is not None:
-                    reported_usage[key] = aggregate_usage.get(key)
         link = {
             "schema": "adaos.builder.repair_automation_link.v1",
             "session_id": session_id or None,
@@ -565,10 +550,6 @@ class BuilderRepairService:
             "linked_by": str(actor),
             "linked_at": _now(),
         }
-        if usage_receipt:
-            link["codex_usage_accounting"] = dict(usage_receipt)
-        if aggregate_usage:
-            link["codex_usage_summary"] = aggregate_usage
         refs = []
         if session_id:
             refs.append({"type": "builder_automation_session", "id": session_id})
@@ -581,6 +562,47 @@ class BuilderRepairService:
             repair = state["tasks"].get(str(repair_id))
             if not repair:
                 raise KeyError(repair_id)
+            repair_task_ids = {
+                str(ref.get("id") or "").strip()
+                for ref in repair.get("source_refs") or []
+                if isinstance(ref, Mapping)
+                and str(ref.get("type") or "").strip() == "skill_factory_task"
+                and str(ref.get("id") or "").strip()
+            }
+            if task_id:
+                repair_task_ids.add(task_id)
+            aggregate_usage = _aggregate_codex_usage(
+                session,
+                allowed_task_ids=sorted(repair_task_ids),
+            )
+            reported_usage = dict(observed) if observed else {}
+            if aggregate_usage:
+                for key in (
+                    "model_tokens",
+                    "input_tokens",
+                    "cached_input_tokens",
+                    "output_tokens",
+                    "reasoning_tokens",
+                    "total_tokens",
+                    "billable_tokens",
+                    "accuracy",
+                    "attempts",
+                    "receipt_count",
+                    "receipt_status",
+                    "root_event_id",
+                    "root_event_ids",
+                ):
+                    if aggregate_usage.get(key) is not None:
+                        reported_usage[key] = aggregate_usage.get(key)
+            elif usage_receipt:
+                if usage_receipt.get("status"):
+                    reported_usage["receipt_status"] = usage_receipt.get("status")
+                if usage_receipt.get("reason"):
+                    reported_usage["reason"] = usage_receipt.get("reason")
+            if usage_receipt:
+                link["codex_usage_accounting"] = dict(usage_receipt)
+            if aggregate_usage:
+                link["codex_usage_summary"] = aggregate_usage
             context = dict(repair.get("context") or {})
             context["automation"] = link
             if declared:
@@ -594,7 +616,17 @@ class BuilderRepairService:
             if repair.get("status") == "open":
                 repair["status"] = "in_progress"
             automation_work_status = _automation_work_status(automation)
-            if automation_work_status:
+            repair_is_resolved = str(repair.get("status") or "").strip() == "resolved"
+            if repair_is_resolved and str(repair.get("work_status") or "").strip() != "completed":
+                self._set_work_status_locked(
+                    repair,
+                    "completed",
+                    actor=str(actor),
+                    reason="preserve_resolved_repair_terminal_state",
+                    allow_any=True,
+                )
+            repair_is_complete = repair_is_resolved
+            if automation_work_status and not repair_is_complete:
                 self._set_work_status_locked(
                     repair,
                     automation_work_status,

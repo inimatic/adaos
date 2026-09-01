@@ -525,7 +525,12 @@ def _automation_matches_work(
     }
 
 
-def _automation_evidence_refs(payload: Mapping[str, Any], *, repair_id: str) -> list[dict[str, Any]]:
+def _automation_evidence_refs(
+    payload: Mapping[str, Any],
+    *,
+    repair_id: str,
+    allowed_task_ids: Sequence[str] = (),
+) -> list[dict[str, Any]]:
     projection = _automation_projection(payload)
     session = _automation_session(payload)
     task = _automation_task(payload)
@@ -566,7 +571,17 @@ def _automation_evidence_refs(payload: Mapping[str, Any], *, repair_id: str) -> 
     ]
     current_usage = session.get("codex_usage_accounting")
     if isinstance(current_usage, Mapping):
-        usage_receipts.append(dict(current_usage))
+        current_receipt = dict(current_usage)
+        if task_id:
+            current_receipt.setdefault("task_id", task_id)
+        usage_receipts.append(current_receipt)
+    allowed = {_text(item) for item in allowed_task_ids if _text(item)}
+    if allowed:
+        usage_receipts = [
+            usage
+            for usage in usage_receipts
+            if _text(usage.get("task_id")) in allowed
+        ]
     for usage in usage_receipts:
         usage_id = _text(usage.get("root_event_id") or usage.get("idempotency_key"))
         if usage_id:
@@ -582,6 +597,17 @@ def _automation_evidence_refs(payload: Mapping[str, Any], *, repair_id: str) -> 
                 }
             )
     return _merge_refs([], refs)
+
+
+def _repair_automation_task_ids(ticket: Mapping[str, Any], repair_id: str) -> list[str]:
+    return sorted(
+        {
+            _text(ref.get("automation_task_id"))
+            for ref in _sequence_of_mappings(ticket.get("builder_refs") or [])
+            if _text(ref.get("repair_id")) == _text(repair_id)
+            and _text(ref.get("automation_task_id"))
+        }
+    )
 
 
 def _automation_has_validation_evidence(payload: Mapping[str, Any]) -> bool:
@@ -1911,7 +1937,12 @@ class DevelopmentTicketService:
             and _automation_has_validation_evidence(status_result)
             and _text(updated.get("status")) not in {"resolved", "verified", "closed"}
         ):
-            refs = _automation_evidence_refs(status_result, repair_id=linked_repair_id)
+            repair_task_ids = _repair_automation_task_ids(updated, linked_repair_id)
+            refs = _automation_evidence_refs(
+                status_result,
+                repair_id=linked_repair_id,
+                allowed_task_ids=repair_task_ids,
+            )
             result = _automation_task(status_result).get("result")
             result = dict(result) if isinstance(result, Mapping) else _mapping(_automation_session(status_result).get("last_result"))
             resolved = self.record_resolution(
@@ -1947,7 +1978,11 @@ class DevelopmentTicketService:
             "ticket": updated,
             "repair": repair,
             "automation": status_result,
-            "evidence_refs": _automation_evidence_refs(status_result, repair_id=linked_repair_id),
+            "evidence_refs": _automation_evidence_refs(
+                status_result,
+                repair_id=linked_repair_id,
+                allowed_task_ids=_repair_automation_task_ids(updated, linked_repair_id),
+            ),
         }
 
     def create_core_capability_request(
@@ -2919,7 +2954,9 @@ class DevelopmentTicketService:
                     "handoff_mode": mode,
                 },
                 "target_scope": target,
-                "development_source": development_source_options(target),
+                "development_source": development_source_options(
+                    _development_source_scope(ticket, automation_target)
+                ),
                 "compatibility": _mapping(ticket.get("metadata")),
                 "policy": _mapping(ticket.get("policy")),
                 "economic": {
@@ -3116,9 +3153,21 @@ class DevelopmentTicketService:
             if _text(ticket.get("status")) not in {"resolved", "verified", "closed", *TERMINAL_TICKET_STATES}:
                 ticket["status"] = "ready_for_builder" if failed_automation else "in_builder"
             if failed_automation:
+                repair_task_ids = sorted(
+                    {
+                        _text(ref.get("automation_task_id"))
+                        for ref in refs
+                        if _text(ref.get("repair_id")) == _text(repair_id)
+                        and _text(ref.get("automation_task_id"))
+                    }
+                )
                 ticket["evidence_refs"] = _merge_refs(
                     ticket.get("evidence_refs") or [],
-                    _automation_evidence_refs(automation, repair_id=_text(repair_id)),
+                    _automation_evidence_refs(
+                        automation,
+                        repair_id=_text(repair_id),
+                        allowed_task_ids=repair_task_ids,
+                    ),
                 )
             ticket["updated_at"] = now
             self._append_history(
