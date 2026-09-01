@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.agent.context_receipt.v1",
+  "title": "AdaOS Agent Context Attribution Receipt",
+  "type": "object",
+  "required": ["schema", "run_ref", "plan_ref", "selected_refs", "omitted", "denied", "unavailable", "context_misses", "usage", "execution_route", "validation", "evidence_refs", "created_at"],
+  "properties": {
+    "schema": {"const": "adaos.agent.context_receipt.v1"},
+    "run_ref": {"type": "string", "minLength": 1},
+    "plan_ref": {"type": "string", "minLength": 1},
+    "subject_refs": {"type": "array", "items": {"type": "string"}},
+    "purpose": {"type": "string"},
+    "audience": {"type": "string"},
+    "selected_refs": {"type": "array", "items": {"type": "string"}},
+    "omitted": {"type": "array", "items": {"type": "object"}},
+    "denied": {"type": "array", "items": {"type": "object"}},
+    "unavailable": {"type": "array", "items": {"type": "object"}},
+    "context_misses": {"type": "array", "items": {"type": "object"}},
+    "layer_usage": {"type": "array", "items": {"type": "object"}},
+    "usage": {"type": "object"},
+    "tool_boundary_count": {"type": "integer", "minimum": 0},
+    "execution_route": {"type": "string"},
+    "validation": {"type": "object"},
+    "evidence_refs": {"type": "array", "items": {"type": "object"}},
+    "latency_ms": {"type": "integer", "minimum": 0},
+    "created_at": {"type": "string", "format": "date-time"}
+  },
+  "additionalProperties": true
+}

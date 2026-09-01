@@ -44,6 +44,7 @@ def test_root_mcp_foundation_and_contracts(monkeypatch) -> None:
     assert foundation_payload["foundation"]["surfaces"]["development"]["mode"] == "root_descriptor_cache"
     assert foundation_payload["foundation"]["planes"]["adaos_dev"]["enabled"] is True
     assert foundation_payload["foundation"]["planes"]["profile_ops"]["enabled"] is True
+    assert foundation_payload["foundation"]["planes"]["context_control"]["enabled"] is True
     assert foundation_payload["foundation"]["preferred_descriptive_surface"] == "adaos_dev"
     assert foundation_payload["foundation"]["plane_registry"]["plane_count"] >= 2
     assert foundation_payload["foundation"]["infra_access_skill"]["state"]["skill_name"] == "infra_access_skill"
@@ -68,6 +69,7 @@ def test_root_mcp_foundation_and_contracts(monkeypatch) -> None:
     assert "adaos_dev.get_sdk_metadata" in contract_ids
     assert "adaos_dev.get_public_skill_registry" in contract_ids
     assert "builder.get_context" in contract_ids
+    assert {"context.resolve", "context.plan", "context.compile", "context.inspect", "context.record_receipt", "context.propose_memory"} <= contract_ids
     assert "hub.memory.get_status" in contract_ids
     assert "hub.memory.list_sessions" in contract_ids
     assert "hub.memory.get_artifact" in contract_ids

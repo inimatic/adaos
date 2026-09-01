@@ -81,6 +81,24 @@ def _plane_registry_payload() -> dict[str, Any]:
                 "backing_store": "root_descriptor_cache + supervisor_authority",
             },
             {
+                "plane_id": "context_control",
+                "title": "ContextControlPlane",
+                "enabled": True,
+                "surface": "development",
+                "mode": "typed_context_graph_adapter",
+                "published_by": "root",
+                "preferred_for": ["builder", "codex", "evaluator", "context_inspection"],
+                "descriptor_ids": [
+                    "context_capsule_schema",
+                    "context_plan_schema",
+                    "context_receipt_schema",
+                    "context_memory_candidate_schema"
+                ],
+                "tool_prefixes": ["context."],
+                "capability_profiles": ["ContextAgent"],
+                "backing_store": "context_control relational registry + content-addressed artifacts",
+            },
+            {
                 "plane_id": "skill_factory_task",
                 "title": "SkillFactoryTaskPlane",
                 "enabled": True,

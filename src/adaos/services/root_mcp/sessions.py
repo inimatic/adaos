@@ -17,6 +17,12 @@ DEFAULT_SESSION_TTL_SECONDS = 4 * 60 * 60
 MAX_SESSION_TTL_SECONDS = 24 * 60 * 60
 
 DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
+    "ContextAgent": [
+        *DEFAULT_BEARER_CAPABILITIES,
+        "context.read",
+        "context.receipt.write",
+        "context.memory.propose",
+    ],
     "NLUTeacherRead": [
         *DEFAULT_BEARER_CAPABILITIES,
         "development.read.descriptors",

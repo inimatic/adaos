@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.context.plan.v1",
+  "title": "AdaOS Context Plan",
+  "type": "object",
+  "required": ["schema", "resolution_ref", "subject_refs", "purpose", "audience", "token_budget", "estimated_tokens", "selected", "omitted", "denied", "unavailable", "cache_partition", "status", "created_at"],
+  "properties": {
+    "schema": {"const": "adaos.context.plan.v1"},
+    "resolution_ref": {"type": "string", "minLength": 1},
+    "subject_refs": {"type": "array", "items": {"type": "string"}},
+    "purpose": {"type": "string"},
+    "audience": {"type": "string"},
+    "model_profile": {"type": "object"},
+    "token_budget": {"type": "integer", "minimum": 0},
+    "estimated_tokens": {"type": "integer", "minimum": 0},
+    "selected": {"type": "array", "items": {"type": "object"}},
+    "omitted": {"type": "array", "items": {"type": "object"}},
+    "denied": {"type": "array", "items": {"type": "object"}},
+    "unavailable": {"type": "array", "items": {"type": "object"}},
+    "cache_partition": {"type": "string", "pattern": "^sha256:"},
+    "status": {"enum": ["ready", "insufficient"]},
+    "created_at": {"type": "string", "format": "date-time"}
+  },
+  "additionalProperties": true
+}

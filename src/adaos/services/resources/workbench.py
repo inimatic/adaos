@@ -11,6 +11,7 @@ from jsonschema import Draft202012Validator
 
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from adaos.services.builder.repair import BuilderRepairService
+from adaos.services.context_control import ContextAccessDenied, ContextConflict, ContextControlService
 from adaos.services.development_tickets import DevelopmentTicketService
 from adaos.services.id_gen import new_id
 from adaos.services.runtime_paths import current_state_dir
@@ -439,10 +440,143 @@ def _demo_metric_event_definition() -> dict[str, Any]:
     return definition
 
 
+def _context_resource_definition(
+    *,
+    resource_type: str,
+    title: str,
+    record_schema_ref: str,
+    filters: Sequence[str],
+    operations: Sequence[Mapping[str, Any]],
+    writes: str,
+) -> dict[str, Any]:
+    definition = {
+        "schema": RESOURCE_DEFINITION_SCHEMA,
+        "resource_type": resource_type,
+        "version": "1.0.0",
+        "title": title,
+        "description": f"Governed {title.lower()} projection from the AdaOS Context Control Plane.",
+        "scope": {"owner": "context_control", "target_refs": ["project", "component", "run", "agent"]},
+        "authority": {
+            "provider": "context_control",
+            "binding": "context_control/registry.sqlite3",
+            "writes": writes,
+            "source_of_truth": "context_control",
+        },
+        "record_schema_ref": record_schema_ref,
+        "query": {
+            "default": "latest",
+            "filters": [*filters, "search", "role"],
+            "sort": ["updated_at", "created_at", "recorded_at"],
+            "cursor": True,
+            "include": ["provenance", "access_decisions", "cost", "content_ref"],
+        },
+        "operations": [dict(item) for item in operations],
+        "views": [
+            {"id": "list", "kind": "list", "title": title},
+            {"id": "detail", "kind": "detail", "title": f"{title} detail"},
+            {"id": "trace", "kind": "trace", "title": "Trace"},
+        ],
+        "events": {
+            "emits": ["resource.operation.completed"],
+            "semantic_types": [f"{resource_type}.changed"],
+        },
+        "i18n": {
+            "default_locale": "en",
+            "locales": ["en", "ru"],
+            "title_i18n": {"en": title, "ru": title},
+        },
+        "access": {
+            "read": {"required_capabilities": ["context.read"]},
+            "role_fixtures": {
+                "owner": "allowed",
+                "admin": "allowed",
+                "builder": "allowed",
+                "member": "allowed",
+                "guest": "denied",
+            },
+        },
+        "privacy": {
+            "sensitivity": "mixed_metadata",
+            "retention": "context_policy",
+            "external_export": "denied_by_default",
+        },
+        "readiness": {"states": ["ready", "empty", "permission_denied", "stale", "insufficient"]},
+        "workflow_links": {"builder": True, "subscription": resource_type == "adaos.agent.context_receipt"},
+    }
+    _validate("resource.definition.v1", definition)
+    return definition
+
+
+def _context_resource_definitions() -> list[dict[str, Any]]:
+    read = lambda operation_id: {  # noqa: E731 - compact declarative factory
+        "id": operation_id,
+        "kind": operation_id,
+        "risk": "read",
+        "required_capabilities": ["context.read"],
+    }
+    write = lambda operation_id, risk="low": {  # noqa: E731 - compact declarative factory
+        "id": operation_id,
+        "kind": operation_id,
+        "risk": risk,
+        "required_capabilities": ["context.write"],
+    }
+    return [
+        _context_resource_definition(
+            resource_type="adaos.context.capsule",
+            title="Context Capsule",
+            record_schema_ref="abi:context.capsule.v2",
+            filters=["subject_ref", "kind", "trust_class", "sensitivity", "include_revoked"],
+            operations=[read("show"), write("create"), write("revoke", "medium")],
+            writes="immutable_plus_revoke",
+        ),
+        _context_resource_definition(
+            resource_type="adaos.context.relationship",
+            title="Context Relationship",
+            record_schema_ref="abi:context.relationship.v1",
+            filters=["from_capsule_id", "to_capsule_id", "relation_type", "include_revoked"],
+            operations=[read("show"), write("create")],
+            writes="append_only",
+        ),
+        _context_resource_definition(
+            resource_type="adaos.context.subject_binding",
+            title="Context Subject Binding",
+            record_schema_ref="abi:context.subject_binding.v1",
+            filters=["subject_ref", "purpose", "audience", "branch"],
+            operations=[read("show"), write("bind")],
+            writes="optimistic",
+        ),
+        _context_resource_definition(
+            resource_type="adaos.context.plan",
+            title="Context Plan",
+            record_schema_ref="abi:context.plan.v1",
+            filters=["subject_ref", "purpose", "audience", "status"],
+            operations=[read("show"), write("create"), write("compile")],
+            writes="append_only",
+        ),
+        _context_resource_definition(
+            resource_type="adaos.context.memory_candidate",
+            title="Memory Candidate",
+            record_schema_ref="abi:context.memory_candidate.v1",
+            filters=["status", "kind", "authority_ref", "proposed_by"],
+            operations=[read("show"), write("propose"), write("qualify", "medium"), write("promote", "high"), write("rollback", "high")],
+            writes="governed",
+        ),
+        _context_resource_definition(
+            resource_type="adaos.agent.context_receipt",
+            title="Context Attribution Receipt",
+            record_schema_ref="abi:agent.context_receipt.v1",
+            filters=["run_ref", "plan_ref", "execution_route"],
+            operations=[read("show"), write("create")],
+            writes="append_only",
+        ),
+    ]
+
+
 @dataclass(slots=True)
 class ResourceWorkbenchService:
     state_dir: Path | None = None
     ticket_service: DevelopmentTicketService | None = None
+    context_service: ContextControlService | None = None
 
     @property
     def root(self) -> Path:
@@ -473,6 +607,7 @@ class ResourceWorkbenchService:
                 _demo_metric_definition(),
                 _demo_metric_note_definition(),
                 _demo_metric_event_definition(),
+                *_context_resource_definitions(),
             ],
             key=lambda item: item["resource_type"],
         )
@@ -646,6 +781,26 @@ class ResourceWorkbenchService:
             }
             self._append_trace(trace)
             raise
+        except ContextConflict as exc:
+            trace = {
+                **trace_base,
+                "status": "conflict",
+                "readiness": {"state": "conflict"},
+                "result": {"error": str(exc)},
+                "completed_at": _now(),
+            }
+            self._append_trace(trace)
+            raise ResourceConflict(str(exc)) from exc
+        except ContextAccessDenied as exc:
+            trace = {
+                **trace_base,
+                "status": "permission_denied",
+                "readiness": {"state": "permission_denied"},
+                "result": {"error": str(exc)},
+                "completed_at": _now(),
+            }
+            self._append_trace(trace)
+            raise ResourceAccessDenied(str(exc)) from exc
         except ValueError as exc:
             trace = {
                 **trace_base,
@@ -673,6 +828,9 @@ class ResourceWorkbenchService:
 
     def _tickets(self) -> DevelopmentTicketService:
         return self.ticket_service or DevelopmentTicketService(state_dir=self.state_dir)
+
+    def _contexts(self) -> ContextControlService:
+        return self.context_service or ContextControlService(state_dir=self.state_dir)
 
     def _query_items(self, resource_type: str, *, filters: Mapping[str, Any], search: str, limit: Any) -> list[dict[str, Any]]:
         max_items = int(limit) if isinstance(limit, int) else None
@@ -720,6 +878,43 @@ class ResourceWorkbenchService:
             return _filter_records(records, filters, search)[:max_items]
         if resource_type == "demo.metric_event":
             return _filter_records(self.events(limit=1000), filters, search)[:max_items]
+        contexts = self._contexts()
+        if resource_type == "adaos.context.capsule":
+            records = contexts.list_capsules(
+                subject_ref=_text(filters.get("subject_ref")) or None,
+                kind=_text(filters.get("kind")) or None,
+                trust_class=_text(filters.get("trust_class")) or None,
+                include_revoked=bool(filters.get("include_revoked")),
+                limit=max_items or 200,
+            )
+            return _filter_records(records, {key: value for key, value in filters.items() if key in {"sensitivity"}}, search)
+        if resource_type == "adaos.context.relationship":
+            records = contexts.list_relationships(
+                from_capsule_id=_text(filters.get("from_capsule_id")) or None,
+                to_capsule_id=_text(filters.get("to_capsule_id")) or None,
+                relation_type=_text(filters.get("relation_type")) or None,
+                include_revoked=bool(filters.get("include_revoked")),
+                limit=max_items or 200,
+            )
+            return _filter_records(records, {}, search)
+        if resource_type == "adaos.context.subject_binding":
+            records = contexts.list_bindings(
+                subject_ref=_text(filters.get("subject_ref")) or None,
+                purpose=_text(filters.get("purpose")) or None,
+                audience=_text(filters.get("audience")) or None,
+                branch=_text(filters.get("branch")) or None,
+                limit=max_items or 200,
+            )
+            return _filter_records(records, {}, search)
+        if resource_type == "adaos.context.plan":
+            records = contexts.list_plans(subject_ref=_text(filters.get("subject_ref")) or None, limit=max_items or 200)
+            return _filter_records(records, {key: value for key, value in filters.items() if key in {"purpose", "audience", "status"}}, search)
+        if resource_type == "adaos.context.memory_candidate":
+            records = contexts.list_memory_candidates(status=_text(filters.get("status")) or None, limit=max_items or 200)
+            return _filter_records(records, {key: value for key, value in filters.items() if key in {"kind", "authority_ref", "proposed_by"}}, search)
+        if resource_type == "adaos.agent.context_receipt":
+            records = contexts.list_receipts(run_ref=_text(filters.get("run_ref")) or None, limit=max_items or 200)
+            return _filter_records(records, {key: value for key, value in filters.items() if key in {"plan_ref", "execution_route"}}, search)
         raise ValueError(f"unknown resource_type: {resource_type}")
 
     def _operate(self, resource_type: str, operation_id: str, request: Mapping[str, Any]) -> dict[str, Any]:
@@ -727,7 +922,82 @@ class ResourceWorkbenchService:
             return self._operate_dev_ticket(operation_id, request)
         if resource_type == "demo.metric_note":
             return self._operate_demo_note(operation_id, request)
+        if resource_type.startswith("adaos.context.") or resource_type == "adaos.agent.context_receipt":
+            return self._operate_context_resource(resource_type, operation_id, request)
         raise ValueError(f"resource operation is read-only: {resource_type}.{operation_id}")
+
+    def _operate_context_resource(self, resource_type: str, operation_id: str, request: Mapping[str, Any]) -> dict[str, Any]:
+        service = self._contexts()
+        payload = _mapping(request.get("payload"))
+        record_id = _text(request.get("record_id"))
+        actor = _actor_id(_mapping(request.get("actor")))
+        expected = request.get("expected_revision")
+        if resource_type == "adaos.context.capsule":
+            if operation_id == "show":
+                include = request.get("include") if isinstance(request.get("include"), list) else []
+                return {"record": service.get_capsule(record_id, include_content="content" in include), "record_id": record_id}
+            if operation_id == "create":
+                record = service.register_capsule(payload, bind=bool(payload.get("bind")))
+                return {"record": record, "record_id": record["capsule_id"]}
+            if operation_id == "revoke":
+                record = service.revoke_capsule(record_id, actor_ref=actor, reason=_text(payload.get("reason")))
+                return {"record": record, "record_id": record_id}
+        if resource_type == "adaos.context.relationship" and operation_id == "create":
+            record = service.add_relationship(payload)
+            return {"record": record, "record_id": record["relationship_id"]}
+        if resource_type == "adaos.context.subject_binding" and operation_id == "bind":
+            record = service.bind_subject(
+                subject_ref=_text(payload.get("subject_ref")),
+                capsule_id=_text(payload.get("capsule_id")),
+                purpose=_text(payload.get("purpose")) or "*",
+                audience=_text(payload.get("audience")) or "*",
+                branch=_text(payload.get("branch")) or "main",
+                expected_revision=int(expected) if expected is not None else None,
+                actor_ref=actor,
+                reason=_text(payload.get("reason")) or "resource_workbench",
+            )
+            return {"record": record, "record_id": record["binding_id"]}
+        if resource_type == "adaos.context.plan":
+            if operation_id == "create":
+                record = service.plan(payload)
+                return {"record": record, "record_id": record["plan_id"]}
+            if operation_id == "compile":
+                record = service.compile(payload or {"plan_id": record_id})
+                return {"record": record, "record_id": record_id or _text(record.get("packet_digest"))}
+        if resource_type == "adaos.agent.context_receipt" and operation_id == "create":
+            record = service.record_receipt(payload)
+            return {"record": record, "record_id": record["receipt_id"]}
+        if resource_type == "adaos.context.memory_candidate":
+            if operation_id == "propose":
+                record = service.propose_memory(payload)
+            elif operation_id == "qualify":
+                record = service.qualify_memory(
+                    record_id,
+                    validation_refs=payload.get("validation_refs") or [],
+                    qualified_by=actor,
+                    expected_revision=int(expected) if expected is not None else None,
+                )
+            elif operation_id == "promote":
+                result = service.promote_memory(
+                    record_id,
+                    actor_ref=actor,
+                    subject_refs=payload.get("subject_refs") or [],
+                    bind=bool(payload.get("bind", True)),
+                    expected_revision=int(expected) if expected is not None else None,
+                )
+                return {"record": result["candidate"], "record_id": record_id, "capsule": result["capsule"]}
+            elif operation_id == "rollback":
+                result = service.rollback_memory(
+                    record_id,
+                    actor_ref=actor,
+                    reason=_text(payload.get("reason")),
+                    restore_capsule_id=_text(payload.get("restore_capsule_id")) or None,
+                )
+                return {"record": result["candidate"], "record_id": record_id, "rollback": result}
+            else:
+                raise ValueError(f"unsupported context memory operation: {operation_id}")
+            return {"record": record, "record_id": record["candidate_id"]}
+        raise ValueError(f"unsupported context resource operation: {resource_type}.{operation_id}")
 
     def _operate_dev_ticket(self, operation_id: str, request: Mapping[str, Any]) -> dict[str, Any]:
         service = self._tickets()

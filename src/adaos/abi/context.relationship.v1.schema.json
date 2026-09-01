@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.context.relationship.v1",
+  "title": "AdaOS Context Relationship",
+  "type": "object",
+  "required": ["schema", "relationship_id", "digest", "from_capsule_id", "to_capsule_id", "relation_type", "required", "propagate_taint", "valid_from", "recorded_at"],
+  "properties": {
+    "schema": {"const": "adaos.context.relationship.v1"},
+    "relationship_id": {"type": "string", "pattern": "^ctxrel\\."},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "from_capsule_id": {"type": "string", "pattern": "^ctxcap\\."},
+    "to_capsule_id": {"type": "string", "pattern": "^ctxcap\\."},
+    "relation_type": {"type": "string", "minLength": 1},
+    "required": {"type": "boolean"},
+    "propagate_taint": {"type": "boolean"},
+    "valid_from": {"type": "string", "format": "date-time"},
+    "valid_to": {"type": ["string", "null"], "format": "date-time"},
+    "recorded_at": {"type": "string", "format": "date-time"},
+    "metadata": {"type": "object"}
+  },
+  "additionalProperties": true
+}

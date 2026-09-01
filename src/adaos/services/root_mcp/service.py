@@ -475,6 +475,94 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             metadata={"published_by": "plane:adaos_dev", "handler": "builder_get_context"},
         ),
         RootMcpToolContract(
+            id="context.resolve",
+            title="Resolve governed context",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Resolve an admissible typed context graph for exact subjects, purpose, audience, policy, and as-of time.",
+            input_schema=schema_object(
+                properties={
+                    "subject_refs": {"type": "array", "items": {"type": "string"}},
+                    "scope_ref": {"type": "string"},
+                    "purpose": {"type": "string"},
+                    "audience": {"type": "string"},
+                    "branch": {"type": "string"},
+                    "as_of": {"type": "string"},
+                    "policy": {"type": "object"},
+                },
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="context.read",
+            metadata={"published_by": "plane:context_control", "handler": "context_resolve"},
+        ),
+        RootMcpToolContract(
+            id="context.plan",
+            title="Plan governed context",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Select the minimal deterministic working set under an explicit token and policy budget.",
+            input_schema=schema_object(
+                properties={
+                    "resolution": {"type": "object"},
+                    "resolution_ref": {"type": "string"},
+                    "token_budget": {"type": "integer", "minimum": 1},
+                    "model_profile": {"type": "object"},
+                },
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="context.read",
+            metadata={"published_by": "plane:context_control", "handler": "context_plan"},
+        ),
+        RootMcpToolContract(
+            id="context.compile",
+            title="Compile governed context",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Compile one Context Plan into a provider-neutral packet and selected model text layout.",
+            input_schema=schema_object(
+                properties={
+                    "plan": {"type": "object"},
+                    "plan_id": {"type": "string"},
+                    "plan_ref": {"type": "string"},
+                    "output_format": {"type": "string", "enum": ["json", "min_json", "jsonl", "toon"]},
+                    "role_authority": {"type": "object"},
+                    "output_contract": {"type": "object"},
+                },
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="context.read",
+            metadata={"published_by": "plane:context_control", "handler": "context_compile"},
+        ),
+        RootMcpToolContract(
+            id="context.inspect",
+            title="Inspect context attribution",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Inspect selected, omitted, denied, cost, cache, and validation receipts for an agent run.",
+            input_schema=schema_object(properties={"run_ref": {"type": "string"}}, required=["run_ref"]),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="context.read",
+            metadata={"published_by": "plane:context_control", "handler": "context_inspect"},
+        ),
+        RootMcpToolContract(
+            id="context.record_receipt",
+            title="Record context receipt",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Record immutable context attribution, provider usage, local-Codex usage, and validation evidence.",
+            input_schema=schema_object(additional_properties=True),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="context.receipt.write",
+            side_effects="write",
+            metadata={"published_by": "plane:context_control", "handler": "context_record_receipt"},
+        ),
+        RootMcpToolContract(
+            id="context.propose_memory",
+            title="Propose context memory",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Create an unpromoted memory candidate from run evidence; independent qualification remains mandatory.",
+            input_schema=schema_object(additional_properties=True),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="context.memory.propose",
+            side_effects="write",
+            metadata={"published_by": "plane:context_control", "handler": "context_propose_memory"},
+        ),
+        RootMcpToolContract(
             id="skill_factory.get_status",
             title="Get Skill Factory status",
             surface=RootMcpSurface.DEVELOPMENT,
@@ -3160,6 +3248,54 @@ def _handle_get_360log_snapshot(arguments: dict[str, Any], *, dry_run: bool) -> 
     }
 
 
+def _context_service():
+    from adaos.services.context_control import ContextControlService
+
+    return ContextControlService()
+
+
+def _handle_context_resolve(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_resolve": True, "request": request}
+    return {"resolution": _context_service().resolve(request)}
+
+
+def _handle_context_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_plan": True, "request": request}
+    return {"plan": _context_service().plan(request)}
+
+
+def _handle_context_compile(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_compile": True, "request": request}
+    return {"compilation": _context_service().compile(request)}
+
+
+def _handle_context_inspect(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    run_ref = str(arguments.get("run_ref") or "").strip()
+    if not run_ref:
+        raise ValueError("run_ref is required")
+    return {"inspection": _context_service().inspect(run_ref)}
+
+
+def _handle_context_record_receipt(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_record": True, "request": request}
+    return {"receipt": _context_service().record_receipt(request)}
+
+
+def _handle_context_propose_memory(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_propose": True, "request": request}
+    return {"candidate": _context_service().propose_memory(request)}
+
+
 _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "development.describe_foundation": lambda arguments, dry_run=False: _handle_describe_foundation(arguments, dry_run=dry_run),
     "development.list_contracts": lambda arguments, dry_run=False: _handle_list_contracts(arguments, dry_run=dry_run),
@@ -3177,6 +3313,12 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "adaos_dev.get_public_scenario_registry": lambda arguments, dry_run=False: _handle_adaos_dev_descriptor(arguments, descriptor_id="public_scenario_registry_summary"),
     "adaos_dev.get_named_entity_registry": lambda arguments, dry_run=False: _handle_adaos_dev_named_entity_registry(arguments, dry_run=dry_run),
     "builder.get_context": lambda arguments, dry_run=False: _handle_builder_context(arguments, dry_run=dry_run),
+    "context.resolve": lambda arguments, dry_run=False: _handle_context_resolve(arguments, dry_run=dry_run),
+    "context.plan": lambda arguments, dry_run=False: _handle_context_plan(arguments, dry_run=dry_run),
+    "context.compile": lambda arguments, dry_run=False: _handle_context_compile(arguments, dry_run=dry_run),
+    "context.inspect": lambda arguments, dry_run=False: _handle_context_inspect(arguments, dry_run=dry_run),
+    "context.record_receipt": lambda arguments, dry_run=False: _handle_context_record_receipt(arguments, dry_run=dry_run),
+    "context.propose_memory": lambda arguments, dry_run=False: _handle_context_propose_memory(arguments, dry_run=dry_run),
     "skill_factory.get_status": lambda arguments, dry_run=False: _handle_skill_factory_get_status(arguments, dry_run=dry_run),
     "skill_factory.submit_realize_request": lambda arguments, dry_run=False: _handle_skill_factory_submit_realize_request(arguments, dry_run=dry_run),
     "skill_factory.register_dev_node": lambda arguments, dry_run=False: _handle_skill_factory_register_dev_node(arguments, dry_run=dry_run),

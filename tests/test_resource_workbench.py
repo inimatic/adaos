@@ -32,7 +32,18 @@ def test_resource_definitions_validate_and_include_dev_tickets_and_demo_metrics(
     resource_types = {item["resource_type"] for item in definitions}
     dev_ticket = next(item for item in definitions if item["resource_type"] == "adaos.dev.ticket")
 
-    assert {"adaos.dev.ticket", "demo.metric", "demo.metric_note", "demo.metric_event"} <= resource_types
+    assert {
+        "adaos.dev.ticket",
+        "demo.metric",
+        "demo.metric_note",
+        "demo.metric_event",
+        "adaos.context.capsule",
+        "adaos.context.relationship",
+        "adaos.context.subject_binding",
+        "adaos.context.plan",
+        "adaos.context.memory_candidate",
+        "adaos.agent.context_receipt",
+    } <= resource_types
     assert {"owner_area", "component_ref"} <= set(dev_ticket["query"]["filters"])
     assert {"core_request", "sdk_understanding"} <= {item["id"] for item in dev_ticket["operations"]}
     for definition in definitions:
@@ -250,6 +261,46 @@ def test_resource_workbench_demo_metric_note_crud_validation_roles_and_traces(tm
     assert updated["result"]["record"]["revision"] == 2
     assert service.traces(resource_type="demo.metric_note")
     assert service.events(resource_type="demo.metric_note")
+
+
+def test_resource_workbench_context_inspector_resources(tmp_path: Path) -> None:
+    service = ResourceWorkbenchService(state_dir=tmp_path)
+    created = service.operate(
+        {
+            "schema": "adaos.resource.operation.v1",
+            "resource_type": "adaos.context.capsule",
+            "operation_id": "create",
+            "payload": {
+                "kind": "project",
+                "subject_refs": ["project:demo"],
+                "authority_ref": "project:demo",
+                "trust_class": "accepted",
+                "summary": "Demo project context",
+                "bind": True,
+            },
+            "actor": {"id": "builder:test", "role": "builder"},
+        }
+    )
+    capsule = created["result"]["record"]
+    listed = service.query(
+        {
+            "schema": "adaos.resource.query.v1",
+            "resource_type": "adaos.context.capsule",
+            "filters": {"subject_ref": "project:demo", "trust_class": "accepted"},
+            "search": "demo",
+            "actor": {"id": "builder:test", "role": "builder"},
+        }
+    )
+    bindings = service.query(
+        {
+            "schema": "adaos.resource.query.v1",
+            "resource_type": "adaos.context.subject_binding",
+            "filters": {"subject_ref": "project:demo"},
+            "actor": {"id": "builder:test", "role": "builder"},
+        }
+    )
+    assert [item["capsule_id"] for item in listed["items"]] == [capsule["capsule_id"]]
+    assert bindings["items"][0]["capsule_id"] == capsule["capsule_id"]
 
 
 def test_resource_api_query_and_operation(tmp_path: Path) -> None:
