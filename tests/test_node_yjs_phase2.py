@@ -1614,6 +1614,65 @@ def test_node_yjs_webspace_materialization_snapshot_returns_live_branches(monkey
     assert all(call.get("prefer_live_room") is False for call in read_calls)
 
 
+def test_node_yjs_webspace_path_reads_live_nested_projection(monkeypatch) -> None:
+    fake_state = {
+        "data": _FakeMap(
+            {
+                "subscription_status": {
+                    "current": {"value": "builder"},
+                    "resources": {"items": [{"resource": "codex.api.tokens", "used_30d": 5398516}]},
+                }
+            }
+        )
+    }
+    read_calls: list[dict[str, object]] = []
+
+    def _fake_async_read_ydoc(*_args, **kwargs):
+        read_calls.append(dict(kwargs))
+        return _FakeAsyncDoc(fake_state)
+
+    monkeypatch.setattr(node_api_module, "async_read_ydoc", _fake_async_read_ydoc)
+
+    result = asyncio.run(
+        node_api_module.node_yjs_webspace_path(
+            "default",
+            path="data/subscription_status/resources",
+            max_bytes=4096,
+        )
+    )
+
+    assert result["available"] is True
+    assert result["webspace_id"] == "desktop"
+    assert result["value"]["items"][0]["resource"] == "codex.api.tokens"
+    assert result["value"]["items"][0]["used_30d"] == 5398516
+    assert result["payload_bytes"] > 0
+    assert len(result["fingerprint"]) == 64
+    assert read_calls == [{"prefer_live_room": True}]
+
+
+def test_node_yjs_webspace_path_omits_oversized_value(monkeypatch) -> None:
+    fake_state = {"data": _FakeMap({"large": {"body": "x" * 2048}})}
+    monkeypatch.setattr(
+        node_api_module,
+        "async_read_ydoc",
+        lambda *_args, **_kwargs: _FakeAsyncDoc(fake_state),
+    )
+
+    result = asyncio.run(
+        node_api_module.node_yjs_webspace_path(
+            "desktop",
+            path="data/large",
+            max_bytes=1024,
+        )
+    )
+
+    assert result["available"] is False
+    assert result["reason"] == "payload_too_large"
+    assert result["found"] is True
+    assert result["value"] is None
+    assert result["payload_bytes"] > result["max_bytes"]
+
+
 def test_node_yjs_webspace_materialization_snapshot_returns_degraded_on_timeout(monkeypatch) -> None:
     monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
     monkeypatch.setattr(

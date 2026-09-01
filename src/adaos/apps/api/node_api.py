@@ -303,6 +303,24 @@ def _coerce_node_webspace_id(value: Any = None) -> str:
     return coerce_webspace_id(value, fallback=default_webspace_id())
 
 
+def _read_ydoc_json_path(ydoc: Any, path: str) -> tuple[bool, Any]:
+    segments = [segment for segment in str(path or "").split("/") if segment]
+    if len(segments) < 2:
+        return False, None
+    current: Any = ydoc.get_map(segments[0])
+    for segment in segments[1:]:
+        getter = getattr(current, "get", None)
+        if callable(getter):
+            current = getter(segment)
+        elif isinstance(current, Mapping):
+            current = current.get(segment)
+        else:
+            return False, None
+        if current is None:
+            return False, None
+    return True, _clone_json_like(current)
+
+
 def _coerce_optional_int(value: Any) -> int | None:
     if value is None:
         return None
@@ -5715,6 +5733,59 @@ async def node_yjs_webspace_materialization_snapshot(
             webspace_id=target_webspace_id,
         )
     return result
+
+
+@router.get("/yjs/webspaces/{webspace_id}/path", dependencies=[Depends(require_token)])
+async def node_yjs_webspace_path(
+    webspace_id: str,
+    path: str = Query(..., min_length=3, max_length=512),
+    max_bytes: int = Query(default=64 * 1024, ge=1024, le=256 * 1024),
+) -> dict[str, Any]:
+    """Inspect one bounded path from the active YDoc for validation evidence."""
+
+    target_webspace_id = _coerce_node_webspace_id(webspace_id)
+    normalized_path = "/".join(segment for segment in str(path or "").split("/") if segment)
+    segments = normalized_path.split("/") if normalized_path else []
+    if len(segments) < 2 or segments[0] not in {"data", "ui", "registry", "runtime"}:
+        raise HTTPException(
+            status_code=400,
+            detail="path must address a child of data, ui, registry, or runtime",
+        )
+
+    async with async_read_ydoc(
+        target_webspace_id,
+        prefer_live_room=True,
+    ) as ydoc:
+        found, value = _read_ydoc_json_path(ydoc, normalized_path)
+
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    payload_bytes = len(encoded)
+    fingerprint = hashlib.sha256(encoded).hexdigest()
+    if payload_bytes > max_bytes:
+        return {
+            "ok": True,
+            "available": False,
+            "reason": "payload_too_large",
+            "webspace_id": target_webspace_id,
+            "path": normalized_path,
+            "found": found,
+            "payload_bytes": payload_bytes,
+            "max_bytes": max_bytes,
+            "fingerprint": fingerprint,
+            "value": None,
+        }
+    return {
+        "ok": True,
+        "available": found,
+        "reason": "ready" if found else "path_not_found",
+        "webspace_id": target_webspace_id,
+        "path": normalized_path,
+        "found": found,
+        "payload_bytes": payload_bytes,
+        "max_bytes": max_bytes,
+        "fingerprint": fingerprint,
+        "value": value,
+    }
 
 
 @router.post("/yjs/webspaces/{webspace_id}/materialization/repair", dependencies=[Depends(require_token)])
