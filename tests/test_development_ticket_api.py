@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 
 import pytest
@@ -658,6 +659,45 @@ def test_builder_work_stream_preserves_attempt_status_and_snapshot(tmp_path: Pat
         actor="user:owner",
     )["repair"]
     repair_id = repair["repair_id"]
+    trial = {
+        "schema": "adaos.builder.aprobation_runtime_overlay.v1",
+        "ok": True,
+        "mode": "devspace_to_workspace_runtime_overlay",
+        "webspace_id": "desktop",
+        "skills": [
+            {
+                "id": "demo_metrics_skill",
+                "version": "0.13.23",
+                "source_space": "dev",
+                "runtime_space": "default",
+                "webspace_projection": {"large": "payload" * 10_000},
+            }
+        ],
+        "trial": {
+            "status": "trial",
+            "candidate_id": "candidate.demo",
+            "candidate_digest": "sha256:" + "a" * 64,
+            "version": "0.13.23",
+        },
+    }
+    repair_service = tickets_api._repair_service_for(service)
+    repair_service.link_automation(
+        repair_id,
+        automation={
+            "automation": {
+                "session_id": "automation.demo",
+                "task_id": "task.completed",
+                "status": "completed",
+            },
+            "session": {
+                "session_id": "automation.demo",
+                "current_task_id": "task.completed",
+                "status": "completed",
+                "completion_readiness": {"ok": True, "aprobation": trial},
+            },
+        },
+        actor="builder.automation",
+    )
     first_ref = {
         "type": "builder_repair_task",
         "repair_id": repair_id,
@@ -694,7 +734,94 @@ def test_builder_work_stream_preserves_attempt_status_and_snapshot(tmp_path: Pat
         "task.failed",
         "task.completed",
     ]
-    assert stream["builder_work_items"][0]["parent_work_status"] == "planned"
+    assert stream["builder_work_items"][0]["parent_work_status"] == "validating"
+    assert all(item["trial"] == {} for item in stream["builder_work_items"])
+    assert all("timeline" not in item for item in stream["builder_work_items"])
+    assert stream["builder_work_items"][0]["timeline_summary"]["event_count"] > 0
+    assert all("token_accounting" not in item for item in stream["entries"])
+    assert stream["trial"]["schema"] == "adaos.builder.ticket_trial_summary.v1"
+    assert stream["trial"]["trial"]["candidate_id"] == "candidate.demo"
+    assert stream["trial"]["skills"] == [
+        {
+            "id": "demo_metrics_skill",
+            "version": "0.13.23",
+            "source_space": "dev",
+            "runtime_space": "default",
+        }
+    ]
+    assert len(json.dumps(stream["trial"])) < 2_000
+    assert len(json.dumps(stream)) < 20_000
+
+
+def test_builder_work_stream_compacts_acceptance_evidence_and_timeline() -> None:
+    acceptance = tickets_api._compact_builder_acceptance(
+        {
+            "status": "accepted",
+            "accepted": True,
+            "actor": "builder.automation",
+            "recorded_at": "2026-09-01T00:00:00+00:00",
+            "evidence_refs": [
+                {"type": "trace", "payload": "large" * 10_000},
+                {"type": "test", "id": "focused"},
+            ],
+        }
+    )
+    timeline = tickets_api._compact_builder_timeline(
+        [
+            {"kind": "created", "payload": "large" * 10_000},
+            {
+                "kind": "validated",
+                "actor": "builder.automation",
+                "recorded_at": "2026-09-01T00:00:00+00:00",
+                "payload": "large" * 10_000,
+            },
+        ]
+    )
+
+    assert acceptance == {
+        "status": "accepted",
+        "accepted": True,
+        "actor": "builder.automation",
+        "recorded_at": "2026-09-01T00:00:00+00:00",
+        "evidence_ref_count": 2,
+    }
+    assert timeline == {
+        "event_count": 2,
+        "last_event": {
+            "kind": "validated",
+            "actor": "builder.automation",
+            "recorded_at": "2026-09-01T00:00:00+00:00",
+        },
+    }
+
+
+def test_development_ticket_list_summary_projection_omits_heavy_fields(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    client = _client(service)
+    created = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "summary": "Keep list projection bounded",
+            "kind": "development_request",
+            "target_scope": {"type": "skill", "id": "demo_metrics_skill"},
+            "evidence_refs": [{"type": "trace", "payload": "large" * 10_000}],
+        },
+    ).json()["ticket"]
+
+    response = client.get(
+        "/api/development-tickets?projection=summary",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["projection"] == "summary"
+    assert payload["items"] == [
+        tickets_api._ticket_list_item(service.get_ticket(created["ticket_id"]))
+    ]
+    assert "evidence_refs" not in payload["items"][0]
+    assert len(response.content) < 2_000
 
 
 def test_development_ticket_api_delegates_trial_decision_to_scoped_builder_target(tmp_path: Path) -> None:

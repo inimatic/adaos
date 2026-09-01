@@ -4158,16 +4158,20 @@ class BuilderAutomationService:
             "stderr_path": str(run_dir / "output" / "codex-live.stderr.log"),
             "result_path": str(run_dir / "output" / "result.json"),
         }
-        current = self._report_terminal_codex_usage(
-            current,
-            task_status=str(task_status or ""),
-        )
         if task.get("result"):
             current["last_result"] = task.get("result")
             current.pop("last_failure", None)
         if task_status != "completed" and task.get("failure_history"):
             current["last_failure"] = task.get("failure_history")[-1]
             current.pop("last_result", None)
+        # Deterministic executions declare their zero-model strategy in the
+        # result. Retain it before metering so the first terminal projection
+        # records an exact zero-token receipt instead of a transient
+        # unavailable receipt that needs a later status poll to repair.
+        current = self._report_terminal_codex_usage(
+            current,
+            task_status=str(task_status or ""),
+        )
         readiness = current.get("completion_readiness")
         finalizing = str(current.get("finalizing_task_id") or "").strip() == task_id
         if (

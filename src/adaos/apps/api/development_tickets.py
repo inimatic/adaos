@@ -337,6 +337,32 @@ def _ticket_detail(service: DevelopmentTicketService, ticket: dict[str, Any]) ->
     }
 
 
+def _ticket_list_item(ticket: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: ticket.get(key)
+        for key in (
+            "schema",
+            "ticket_id",
+            "kind",
+            "status",
+            "status_group",
+            "summary",
+            "severity",
+            "blocking",
+            "owner_area",
+            "component_ref",
+            "owner_scope",
+            "origin_scope",
+            "target_scope",
+            "occurrence_count",
+            "source",
+            "created_at",
+            "updated_at",
+        )
+        if ticket.get(key) not in (None, "")
+    }
+
+
 def _mapping_list(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
@@ -422,6 +448,122 @@ def _builder_token_accounting(ref: Mapping[str, Any], task: Mapping[str, Any]) -
     }
 
 
+def _compact_builder_trial(value: Any) -> dict[str, Any]:
+    trial_context = dict(value) if isinstance(value, Mapping) else {}
+    trial = (
+        dict(trial_context.get("trial"))
+        if isinstance(trial_context.get("trial"), Mapping)
+        else {}
+    )
+    if not trial_context or not trial:
+        return {}
+    skills = [
+        {
+            key: item.get(key)
+            for key in ("id", "version", "source_space", "runtime_space")
+            if item.get(key) not in (None, "")
+        }
+        for item in trial_context.get("skills") or []
+        if isinstance(item, Mapping)
+    ][:12]
+    scenario = (
+        {
+            key: trial_context["scenario"].get(key)
+            for key in ("id", "version", "source_space", "runtime_space")
+            if trial_context["scenario"].get(key) not in (None, "")
+        }
+        if isinstance(trial_context.get("scenario"), Mapping)
+        else None
+    )
+    return {
+        "schema": "adaos.builder.ticket_trial_summary.v1",
+        "ok": bool(trial_context.get("ok")),
+        "mode": trial_context.get("mode"),
+        "webspace_id": trial_context.get("webspace_id"),
+        "source_policy": trial_context.get("source_policy"),
+        "ticket_id": trial_context.get("ticket_id"),
+        "task_id": trial_context.get("task_id"),
+        "trial": {
+            key: trial.get(key)
+            for key in (
+                "status",
+                "decision",
+                "candidate_id",
+                "candidate_digest",
+                "release_digest",
+                "version",
+                "started_at",
+                "decided_at",
+                "decided_by",
+            )
+            if trial.get(key) not in (None, "")
+        },
+        "skills": skills,
+        "scenario": scenario,
+    }
+
+
+def _compact_builder_acceptance(value: Any) -> dict[str, Any]:
+    acceptance = dict(value) if isinstance(value, Mapping) else {}
+    if not acceptance:
+        return {}
+    evidence_refs = _mapping_list(acceptance.get("evidence_refs"))
+    return {
+        key: acceptance.get(key)
+        for key in (
+            "status",
+            "accepted",
+            "capability_works",
+            "regression_free",
+            "actor",
+            "recorded_at",
+        )
+        if acceptance.get(key) not in (None, "")
+    } | {"evidence_ref_count": len(evidence_refs)}
+
+
+def _compact_builder_timeline(value: Any) -> dict[str, Any]:
+    timeline = _mapping_list(value)
+    if not timeline:
+        return {"event_count": 0}
+    last_event = timeline[-1]
+    return {
+        "event_count": len(timeline),
+        "last_event": {
+            key: last_event.get(key)
+            for key in ("kind", "status", "actor", "recorded_at", "created_at")
+            if last_event.get(key) not in (None, "")
+        },
+    }
+
+
+def _builder_stream_entry(item: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: item.get(key)
+        for key in (
+            "entry_id",
+            "kind",
+            "authority",
+            "work_id",
+            "work_item_id",
+            "work_type",
+            "mode",
+            "status",
+            "compatibility_status",
+            "parent_work_status",
+            "summary",
+            "repair_id",
+            "automation_task_id",
+            "automation_status",
+            "human_manageable",
+            "read_only",
+            "created_at",
+            "updated_at",
+        )
+        if item.get(key) not in (None, "")
+    }
+
+
 def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, Any]) -> dict[str, Any]:
     ticket_id = str(ticket.get("ticket_id") or "").strip()
     refs = _mapping_list(ticket.get("builder_refs"))
@@ -441,6 +583,7 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
         except Exception:
             repair_tasks = {}
     builder_items: list[dict[str, Any]] = []
+    current_trial: dict[str, Any] = {}
     entries: list[dict[str, Any]] = [
         {
             "entry_id": f"{ticket_id}:ticket",
@@ -476,6 +619,9 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
         repair_id = str(ref.get("repair_id") or "").strip()
         task = repair_tasks.get(repair_id) or {}
         context = task.get("context") if isinstance(task.get("context"), Mapping) else {}
+        compact_trial = _compact_builder_trial(context.get("trial"))
+        if compact_trial:
+            current_trial = compact_trial
         automation = _builder_automation_context(ref, task)
         has_automation_attempt = bool(
             str(ref.get("automation_task_id") or automation.get("task_id") or "").strip()
@@ -505,19 +651,19 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
             "read_only": True,
             "created_at": task.get("created_at") or ref.get("created_at"),
             "updated_at": task.get("updated_at") or ref.get("updated_at") or ref.get("created_at"),
-            "acceptance": task.get("acceptance") if isinstance(task.get("acceptance"), Mapping) else {},
+            "acceptance": _compact_builder_acceptance(task.get("acceptance")),
             "automation": automation,
-            "trial": dict(context.get("trial"))
-            if isinstance(context.get("trial"), Mapping)
-            else {},
+            # Trial belongs to the user ticket/release candidate, not to each
+            # historical Builder attempt. Keep it once at work-stream level.
+            "trial": {},
             "automation_session_id": automation.get("session_id") or ref.get("automation_session_id"),
             "automation_task_id": automation.get("task_id") or ref.get("automation_task_id"),
             "automation_status": automation.get("status") or ref.get("automation_status"),
             "token_accounting": _builder_token_accounting(ref, task),
-            "timeline": _mapping_list(task.get("timeline")),
+            "timeline_summary": _compact_builder_timeline(task.get("timeline")),
         }
         builder_items.append(item)
-        entries.append(item)
+        entries.append(_builder_stream_entry(item))
     entries = sorted(entries, key=lambda item: (str(item.get("created_at") or item.get("updated_at") or ""), str(item.get("entry_id") or "")))
     return {
         "schema": "adaos.builder.ticket_work_stream.v1",
@@ -535,6 +681,7 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
         },
         "builder_work_count": len(builder_items),
         "builder_work_items": builder_items,
+        "trial": current_trial,
         "entries": entries,
     }
 
@@ -755,6 +902,7 @@ def list_tickets(
     component_ref: str | None = None,
     updated_since: str | None = None,
     search: str | None = None,
+    projection: str = Query(default="full", pattern="^(full|summary)$"),
     limit: int | None = Query(default=None, ge=0, le=1000),
     service: DevelopmentTicketService = Depends(_get_service),
 ) -> dict[str, Any]:
@@ -796,7 +944,14 @@ def list_tickets(
         tickets = [ticket for ticket in tickets if _ticket_target_tokens(ticket) & scoped_tokens]
     if kind_tokens:
         tickets = [ticket for ticket in tickets if _text(ticket.get("kind")) in kind_tokens]
-    return {"ok": True, "tickets": tickets, "items": tickets, "count": len(tickets)}
+    items = [_ticket_list_item(ticket) for ticket in tickets] if projection == "summary" else tickets
+    return {
+        "ok": True,
+        "tickets": items,
+        "items": items,
+        "count": len(items),
+        "projection": projection,
+    }
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

@@ -4881,6 +4881,49 @@ def test_refresh_restores_recovered_return_to_prototype_transition(
     assert refreshed["last_result"]["summary"] == "Safe prototype recovered."
 
 
+def test_refresh_reports_structured_edit_zero_usage_on_first_terminal_projection(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    calls: list[dict] = []
+    service.codex_usage_reporter = lambda event: (
+        calls.append(dict(event))
+        or {
+            "ok": True,
+            "duplicate": False,
+            "event": {"event_id": "codex_usage_first_terminal_zero"},
+        }
+    )
+    session = {
+        "session_id": "automation.skill.demo",
+        "object_type": "skill",
+        "object_id": "demo",
+        "current_task_id": "task.structured.first",
+        "status": "in_progress",
+    }
+    task = {
+        "task_id": "task.structured.first",
+        "status": "completed",
+        "updated_at": "2026-09-01T18:00:00+00:00",
+        "result": {
+            "summary": "Applied structured edit.",
+            "execution_strategy": "structured_edits",
+            "provenance": {"execution_strategy": "structured_edits"},
+        },
+    }
+    monkeypatch.setattr(type(service.factory), "read_task", lambda _self, _task_id: task)
+
+    refreshed = service.refresh_session(session)
+
+    assert refreshed["codex_usage_accounting"]["status"] == "reported"
+    assert refreshed["codex_usage_accounting"]["total_tokens"] == 0
+    assert refreshed["codex_usage_accounting"]["root_event_id"] == (
+        "codex_usage_first_terminal_zero"
+    )
+    assert len(calls) == 1
+
+
 def test_validated_result_recovery_finalizes_recovered_workflow_transition(
     tmp_path: Path,
     monkeypatch,
