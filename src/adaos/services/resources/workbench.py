@@ -239,6 +239,7 @@ def _dev_ticket_definition() -> dict[str, Any]:
             {"id": "duplicate", "kind": "transition", "risk": "low", "required_capabilities": ["dev_ticket.close"]},
             {"id": "related", "kind": "transition", "risk": "low", "required_capabilities": ["dev_ticket.update"]},
             {"id": "core_request", "kind": "core_capability_request", "risk": "medium", "requires": ["desired_contract"], "required_capabilities": ["dev_ticket.core_request"]},
+            {"id": "core_transition", "kind": "transition", "risk": "medium", "requires": ["transition"], "required_capabilities": ["dev_ticket.core_transition"]},
             {"id": "sdk_understanding", "kind": "sdk_understanding", "risk": "low", "requires": ["method_ref"], "required_capabilities": ["dev_ticket.sdk_understanding"]},
             {"id": "preview_evidence", "kind": "preview_evidence", "risk": "read", "required_capabilities": ["dev_ticket.read"]},
             {"id": "open_artifact", "kind": "open_artifact", "risk": "read", "required_capabilities": ["dev_ticket.artifact.read"]},
@@ -252,7 +253,17 @@ def _dev_ticket_definition() -> dict[str, Any]:
         ],
         "events": {
             "emits": ["resource.record.created", "resource.operation.completed"],
-            "semantic_types": ["dev_ticket.created", "dev_ticket.resolved", "dev_ticket.verified", "dev_ticket.reopened", "core_ticket.created", "sdk_understanding.created"],
+            "semantic_types": [
+                "dev_ticket.created",
+                "dev_ticket.resolved",
+                "dev_ticket.verified",
+                "dev_ticket.reopened",
+                "core_ticket.created",
+                "core_ticket.released",
+                "core_ticket.verified",
+                "core_capability.available",
+                "sdk_understanding.created",
+            ],
         },
         "i18n": {
             "default_locale": "en",
@@ -1070,6 +1081,7 @@ class ResourceWorkbenchService:
                 repair_service=BuilderRepairService(state_dir=self.state_dir),
                 capability_works=bool(payload.get("capability_works", True)),
                 regression_free=bool(payload.get("regression_free", True)),
+                accept_reduced_scope=bool(payload.get("accept_reduced_scope", False)),
             ), "record_id": ticket_id}
         if operation_id == "verify":
             return {**service.verify_ticket(
@@ -1124,6 +1136,21 @@ class ResourceWorkbenchService:
                 policy=_mapping(payload.get("policy")),
                 status=_text(payload.get("status")) or "proposed",
             ), "record_id": ticket_id}
+        if operation_id == "core_transition":
+            return {
+                **service.transition_core_ticket(
+                    ticket_id,
+                    transition=_text(payload.get("transition")),
+                    actor=actor,
+                    reason=_text(payload.get("reason")),
+                    notes=_text(payload.get("notes")),
+                    evidence_refs=evidence_refs,
+                    release_ref=_mapping(payload.get("release_ref")) or None,
+                    capability_ref=_mapping(payload.get("capability_ref")) or None,
+                    publish_pending_actions=bool(payload.get("publish_pending_actions", True)),
+                ),
+                "record_id": ticket_id,
+            }
         if operation_id == "sdk_understanding":
             return {**service.record_sdk_understanding_signal(
                 kind=_text(payload.get("kind")) or "sdk_unclear_definition",

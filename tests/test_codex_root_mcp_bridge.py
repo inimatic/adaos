@@ -117,6 +117,34 @@ class _FakeRootMcpClient:
         self.calls.append(("propose_context_memory", "", dict(proposal)))
         return {"candidate": {"candidate_id": "ctxmem.demo", "status": "proposed"}}
 
+    def list_dev_tickets(self, **filters) -> dict:
+        self.calls.append(("list_dev_tickets", "", dict(filters)))
+        return {"tickets": [{"ticket_id": "dticket.demo", "status": "accepted"}], "count": 1}
+
+    def get_dev_ticket(self, ticket_id: str) -> dict:
+        self.calls.append(("get_dev_ticket", ticket_id, {}))
+        return {"ticket": {"ticket_id": ticket_id, "status": "accepted"}}
+
+    def list_dev_ticket_events(self, **filters) -> dict:
+        self.calls.append(("list_dev_ticket_events", "", dict(filters)))
+        return {"events": [{"event_id": "dtevent.demo"}], "cursor": "dtevent.demo"}
+
+    def create_dev_ticket(self, request: dict) -> dict:
+        self.calls.append(("create_dev_ticket", "", dict(request)))
+        return {"ticket": {"ticket_id": "dticket.new", "summary": request.get("summary")}}
+
+    def operate_dev_ticket(self, ticket_id: str, operation: str, **request) -> dict:
+        self.calls.append(("operate_dev_ticket", ticket_id, {"operation": operation, **request}))
+        return {"ticket": {"ticket_id": ticket_id, "status": operation}}
+
+    def list_dev_ticket_artifacts(self, ticket_id: str | None = None) -> dict:
+        self.calls.append(("list_dev_ticket_artifacts", ticket_id or "", {}))
+        return {"artifacts": [{"artifact_id": "artifact.demo"}]}
+
+    def get_dev_ticket_artifact(self, artifact_id: str) -> dict:
+        self.calls.append(("get_dev_ticket_artifact", artifact_id, {}))
+        return {"artifact": {"artifact_id": artifact_id, "exists": True}}
+
     def get_nlu_authoring_context(
         self,
         *,
@@ -699,6 +727,51 @@ def test_model_text_formats_preserve_canonical_structured_content(monkeypatch) -
         "purpose": "builder.automation",
     }
     assert "model_text_format" in definition["inputSchema"]["properties"]
+
+
+def test_codex_bridge_exposes_dev_ticket_workflow(monkeypatch) -> None:
+    profile = bridge_mod.CodexBridgeProfile(
+        root_url="https://root.example.test",
+        target_id="hub:test-subnet",
+        access_token="access-123",
+    )
+    bridge = bridge_mod.CodexRootMcpBridge(profile)
+    fake_client = _FakeRootMcpClient()
+    monkeypatch.setattr(bridge, "_client", lambda: fake_client)
+
+    definitions = {item["name"]: item for item in bridge.tool_definitions()}
+    listed = bridge.call_tool(
+        "list_dev_tickets",
+        {"status_group": "open", "component_ref": "skill:demo", "model_text_format": "min_json"},
+    )
+    created = bridge.call_tool(
+        "create_dev_ticket",
+        {"summary": "Demo improvement", "component_ref": "skill:demo"},
+    )
+    operated = bridge.call_tool(
+        "operate_dev_ticket",
+        {
+            "ticket_id": "dticket.demo",
+            "operation": "comment",
+            "actor": "codex:test",
+            "payload": {"body": "Started"},
+        },
+    )
+
+    assert {
+        "list_dev_tickets",
+        "get_dev_ticket",
+        "list_dev_ticket_events",
+        "create_dev_ticket",
+        "operate_dev_ticket",
+        "list_dev_ticket_artifacts",
+        "get_dev_ticket_artifact",
+    } <= definitions.keys()
+    assert listed["structuredContent"]["count"] == 1
+    assert listed["_meta"]["adaos/modelProjection"]["model_text_format"] == "min_json"
+    assert created["structuredContent"]["ticket"]["ticket_id"] == "dticket.new"
+    assert operated["structuredContent"]["ticket"]["status"] == "comment"
+    assert fake_client.calls[-1][2]["payload"] == {"body": "Started"}
 
 
 def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:

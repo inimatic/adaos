@@ -228,3 +228,38 @@ def test_root_mcp_client_uses_root_url_scope_and_bearer_headers() -> None:
     assert stub.calls[54 + offset][2]["json"]["arguments"]["use_rasa"] is False
     assert stub.calls[54 + offset][2]["json"]["arguments"]["request_locale"] == "en"
     assert stub.calls[54 + offset][2]["json"]["arguments"]["preferred_locales"] == ["ru"]
+
+
+def test_root_mcp_client_exposes_dev_ticket_lifecycle() -> None:
+    stub = _StubRootHttpClient()
+    client = RootMcpClient(
+        config=RootMcpClientConfig(root_url="https://root.example.test", access_token="access-123"),
+        http=stub,  # type: ignore[arg-type]
+    )
+
+    client.list_dev_tickets(status_group="open", component_ref="skill:demo")
+    client.get_dev_ticket("dticket.test")
+    client.list_dev_ticket_events(after="dtevent.previous", limit=10)
+    client.create_dev_ticket({"summary": "Demo improvement", "component_ref": "skill:demo"})
+    client.operate_dev_ticket(
+        "dticket.test",
+        "resolve",
+        actor="codex:test",
+        payload={"resolved_by_version": "1.2.3"},
+        evidence_refs=[{"type": "test", "ref": "test_demo"}],
+    )
+    client.list_dev_ticket_artifacts("dticket.test")
+    client.get_dev_ticket_artifact("artifact.test")
+
+    tool_ids = [call[2]["json"]["tool_id"] for call in stub.calls]
+    assert tool_ids == [
+        "dev_ticket.list",
+        "dev_ticket.show",
+        "dev_ticket.events",
+        "dev_ticket.create",
+        "dev_ticket.operate",
+        "dev_ticket.artifacts",
+        "dev_ticket.get_artifact",
+    ]
+    assert stub.calls[0][2]["json"]["arguments"]["component_ref"] == "skill:demo"
+    assert stub.calls[4][2]["json"]["arguments"]["payload"]["resolved_by_version"] == "1.2.3"

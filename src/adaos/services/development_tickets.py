@@ -24,6 +24,9 @@ DEV_TICKET_SCHEMA = "adaos.dev_ticket.v1"
 STATE_SCHEMA = "adaos.development_tickets.state.v1"
 COMPATIBILITY_PENDING_ACTION_KIND = "development_ticket.runtime_compatibility.review"
 COMPATIBILITY_RESPONSE_TOPIC = "development_tickets.compatibility.response"
+CORE_CAPABILITY_PENDING_ACTION_KIND = "development_ticket.core_capability.available"
+CORE_CAPABILITY_RESPONSE_TOPIC = "development_tickets.core_capability.response"
+DEV_TICKET_LIFECYCLE_EVENT_SCHEMA = "adaos.dev_ticket.lifecycle_event.v1"
 ACTIVE_SIGNAL_STATES = {
     "captured",
     "classified",
@@ -1496,6 +1499,16 @@ class DevelopmentTicketService:
         actor: str,
         reason: str = "",
     ) -> dict[str, Any]:
+        ticket = self.get_ticket(ticket_id)
+        if not ticket:
+            raise KeyError(ticket_id)
+        if _text(ticket.get("owner_area")) == "core":
+            return self.transition_core_ticket(
+                ticket_id,
+                transition="deferred",
+                actor=actor,
+                reason=reason,
+            )["ticket"]
         return self._update_ticket(
             ticket_id,
             status="deferred",
@@ -2241,14 +2254,325 @@ class DevelopmentTicketService:
             self.block_ticket_by_core(ticket_id, core_ticket["ticket_id"], actor=_text(actor) or "builder")
             for ticket_id in blocked_ids
         ]
+        lifecycle = self.transition_core_ticket(
+            core_ticket["ticket_id"],
+            transition="created",
+            actor=_text(actor) or "builder",
+            publish_pending_actions=False,
+        )
         return {
             "ok": True,
             "signal": signal_result["signal"],
-            "ticket": core_ticket,
+            "ticket": lifecycle["ticket"],
             "blocked_tickets": blocked,
             "signal_duplicate": bool(signal_result.get("duplicate")),
             "ticket_duplicate": bool(ticket_result.get("duplicate")),
+            "lifecycle_event": lifecycle["event"],
         }
+
+    def transition_core_ticket(
+        self,
+        ticket_id: str,
+        *,
+        transition: str,
+        actor: str,
+        reason: str = "",
+        notes: str = "",
+        evidence_refs: Sequence[Mapping[str, Any]] = (),
+        release_ref: Mapping[str, Any] | None = None,
+        capability_ref: Mapping[str, Any] | None = None,
+        publish_pending_actions: bool = True,
+    ) -> dict[str, Any]:
+        transition_token = _text(transition).lower()
+        allowed = {
+            "created",
+            "qualified",
+            "accepted",
+            "deferred",
+            "released",
+            "verified",
+            "reopened",
+        }
+        if transition_token not in allowed:
+            raise ValueError(f"unsupported core ticket transition: {transition_token}")
+        actor_token = _text(actor) or "core:maintainer"
+        refs = _sequence_of_mappings(evidence_refs)
+        release = _mapping(release_ref)
+        capability = _mapping(capability_ref)
+        if transition_token in {"released", "verified"} and not refs:
+            raise ValueError(f"core ticket {transition_token} transition requires evidence_refs")
+        if transition_token == "released" and not (release or capability):
+            raise ValueError("core ticket released transition requires release_ref or capability_ref")
+        pending_ticket_ids: list[str] = []
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                raise KeyError(ticket_id)
+            if _text(ticket.get("owner_area")) != "core" and _text(_mapping(ticket.get("target_scope")).get("type")) != "core":
+                raise ValueError("core lifecycle transition requires a Core Dev Ticket")
+            semantic_type = f"core_ticket.{transition_token}"
+            existing = next(
+                (
+                    dict(item)
+                    for item in reversed(ticket.get("history") or [])
+                    if isinstance(item, Mapping)
+                    and _text(item.get("semantic_type")) == semantic_type
+                    and transition_token == "created"
+                ),
+                None,
+            )
+            if existing is not None:
+                return {
+                    "ok": True,
+                    "duplicate": True,
+                    "ticket": _normalized_ticket(ticket),
+                    "event": self._history_lifecycle_event(ticket, existing),
+                    "affected_tickets": [],
+                }
+            current_status = _text(ticket.get("status"))
+            if transition_token == "released" and current_status not in {"accepted", "claimed", "in_progress", "deferred"}:
+                raise ValueError("core ticket release requires an accepted or active ticket")
+            if transition_token == "verified" and current_status != "resolved":
+                raise ValueError("core ticket verification requires released/resolved status")
+            if transition_token == "reopened" and current_status not in {"resolved", "verified", "closed", "deferred"}:
+                raise ValueError("core ticket reopen requires deferred or completed status")
+            next_status = {
+                "qualified": "accepted",
+                "accepted": "accepted",
+                "deferred": "deferred",
+                "released": "resolved",
+                "verified": "verified",
+                "reopened": "accepted",
+            }.get(transition_token, current_status)
+            now = _now()
+            if next_status:
+                ticket["status"] = next_status
+            metadata = _mapping(ticket.get("metadata"))
+            core_lifecycle = _mapping(metadata.get("core_lifecycle"))
+            core_lifecycle.update(
+                {
+                    "stage": transition_token,
+                    "actor": actor_token,
+                    "reason": _text(reason) or None,
+                    "notes": _text(notes) or None,
+                    "release_ref": release or core_lifecycle.get("release_ref"),
+                    "capability_ref": capability or core_lifecycle.get("capability_ref"),
+                    "updated_at": now,
+                }
+            )
+            metadata["core_lifecycle"] = core_lifecycle
+            ticket["metadata"] = metadata
+            if refs:
+                ticket["evidence_refs"] = _merge_refs(ticket.get("evidence_refs") or [], refs)
+            if transition_token == "released":
+                ticket["closure"] = {
+                    "kind": "released",
+                    "actor": actor_token,
+                    "evidence_refs": refs,
+                    "release_ref": release or None,
+                    "capability_ref": capability or None,
+                    "recorded_at": now,
+                }
+            elif transition_token == "verified":
+                ticket["verification"] = {
+                    "kind": "verified",
+                    "actor": actor_token,
+                    "evidence_refs": refs,
+                    "notes": _text(notes) or None,
+                    "recorded_at": now,
+                }
+            elif transition_token == "reopened":
+                ticket.pop("verification", None)
+            event_id = f"dtevent.{new_id()}"
+            history_item = {
+                "kind": transition_token,
+                "semantic_type": semantic_type,
+                "event_id": event_id,
+                "actor": actor_token,
+                "reason": _text(reason) or None,
+                "notes": _text(notes) or None,
+                "release_ref": release or None,
+                "capability_ref": capability or None,
+                "evidence_refs": refs,
+                "status": next_status,
+                "recorded_at": now,
+            }
+            ticket["updated_at"] = now
+            self._append_history(ticket, history_item)
+            affected: list[dict[str, Any]] = []
+            if transition_token in {"released", "verified", "reopened", "deferred"}:
+                affected = self._fanout_core_transition(
+                    state,
+                    core_ticket=ticket,
+                    transition=transition_token,
+                    actor=actor_token,
+                    release_ref=release,
+                    capability_ref=capability,
+                    recorded_at=now,
+                )
+                if transition_token == "verified":
+                    pending_ticket_ids = [item["ticket_id"] for item in affected]
+            self._validate_ticket(ticket)
+            self._write(state)
+            normalized = _normalized_ticket(ticket)
+            event = self._history_lifecycle_event(normalized, history_item)
+        self._publish_lifecycle_event(event)
+        pending_actions: list[dict[str, Any]] = []
+        if publish_pending_actions and transition_token == "verified":
+            for blocked_ticket_id in pending_ticket_ids:
+                try:
+                    pending_actions.append(
+                        self.publish_core_capability_pending_action(
+                            blocked_ticket_id,
+                            core_ticket_id=normalized["ticket_id"],
+                        )
+                    )
+                except Exception:
+                    _log.warning(
+                        "failed to publish core capability Pending Action ticket=%s core_ticket=%s",
+                        blocked_ticket_id,
+                        normalized["ticket_id"],
+                        exc_info=True,
+                    )
+        return {
+            "ok": True,
+            "duplicate": False,
+            "ticket": normalized,
+            "event": event,
+            "affected_tickets": affected,
+            "pending_actions": pending_actions,
+        }
+
+    def _fanout_core_transition(
+        self,
+        state: dict[str, Any],
+        *,
+        core_ticket: Mapping[str, Any],
+        transition: str,
+        actor: str,
+        release_ref: Mapping[str, Any],
+        capability_ref: Mapping[str, Any],
+        recorded_at: str,
+    ) -> list[dict[str, Any]]:
+        core_ticket_id = _text(core_ticket.get("ticket_id"))
+        blocked_ids = {
+            _text(ref.get("ticket_id"))
+            for ref in _sequence_of_mappings(core_ticket.get("relation_refs") or [])
+            if _text(ref.get("relation") or ref.get("type")) == "blocks"
+            and _text(ref.get("ticket_id"))
+        }
+        affected: list[dict[str, Any]] = []
+        for blocked_id in sorted(blocked_ids):
+            ticket = state["tickets"].get(blocked_id)
+            if not ticket:
+                continue
+            if transition == "verified":
+                ticket["status"] = "ready_for_builder"
+            elif transition in {"reopened", "deferred"}:
+                ticket["status"] = "waiting_for_core"
+            metadata = _mapping(ticket.get("metadata"))
+            metadata["core_capability"] = {
+                "core_ticket_id": core_ticket_id,
+                "stage": transition,
+                "release_ref": dict(release_ref) or None,
+                "capability_ref": dict(capability_ref) or None,
+                "updated_at": recorded_at,
+            }
+            ticket["metadata"] = metadata
+            ticket["updated_at"] = recorded_at
+            self._append_history(
+                ticket,
+                {
+                    "kind": f"core_capability_{transition}",
+                    "semantic_type": f"project_ticket.core_capability_{transition}",
+                    "event_id": f"dtevent.{new_id()}",
+                    "core_ticket_id": core_ticket_id,
+                    "actor": actor,
+                    "release_ref": dict(release_ref) or None,
+                    "capability_ref": dict(capability_ref) or None,
+                    "status": _text(ticket.get("status")),
+                    "recorded_at": recorded_at,
+                },
+            )
+            for signal_id in ticket.get("signal_ids") or []:
+                signal = state["signals"].get(signal_id)
+                if signal:
+                    signal["status"] = "in_progress" if transition == "verified" else "deferred"
+                    signal["updated_at"] = recorded_at
+                    self._validate_signal(signal)
+            self._validate_ticket(ticket)
+            affected.append(_normalized_ticket(ticket))
+        return affected
+
+    def publish_core_capability_pending_action(
+        self,
+        ticket_id: str,
+        *,
+        core_ticket_id: str,
+        ctx: Any = None,
+        webspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        ticket = self.get_ticket(ticket_id)
+        core_ticket = self.get_ticket(core_ticket_id)
+        if not ticket or not core_ticket:
+            raise KeyError(ticket_id if not ticket else core_ticket_id)
+        if _mapping(ticket.get("policy")).get("notify_core_available") is False:
+            return {"ok": True, "published": False, "reason": "notification_disabled"}
+        existing = [
+            ref
+            for ref in _sequence_of_mappings(ticket.get("pending_action_refs") or [])
+            if ref.get("kind") == CORE_CAPABILITY_PENDING_ACTION_KIND
+            and _text(ref.get("core_ticket_id")) == _text(core_ticket_id)
+        ]
+        if existing:
+            return {"ok": True, "published": False, "reason": "pending_action_already_linked", "pending_action": existing[-1]}
+        from adaos.services import pending_actions
+
+        action = pending_actions.publish_pending_action(
+            ctx=ctx,
+            webspace_id=webspace_id,
+            kind=CORE_CAPABILITY_PENDING_ACTION_KIND,
+            title="Core capability is available",
+            summary=f"{ticket['summary']} - the blocking AdaOS capability is now verified.",
+            producer={"type": "system", "system_id": "development_tickets"},
+            owner_scope=ticket.get("owner_scope") or {"type": "workspace", "id": "local"},
+            domain_ref={
+                "ticket_id": ticket["ticket_id"],
+                "core_ticket_id": core_ticket_id,
+                "target_scope": ticket.get("target_scope") or {},
+            },
+            allowed_actions=[
+                {"id": "postpone", "label": "Later", "terminal": True},
+                {"id": "open_builder", "label": "Open Builder", "terminal": True},
+                {"id": "start_autonomous_repair", "label": "Resume autonomously", "terminal": True},
+            ],
+            response_topic=CORE_CAPABILITY_RESPONSE_TOPIC,
+            metadata={
+                "schema": "adaos.dev_ticket.core_capability.pending_action_metadata.v1",
+                "ticket_id": ticket["ticket_id"],
+                "core_ticket_id": core_ticket_id,
+                "core_component_ref": core_ticket.get("component_ref"),
+                "core_lifecycle": _mapping(_mapping(core_ticket.get("metadata")).get("core_lifecycle")),
+            },
+        )
+        ref = {
+            "id": action.get("id"),
+            "kind": action.get("kind"),
+            "core_ticket_id": core_ticket_id,
+            "status": action.get("status"),
+            "created_at": action.get("created_at"),
+        }
+        updated = self._update_ticket(
+            ticket["ticket_id"],
+            pending_action_refs=_merge_refs(ticket.get("pending_action_refs") or [], [ref]),
+            history_item={
+                "kind": "core_capability_pending_action_published",
+                "pending_action_id": ref.get("id"),
+                "core_ticket_id": core_ticket_id,
+            },
+        )
+        return {"ok": True, "published": True, "pending_action": action, "ticket": updated}
 
     def record_sdk_understanding_signal(
         self,
@@ -2627,6 +2951,7 @@ class DevelopmentTicketService:
         repair_id: str | None = None,
         capability_works: bool = True,
         regression_free: bool = True,
+        accept_reduced_scope: bool = False,
     ) -> dict[str, Any]:
         refs = _sequence_of_mappings(evidence_refs)
         if not refs:
@@ -2637,6 +2962,8 @@ class DevelopmentTicketService:
         ticket = self.get_ticket(ticket_id)
         if not ticket:
             raise KeyError(ticket_id)
+        if _text(ticket.get("owner_area")) == "core":
+            raise ValueError("Core Dev Ticket resolution requires the released lifecycle transition")
         linked_repair_id = _text(repair_id) or self._latest_repair_id(ticket)
         if repair_service is not None and linked_repair_id:
             repair_service.record_acceptance(
@@ -2663,7 +2990,16 @@ class DevelopmentTicketService:
             stored = state["tickets"].get(ticket["ticket_id"])
             if not stored:
                 raise KeyError(ticket["ticket_id"])
+            blockers = self._unresolved_core_blockers(stored, state)
+            if blockers and not accept_reduced_scope:
+                raise ValueError(
+                    "Dev Ticket cannot be resolved while blocked by unresolved Core Dev Tickets: "
+                    + ", ".join(blockers)
+                )
             stored["status"] = "resolved"
+            if blockers:
+                closure["reduced_scope_accepted"] = True
+                closure["unresolved_core_ticket_ids"] = blockers
             stored["closure"] = closure
             stored["evidence_refs"] = _merge_refs(stored.get("evidence_refs") or [], refs)
             stored["updated_at"] = closure["recorded_at"]
@@ -2686,6 +3022,26 @@ class DevelopmentTicketService:
             self._write(state)
             return {"ok": True, "ticket": _normalized_ticket(stored), "closure": _clone(closure)}
 
+    @staticmethod
+    def _unresolved_core_blockers(
+        ticket: Mapping[str, Any],
+        state: Mapping[str, Any],
+    ) -> list[str]:
+        tickets = _mapping(state.get("tickets"))
+        blockers: list[str] = []
+        for ref in _sequence_of_mappings(ticket.get("relation_refs") or []):
+            if _text(ref.get("relation") or ref.get("type")) != "blocked_by":
+                continue
+            blocker_id = _text(ref.get("ticket_id"))
+            blocker = _mapping(tickets.get(blocker_id))
+            if not blocker_id or not blocker:
+                continue
+            if _text(blocker.get("owner_area")) != "core":
+                continue
+            if _text(blocker.get("status")) not in {"verified", "closed", "superseded"}:
+                blockers.append(blocker_id)
+        return sorted(set(blockers))
+
     def verify_ticket(
         self,
         ticket_id: str,
@@ -2701,6 +3057,25 @@ class DevelopmentTicketService:
         actor_token = _text(actor)
         if not actor_token:
             raise ValueError("ticket verification requires actor")
+        current = self.get_ticket(ticket_id)
+        if not current:
+            raise KeyError(ticket_id)
+        if _text(current.get("owner_area")) == "core":
+            result = self.transition_core_ticket(
+                ticket_id,
+                transition="verified",
+                actor=actor_token,
+                notes=notes,
+                evidence_refs=refs,
+            )
+            return {
+                "ok": True,
+                "ticket": result["ticket"],
+                "verification": _clone(result["ticket"].get("verification") or {}),
+                "event": result["event"],
+                "affected_tickets": result["affected_tickets"],
+                "pending_actions": result["pending_actions"],
+            }
         with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
             state = self._read()
             ticket = state["tickets"].get(_text(ticket_id))
@@ -2745,6 +3120,17 @@ class DevelopmentTicketService:
             raise ValueError("ticket reopen requires reason")
         actor_token = _text(actor) or "system"
         refs = _sequence_of_mappings(evidence_refs)
+        current = self.get_ticket(ticket_id)
+        if not current:
+            raise KeyError(ticket_id)
+        if _text(current.get("owner_area")) == "core":
+            return self.transition_core_ticket(
+                ticket_id,
+                transition="reopened",
+                actor=actor_token,
+                reason=reason_token,
+                evidence_refs=refs,
+            )["ticket"]
         with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
             state = self._read()
             ticket = state["tickets"].get(_text(ticket_id))
@@ -3044,6 +3430,134 @@ class DevelopmentTicketService:
         if limit is not None and int(limit) >= 0:
             sorted_tickets = sorted_tickets[-int(limit):]
         return [_clone(item) for item in sorted_tickets]
+
+    @staticmethod
+    def _history_lifecycle_event(
+        ticket: Mapping[str, Any],
+        history_item: Mapping[str, Any],
+        *,
+        sequence: int | None = None,
+    ) -> dict[str, Any]:
+        ticket_id = _text(ticket.get("ticket_id"))
+        kind = _text(history_item.get("kind")) or "changed"
+        recorded_at = _text(history_item.get("recorded_at")) or _text(ticket.get("updated_at"))
+        event_id = _text(history_item.get("event_id")) or "dtevent." + hashlib.sha256(
+            f"{ticket_id}:{sequence if sequence is not None else -1}:{kind}:{recorded_at}".encode("utf-8")
+        ).hexdigest()[:26]
+        semantic_type = _text(history_item.get("semantic_type")) or f"dev_ticket.{kind}"
+        payload = {
+            key: _clone(value)
+            for key, value in history_item.items()
+            if key not in {"event_id", "semantic_type", "recorded_at"} and value is not None
+        }
+        status = _text(history_item.get("status")) or {
+            "accepted": "accepted",
+            "claimed": "claimed",
+            "in_progress": "in_progress",
+            "deferred": "deferred",
+            "postponed": "deferred",
+            "resolved": "resolved",
+            "released": "resolved",
+            "verified": "verified",
+            "closed": "closed",
+            "reopened": "accepted",
+            "superseded": "superseded",
+            "stale": "stale",
+            "core_capability_verified": "ready_for_builder",
+            "core_capability_reopened": "waiting_for_core",
+            "core_capability_deferred": "waiting_for_core",
+        }.get(kind, "unknown")
+        identity = {
+            "event_id": event_id,
+            "semantic_type": semantic_type,
+            "ticket_id": ticket_id,
+            "owner_area": _text(ticket.get("owner_area")),
+            "component_ref": _text(ticket.get("component_ref")) or None,
+            "status": status,
+            "recorded_at": recorded_at,
+            "payload": payload,
+        }
+        digest = "sha256:" + hashlib.sha256(
+            json.dumps(identity, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        ).hexdigest()
+        return {
+            "schema": DEV_TICKET_LIFECYCLE_EVENT_SCHEMA,
+            **identity,
+            "source_authority": "core:development_tickets",
+            "integrity": {
+                "algorithm": "sha256",
+                "digest": digest,
+                "transport_authentication": "adaos.runtime.event_bus",
+                "cryptographic_signature": False,
+            },
+        }
+
+    def list_lifecycle_events(
+        self,
+        *,
+        after: str | None = None,
+        updated_since: str | None = None,
+        ticket_id: str | None = None,
+        owner_area: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        state = self._read()
+        events: list[dict[str, Any]] = []
+        for ticket in state["tickets"].values():
+            if _text(ticket_id) and _text(ticket.get("ticket_id")) != _text(ticket_id):
+                continue
+            if _text(owner_area) and _text(ticket.get("owner_area")) != _text(owner_area):
+                continue
+            for sequence, item in enumerate(ticket.get("history") or []):
+                if not isinstance(item, Mapping):
+                    continue
+                event = self._history_lifecycle_event(ticket, item, sequence=sequence)
+                if _text(updated_since) and event["recorded_at"] < _text(updated_since):
+                    continue
+                events.append(event)
+        events.sort(key=lambda item: (item["recorded_at"], item["event_id"]))
+        cursor = _text(after)
+        if cursor:
+            index = next(
+                (index for index, event in enumerate(events) if event["event_id"] == cursor),
+                None,
+            )
+            events = events[index + 1 :] if index is not None else []
+        return events[-max(1, min(int(limit), 2000)) :]
+
+    @staticmethod
+    def _publish_lifecycle_event(event: Mapping[str, Any]) -> None:
+        try:
+            from adaos.services.agent_context import get_ctx
+            from adaos.services.eventbus import emit as bus_emit
+
+            ctx = get_ctx()
+            bus = getattr(ctx, "bus", None)
+            if bus is None:
+                return
+            bus_emit(
+                bus,
+                _text(event.get("semantic_type")) or "dev_ticket.changed",
+                dict(event),
+                "development_tickets",
+                event_id=_text(event.get("event_id")) or None,
+                source_authority="core:development_tickets",
+                schema=DEV_TICKET_LIFECYCLE_EVENT_SCHEMA,
+                version=1,
+            )
+            if _text(event.get("semantic_type")) == "core_ticket.verified":
+                bus_emit(
+                    bus,
+                    "core_capability.available",
+                    dict(event),
+                    "development_tickets",
+                    event_id=_text(event.get("event_id")) or None,
+                    source_authority="core:development_tickets",
+                    schema=DEV_TICKET_LIFECYCLE_EVENT_SCHEMA,
+                    version=1,
+                )
+        except Exception:
+            _log.debug("Dev Ticket lifecycle event publication skipped", exc_info=True)
 
     def list_artifacts(self, ticket_id: str | None = None) -> list[dict[str, Any]]:
         root = self.root / "artifacts"
@@ -3520,6 +4034,7 @@ class DevelopmentTicketService:
 
 
 @subscribe(COMPATIBILITY_RESPONSE_TOPIC)
+@subscribe(CORE_CAPABILITY_RESPONSE_TOPIC)
 async def _on_compatibility_pending_action_response(evt: Any) -> None:
     payload = _event_payload(evt)
     response = _mapping(payload.get("response"))
@@ -3546,7 +4061,10 @@ __all__ = [
     "ACTIVE_TICKET_STATES",
     "COMPATIBILITY_PENDING_ACTION_KIND",
     "COMPATIBILITY_RESPONSE_TOPIC",
+    "CORE_CAPABILITY_PENDING_ACTION_KIND",
+    "CORE_CAPABILITY_RESPONSE_TOPIC",
     "DEVELOPMENT_SIGNAL_SCHEMA",
+    "DEV_TICKET_LIFECYCLE_EVENT_SCHEMA",
     "DEV_TICKET_SCHEMA",
     "DevelopmentTicketService",
     "RECEIVER_COMPATIBILITY_REASONS",

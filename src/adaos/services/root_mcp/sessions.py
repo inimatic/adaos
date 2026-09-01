@@ -22,6 +22,18 @@ DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
         "context.read",
         "context.receipt.write",
         "context.memory.propose",
+        "development.read.ticket_artifacts",
+        "development.write.tickets",
+    ],
+    "BuilderDeveloper": [
+        *DEFAULT_BEARER_CAPABILITIES,
+        "development.read.ticket_artifacts",
+        "development.write.tickets",
+        "context.read",
+        "context.receipt.write",
+        "context.memory.propose",
+        "skill_factory.read.status",
+        "skill_factory.submit.realize_request",
     ],
     "NLUTeacherRead": [
         *DEFAULT_BEARER_CAPABILITIES,
@@ -44,6 +56,8 @@ DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
         *DEFAULT_BEARER_CAPABILITIES,
         "skill_factory.read.status",
         "skill_factory.submit.realize_request",
+        "development.read.ticket_artifacts",
+        "development.write.tickets",
     ],
     "SkillFactoryDevNode": [
         *DEFAULT_BEARER_CAPABILITIES,

@@ -195,6 +195,8 @@ def _contract_plane_id(contract: RootMcpToolContract) -> str:
         return published_by.split(":", 1)[1].strip() or "foundation"
     if contract.id.startswith("adaos_dev."):
         return "adaos_dev"
+    if contract.id.startswith("dev_ticket."):
+        return "adaos_dev"
     if contract.id.startswith("skill_factory."):
         return "skill_factory_task"
     if contract.id.startswith("hub.memory."):
@@ -203,7 +205,6 @@ def _contract_plane_id(contract: RootMcpToolContract) -> str:
 
 
 def _foundation_summary() -> dict[str, Any]:
-    descriptors = list_descriptor_sets()
     managed_targets = list_target_descriptors()
     contracts = list_tool_contracts()
     plane_items = _plane_items()
@@ -473,6 +474,132 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
             metadata={"published_by": "plane:adaos_dev", "handler": "builder_get_context"},
+        ),
+        RootMcpToolContract(
+            id="dev_ticket.list",
+            title="List relevant Dev Tickets",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Query the authoritative local Dev Ticket inbox by lifecycle, owner, component, text, and update time.",
+            input_schema=schema_object(
+                properties={
+                    "status": {"type": "string"},
+                    "status_group": {"type": "string"},
+                    "target_id": {"type": "string"},
+                    "kind": {"type": "string"},
+                    "owner_area": {"type": "string"},
+                    "component_ref": {"type": "string"},
+                    "search": {"type": "string"},
+                    "updated_since": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
+                },
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.tickets",
+            metadata={"published_by": "plane:adaos_dev", "handler": "dev_ticket_list"},
+        ),
+        RootMcpToolContract(
+            id="dev_ticket.show",
+            title="Show Dev Ticket",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Return one Dev Ticket with its evidence refs, relations, comments, and linked Builder work refs.",
+            input_schema=schema_object(
+                properties={"ticket_id": {"type": "string"}},
+                required=["ticket_id"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.tickets",
+            metadata={"published_by": "plane:adaos_dev", "handler": "dev_ticket_show"},
+        ),
+        RootMcpToolContract(
+            id="dev_ticket.events",
+            title="Read Dev Ticket change feed",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Read durable Dev Ticket lifecycle events after an optional cursor, including core capability fanout.",
+            input_schema=schema_object(
+                properties={
+                    "after": {"type": "string"},
+                    "updated_since": {"type": "string"},
+                    "ticket_id": {"type": "string"},
+                    "owner_area": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 2000},
+                },
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.tickets",
+            metadata={"published_by": "plane:adaos_dev", "handler": "dev_ticket_events"},
+        ),
+        RootMcpToolContract(
+            id="dev_ticket.create",
+            title="Create Dev Ticket",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Create or deduplicate a scoped Dev Ticket instead of leaving a documentation TODO.",
+            input_schema=schema_object(
+                properties={
+                    "summary": {"type": "string"},
+                    "kind": {"type": "string"},
+                    "signal_kind": {"type": "string"},
+                    "target_scope": {"type": "object"},
+                    "owner_area": {"type": "string"},
+                    "component_ref": {"type": "string"},
+                    "severity": {"type": "string"},
+                    "blocking": {"type": "boolean"},
+                    "status": {"type": "string"},
+                    "actor": {"type": "string"},
+                    "evidence_refs": {"type": "array", "items": {"type": "object"}},
+                    "metadata": {"type": "object"},
+                },
+                required=["summary"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.write.tickets",
+            side_effects="write",
+            metadata={"published_by": "plane:adaos_dev", "handler": "dev_ticket_create"},
+        ),
+        RootMcpToolContract(
+            id="dev_ticket.operate",
+            title="Operate Dev Ticket",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Claim, comment, defer, resolve, verify, close, reopen, or transition an owned Core Dev Ticket with evidence gates.",
+            input_schema=schema_object(
+                properties={
+                    "ticket_id": {"type": "string"},
+                    "operation": {
+                        "type": "string",
+                        "enum": ["claim", "start", "comment", "defer", "resolve", "verify", "close", "reopen", "core_transition"],
+                    },
+                    "actor": {"type": "string"},
+                    "payload": {"type": "object"},
+                    "evidence_refs": {"type": "array", "items": {"type": "object"}},
+                },
+                required=["ticket_id", "operation"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.write.tickets",
+            side_effects="write",
+            metadata={"published_by": "plane:adaos_dev", "handler": "dev_ticket_operate"},
+        ),
+        RootMcpToolContract(
+            id="dev_ticket.artifacts",
+            title="List Dev Ticket artifacts",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="List screenshot and evidence artifact manifests linked to one Dev Ticket.",
+            input_schema=schema_object(properties={"ticket_id": {"type": "string"}}),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.ticket_artifacts",
+            metadata={"published_by": "plane:adaos_dev", "handler": "dev_ticket_artifacts"},
+        ),
+        RootMcpToolContract(
+            id="dev_ticket.get_artifact",
+            title="Get Dev Ticket artifact",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Resolve a Dev Ticket artifact id to its governed local manifest and logical content location.",
+            input_schema=schema_object(
+                properties={"artifact_id": {"type": "string"}},
+                required=["artifact_id"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.ticket_artifacts",
+            metadata={"published_by": "plane:adaos_dev", "handler": "dev_ticket_get_artifact"},
         ),
         RootMcpToolContract(
             id="context.resolve",
@@ -2048,7 +2175,7 @@ def _handle_skill_factory_cancel_task(arguments: dict[str, Any], *, dry_run: boo
     return _skill_factory_service().cancel_task(
         task_id,
         reason=_text_or_none(arguments.get("reason")),
-        actor=_text_or_none(_mapping(arguments.get("_mcp_context")).get("actor")),
+        actor=_text_or_none(_mcp_context(arguments).get("actor")),
     )
 
 
@@ -2059,7 +2186,7 @@ def _handle_skill_factory_set_queue_paused(arguments: dict[str, Any], *, dry_run
     return _skill_factory_service().set_queue_paused(
         paused=paused,
         reason=_text_or_none(arguments.get("reason")),
-        actor=_text_or_none(_mapping(arguments.get("_mcp_context")).get("actor")),
+        actor=_text_or_none(_mcp_context(arguments).get("actor")),
     )
 
 
@@ -2072,7 +2199,7 @@ def _handle_skill_factory_drain_dev_node(arguments: dict[str, Any], *, dry_run: 
     return _skill_factory_service().drain_dev_node(
         node_id,
         reason=_text_or_none(arguments.get("reason")),
-        actor=_text_or_none(_mapping(arguments.get("_mcp_context")).get("actor")),
+        actor=_text_or_none(_mcp_context(arguments).get("actor")),
     )
 
 
@@ -2085,7 +2212,7 @@ def _handle_skill_factory_quarantine_dev_node(arguments: dict[str, Any], *, dry_
     return _skill_factory_service().quarantine_dev_node(
         node_id,
         reason=_text_or_none(arguments.get("reason")),
-        actor=_text_or_none(_mapping(arguments.get("_mcp_context")).get("actor")),
+        actor=_text_or_none(_mcp_context(arguments).get("actor")),
     )
 
 
@@ -2098,7 +2225,7 @@ def _handle_skill_factory_revoke_dev_node_credentials(arguments: dict[str, Any],
     return _skill_factory_service().revoke_dev_node_credentials(
         node_id,
         reason=_text_or_none(arguments.get("reason")),
-        actor=_text_or_none(_mapping(arguments.get("_mcp_context")).get("actor")),
+        actor=_text_or_none(_mcp_context(arguments).get("actor")),
     )
 
 
@@ -2112,7 +2239,7 @@ def _handle_skill_factory_retry_task(arguments: dict[str, Any], *, dry_run: bool
     return _skill_factory_service().retry_task(
         task_id,
         reason=_text_or_none(arguments.get("reason")),
-        actor=_text_or_none(_mapping(arguments.get("_mcp_context")).get("actor")),
+        actor=_text_or_none(_mcp_context(arguments).get("actor")),
         avoid_previous_node=avoid_previous_node,
     )
 
@@ -3254,6 +3381,101 @@ def _context_service():
     return ContextControlService()
 
 
+def _development_ticket_sdk():
+    from adaos.sdk import development_tickets
+
+    return development_tickets
+
+
+def _handle_dev_ticket_list(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    filters = {
+        key: value
+        for key, value in arguments.items()
+        if key
+        in {
+            "status",
+            "status_group",
+            "target_id",
+            "kind",
+            "owner_area",
+            "component_ref",
+            "search",
+            "updated_since",
+            "limit",
+        }
+    }
+    tickets = _development_ticket_sdk().list_tickets(**filters)
+    return {"tickets": tickets, "count": len(tickets)}
+
+
+def _handle_dev_ticket_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    ticket_id = str(arguments.get("ticket_id") or "").strip()
+    if not ticket_id:
+        raise ValueError("ticket_id is required")
+    ticket = _development_ticket_sdk().get_ticket(ticket_id)
+    if ticket is None:
+        raise KeyError(ticket_id)
+    return {"ticket": ticket}
+
+
+def _handle_dev_ticket_events(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    filters = {
+        key: value
+        for key, value in arguments.items()
+        if key in {"after", "updated_since", "ticket_id", "owner_area", "limit"}
+    }
+    events = _development_ticket_sdk().list_events(**filters)
+    return {
+        "events": events,
+        "count": len(events),
+        "cursor": events[-1]["event_id"] if events else str(arguments.get("after") or "").strip() or None,
+    }
+
+
+def _handle_dev_ticket_create(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_create": True, "request": request}
+    summary = str(request.pop("summary", "") or "").strip()
+    if not summary:
+        raise ValueError("summary is required")
+    return _development_ticket_sdk().create_ticket(summary, **request)
+
+
+def _handle_dev_ticket_operate(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    ticket_id = str(request.pop("ticket_id", "") or "").strip()
+    operation = str(request.pop("operation", "") or "").strip()
+    if not ticket_id:
+        raise ValueError("ticket_id is required")
+    if not operation:
+        raise ValueError("operation is required")
+    if dry_run:
+        return {
+            "would_operate": True,
+            "ticket_id": ticket_id,
+            "operation": operation,
+            "request": request,
+        }
+    return _development_ticket_sdk().operate_ticket(ticket_id, operation, **request)
+
+
+def _handle_dev_ticket_artifacts(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    ticket_id = str(arguments.get("ticket_id") or "").strip() or None
+    artifacts = _development_ticket_sdk().list_artifacts(ticket_id=ticket_id)
+    return {"artifacts": artifacts, "count": len(artifacts)}
+
+
+def _handle_dev_ticket_get_artifact(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    artifact_id = str(arguments.get("artifact_id") or "").strip()
+    if not artifact_id:
+        raise ValueError("artifact_id is required")
+    artifact = _development_ticket_sdk().get_artifact(artifact_id)
+    if artifact is None:
+        raise KeyError(artifact_id)
+    return {"artifact": artifact}
+
+
 def _handle_context_resolve(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
     if dry_run:
@@ -3313,6 +3535,13 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "adaos_dev.get_public_scenario_registry": lambda arguments, dry_run=False: _handle_adaos_dev_descriptor(arguments, descriptor_id="public_scenario_registry_summary"),
     "adaos_dev.get_named_entity_registry": lambda arguments, dry_run=False: _handle_adaos_dev_named_entity_registry(arguments, dry_run=dry_run),
     "builder.get_context": lambda arguments, dry_run=False: _handle_builder_context(arguments, dry_run=dry_run),
+    "dev_ticket.list": lambda arguments, dry_run=False: _handle_dev_ticket_list(arguments, dry_run=dry_run),
+    "dev_ticket.show": lambda arguments, dry_run=False: _handle_dev_ticket_show(arguments, dry_run=dry_run),
+    "dev_ticket.events": lambda arguments, dry_run=False: _handle_dev_ticket_events(arguments, dry_run=dry_run),
+    "dev_ticket.create": lambda arguments, dry_run=False: _handle_dev_ticket_create(arguments, dry_run=dry_run),
+    "dev_ticket.operate": lambda arguments, dry_run=False: _handle_dev_ticket_operate(arguments, dry_run=dry_run),
+    "dev_ticket.artifacts": lambda arguments, dry_run=False: _handle_dev_ticket_artifacts(arguments, dry_run=dry_run),
+    "dev_ticket.get_artifact": lambda arguments, dry_run=False: _handle_dev_ticket_get_artifact(arguments, dry_run=dry_run),
     "context.resolve": lambda arguments, dry_run=False: _handle_context_resolve(arguments, dry_run=dry_run),
     "context.plan": lambda arguments, dry_run=False: _handle_context_plan(arguments, dry_run=dry_run),
     "context.compile": lambda arguments, dry_run=False: _handle_context_compile(arguments, dry_run=dry_run),
@@ -3561,6 +3790,8 @@ def _execution_adapter_for_tool(tool_id: str) -> str:
         return "nlu_authoring.context"
     if token.startswith("adaos_dev."):
         return "adaos_dev.descriptor_registry"
+    if token.startswith("dev_ticket."):
+        return "adaos_dev.dev_ticket_store"
     if token.startswith("development."):
         return "root.descriptor_registry"
     if token.startswith("operations."):

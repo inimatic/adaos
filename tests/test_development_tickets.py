@@ -1163,6 +1163,132 @@ def test_core_capability_request_blocks_project_ticket_and_filters_by_owner_area
     ]
 
 
+def test_core_release_fanout_unblocks_project_only_after_verification(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    project_signal = service.capture_signal(
+        kind="development_request",
+        summary="Use a missing public SDK operation",
+        target_scope={"type": "skill", "id": "demo_metrics_skill"},
+        source="client_feedback",
+    )["signal"]
+    project_ticket = service.ensure_ticket_for_signal(
+        project_signal,
+        kind="development_request",
+        status="accepted",
+    )["ticket"]
+    created = service.create_core_capability_request(
+        summary="Expose the missing public SDK operation",
+        component_ref="core:sdk",
+        desired_contract="sdk.demo_metrics.replace_source",
+        actor="builder:test",
+        impact="blocker",
+        blocked_ticket_ids=[project_ticket["ticket_id"]],
+        evidence_refs=[{"type": "trace", "id": "sdk-miss"}],
+    )
+    core_ticket_id = created["ticket"]["ticket_id"]
+    created_event = next(
+        event
+        for event in service.list_lifecycle_events(owner_area="core")
+        if event["semantic_type"] == "core_ticket.created"
+    )
+
+    with pytest.raises(ValueError, match="released lifecycle transition"):
+        service.record_resolution(
+            core_ticket_id,
+            evidence_refs=[{"type": "test", "id": "core-test"}],
+            actor="core:maintainer",
+        )
+
+    with pytest.raises(ValueError, match="blocked by unresolved Core Dev Tickets"):
+        service.record_resolution(
+            project_ticket["ticket_id"],
+            evidence_refs=[{"type": "test", "id": "project-test"}],
+            actor="builder:test",
+        )
+
+    released = service.transition_core_ticket(
+        core_ticket_id,
+        transition="released",
+        actor="core:maintainer",
+        evidence_refs=[{"type": "release", "id": "adaos@1.2.3"}],
+        release_ref={"project_id": "adaos", "version": "1.2.3", "digest": "sha256:release"},
+        publish_pending_actions=False,
+    )
+    assert released["ticket"]["status"] == "resolved"
+    assert service.get_ticket(project_ticket["ticket_id"])["status"] == "waiting_for_core"
+
+    verified = service.transition_core_ticket(
+        core_ticket_id,
+        transition="verified",
+        actor="core:evaluator",
+        evidence_refs=[{"type": "test", "id": "sdk-contract-test"}],
+        notes="Public contract verified on the target subnet.",
+        publish_pending_actions=False,
+    )
+    unblocked = service.get_ticket(project_ticket["ticket_id"])
+    resolved = service.record_resolution(
+        project_ticket["ticket_id"],
+        evidence_refs=[{"type": "test", "id": "project-test"}],
+        actor="builder:test",
+        resolved_by_version="demo_metrics@0.2.0",
+    )
+    events = service.list_lifecycle_events(owner_area="core")
+
+    assert verified["ticket"]["status"] == "verified"
+    assert unblocked["status"] == "ready_for_builder"
+    assert resolved["ticket"]["status"] == "resolved"
+    assert [event["semantic_type"] for event in events][-3:] == [
+        "core_ticket.created",
+        "core_ticket.released",
+        "core_ticket.verified",
+    ]
+    assert events[-3]["integrity"]["digest"] == created_event["integrity"]["digest"]
+    assert events[-3]["status"] == "accepted"
+    Draft202012Validator(_schema("dev_ticket.lifecycle_event.v1.schema.json")).validate(events[-1])
+
+
+def test_generic_core_verify_and_reopen_use_core_lifecycle(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    created = service.create_core_capability_request(
+        summary="Expose stable demo source selection",
+        component_ref="core:sdk",
+        desired_contract="sdk.demo.select_source",
+        actor="builder:test",
+        impact="generalization",
+        evidence_refs=[{"type": "trace", "id": "sdk-gap"}],
+    )
+    ticket_id = created["ticket"]["ticket_id"]
+    service.transition_core_ticket(
+        ticket_id,
+        transition="accepted",
+        actor="core:maintainer",
+    )
+    service.transition_core_ticket(
+        ticket_id,
+        transition="released",
+        actor="core:maintainer",
+        evidence_refs=[{"type": "release", "id": "adaos@1.2.4"}],
+        release_ref={"project_id": "adaos", "version": "1.2.4"},
+        publish_pending_actions=False,
+    )
+
+    verified = service.verify_ticket(
+        ticket_id,
+        evidence_refs=[{"type": "test", "id": "sdk-contract"}],
+        actor="core:evaluator",
+    )
+    reopened = service.reopen_ticket(
+        ticket_id,
+        actor="core:evaluator",
+        reason="Regression found on another node",
+    )
+
+    assert verified["event"]["semantic_type"] == "core_ticket.verified"
+    assert verified["ticket"]["status"] == "verified"
+    assert reopened["status"] == "accepted"
+    assert reopened["metadata"]["core_lifecycle"]["stage"] == "reopened"
+
+
 def test_sdk_understanding_signal_links_to_project_ticket(tmp_path: Path) -> None:
     service = DevelopmentTicketService(state_dir=tmp_path)
     project_signal = service.capture_signal(

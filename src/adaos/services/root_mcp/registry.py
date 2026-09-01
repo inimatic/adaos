@@ -63,8 +63,8 @@ def _plane_registry_payload() -> dict[str, Any]:
                     "public_scenario_registry_summary",
                     "named_entity_registry",
                 ],
-                "tool_prefixes": ["adaos_dev.", "builder."],
-                "capability_profiles": [],
+                "tool_prefixes": ["adaos_dev.", "builder.", "dev_ticket."],
+                "capability_profiles": ["BuilderDeveloper"],
                 "backing_store": "root_descriptor_cache",
             },
             {

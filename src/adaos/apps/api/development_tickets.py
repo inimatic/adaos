@@ -143,6 +143,7 @@ class DevTicketResolveRequest(BaseModel):
     repair_id: str | None = None
     capability_works: bool = True
     regression_free: bool = True
+    accept_reduced_scope: bool = False
 
 
 class DevTicketCloseRequest(BaseModel):
@@ -201,6 +202,20 @@ class CoreCapabilityRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     policy: dict[str, Any] = Field(default_factory=dict)
     status: str = "proposed"
+
+
+class CoreTicketTransitionRequest(BaseModel):
+    transition: str = Field(
+        ...,
+        pattern="^(created|qualified|accepted|deferred|released|verified|reopened)$",
+    )
+    actor: str = Field(default="core:maintainer", min_length=1)
+    reason: str = ""
+    notes: str = ""
+    evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+    release_ref: dict[str, Any] = Field(default_factory=dict)
+    capability_ref: dict[str, Any] = Field(default_factory=dict)
+    publish_pending_actions: bool = True
 
 
 class SdkUnderstandingRequest(BaseModel):
@@ -835,6 +850,37 @@ def create_ticket(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
+@router.get("/events")
+def list_ticket_events(
+    after: str | None = None,
+    updated_since: str | None = None,
+    ticket_id: str | None = None,
+    owner_area: str | None = None,
+    include_snapshot: bool = True,
+    limit: int = Query(default=500, ge=1, le=2000),
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    events = service.list_lifecycle_events(
+        after=after,
+        updated_since=updated_since,
+        ticket_id=ticket_id,
+        owner_area=owner_area,
+        limit=limit,
+    )
+    snapshot = (
+        service.list_tickets(status_group="open", owner_area=owner_area)
+        if include_snapshot and not after
+        else []
+    )
+    return {
+        "ok": True,
+        "schema": "adaos.dev_ticket.change_feed.v1",
+        "snapshot": snapshot,
+        "events": events,
+        "cursor": events[-1]["event_id"] if events else after,
+    }
+
+
 @router.post("/core-capability-requests", status_code=status.HTTP_201_CREATED)
 def create_core_capability_request(
     body: CoreCapabilityRequest,
@@ -860,6 +906,30 @@ def create_core_capability_request(
         return {"ok": True, **result, "detail": _ticket_detail(service, result["ticket"])}
     except KeyError as exc:
         raise _not_found(str(exc).strip("'")) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/{ticket_id}/core-lifecycle")
+def transition_core_ticket(
+    ticket_id: str,
+    body: CoreTicketTransitionRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        return service.transition_core_ticket(
+            ticket_id,
+            transition=body.transition,
+            actor=body.actor,
+            reason=body.reason,
+            notes=body.notes,
+            evidence_refs=body.evidence_refs,
+            release_ref=body.release_ref,
+            capability_ref=body.capability_ref,
+            publish_pending_actions=body.publish_pending_actions,
+        )
+    except KeyError as exc:
+        raise _not_found(ticket_id) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -1340,6 +1410,7 @@ def resolve_ticket(
             repair_id=body.repair_id,
             capability_works=body.capability_works,
             regression_free=body.regression_free,
+            accept_reduced_scope=body.accept_reduced_scope,
         )
         return {"ok": True, **result, "detail": _ticket_detail(service, result["ticket"])}
     except KeyError as exc:

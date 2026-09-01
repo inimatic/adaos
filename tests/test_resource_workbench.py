@@ -45,7 +45,9 @@ def test_resource_definitions_validate_and_include_dev_tickets_and_demo_metrics(
         "adaos.agent.context_receipt",
     } <= resource_types
     assert {"owner_area", "component_ref"} <= set(dev_ticket["query"]["filters"])
-    assert {"core_request", "sdk_understanding"} <= {item["id"] for item in dev_ticket["operations"]}
+    assert {"core_request", "core_transition", "sdk_understanding"} <= {
+        item["id"] for item in dev_ticket["operations"]
+    }
     for definition in definitions:
         validator.validate(definition)
         assert definition["i18n"]["default_locale"] == "en"
@@ -168,6 +170,37 @@ def test_resource_workbench_core_and_sdk_ticket_routes(tmp_path: Path) -> None:
     )
     assert core["result"]["ticket"]["owner_area"] == "core"
     assert core["result"]["blocked_tickets"][0]["status"] == "waiting_for_core"
+
+    core_ticket_id = core["result"]["ticket"]["ticket_id"]
+    released = workbench.operate(
+        {
+            "schema": "adaos.resource.operation.v1",
+            "resource_type": "adaos.dev.ticket",
+            "operation_id": "core_transition",
+            "record_id": core_ticket_id,
+            "payload": {
+                "transition": "released",
+                "release_ref": {"project_id": "adaos", "version": "1.2.3"},
+                "publish_pending_actions": False,
+            },
+            "evidence_refs": [{"type": "release", "id": "adaos@1.2.3"}],
+            "actor": {"id": "core:maintainer", "role": "owner"},
+        }
+    )
+    verified_core = workbench.operate(
+        {
+            "schema": "adaos.resource.operation.v1",
+            "resource_type": "adaos.dev.ticket",
+            "operation_id": "core_transition",
+            "record_id": core_ticket_id,
+            "payload": {"transition": "verified", "publish_pending_actions": False},
+            "evidence_refs": [{"type": "test", "id": "core-contract"}],
+            "actor": {"id": "core:evaluator", "role": "owner"},
+        }
+    )
+    assert released["result"]["ticket"]["status"] == "resolved"
+    assert verified_core["result"]["ticket"]["status"] == "verified"
+    assert tickets.get_ticket(project_ticket_id)["status"] == "ready_for_builder"
 
     sdk = workbench.operate(
         {

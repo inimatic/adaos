@@ -21,6 +21,8 @@ DEFAULT_CODEX_TARGET_CAPABILITIES: list[str] = [
     "hub.get_capability_usage_summary",
     "hub.get_logs",
     "hub.run_healthchecks",
+    "development.read.ticket_artifacts",
+    "development.write.tickets",
 ]
 
 
@@ -68,6 +70,9 @@ _COMPACT_MODEL_TEXT_TOOLS = {
     "context_plan",
     "context_compile",
     "context_inspect",
+    "list_dev_tickets",
+    "get_dev_ticket",
+    "list_dev_ticket_events",
 }
 
 
@@ -407,6 +412,109 @@ class CodexRootMcpBridge:
                             "description": "Include descriptor payloads for trusted local debugging. Defaults to compact metadata only.",
                         },
                     },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "list_dev_tickets",
+                "description": "List relevant open or historical Dev Tickets by lifecycle, component, text, and update time.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string"},
+                        "status_group": {"type": "string"},
+                        "target_id": {"type": "string"},
+                        "kind": {"type": "string"},
+                        "owner_area": {"type": "string"},
+                        "component_ref": {"type": "string"},
+                        "search": {"type": "string"},
+                        "updated_since": {"type": "string"},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "get_dev_ticket",
+                "description": "Read one Dev Ticket with evidence, relations, comments, and linked Builder work.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"ticket_id": {"type": "string"}},
+                    "required": ["ticket_id"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "list_dev_ticket_events",
+                "description": "Read the durable Dev Ticket lifecycle feed after an optional cursor.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "after": {"type": "string"},
+                        "updated_since": {"type": "string"},
+                        "ticket_id": {"type": "string"},
+                        "owner_area": {"type": "string"},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 100},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "create_dev_ticket",
+                "description": "Create or deduplicate a scoped Dev Ticket instead of leaving a documentation TODO.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "summary": {"type": "string"},
+                        "kind": {"type": "string"},
+                        "target_scope": {"type": "object"},
+                        "owner_area": {"type": "string"},
+                        "component_ref": {"type": "string"},
+                        "severity": {"type": "string"},
+                        "blocking": {"type": "boolean"},
+                        "actor": {"type": "string"},
+                        "evidence_refs": {"type": "array", "items": {"type": "object"}},
+                        "metadata": {"type": "object"},
+                    },
+                    "required": ["summary"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "operate_dev_ticket",
+                "description": "Claim, comment, defer, resolve, verify, close, reopen, or transition an owned Core Dev Ticket.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "ticket_id": {"type": "string"},
+                        "operation": {
+                            "type": "string",
+                            "enum": ["claim", "start", "comment", "defer", "resolve", "verify", "close", "reopen", "core_transition"],
+                        },
+                        "actor": {"type": "string"},
+                        "payload": {"type": "object"},
+                        "evidence_refs": {"type": "array", "items": {"type": "object"}},
+                    },
+                    "required": ["ticket_id", "operation"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "list_dev_ticket_artifacts",
+                "description": "List governed screenshot and evidence artifacts attached to a Dev Ticket.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"ticket_id": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "get_dev_ticket_artifact",
+                "description": "Resolve a Dev Ticket artifact id to its governed manifest and local content location.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"artifact_id": {"type": "string"}},
+                    "required": ["artifact_id"],
                     "additionalProperties": False,
                 },
             },
@@ -1164,6 +1272,39 @@ class CodexRootMcpBridge:
                 ),
                 model_text_format=model_text_format,
             )
+        if tool == "list_dev_tickets":
+            return _tool_text(
+                client.list_dev_tickets(**{key: value for key, value in args.items() if key != "model_text_format"}),
+                model_text_format=model_text_format,
+            )
+        if tool == "get_dev_ticket":
+            return _tool_text(
+                client.get_dev_ticket(str(args.get("ticket_id") or "")),
+                model_text_format=model_text_format,
+            )
+        if tool == "list_dev_ticket_events":
+            return _tool_text(
+                client.list_dev_ticket_events(**{key: value for key, value in args.items() if key != "model_text_format"}),
+                model_text_format=model_text_format,
+            )
+        if tool == "create_dev_ticket":
+            return _tool_text(client.create_dev_ticket(args))
+        if tool == "operate_dev_ticket":
+            raw_refs = args.get("evidence_refs")
+            evidence_refs = [item for item in raw_refs if isinstance(item, Mapping)] if isinstance(raw_refs, list) else []
+            return _tool_text(
+                client.operate_dev_ticket(
+                    str(args.get("ticket_id") or ""),
+                    str(args.get("operation") or ""),
+                    actor=_normalize_text(args.get("actor")),
+                    payload=args.get("payload") if isinstance(args.get("payload"), Mapping) else {},
+                    evidence_refs=evidence_refs,
+                )
+            )
+        if tool == "list_dev_ticket_artifacts":
+            return _tool_text(client.list_dev_ticket_artifacts(_normalize_text(args.get("ticket_id"))))
+        if tool == "get_dev_ticket_artifact":
+            return _tool_text(client.get_dev_ticket_artifact(str(args.get("artifact_id") or "")))
         if tool == "context_resolve":
             return _tool_text(
                 client.resolve_context({key: value for key, value in args.items() if key != "model_text_format"}),

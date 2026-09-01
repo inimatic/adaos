@@ -1,8 +1,13 @@
 from __future__ import annotations
 
-import json, os, shutil, subprocess, sys, traceback
 import functools
+import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
+import sys
+import traceback
 from typing import Any, Dict, List, Mapping, Optional
 from dataclasses import asdict
 
@@ -49,7 +54,7 @@ from adaos.services.root_mcp.smoke import run_root_mcp_smoke
 from adaos.services.nats_config import normalize_nats_ws_url
 from adaos.services.node_runtime_state import save_nats_runtime_config
 from adaos.services.subnet_alias import load_subnet_alias, save_subnet_alias
-from adaos.sdk.scenarios.runtime import ScenarioModel, ScenarioRuntime, ensure_runtime_context, load_scenario
+from adaos.sdk.scenarios.runtime import ScenarioModel, ScenarioRuntime, load_scenario
 
 app = typer.Typer(help="Developer utilities for Root and Forge workflows.")
 root_app = typer.Typer(help="Bootstrap and authenticate against the Root service.")
@@ -74,7 +79,7 @@ def _run_safe(func):
             return func(*args, **kwargs)
         except typer.Exit:
             raise
-        except Exception as e:
+        except Exception:
             if os.getenv("ADAOS_CLI_DEBUG") == "1":
                 traceback.print_exc()
             raise
@@ -419,6 +424,43 @@ def dev_ticket_list(
         _print_ticket_summary(ticket)
 
 
+@ticket_app.command("events")
+@_run_safe
+def dev_ticket_events(
+    after: str = typer.Option("", "--after", help="event cursor returned by the previous call"),
+    updated_since: str = typer.Option("", "--updated-since", help="ISO timestamp lower bound"),
+    ticket_id: str = typer.Option("", "--ticket-id", help="filter by ticket id"),
+    owner_area: str = typer.Option("", "--owner-area", help="filter by owner area"),
+    limit: int = typer.Option(500, "--limit", min=1, max=2000),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    events = _ticket_service(state_dir).list_lifecycle_events(
+        after=after or None,
+        updated_since=updated_since or None,
+        ticket_id=ticket_id or None,
+        owner_area=owner_area or None,
+        limit=limit,
+    )
+    payload = {
+        "ok": True,
+        "schema": "adaos.dev_ticket.change_feed.v1",
+        "events": events,
+        "cursor": events[-1]["event_id"] if events else after or None,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    if not events:
+        typer.echo("No Dev Ticket lifecycle events found.")
+        return
+    for event in events:
+        typer.echo(
+            f"{event['event_id']} {event['semantic_type']} "
+            f"{event['ticket_id']} {event['status']} {event['recorded_at']}"
+        )
+
+
 @ticket_app.command("core-request")
 @_run_safe
 def dev_ticket_core_request(
@@ -451,6 +493,49 @@ def dev_ticket_core_request(
     _print_ticket_summary(result["ticket"])
     if result.get("blocked_tickets"):
         typer.echo(f"blocked: {len(result['blocked_tickets'])}")
+
+
+@ticket_app.command("core-transition")
+@_run_safe
+def dev_ticket_core_transition(
+    ticket_id: str = typer.Argument(..., help="Core Dev Ticket id"),
+    transition: str = typer.Argument(..., help="qualified, accepted, deferred, released, verified, or reopened"),
+    reason: str = typer.Option("", "--reason", help="transition reason"),
+    notes: str = typer.Option("", "--notes", help="maintainer or verification notes"),
+    evidence: List[str] = typer.Option([], "--evidence", help="evidence ref, optionally type:id"),
+    release_version: str = typer.Option("", "--release-version", help="released AdaOS version"),
+    release_digest: str = typer.Option("", "--release-digest", help="released project digest"),
+    capability_ref: str = typer.Option("", "--capability-ref", help="available public capability ref"),
+    actor: str = typer.Option("core:maintainer", "--actor", help="actor id"),
+    publish_pending_actions: bool = typer.Option(True, "--notify/--no-notify", help="notify linked project tickets"),
+    state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    release_ref = {
+        key: value
+        for key, value in {
+            "project_id": "adaos" if release_version or release_digest else "",
+            "version": release_version,
+            "digest": release_digest,
+        }.items()
+        if value
+    }
+    result = _ticket_service(state_dir).transition_core_ticket(
+        ticket_id,
+        transition=transition,
+        actor=actor,
+        reason=reason,
+        notes=notes,
+        evidence_refs=_ticket_evidence_refs(evidence),
+        release_ref=release_ref,
+        capability_ref={"ref": capability_ref} if capability_ref else {},
+        publish_pending_actions=publish_pending_actions,
+    )
+    if json_output:
+        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    _print_ticket_summary(result["ticket"])
+    typer.echo(f"event: {result['event']['event_id']} {result['event']['semantic_type']}")
 
 
 @ticket_app.command("sdk-understanding")
@@ -600,6 +685,7 @@ def dev_ticket_resolve(
     evidence: List[str] = typer.Option(..., "--evidence", help="required evidence ref, optionally type:id"),
     version: str = typer.Option("", "--version", help="resolved artifact version"),
     overlay: str = typer.Option("", "--overlay", help="resolved overlay id"),
+    accept_reduced_scope: bool = typer.Option(False, "--accept-reduced-scope", help="resolve while an explicit Core blocker remains"),
     actor: str = typer.Option("cli", "--actor", help="actor id"),
     state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
     json_output: bool = typer.Option(False, "--json", help="machine readable output"),
@@ -613,6 +699,7 @@ def dev_ticket_resolve(
         resolved_by_version=version,
         resolved_by_overlay=overlay,
         repair_service=BuilderRepairService(state_dir=state_dir),
+        accept_reduced_scope=accept_reduced_scope,
     )
     if json_output:
         typer.echo(json.dumps(result, ensure_ascii=False, indent=2))

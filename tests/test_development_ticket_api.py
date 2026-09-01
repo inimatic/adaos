@@ -877,3 +877,65 @@ def test_development_ticket_api_creates_core_and_sdk_qualification_tickets(tmp_p
     listed = client.get("/api/development-tickets?owner_area=core&component_ref=core:sdk", headers=_headers())
     assert listed.status_code == 200, listed.text
     assert [item["ticket_id"] for item in listed.json()["tickets"]] == [core_ticket["ticket_id"]]
+
+
+def test_development_ticket_api_core_lifecycle_and_change_feed(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    client = _client(service)
+    project = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "summary": "Project needs a new public SDK capability",
+            "kind": "development_request",
+            "target_scope": {"type": "skill", "id": "demo_metrics_skill"},
+        },
+    ).json()["ticket"]
+    core_response = client.post(
+        "/api/development-tickets/core-capability-requests",
+        headers=_headers(),
+        json={
+            "summary": "Add the public SDK capability",
+            "component_ref": "core:sdk",
+            "desired_contract": "sdk.demo.capability",
+            "impact": "blocker",
+            "blocked_ticket_ids": [project["ticket_id"]],
+            "evidence_refs": [{"type": "trace", "id": "api-core-gap"}],
+        },
+    )
+    assert core_response.status_code == 201, core_response.text
+    core_ticket_id = core_response.json()["ticket"]["ticket_id"]
+
+    released = client.post(
+        f"/api/development-tickets/{core_ticket_id}/core-lifecycle",
+        headers=_headers(),
+        json={
+            "transition": "released",
+            "actor": "core:maintainer",
+            "evidence_refs": [{"type": "release", "id": "adaos@1.2.3"}],
+            "release_ref": {"project_id": "adaos", "version": "1.2.3"},
+            "publish_pending_actions": False,
+        },
+    )
+    verified = client.post(
+        f"/api/development-tickets/{core_ticket_id}/core-lifecycle",
+        headers=_headers(),
+        json={
+            "transition": "verified",
+            "actor": "core:evaluator",
+            "evidence_refs": [{"type": "test", "id": "sdk-contract"}],
+            "publish_pending_actions": False,
+        },
+    )
+    feed = client.get(
+        "/api/development-tickets/events?owner_area=core&include_snapshot=true",
+        headers=_headers(),
+    )
+
+    assert released.status_code == 200, released.text
+    assert verified.status_code == 200, verified.text
+    assert feed.status_code == 200, feed.text
+    assert feed.json()["schema"] == "adaos.dev_ticket.change_feed.v1"
+    assert feed.json()["snapshot"][0]["ticket_id"] == core_ticket_id
+    assert feed.json()["events"][-1]["semantic_type"] == "core_ticket.verified"
+    assert service.get_ticket(project["ticket_id"])["status"] == "ready_for_builder"

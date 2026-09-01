@@ -173,6 +173,47 @@ class RootMcpClient:
             dry_run=dry_run,
         )
 
+    def list_dev_tickets(self, **filters: Any) -> dict[str, Any]:
+        arguments = {key: value for key, value in filters.items() if value is not None}
+        return self.call("dev_ticket.list", arguments=arguments)
+
+    def get_dev_ticket(self, ticket_id: str) -> dict[str, Any]:
+        return self.call("dev_ticket.show", arguments={"ticket_id": str(ticket_id)})
+
+    def list_dev_ticket_events(self, **filters: Any) -> dict[str, Any]:
+        arguments = {key: value for key, value in filters.items() if value is not None}
+        return self.call("dev_ticket.events", arguments=arguments)
+
+    def create_dev_ticket(self, request: Mapping[str, Any], *, dry_run: bool = False) -> dict[str, Any]:
+        return self.call("dev_ticket.create", arguments=dict(request), dry_run=dry_run)
+
+    def operate_dev_ticket(
+        self,
+        ticket_id: str,
+        operation: str,
+        *,
+        actor: str | None = None,
+        payload: Mapping[str, Any] | None = None,
+        evidence_refs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] = (),
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "ticket_id": str(ticket_id),
+            "operation": str(operation),
+            "payload": dict(payload or {}),
+            "evidence_refs": [dict(item) for item in evidence_refs],
+        }
+        if actor:
+            arguments["actor"] = str(actor)
+        return self.call("dev_ticket.operate", arguments=arguments, dry_run=dry_run)
+
+    def list_dev_ticket_artifacts(self, ticket_id: str | None = None) -> dict[str, Any]:
+        arguments = {"ticket_id": str(ticket_id)} if ticket_id else {}
+        return self.call("dev_ticket.artifacts", arguments=arguments)
+
+    def get_dev_ticket_artifact(self, artifact_id: str) -> dict[str, Any]:
+        return self.call("dev_ticket.get_artifact", arguments={"artifact_id": str(artifact_id)})
+
     def resolve_context(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
         return self.call("context.resolve", arguments=dict(arguments))
 

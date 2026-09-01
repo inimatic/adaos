@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.dev_ticket.lifecycle_event.v1",
+  "title": "AdaOS Dev Ticket Lifecycle Event",
+  "type": "object",
+  "required": ["schema", "event_id", "semantic_type", "ticket_id", "owner_area", "status", "recorded_at", "payload", "source_authority", "integrity"],
+  "properties": {
+    "schema": {"const": "adaos.dev_ticket.lifecycle_event.v1"},
+    "event_id": {"type": "string", "pattern": "^dtevent\\."},
+    "semantic_type": {"type": "string", "minLength": 1},
+    "ticket_id": {"type": "string", "pattern": "^dticket\\."},
+    "owner_area": {"type": "string"},
+    "component_ref": {"type": ["string", "null"]},
+    "status": {"type": "string", "minLength": 1},
+    "recorded_at": {"type": "string", "format": "date-time"},
+    "payload": {"type": "object"},
+    "source_authority": {"const": "core:development_tickets"},
+    "integrity": {
+      "type": "object",
+      "required": ["algorithm", "digest", "transport_authentication", "cryptographic_signature"],
+      "properties": {
+        "algorithm": {"const": "sha256"},
+        "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "transport_authentication": {"type": "string", "minLength": 1},
+        "cryptographic_signature": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

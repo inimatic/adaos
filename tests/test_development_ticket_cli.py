@@ -232,3 +232,47 @@ def test_dev_ticket_cli_core_request_and_sdk_understanding(tmp_path: Path) -> No
         )
     )
     assert [item["ticket_id"] for item in listed["tickets"]] == [core["ticket"]["ticket_id"]]
+
+    released = _payload(
+        runner.invoke(
+            dev_cmd.ticket_app,
+            [
+                "core-transition",
+                core["ticket"]["ticket_id"],
+                "released",
+                "--evidence",
+                "release:adaos@1.2.3",
+                "--release-version",
+                "1.2.3",
+                "--no-notify",
+                *state_arg,
+                "--json",
+            ],
+        )
+    )
+    assert released["ticket"]["status"] == "resolved"
+
+    verified = _payload(
+        runner.invoke(
+            dev_cmd.ticket_app,
+            [
+                "core-transition",
+                core["ticket"]["ticket_id"],
+                "verified",
+                "--evidence",
+                "test:sdk-contract",
+                "--no-notify",
+                *state_arg,
+                "--json",
+            ],
+        )
+    )
+    assert verified["ticket"]["status"] == "verified"
+
+    events = _payload(
+        runner.invoke(
+            dev_cmd.ticket_app,
+            ["events", "--owner-area", "core", *state_arg, "--json"],
+        )
+    )
+    assert events["events"][-1]["semantic_type"] == "core_ticket.verified"
