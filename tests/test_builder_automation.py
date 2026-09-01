@@ -2678,9 +2678,15 @@ def test_refresh_reconciles_completed_task_with_failed_live_readiness(tmp_path: 
 def test_completed_session_publishes_one_terminal_chat_message(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     published: list[dict] = []
+    events: list[object] = []
+
+    class _Bus:
+        def publish(self, event) -> None:  # noqa: ANN001
+            events.append(event)
+
     monkeypatch.setattr(
         "adaos.services.agent_context.get_ctx",
-        lambda: SimpleNamespace(bus=object()),
+        lambda: SimpleNamespace(bus=_Bus()),
     )
     monkeypatch.setattr(
         "adaos.services.conversation_response.materialize_response",
@@ -2701,9 +2707,45 @@ def test_completed_session_publishes_one_terminal_chat_message(tmp_path: Path, m
     second = service._notify_completed_session(first)
 
     assert len(published) == 1
-    assert "Локальный Codex завершил работу" in published[0]["response"]["message"]
+    assert "Builder завершил доработку recipes" in published[0]["response"]["message"]
     assert published[0]["thread_id"] == "prompt-project:scenario:recipes"
+    assert published[0]["meta"]["response_idempotency_key"] == "builder-automation:completed:task.1"
+    assert len(events) == 1
+    assert events[0].type == "ui.notify"
+    assert events[0].payload["_meta"]["notification_scope"] == "subnet"
     assert second["completion_notified_task_id"] == "task.1"
+
+
+def test_started_session_broadcasts_once_without_conversation(tmp_path: Path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    events: list[object] = []
+
+    class _Bus:
+        def publish(self, event) -> None:  # noqa: ANN001
+            events.append(event)
+
+    monkeypatch.setattr(
+        "adaos.services.agent_context.get_ctx",
+        lambda: SimpleNamespace(bus=_Bus()),
+    )
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.skill.demo_metrics_skill",
+        "object_type": "skill",
+        "object_id": "demo_metrics_skill",
+        "webspace_id": "desktop",
+        "current_task_id": "task.start.1",
+        "iteration": 1,
+    }
+
+    first = service._notify_started_session(session)
+    second = service._notify_started_session(first)
+
+    assert len(events) == 1
+    assert events[0].type == "ui.notify"
+    assert "Итерация 1" in events[0].payload["text"]
+    assert events[0].payload["_meta"]["automation_status"] == "started"
+    assert second["started_notified_task_id"] == "task.start.1"
 
 
 def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, monkeypatch) -> None:

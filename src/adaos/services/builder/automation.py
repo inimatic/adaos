@@ -1067,6 +1067,7 @@ class BuilderAutomationService:
                     "context_packet_digest": session.get("context_packet_digest"),
                 },
             )
+        session = self._notify_started_session(session)
         self._launch_worker(session["session_id"])
         return {
             "ok": True,
@@ -1628,6 +1629,7 @@ class BuilderAutomationService:
                         "context_packet_digest": session.get("context_packet_digest"),
                     },
                 )
+        session = self._notify_started_session(session)
         self._launch_worker(session["session_id"])
         return {
             "ok": True,
@@ -5590,51 +5592,145 @@ class BuilderAutomationService:
         }
         return {**identity, "digest": _canonical_digest(identity)}
 
+    def _publish_lifecycle_notification(
+        self,
+        session: Mapping[str, Any],
+        *,
+        status: str,
+        message: str,
+    ) -> bool:
+        from adaos.services.agent_context import get_ctx
+
+        current = dict(session)
+        ctx = get_ctx()
+        task_id = str(current.get("current_task_id") or "").strip()
+        conversation_id = str(current.get("conversation_id") or "").strip()
+        object_type = str(current.get("object_type") or "").strip()
+        object_id = str(current.get("object_id") or "").strip()
+        webspace_id = str(current.get("webspace_id") or "desktop").strip() or "desktop"
+        thread_id = str(current.get("topic_id") or "").strip() or (
+            f"prompt-project:scenario:{object_id}" if object_type == "scenario" else None
+        )
+        meta = {
+            "schema": "adaos.builder.automation_notification.v1",
+            "automation_session_id": current.get("session_id"),
+            "task_id": task_id or None,
+            "automation_status": status,
+            "object_type": object_type or None,
+            "object_id": object_id or None,
+            "notification_scope": "subnet",
+            "response_idempotency_key": f"builder-automation:{status}:{task_id}",
+        }
+        delivered = False
+        if conversation_id:
+            try:
+                from adaos.services.conversation_response import materialize_response
+
+                materialize_response(
+                    {"message": message, "render_targets": ["text_tail"]},
+                    webspace_id=webspace_id,
+                    conversation_id=conversation_id,
+                    channel_id="builder",
+                    owner="skill:builder_skill",
+                    bus=ctx.bus,
+                    route_id="voice_chat",
+                    actor_id="agent:builder_skill:builder",
+                    actor_label="Builder",
+                    thread_id=thread_id,
+                    meta=meta,
+                    source="builder.automation",
+                )
+                delivered = True
+            except Exception:
+                _log.debug(
+                    "failed to materialize Builder lifecycle message task=%s status=%s",
+                    task_id,
+                    status,
+                    exc_info=True,
+                )
+        try:
+            from adaos.services.eventbus import emit
+
+            emit(
+                ctx.bus,
+                "ui.notify",
+                {
+                    "text": message,
+                    "_meta": {
+                        **meta,
+                        "skip_voice_chat": True,
+                    },
+                },
+                source="builder.automation",
+                schema="adaos.builder.automation_notification.v1",
+                version=1,
+                generate_event_id=True,
+            )
+            delivered = True
+        except Exception:
+            _log.debug(
+                "failed to broadcast Builder lifecycle message task=%s status=%s",
+                task_id,
+                status,
+                exc_info=True,
+            )
+        return delivered
+
+    def _notify_started_session(self, session: Mapping[str, Any]) -> dict[str, Any]:
+        """Publish one conversational and subnet-wide start message per task."""
+        current = dict(session)
+        task_id = str(current.get("current_task_id") or "").strip()
+        if not task_id or str(current.get("started_notified_task_id") or "").strip() == task_id:
+            return current
+        object_id = str(current.get("object_id") or "").strip()
+        iteration = int(current.get("iteration") or 0)
+        iteration_suffix = f" Итерация {iteration}." if iteration else ""
+        message = (
+            f"Builder начал доработку {object_id} с помощью локального Codex."
+            f"{iteration_suffix}"
+        )
+        try:
+            delivered = self._publish_lifecycle_notification(
+                current,
+                status="started",
+                message=message,
+            )
+        except Exception:
+            delivered = False
+        if delivered:
+            current["started_notified_task_id"] = task_id
+            current["started_notified_at"] = _now_iso()
+            self._save_session(current, emit_projection=False)
+        return current
+
     def _notify_completed_session(self, session: Mapping[str, Any]) -> dict[str, Any]:
-        """Publish one idempotent terminal Builder message for a local task."""
+        """Publish one conversational and subnet-wide terminal message per task."""
         current = self._sync_linked_development_ticket_tasks(dict(session))
         task_id = str(current.get("current_task_id") or "").strip()
         if task_id and str(current.get("completion_notified_task_id") or "").strip() == task_id:
             return current
 
-        conversation_id = str(current.get("conversation_id") or "").strip()
-        if not conversation_id:
-            return current
         try:
-            from adaos.services.agent_context import get_ctx
-            from adaos.services.conversation_response import materialize_response
-
             result = current.get("last_result") if isinstance(current.get("last_result"), Mapping) else {}
-            object_type = str(current.get("object_type") or "").strip()
             object_id = str(current.get("object_id") or "").strip()
-            webspace_id = str(current.get("webspace_id") or "desktop").strip() or "desktop"
             summary = str(result.get("summary") or "").strip()
-            message = f"Локальный Codex завершил работу над {object_id}. Проверки пройдены."
+            message = (
+                f"Builder завершил доработку {object_id} с помощью локального Codex. "
+                "Проверки пройдены, результат готов к пользовательской апробации."
+            )
             if summary:
                 message += f" {summary}"
-            materialize_response(
-                {"message": message, "render_targets": ["text_tail"]},
-                webspace_id=webspace_id,
-                conversation_id=conversation_id,
-                channel_id="builder",
-                owner="skill:builder_skill",
-                bus=get_ctx().bus,
-                route_id="voice_chat",
-                actor_id="agent:builder_skill:builder",
-                actor_label="Конструктор",
-                thread_id=f"prompt-project:scenario:{object_id}" if object_type == "scenario" else None,
-                meta={
-                    "automation_session_id": current.get("session_id"),
-                    "task_id": task_id or None,
-                    "automation_status": "completed",
-                },
-                source="builder.automation",
+            delivered = self._publish_lifecycle_notification(
+                current,
+                status="completed",
+                message=message,
             )
-            current["completion_notified_task_id"] = task_id or None
-            current["completion_notified_at"] = _now_iso()
-            self._save_session(current)
+            if delivered:
+                current["completion_notified_task_id"] = task_id or None
+                current["completion_notified_at"] = _now_iso()
+                self._save_session(current, emit_projection=False)
         except Exception:
-            pass
+            _log.debug("failed to publish Builder completion task=%s", task_id, exc_info=True)
         return current
 
     def _sync_linked_development_ticket_tasks(
@@ -5909,7 +6005,12 @@ class BuilderAutomationService:
     def _session_path(self, object_type: str, object_id: str) -> Path:
         return self.root / f"{_safe_token(object_type)}.{_safe_token(object_id)}.json"
 
-    def _save_session(self, session: Mapping[str, Any]) -> dict[str, Any]:
+    def _save_session(
+        self,
+        session: Mapping[str, Any],
+        *,
+        emit_projection: bool = True,
+    ) -> dict[str, Any]:
         payload = dict(session)
         path = self._session_path(str(payload["object_type"]), str(payload["object_id"]))
         lock_path = self.root / ".mutation.lock"
@@ -5927,7 +6028,7 @@ class BuilderAutomationService:
             if previous == payload:
                 return payload
             _write_json(path, payload)
-        if self.event_sink is not None:
+        if emit_projection and self.event_sink is not None:
             self.event_sink(self.project_session(payload))
         return payload
 
