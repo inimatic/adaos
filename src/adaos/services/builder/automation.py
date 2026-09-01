@@ -3397,6 +3397,7 @@ class BuilderAutomationService:
                         "status": task_status,
                         "source": "builder_automation",
                         "accuracy": "reported",
+                        "metering_disposition": "zero_model",
                         "input_tokens": 0,
                         "cached_input_tokens": 0,
                         "output_tokens": 0,

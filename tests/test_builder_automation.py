@@ -927,6 +927,7 @@ def test_terminal_codex_usage_marks_preserved_candidate_validation_as_exact_zero
     assert calls[0]["idempotency_key"] == receipt["idempotency_key"]
     assert calls[0]["run_id"] == "task.finalizer"
     assert calls[0]["project_id"] == "demo"
+    assert calls[0]["metering_disposition"] == "zero_model"
     assert calls[0]["total_tokens"] == 0
     assert calls[0]["billable_tokens"] == 0
     assert calls[0]["note"] == "builder_status=completed; deterministic_continuation=true"
