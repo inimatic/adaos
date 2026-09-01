@@ -19,21 +19,20 @@ class _FakeBuilderAutomation:
     def __init__(self) -> None:
         self.calls: list[dict] = []
         self.counter = 0
+        self.latest_links: dict = {}
 
     def start_from_execute(self, **kwargs):
         self.counter += 1
         self.calls.append(dict(kwargs))
-        return self._payload(status="running", suffix=str(self.counter), links=kwargs.get("links") or {})
+        self.latest_links = dict(kwargs.get("links") or {})
+        return self._payload(status="running", suffix=str(self.counter), links=self.latest_links)
 
     def status(self, *, object_type: str, object_id: str):
         suffix = str(self.counter or 1)
         return self._payload(
             status="completed",
             suffix=suffix,
-            links={
-                "object_type": object_type,
-                "object_id": object_id,
-            },
+            links=self.latest_links,
         )
 
     def _payload(self, *, status: str, suffix: str, links: dict) -> dict:
@@ -72,7 +71,13 @@ class _FakeBuilderAutomation:
                 "session_id": session_id,
                 "status": status,
                 "current_task_id": task_id,
-                "task": {"task_id": task_id, "status": "completed", "result": result},
+                "task": {
+                    "task_id": task_id,
+                    "status": "completed",
+                    "result": result,
+                    "realize_request": {"links": dict(links)},
+                },
+                "links": dict(links),
                 "completion_readiness": {"ok": True, "checks": [{"id": "tests", "status": "passed"}]},
                 "codex_usage_history": [
                     {
@@ -124,10 +129,11 @@ class _FakeResumableBuilderAutomation(_FakeBuilderAutomation):
     def resume_failed_dev_ticket_repair(self, **kwargs):
         self.resume_calls.append(dict(kwargs))
         self.counter += 1
+        self.latest_links = dict(kwargs.get("links") or {})
         return self._payload(
             status="running",
             suffix=f"resumed-{self.counter}",
-            links=kwargs.get("links") or {},
+            links=self.latest_links,
         )
 
 
@@ -148,10 +154,11 @@ class _FakeFollowupBuilderAutomation(_FakeBuilderAutomation):
     def start_followup_dev_ticket_repair(self, **kwargs):
         self.followup_calls.append(dict(kwargs))
         self.counter += 1
+        self.latest_links = dict(kwargs.get("links") or {})
         return self._payload(
             status="running",
             suffix=f"followup-{self.counter}",
-            links=kwargs.get("links") or {},
+            links=self.latest_links,
         )
 
 
@@ -160,10 +167,7 @@ class _FakeFailingBuilderAutomation(_FakeBuilderAutomation):
         suffix = str(self.counter or 1)
         return self._failed_payload(
             suffix=suffix,
-            links={
-                "object_type": object_type,
-                "object_id": object_id,
-            },
+            links=self.latest_links,
         )
 
     def _failed_payload(self, *, suffix: str, links: dict) -> dict:
@@ -190,7 +194,13 @@ class _FakeFailingBuilderAutomation(_FakeBuilderAutomation):
                 "session_id": session_id,
                 "status": "failed",
                 "current_task_id": task_id,
-                "task": {"task_id": task_id, "status": "failed", "failure": {"message": "codex timeout"}},
+                "task": {
+                    "task_id": task_id,
+                    "status": "failed",
+                    "failure": {"message": "codex timeout"},
+                    "realize_request": {"links": dict(links)},
+                },
+                "links": dict(links),
                 "completion_readiness": {"ok": False, "checks": [{"id": "codex", "status": "failed"}]},
                 "codex_usage_accounting": {
                     "status": "unavailable",
@@ -818,6 +828,48 @@ def test_failed_autonomous_repair_returns_ticket_to_builder_queue_with_evidence(
     assert repair["status"] == "in_progress"
     assert repair["context"]["automation"]["status"] == "failed"
     assert repair["context"]["usage"]["receipt_status"] == "unavailable"
+
+
+def test_builder_sync_rejects_completed_result_from_another_ticket_repair(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    ticket = _bounded_demo_ticket(
+        service,
+        summary="Rename the current Demo Metrics heading",
+        target_files=["skills/demo_metrics_skill/webui.json"],
+        acceptance="The current heading is renamed.",
+    )
+    handoff = service.handoff_ticket(
+        ticket["ticket_id"],
+        mode="autonomous",
+        repair_service=repair_service,
+        actor="user:owner",
+    )
+    stale = _FakeBuilderAutomation()._payload(
+        status="completed",
+        suffix="stale",
+        links={
+            "development_ticket_id": "dticket.previous",
+            "builder_repair_id": "repair.previous",
+        },
+    )
+
+    result = service.sync_builder_repair(
+        ticket["ticket_id"],
+        repair_id=handoff["repair"]["repair_id"],
+        actor="builder.automation",
+        repair_service=repair_service,
+        automation_result=stale,
+    )
+
+    assert result["synchronized"] is False
+    assert result["resolved"] is False
+    assert result["reason"] == "automation_correlation_mismatch"
+    assert result["correlation"]["observed_ticket_ids"] == ["dticket.previous"]
+    current = service.get_ticket(ticket["ticket_id"])
+    assert current["status"] == "in_builder"
+    assert current.get("closure") is None
+    assert len(current["builder_refs"]) == 1
 
 
 def test_failed_autonomous_repair_resumes_same_ticket_session(tmp_path: Path) -> None:

@@ -325,10 +325,11 @@ def _builder_work_id(ref: Mapping[str, Any], index: int) -> str:
 
 
 def _builder_automation_context(ref: Mapping[str, Any], task: Mapping[str, Any]) -> dict[str, Any]:
+    ref_automation = ref.get("automation") if isinstance(ref.get("automation"), Mapping) else {}
+    if ref_automation:
+        return dict(ref_automation)
     context = task.get("context") if isinstance(task.get("context"), Mapping) else {}
     automation = context.get("automation") if isinstance(context.get("automation"), Mapping) else {}
-    if not automation and isinstance(ref.get("automation"), Mapping):
-        automation = ref.get("automation") or {}
     return dict(automation) if isinstance(automation, Mapping) else {}
 
 
@@ -449,6 +450,12 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
         task = repair_tasks.get(repair_id) or {}
         context = task.get("context") if isinstance(task.get("context"), Mapping) else {}
         automation = _builder_automation_context(ref, task)
+        has_automation_attempt = bool(
+            str(ref.get("automation_task_id") or automation.get("task_id") or "").strip()
+        )
+        attempt_status = str(ref.get("status") or "").strip() if has_automation_attempt else ""
+        if not attempt_status:
+            attempt_status = str(task.get("work_status") or task.get("status") or "linked")
         item = {
             "entry_id": f"{ticket_id}:builder:{work_id}",
             "kind": "builder_work_item",
@@ -457,8 +464,10 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
             "work_item_id": task.get("work_item_id") or work_id,
             "work_type": str(ref.get("type") or "builder_repair_task"),
             "mode": str(ref.get("mode") or ref.get("handoff_mode") or "").strip() or None,
-            "status": task.get("work_status") or task.get("status") or ref.get("status") or "linked",
-            "compatibility_status": task.get("status") or ref.get("status") or "linked",
+            "status": attempt_status,
+            "compatibility_status": ref.get("status") or task.get("status") or "linked",
+            "parent_work_status": task.get("work_status") or task.get("status") or None,
+            "parent_compatibility_status": task.get("status") or None,
             "revision": task.get("revision"),
             "package_id": task.get("package_id"),
             "ticket_ids": list(task.get("ticket_ids") or []),

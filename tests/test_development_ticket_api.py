@@ -25,9 +25,11 @@ class _FakeAutomationService:
     def __init__(self) -> None:
         self.started: list[dict] = []
         self.workspace_service = _FakeWorkspaceService()
+        self.latest_links: dict = {}
 
     def start_from_execute(self, **kwargs):
         self.started.append(dict(kwargs))
+        self.latest_links = dict(kwargs.get("links") or {})
         return self._payload(status="running")
 
     def status(self, *, object_type: str, object_id: str):
@@ -62,6 +64,7 @@ class _FakeAutomationService:
                 "result_branch": "builder/api-dev-ticket",
                 "webspace_id": "desktop",
                 "project": {"object_type": object_type, "object_id": object_id},
+                "links": dict(self.latest_links),
                 "budget_usage": {
                     "declared": {"max_tokens": 200000},
                     "observed": {"total_tokens": 321, "input_tokens": 200, "output_tokens": 121},
@@ -71,7 +74,13 @@ class _FakeAutomationService:
                 "session_id": "automation.session.api",
                 "status": status,
                 "current_task_id": "factory.task.api",
-                "task": {"task_id": "factory.task.api", "status": "completed", "result": result},
+                "task": {
+                    "task_id": "factory.task.api",
+                    "status": "completed",
+                    "result": result,
+                    "realize_request": {"links": dict(self.latest_links)},
+                },
+                "links": dict(self.latest_links),
                 "completion_readiness": {"ok": True},
                 "codex_usage_accounting": {
                     "status": "recorded",
@@ -625,6 +634,66 @@ def test_builder_work_stream_keeps_task_usage_and_repair_aggregate_separate() ->
     assert tickets_api._builder_work_id(ref, 0) == "task.continuation"
     assert accounting["reported_usage"]["total_tokens"] == 0
     assert accounting["aggregate_usage"]["total_tokens"] == 155_768
+
+
+def test_builder_work_stream_preserves_attempt_status_and_snapshot(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    signal = service.capture_signal(
+        summary="Apply two bounded Builder attempts",
+        kind="development_request",
+        target_scope={"type": "skill", "id": "demo_metrics_skill", "source": "dev"},
+        source="client_feedback",
+        owner_area="skill",
+    )["signal"]
+    created = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="accepted",
+        owner_area="skill",
+    )["ticket"]
+    repair = service.handoff_ticket(
+        created["ticket_id"],
+        mode="autonomous",
+        actor="user:owner",
+    )["repair"]
+    repair_id = repair["repair_id"]
+    first_ref = {
+        "type": "builder_repair_task",
+        "repair_id": repair_id,
+        "automation_task_id": "task.failed",
+        "status": "failed",
+        "automation_status": "failed",
+        "automation": {"task_id": "task.failed", "status": "failed", "error": "budget"},
+        "token_usage": {"total_tokens": 10},
+    }
+    second_ref = {
+        "type": "builder_repair_task",
+        "repair_id": repair_id,
+        "automation_task_id": "task.completed",
+        "status": "resolved",
+        "automation_status": "completed",
+        "automation": {"task_id": "task.completed", "status": "completed"},
+        "token_usage": {"total_tokens": 0},
+    }
+    service._update_ticket(
+        created["ticket_id"],
+        builder_refs=[first_ref, second_ref],
+    )
+
+    stream = tickets_api._builder_work_stream(
+        service,
+        service.get_ticket(created["ticket_id"]),
+    )
+
+    assert [item["status"] for item in stream["builder_work_items"]] == [
+        "failed",
+        "resolved",
+    ]
+    assert [item["automation"]["task_id"] for item in stream["builder_work_items"]] == [
+        "task.failed",
+        "task.completed",
+    ]
+    assert stream["builder_work_items"][0]["parent_work_status"] == "planned"
 
 
 def test_development_ticket_api_delegates_trial_decision_to_scoped_builder_target(tmp_path: Path) -> None:

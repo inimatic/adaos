@@ -117,6 +117,46 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["local_run"]["events_path"].endswith("codex-live.jsonl")
 
 
+def test_compact_status_omits_private_session_payload_and_stays_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipe search and detail actions.",
+        webspace_id="prompt-dev",
+    )
+    session = service.get_session("scenario", "recipes")
+    assert session is not None
+    session["large_private_diagnostic"] = "x" * 2_000_000
+    service._save_session(session)
+    summary_path = service._compact_status_path("scenario", "recipes")
+    assert summary_path.is_file()
+
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "get_session",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("terminal compact status must not load the full session")
+        ),
+    )
+
+    status = service.status(
+        object_type="scenario",
+        object_id="recipes",
+        include_session=False,
+    )
+
+    assert status["detail_available"] is True
+    assert status["session"]["schema"] == "adaos.builder.automation_session_summary.v1"
+    assert status["session"]["task_history"]["count"] == 1
+    assert "large_private_diagnostic" not in status["session"]
+    assert "implementation_brief" not in status["session"]
+    assert len(json.dumps(status, ensure_ascii=False).encode("utf-8")) < 32 * 1024
+
+
 def test_dev_ticket_repair_projects_minimal_diff_constraints(tmp_path: Path) -> None:
     service = _service(tmp_path)
 

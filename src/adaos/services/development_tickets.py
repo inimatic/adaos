@@ -434,6 +434,74 @@ def _automation_task(payload: Mapping[str, Any]) -> dict[str, Any]:
     return dict(task) if isinstance(task, Mapping) else {}
 
 
+def _automation_correlation(payload: Mapping[str, Any]) -> dict[str, Any]:
+    projection = _automation_projection(payload)
+    session = _automation_session(payload)
+    task = _automation_task(payload)
+    realize_request = (
+        task.get("realize_request")
+        if isinstance(task.get("realize_request"), Mapping)
+        else {}
+    )
+    fallback_sources = [
+        projection.get("links") if isinstance(projection.get("links"), Mapping) else {},
+        session.get("links") if isinstance(session.get("links"), Mapping) else {},
+    ]
+    task_links = (
+        realize_request.get("links")
+        if isinstance(realize_request.get("links"), Mapping)
+        else {}
+    )
+    sources = [*fallback_sources, task_links]
+    links: dict[str, Any] = {}
+    for source in sources:
+        links.update(dict(source))
+    correlation_sources = [task_links] if task_links else fallback_sources
+    ticket_ids: list[str] = []
+    for source in correlation_sources:
+        ticket_ids.extend(
+            _text(item)
+            for item in source.get("development_ticket_ids") or []
+            if _text(item)
+        )
+        ticket_id = _text(source.get("development_ticket_id"))
+        if ticket_id:
+            ticket_ids.append(ticket_id)
+    links["development_ticket_ids"] = list(dict.fromkeys(ticket_ids))
+    return links
+
+
+def _automation_matches_work(
+    payload: Mapping[str, Any],
+    *,
+    ticket_ids: Sequence[str],
+    repair_id: str,
+) -> tuple[bool, dict[str, Any]]:
+    correlation = _automation_correlation(payload)
+    observed_tickets = {
+        _text(item)
+        for item in correlation.get("development_ticket_ids") or []
+        if _text(item)
+    }
+    expected_tickets = {_text(item) for item in ticket_ids if _text(item)}
+    observed_repair = _text(
+        correlation.get("builder_repair_id") or correlation.get("repair_id")
+    )
+    expected_repair = _text(repair_id)
+    matched = bool(
+        expected_tickets
+        and expected_tickets <= observed_tickets
+        and expected_repair
+        and observed_repair == expected_repair
+    )
+    return matched, {
+        "expected_ticket_ids": sorted(expected_tickets),
+        "observed_ticket_ids": sorted(observed_tickets),
+        "expected_repair_id": expected_repair or None,
+        "observed_repair_id": observed_repair or None,
+    }
+
+
 def _automation_evidence_refs(payload: Mapping[str, Any], *, repair_id: str) -> list[dict[str, Any]]:
     projection = _automation_projection(payload)
     session = _automation_session(payload)
@@ -1421,6 +1489,16 @@ class DevelopmentTicketService:
             mcp=dict(mcp) if isinstance(mcp, Mapping) else None,
             links=automation_links,
         )
+        correlated, correlation = _automation_matches_work(
+            started,
+            ticket_ids=[ticket["ticket_id"]],
+            repair_id=repair_id,
+        )
+        if not correlated:
+            raise RuntimeError(
+                "Builder automation returned a task that is not correlated with "
+                f"the requested Dev Ticket repair: {correlation}"
+            )
         linked_repair = service.link_automation(repair_id, automation=started, actor=_text(actor) or "builder")
         linked_ticket = self._link_builder_automation(
             ticket["ticket_id"],
@@ -1694,6 +1772,16 @@ class DevelopmentTicketService:
             mcp=dict(mcp) if isinstance(mcp, Mapping) else None,
             links=links,
         )
+        correlated, correlation = _automation_matches_work(
+            started,
+            ticket_ids=ticket_ids,
+            repair_id=_text(repair.get("repair_id")),
+        )
+        if not correlated:
+            raise RuntimeError(
+                "Builder automation returned a task that is not correlated with "
+                f"the requested Dev Ticket package: {correlation}"
+            )
         linked_repair = service.link_automation(
             repair["repair_id"],
             automation=started,
@@ -1760,6 +1848,21 @@ class DevelopmentTicketService:
                 "ok": True,
                 "synchronized": False,
                 "reason": status_result.get("error") or "automation_session_not_found",
+                "ticket": ticket,
+                "automation": status_result,
+            }
+        correlated, correlation = _automation_matches_work(
+            status_result,
+            ticket_ids=[ticket["ticket_id"]],
+            repair_id=linked_repair_id,
+        )
+        if not correlated:
+            return {
+                "ok": True,
+                "synchronized": False,
+                "resolved": False,
+                "reason": "automation_correlation_mismatch",
+                "correlation": correlation,
                 "ticket": ticket,
                 "automation": status_result,
             }
@@ -2919,6 +3022,7 @@ class DevelopmentTicketService:
                 "result_branch": projection.get("result_branch"),
                 "summary": projection.get("summary"),
                 "error": projection.get("error"),
+                "links": _automation_correlation(automation),
             },
         }
         if declared:
@@ -2932,6 +3036,13 @@ class DevelopmentTicketService:
                 raise KeyError(ticket_id)
             now = _now()
             refs = [dict(ref) for ref in ticket.get("builder_refs") or [] if isinstance(ref, Mapping)]
+            if task_id:
+                refs = [
+                    ref
+                    for ref in refs
+                    if _text(ref.get("automation_task_id")) != task_id
+                    or _text(ref.get("repair_id")) == _text(repair_id)
+                ]
             matched = False
             for index, ref in enumerate(refs):
                 if _text(ref.get("repair_id")) != _text(repair_id):

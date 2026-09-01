@@ -2209,7 +2209,23 @@ class BuilderAutomationService:
             "automation": self.project_session(reconciled),
         }
 
-    def status(self, *, object_type: str, object_id: str) -> dict[str, Any]:
+    def status(
+        self,
+        *,
+        object_type: str,
+        object_id: str,
+        include_session: bool = True,
+    ) -> dict[str, Any]:
+        if not include_session:
+            cached = self._read_compact_status(object_type, object_id)
+            cached_automation = (
+                cached.get("automation")
+                if isinstance(cached, Mapping)
+                and isinstance(cached.get("automation"), Mapping)
+                else {}
+            )
+            if str(cached_automation.get("status") or "") in _TERMINAL_STATUSES:
+                return dict(cached)
         session = self.get_session(object_type, object_id)
         if not session:
             return {"ok": False, "error": "automation_session_not_found"}
@@ -2217,7 +2233,148 @@ class BuilderAutomationService:
         current = self._reconcile_required_aprobation(current)
         if current.get("status") == "completed":
             current = self._notify_completed_session(current)
-        return {"ok": True, "session": current, "automation": self.project_session(current)}
+        if not include_session:
+            current = self._save_session(current, emit_projection=False)
+        return {
+            "ok": True,
+            "session": current if include_session else self.compact_session(current),
+            "automation": self.project_session(current),
+            "detail_available": not include_session,
+        }
+
+    @staticmethod
+    def compact_session(session: Mapping[str, Any]) -> dict[str, Any]:
+        from adaos.services.builder.repair import _aggregate_codex_usage
+
+        task_history = [
+            str(item).strip()
+            for item in session.get("task_history") or []
+            if str(item).strip()
+        ]
+        links = session.get("links") if isinstance(session.get("links"), Mapping) else {}
+        compact_links = {
+            key: copy.deepcopy(links.get(key))
+            for key in (
+                "development_ticket_id",
+                "development_ticket_ids",
+                "builder_repair_id",
+                "builder_package_id",
+                "development_ticket_component_ref",
+                "development_ticket_owner_area",
+            )
+            if links.get(key) not in (None, "", [])
+        }
+        readiness = (
+            session.get("completion_readiness")
+            if isinstance(session.get("completion_readiness"), Mapping)
+            else {}
+        )
+        trial = (
+            readiness.get("aprobation")
+            if isinstance(readiness.get("aprobation"), Mapping)
+            else {}
+        )
+        checks = [
+            {
+                key: item.get(key)
+                for key in ("id", "status", "required", "message")
+                if item.get(key) not in (None, "")
+            }
+            for item in readiness.get("checks") or []
+            if isinstance(item, Mapping)
+        ][:20]
+        receipt = (
+            session.get("codex_usage_accounting")
+            if isinstance(session.get("codex_usage_accounting"), Mapping)
+            else {}
+        )
+        current_usage = {
+            key: receipt.get(key)
+            for key in (
+                "task_id",
+                "status",
+                "accuracy",
+                "model_tokens",
+                "input_tokens",
+                "cached_input_tokens",
+                "output_tokens",
+                "reasoning_tokens",
+                "total_tokens",
+                "billable_tokens",
+                "root_event_id",
+                "recorded_at",
+            )
+            if receipt.get(key) is not None
+        }
+        failure = (
+            session.get("last_failure")
+            if isinstance(session.get("last_failure"), Mapping)
+            else {}
+        )
+        progress = session.get("progress") if isinstance(session.get("progress"), Mapping) else {}
+        return {
+            "schema": "adaos.builder.automation_session_summary.v1",
+            "session_id": str(session.get("session_id") or "") or None,
+            "object_type": str(session.get("object_type") or "") or None,
+            "object_id": str(session.get("object_id") or "") or None,
+            "status": str(session.get("status") or "starting"),
+            "current_task_id": str(session.get("current_task_id") or "") or None,
+            "task_history": {
+                "count": len(task_history),
+                "latest": task_history[-10:],
+            },
+            "iteration": int(session.get("iteration") or 0),
+            "change_set_id": str(session.get("change_set_id") or "") or None,
+            "change_id": str(session.get("change_id") or "") or None,
+            "conversation_id": str(session.get("conversation_id") or "") or None,
+            "webspace_id": str(session.get("webspace_id") or "desktop"),
+            "links": compact_links,
+            "progress": {
+                key: progress.get(key)
+                for key in ("task_id", "status", "message", "updated_at")
+                if progress.get(key) not in (None, "")
+            }
+            or None,
+            "completion": {
+                "ok": bool(readiness.get("ok")),
+                "task_id": readiness.get("task_id"),
+                "checks": checks,
+                "trial": {
+                    key: trial.get(key)
+                    for key in (
+                        "ok",
+                        "mode",
+                        "candidate_id",
+                        "candidate_digest",
+                        "version",
+                        "status",
+                    )
+                    if trial.get(key) not in (None, "")
+                },
+            }
+            if readiness
+            else None,
+            "usage": {
+                "current": current_usage,
+                "aggregate": _aggregate_codex_usage(session),
+                "receipt_count": len(
+                    [
+                        item
+                        for item in session.get("codex_usage_history") or []
+                        if isinstance(item, Mapping)
+                    ]
+                )
+                + (1 if receipt else 0),
+            },
+            "failure": {
+                key: failure.get(key)
+                for key in ("failure_id", "stage", "error", "message", "retryable")
+                if failure.get(key) not in (None, "")
+            }
+            or None,
+            "created_at": session.get("created_at"),
+            "updated_at": session.get("updated_at"),
+        }
 
     def decide_aprobation(
         self,
@@ -6228,6 +6385,36 @@ class BuilderAutomationService:
     def _session_path(self, object_type: str, object_id: str) -> Path:
         return self.root / f"{_safe_token(object_type)}.{_safe_token(object_id)}.json"
 
+    def _compact_status_path(self, object_type: str, object_id: str) -> Path:
+        return self.root / (
+            f"{_safe_token(object_type)}.{_safe_token(object_id)}.summary.json"
+        )
+
+    def _read_compact_status(
+        self,
+        object_type: str,
+        object_id: str,
+    ) -> dict[str, Any] | None:
+        try:
+            kind, project_id = self._project_ref(object_type, object_id)
+        except ValueError:
+            return None
+        try:
+            payload = json.loads(
+                self._compact_status_path(kind, project_id).read_text(encoding="utf-8")
+            )
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+        return dict(payload) if isinstance(payload, Mapping) else None
+
+    def _compact_status_payload(self, session: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "session": self.compact_session(session),
+            "automation": self.project_session(session),
+            "detail_available": True,
+        }
+
     def _save_session(
         self,
         session: Mapping[str, Any],
@@ -6236,6 +6423,10 @@ class BuilderAutomationService:
     ) -> dict[str, Any]:
         payload = dict(session)
         path = self._session_path(str(payload["object_type"]), str(payload["object_id"]))
+        compact_path = self._compact_status_path(
+            str(payload["object_type"]),
+            str(payload["object_id"]),
+        )
         lock_path = self.root / ".mutation.lock"
         with mutation_lock(lock_path, timeout_s=30.0):
             try:
@@ -6244,13 +6435,16 @@ class BuilderAutomationService:
                 previous = None
             if isinstance(previous, Mapping) and _prefer_persisted_session(previous, payload):
                 persisted = dict(previous)
+                _write_json(compact_path, self._compact_status_payload(persisted))
                 if isinstance(session, dict):
                     session.clear()
                     session.update(copy.deepcopy(persisted))
                 return persisted
             if previous == payload:
+                _write_json(compact_path, self._compact_status_payload(payload))
                 return payload
             _write_json(path, payload)
+            _write_json(compact_path, self._compact_status_payload(payload))
         if emit_projection and self.event_sink is not None:
             self.event_sink(self.project_session(payload))
         return payload

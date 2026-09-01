@@ -344,9 +344,14 @@ def submit_automation_turn(
 def automation_status(
     object_type: str,
     object_id: str,
+    details: bool = False,
     service: BuilderAutomationService = Depends(_get_automation_service),
 ) -> dict[str, Any]:
-    return service.status(object_type=object_type, object_id=object_id)
+    return service.status(
+        object_type=object_type,
+        object_id=object_id,
+        include_session=details,
+    )
 
 
 @router.post("/automation/recover-validated")
