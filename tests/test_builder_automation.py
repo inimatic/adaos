@@ -15,6 +15,7 @@ from adaos.services.builder import automation as automation_module
 from adaos.services.builder.automation import (
     BuilderAutomationService,
     _brief_has_structured_edits,
+    _context_projection_brief,
     _iteration_context_projection,
 )
 from adaos.services.builder.workspace import BuilderWorkspaceService
@@ -1068,6 +1069,14 @@ def test_structured_edit_context_projection_keeps_authority_without_prompt_paylo
     assert projection["authority"]["execution_strategy"] == "structured_edits"
     assert "large_payload" not in projection
     assert len(json.dumps(projection).encode("utf-8")) < 2_000
+    assert _context_projection_brief(
+        {"implementation_brief": brief},
+        "Resume the requalified repair from its candidate.",
+    ) == brief
+    assert _context_projection_brief(
+        {"implementation_brief": "General project brief."},
+        "Apply the next iteration.",
+    ) == "Apply the next iteration."
 
 
 def test_path_guard_failure_reuses_original_budget_candidate_after_requalification(

@@ -291,6 +291,18 @@ def _iteration_context_projection(
     }
 
 
+def _context_projection_brief(
+    session: Mapping[str, Any],
+    iteration_brief: str,
+) -> str:
+    canonical_brief = str(session.get("implementation_brief") or "")
+    return (
+        canonical_brief
+        if _brief_has_structured_edits(canonical_brief)
+        else iteration_brief
+    )
+
+
 def _cleanup_dev_skill_runtime(skill_id: str) -> dict[str, Any]:
     """Invoke the core-owned DEV runtime lifecycle without deleting source."""
 
@@ -572,7 +584,10 @@ class BuilderAutomationService:
         packet_artifact = service.put_artifact(dict(context_packet))
         projection = _iteration_context_projection(
             context_packet,
-            implementation_brief=implementation_brief,
+            implementation_brief=_context_projection_brief(
+                session,
+                implementation_brief,
+            ),
             packet_ref=packet_artifact["ref"],
             packet_digest=str(context_packet.get("digest") or "").strip() or None,
             kind=kind,
