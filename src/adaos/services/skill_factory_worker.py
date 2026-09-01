@@ -2674,6 +2674,7 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
         repair_profile = str(constraints.get("repair_profile") or "").strip()
         surgical_ui = is_dev_ticket_repair and repair_profile == "surgical_ui"
         bounded_repair = is_dev_ticket_repair and repair_profile in {
+            "project_batch",
             "surgical_ui",
             "surgical_data",
             "resource_crud",

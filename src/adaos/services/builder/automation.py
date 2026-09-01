@@ -4880,34 +4880,56 @@ class BuilderAutomationService:
     ) -> dict[str, Any]:
         current = dict(session)
         links = current.get("links") if isinstance(current.get("links"), Mapping) else {}
-        ticket_id = str(links.get("development_ticket_id") or "").strip()
+        ticket_ids = list(
+            dict.fromkeys(
+                [
+                    str(links.get("development_ticket_id") or "").strip(),
+                    *[
+                        str(item).strip()
+                        for item in links.get("development_ticket_ids") or []
+                        if str(item).strip()
+                    ],
+                ]
+            )
+        )
+        ticket_ids = [item for item in ticket_ids if item]
         repair_id = str(links.get("builder_repair_id") or "").strip()
         task_id = str(current.get("current_task_id") or "").strip()
-        if not ticket_id or not repair_id or not task_id:
+        if not ticket_ids or not repair_id or not task_id:
             return current
-        synced_task_ids = {
+        legacy_synced_task_ids = {
             str(item).strip()
             for item in current.get("development_ticket_synced_task_ids") or []
             if str(item).strip()
         }
+        synced_refs = {
+            str(item).strip()
+            for item in current.get("development_ticket_synced_refs") or []
+            if str(item).strip()
+        }
         if (
-            current.get("development_ticket_sync_schema")
-            != "adaos.builder.dev_ticket_task_sync.v3"
-            or current.get("development_ticket_sync_revision") != 2
+            not synced_refs
+            and len(ticket_ids) == 1
+            and current.get("development_ticket_sync_schema")
+            == "adaos.builder.dev_ticket_task_sync.v3"
+            and current.get("development_ticket_sync_revision") == 2
         ):
-            synced_task_ids.clear()
+            synced_refs = {
+                f"{ticket_ids[0]}:{linked_task_id}"
+                for linked_task_id in legacy_synced_task_ids
+            }
         historical_task_ids = {
             str(item).strip()
             for item in current.get("task_history") or []
             if str(item).strip()
         }
-        if (
-            current.get("development_ticket_sync_schema")
-            == "adaos.builder.dev_ticket_task_sync.v3"
-            and current.get("development_ticket_sync_revision") == 2
-            and task_id in synced_task_ids
-            and historical_task_ids.issubset(synced_task_ids)
-        ):
+        expected_task_ids = historical_task_ids | {task_id}
+        expected_refs = {
+            f"{ticket_id}:{linked_task_id}"
+            for ticket_id in ticket_ids
+            for linked_task_id in expected_task_ids
+        }
+        if expected_refs and expected_refs.issubset(synced_refs):
             return current
         try:
             from adaos.services.builder.repair import BuilderRepairService
@@ -4925,10 +4947,8 @@ class BuilderAutomationService:
                     + [task_id]
                 )
             )
-            latest_sync: Mapping[str, Any] = {}
+            latest_by_ticket: dict[str, Mapping[str, Any]] = {}
             for linked_task_id in ordered_task_ids:
-                if linked_task_id in synced_task_ids:
-                    continue
                 task_session = self._session_for_linked_task(current, linked_task_id)
                 if task_session is None:
                     continue
@@ -4940,40 +4960,62 @@ class BuilderAutomationService:
                     "session": task_session,
                     "automation": self.project_session(task_session),
                 }
-                latest_sync = ticket_service.sync_builder_repair(
-                    ticket_id,
-                    actor="builder.automation",
-                    repair_id=repair_id,
-                    repair_service=repair_service,
-                    automation_result=status_result,
-                )
-                if bool(latest_sync.get("synchronized")):
-                    synced_task_ids.add(linked_task_id)
-            if synced_task_ids:
+                for ticket_id in ticket_ids:
+                    ref = f"{ticket_id}:{linked_task_id}"
+                    if ref in synced_refs:
+                        continue
+                    latest_sync = ticket_service.sync_builder_repair(
+                        ticket_id,
+                        actor="builder.automation",
+                        repair_id=repair_id,
+                        repair_service=repair_service,
+                        automation_result=status_result,
+                    )
+                    latest_by_ticket[ticket_id] = latest_sync
+                    if bool(latest_sync.get("synchronized")):
+                        synced_refs.add(ref)
+            if synced_refs:
                 now = _now_iso()
                 current["development_ticket_synced_task_id"] = task_id
                 current["development_ticket_synced_task_ids"] = [
-                    item for item in ordered_task_ids if item in synced_task_ids
+                    item
+                    for item in ordered_task_ids
+                    if all(f"{ticket_id}:{item}" in synced_refs for ticket_id in ticket_ids)
                 ]
+                current["development_ticket_synced_refs"] = sorted(synced_refs)
                 current["development_ticket_sync_schema"] = (
-                    "adaos.builder.dev_ticket_task_sync.v3"
+                    "adaos.builder.dev_ticket_task_sync.v4"
                 )
-                current["development_ticket_sync_revision"] = 2
+                current["development_ticket_sync_revision"] = 3
                 current["development_ticket_synced_at"] = now
-                synced_ticket = (
-                    latest_sync.get("ticket")
-                    if isinstance(latest_sync.get("ticket"), Mapping)
-                    else {}
-                )
+                ticket_results: list[dict[str, Any]] = []
+                for ticket_id in ticket_ids:
+                    latest_sync = latest_by_ticket.get(ticket_id) or {}
+                    synced_ticket = (
+                        latest_sync.get("ticket")
+                        if isinstance(latest_sync.get("ticket"), Mapping)
+                        else {}
+                    )
+                    ticket_results.append(
+                        {
+                            "ticket_id": ticket_id,
+                            "status": str(synced_ticket.get("status") or "").strip() or None,
+                            "resolved": bool(
+                                latest_sync.get("resolved")
+                                or str(synced_ticket.get("status") or "").strip()
+                                in {"resolved", "verified", "closed"}
+                            ),
+                        }
+                    )
                 current["development_ticket_sync"] = {
-                    "ticket_id": ticket_id,
+                    "ticket_id": ticket_ids[0],
+                    "ticket_ids": ticket_ids,
                     "repair_id": repair_id,
-                    "resolved": bool(
-                        latest_sync.get("resolved")
-                        or str(synced_ticket.get("status") or "").strip()
-                        in {"resolved", "verified", "closed"}
-                    ),
+                    "resolved": bool(ticket_results)
+                    and all(item["resolved"] for item in ticket_results),
                     "task_count": len(ordered_task_ids),
+                    "ticket_count": len(ticket_ids),
+                    "tickets": ticket_results,
                     "updated_at": now,
                 }
                 current["updated_at"] = now
@@ -4981,8 +5023,8 @@ class BuilderAutomationService:
         except Exception:
             _log.exception(
                 "completed Builder automation failed to synchronize Dev Ticket "
-                "ticket=%s repair=%s task=%s",
-                ticket_id,
+                "tickets=%s repair=%s task=%s",
+                ticket_ids,
                 repair_id,
                 task_id,
             )

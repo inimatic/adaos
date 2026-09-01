@@ -109,6 +109,21 @@ class DevTicketAutonomousRepairRequest(BaseModel):
     mcp: dict[str, Any] | None = None
 
 
+class DevTicketPackagePlanRequest(BaseModel):
+    ticket_ids: list[str] = Field(..., min_length=1, max_length=12)
+    actor: str = Field(default="builder", min_length=1)
+    execution_budget: dict[str, Any] | None = None
+
+
+class DevTicketPackageStartRequest(BaseModel):
+    actor: str = Field(default="builder", min_length=1)
+    webspace_id: str = "desktop"
+    conversation_id: str | None = None
+    source_strategy: str | None = None
+    agent_profile: dict[str, Any] | None = None
+    mcp: dict[str, Any] | None = None
+
+
 class DevTicketBuilderSyncRequest(BaseModel):
     actor: str = "ui"
     repair_id: str | None = None
@@ -836,6 +851,72 @@ def create_sdk_understanding_signal(
         raise _not_found(str(exc).strip("'")) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/builder-packages/plan", status_code=status.HTTP_201_CREATED)
+def plan_builder_package(
+    body: DevTicketPackagePlanRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        return service.plan_builder_package(
+            body.ticket_ids,
+            actor=body.actor,
+            repair_service=_repair_service_for(service),
+            execution_budget=body.execution_budget,
+        )
+    except KeyError as exc:
+        raise _not_found(str(exc).strip("'")) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/builder-packages/{package_id}/start")
+def start_builder_package(
+    package_id: str,
+    body: DevTicketPackageStartRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        return service.start_autonomous_package(
+            package_id,
+            actor=body.actor,
+            repair_service=_repair_service_for(service),
+            automation_service=_get_automation_service(),
+            webspace_id=body.webspace_id,
+            conversation_id=body.conversation_id,
+            source_strategy=body.source_strategy,
+            agent_profile=body.agent_profile,
+            mcp=body.mcp,
+        )
+    except KeyError as exc:
+        missing_id = str(exc).strip("'")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"builder_package_not_found:{missing_id}",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.get("/builder-packages/{package_id}")
+def get_builder_package(
+    package_id: str,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    repair_service = _repair_service_for(service)
+    items = repair_service.list(package_id=package_id)
+    if not items:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"builder_package_not_found:{package_id}",
+        )
+    return {
+        "ok": True,
+        "package_id": package_id,
+        "work_items": items,
+        "rollup": repair_service.package_rollup(package_id),
+    }
 
 
 @router.post("/artifacts", status_code=status.HTTP_201_CREATED)

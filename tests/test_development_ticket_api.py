@@ -177,6 +177,67 @@ def test_development_ticket_api_create_accepts_signal_kind_with_ticket_kind(tmp_
     ]
 
 
+def test_development_ticket_api_plans_and_starts_builder_package(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    automation = _FakeAutomationService()
+    client = _client(service)
+    signal = service.capture_signal(
+        kind="development_request",
+        summary="Rename the Demo Metrics table heading",
+        target_scope={"type": "skill", "id": "demo_metrics_skill", "source": "dev"},
+        source="client_feedback",
+        owner_area="skill",
+        metadata={
+            "builder_repair": {
+                "profile": "surgical_ui",
+                "change_summary": "Rename only the selected heading.",
+                "target_files": ["skills/demo_metrics_skill/webui.json"],
+                "target_refs": ["widget:metrics-table.title"],
+                "acceptance_checks": ["The table heading is Live metrics."],
+                "max_changed_files": 1,
+                "requires_root_mcp": False,
+            }
+        },
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="ready_for_builder",
+        owner_area="skill",
+    )["ticket"]
+
+    planned = client.post(
+        "/api/development-tickets/builder-packages/plan",
+        headers=_headers(),
+        json={"ticket_ids": [ticket["ticket_id"]], "actor": "builder:qualifier"},
+    )
+
+    assert planned.status_code == 201, planned.text
+    package_id = planned.json()["package_id"]
+    shown = client.get(
+        f"/api/development-tickets/builder-packages/{package_id}",
+        headers=_headers(),
+    )
+    assert shown.status_code == 200, shown.text
+    assert shown.json()["rollup"]["ticket_ids"] == [ticket["ticket_id"]]
+
+    monkeypatch.setattr(tickets_api, "_get_automation_service", lambda: automation)
+    started = client.post(
+        f"/api/development-tickets/builder-packages/{package_id}/start",
+        headers=_headers(),
+        json={"actor": "builder:automation", "webspace_id": "desktop"},
+    )
+
+    assert started.status_code == 200, started.text
+    assert len(automation.started) == 1
+    assert automation.started[0]["links"]["development_ticket_ids"] == [
+        ticket["ticket_id"]
+    ]
+
+
 def test_development_ticket_api_uploads_screenshot_artifact(tmp_path: Path) -> None:
     client = _client(DevelopmentTicketService(state_dir=tmp_path))
     content = b"\x89PNG\r\n\x1a\nfake screenshot"

@@ -1308,7 +1308,10 @@ def test_surgical_repair_enforces_exact_files_and_file_count(tmp_path: Path) -> 
         )
 
 
-@pytest.mark.parametrize("repair_profile", ["surgical_ui", "resource_crud", "subnet_data_integration"])
+@pytest.mark.parametrize(
+    "repair_profile",
+    ["surgical_ui", "resource_crud", "subnet_data_integration", "project_batch"],
+)
 def test_bounded_repair_prompt_requires_targeted_reads(
     tmp_path: Path,
     repair_profile: str,

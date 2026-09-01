@@ -181,6 +181,46 @@ def _schema(name: str) -> dict:
     return json.loads((Path(__file__).parents[1] / "src" / "adaos" / "abi" / name).read_text(encoding="utf-8"))
 
 
+def _bounded_demo_ticket(
+    service: DevelopmentTicketService,
+    *,
+    summary: str,
+    target_files: list[str],
+    acceptance: str,
+) -> dict:
+    signal = service.capture_signal(
+        kind="development_request",
+        summary=summary,
+        target_scope={
+            "type": "skill",
+            "id": "demo_metrics_skill",
+            "source": "dev",
+            "component_ref": "skill:demo_metrics_skill",
+        },
+        source="client_feedback",
+        owner_area="skill",
+        component_ref="skill:demo_metrics_skill",
+        metadata={
+            "builder_repair": {
+                "profile": "surgical_ui",
+                "change_summary": summary,
+                "target_files": target_files,
+                "target_refs": [f"widget:{Path(target_files[0]).stem}"],
+                "acceptance_checks": [acceptance],
+                "max_changed_files": len(target_files),
+                "requires_root_mcp": False,
+            }
+        },
+    )["signal"]
+    return service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="ready_for_builder",
+        owner_area="skill",
+        component_ref="skill:demo_metrics_skill",
+    )["ticket"]
+
+
 def test_receiver_compatibility_finding_creates_signal_ticket_pending_action_and_dedups(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -462,6 +502,103 @@ def test_builder_repair_requalification_is_bounded_and_audited(tmp_path: Path) -
                 "max_changed_files": 1,
             },
         )
+
+
+def test_builder_package_requires_qualification_before_spending_tokens(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    signal = service.capture_signal(
+        kind="development_request",
+        summary="Improve a Demo Metrics control",
+        target_scope={"type": "skill", "id": "demo_metrics_skill", "source": "dev"},
+        source="client_feedback",
+        owner_area="skill",
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="ready_for_builder",
+        owner_area="skill",
+    )["ticket"]
+
+    result = service.plan_builder_package(
+        [ticket["ticket_id"]],
+        actor="builder:qualifier",
+        repair_service=repair_service,
+    )
+
+    assert result["ready"] is False
+    assert result["status"] == "qualification_required"
+    assert result["unqualified_ticket_ids"] == [ticket["ticket_id"]]
+    assert result["repair"] is None
+    assert repair_service.list() == []
+    assert service.get_ticket(ticket["ticket_id"])["builder_refs"] == []
+
+
+def test_builder_package_uses_one_work_item_budget_and_automation(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    automation = _FakeBuilderAutomation()
+    tickets = [
+        _bounded_demo_ticket(
+            service,
+            summary="Rename the Demo Metrics table heading",
+            target_files=["skills/demo_metrics_skill/webui.json"],
+            acceptance="The table heading is Live metrics.",
+        ),
+        _bounded_demo_ticket(
+            service,
+            summary="Move the Demo Metrics refresh action",
+            target_files=[
+                "skills/demo_metrics_skill/webui.json",
+                "skills/demo_metrics_skill/tests/test_resource_workbench.py",
+            ],
+            acceptance="Refresh appears before Create note.",
+        ),
+    ]
+    ticket_ids = [ticket["ticket_id"] for ticket in tickets]
+
+    planned = service.plan_builder_package(
+        ticket_ids,
+        actor="builder:qualifier",
+        repair_service=repair_service,
+    )
+
+    assert planned["ready"] is True
+    assert planned["execution_budget"]["max_tokens"] == 60000
+    assert planned["repair_hints"]["profile"] == "project_batch"
+    assert planned["repair_hints"]["target_files"] == [
+        "skills/demo_metrics_skill/webui.json",
+        "skills/demo_metrics_skill/tests/test_resource_workbench.py",
+    ]
+    assert len(repair_service.list(package_id=planned["package_id"])) == 1
+    assert planned["rollup"]["ticket_ids"] == sorted(ticket_ids)
+    assert {
+        service.get_ticket(ticket_id)["builder_refs"][0]["repair_id"]
+        for ticket_id in ticket_ids
+    } == {planned["repair"]["repair_id"]}
+
+    started = service.start_autonomous_package(
+        planned["package_id"],
+        actor="builder:automation",
+        repair_service=repair_service,
+        automation_service=automation,
+    )
+
+    assert started["started"] is True
+    assert len(automation.calls) == 1
+    assert automation.calls[0]["execution_budget"]["max_tokens"] == 60000
+    assert automation.calls[0]["links"]["development_ticket_ids"] == ticket_ids
+    brief = json.loads(automation.calls[0]["implementation_brief"])
+    assert brief["ticket_ids"] == ticket_ids
+    assert brief["policy"]["one_release_for_package"] is True
+    assert [item["ticket_id"] for item in brief["issues"]] == ticket_ids
+    assert all(
+        service.get_ticket(ticket_id)["builder_refs"][0]["automation_task_id"]
+        == "factory.task.1"
+        for ticket_id in ticket_ids
+    )
+    assert started["rollup"]["total_tokens"] == 150
 
 
 def test_autonomous_repair_links_builder_automation_and_resolves_with_evidence(tmp_path: Path) -> None:

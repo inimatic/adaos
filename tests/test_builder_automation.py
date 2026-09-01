@@ -2992,7 +2992,6 @@ def test_completed_automation_synchronizes_linked_dev_ticket_without_status_recu
         "_save_session",
         lambda self, value: saved.append(dict(value)),
     )
-
     current = service._sync_linked_development_ticket_tasks(
         {
             "object_type": "skill",
@@ -3013,11 +3012,95 @@ def test_completed_automation_synchronizes_linked_dev_ticket_without_status_recu
     assert current["development_ticket_synced_task_ids"] == ["task.1"]
     assert (
         current["development_ticket_sync_schema"]
-        == "adaos.builder.dev_ticket_task_sync.v3"
+        == "adaos.builder.dev_ticket_task_sync.v4"
     )
-    assert current["development_ticket_sync_revision"] == 2
+    assert current["development_ticket_sync_revision"] == 3
     assert current["development_ticket_sync"]["resolved"] is True
     assert saved[-1]["development_ticket_synced_task_id"] == "task.1"
+
+
+def test_completed_automation_synchronizes_every_ticket_in_package(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.services.development_tickets import DevelopmentTicketService
+
+    service = _service(tmp_path)
+    saved: list[dict] = []
+    calls: list[tuple[str, str]] = []
+
+    def sync(self, ticket_id, **kwargs):  # noqa: ARG001
+        task_id = kwargs["automation_result"]["automation"]["task_id"]
+        calls.append((ticket_id, task_id))
+        return {
+            "ok": True,
+            "synchronized": True,
+            "resolved": True,
+            "ticket": {"ticket_id": ticket_id, "status": "resolved"},
+        }
+
+    monkeypatch.setattr(DevelopmentTicketService, "sync_builder_repair", sync)
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_save_session",
+        lambda self, value: saved.append(dict(value)),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_session_for_linked_task",
+        lambda self, session, task_id: (
+            {
+                **dict(session),
+                "current_task_id": "task.1",
+                "status": "completed",
+                "task": {"task_id": "task.1", "status": "completed"},
+            }
+            if task_id == "task.1"
+            else dict(session)
+        ),
+    )
+
+    current = service._sync_linked_development_ticket_tasks(
+        {
+            "object_type": "skill",
+            "object_id": "demo_metrics_skill",
+            "status": "completed",
+            "current_task_id": "task.2",
+            "task_history": ["task.1"],
+            "links": {
+                "development_ticket_id": "dticket.1",
+                "development_ticket_ids": ["dticket.1", "dticket.2"],
+                "builder_repair_id": "repair.package",
+                "builder_package_id": "bpackage.1",
+            },
+            "completion_readiness": {"ok": True, "task_id": "task.2"},
+            "task_results": {
+                "task.1": {
+                    "session": {
+                        "current_task_id": "task.1",
+                        "status": "completed",
+                    },
+                    "automation": {"task_id": "task.1", "status": "completed"},
+                }
+            },
+        }
+    )
+
+    assert calls == [
+        ("dticket.1", "task.1"),
+        ("dticket.2", "task.1"),
+        ("dticket.1", "task.2"),
+        ("dticket.2", "task.2"),
+    ]
+    assert current["development_ticket_sync"]["ticket_count"] == 2
+    assert current["development_ticket_sync"]["resolved"] is True
+    assert current["development_ticket_synced_refs"] == [
+        "dticket.1:task.1",
+        "dticket.1:task.2",
+        "dticket.2:task.1",
+        "dticket.2:task.2",
+    ]
+    assert saved[-1]["development_ticket_sync_revision"] == 3
 
 
 def test_finalize_reconciles_exact_canonical_checkpoint_without_replay(

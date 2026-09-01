@@ -505,6 +505,7 @@ def _automation_has_validation_evidence(payload: Mapping[str, Any]) -> bool:
 
 
 _REPAIR_HINT_PROFILES = {
+    "project_batch",
     "surgical_ui",
     "surgical_data",
     "resource_crud",
@@ -595,6 +596,60 @@ def _autonomous_repair_brief(ticket: Mapping[str, Any], repair: Mapping[str, Any
             "The ticket summary is satisfied.",
             "Relevant validation passes and is recorded as evidence.",
             "Unrelated project behavior remains valid.",
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def _autonomous_package_brief(
+    tickets: Sequence[Mapping[str, Any]],
+    repair: Mapping[str, Any],
+    *,
+    target: Mapping[str, str],
+) -> str:
+    context = _mapping(repair.get("context"))
+    package = _mapping(context.get("package"))
+    ticket_items = [
+        {
+            "ticket_id": _text(ticket.get("ticket_id")),
+            "kind": _text(ticket.get("kind")),
+            "summary": _text(ticket.get("summary")),
+            "component_ref": _text(ticket.get("component_ref")) or None,
+            "acceptance_checks": _bounded_repair_hints(ticket).get("acceptance_checks") or [],
+            "evidence_refs": _sequence_of_mappings(ticket.get("evidence_refs") or []),
+            "artifact_refs": _sequence_of_mappings(ticket.get("artifact_refs") or []),
+        }
+        for ticket in tickets
+    ]
+    payload = {
+        "schema": "adaos.dev_ticket.autonomous_repair_package_brief.v1",
+        "execution_mode": "surgical_dev_ticket_repair",
+        "package_id": _text(repair.get("package_id") or package.get("package_id")),
+        "ticket_id": ticket_items[0]["ticket_id"] if ticket_items else None,
+        "ticket_ids": [item["ticket_id"] for item in ticket_items],
+        "repair_id": _text(repair.get("repair_id")),
+        "summary": _text(repair.get("summary")),
+        "target": target,
+        "issues": ticket_items,
+        "policy": {
+            "publication_required": True,
+            "one_release_for_package": True,
+            "individual_ticket_evidence_required": True,
+            "stop_on_core_or_sdk_boundary": True,
+        },
+        "repair_hints": _mapping(package.get("repair_hints")),
+        "guardrails": [
+            "Use only public AdaOS SDK/API surfaces available to the project.",
+            "Do not modify AdaOS core/runtime from project Builder automation.",
+            "Implement all package issues in one bounded project change and one release.",
+            "Do not close an issue that lacks its own validation evidence.",
+            "Stop and create a linked core capability request when project-owned repair is impossible.",
+        ],
+        "acceptance": [
+            "Every included ticket has a satisfied acceptance check or an explicit blocker.",
+            "Focused validation passes for the combined change.",
+            "Changed files stay inside the exact package envelope.",
+            "The candidate is exposed through the workspace runtime trial overlay.",
         ],
     }
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
@@ -1372,6 +1427,266 @@ class DevelopmentTicketService:
             "sync": sync,
             "development_source": development_source,
             "materialization": materialization,
+        }
+
+    def plan_builder_package(
+        self,
+        ticket_ids: Sequence[str],
+        *,
+        actor: str,
+        repair_service: BuilderRepairService | None = None,
+        execution_budget: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        ids = list(dict.fromkeys(_text(item) for item in ticket_ids if _text(item)))
+        if not ids:
+            raise ValueError("Builder package requires ticket_ids")
+        if len(ids) > 12:
+            raise ValueError("Builder package supports at most 12 tickets")
+        tickets: list[dict[str, Any]] = []
+        for ticket_id in ids:
+            ticket = self.get_ticket(ticket_id)
+            if not ticket:
+                raise KeyError(ticket_id)
+            if _text(ticket.get("status")) in TERMINAL_TICKET_STATES:
+                raise ValueError(f"terminal Dev Ticket cannot enter Builder package: {ticket_id}")
+            tickets.append(ticket)
+
+        targets = [_automation_target_from_ticket(ticket) for ticket in tickets]
+        target_keys = {(item["object_type"], item["object_id"]) for item in targets}
+        if len(target_keys) != 1:
+            raise ValueError("Builder package tickets must target one skill or scenario")
+        target = targets[0]
+        qualifications = [_bounded_repair_hints(ticket) for ticket in tickets]
+        missing = [
+            _text(ticket.get("ticket_id"))
+            for ticket, qualification in zip(tickets, qualifications, strict=True)
+            if not qualification.get("profile") or not qualification.get("target_files")
+        ]
+        if missing:
+            return {
+                "ok": True,
+                "ready": False,
+                "status": "qualification_required",
+                "ticket_ids": ids,
+                "unqualified_ticket_ids": missing,
+                "target": target,
+                "repair": None,
+            }
+
+        target_files = list(
+            dict.fromkeys(
+                path
+                for qualification in qualifications
+                for path in qualification.get("target_files") or []
+            )
+        )
+        if len(target_files) > 12:
+            raise ValueError("Builder package exact file envelope exceeds 12 files; split the package")
+        target_refs = list(
+            dict.fromkeys(
+                ref
+                for qualification in qualifications
+                for ref in qualification.get("target_refs") or []
+            )
+        )[:20]
+        acceptance_checks = list(
+            dict.fromkeys(
+                check
+                for qualification in qualifications
+                for check in qualification.get("acceptance_checks") or []
+            )
+        )[:24]
+        requires_root_mcp = any(
+            qualification.get("requires_root_mcp") is True
+            for qualification in qualifications
+        )
+        package_id = f"bpackage.{new_id()}"
+        budget = dict(execution_budget) if isinstance(execution_budget, Mapping) else {
+            "schema": "adaos.builder.execution_budget.v1",
+            "source": "development_ticket.package_default",
+            "max_tokens": min(200000, 30000 + 15000 * len(tickets)),
+            "max_wall_seconds": min(3600, 600 + 240 * len(tickets)),
+        }
+        repair_hints = {
+            "profile": "project_batch",
+            "change_summary": "\n".join(
+                f"{index + 1}. {_text(ticket.get('summary'))}"
+                for index, ticket in enumerate(tickets)
+            ),
+            "target_files": target_files,
+            "target_refs": target_refs,
+            "acceptance_checks": acceptance_checks,
+            "max_changed_files": len(target_files),
+            "requires_root_mcp": requires_root_mcp,
+        }
+        source_refs = [
+            {"type": "dev_ticket", "id": _text(ticket.get("ticket_id"))}
+            for ticket in tickets
+        ]
+        service = repair_service or BuilderRepairService(state_dir=self.state_dir)
+        report = service.report(
+            project_id=target["object_id"],
+            signal_type="other",
+            summary=f"Builder package for {len(tickets)} Dev Tickets",
+            source_refs=source_refs,
+            context={
+                "package_id": package_id,
+                "package": {
+                    "schema": "adaos.builder.work_package.v1",
+                    "package_id": package_id,
+                    "ticket_ids": ids,
+                    "target": target,
+                    "repair_hints": repair_hints,
+                    "execution_budget": budget,
+                    "planned_by": _text(actor) or "builder",
+                    "planned_at": _now(),
+                },
+                "economic": {
+                    "schema": "adaos.builder.codex_token_accounting.v1",
+                    "subscription_resource": "codex.api.tokens",
+                    "source_of_truth": "adaos.root_mgmnt.codex_usage_event.v1",
+                    "usage_event_endpoint": "/hub/economic/codex/usage",
+                    "required_for_statuses": ["succeeded", "failed", "errored", "cancelled"],
+                },
+            },
+            dedup_key=f"builder-package:{package_id}",
+        )
+        repair = report["task"]
+        linked = [
+            self._link_builder_repair(
+                ticket["ticket_id"],
+                repair,
+                mode="package",
+                actor=_text(actor) or "builder",
+            )
+            for ticket in tickets
+        ]
+        return {
+            "ok": True,
+            "ready": True,
+            "status": "planned",
+            "package_id": package_id,
+            "ticket_ids": ids,
+            "target": target,
+            "repair": repair,
+            "tickets": linked,
+            "repair_hints": repair_hints,
+            "execution_budget": budget,
+            "rollup": service.package_rollup(package_id),
+        }
+
+    def start_autonomous_package(
+        self,
+        package_id: str,
+        *,
+        actor: str,
+        repair_service: BuilderRepairService | None = None,
+        automation_service: Any | None = None,
+        webspace_id: str = "desktop",
+        conversation_id: str | None = None,
+        source_strategy: str | None = None,
+        agent_profile: Mapping[str, Any] | None = None,
+        mcp: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        service = repair_service or BuilderRepairService(state_dir=self.state_dir)
+        matches = service.list(package_id=_text(package_id))
+        if len(matches) != 1:
+            raise KeyError(package_id)
+        repair = matches[0]
+        ticket_ids = [_text(item) for item in repair.get("ticket_ids") or [] if _text(item)]
+        tickets = [self.get_ticket(ticket_id) for ticket_id in ticket_ids]
+        if not tickets or any(ticket is None for ticket in tickets):
+            raise ValueError("Builder package contains missing Dev Tickets")
+        ticket_list = [dict(ticket) for ticket in tickets if isinstance(ticket, Mapping)]
+        targets = [_automation_target_from_ticket(ticket) for ticket in ticket_list]
+        if len({(item["object_type"], item["object_id"]) for item in targets}) != 1:
+            raise ValueError("Builder package target changed since planning")
+        target = targets[0]
+        development_source = development_source_options(_mapping(ticket_list[0].get("target_scope")))
+        materialization: dict[str, Any] | None = None
+        if automation_service is None:
+            from adaos.services.builder.automation import BuilderAutomationService
+
+            automation_service = BuilderAutomationService.from_context()
+        if development_source.get("status") == "needs_materialization":
+            strategy = _text(source_strategy)
+            if strategy != "materialize_dev_source":
+                raise ValueError("autonomous Builder package requires materialize_dev_source when source is missing")
+            workspace_service = getattr(automation_service, "workspace_service", None)
+            if workspace_service is None:
+                from adaos.services.builder.workspace import BuilderWorkspaceService
+
+                workspace_service = BuilderWorkspaceService.from_context()
+            materialization = workspace_service.materialize_dev_source(
+                kind=target["object_type"],
+                artifact_id=target["object_id"],
+                project_id=_project_id_for_materialization(ticket_list[0], development_source),
+            )
+            if not materialization.get("ok"):
+                raise ValueError("development source materialization failed")
+            development_source = _mapping(materialization.get("development_source")) or development_source
+
+        package = _mapping(_mapping(repair.get("context")).get("package"))
+        budget = _mapping(package.get("execution_budget")) or dict(DEFAULT_AUTONOMOUS_REPAIR_BUDGET)
+        brief = _autonomous_package_brief(ticket_list, repair, target=target)
+        links = {
+            "development_ticket_id": ticket_ids[0],
+            "development_ticket_ids": ticket_ids,
+            "builder_repair_id": _text(repair.get("repair_id")),
+            "builder_package_id": _text(package_id),
+            "development_source_materialization": materialization,
+        }
+        current = automation_service.status(
+            object_type=target["object_type"],
+            object_id=target["object_id"],
+        )
+        current_session = _automation_session(current)
+        current_links = _mapping(current_session.get("links"))
+        resume = (
+            _text(current_session.get("status")) == "failed"
+            and _text(current_links.get("builder_package_id")) == _text(package_id)
+            and callable(getattr(automation_service, "resume_failed_dev_ticket_repair", None))
+        )
+        start_method = (
+            automation_service.resume_failed_dev_ticket_repair
+            if resume
+            else automation_service.start_from_execute
+        )
+        started = start_method(
+            object_type=target["object_type"],
+            object_id=target["object_id"],
+            implementation_brief=brief,
+            webspace_id=_text(webspace_id) or "desktop",
+            conversation_id=_text(conversation_id) or f"dev-ticket-package:{package_id}",
+            execution_budget=budget,
+            agent_profile=dict(agent_profile) if isinstance(agent_profile, Mapping) else None,
+            mcp=dict(mcp) if isinstance(mcp, Mapping) else None,
+            links=links,
+        )
+        linked_repair = service.link_automation(
+            repair["repair_id"],
+            automation=started,
+            actor=_text(actor) or "builder",
+        )
+        linked_tickets = [
+            self._link_builder_automation(
+                ticket_id,
+                repair_id=repair["repair_id"],
+                automation=started,
+                actor=_text(actor) or "builder",
+            )
+            for ticket_id in ticket_ids
+        ]
+        return {
+            "ok": True,
+            "started": True,
+            "package_id": _text(package_id),
+            "repair": linked_repair,
+            "tickets": linked_tickets,
+            "automation": started,
+            "development_source": development_source,
+            "materialization": materialization,
+            "rollup": service.package_rollup(_text(package_id)),
         }
 
     def sync_builder_repair(
