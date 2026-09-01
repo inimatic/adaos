@@ -128,6 +128,18 @@ def _print_error(message: str) -> None:
     typer.secho(message, fg=typer.colors.RED)
 
 
+def _echo_utf8_json(value: object) -> None:
+    """Write machine JSON independently of the Windows console code page."""
+
+    rendered = json.dumps(value, ensure_ascii=False, indent=2)
+    binary = getattr(sys.stdout, "buffer", None)
+    if binary is None:
+        typer.echo(rendered)
+        return
+    binary.write(rendered.encode("utf-8") + b"\n")
+    binary.flush()
+
+
 def _parse_metadata(pairs: List[str]) -> Dict[str, str]:
     result: Dict[str, str] = {}
     for item in pairs:
@@ -220,7 +232,7 @@ def _echo_artifact_list(items: List[ArtifactListItem], json_output: bool) -> Non
             }
             for item in items
         ]
-        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        _echo_utf8_json(payload)
         return
 
     if not items:
@@ -287,7 +299,7 @@ def _echo_update_result(kind_label: str, result: ArtifactUpdateResult, json_outp
             "metadata": result.metadata,
             "recovery": result.recovery,
         }
-        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        _echo_utf8_json(payload)
         return
     typer.secho(f"{kind_label} '{result.name}' updated from Root Forge.", fg=typer.colors.GREEN)
     typer.echo(f"Source: {_display_path(result.source_path)}")
@@ -360,7 +372,7 @@ def dev_ticket_new(
         "ticket_duplicate": bool(ticket_result.get("duplicate")),
     }
     if json_output:
-        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        _echo_utf8_json(payload)
         return
     _print_ticket_summary(ticket_result["ticket"])
 
@@ -415,7 +427,7 @@ def dev_ticket_list(
         limit=limit,
     )
     if json_output:
-        typer.echo(json.dumps({"ok": True, "tickets": tickets}, ensure_ascii=False, indent=2))
+        _echo_utf8_json({"ok": True, "tickets": tickets})
         return
     if not tickets:
         typer.echo("No development tickets found.")
@@ -449,7 +461,7 @@ def dev_ticket_events(
         "cursor": events[-1]["event_id"] if events else after or None,
     }
     if json_output:
-        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        _echo_utf8_json(payload)
         return
     if not events:
         typer.echo("No Dev Ticket lifecycle events found.")
@@ -488,7 +500,7 @@ def dev_ticket_core_request(
         evidence_refs=_ticket_evidence_refs(evidence),
     )
     if json_output:
-        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        _echo_utf8_json(result)
         return
     _print_ticket_summary(result["ticket"])
     if result.get("blocked_tickets"):
@@ -532,7 +544,7 @@ def dev_ticket_core_transition(
         publish_pending_actions=publish_pending_actions,
     )
     if json_output:
-        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        _echo_utf8_json(result)
         return
     _print_ticket_summary(result["ticket"])
     typer.echo(f"event: {result['event']['event_id']} {result['event']['semantic_type']}")
@@ -565,7 +577,7 @@ def dev_ticket_sdk_understanding(
         evidence_refs=_ticket_evidence_refs(evidence),
     )
     if json_output:
-        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        _echo_utf8_json(result)
         return
     _print_ticket_summary(result["ticket"])
 
@@ -581,7 +593,7 @@ def dev_ticket_show(
     if not ticket:
         typer.secho(f"ticket not found: {ticket_id}", fg=typer.colors.RED)
         raise typer.Exit(1)
-    typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
+    _echo_utf8_json({"ok": True, "ticket": ticket})
 
 
 @ticket_app.command("claim")
@@ -595,7 +607,7 @@ def dev_ticket_claim(
 ) -> None:
     ticket = _ticket_service(state_dir).claim_ticket(ticket_id, actor=actor, owner=owner or None)
     if json_output:
-        typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
+        _echo_utf8_json({"ok": True, "ticket": ticket})
         return
     _print_ticket_summary(ticket)
 
@@ -610,7 +622,7 @@ def dev_ticket_start(
 ) -> None:
     ticket = _ticket_service(state_dir).start_ticket(ticket_id, actor=actor)
     if json_output:
-        typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
+        _echo_utf8_json({"ok": True, "ticket": ticket})
         return
     _print_ticket_summary(ticket)
 
@@ -632,7 +644,7 @@ def dev_ticket_comment(
         evidence_refs=_ticket_evidence_refs(evidence),
     )
     if json_output:
-        typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
+        _echo_utf8_json({"ok": True, "ticket": ticket})
         return
     _print_ticket_summary(ticket)
 
@@ -648,7 +660,7 @@ def dev_ticket_defer(
 ) -> None:
     ticket = _ticket_service(state_dir).defer_ticket(ticket_id, actor=actor, reason=reason)
     if json_output:
-        typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
+        _echo_utf8_json({"ok": True, "ticket": ticket})
         return
     _print_ticket_summary(ticket)
 
@@ -672,7 +684,7 @@ def dev_ticket_handoff(
         actor=actor,
     )
     if json_output:
-        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        _echo_utf8_json(result)
         return
     _print_ticket_summary(result["ticket"])
     typer.echo(f"repair: {result['repair'].get('repair_id')}")
@@ -702,7 +714,7 @@ def dev_ticket_resolve(
         accept_reduced_scope=accept_reduced_scope,
     )
     if json_output:
-        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        _echo_utf8_json(result)
         return
     _print_ticket_summary(result["ticket"])
 
@@ -726,7 +738,7 @@ def dev_ticket_verify(
         notes=notes,
     )
     if json_output:
-        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        _echo_utf8_json(result)
         return
     _print_ticket_summary(result["ticket"])
 
@@ -748,7 +760,7 @@ def dev_ticket_close(
         evidence_refs=_ticket_evidence_refs(evidence),
     )
     if json_output:
-        typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
+        _echo_utf8_json({"ok": True, "ticket": ticket})
         return
     _print_ticket_summary(ticket)
 
@@ -770,7 +782,7 @@ def dev_ticket_reopen(
         evidence_refs=_ticket_evidence_refs(evidence),
     )
     if json_output:
-        typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
+        _echo_utf8_json({"ok": True, "ticket": ticket})
         return
     _print_ticket_summary(ticket)
 
@@ -792,7 +804,7 @@ def dev_ticket_related(
         actor=actor,
     )
     if json_output:
-        typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
+        _echo_utf8_json({"ok": True, "ticket": ticket})
         return
     _print_ticket_summary(ticket)
 
@@ -808,7 +820,7 @@ def dev_ticket_duplicate(
 ) -> None:
     ticket = _ticket_service(state_dir).duplicate_ticket(ticket_id, duplicate_of=duplicate_of, actor=actor)
     if json_output:
-        typer.echo(json.dumps({"ok": True, "ticket": ticket}, ensure_ascii=False, indent=2))
+        _echo_utf8_json({"ok": True, "ticket": ticket})
         return
     _print_ticket_summary(ticket)
 
@@ -822,7 +834,7 @@ def dev_ticket_artifact_list(
 ) -> None:
     artifacts = _ticket_service(state_dir).list_artifacts(ticket_id=ticket_id or None)
     if json_output:
-        typer.echo(json.dumps({"ok": True, "artifacts": artifacts}, ensure_ascii=False, indent=2))
+        _echo_utf8_json({"ok": True, "artifacts": artifacts})
         return
     if not artifacts:
         typer.echo("No Dev Ticket artifacts found.")
@@ -846,7 +858,7 @@ def dev_ticket_artifact_show(
         typer.secho(f"artifact not found: {artifact_id}", fg=typer.colors.RED)
         raise typer.Exit(1)
     if json_output:
-        typer.echo(json.dumps({"ok": True, "artifact": artifact}, ensure_ascii=False, indent=2))
+        _echo_utf8_json({"ok": True, "artifact": artifact})
         return
     typer.echo(artifact.get("path") or artifact.get("manifest_path") or artifact_id)
 
@@ -864,7 +876,7 @@ def dev_ticket_artifact_open(
         raise typer.Exit(1)
     path = str(artifact.get("path") or "").strip()
     if json_output:
-        typer.echo(json.dumps({"ok": True, "artifact": artifact, "path": path}, ensure_ascii=False, indent=2))
+        _echo_utf8_json({"ok": True, "artifact": artifact, "path": path})
         return
     if not path:
         typer.secho(f"artifact content path is missing: {artifact_id}", fg=typer.colors.RED)
@@ -949,7 +961,7 @@ def root_login(
                     "expires_in": auth.expires_in,
                     "interval": auth.interval,
                 }
-                typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+                _echo_utf8_json(payload)
                 raise typer.Exit(0)
 
             typer.secho("Owner browser pairing:", fg=typer.colors.GREEN)
@@ -985,7 +997,7 @@ def root_recover_promotion_activation(
     except RootServiceError as exc:
         _print_error(str(exc))
         raise typer.Exit(1)
-    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        _echo_utf8_json(result)
 
 
 @root_app.command("logs")
@@ -1026,7 +1038,7 @@ def root_logs(
         _print_error(str(exc))
         raise typer.Exit(1)
     if json_output:
-        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        _echo_utf8_json(result)
         return
     items = result.get("items") if isinstance(result, dict) else None
     if not isinstance(items, list) or not items:
@@ -1090,7 +1102,7 @@ def root_log_files(
         _print_error(str(exc))
         raise typer.Exit(1)
     if json_output:
-        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        _echo_utf8_json(result)
         return
     items = result.get("items") if isinstance(result, dict) else None
     if not isinstance(items, list) or not items:
@@ -1127,7 +1139,7 @@ def root_log_tail(
         _print_error(str(exc))
         raise typer.Exit(1)
     if json_output:
-        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        _echo_utf8_json(result)
         return
     out_lines = result.get("lines") if isinstance(result, dict) else None
     rel = (result.get("rel") if isinstance(result, dict) else None) or file
@@ -1400,7 +1412,7 @@ def prepare_codex(
         "codex_add_command": codex_add_cmd,
     }
     if json_output:
-        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        _echo_utf8_json(payload)
         return
 
     typer.secho("Codex test-hub MCP profile prepared.", fg=typer.colors.GREEN)
@@ -1970,7 +1982,7 @@ def scenario_run(
     typer.secho(f"Scenario '{name}' executed.", fg=typer.colors.GREEN)
     if log_file:
         typer.echo(f"Log: {log_file}")
-    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        _echo_utf8_json(result)
 
 
 @_run_safe
@@ -2002,7 +2014,7 @@ def scenario_validate(
             "issues": [asdict(issue) for issue in report.issues],
             "scenario_id": report.scenario_id,
         }
-        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        _echo_utf8_json(payload)
         raise typer.Exit(0 if report.ok else 1)
 
     if errors:
@@ -2044,7 +2056,7 @@ def dev_skill_validate(
 
     issues = [asdict(issue) for issue in report.issues]
     if json_output:
-        typer.echo(json.dumps({"ok": report.ok, "issues": issues}, ensure_ascii=False, indent=2))
+        _echo_utf8_json({"ok": report.ok, "issues": issues})
         if not report.ok:
             raise typer.Exit(1)
         return
@@ -2150,7 +2162,7 @@ def dev_skill_test(
         raise typer.Exit(1) from exc
 
     if json_output:
-        typer.echo(json.dumps({k: asdict(v) for k, v in results.items()}, ensure_ascii=False, indent=2))
+        _echo_utf8_json({k: asdict(v) for k, v in results.items()})
         if any(res.status != "passed" for res in results.values()):
             raise typer.Exit(1)
         return
@@ -2210,30 +2222,17 @@ def dev_skill_setup(
         raise typer.Exit(1) from exc
 
     if isinstance(result, dict):
-        payload = json.dumps(result, ensure_ascii=False)
-        typer.echo(payload)
+        _echo_utf8_json(result)
         if not result.get("ok", True):
             raise typer.Exit(1)
         return
 
     if json_output:
-        typer.echo(json.dumps({"result": result}, ensure_ascii=False))
+        _echo_utf8_json({"result": result})
     elif result is None:
         typer.secho("setup completed", fg=typer.colors.GREEN)
     else:
         typer.echo(str(result))
-
-
-def _echo_utf8_json(value: Any) -> None:
-    """Write machine JSON independently of the Windows console code page."""
-
-    rendered = json.dumps(value, ensure_ascii=False)
-    binary = getattr(sys.stdout, "buffer", None)
-    if binary is None:
-        typer.echo(rendered)
-        return
-    binary.write(rendered.encode("utf-8") + b"\n")
-    binary.flush()
 
 
 @_run_safe
@@ -2317,7 +2316,7 @@ def dev_skill_status(
         raise typer.Exit(1) from exc
 
     if json_output:
-        typer.echo(json.dumps(state, ensure_ascii=False, indent=2))
+        _echo_utf8_json(state)
         return
 
     typer.echo(f"skill: {state['name']}")

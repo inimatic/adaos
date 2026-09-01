@@ -150,6 +150,44 @@ def test_dev_ticket_cli_dedups_and_defers(tmp_path: Path) -> None:
     assert deferred["ticket"]["status"] == "deferred"
 
 
+def test_dev_ticket_cli_json_preserves_unicode(tmp_path: Path) -> None:
+    runner = CliRunner()
+    summary = "Проверить русское описание тикета"
+    created = _payload(
+        runner.invoke(
+            dev_cmd.ticket_app,
+            [
+                "new",
+                summary,
+                "--kind",
+                "feedback",
+                "--target-type",
+                "scenario",
+                "--target-id",
+                "desktop",
+                "--state-dir",
+                str(tmp_path),
+                "--json",
+            ],
+        )
+    )
+
+    shown = _payload(
+        runner.invoke(
+            dev_cmd.ticket_app,
+            [
+                "show",
+                created["ticket"]["ticket_id"],
+                "--state-dir",
+                str(tmp_path),
+                "--json",
+            ],
+        )
+    )
+
+    assert shown["ticket"]["summary"] == summary
+
+
 def test_dev_ticket_cli_core_request_and_sdk_understanding(tmp_path: Path) -> None:
     runner = CliRunner()
     state_arg = ["--state-dir", str(tmp_path)]
