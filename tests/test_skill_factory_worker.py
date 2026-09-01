@@ -2398,7 +2398,14 @@ def test_generated_tests_receive_task_owned_runtime_outside_candidate(
 ) -> None:
     workspace = tmp_path / "run" / "workspace"
     tests_dir = workspace / "skills" / "candidate" / "tests"
+    scenario_root = workspace / "scenarios" / "companion"
+    scenario_tests = scenario_root / "tests"
     tests_dir.mkdir(parents=True)
+    scenario_tests.mkdir(parents=True)
+    (scenario_root / "scenario.yaml").write_text(
+        "id: companion\nversion: 1.0.0\n",
+        encoding="utf-8",
+    )
     (tests_dir / "test_runtime_boundary.py").write_text(
         "import os\n"
         "from pathlib import Path\n\n"
@@ -2410,10 +2417,17 @@ def test_generated_tests_receive_task_owned_runtime_outside_candidate(
         "    assert workspace not in runtime.parents\n"
         "    assert os.environ['ADAOS_SKILL_NAME'] == 'candidate'\n"
         "    assert internal == runtime / 'skill-data' / 'candidate'\n"
+        "    assert (workspace / 'scenarios' / 'companion' / 'scenario.yaml').is_file()\n"
         "    (internal / 'installed-context-marker.txt').parent.mkdir(parents=True, exist_ok=True)\n"
         "    (internal / 'installed-context-marker.txt').write_text('ok', encoding='utf-8')\n"
         "    (runtime / 'validation-marker.txt').parent.mkdir(parents=True, exist_ok=True)\n"
         "    (runtime / 'validation-marker.txt').write_text('ok', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    (scenario_tests / "test_scenario_package.py").write_text(
+        "from pathlib import Path\n\n"
+        "def test_scenario_is_validated_from_project_envelope():\n"
+        "    assert (Path.cwd() / 'skills' / 'candidate' / 'tests').is_dir()\n",
         encoding="utf-8",
     )
     worker = LocalSkillFactoryWorker(
@@ -2429,7 +2443,10 @@ def test_generated_tests_receive_task_owned_runtime_outside_candidate(
     worker._run_generated_tests(workspace, checks, errors)
 
     assert errors == []
-    assert checks[0]["ok"] is True
+    assert {(check["path"], check["ok"]) for check in checks} == {
+        ("skills/candidate/tests", True),
+        ("scenarios/companion/tests", True),
+    }
     assert (
         workspace.parent / "adaos-runtime-packaged" / "validation-marker.txt"
     ).is_file()

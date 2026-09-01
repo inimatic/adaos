@@ -4444,12 +4444,13 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         validation_root = workspace.parent / "package-validation"
         if validation_root.exists():
             shutil.rmtree(validation_root)
-        source_skills = workspace / "skills"
-        packaged_skills = validation_root / "skills"
-        if source_skills.is_dir():
+        for root_name in ("skills", "scenarios", "projects"):
+            source_root = workspace / root_name
+            if not source_root.is_dir():
+                continue
             shutil.copytree(
-                source_skills,
-                packaged_skills,
+                source_root,
+                validation_root / root_name,
                 ignore=shutil.ignore_patterns(
                     ".runtime",
                     ".adaos_context",
@@ -4458,12 +4459,19 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     "*.pyc",
                 ),
             )
-        for tests_dir in sorted(path for path in workspace.glob("skills/*/tests") if path.is_dir()):
+        test_roots = [
+            (tests_dir, owner_kind)
+            for owner_kind in ("skills", "scenarios")
+            for tests_dir in sorted(
+                path for path in workspace.glob(f"{owner_kind}/*/tests") if path.is_dir()
+            )
+        ]
+        for tests_dir, owner_kind in test_roots:
             test_files = list(tests_dir.glob("test_*.py"))
             if not test_files:
                 continue
             relative = tests_dir.relative_to(workspace).as_posix()
-            if skip_frozen_skills:
+            if skip_frozen_skills and owner_kind == "skills":
                 checks.append(
                     {
                         "kind": "pytest",
@@ -4483,29 +4491,30 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             )._execution_environment(
                 runtime_base_dir=workspace.parent / "adaos-runtime-packaged"
             )
-            skill_id = tests_dir.parent.name
-            internal_data_root = (
-                workspace.parent
-                / "adaos-runtime-packaged"
-                / "skill-data"
-                / skill_id
-            ).resolve()
-            internal_data_root.mkdir(parents=True, exist_ok=True)
-            environment.update(
-                {
-                    # Source-only tests must observe the same owner-scoped
-                    # storage authority as the prepared DEV slot. Otherwise a
-                    # test can pass by falling back to ADAOS_TASK_RUNTIME_DIR
-                    # and fail only after ProjectRelease activates the skill.
-                    "ADAOS_SKILL_NAME": skill_id,
-                    "ADAOS_CURRENT_SKILL": skill_id,
-                    "ADAOS_SKILL_ROOT": str(packaged_tests.parent.resolve()),
-                    "ADAOS_SKILL_INTERNAL_DATA_ROOT": str(internal_data_root),
-                    "ADAOS_SKILL_ENV_PATH": str(
-                        internal_data_root / "db" / "skill_env.json"
-                    ),
-                }
-            )
+            if owner_kind == "skills":
+                skill_id = tests_dir.parent.name
+                internal_data_root = (
+                    workspace.parent
+                    / "adaos-runtime-packaged"
+                    / "skill-data"
+                    / skill_id
+                ).resolve()
+                internal_data_root.mkdir(parents=True, exist_ok=True)
+                environment.update(
+                    {
+                        # Source-only tests must observe the same owner-scoped
+                        # storage authority as the prepared DEV slot. Otherwise a
+                        # test can pass by falling back to ADAOS_TASK_RUNTIME_DIR
+                        # and fail only after ProjectRelease activates the skill.
+                        "ADAOS_SKILL_NAME": skill_id,
+                        "ADAOS_CURRENT_SKILL": skill_id,
+                        "ADAOS_SKILL_ROOT": str(packaged_tests.parent.resolve()),
+                        "ADAOS_SKILL_INTERNAL_DATA_ROOT": str(internal_data_root),
+                        "ADAOS_SKILL_ENV_PATH": str(
+                            internal_data_root / "db" / "skill_env.json"
+                        ),
+                    }
+                )
             validation_budget = _generated_test_budget(assignment)
             timeout_seconds = int(
                 validation_budget["packaged_pytest_wall_seconds"]

@@ -1909,6 +1909,59 @@ class BuilderAutomationService:
                 result.append(token)
         return result
 
+    @classmethod
+    def _session_changed_companion_skill_ids(
+        cls,
+        session: Mapping[str, Any],
+    ) -> list[str]:
+        """Return only companion skills changed by the trusted worker result."""
+
+        companion_ids = cls._session_companion_skill_ids(session)
+        result = (
+            session.get("last_result")
+            if isinstance(session.get("last_result"), Mapping)
+            else {}
+        )
+        changed_paths_value: Any = result.get("changed_paths")
+        if not isinstance(changed_paths_value, list):
+            provenance = (
+                result.get("provenance")
+                if isinstance(result.get("provenance"), Mapping)
+                else {}
+            )
+            receipt = (
+                provenance.get("structured_edit_receipt")
+                if isinstance(provenance.get("structured_edit_receipt"), Mapping)
+                else {}
+            )
+            changed_paths_value = receipt.get("changed_files")
+        if not isinstance(changed_paths_value, list):
+            # Compatibility with completed sessions produced before workers
+            # reported a qualified changed-path manifest.
+            return companion_ids
+
+        changed_paths = {
+            str(path or "").replace("\\", "/").lstrip("./")
+            for path in changed_paths_value
+            if str(path or "").strip()
+        }
+        created_skills = {
+            str(item.get("name") or item.get("id") or "").strip()
+            for item in session.get("created_artifacts") or []
+            if isinstance(item, Mapping)
+            and str(item.get("kind") or "").strip().lower().rstrip("s") == "skill"
+        }
+        return [
+            skill_id
+            for skill_id in companion_ids
+            if skill_id in created_skills
+            or any(
+                path == f"skills/{skill_id}"
+                or path.startswith(f"skills/{skill_id}/")
+                for path in changed_paths
+            )
+        ]
+
     def _refresh_session_companion_skill_ids(
         self,
         session: dict[str, Any],
@@ -5063,7 +5116,7 @@ class BuilderAutomationService:
             self._session_requires_aprobation_overlay(current)
             and not self._aprobation_overlay_ready(existing_aprobation)
         ):
-            companion_skill_ids = self._session_companion_skill_ids(current)
+            companion_skill_ids = self._session_changed_companion_skill_ids(current)
             scenario_id = object_id if object_type == "scenario" else None
             if companion_skill_ids or scenario_id:
                 readiness["aprobation"] = self._prepare_and_activate_aprobation_overlay(
@@ -5213,6 +5266,7 @@ class BuilderAutomationService:
             "task_id": str(session.get("current_task_id") or "").strip() or None,
             "iteration": int(session.get("iteration") or 0),
             "skill": None,
+            "skills": [],
             "materialization": None,
             "aprobation": None,
             "vcs_checkpoints": [],
@@ -5243,7 +5297,7 @@ class BuilderAutomationService:
                         object_id,
                         task_id=str(current.get("current_task_id") or "").strip() or None,
                     )
-            companion_skill_ids = self._session_companion_skill_ids(session)
+            companion_skill_ids = self._session_changed_companion_skill_ids(session)
             if companion_skill_ids:
                 with self._finalization_stage(
                     current,

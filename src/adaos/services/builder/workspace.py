@@ -553,6 +553,60 @@ class BuilderWorkspaceService:
             dev_artifact = self._dev_artifact_root(normalized_kind, artifact_id)
         except ValueError:
             dev_artifact = None
+        workspace_artifact = self._workspace_artifact_root(
+            normalized_kind,
+            artifact_id,
+        )
+        owners = (
+            [project_id]
+            if project_id
+            else self._workspace_project_ids_owning_ref(
+                f"{normalized_kind}:{artifact_id}"
+            )
+        )
+        owners = list(dict.fromkeys(str(item).strip() for item in owners if str(item).strip()))
+        if len(owners) == 1:
+            owning_project_id = owners[0]
+            workspace_project = self._workspace_project_root(owning_project_id)
+            dev_project = self._dev_project_root(owning_project_id)
+            if workspace_project is not None and (dev_project is None or not dev_project.is_dir()):
+                return {
+                    "status": "needs_materialization",
+                    "source": "workspace",
+                    "reason": "owning_project_not_in_devspace",
+                    "target_type": normalized_kind,
+                    "target_id": artifact_id,
+                    "project_id": owning_project_id,
+                    "project_ids": owners,
+                    "source_path": str(workspace_artifact) if workspace_artifact is not None else None,
+                    "project_source_path": str(workspace_project),
+                    "orphaned_dev_source_path": (
+                        str(dev_artifact)
+                        if dev_artifact is not None and dev_artifact.is_dir()
+                        else None
+                    ),
+                    "options": [
+                        "materialize_dev_source",
+                        "create_local_fork",
+                        "create_runtime_overlay",
+                        "defer",
+                    ],
+                    "default_option": "materialize_dev_source",
+                }
+        elif len(owners) > 1:
+            return {
+                "status": "needs_materialization",
+                "source": "workspace",
+                "reason": "ambiguous_project_owners",
+                "target_type": normalized_kind,
+                "target_id": artifact_id,
+                "project_id": None,
+                "project_ids": owners,
+                "ambiguous_project_owners": owners,
+                "source_path": str(workspace_artifact) if workspace_artifact is not None else None,
+                "options": ["create_local_fork", "defer"],
+                "default_option": "defer",
+            }
         if dev_artifact is not None and dev_artifact.is_dir():
             return {
                 "status": "source_available",
@@ -564,9 +618,6 @@ class BuilderWorkspaceService:
                 "options": ["use_existing_dev_source"],
                 "default_option": "use_existing_dev_source",
             }
-        workspace_artifact = self._workspace_artifact_root(normalized_kind, artifact_id)
-        owners = [project_id] if project_id else self._workspace_project_ids_owning_ref(f"{normalized_kind}:{artifact_id}")
-        owners = [str(item).strip() for item in owners if str(item).strip()]
         source = "workspace" if workspace_artifact is not None or owners else "unknown"
         return {
             "status": "needs_materialization",

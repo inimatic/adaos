@@ -3348,6 +3348,118 @@ def test_finalize_activates_dev_ticket_aprobation_overlay_after_checkpoint(
     )
 
 
+def test_finalize_scenario_only_repair_does_not_activate_unchanged_companion_skill(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    calls: list[str] = []
+    saved: list[dict] = []
+
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_prepare_and_activate_dev_skill",
+        lambda self, skill_id, **kwargs: calls.append(f"dev:{skill_id}"),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_checkpoint_completed_artifacts",
+        lambda self, session: calls.append("checkpoint")
+        or [
+            {
+                "ok": True,
+                "kind": "scenario",
+                "name": "recipes",
+                "commit": "forge-1",
+                "package_digest": "sha256:" + "1" * 64,
+                "source_revision": "forge-1",
+            }
+        ],
+    )
+
+    def fake_overlay(self, session, *, skill_ids, scenario_id, webspace_id):  # noqa: ARG001
+        calls.append("overlay")
+        assert list(skill_ids) == []
+        assert scenario_id == "recipes"
+        assert webspace_id == "desktop"
+        return {"ok": True, "mode": "devspace_to_workspace_runtime_overlay"}
+
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_prepare_and_activate_aprobation_overlay",
+        fake_overlay,
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_ensure_governed_aprobation_trial",
+        lambda self, session, receipt: {
+            **dict(receipt),
+            "trial": {
+                "status": "trial",
+                "candidate_id": "candidate.recipes",
+                "candidate_digest": "sha256:" + "2" * 64,
+            },
+        },
+    )
+
+    class FakeWorkbench:
+        def __init__(self, **kwargs):  # noqa: ARG002
+            pass
+
+        async def ensure_dev_webspace(self, source_webspace_id, **kwargs):  # noqa: ARG002
+            calls.append("ensure")
+            return {
+                "dev_webspace_id": "desktop-dev",
+                "runtime": {"ok": True, "webspace_id": "desktop-dev"},
+            }
+
+    monkeypatch.setattr(
+        "adaos.services.builder.workbench.BuilderWorkbenchService",
+        FakeWorkbench,
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_save_session",
+        lambda self, value: saved.append(dict(value)),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_notify_completed_session",
+        lambda self, value: None,
+    )
+
+    service._finalize_completed_session(
+        {
+            "session_id": "automation.scenario.recipes",
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "companion_skill_id": "recipes_skill",
+            "webspace_id": "desktop",
+            "current_task_id": "task.1",
+            "change_id": "change-1",
+            "status": "completed",
+            "last_result": {
+                "changed_paths": [
+                    "scenarios/recipes/scenario.yaml",
+                    "scenarios/recipes/webui.json",
+                ]
+            },
+            "links": {"development_ticket_id": "dticket.demo"},
+            "implementation_brief": json.dumps(
+                {
+                    "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+                    "ticket_id": "dticket.demo",
+                    "policy": {"publication_required": True},
+                }
+            ),
+        }
+    )
+
+    assert calls == ["checkpoint", "overlay", "ensure"]
+    assert saved[-1]["completion_readiness"]["ok"] is True
+    assert saved[-1]["completion_readiness"]["skills"] == []
+
+
 def test_dev_ticket_repair_defaults_to_aprobation_overlay() -> None:
     assert BuilderAutomationService._session_requires_aprobation_overlay(
         {

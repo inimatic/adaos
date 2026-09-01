@@ -128,6 +128,8 @@ def test_materialize_dev_source_copies_workspace_project_owned_slice(tmp_path: P
         ),
         encoding="utf-8",
     )
+    service.dev_scenarios_root.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(scenario_dir, service.dev_scenarios_root / "demo_scene")
 
     before = service.development_source_status(kind="scenario", artifact_id="demo_scene")
     result = service.materialize_dev_source(kind="scenario", artifact_id="demo_scene")
@@ -135,6 +137,8 @@ def test_materialize_dev_source_copies_workspace_project_owned_slice(tmp_path: P
 
     assert before["status"] == "needs_materialization"
     assert before["project_id"] == "demo_project"
+    assert before["reason"] == "owning_project_not_in_devspace"
+    assert before["orphaned_dev_source_path"] == str(service.dev_scenarios_root / "demo_scene")
     assert result["ok"] is True
     assert result["project_id"] == "demo_project"
     assert {f"{item['kind']}:{item['name']}" for item in result["components"]} == {
