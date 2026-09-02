@@ -989,9 +989,10 @@ def _root_mcp_profile_from_assignment(
         return None
     raw = mcp.get("root_mcp") if isinstance(mcp.get("root_mcp"), Mapping) else {}
     root = dict(raw) if isinstance(raw, Mapping) else {}
-    token = ""
+    task_token = str(mcp.get("access_token") or "").strip()
+    task_endpoint = str(mcp.get("endpoint") or "").strip()
+    token = task_token
     if not root and mcp:
-        token = str(mcp.get("access_token") or "").strip()
         root = {
             "enabled": True,
             "transport": "streamable_http",
@@ -1006,15 +1007,33 @@ def _root_mcp_profile_from_assignment(
         }
     if not root or root.get("enabled") is False:
         return None
-    url = _resolve_mcp_http_url(root.get("url") or root.get("mcp_http_url"))
+    # A Builder assignment carries a task-scoped lease. The durable Root
+    # profile contributes tool policy, but cannot replace that lease with a
+    # generic endpoint or credential inherited by the API process.
+    root_url = str(root.get("url") or root.get("mcp_http_url") or "").strip()
+    if task_token and not task_endpoint and "/v1/root/mcp/task/" in root_url:
+        task_endpoint = root_url
+    task_scoped = bool(task_token and task_endpoint)
+    task_url = task_endpoint
+    if task_scoped and task_endpoint.startswith("/"):
+        parsed_root = urlparse(root_url)
+        if parsed_root.scheme in {"http", "https"} and parsed_root.netloc:
+            task_url = f"{parsed_root.scheme}://{parsed_root.netloc}{task_endpoint}"
+    url = _resolve_mcp_http_url(
+        task_url if task_scoped else root_url
+    )
     if not url:
         return None
-    env_var = str(
-        root.get("bearer_token_env_var")
-        or root.get("auth_env_var")
-        or root.get("access_token_env_var")
-        or ""
-    ).strip()
+    env_var = (
+        _assignment_task_mcp_env_var(assignment)
+        if task_scoped
+        else str(
+            root.get("bearer_token_env_var")
+            or root.get("auth_env_var")
+            or root.get("access_token_env_var")
+            or ""
+        ).strip()
+    )
     if include_private_token and not token:
         token = str(os.getenv(env_var) or "").strip() if env_var else ""
         if not token:
@@ -1026,7 +1045,11 @@ def _root_mcp_profile_from_assignment(
     profile: dict[str, Any] = {
         "enabled": True,
         "transport": "streamable_http",
-        "server_name": _safe_config_token(root.get("server_name") or root.get("name")),
+        "server_name": _safe_config_token(
+            "adaos_task_root"
+            if task_scoped
+            else root.get("server_name") or root.get("name")
+        ),
         "url": url,
         "required": bool(root.get("required", False)),
     }
@@ -1041,7 +1064,7 @@ def _root_mcp_profile_from_assignment(
         if values:
             profile[key] = values
     for key in ("lease_id", "token_ref", "expires_at"):
-        value = str(root.get(key) or "").strip()
+        value = str(mcp.get(key) or root.get(key) or "").strip()
         if value:
             profile[key] = value
     for key in ("startup_timeout_sec", "tool_timeout_sec"):
@@ -3253,13 +3276,17 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
 """ if is_dev_ticket_repair else ""
         repair_profile = str(constraints.get("repair_profile") or "").strip()
         surgical_ui = is_dev_ticket_repair and repair_profile == "surgical_ui"
-        bounded_repair = is_dev_ticket_repair and repair_profile in {
-            "project_batch",
-            "surgical_ui",
-            "surgical_data",
-            "resource_crud",
-            "subnet_data_integration",
-        }
+        bounded_repair = is_dev_ticket_repair and (
+            not repair_profile
+            or repair_profile
+            in {
+                "project_batch",
+                "surgical_ui",
+                "surgical_data",
+                "resource_crud",
+                "subnet_data_integration",
+            }
+        )
         repair_coverage = (
             dict(repair_target_context.get("coverage") or {})
             if isinstance(repair_target_context.get("coverage"), Mapping)

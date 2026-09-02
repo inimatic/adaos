@@ -1495,6 +1495,43 @@ def test_bounded_repair_prompt_requires_targeted_reads(
     assert expected_title in prompt
 
 
+def test_unqualified_dev_ticket_uses_bounded_repair_prompt(tmp_path: Path) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    workspace = tmp_path / "workspace"
+    input_dir = tmp_path / "input"
+    (workspace / "skills" / "demo").mkdir(parents=True)
+    assignment = {
+        "task_id": "task.unqualified-ticket",
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {"sparse_paths": ["skills/demo/"]},
+        "constraints": {"mode": "dev_ticket_repair", "minimal_diff": True},
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": json.dumps(
+                    {
+                        "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+                        "ticket_id": "dticket.demo",
+                        "summary": "Expose a small validation marker.",
+                    }
+                )
+            }
+        },
+    }
+
+    worker._build_packet(assignment, workspace, input_dir)
+    prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+
+    assert "AdaOS bounded Dev Ticket repair" in prompt
+    assert "`rg -n --max-count 12`" in prompt
+    assert "Inspect the complete targeted skill or scenario" not in prompt
+    assert len(prompt.encode("utf-8")) < 12_000
+
+
 def test_bounded_repair_prompt_omits_completed_builder_history(tmp_path: Path) -> None:
     worker = LocalSkillFactoryWorker(
         state_dir=tmp_path / "state",
@@ -2479,6 +2516,43 @@ def test_api_serve_rebinds_stale_loopback_mcp_url_to_configured_local_api(
 
     assert profile is not None
     assert profile["url"] == "http://127.0.0.1:8777/v1/root/mcp/task/task.local-api"
+    assert profile["server_name"] == "adaos_task_root"
+    assert profile["bearer_token_env_var"] == "ADAOS_TASK_MCP_AUTH_TASK_LOCAL_API"
+    assert profile["_bearer_token_value"] == "task-secret"
+
+
+def test_task_lease_overrides_generic_root_mcp_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ADAOS_ROOT_MCP_AUTH", "generic-root-secret")
+    assignment = {
+        "task_id": "task.scoped-lease",
+        "mcp": {
+            "endpoint": "/v1/root/mcp/task/task.scoped-lease",
+            "access_token": "task-lease-secret",
+            "lease_id": "lease.scoped",
+            "root_mcp": {
+                "enabled": True,
+                "url": "https://ru.api.inimatic.com/v1/root/mcp",
+                "server_name": "adaos_root",
+                "bearer_token_env_var": "ADAOS_ROOT_MCP_AUTH",
+                "enabled_tools": ["get_status"],
+            },
+        },
+    }
+
+    profile = _root_mcp_profile_from_assignment(
+        assignment,
+        include_private_token=True,
+    )
+
+    assert profile is not None
+    assert profile["url"].endswith("/v1/root/mcp/task/task.scoped-lease")
+    assert profile["server_name"] == "adaos_task_root"
+    assert profile["bearer_token_env_var"] == "ADAOS_TASK_MCP_AUTH_TASK_SCOPED_LEASE"
+    assert profile["_bearer_token_value"] == "task-lease-secret"
+    assert profile["lease_id"] == "lease.scoped"
+    assert profile["enabled_tools"] == ["get_status"]
 
 
 def test_worker_projects_task_scoped_mcp_lease_without_prompt_secret(

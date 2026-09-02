@@ -5159,6 +5159,8 @@ class BuilderAutomationService:
             kind=kind,
             object_id=project_id,
         )
+        if is_dev_ticket_repair and not str(repair_hints.get("profile") or "").strip():
+            repair_hints["profile"] = "project_batch"
         realization_constraints = {
             "no_external_api": True,
             "no_secrets": True,

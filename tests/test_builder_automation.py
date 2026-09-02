@@ -502,6 +502,38 @@ def test_dev_ticket_repair_projects_minimal_diff_constraints(tmp_path: Path) -> 
     assert "Governed Development Session inputs" not in prompt
 
 
+def test_unqualified_dev_ticket_defaults_to_project_batch_repair(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief=json.dumps(
+            {
+                "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+                "ticket_id": "dticket.unqualified",
+                "summary": "Expose a small validation marker.",
+            }
+        ),
+        links={"development_ticket_id": "dticket.unqualified"},
+        execution_budget={"max_wall_seconds": 300, "max_tokens": 12000},
+    )
+
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == started["session"]["current_task_id"]
+    )
+    request = task["realize_request"]
+    assert request["constraints"]["repair_profile"] == "project_batch"
+    assert request["artifacts"]["repair_hints"]["profile"] == "project_batch"
+    prompt = (
+        tmp_path / "runs" / started["session"]["current_task_id"] / "input" / "task.md"
+    ).read_text(encoding="utf-8")
+    assert "AdaOS bounded Dev Ticket repair" in prompt
+    assert len(prompt.encode("utf-8")) < 12_000
+
+
 def test_dev_ticket_repair_canonicalizes_component_relative_structured_paths(
     tmp_path: Path,
 ) -> None:
