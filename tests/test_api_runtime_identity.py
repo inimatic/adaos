@@ -35,6 +35,29 @@ from adaos.apps.api import node_api
 from adaos.services.system_model import service as system_model_service
 
 
+def test_artifact_activation_observation_has_event_timestamp(monkeypatch) -> None:
+    published = []
+    ctx = types.SimpleNamespace(
+        bus=types.SimpleNamespace(publish=published.append),
+    )
+    monkeypatch.setattr(api_server.time, "time", lambda: 1234.5)
+
+    api_server._publish_artifact_activation_observation(
+        ctx,
+        {"observation_id": "observation-1", "status": "failed"},
+    )
+
+    assert len(published) == 1
+    event = published[0]
+    assert event.type == "artifact.activation.observed"
+    assert event.source == "artifact.activation"
+    assert event.ts == 1234.5
+    assert event.payload == {
+        "observation_id": "observation-1",
+        "status": "failed",
+    }
+
+
 def test_current_node_object_does_not_enter_diagnostic_io(monkeypatch) -> None:
     monkeypatch.setattr(
         system_model_service,

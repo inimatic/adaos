@@ -610,6 +610,17 @@ def _artifact_observation_poll_seconds() -> float:
     return min(300.0, max(1.0, value))
 
 
+def _publish_artifact_activation_observation(ctx: Any, payload: dict[str, Any]) -> None:
+    ctx.bus.publish(
+        DomainEvent(
+            type="artifact.activation.observed",
+            payload=payload,
+            source="artifact.activation",
+            ts=time.time(),
+        )
+    )
+
+
 async def _artifact_delayed_verification_worker(ctx: Any) -> None:
     from adaos.services.artifact_pipeline import (
         ContentAddressedPackageStore,
@@ -639,13 +650,7 @@ async def _artifact_delayed_verification_worker(ctx: Any) -> None:
                     "error": result.get("error"),
                 }
                 try:
-                    ctx.bus.publish(
-                        DomainEvent(
-                            type="artifact.activation.observed",
-                            payload=payload,
-                            source="artifact.activation",
-                        )
-                    )
+                    _publish_artifact_activation_observation(ctx, payload)
                 except Exception:
                     _startup_log.debug(
                         "failed to emit delayed artifact verification event",
