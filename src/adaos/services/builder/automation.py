@@ -3404,10 +3404,15 @@ class BuilderAutomationService:
             if isinstance(session.get("completion_readiness"), Mapping)
             else {}
         )
-        trial = (
+        approval = (
             readiness.get("aprobation")
             if isinstance(readiness.get("aprobation"), Mapping)
             else {}
+        )
+        trial = (
+            approval.get("trial")
+            if isinstance(approval.get("trial"), Mapping)
+            else approval
         )
         checks = [
             {
@@ -3447,6 +3452,22 @@ class BuilderAutomationService:
             else {}
         )
         progress = session.get("progress") if isinstance(session.get("progress"), Mapping) else {}
+        usage_receipts = [
+            dict(item)
+            for item in session.get("codex_usage_history") or []
+            if isinstance(item, Mapping)
+        ]
+        if receipt:
+            usage_receipts.append(dict(receipt))
+        unique_usage_receipts = {
+            str(
+                item.get("root_event_id")
+                or item.get("idempotency_key")
+                or item.get("task_id")
+                or f"receipt:{index}"
+            ).strip(): item
+            for index, item in enumerate(usage_receipts)
+        }
         return {
             "schema": "adaos.builder.automation_session_summary.v1",
             "session_id": str(session.get("session_id") or "") or None,
@@ -3475,16 +3496,21 @@ class BuilderAutomationService:
                 "task_id": readiness.get("task_id"),
                 "checks": checks,
                 "trial": {
-                    key: trial.get(key)
-                    for key in (
-                        "ok",
-                        "mode",
-                        "candidate_id",
-                        "candidate_digest",
-                        "version",
-                        "status",
-                    )
-                    if trial.get(key) not in (None, "")
+                    **{
+                        key: approval.get(key)
+                        for key in ("ok", "mode")
+                        if approval.get(key) not in (None, "")
+                    },
+                    **{
+                        key: trial.get(key)
+                        for key in (
+                            "candidate_id",
+                            "candidate_digest",
+                            "version",
+                            "status",
+                        )
+                        if trial.get(key) not in (None, "")
+                    },
                 },
             }
             if readiness
@@ -3492,14 +3518,7 @@ class BuilderAutomationService:
             "usage": {
                 "current": current_usage,
                 "aggregate": _aggregate_codex_usage(session),
-                "receipt_count": len(
-                    [
-                        item
-                        for item in session.get("codex_usage_history") or []
-                        if isinstance(item, Mapping)
-                    ]
-                )
-                + (1 if receipt else 0),
+                "receipt_count": len(unique_usage_receipts),
             },
             "failure": {
                 key: failure.get(key)
@@ -4082,6 +4101,16 @@ class BuilderAutomationService:
         status = str(session.get("status") or "starting").strip() or "starting"
         task = session.get("task") if isinstance(session.get("task"), Mapping) else {}
         result = session.get("last_result") if isinstance(session.get("last_result"), Mapping) else {}
+        provenance = (
+            result.get("provenance")
+            if isinstance(result.get("provenance"), Mapping)
+            else {}
+        )
+        usage_receipt = (
+            session.get("codex_usage_accounting")
+            if isinstance(session.get("codex_usage_accounting"), Mapping)
+            else {}
+        )
         forge = task.get("forge") if isinstance(task.get("forge"), Mapping) else {}
         failure = session.get("last_failure") if isinstance(session.get("last_failure"), Mapping) else {}
         progress = session.get("progress") if isinstance(session.get("progress"), Mapping) else {}
@@ -4090,6 +4119,19 @@ class BuilderAutomationService:
             status=status,
             task=task,
             local_run=local_run,
+            declared_budget=(
+                session.get("execution_budget")
+                if isinstance(session.get("execution_budget"), Mapping)
+                else None
+            ),
+            usage_receipt=usage_receipt,
+            execution_strategy=str(
+                result.get("execution_strategy")
+                or provenance.get("execution_strategy")
+                or usage_receipt.get("execution_strategy")
+                or ""
+            ).strip()
+            or None,
         )
         readiness = (
             session.get("completion_readiness")
@@ -4169,6 +4211,9 @@ class BuilderAutomationService:
         status: str,
         task: Mapping[str, Any],
         local_run: Mapping[str, Any],
+        declared_budget: Mapping[str, Any] | None = None,
+        usage_receipt: Mapping[str, Any] | None = None,
+        execution_strategy: str | None = None,
     ) -> dict[str, Any] | None:
         realize_request = (
             task.get("realize_request")
@@ -4183,9 +4228,25 @@ class BuilderAutomationService:
         declared = (
             dict(artifacts.get("execution_budget"))
             if isinstance(artifacts.get("execution_budget"), Mapping)
+            else dict(declared_budget)
+            if isinstance(declared_budget, Mapping)
             else None
         )
         usage = BuilderAutomationService._codex_run_usage(local_run)
+        if not usage and isinstance(usage_receipt, Mapping):
+            usage = {
+                key: usage_receipt.get(key)
+                for key in (
+                    "model_tokens",
+                    "input_tokens",
+                    "cached_input_tokens",
+                    "output_tokens",
+                    "reasoning_tokens",
+                    "attempts",
+                    "accuracy",
+                )
+                if usage_receipt.get(key) is not None
+            }
         started_raw = str(task.get("assigned_at") or task.get("created_at") or "").strip()
         finished_raw = str(task.get("updated_at") or "").strip()
         wall_seconds = 0.0
@@ -4238,7 +4299,9 @@ class BuilderAutomationService:
             declared_model_tokens > 0
             and status in _TERMINAL_STATUSES
             and (
-                (
+                str(execution_strategy or "").strip()
+                in {"preserved_candidate", "structured_edits", "validation_only"}
+                or (
                     isinstance(artifacts.get("continuation_checkpoint"), Mapping)
                     and artifacts["continuation_checkpoint"].get("mode")
                     == "validate_preserved_candidate"

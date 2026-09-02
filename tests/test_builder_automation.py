@@ -1488,6 +1488,98 @@ def test_preserved_candidate_budget_projection_is_not_applicable() -> None:
     assert projected["status"] == "not_applicable"
 
 
+def test_compact_persisted_status_retains_budget_trial_and_unique_usage(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    receipt = {
+        "schema": "adaos.builder.codex_usage_receipt.v1",
+        "task_id": "task.compact",
+        "status": "reported",
+        "accuracy": "exact",
+        "input_tokens": 0,
+        "cached_input_tokens": 0,
+        "output_tokens": 0,
+        "reasoning_tokens": 0,
+        "model_tokens": 0,
+        "total_tokens": 0,
+        "billable_tokens": 0,
+        "idempotency_key": "builder:compact:usage:v1",
+        "root_event_id": "codex_usage_compact",
+        "execution_strategy": "structured_edits",
+    }
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.skill.demo",
+        "object_type": "skill",
+        "object_id": "demo",
+        "status": "completed",
+        "current_task_id": "task.compact",
+        "task_history": ["task.compact"],
+        "iteration": 1,
+        "webspace_id": "desktop",
+        "created_at": "2026-09-02T00:00:00Z",
+        "updated_at": "2026-09-02T00:01:00Z",
+        "execution_budget": {
+            "max_model_tokens": 4_000,
+            "token_budget_metric": "fresh_plus_output",
+            "max_billable_tokens": 32_000,
+        },
+        "task": {
+            "task_id": "task.compact",
+            "assigned_at": "2026-09-02T00:00:00Z",
+            "updated_at": "2026-09-02T00:01:00Z",
+            "realize_request": {
+                "schema": "adaos.builder.realize_request.v1",
+                "artifacts": {
+                    "execution_budget": {
+                        "max_model_tokens": 4_000,
+                        "token_budget_metric": "fresh_plus_output",
+                        "max_billable_tokens": 32_000,
+                    },
+                    "structured_edits": [{"path": "skills/demo/webui.json"}],
+                },
+            },
+        },
+        "codex_usage_accounting": receipt,
+        "codex_usage_history": [receipt],
+        "completion_readiness": {
+            "ok": True,
+            "task_id": "task.compact",
+            "checks": [],
+            "aprobation": {
+                "ok": True,
+                "mode": "trial",
+                "trial": {
+                    "candidate_id": "candidate.demo",
+                    "candidate_digest": "sha256:demo",
+                    "version": "1.2.3",
+                    "status": "trial",
+                },
+            },
+        },
+    }
+
+    service._save_session(session)
+    summary = json.loads(
+        service._compact_status_path("skill", "demo").read_text(encoding="utf-8")
+    )
+
+    assert summary["automation"]["budget_usage"]["declared"]["max_model_tokens"] == 4_000
+    assert summary["automation"]["budget_usage"]["observed"]["model_tokens"] == 0
+    assert summary["automation"]["budget_usage"]["status"] == "not_applicable"
+    assert summary["automation"]["budget_usage"]["billable_status"] == "not_applicable"
+    assert summary["session"]["completion"]["trial"] == {
+        "ok": True,
+        "mode": "trial",
+        "candidate_id": "candidate.demo",
+        "candidate_digest": "sha256:demo",
+        "version": "1.2.3",
+        "status": "trial",
+    }
+    assert summary["session"]["usage"]["receipt_count"] == 1
+
+
 def test_terminal_codex_usage_missing_journal_is_unavailable_not_zero(tmp_path: Path) -> None:
     service = _service(tmp_path)
     service.codex_usage_reporter = lambda _event: pytest.fail("empty usage must not be reported")

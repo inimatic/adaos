@@ -18,6 +18,7 @@ from adaos.services.builder.workspace import BuilderSourceRecoveryRequired
 from adaos.services.development_tickets import (
     DevelopmentTicketService,
     development_source_options,
+    project_development_ticket_summary,
 )
 from adaos.services.id_gen import new_id
 
@@ -418,30 +419,7 @@ def _ticket_detail(service: DevelopmentTicketService, ticket: dict[str, Any]) ->
 
 
 def _ticket_list_item(ticket: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        key: ticket.get(key)
-        for key in (
-            "schema",
-            "ticket_id",
-            "revision",
-            "kind",
-            "status",
-            "status_group",
-            "summary",
-            "severity",
-            "blocking",
-            "owner_area",
-            "component_ref",
-            "owner_scope",
-            "origin_scope",
-            "target_scope",
-            "occurrence_count",
-            "source",
-            "created_at",
-            "updated_at",
-        )
-        if ticket.get(key) not in (None, "")
-    }
+    return project_development_ticket_summary(ticket)
 
 
 def _mapping_list(value: Any) -> list[dict[str, Any]]:

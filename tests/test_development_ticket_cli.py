@@ -150,6 +150,50 @@ def test_dev_ticket_cli_dedups_and_defers(tmp_path: Path) -> None:
     assert deferred["ticket"]["status"] == "deferred"
 
 
+def test_dev_ticket_cli_list_defaults_to_bounded_summary(tmp_path: Path) -> None:
+    runner = CliRunner()
+    state_arg = ["--state-dir", str(tmp_path)]
+    created = _payload(
+        runner.invoke(
+            dev_cmd.ticket_app,
+            [
+                "new",
+                "Keep agent ticket lists compact",
+                "--kind",
+                "feedback",
+                "--target-type",
+                "skill",
+                "--target-id",
+                "demo_skill",
+                "--evidence",
+                "trace:large-detail",
+                *state_arg,
+                "--json",
+            ],
+        )
+    )
+
+    listed = _payload(
+        runner.invoke(dev_cmd.ticket_app, ["list", *state_arg, "--json"])
+    )
+    item = listed["tickets"][0]
+
+    assert listed["projection"] == "summary"
+    assert listed["count"] == 1
+    assert item["ticket_id"] == created["ticket"]["ticket_id"]
+    assert "evidence_refs" not in item
+    assert "history" not in item
+
+    full = _payload(
+        runner.invoke(
+            dev_cmd.ticket_app,
+            ["list", "--projection", "full", *state_arg, "--json"],
+        )
+    )
+    assert full["projection"] == "full"
+    assert full["tickets"][0]["evidence_refs"]
+
+
 def test_dev_ticket_cli_json_preserves_unicode(tmp_path: Path) -> None:
     runner = CliRunner()
     summary = "Проверить русское описание тикета"

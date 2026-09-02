@@ -119,6 +119,35 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
+def project_development_ticket_summary(ticket: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the bounded list projection; use get/show for ticket detail."""
+
+    return {
+        key: ticket.get(key)
+        for key in (
+            "schema",
+            "ticket_id",
+            "revision",
+            "kind",
+            "status",
+            "status_group",
+            "summary",
+            "severity",
+            "blocking",
+            "owner_area",
+            "component_ref",
+            "owner_scope",
+            "origin_scope",
+            "target_scope",
+            "occurrence_count",
+            "source",
+            "created_at",
+            "updated_at",
+        )
+        if ticket.get(key) not in (None, "")
+    }
+
+
 def _clone(value: Any) -> Any:
     return json.loads(json.dumps(value, ensure_ascii=False, default=str))
 
@@ -6135,4 +6164,5 @@ __all__ = [
     "RECEIVER_COMPATIBILITY_REASONS",
     "STATE_SCHEMA",
     "TERMINAL_TICKET_STATES",
+    "project_development_ticket_summary",
 ]

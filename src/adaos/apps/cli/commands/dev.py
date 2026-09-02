@@ -398,10 +398,18 @@ def dev_ticket_list(
     component_ref: str = typer.Option("", "--component-ref", help="filter by stable component ref"),
     updated_since: str = typer.Option("", "--updated-since", help="filter by ISO updated_at lower bound"),
     search: str = typer.Option("", "--search", help="full-text search over indexed ticket fields"),
+    projection: str = typer.Option(
+        "summary",
+        "--projection",
+        help="response projection: summary or full",
+    ),
     limit: Optional[int] = typer.Option(None, "--limit", min=0, max=1000, help="limit result count"),
     state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="override state root for tests/local tooling"),
     json_output: bool = typer.Option(False, "--json", help="machine readable output"),
 ) -> None:
+    projection_token = str(projection or "summary").strip().lower()
+    if projection_token not in {"summary", "full"}:
+        raise typer.BadParameter("must be summary or full", param_hint="--projection")
     tokens = [
         *target_ref,
         project_id,
@@ -426,13 +434,28 @@ def dev_ticket_list(
         search=search or None,
         limit=limit,
     )
+    if projection_token == "summary":
+        from adaos.services.development_tickets import (
+            project_development_ticket_summary,
+        )
+
+        items = [project_development_ticket_summary(ticket) for ticket in tickets]
+    else:
+        items = tickets
     if json_output:
-        _echo_utf8_json({"ok": True, "tickets": tickets})
+        _echo_utf8_json(
+            {
+                "ok": True,
+                "tickets": items,
+                "count": len(items),
+                "projection": projection_token,
+            }
+        )
         return
-    if not tickets:
+    if not items:
         typer.echo("No development tickets found.")
         return
-    for ticket in tickets:
+    for ticket in items:
         _print_ticket_summary(ticket)
 
 
