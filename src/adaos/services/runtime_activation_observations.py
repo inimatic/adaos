@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from adaos.ports import EventBus
@@ -8,6 +9,32 @@ from adaos.services.eventbus import emit
 
 ACTIVATION_REPORT_POLICIES = frozenset({"project_inbox", "diagnostic_only"})
 ACTIVATION_OBSERVATION_STATUSES = frozenset({"failed", "passed"})
+_log = logging.getLogger("adaos.runtime.activation_observations")
+
+
+def _project_development_ticket(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("report_policy") != "project_inbox":
+        return {"processed": False, "reason": "diagnostic_only"}
+    try:
+        from adaos.services.development_tickets import DevelopmentTicketService
+
+        result = DevelopmentTicketService().report_runtime_activation_observation(payload)
+    except Exception as exc:
+        _log.warning("failed to durably project runtime activation observation", exc_info=True)
+        return {
+            "processed": False,
+            "reason": "projection_failed",
+            "error_type": type(exc).__name__,
+        }
+    ticket = result.get("ticket") if isinstance(result, dict) else None
+    ticket_id = str(ticket.get("ticket_id") or "") or None if isinstance(ticket, dict) else None
+    reason = str(result.get("reason") or "") or None if isinstance(result, dict) else None
+    return {
+        "processed": True,
+        "reported": bool(result.get("reported")) if isinstance(result, dict) else False,
+        "ticket_id": ticket_id,
+        "reason": reason,
+    }
 
 
 def classify_runtime_activation_failure(error: object, *, default: str = "activation") -> str:
@@ -74,6 +101,7 @@ def emit_runtime_activation_observation(
     if status_token == "failed":
         payload["failed_stage"] = stage_token
         payload["error"] = error_text
+    payload["development_ticket_projection"] = _project_development_ticket(payload)
     if bus is not None and callable(getattr(bus, "publish", None)):
         emit(
             bus,

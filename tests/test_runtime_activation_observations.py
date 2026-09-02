@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -9,6 +10,10 @@ from adaos.services.runtime_activation_observations import (
     classify_runtime_activation_failure,
     emit_runtime_activation_failure,
     emit_runtime_activation_success,
+)
+from adaos.services.development_tickets import (
+    DevelopmentTicketService,
+    _on_runtime_activation_failed,
 )
 
 
@@ -53,6 +58,14 @@ def test_activation_failure_event_matches_abi() -> None:
     assert bus.events[0].type == "scenarios.activation.failed"
     assert bus.events[0].payload["report_policy"] == "project_inbox"
     assert bus.events[0].payload["scenario_id"] == "demo_metrics"
+    projection = payload["development_ticket_projection"]
+    assert projection["processed"] is True
+    assert projection["reported"] is True
+    ticket = DevelopmentTicketService().get_ticket(projection["ticket_id"])
+    assert ticket["status"] == "accepted"
+    assert ticket["evidence_refs"][0]["type"] == "test"
+    asyncio.run(_on_runtime_activation_failed(bus.events[0]))
+    assert DevelopmentTicketService().get_ticket(projection["ticket_id"])["occurrence_count"] == 1
 
 
 def test_activation_success_event_matches_abi_and_keeps_exact_gate() -> None:
@@ -82,3 +95,5 @@ def test_activation_success_event_matches_abi_and_keeps_exact_gate() -> None:
     assert bus.events[0].payload["status"] == "passed"
     assert bus.events[0].payload["stage"] == "validation"
     assert "error" not in bus.events[0].payload
+    assert payload["development_ticket_projection"]["processed"] is True
+    assert payload["development_ticket_projection"]["reported"] is False

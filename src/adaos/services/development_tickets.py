@@ -5337,9 +5337,12 @@ async def _on_compatibility_pending_action_response(evt: Any) -> None:
 @subscribe("skills.activation.failed")
 @subscribe("scenarios.activation.failed")
 async def _on_runtime_activation_failed(evt: Any) -> None:
+    payload = _event_payload(evt)
+    if _mapping(payload.get("development_ticket_projection")).get("processed") is True:
+        return
     try:
         DevelopmentTicketService().report_runtime_activation_observation(
-            {**_event_payload(evt), "status": "failed"}
+            {**payload, "status": "failed"}
         )
     except Exception:
         _log.warning("failed to record runtime activation Dev Ticket", exc_info=True)
@@ -5350,9 +5353,12 @@ async def _on_runtime_activation_failed(evt: Any) -> None:
 @subscribe("skills.activation.passed")
 @subscribe("scenarios.activation.passed")
 async def _on_runtime_activation_passed(evt: Any) -> None:
+    payload = _event_payload(evt)
+    if _mapping(payload.get("development_ticket_projection")).get("processed") is True:
+        return
     try:
         DevelopmentTicketService().report_runtime_activation_observation(
-            {**_event_payload(evt), "status": "passed"}
+            {**payload, "status": "passed"}
         )
     except Exception:
         _log.warning("failed to reconcile runtime activation Dev Ticket", exc_info=True)
