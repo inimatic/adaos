@@ -1644,6 +1644,8 @@ def test_bounded_repair_prompt_requires_targeted_reads(
     assert "Task-scoped Root MCP route" in prompt
     assert "hub:sn_demo" in prompt
     assert "Never substitute a skill, scenario, project, or component ID" in prompt
+    assert "MCP resources or resource templates" in prompt
+    assert "shell, HTTP client, or bearer-token environment expansion" in prompt
     expected_title = (
         "AdaOS bounded surgical UI repair"
         if repair_profile == "surgical_ui"
@@ -2285,6 +2287,48 @@ def test_bounded_dev_ticket_rejects_large_manifest_collapse(tmp_path: Path) -> N
     admitted = copy.deepcopy(assignment)
     admitted["realize_request"]["artifacts"]["allow_large_manifest_rewrite"] = True
     worker._validate_changed_paths(admitted, changed_paths, workspace=workspace)
+
+
+def test_bounded_dev_ticket_rejects_large_manifest_format_churn(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    scenario = workspace / "scenarios" / "demo"
+    scenario.mkdir(parents=True)
+    manifest = scenario / "webui.json"
+    document = {
+        "schema": "adaos.webui.v1",
+        "widgets": [
+            {"id": f"metric-{index}", "title": f"Metric {index}", "value": index}
+            for index in range(80)
+        ],
+    }
+    manifest.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=workspace,
+        check=True,
+    )
+    subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "baseline"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+    )
+    manifest.write_text(json.dumps(document, indent=4) + "\n", encoding="utf-8")
+    worker = object.__new__(LocalSkillFactoryWorker)
+    assignment = {
+        "forge": {"sparse_paths": ["scenarios/demo/"]},
+        "realize_request": {"artifacts": {"execution_budget": {"max_wall_seconds": 300}}},
+    }
+
+    with pytest.raises(ValueError, match="large declarative manifest rewrite"):
+        worker._validate_changed_paths(
+            assignment,
+            worker._changed_from_baseline(workspace),
+            workspace=workspace,
+        )
 
 
 def test_return_to_prototype_skips_frozen_skill_tests_but_enforces_safe_ui(

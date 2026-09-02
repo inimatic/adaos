@@ -3861,6 +3861,9 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
 When `bound_target_id` is present, it is the only authorized Root target for
 this task. Never substitute a skill, scenario, project, or component ID. Omit
 `target_id` when the tool permits it; otherwise pass `bound_target_id` exactly.
+Use a normal MCP tool call to one of the declared `enabled_tools`. Do not list
+MCP resources or resource templates, and do not invoke this route through a
+shell, HTTP client, or bearer-token environment expansion.
 Do not read, print, or inspect bearer-token environment values.
 """
         if bounded_repair:
@@ -4129,7 +4132,18 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 deletions >= MANIFEST_REWRITE_DELETION_THRESHOLD
                 and deletion_ratio >= MANIFEST_REWRITE_DELETION_RATIO
             )
-            if deletion_collapse or (deletions >= MANIFEST_REWRITE_DELETION_THRESHOLD and shrank_substantially):
+            replacement_churn = (
+                additions >= MANIFEST_REWRITE_DELETION_THRESHOLD
+                and deletions >= MANIFEST_REWRITE_DELETION_THRESHOLD
+            )
+            if (
+                replacement_churn
+                or deletion_collapse
+                or (
+                    deletions >= MANIFEST_REWRITE_DELETION_THRESHOLD
+                    and shrank_substantially
+                )
+            ):
                 violations.append(
                     f"{path} (+{additions}/-{deletions}, "
                     f"baseline_bytes={baseline_size}, current_bytes={current_size})"
