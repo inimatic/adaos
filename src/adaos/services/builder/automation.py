@@ -92,11 +92,15 @@ def _now_iso() -> str:
 
 def _context_budget_window(
     execution_budget: Mapping[str, Any] | None,
+    *,
+    model_call_expected: bool = True,
 ) -> tuple[int, int, bool]:
     budget = execution_budget if isinstance(execution_budget, Mapping) else {}
     explicit = int(budget.get("max_context_tokens") or 0)
     if explicit > 0:
         return explicit, explicit, True
+    if not model_call_expected:
+        return 16_000, _CONTEXT_BUDGET_MAX, False
     model_budget = int(budget.get("max_model_tokens") or budget.get("max_tokens") or 0)
     if model_budget <= 0:
         return 16_000, _CONTEXT_BUDGET_MAX, False
@@ -1083,8 +1087,12 @@ class BuilderAutomationService:
             if isinstance(session.get("execution_budget"), Mapping)
             else {}
         )
+        model_call_expected = not _brief_has_structured_edits(implementation_brief)
         context_budget, context_budget_ceiling, context_budget_explicit = (
-            _context_budget_window(execution_budget)
+            _context_budget_window(
+                execution_budget,
+                model_call_expected=model_call_expected,
+            )
         )
         initial_context_budget = context_budget
         plan = service.plan(
@@ -1170,6 +1178,14 @@ class BuilderAutomationService:
             "token_budget": plan["token_budget"],
             "initial_token_budget": initial_context_budget,
             "token_budget_adapted": plan["token_budget"] != initial_context_budget,
+            "model_call_expected": model_call_expected,
+            "context_budget_source": (
+                "explicit"
+                if context_budget_explicit
+                else "model"
+                if model_call_expected
+                else "deterministic_execution"
+            ),
             "required_estimated_tokens": plan.get("required_estimated_tokens", 0),
             "omitted_required_refs": plan.get("omitted_required_refs", []),
             "context_latency_ms": max(
@@ -5373,6 +5389,8 @@ class BuilderAutomationService:
                     "token_budget",
                     "initial_token_budget",
                     "token_budget_adapted",
+                    "model_call_expected",
+                    "context_budget_source",
                     "required_estimated_tokens",
                     "omitted_required_refs",
                     "context_latency_ms",

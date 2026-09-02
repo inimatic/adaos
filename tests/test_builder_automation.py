@@ -567,6 +567,23 @@ def test_explicit_context_budget_is_a_hard_limit_with_diagnostics() -> None:
     assert "omitted_required=capsule:required-task" in message
 
 
+def test_deterministic_execution_context_budget_is_independent_of_model_budget() -> None:
+    execution_budget = {
+        "max_model_tokens": 4_000,
+        "token_budget_metric": "fresh_plus_output",
+    }
+
+    assert _context_budget_window(execution_budget) == (2_976, 2_976, False)
+    assert _context_budget_window(
+        execution_budget,
+        model_call_expected=False,
+    ) == (16_000, 32_000, False)
+    assert _context_budget_window(
+        {**execution_budget, "max_context_tokens": 8_000},
+        model_call_expected=False,
+    ) == (8_000, 8_000, True)
+
+
 def test_unqualified_dev_ticket_defaults_to_project_batch_repair(tmp_path: Path) -> None:
     service = _service(tmp_path)
 
@@ -630,9 +647,13 @@ def test_dev_ticket_repair_canonicalizes_component_relative_structured_paths(
             }
         ),
         links={"development_ticket_id": "dticket.relative-path"},
-        execution_budget={"max_wall_seconds": 300, "max_tokens": 20000},
+        execution_budget={"max_wall_seconds": 300, "max_model_tokens": 4_000},
     )
 
+    context_control = started["session"]["context_control"]
+    assert context_control["model_call_expected"] is False
+    assert context_control["context_budget_source"] == "deterministic_execution"
+    assert context_control["initial_token_budget"] == 16_000
     task = next(
         item
         for item in service.factory.snapshot(include_tasks=True)["tasks"]
