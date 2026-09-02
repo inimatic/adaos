@@ -2930,7 +2930,13 @@ class BuilderAutomationService:
                 or validated_activation_pending
                 or interrupted_finalization_pending
                 or task_status == "completed"
-                and failure_stage in {"snapshot", "live_readiness"}
+                and failure_stage
+                in {
+                    "snapshot",
+                    "live_readiness",
+                    "aprobation_activation",
+                    "trial_projection",
+                }
                 and isinstance(current.get("last_result"), Mapping)
             ):
                 recovered_result = {
@@ -3640,7 +3646,10 @@ class BuilderAutomationService:
             and bool(readiness.get("ok"))
             and self._session_requires_aprobation_overlay(current)
             and self._aprobation_overlay_ready(aprobation)
-            and not isinstance(aprobation.get("component_update_projection"), Mapping)
+            and (
+                not isinstance(aprobation.get("component_update_projection"), Mapping)
+                or not bool(aprobation.get("component_update_projection", {}).get("ok"))
+            )
         ):
             _log.info(
                 "reconciling missing component update projection session=%s task=%s",
@@ -6254,12 +6263,18 @@ class BuilderAutomationService:
                             },
                         )
                 if self._session_requires_aprobation_overlay(current):
-                    readiness["aprobation"] = self._ensure_governed_aprobation_trial(
+                    with self._finalization_stage(
                         current,
-                        readiness.get("aprobation")
-                        if isinstance(readiness.get("aprobation"), Mapping)
-                        else {},
-                    )
+                        readiness,
+                        "trial_projection",
+                        "Publishing the immutable Trial candidate and review notice",
+                    ):
+                        readiness["aprobation"] = self._ensure_governed_aprobation_trial(
+                            current,
+                            readiness.get("aprobation")
+                            if isinstance(readiness.get("aprobation"), Mapping)
+                            else {},
+                        )
             readiness["ok"] = True
             readiness["completed_at"] = _now_iso()
             current["completion_readiness"] = readiness
@@ -6964,22 +6979,28 @@ class BuilderAutomationService:
             )
             if ready:
                 break
-            if (
-                error not in transient_errors
-                or attempt >= COMPONENT_UPDATE_PROJECTION_MAX_ATTEMPTS
-            ):
+            if error not in transient_errors:
                 raise RuntimeError(
                     error
                     or "Component update notice webspace materialization is not ready"
                 )
+            if attempt >= COMPONENT_UPDATE_PROJECTION_MAX_ATTEMPTS:
+                break
             time.sleep(COMPONENT_UPDATE_PROJECTION_RETRY_SECONDS)
+        projection_ready = bool(projection.get("ok")) and materialization.get("ready") is True
         return {
-            "ok": True,
+            "ok": projection_ready,
             "webspace_id": webspace_id,
             "stage": "alpha" if trial_pending else "published_or_reverted",
             "materialization": materialization,
             "attempts": attempt_receipts,
-            "recovered": len(attempt_receipts) > 1,
+            "recovered": projection_ready and len(attempt_receipts) > 1,
+            "retryable": not projection_ready,
+            "error": (
+                None
+                if projection_ready
+                else str(projection.get("error") or "").strip() or None
+            ),
         }
 
     def _rollback_aprobation_overlay(

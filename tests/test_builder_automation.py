@@ -4133,7 +4133,54 @@ def test_component_update_notice_retries_transient_webspace_rebuild(
     assert sleeps == [1.0]
 
 
-def test_completed_session_reconciles_missing_component_update_projection(
+def test_component_update_notice_defers_exhausted_transient_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.services import runtime_refresh
+    from adaos.services.scenario import webspace_runtime
+
+    service = _service(tmp_path)
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        webspace_runtime,
+        "invalidate_webspace_materialization_cache",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_refresh,
+        "rebuild_webspace_projection_sync",
+        lambda **kwargs: {
+            "ok": False,
+            "error": "webspace_rebuild_failed",
+            "request_id": "rebuild.deferred",
+            "materialization": {"ready": False},
+        },
+    )
+    monkeypatch.setattr("adaos.services.builder.automation.time.sleep", sleeps.append)
+
+    result = service._refresh_component_update_projection(
+        {
+            "object_type": "skill",
+            "object_id": "demo_metrics_skill",
+            "webspace_id": "desktop",
+        },
+        {
+            "mode": "devspace_to_workspace_runtime_overlay",
+            "webspace_id": "desktop",
+            "skills": [{"id": "demo_metrics_skill"}],
+            "trial": {"status": "trial"},
+        },
+    )
+
+    assert result is not None and result["ok"] is False
+    assert result["retryable"] is True
+    assert result["error"] == "webspace_rebuild_failed"
+    assert len(result["attempts"]) == 3
+    assert sleeps == [1.0, 1.0]
+
+
+def test_completed_session_reconciles_retryable_component_update_projection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4172,6 +4219,11 @@ def test_completed_session_reconciles_missing_component_update_projection(
                     "candidate_id": "candidate.demo",
                     "candidate_digest": "sha256:" + "2" * 64,
                     "version": "0.2.0",
+                },
+                "component_update_projection": {
+                    "ok": False,
+                    "retryable": True,
+                    "error": "webspace_rebuild_failed",
                 },
             },
         },
