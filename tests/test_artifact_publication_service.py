@@ -1028,6 +1028,80 @@ def test_scenario_candidate_includes_companion_skill_from_same_change_set(
     ).is_file()
 
 
+def test_project_promotion_consolidates_superseded_component_subscription(
+    tmp_path: Path,
+) -> None:
+    remote = _Remote(tmp_path / "remote")
+    workspace = tmp_path / "workspace"
+    dev_root = tmp_path / "dev"
+    skill_dir = _skill(dev_root / "skills")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=workspace,
+        remote=remote,
+    )
+    service.record_push(
+        kind="skill",
+        artifact_id="shopping_skill",
+        artifact_dir=skill_dir,
+        source_ref=_source(),
+    )
+    standalone = service.prepare_candidate(
+        kind="skill",
+        artifact_id="shopping_skill",
+        artifact_dir=skill_dir,
+        change_ids=("standalone-skill",),
+        validation_evidence={"status": "passed"},
+    )
+    service.decide_candidate(standalone.candidate.candidate_id, accepted=True)
+    _promote(service, standalone.candidate.candidate_id)
+    assert set(service.subscriptions.load()) == {"shopping_skill"}
+
+    (skill_dir / "skill.yaml").write_text(
+        "name: shopping_skill\nversion: 2.2.0\n",
+        encoding="utf-8",
+    )
+    scenario_dir = _scenario(dev_root / "scenarios")
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.0.0\ndepends:\n  - shopping_skill\n",
+        encoding="utf-8",
+    )
+    change_id = "project-owned-skill"
+    service.record_push(
+        kind="skill",
+        artifact_id="shopping_skill",
+        artifact_dir=skill_dir,
+        source_ref=_source(),
+        change_ids=(change_id,),
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        source_ref=_source(),
+        change_ids=(change_id,),
+    )
+    project = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        change_ids=(change_id,),
+        validation_evidence={"status": "passed"},
+    )
+    service.decide_candidate(project.candidate.candidate_id, accepted=True)
+
+    promoted = _promote(service, project.candidate.candidate_id)
+
+    assert [(item.slot_id, item.project_id) for item in promoted.activation.workspace_lock.slots] == [
+        ("recipes", "recipes")
+    ]
+    assert set(service.subscriptions.load()) == {"recipes"}
+    promotion = service.load_promotion(project.candidate.candidate_id)
+    assert promotion is not None
+    saved = promotion["receipts"]["subscription_saved"]
+    assert saved["removed_subscriptions"][0]["project_id"] == "shopping_skill"
+
+
 def test_scenario_candidate_migrates_installed_dependency_without_dev_copy(
     tmp_path: Path,
 ) -> None:

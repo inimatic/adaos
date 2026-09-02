@@ -395,7 +395,22 @@ class SubscriptionStore:
         return result
 
     def save(self, subscription: StableSubscription) -> None:
+        self.reconcile(subscription)
+
+    def reconcile(
+        self,
+        subscription: StableSubscription,
+        *,
+        remove_project_ids: tuple[str, ...] = (),
+    ) -> tuple[StableSubscription, ...]:
         subscriptions = self.load()
+        removed: list[StableSubscription] = []
+        for project_id in sorted(set(remove_project_ids)):
+            if project_id == subscription.project_id:
+                continue
+            existing = subscriptions.pop(project_id, None)
+            if existing is not None:
+                removed.append(existing)
         subscriptions[subscription.project_id] = subscription
         atomic_write_json(
             self.path,
@@ -406,6 +421,7 @@ class SubscriptionStore:
                 ],
             },
         )
+        return tuple(removed)
 
 
 class SubscriptionManager:

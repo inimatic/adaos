@@ -114,6 +114,16 @@ def _plan_with_skill(scenario, skill):
     )
 
 
+def _skill_plan(skill):
+    return build_project_release(
+        project_id="shopping",
+        version=skill.ref.version,
+        source_ref=_source(),
+        components=(skill.ref,),
+        catalog=PackageCatalog(),
+    )
+
+
 def _manager(tmp_path: Path, *, delayed_verification_seconds: float = 30):
     store = ContentAddressedPackageStore(tmp_path / "package-store")
     manager = WorkspaceActivationManager(
@@ -484,6 +494,55 @@ def test_removed_dependency_is_pruned_from_lock_and_workspace(tmp_path: Path) ->
     assert not skill_target.exists()
     operation = json.loads(manager.operation_path(result.operation_id).read_text(encoding="utf-8"))
     assert operation["component_plan"]["removed"] == ["skill:shopping"]
+
+
+def test_project_release_consolidates_replaced_standalone_component_slot(
+    tmp_path: Path,
+) -> None:
+    standalone = _built_skill(tmp_path, version="1.0.0", marker="standalone")
+    replacement = _built_skill(tmp_path, version="1.1.0", marker="project-owned")
+    scenario = _built_scenario(tmp_path, version="1.0.0", marker="project")
+    store, manager = _manager(tmp_path)
+    for built in (standalone, replacement, scenario):
+        store.put(built.archive_bytes)
+
+    _activate(
+        manager,
+        _skill_plan(standalone),
+        idempotency_key="standalone-skill",
+        slot_id="shopping",
+    )
+    plan = manager.plan_activation(
+        _plan_with_skill(scenario, replacement),
+        slot_id="recipes",
+    )
+
+    assert plan["slot_changes"]["removed"] == [
+        {
+            "slot_id": "shopping",
+            "project_id": "shopping",
+            "release": "shopping@1.0.0",
+            "release_digest": _skill_plan(standalone).release.release_digest,
+            "reason": "consolidated_into_target_release",
+        }
+    ]
+
+    result = _activate(
+        manager,
+        _plan_with_skill(scenario, replacement),
+        idempotency_key="project-release",
+        slot_id="recipes",
+    )
+
+    assert [(item.slot_id, item.project_id) for item in result.workspace_lock.slots] == [
+        ("recipes", "recipes")
+    ]
+    active = {item.key: item.version for item in result.workspace_lock.components}
+    assert active == {"scenario:recipes": "1.0.0", "skill:shopping": "1.1.0"}
+    operation = json.loads(
+        manager.operation_path(result.operation_id).read_text(encoding="utf-8")
+    )
+    assert operation["slot_plan"]["removed"][0]["project_id"] == "shopping"
 
 
 def test_removed_dependency_is_restored_when_post_switch_health_fails(tmp_path: Path) -> None:

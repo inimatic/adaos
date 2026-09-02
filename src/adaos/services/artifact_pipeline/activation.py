@@ -941,7 +941,9 @@ class WorkspaceActivationManager:
         for binding in plan.bindings:
             bindings[(binding.consumer, binding.dependency)] = binding
 
-        roots: set[str] = set()
+        candidate_packages = {item.key: item for item in plan.packages}
+        superseded_slot_ids: set[str] = set()
+        slot_releases: dict[str, ProjectRelease] = {}
         for slot in slots.values():
             if slot.slot_id == slot_id:
                 slot_release = plan.release
@@ -951,6 +953,35 @@ class WorkspaceActivationManager:
                     raise ActivationError(
                         f"cannot rebuild WorkspaceLock: release record is missing for slot {slot.slot_id}"
                     )
+                release_components = tuple(slot_release.components)
+                replacements = tuple(
+                    candidate_packages.get(component.key) for component in release_components
+                )
+                if (
+                    release_components
+                    and all(item is not None for item in replacements)
+                    and any(
+                        replacement != component
+                        for component, replacement in zip(
+                            release_components,
+                            replacements,
+                            strict=True,
+                        )
+                    )
+                ):
+                    # The accepted project release now owns every root component
+                    # of this standalone slot. Consolidate it so one Workspace
+                    # never activates incompatible versions of one package.
+                    superseded_slot_ids.add(slot.slot_id)
+                    continue
+            slot_releases[slot.slot_id] = slot_release
+
+        for superseded_slot_id in superseded_slot_ids:
+            slots.pop(superseded_slot_id, None)
+
+        roots: set[str] = set()
+        for slot in slots.values():
+            slot_release = slot_releases[slot.slot_id]
             for component in slot_release.components:
                 active = components.get(component.key)
                 if active != component:
@@ -1023,6 +1054,38 @@ class WorkspaceActivationManager:
             "removed": sorted(key for key in before if key not in after),
         }
 
+    @staticmethod
+    def _slot_plan(
+        current: WorkspaceLock | None,
+        desired: WorkspaceLock,
+    ) -> dict[str, Any]:
+        before = {item.slot_id: item for item in (current.slots if current else ())}
+        after = {item.slot_id: item for item in desired.slots}
+        removed = [before[key] for key in sorted(before.keys() - after.keys())]
+        return {
+            "added": sorted(after.keys() - before.keys()),
+            "changed": sorted(
+                key
+                for key in after.keys() & before.keys()
+                if after[key] != before[key]
+            ),
+            "retained": sorted(
+                key
+                for key in after.keys() & before.keys()
+                if after[key] == before[key]
+            ),
+            "removed": [
+                {
+                    "slot_id": item.slot_id,
+                    "project_id": item.project_id,
+                    "release": item.release,
+                    "release_digest": item.release_digest,
+                    "reason": "consolidated_into_target_release",
+                }
+                for item in removed
+            ],
+        }
+
     def _target_for(self, package: ArtifactPackageRef) -> Path:
         relative = package.materialization_path or (
             f"skills/{package.artifact_id}"
@@ -1090,6 +1153,7 @@ class WorkspaceActivationManager:
             "target": [item.to_dict() for item in plan.release.schema_locks],
         }
         component_changes = self._component_plan(current, desired)
+        slot_changes = self._slot_plan(current, desired)
         warnings: list[str] = []
         legacy_targets = sorted(item.key for item in plan.packages if item.materialization_path is None)
         if legacy_targets:
@@ -1099,6 +1163,11 @@ class WorkspaceActivationManager:
         if current is not None and current_release is None:
             warnings.append(
                 "active ProjectRelease is unavailable; introduced permissions and schema removals cannot be fully compared"
+            )
+        if slot_changes["removed"]:
+            warnings.append(
+                "standalone component slots will be consolidated into the target release: "
+                + ", ".join(item["slot_id"] for item in slot_changes["removed"])
             )
         rollback_available = current is not None and (
             migration_plan["count"] == 0 or migration_plan["rollback_ready"]
@@ -1112,6 +1181,7 @@ class WorkspaceActivationManager:
             "slot_id": slot_id,
             "observed_lock_digest": self._lock_digest(current),
             "component_changes": component_changes,
+            "slot_changes": slot_changes,
             "target_components": [
                 {
                     "key": item.key,
@@ -1446,6 +1516,7 @@ class WorkspaceActivationManager:
             )
             component_plan = self._component_plan(current, desired)
             operation["component_plan"] = component_plan
+            operation["slot_plan"] = self._slot_plan(current, desired)
             self._phase(
                 operation,
                 "dependency-plan",

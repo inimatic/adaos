@@ -2250,6 +2250,14 @@ class ArtifactPublicationService:
                         "workspace_lock": activation.workspace_lock.to_dict(),
                         "reload_receipt": activation_operation["reload_receipt"],
                         "health_receipt": activation_operation["health_receipt"],
+                        "superseded_slots": list(
+                            (
+                                activation_operation.get("slot_plan")
+                                if isinstance(activation_operation.get("slot_plan"), Mapping)
+                                else {}
+                            ).get("removed")
+                            or []
+                        ),
                     },
                 )
 
@@ -2285,11 +2293,32 @@ class ArtifactPublicationService:
                     installed_release=pointer.release,
                     installed_digest=pointer.release_digest,
                 )
-                self.subscriptions.save(subscription)
+                activation_receipt = receipts.get("workspace_activated")
+                superseded_slots = (
+                    activation_receipt.get("superseded_slots")
+                    if isinstance(activation_receipt, Mapping)
+                    and isinstance(activation_receipt.get("superseded_slots"), list)
+                    else []
+                )
+                superseded_project_ids = tuple(
+                    str(item.get("project_id") or "").strip()
+                    for item in superseded_slots
+                    if isinstance(item, Mapping)
+                    and str(item.get("project_id") or "").strip()
+                )
+                removed_subscriptions = self.subscriptions.reconcile(
+                    subscription,
+                    remove_project_ids=superseded_project_ids,
+                )
                 self._promotion_receipt(
                     operation,
                     "subscription_saved",
-                    {"subscription": subscription.to_dict()},
+                    {
+                        "subscription": subscription.to_dict(),
+                        "removed_subscriptions": [
+                            item.to_dict() for item in removed_subscriptions
+                        ],
+                    },
                 )
 
             operation["status"] = "completed"
