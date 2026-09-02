@@ -83,6 +83,94 @@ def _write_demo_skill(root: Path, name: str = "demo_skill") -> Path:
     return skill_dir
 
 
+def _write_dev_skill(service: BuilderWorkspaceService, name: str) -> Path:
+    skill_dir = Path(service.dev_skills_root) / name
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "skill.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": name,
+                "version": "0.1.0",
+                "description": "Standalone DEV skill",
+                "tools": [],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return skill_dir
+
+
+def test_ensure_owning_dev_project_adopts_standalone_component_once(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    _write_dev_skill(service, "subscription_status_skill")
+
+    created = service.ensure_owning_dev_project(
+        kind="skill",
+        artifact_id="subscription_status_skill",
+        actor="builder:test",
+    )
+    repeated = service.ensure_owning_dev_project(
+        kind="skill",
+        artifact_id="subscription_status_skill",
+        actor="builder:test",
+    )
+
+    assert created["status"] == "created"
+    assert created["project_id"] == "subscription_status"
+    assert created["project_ref"] == "project:subscription_status"
+    manifest = yaml.safe_load(Path(created["manifest_path"]).read_text(encoding="utf-8"))
+    assert manifest["components"]["owned"] == [
+        {
+            "ref": "skill:subscription_status_skill",
+            "role": "primary",
+            "exposure": "application",
+            "lifecycle": "bound",
+            "relations": ["uses"],
+        }
+    ]
+    assert manifest["publication"]["stage"] == "alpha"
+    assert repeated["status"] == "source_available"
+    assert repeated["created"] is False
+    assert repeated["project_id"] == created["project_id"]
+    assert len(list(Path(service.dev_skills_root).parent.joinpath("projects").iterdir())) == 1
+
+
+def test_ensure_owning_dev_project_requires_workspace_owner_materialization(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    _write_dev_skill(service, "subscription_status_skill")
+    project_root = tmp_path / "workspace" / "projects" / "subscriptions"
+    project_root.mkdir(parents=True)
+    (project_root / "project.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema": "adaos.project.v1",
+                "id": "subscriptions",
+                "version": "1.0.0",
+                "components": {
+                    "owned": [
+                        {"ref": "skill:subscription_status_skill", "role": "primary"}
+                    ],
+                    "dependencies": [],
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = service.ensure_owning_dev_project(
+        kind="skill",
+        artifact_id="subscription_status_skill",
+    )
+
+    assert result["status"] == "needs_materialization"
+    assert result["project_id"] == "subscriptions"
+    assert not Path(service.dev_skills_root).parent.joinpath("projects").exists()
+
+
 def test_materialize_dev_source_copies_workspace_project_owned_slice(tmp_path: Path) -> None:
     service = _service(tmp_path)
     workspace = tmp_path / "workspace"

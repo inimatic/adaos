@@ -517,6 +517,204 @@ class BuilderWorkspaceService:
                     matches.append(project_id)
         return matches
 
+    def _dev_project_ids_owning_ref(self, component_ref: str) -> list[str]:
+        token = str(component_ref or "").strip()
+        if not token:
+            return []
+        root = self._dev_projects_root()
+        if not root.is_dir():
+            return []
+        matches: list[str] = []
+        for child in sorted(item for item in root.iterdir() if item.is_dir()):
+            manifest_path = child / "project.yaml"
+            if not manifest_path.is_file():
+                continue
+            try:
+                manifest = _read_yaml(manifest_path)
+            except (OSError, ValueError, yaml.YAMLError):
+                continue
+            if token in self._project_owned_component_refs(manifest):
+                project_id = str(manifest.get("id") or child.name).strip() or child.name
+                if project_id not in matches:
+                    matches.append(project_id)
+        return matches
+
+    @staticmethod
+    def _default_component_project_id(kind: str, artifact_id: str) -> str:
+        token = _slug(artifact_id)
+        suffix = f"_{kind}"
+        if token.endswith(suffix) and len(token) > len(suffix):
+            token = token[: -len(suffix)]
+        return token
+
+    def ensure_owning_dev_project(
+        self,
+        *,
+        kind: str,
+        artifact_id: str,
+        project_id: str | None = None,
+        actor: str = "builder.qualifier",
+    ) -> dict[str, Any]:
+        """Ensure a standalone DEV component has one authoritative owning Project."""
+
+        normalized_kind = str(kind or "").strip().lower().rstrip("s")
+        artifact_token = _slug(artifact_id)
+        if normalized_kind not in {"skill", "scenario"}:
+            raise ValueError("kind must be skill or scenario")
+        component_ref = f"{normalized_kind}:{artifact_token}"
+        owners = self._dev_project_ids_owning_ref(component_ref)
+        if len(owners) == 1:
+            root = self._dev_project_root(owners[0])
+            return {
+                "schema": "adaos.builder.owning_project_resolution.v1",
+                "status": "source_available",
+                "created": False,
+                "component_ref": component_ref,
+                "project_id": owners[0],
+                "project_ref": f"project:{owners[0]}",
+                "project_source_path": str(root) if root is not None else None,
+            }
+        if len(owners) > 1:
+            return {
+                "schema": "adaos.builder.owning_project_resolution.v1",
+                "status": "ambiguous",
+                "created": False,
+                "component_ref": component_ref,
+                "project_ids": owners,
+                "reason": "component is owned by multiple DEV Projects",
+            }
+        workspace_owners = self._workspace_project_ids_owning_ref(component_ref)
+        if workspace_owners:
+            return {
+                "schema": "adaos.builder.owning_project_resolution.v1",
+                "status": "needs_materialization",
+                "created": False,
+                "component_ref": component_ref,
+                "project_id": workspace_owners[0] if len(workspace_owners) == 1 else None,
+                "project_ids": workspace_owners,
+                "reason": (
+                    "owning Workspace Project must be materialized"
+                    if len(workspace_owners) == 1
+                    else "component has ambiguous Workspace Project owners"
+                ),
+            }
+        component_root = self._dev_artifact_root(normalized_kind, artifact_token)
+        if not component_root.is_dir():
+            return {
+                "schema": "adaos.builder.owning_project_resolution.v1",
+                "status": "needs_source",
+                "created": False,
+                "component_ref": component_ref,
+                "reason": "component DEV source is unavailable",
+            }
+
+        requested_id = _slug(
+            project_id
+            or self._default_component_project_id(normalized_kind, artifact_token)
+        )
+        projects_root = self._dev_projects_root()
+        projects_root.mkdir(parents=True, exist_ok=True)
+        candidate_id = requested_id
+        candidate_root = projects_root / candidate_id
+        if candidate_root.exists():
+            candidate_id = _slug(f"{requested_id}_project")
+            candidate_root = projects_root / candidate_id
+        if candidate_root.exists():
+            suffix = hashlib.sha256(component_ref.encode("utf-8")).hexdigest()[:8]
+            candidate_id = _slug(f"{requested_id}_{suffix}")
+            candidate_root = projects_root / candidate_id
+        if candidate_root.exists():
+            raise ValueError(f"unable to allocate owning DEV Project for {component_ref}")
+
+        manifest_name = "skill.yaml" if normalized_kind == "skill" else "scenario.yaml"
+        component_manifest: dict[str, Any] = {}
+        if (component_root / manifest_name).is_file():
+            try:
+                component_manifest = _read_yaml(component_root / manifest_name)
+            except (OSError, ValueError, yaml.YAMLError):
+                component_manifest = {}
+        title = str(
+            component_manifest.get("title")
+            or component_manifest.get("name")
+            or artifact_token.replace("_", " ").replace("-", " ").title()
+        ).strip()
+        description = str(component_manifest.get("description") or "").strip()
+        owned = {
+            "ref": component_ref,
+            "role": "primary",
+            "exposure": "application",
+            "lifecycle": "bound",
+            "relations": ["presents" if normalized_kind == "scenario" else "uses"],
+        }
+        entrypoints = (
+            [
+                {
+                    "id": "default",
+                    "presentation": component_ref,
+                    "default": True,
+                    "bindings": {},
+                }
+            ]
+            if normalized_kind == "scenario"
+            else []
+        )
+        payload = {
+            "schema": "adaos.project.v1",
+            "kind": "project",
+            "id": candidate_id,
+            "version": "0.1.0",
+            "profiles": ["adaos.builder.component_project.v1"],
+            "components": {"owned": [owned], "dependencies": []},
+            "entrypoints": entrypoints,
+            "catalog": {
+                "title": title,
+                "description": description,
+                "categories": ["development"],
+                "tags": ["builder-managed", "legacy-component"],
+            },
+            "publication": {
+                "stage": "alpha",
+                "visibility": "unlisted",
+                "channel": "stable",
+            },
+            "install": {
+                "default": False,
+                "features": [
+                    {
+                        "id": "default",
+                        "title": title,
+                        "default": True,
+                        "optional": False,
+                        "components": [component_ref],
+                    }
+                ],
+            },
+            "compatibility": {},
+            "lifecycle": {
+                "uninstall": {
+                    "components": "remove_if_unreferenced",
+                    "runtime_data": "retain",
+                    "source_artifacts": "retain",
+                }
+            },
+            "created_at": _now_iso(),
+            "created_by": str(actor or "builder.qualifier"),
+        }
+        from adaos.sdk.developer.compositions import validate
+
+        validated = validate(payload)
+        _write_yaml(candidate_root / "project.yaml", validated)
+        return {
+            "schema": "adaos.builder.owning_project_resolution.v1",
+            "status": "created",
+            "created": True,
+            "component_ref": component_ref,
+            "project_id": candidate_id,
+            "project_ref": f"project:{candidate_id}",
+            "project_source_path": str(candidate_root.resolve()),
+            "manifest_path": str((candidate_root / "project.yaml").resolve()),
+        }
+
     def development_source_status(
         self,
         *,

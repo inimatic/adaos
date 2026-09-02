@@ -2108,6 +2108,7 @@ class DevelopmentTicketService:
         actor: str,
         repair_service: BuilderRepairService | None = None,
         execution_budget: Mapping[str, Any] | None = None,
+        workspace_service: Any | None = None,
     ) -> dict[str, Any]:
         ids = list(dict.fromkeys(_text(item) for item in ticket_ids if _text(item)))
         if not ids:
@@ -2174,6 +2175,56 @@ class DevelopmentTicketService:
                 "target": target,
                 "repair": None,
             }
+
+        project_resolution: dict[str, Any] = {}
+        if not project_identity:
+            if workspace_service is None:
+                from adaos.services.builder.workspace import BuilderWorkspaceService
+
+                workspace_service = BuilderWorkspaceService.from_context()
+            project_resolution = _mapping(
+                workspace_service.ensure_owning_dev_project(
+                    kind=target["object_type"],
+                    artifact_id=target["object_id"],
+                    actor=_text(actor) or "builder.qualifier",
+                )
+            )
+            if _text(project_resolution.get("status")) not in {
+                "created",
+                "source_available",
+            }:
+                return {
+                    "ok": True,
+                    "ready": False,
+                    "status": "owning_project_required",
+                    "ticket_ids": ids,
+                    "target": target,
+                    "project_resolution": project_resolution,
+                    "repair": None,
+                }
+            project_id = _text(project_resolution.get("project_id"))
+            if not project_id:
+                raise ValueError("owning DEV Project resolution returned no project_id")
+            project_evidence = [
+                {
+                    "type": "project_manifest",
+                    "id": _text(project_resolution.get("project_ref"))
+                    or f"project:{project_id}",
+                    "path": _text(project_resolution.get("manifest_path")) or None,
+                    "status": _text(project_resolution.get("status")),
+                }
+            ]
+            tickets = [
+                self.bind_ticket_project_scope(
+                    ticket["ticket_id"],
+                    project_id=project_id,
+                    actor=_text(actor) or "builder.qualifier",
+                    evidence_refs=project_evidence,
+                    expected_revision=int(ticket.get("revision") or 1),
+                )
+                for ticket in tickets
+            ]
+            project_identity = _project_identity_for_package(tickets)
 
         target_files = list(
             dict.fromkeys(
@@ -2245,7 +2296,7 @@ class DevelopmentTicketService:
         ]
         service = repair_service or BuilderRepairService(state_dir=self.state_dir)
         report = service.report(
-            project_id=target["object_id"],
+            project_id=_text(project_identity.get("project_id")) or target["object_id"],
             signal_type="other",
             summary=f"Builder package for {len(tickets)} Dev Tickets",
             source_refs=source_refs,
@@ -2290,6 +2341,7 @@ class DevelopmentTicketService:
             "ticket_ids": ids,
             "target": target,
             **project_identity,
+            "project_resolution": project_resolution,
             "repair": repair,
             "tickets": linked,
             "repair_hints": repair_hints,
@@ -5297,6 +5349,68 @@ class DevelopmentTicketService:
             }
         )
         return result
+
+    def bind_ticket_project_scope(
+        self,
+        ticket_id: str,
+        *,
+        project_id: str,
+        actor: str = "builder.qualifier",
+        evidence_refs: Sequence[Mapping[str, Any]] = (),
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        project_token = _text(project_id)
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,127}", project_token):
+            raise ValueError("project_id is invalid")
+        project_ref = f"project:{project_token}"
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                raise KeyError(ticket_id)
+            self._assert_expected_revision(ticket, expected_revision)
+            current = _project_identity_from_ticket(ticket)
+            if current:
+                if _text(current.get("project_id")) != project_token:
+                    raise ValueError("Dev Ticket is already bound to a different Project")
+                return _normalized_ticket(ticket)
+            target_scope = _mapping(ticket.get("target_scope"))
+            target_scope.update({"project_id": project_token, "project_ref": project_ref})
+            metadata = _mapping(ticket.get("metadata"))
+            metadata.update({"project_id": project_token, "project_ref": project_ref})
+            ticket["target_scope"] = target_scope
+            ticket["metadata"] = metadata
+            ticket["evidence_refs"] = _merge_refs(
+                ticket.get("evidence_refs") or [],
+                evidence_refs,
+            )
+            now = _now()
+            ticket["updated_at"] = now
+            self._append_history(
+                ticket,
+                {
+                    "kind": "project_scope_bound",
+                    "actor": _text(actor) or "builder.qualifier",
+                    "project_id": project_token,
+                    "project_ref": project_ref,
+                    "recorded_at": now,
+                },
+            )
+            for signal_id in ticket.get("signal_ids") or []:
+                signal = state["signals"].get(signal_id)
+                if not signal:
+                    continue
+                signal_target = _mapping(signal.get("target_scope"))
+                signal_target.update({"project_id": project_token, "project_ref": project_ref})
+                signal["target_scope"] = signal_target
+                signal_metadata = _mapping(signal.get("metadata"))
+                signal_metadata.update({"project_id": project_token, "project_ref": project_ref})
+                signal["metadata"] = signal_metadata
+                signal["updated_at"] = now
+                self._validate_signal(signal)
+            self._validate_ticket(ticket)
+            self._write(state)
+            return _normalized_ticket(ticket)
 
     def _release_builder_start_failure(
         self,

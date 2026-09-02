@@ -284,7 +284,13 @@ def test_development_ticket_api_plans_and_starts_builder_package(
     signal = service.capture_signal(
         kind="development_request",
         summary="Rename the Demo Metrics table heading",
-        target_scope={"type": "skill", "id": "demo_metrics_skill", "source": "dev"},
+        target_scope={
+            "type": "skill",
+            "id": "demo_metrics_skill",
+            "source": "dev",
+            "project_id": "demo_metrics",
+            "project_ref": "project:demo_metrics",
+        },
         source="client_feedback",
         owner_area="skill",
         metadata={

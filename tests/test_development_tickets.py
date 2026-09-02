@@ -7,6 +7,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from adaos.services.builder.repair import BuilderRepairService
+from adaos.services.builder.workspace import BuilderWorkspaceService
 from adaos.services.development_tickets import (
     COMPATIBILITY_PENDING_ACTION_KIND,
     COMPATIBILITY_RESPONSE_TOPIC,
@@ -1215,6 +1216,89 @@ def test_builder_package_uses_one_work_item_budget_and_automation(tmp_path: Path
         for ticket_id in ticket_ids
     )
     assert started["rollup"]["total_tokens"] == 150
+
+
+def test_builder_package_adopts_standalone_dev_skill_into_project(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    dev_root = tmp_path / "dev" / "test-subnet"
+    dev_skill = dev_root / "skills" / "subscription_status_skill"
+    dev_skill.mkdir(parents=True)
+    (dev_skill / "skill.yaml").write_text(
+        "name: subscription_status_skill\nversion: 0.1.0\ntools: []\n",
+        encoding="utf-8",
+    )
+    workspace_service = BuilderWorkspaceService(
+        state_dir=state_dir,
+        workspace_root=tmp_path / "workspace",
+        skills_root=tmp_path / "workspace" / "skills",
+        scenarios_root=tmp_path / "workspace" / "scenarios",
+        dev_skills_root=dev_root / "skills",
+        dev_scenarios_root=dev_root / "scenarios",
+    )
+    service = DevelopmentTicketService(state_dir=state_dir)
+    repair_service = BuilderRepairService(state_dir=state_dir)
+    tickets = []
+    for summary in (
+        "Rename the Subscription resource heading",
+        "Move the Subscription refresh action",
+    ):
+        signal = service.capture_signal(
+            kind="development_request",
+            summary=summary,
+            target_scope={
+                "type": "skill",
+                "id": "subscription_status_skill",
+                "source": "dev",
+                "component_ref": "skill:subscription_status_skill",
+            },
+            source="client_feedback",
+            owner_area="skill",
+            component_ref="skill:subscription_status_skill",
+            metadata={
+                "builder_repair": {
+                    "profile": "surgical_ui",
+                    "change_summary": summary,
+                    "target_files": ["skills/subscription_status_skill/webui.json"],
+                    "target_refs": ["modal:subscription_status_modal"],
+                    "acceptance_checks": [summary],
+                    "max_changed_files": 1,
+                    "requires_root_mcp": False,
+                }
+            },
+        )["signal"]
+        tickets.append(
+            service.ensure_ticket_for_signal(
+                signal,
+                kind="development_request",
+                status="ready_for_builder",
+                owner_area="skill",
+                component_ref="skill:subscription_status_skill",
+            )["ticket"]
+        )
+
+    planned = service.plan_builder_package(
+        [ticket["ticket_id"] for ticket in tickets],
+        actor="builder:qualifier",
+        repair_service=repair_service,
+        workspace_service=workspace_service,
+    )
+
+    assert planned["ready"] is True
+    assert planned["project_resolution"]["status"] == "created"
+    assert planned["project_id"] == "subscription_status"
+    assert planned["project_ref"] == "project:subscription_status"
+    assert planned["repair"]["project_id"] == "subscription_status"
+    assert planned["execution_budget"]["max_tokens"] == 30000
+    assert (
+        dev_root / "projects" / "subscription_status" / "project.yaml"
+    ).is_file()
+    for ticket in tickets:
+        updated = service.get_ticket(ticket["ticket_id"])
+        assert updated["target_scope"]["project_id"] == "subscription_status"
+        assert updated["metadata"]["project_ref"] == "project:subscription_status"
+        assert any(
+            item["kind"] == "project_scope_bound" for item in updated["history"]
+        )
 
 
 def test_builder_package_rejects_same_skill_from_different_projects(tmp_path: Path) -> None:

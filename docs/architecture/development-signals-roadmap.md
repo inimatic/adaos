@@ -362,6 +362,13 @@ Ticket and signals, and closes only with evidence.
   only to propose intent and candidate refs, resolve every ref and precondition
   in core, persist its usage receipt, and ask the user rather than admit a
   low-confidence envelope.
+- [x] `[must]` `DS5-33` Require an authoritative owning DEV Project before a
+  qualified repair package can create Builder work. Reuse the single existing
+  DEV owner, require materialization when the owner exists only in Workspace,
+  stop on ambiguous ownership, and adopt a standalone DEV skill/scenario into
+  one validated alpha Project when no owner exists. Bind every package ticket
+  and source signal to that Project before creating the repair so publication,
+  trial, acceptance, and rollback share one ProjectRelease lineage.
 - [ ] `[should]` `DS5-18` Add ticket artifact commands and SDK helpers for
   `artifact open`, screenshot preview, incremental evidence, optimistic
   revision, comment, claim, progress, resolve, verify, close, reopen,
@@ -471,6 +478,17 @@ text and that exact envelope; a related two-ticket package now defaults to
 30,000 tokens when it touches two files, adding only bounded per-ticket and
 per-file increments. The residual Root-accounted language path remains
 `DS5-32`.
+
+Owning-project update, 2026-09-02: package planning no longer uses a legacy
+skill/scenario id as an implicit release identity. A standalone DEV component
+is adopted into one validated `adaos.project.v1` source manifest before any
+Builder task is created; repeated planning reuses that Project. A component
+owned by a Workspace Project stops at `needs_materialization`, and ambiguous
+DEV ownership stops at `ambiguous`. The resulting `project_id`, manifest
+evidence, and history event are written back to every user ticket and linked
+signal before the package repair is materialized. This closes the missing
+ProjectRelease identity exposed by the Subscription E2E while preserving the
+explicit materialize/fork/overlay/defer choice for sources that are not in DEV.
 
 ## DS6. Analytics, Campaigns, And Policy Hardening
 
