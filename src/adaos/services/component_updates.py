@@ -17,6 +17,7 @@ STATE_SCHEMA = "adaos.component_updates.state.v1"
 NOTICE_SCHEMA = "adaos.component_update.v1"
 VIEW_SCHEMA = "adaos.component_update.viewer_state.v1"
 ACTIVE_NOTICE_STATES = frozenset({"active"})
+CURRENT_NOTICE_STATES = frozenset({"active", "accepted"})
 
 
 def _now() -> str:
@@ -130,8 +131,11 @@ class ComponentUpdateService:
             created_at = _text((previous or {}).get("created_at")) or _text(trial.get("started_at")) or now
             revision = int((previous or {}).get("revision") or 0) + 1
             title = _text(changelog.get("title")) or f"{identifier} {stage} update"
-            if stage == "beta" and title.lower().endswith(" alpha update"):
-                title = f"{title[:-len(' alpha update')]} beta update"
+            for previous_stage in ("alpha", "beta", "stable"):
+                suffix = f" {previous_stage} update"
+                if title.lower().endswith(suffix) and previous_stage != stage:
+                    title = f"{title[:-len(suffix)]} {stage} update"
+                    break
             published_at = (previous or {}).get("published_at")
             if stage == "stable" and not published_at:
                 published_at = now
@@ -157,6 +161,23 @@ class ComponentUpdateService:
                     "digest": candidate_digest or None,
                     "release_digest": _text(trial.get("release_digest")) or None,
                     "workflow_generation": trial.get("workflow_generation"),
+                },
+                "transition": {
+                    "state": review_state,
+                    "requires_user_decision": (
+                        stage == "alpha" and notice_status == "active"
+                    ),
+                    "workspace_committed": stage == "stable",
+                    "workspace_version": (
+                        _text(trial.get("version")) or None
+                        if stage == "stable"
+                        else None
+                    ),
+                    "release_digest": (
+                        _text(trial.get("release_digest")) or None
+                        if stage == "stable"
+                        else None
+                    ),
                 },
                 "webspace_id": _text(webspace_id) or "desktop",
                 "created_at": created_at,
@@ -234,6 +255,8 @@ class ComponentUpdateService:
         unread_only: bool = False,
     ) -> list[dict[str, Any]]:
         state = self._read()
+        status_token = _text(status).lower()
+        current_only = status_token == "current"
         result: list[dict[str, Any]] = []
         for raw in state["notices"].values():
             if not isinstance(raw, Mapping):
@@ -246,7 +269,10 @@ class ComponentUpdateService:
                 continue
             if stage and _text(notice.get("stage")) != _text(stage).lower():
                 continue
-            if status and _text(notice.get("status")) != _text(status).lower():
+            notice_status = _text(notice.get("status")).lower()
+            if current_only and notice_status not in CURRENT_NOTICE_STATES:
+                continue
+            if status and not current_only and notice_status != status_token:
                 continue
             projected = self._project_notice(
                 notice,
@@ -258,6 +284,20 @@ class ComponentUpdateService:
                 continue
             result.append(projected)
         result.sort(key=lambda item: (_text(item.get("updated_at")), _text(item.get("notice_id"))), reverse=True)
+        if current_only:
+            current: list[dict[str, Any]] = []
+            seen_components: set[str] = set()
+            for item in result:
+                component = item.get("component") if isinstance(item.get("component"), Mapping) else {}
+                component_key = _text(component.get("key")) or _component_key(
+                    _text(component.get("type")),
+                    _text(component.get("id")),
+                )
+                if component_key in seen_components:
+                    continue
+                seen_components.add(component_key)
+                current.append(item)
+            result = current
         return result
 
     def active_component_metadata(self, component_type: str, component_id: str) -> dict[str, Any] | None:
@@ -372,6 +412,7 @@ class ComponentUpdateService:
 
 __all__ = [
     "ACTIVE_NOTICE_STATES",
+    "CURRENT_NOTICE_STATES",
     "ComponentUpdateService",
     "NOTICE_SCHEMA",
     "STATE_SCHEMA",

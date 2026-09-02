@@ -48,6 +48,21 @@ def list_component_updates(
         "items": items,
         "total": len(items),
         "unread": sum(1 for item in items if item.get("unread")),
+        "awaiting_decision": sum(
+            1
+            for item in items
+            if bool((item.get("transition") or {}).get("requires_user_decision"))
+        ),
+        "publishing": sum(
+            1
+            for item in items
+            if str((item.get("transition") or {}).get("state") or "") == "publishing"
+        ),
+        "workspace_committed": sum(
+            1
+            for item in items
+            if bool((item.get("transition") or {}).get("workspace_committed"))
+        ),
     }
 
 
