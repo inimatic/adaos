@@ -3622,6 +3622,8 @@ class BuilderAutomationService:
         decision: str,
         actor: str,
         reason: str = "",
+        expected_candidate_id: str | None = None,
+        expected_candidate_digest: str | None = None,
     ) -> dict[str, Any]:
         """Accept, revise, or roll back one user-visible Builder Trial."""
 
@@ -3656,6 +3658,16 @@ class BuilderAutomationService:
             candidate_digest = str(trial.get("candidate_digest") or "").strip()
             if not bool(aprobation.get("ok")) or not candidate_id or not candidate_digest:
                 raise ValueError("reviewable Builder Trial is unavailable")
+            expected_id = str(expected_candidate_id or "").strip()
+            expected_digest = str(expected_candidate_digest or "").strip()
+            if expected_id and expected_id != candidate_id:
+                raise ValueError(
+                    "Builder Trial candidate changed since it was displayed; refresh before deciding"
+                )
+            if expected_digest and expected_digest != candidate_digest:
+                raise ValueError(
+                    "Builder Trial candidate digest changed since it was displayed; refresh before deciding"
+                )
 
         from adaos.sdk.builder import lifecycle
 

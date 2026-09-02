@@ -4871,6 +4871,76 @@ def test_completed_session_reconciles_retryable_component_update_projection(
     assert persisted["completion_readiness"]["aprobation"]["component_update_projection"]["ok"] is True
 
 
+@pytest.mark.parametrize(
+    ("expected_candidate_id", "expected_candidate_digest", "message"),
+    [
+        (
+            "candidate.previous",
+            "sha256:" + "2" * 64,
+            "candidate changed",
+        ),
+        (
+            "candidate.current",
+            "sha256:" + "9" * 64,
+            "candidate digest changed",
+        ),
+    ],
+)
+def test_aprobation_decision_rejects_stale_reviewed_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    expected_candidate_id: str,
+    expected_candidate_digest: str,
+    message: str,
+) -> None:
+    from adaos.sdk.builder import lifecycle
+
+    service = _service(tmp_path)
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation.skill.demo_metrics_skill",
+            "object_type": "skill",
+            "object_id": "demo_metrics_skill",
+            "status": "completed",
+            "completion_readiness": {
+                "ok": True,
+                "aprobation": {
+                    "ok": True,
+                    "trial": {
+                        "status": "trial",
+                        "candidate_id": "candidate.current",
+                        "candidate_digest": "sha256:" + "2" * 64,
+                    },
+                },
+            },
+        }
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "refresh_session",
+        lambda self, value: dict(value),
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "decide_trial",
+        lambda *args, **kwargs: pytest.fail("stale decisions must have no side effects"),
+    )
+
+    with pytest.raises(ValueError, match=message):
+        service.decide_aprobation(
+            object_type="skill",
+            object_id="demo_metrics_skill",
+            decision="accept",
+            actor="user:owner",
+            expected_candidate_id=expected_candidate_id,
+            expected_candidate_digest=expected_candidate_digest,
+        )
+
+    persisted = service.get_session("skill", "demo_metrics_skill")
+    assert persisted["completion_readiness"]["aprobation"]["trial"]["status"] == "trial"
+
+
 def test_accepting_aprobation_publishes_and_closes_resolved_ticket(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -133,6 +133,8 @@ class BuilderTrialDecisionRequest(BaseModel):
     decision: str = Field(..., pattern="^(accept|revise|rollback)$")
     actor: str = Field(default="user:owner", min_length=1)
     reason: str = ""
+    expected_candidate_id: str = Field(..., min_length=1)
+    expected_candidate_digest: str = Field(..., pattern="^sha256:[0-9a-f]{64}$")
 
 
 class BuilderSourceRecoveryApplyRequest(BaseModel):
@@ -472,6 +474,8 @@ def decide_trial(
             decision=body.decision,
             actor=body.actor,
             reason=body.reason,
+            expected_candidate_id=body.expected_candidate_id,
+            expected_candidate_digest=body.expected_candidate_digest,
         )
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

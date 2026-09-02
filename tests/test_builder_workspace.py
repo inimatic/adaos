@@ -999,6 +999,8 @@ def test_builder_api_exposes_trial_decision() -> None:
             "decision": "revise",
             "actor": "user:owner",
             "reason": "The label is still unclear",
+            "expected_candidate_id": "candidate.api",
+            "expected_candidate_digest": "sha256:" + "a" * 64,
         },
     )
 
@@ -1011,6 +1013,8 @@ def test_builder_api_exposes_trial_decision() -> None:
             "decision": "revise",
             "actor": "user:owner",
             "reason": "The label is still unclear",
+            "expected_candidate_id": "candidate.api",
+            "expected_candidate_digest": "sha256:" + "a" * 64,
         }
     ]
 

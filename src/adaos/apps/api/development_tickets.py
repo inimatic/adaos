@@ -161,6 +161,8 @@ class DevTicketTrialDecisionRequest(BaseModel):
     decision: str = Field(..., pattern="^(accept|revise|rollback)$")
     actor: str = Field(default="user:owner", min_length=1)
     reason: str = ""
+    expected_candidate_id: str = Field(..., min_length=1)
+    expected_candidate_digest: str = Field(..., pattern="^sha256:[0-9a-f]{64}$")
 
 
 class DevTicketBuilderSyncRequest(BaseModel):
@@ -1409,6 +1411,8 @@ def decide_ticket_trial(
             decision=body.decision,
             actor=body.actor,
             reason=body.reason,
+            expected_candidate_id=body.expected_candidate_id,
+            expected_candidate_digest=body.expected_candidate_digest,
         )
         updated = service.get_ticket(ticket_id)
         return {

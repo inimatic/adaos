@@ -1112,7 +1112,13 @@ def test_development_ticket_api_delegates_trial_decision_to_scoped_builder_targe
     response = client.post(
         f"/api/development-tickets/{ticket_id}/trial/decision",
         headers=_headers(),
-        json={"decision": "accept", "actor": "user:owner", "reason": "Checked in UI"},
+        json={
+            "decision": "accept",
+            "actor": "user:owner",
+            "reason": "Checked in UI",
+            "expected_candidate_id": "candidate.api",
+            "expected_candidate_digest": "sha256:" + "a" * 64,
+        },
     )
 
     assert response.status_code == 200, response.text
