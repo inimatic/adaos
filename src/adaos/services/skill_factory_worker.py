@@ -37,6 +37,7 @@ from adaos.services.node_config import load_config
 from adaos.services.node_runtime_state import load_node_runtime_state
 from adaos.services.artifact_pipeline.storage import replace_with_retry
 from adaos.services.skill_factory import SkillFactoryService
+from adaos.services.skill_factory_mcp import task_scope_enabled_tools
 from adaos.services.skill_factory_sources import (
     SourceSnapshotError,
     materialize_source_snapshot,
@@ -318,6 +319,34 @@ def _root_mcp_required(assignment: Mapping[str, Any]) -> bool:
     return hints.get("requires_root_mcp") is True
 
 
+def _mcp_result_succeeded(result: Mapping[str, Any]) -> bool:
+    if result.get("isError") is True:
+        return False
+    structured = (
+        result.get("structured_content")
+        if isinstance(result.get("structured_content"), Mapping)
+        else result.get("structuredContent")
+        if isinstance(result.get("structuredContent"), Mapping)
+        else {}
+    )
+    candidates = [structured]
+    response = structured.get("response") if isinstance(structured, Mapping) else None
+    if isinstance(response, Mapping):
+        candidates.append(response)
+    for candidate in candidates:
+        if candidate.get("ok") is False:
+            return False
+        if str(candidate.get("status") or "").strip().lower() in {
+            "denied",
+            "error",
+            "failed",
+            "forbidden",
+            "unauthorized",
+        }:
+            return False
+    return True
+
+
 def _codex_jsonl_root_mcp_evidence(
     path: Path,
     *,
@@ -365,6 +394,8 @@ def _codex_jsonl_root_mcp_evidence(
             arguments = item.get("arguments") if isinstance(item.get("arguments"), Mapping) else {}
             argument_target = str(arguments.get("target_id") or "").strip()
             result = item.get("result") if isinstance(item.get("result"), Mapping) else {}
+            if not result or not _mcp_result_succeeded(result):
+                continue
             structured = (
                 result.get("structured_content")
                 if isinstance(result.get("structured_content"), Mapping)
@@ -479,7 +510,7 @@ def _task_mcp_validation_evidence(
     if not isinstance(payload, Mapping) or payload.get("error"):
         raise ValueError(f"task-scoped Root MCP validation call failed for {tool}")
     result = payload.get("result") if isinstance(payload.get("result"), Mapping) else {}
-    if not result or result.get("isError") is True:
+    if not result or not _mcp_result_succeeded(result):
         raise ValueError(f"task-scoped Root MCP validation call failed for {tool}")
     structured = (
         result.get("structuredContent")
@@ -1287,10 +1318,27 @@ def _root_mcp_profile_from_assignment(
     ).strip()
     if bound_target_id:
         profile["bound_target_id"] = bound_target_id
-    for key in ("enabled_tools", "disabled_tools", "scope"):
+    for key in ("disabled_tools", "scope"):
         values = _string_list(root.get(key))
         if values:
             profile[key] = values
+    explicit_tools = _string_list(root.get("enabled_tools"))
+    if task_scoped:
+        scoped_tools = task_scope_enabled_tools(
+            _string_list(mcp.get("scope") or mcp.get("requested_scope"))
+        )
+        if explicit_tools:
+            scoped_tool_set = set(scoped_tools)
+            admitted_tools = [
+                tool for tool in explicit_tools if tool in scoped_tool_set
+            ]
+        else:
+            admitted_tools = scoped_tools
+        if not admitted_tools:
+            raise ValueError("task-scoped Root MCP lease admits no supported tools")
+        profile["enabled_tools"] = admitted_tools
+    elif explicit_tools:
+        profile["enabled_tools"] = explicit_tools
     for key in ("lease_id", "token_ref", "expires_at"):
         value = str(mcp.get(key) or root.get(key) or "").strip()
         if value:

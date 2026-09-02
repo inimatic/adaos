@@ -700,6 +700,25 @@ def test_codex_bridge_rejects_target_outside_binding() -> None:
         bridge._effective_target_id({"target_id": "hub:sn_other"})
 
 
+def test_codex_bridge_filters_task_scoped_tools() -> None:
+    bridge = bridge_mod.CodexRootMcpBridge(
+        bridge_mod.CodexBridgeProfile(
+            root_url="https://root.example.test",
+            target_id="hub:sn_bound",
+            task_id="task.bound",
+            access_token="access-123",
+            enabled_tools=["foundation", "get_managed_target"],
+        )
+    )
+
+    assert {item["name"] for item in bridge.tool_definitions()} == {
+        "foundation",
+        "get_managed_target",
+    }
+    with pytest.raises(PermissionError, match="outside this bridge profile"):
+        bridge.call_tool("get_runtime_summary", {})
+
+
 def test_model_text_formats_preserve_canonical_structured_content(monkeypatch) -> None:
     payload = {
         "schema": "adaos.test.overview.v1",

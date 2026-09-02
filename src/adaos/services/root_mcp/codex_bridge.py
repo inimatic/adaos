@@ -146,6 +146,7 @@ class CodexBridgeProfile:
     audience: str = "codex-vscode"
     generated_at: str | None = None
     capabilities: list[str] = field(default_factory=lambda: list(DEFAULT_CODEX_TARGET_CAPABILITIES))
+    enabled_tools: list[str] | None = None
 
     def resolved_access_token(self) -> str:
         direct = _normalize_text(self.access_token)
@@ -188,6 +189,11 @@ class CodexBridgeProfile:
             "audience": self.audience,
             "generated_at": self.generated_at or _iso_now(),
             "capabilities": list(self.capabilities),
+            "enabled_tools": (
+                list(self.enabled_tools)
+                if self.enabled_tools is not None
+                else None
+            ),
         }
 
 
@@ -229,6 +235,11 @@ def load_codex_bridge_profile(
         audience=_normalize_text(payload.get("audience")) or "codex-vscode",
         generated_at=_normalize_text(payload.get("generated_at")),
         capabilities=_normalize_unique(list(payload.get("capabilities") or [])) or list(DEFAULT_CODEX_TARGET_CAPABILITIES),
+        enabled_tools=(
+            _normalize_unique(list(payload.get("enabled_tools") or []))
+            if "enabled_tools" in payload
+            else None
+        ),
     )
 
 
@@ -257,6 +268,11 @@ def write_codex_bridge_profile(
         audience=profile.audience,
         generated_at=profile.generated_at or _iso_now(),
         capabilities=_normalize_unique(profile.capabilities) or list(DEFAULT_CODEX_TARGET_CAPABILITIES),
+        enabled_tools=(
+            _normalize_unique(profile.enabled_tools)
+            if profile.enabled_tools is not None
+            else None
+        ),
     )
     profile_file.write_text(_json_text(stored.to_dict()) + "\n", encoding="utf-8")
     return profile_file, token_file
@@ -343,6 +359,15 @@ class CodexRootMcpBridge:
     def instructions(self) -> str:
         target = self.profile.target_id or "the configured managed target"
         bootstrap = "MCP Session Lease" if self.profile.bootstrap_mode == "mcp_session_lease" else "bounded access token"
+        if self.profile.task_id:
+            allowed = ", ".join(self.profile.enabled_tools or []) or "no tools"
+            return (
+                "This MCP server is a task-scoped AdaOS Root route. "
+                f"It is bound to {target} using a short-lived Builder lease. "
+                f"Use only the advertised tools ({allowed}); for target validation prefer "
+                "get_managed_target when it is available. Do not attempt tools outside "
+                "the task scope and do not inspect bearer credentials."
+            )
         return (
             "This MCP server is a local stdio bridge from Codex to AdaOS Root MCP. "
             f"It is currently bound to {target} using {bootstrap}. "
@@ -1288,12 +1313,20 @@ class CodexRootMcpBridge:
         for definition in definitions:
             if definition.get("name") in _COMPACT_MODEL_TEXT_TOOLS:
                 definition["inputSchema"].setdefault("properties", {})["model_text_format"] = dict(format_property)
-        return definitions
+        if self.profile.enabled_tools is None:
+            return definitions
+        enabled = set(self.profile.enabled_tools)
+        return [item for item in definitions if item["name"] in enabled]
 
     def call_tool(self, name: str, arguments: Mapping[str, Any] | None = None) -> dict[str, Any]:
         args = dict(arguments or {})
         client = self._client()
         tool = str(name or "").strip()
+        if (
+            self.profile.enabled_tools is not None
+            and tool not in set(self.profile.enabled_tools)
+        ):
+            raise PermissionError(f"MCP tool is outside this bridge profile: {tool}")
         model_text_format = str(args.get("model_text_format") or "json").strip().lower()
         if tool == "foundation":
             return _tool_text(client.foundation())

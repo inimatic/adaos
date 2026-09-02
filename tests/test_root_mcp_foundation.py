@@ -325,6 +325,30 @@ def test_root_mcp_accepts_bounded_builder_task_lease(monkeypatch) -> None:
     assert task_context["task_id"] == task_id
     assert task_context["secrets_included"] is False
 
+    tools = client.post(
+        f"/v1/root/mcp/task/{task_id}",
+        headers=headers,
+        json={"jsonrpc": "2.0", "id": "tools", "method": "tools/list", "params": {}},
+    )
+    assert tools.status_code == 200
+    assert {item["name"] for item in tools.json()["result"]["tools"]} == {
+        "foundation",
+        "get_builder_context",
+    }
+
+    forbidden = client.post(
+        f"/v1/root/mcp/task/{task_id}",
+        headers=headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": "forbidden-tool",
+            "method": "tools/call",
+            "params": {"name": "get_runtime_summary", "arguments": {}},
+        },
+    )
+    assert forbidden.status_code == 200
+    assert forbidden.json()["result"]["isError"] is True
+
     foundation = client.get("/v1/root/mcp/foundation", headers=headers)
     assert foundation.status_code == 200
 

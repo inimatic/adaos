@@ -40,7 +40,11 @@ from adaos.services.root_mcp.service import (
     recent_audit_events,
 )
 from adaos.services.root_mcp.audit import append_audit_event
-from adaos.services.root_mcp.codex_bridge import CodexBridgeProfile, CodexRootMcpBridge
+from adaos.services.root_mcp.codex_bridge import (
+    CodexBridgeProfile,
+    CodexRootMcpBridge,
+)
+from adaos.services.skill_factory_mcp import task_scope_enabled_tools
 from adaos.services.root_mcp.model import RootMcpAuditEvent, RootMcpSurface
 from adaos.services.root_mcp.policy import evaluate_direct_access
 from adaos.services.root_mcp.reports import ingest_control_report, list_control_reports
@@ -453,6 +457,13 @@ def _root_mcp_http_bridge(
         server_name="adaos-root",
         audience=str(auth.get("audience") or "openai-remote-mcp"),
         capabilities=list(auth.get("capabilities") or []),
+        enabled_tools=(
+            task_scope_enabled_tools(
+                [str(item) for item in auth.get("task_scopes") or []]
+            )
+            if auth.get("task_id")
+            else None
+        ),
     )
     return CodexRootMcpBridge(profile)
 

@@ -156,6 +156,52 @@ def test_codex_jsonl_root_mcp_evidence_rejects_wrong_target(tmp_path: Path) -> N
         )
 
 
+def test_codex_jsonl_root_mcp_evidence_rejects_domain_error(tmp_path: Path) -> None:
+    journal = tmp_path / "codex.jsonl"
+    journal.write_text(
+        json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "mcp_tool_call",
+                    "status": "completed",
+                    "server": "builder_e2e",
+                    "tool": "get_runtime_summary",
+                    "arguments": {"target_id": "hub:sn_demo"},
+                    "result": {
+                        "structured_content": {
+                            "ok": False,
+                            "response": {
+                                "ok": False,
+                                "status": "error",
+                                "error": {"code": "forbidden"},
+                            },
+                        }
+                    },
+                    "error": None,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="requires successful Root MCP evidence"):
+        _codex_jsonl_root_mcp_evidence(
+            journal,
+            assignment={
+                "realize_request": {
+                    "artifacts": {"repair_hints": {"requires_root_mcp": True}}
+                }
+            },
+            root_mcp={
+                "enabled": True,
+                "server_name": "builder_e2e",
+                "bound_target_id": "hub:sn_demo",
+            },
+        )
+
+
 def test_task_mcp_validation_evidence_uses_bounded_task_lease(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1565,11 +1611,12 @@ def test_bounded_repair_prompt_requires_targeted_reads(
             "minimal_diff": True,
         },
         "mcp": {
+            "scope": ["run_staging_validation"],
             "root_mcp": {
                 "url": "https://ru.api.inimatic.com/v1/root/mcp",
                 "required": True,
                 "bound_target_id": "hub:sn_demo",
-                "enabled_tools": ["get_status"],
+                "enabled_tools": ["get_managed_target"],
             }
         },
         "realize_request": {
@@ -2613,6 +2660,7 @@ def test_api_serve_rebinds_stale_loopback_mcp_url_to_configured_local_api(
     assignment = {
         "task_id": "task.local-api",
         "mcp": {
+            "scope": ["run_staging_validation"],
             "root_mcp": {
                 "enabled": True,
                 "url": "http://127.0.0.1:8778/v1/root/mcp/task/task.local-api",
@@ -2639,6 +2687,7 @@ def test_task_lease_overrides_generic_root_mcp_credential(
         "task_id": "task.scoped-lease",
         "mcp": {
             "endpoint": "/v1/root/mcp/task/task.scoped-lease",
+            "scope": ["run_staging_validation"],
             "access_token": "task-lease-secret",
             "lease_id": "lease.scoped",
             "root_mcp": {
@@ -2646,7 +2695,7 @@ def test_task_lease_overrides_generic_root_mcp_credential(
                 "url": "https://ru.api.inimatic.com/v1/root/mcp",
                 "server_name": "adaos_root",
                 "bearer_token_env_var": "ADAOS_ROOT_MCP_AUTH",
-                "enabled_tools": ["get_status"],
+                "enabled_tools": ["get_managed_target"],
             },
         },
     }
@@ -2662,7 +2711,7 @@ def test_task_lease_overrides_generic_root_mcp_credential(
     assert profile["bearer_token_env_var"] == "ADAOS_TASK_MCP_AUTH_TASK_SCOPED_LEASE"
     assert profile["_bearer_token_value"] == "task-lease-secret"
     assert profile["lease_id"] == "lease.scoped"
-    assert profile["enabled_tools"] == ["get_status"]
+    assert profile["enabled_tools"] == ["get_managed_target"]
 
 
 def test_worker_projects_task_scoped_mcp_lease_without_prompt_secret(
@@ -2699,6 +2748,10 @@ def test_worker_projects_task_scoped_mcp_lease_without_prompt_secret(
     assert private_profile["bearer_token_env_var"] == "ADAOS_TASK_MCP_AUTH_TASK_LEASE"
     assert private_profile["bearer_env_present"] is True
     assert private_profile["_bearer_token_value"] == "lease-secret-value"
+    assert private_profile["enabled_tools"] == [
+        "foundation",
+        "get_builder_context",
+    ]
 
     executor = SubprocessCodexExecutor(repo_root=tmp_path / "repo")
     config_args = executor._root_mcp_config_args(private_profile)
@@ -2706,6 +2759,12 @@ def test_worker_projects_task_scoped_mcp_lease_without_prompt_secret(
     assert any(
         arg.endswith(
             "mcp_servers.adaos_task_root.url=\"http://127.0.0.1:8778/v1/root/mcp/task/task.lease\""
+        )
+        for arg in config_args
+    )
+    assert any(
+        arg.endswith(
+            'mcp_servers.adaos_task_root.enabled_tools=["foundation", "get_builder_context"]'
         )
         for arg in config_args
     )
