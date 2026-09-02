@@ -18,6 +18,7 @@ from adaos.services.scenario.manager import (
     dependency_failure_message,
 )
 from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
+from adaos.services.runtime_activation_observations import emit_runtime_activation_failure
 from adaos.services.scenarios import loader as scenarios_loader
 from adaos.services.workspaces import index as workspace_index
 from adaos.adapters.db import SqliteScenarioRegistry
@@ -369,7 +370,33 @@ def _install_scenario_sync(body: InstallReq, mgr: ScenarioManager, webspace_id: 
     try:
         meta = mgr.install_with_deps(body.name, pin=body.pin, webspace_id=webspace_id)
     except ScenarioDependencyLifecycleError as exc:
+        emit_runtime_activation_failure(
+            getattr(mgr, "bus", None),
+            component_type="scenario",
+            component_id=body.name,
+            stage="dependency_activation",
+            error=dependency_failure_message(exc.result),
+            source="api.scenarios.install",
+            report_policy="project_inbox",
+            space="default",
+            webspace_id=webspace_id,
+            operation_id=f"scenario-install:{body.name}",
+        )
         raise _dependency_failure_http_exception(exc.result) from exc
+    except Exception as exc:
+        emit_runtime_activation_failure(
+            getattr(mgr, "bus", None),
+            component_type="scenario",
+            component_id=body.name,
+            stage="install",
+            error=f"{type(exc).__name__}: {exc}",
+            source="api.scenarios.install",
+            report_policy="project_inbox",
+            space="default",
+            webspace_id=webspace_id,
+            operation_id=f"scenario-install:{body.name}",
+        )
+        raise
     return {
         "ok": True,
         "scenario": {

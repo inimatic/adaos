@@ -95,6 +95,9 @@ class _FakeSkillManager:
         space: str = "default",
         webspace_id: str = "default",
         emit_activation: bool = True,
+        observation_source: str = "skill.manager",
+        observation_policy: str | None = None,
+        operation_id: str | None = None,
     ):
         self.calls.append(
             f"activate_for_space:{name}:{version}:{slot}:{webspace_id}:emit={int(emit_activation)}"
@@ -828,6 +831,7 @@ def test_skill_update_fails_when_active_runtime_does_not_converge(monkeypatch) -
         space: str = "default",
         webspace_id: str = "default",
         emit_activation: bool = True,
+        **_kwargs: Any,
     ):
         skill_mgr.calls.append(
             f"activate_for_space:{name}:{version}:{slot}:{webspace_id}:emit={int(emit_activation)}"

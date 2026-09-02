@@ -502,6 +502,61 @@ def test_publication_gate_failure_creates_linked_deduplicated_project_ticket(
     assert service.get_ticket(duplicate["ticket"]["ticket_id"])["status"] == "closed"
 
 
+def test_runtime_activation_observation_respects_policy_and_closes_on_retry(
+    tmp_path: Path,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+
+    diagnostic = service.report_runtime_activation_observation(
+        {
+            "status": "failed",
+            "component_type": "skill",
+            "skill_name": "demo_skill",
+            "failed_stage": "prepare",
+            "error": "dependency unavailable",
+            "report_policy": "diagnostic_only",
+        }
+    )
+    assert diagnostic["reported"] is False
+    assert service.list_tickets() == []
+
+    failure = service.report_runtime_activation_observation(
+        {
+            "status": "failed",
+            "component_type": "skill",
+            "skill_name": "demo_skill",
+            "failed_stage": "tests",
+            "error": "skill tests failed: test_demo",
+            "report_policy": "project_inbox",
+            "source": "cli.skill.install",
+            "space": "default",
+            "webspace_id": "desktop",
+            "attempted_version": "1.2.0",
+            "slot": "B",
+        }
+    )
+    ticket = failure["ticket"]
+    assert ticket["source"] == "runtime_activation"
+    assert ticket["component_ref"] == "skill:demo_skill"
+    assert ticket["policy"]["publication_required"] is False
+    assert ticket["metadata"]["activation_source"] == "cli.skill.install"
+
+    passed = service.report_runtime_activation_observation(
+        {
+            "status": "passed",
+            "component_type": "skill",
+            "skill_name": "demo_skill",
+            "space": "default",
+            "webspace_id": "desktop",
+            "version": "1.2.0",
+            "slot": "B",
+        }
+    )
+    assert passed["reported"] is True
+    assert passed["closed_tickets"][0]["ticket_id"] == ticket["ticket_id"]
+    assert passed["closed_tickets"][0]["status"] == "closed"
+
+
 def test_ticket_resolution_requires_evidence_and_closes_linked_repair(tmp_path: Path) -> None:
     service = DevelopmentTicketService(state_dir=tmp_path)
     report = service.report_compatibility_finding(

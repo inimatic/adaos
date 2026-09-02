@@ -30,6 +30,7 @@ from adaos.services.artifact_subscription_update import (
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.operations import submit_install_operation
 from adaos.services.runtime_refresh import RuntimeRefreshError, rebuild_webspace_projection, refresh_skill_runtime
+from adaos.services.runtime_activation_observations import emit_runtime_activation_failure
 from adaos.services.skill.runtime_migration_worker import (
     read_status as read_skill_runtime_migration_status,
     start_background_migration,
@@ -249,9 +250,23 @@ async def _finalize_live_skill_activation(
     cache_reason: str,
     cache_action: str,
     emit_activation: bool = True,
+    observation_source: str = "api.skills.runtime_activation",
+    observation_policy: str = "project_inbox",
 ) -> dict[str, Any]:
     reload_result = await _reload_live_skill_handlers(ctx, skill_name)
     if not bool(reload_result.get("ok")):
+        emit_runtime_activation_failure(
+            getattr(ctx, "bus", None),
+            component_type="skill",
+            component_id=skill_name,
+            stage="handler_reload",
+            error=str(reload_result.get("error") or reload_result.get("reason") or "reload failed"),
+            source=observation_source,
+            report_policy=observation_policy,
+            space=space,
+            webspace_id=webspace_id,
+            operation_id=cache_reason,
+        )
         raise HTTPException(
             status_code=409,
             detail={
@@ -261,13 +276,36 @@ async def _finalize_live_skill_activation(
                 "handler_reload": reload_result,
             },
         )
-    materialization_cache = await asyncio.to_thread(
-        invalidate_webspace_materialization_cache,
-        webspace_id,
-        reason=cache_reason,
-        action=cache_action,
-        source_of_truth="skill_runtime",
-    )
+    try:
+        materialization_cache = await asyncio.to_thread(
+            invalidate_webspace_materialization_cache,
+            webspace_id,
+            reason=cache_reason,
+            action=cache_action,
+            source_of_truth="skill_runtime",
+        )
+    except Exception as exc:
+        emit_runtime_activation_failure(
+            getattr(ctx, "bus", None),
+            component_type="skill",
+            component_id=skill_name,
+            stage="materialization",
+            error=f"{type(exc).__name__}: {exc}",
+            source=observation_source,
+            report_policy=observation_policy,
+            space=space,
+            webspace_id=webspace_id,
+            operation_id=cache_reason,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "skill_materialization_invalidation_failed",
+                "message": f"runtime materialization did not invalidate for {skill_name}",
+                "skill_name": skill_name,
+                "error": str(exc),
+            },
+        ) from exc
     if emit_activation:
         _emit_live_skill_activation(
             ctx,
@@ -600,6 +638,18 @@ def _install_skill_sync(body: InstallReq, mgr: SkillManager, webspace_id: str) -
     try:
         prep = mgr.prepare_runtime(skill_name, run_tests=False)
     except Exception as exc:
+        emit_runtime_activation_failure(
+            getattr(mgr, "bus", None),
+            component_type="skill",
+            component_id=skill_name,
+            stage="prepare",
+            error=f"{type(exc).__name__}: {exc}",
+            source="api.skills.install",
+            report_policy="project_inbox",
+            space="default",
+            webspace_id=webspace_id,
+            operation_id=f"skill-install:{skill_name}",
+        )
         log.exception("runtime preparation failed after skill install: %s", skill_name)
         raise HTTPException(
             status_code=409,
@@ -613,6 +663,9 @@ def _install_skill_sync(body: InstallReq, mgr: SkillManager, webspace_id: str) -
             space="default",
             webspace_id=webspace_id,
             emit_activation=False,
+            observation_source="api.skills.install",
+            observation_policy="project_inbox",
+            operation_id=f"skill-install:{skill_name}",
         )
     except Exception as exc:
         log.exception("runtime activation failed after skill install: %s", skill_name)
@@ -810,6 +863,20 @@ async def runtime_prepare(body: RuntimePrepareReq, mgr: SkillManager = Depends(_
         )
     except (SkillCoreCompatibilityError, SkillDependencyIsolationError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        stage = "tests" if "test" in str(exc).lower() else "prepare"
+        emit_runtime_activation_failure(
+            getattr(mgr, "bus", None),
+            component_type="skill",
+            component_id=body.name,
+            stage=stage,
+            error=f"{type(exc).__name__}: {exc}",
+            source="api.skills.runtime_prepare",
+            report_policy="project_inbox",
+            space="default",
+            operation_id=f"skill-prepare:{body.name}",
+        )
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     payload = {
         "ok": True,
         "name": result.name,
@@ -838,6 +905,9 @@ async def runtime_activate(
             space="default",
             webspace_id=webspace_id,
             emit_activation=False,
+            observation_source="api.skills.runtime_activate",
+            observation_policy="project_inbox",
+            operation_id=f"skill-activate:{body.name}",
         )
         activation = await _finalize_live_skill_activation(
             ctx,
@@ -865,6 +935,23 @@ async def runtime_activate(
                 run_tests=False,
                 preferred_slot=pref_slot,
             )
+        except (SkillCoreCompatibilityError, SkillDependencyIsolationError) as compat_exc:
+            raise HTTPException(status_code=409, detail=str(compat_exc)) from compat_exc
+        except Exception as prep_exc:
+            emit_runtime_activation_failure(
+                getattr(mgr, "bus", None),
+                component_type="skill",
+                component_id=body.name,
+                stage="prepare",
+                error=f"{type(prep_exc).__name__}: {prep_exc}",
+                source="api.skills.runtime_activate",
+                report_policy="project_inbox",
+                space="default",
+                webspace_id=webspace_id,
+                operation_id=f"skill-activate:{body.name}",
+            )
+            raise HTTPException(status_code=422, detail=str(prep_exc)) from prep_exc
+        try:
             slot = await asyncio.to_thread(
                 mgr.activate_for_space,
                 body.name,
@@ -873,9 +960,14 @@ async def runtime_activate(
                 space="default",
                 webspace_id=webspace_id,
                 emit_activation=False,
+                observation_source="api.skills.runtime_activate",
+                observation_policy="project_inbox",
+                operation_id=f"skill-activate:{body.name}",
             )
         except (SkillCoreCompatibilityError, SkillDependencyIsolationError) as compat_exc:
             raise HTTPException(status_code=409, detail=str(compat_exc)) from compat_exc
+        except RuntimeError as activation_exc:
+            raise HTTPException(status_code=422, detail=str(activation_exc)) from activation_exc
         activation = await _finalize_live_skill_activation(
             ctx,
             body.name,
@@ -1039,6 +1131,25 @@ async def update_skill(body: UpdateReq, ctx: AgentContext = Depends(get_ctx)):
                 emit_activation=False,
             )
         except RuntimeRefreshError as exc:
+            emit_runtime_activation_failure(
+                getattr(ctx, "bus", None),
+                component_type="skill",
+                component_id=body.name,
+                stage=str(exc.payload.get("failed_stage") or "runtime_refresh"),
+                error=str(exc.payload.get("error") or exc),
+                source="api.skills.update",
+                report_policy="project_inbox",
+                space="default",
+                webspace_id=webspace_id,
+                version=str(
+                    exc.payload.get("prepared_version")
+                    or exc.payload.get("source_version")
+                    or ""
+                )
+                or None,
+                slot=str(exc.payload.get("prepared_slot") or "") or None,
+                operation_id=f"skill-update:{body.name}",
+            )
             log.exception("runtime refresh failed after skill update: %s", body.name)
             raise HTTPException(
                 status_code=409,

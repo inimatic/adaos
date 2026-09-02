@@ -86,6 +86,42 @@ def test_activate_for_space_can_defer_activation_event_until_handlers_reload(mon
     assert emitted == []
 
 
+@pytest.mark.parametrize(
+    ("emit_activation", "expected_policy"),
+    [(True, "project_inbox"), (False, "diagnostic_only")],
+)
+def test_activate_for_space_emits_policy_scoped_failure_observation(
+    monkeypatch,
+    emit_activation: bool,
+    expected_policy: str,
+) -> None:
+    observations: list[dict] = []
+    mgr = SkillManager(git=SimpleNamespace(), paths=SimpleNamespace(), caps=_Caps(), bus=object())
+    monkeypatch.setattr(
+        mgr,
+        "activate_runtime",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("slot rejected")),
+    )
+    monkeypatch.setattr(
+        skill_manager_module,
+        "emit_runtime_activation_failure",
+        lambda _bus, **kwargs: observations.append(dict(kwargs)),
+    )
+
+    with pytest.raises(RuntimeError, match="slot rejected"):
+        mgr.activate_for_space(
+            "demo_skill",
+            version="1.2.3",
+            slot="B",
+            webspace_id="desktop",
+            emit_activation=emit_activation,
+        )
+
+    assert observations[0]["component_id"] == "demo_skill"
+    assert observations[0]["stage"] == "activation"
+    assert observations[0]["report_policy"] == expected_policy
+
+
 def test_stage_skill_sources_tolerates_empty_directory_residue(monkeypatch, tmp_path: Path) -> None:
     source = tmp_path / "source" / "residue_skill"
     (source / "handlers").mkdir(parents=True)

@@ -332,7 +332,7 @@ Ticket and signals, and closes only with evidence.
   tickets when Builder tests, scenario validation, Trial activation, or
   accepted-candidate publication fails; keep originating tickets open and
   close technical gate findings only after successful publication evidence.
-- [ ] `[should]` `DS5-28` Reuse the publication-gate producer for manual CLI,
+- [x] `[should]` `DS5-28` Reuse the publication-gate producer for manual CLI,
   setup, migration, and other non-Builder skill/scenario activation paths,
   with source-specific policy so unattended setup failures do not flood the
   user's project inbox.

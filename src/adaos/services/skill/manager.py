@@ -44,6 +44,7 @@ from adaos.services.skill.dependency_requirements import resolve_skill_dependenc
 from adaos.services.skill.dependency_disk_guard import ensure_dependency_disk_budget, heavy_dependency_names
 from adaos.services.skill.declarations import load_runtime_skill_declarations
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment, SkillSlotPaths
+from adaos.services.runtime_activation_observations import emit_runtime_activation_failure
 from adaos.services.skill.tests_runner import TestResult, run_tests as run_skill_tests
 from adaos.services.models.artifacts import (
     declared_model_artifacts,
@@ -2725,22 +2726,57 @@ class SkillManager:
         slot: str | None = None,
         defer_webspace_rebuild: bool = False,
         emit_activation: bool = True,
+        observation_source: str = "skill.manager",
+        observation_policy: str | None = None,
+        operation_id: str | None = None,
     ) -> str:
         """
         Convenience helper that routes activation to the appropriate runtime
         (default vs dev) and emits a unified skills.activated event.
         """
-        if space == "dev":
-            target = self.activate_dev_runtime(name, version=version, slot=slot)
-        else:
-            target = self.activate_runtime(name, version=version, slot=slot)
         bus_webspace = webspace_id or _default_webspace_id()
+        policy = str(observation_policy or "").strip().lower() or (
+            "project_inbox" if emit_activation else "diagnostic_only"
+        )
+        try:
+            if space == "dev":
+                target = self.activate_dev_runtime(name, version=version, slot=slot)
+            else:
+                target = self.activate_runtime(name, version=version, slot=slot)
+        except Exception as exc:
+            try:
+                emit_runtime_activation_failure(
+                    self.bus,
+                    component_type="skill",
+                    component_id=name,
+                    stage="activation",
+                    error=f"{type(exc).__name__}: {exc}",
+                    source=observation_source,
+                    report_policy=policy,
+                    space=space,
+                    webspace_id=bus_webspace,
+                    version=version,
+                    slot=slot,
+                    operation_id=operation_id,
+                )
+            except Exception:
+                _log.debug(
+                    "skill activation failure observation failed skill=%s space=%s",
+                    name,
+                    space,
+                    exc_info=True,
+                )
+            raise
         if emit_activation and self.bus:
             payload: Dict[str, Any] = {
                 "skill_name": name,
+                "component_type": "skill",
+                "component_id": name,
                 "space": space,
                 "webspace_id": bus_webspace,
                 "defer_webspace_rebuild": bool(defer_webspace_rebuild),
+                "version": str(version or "").strip() or None,
+                "slot": str(target or "").strip() or None,
             }
             emit(self.bus, "skills.activated", payload, "skill.mgr")
         return target

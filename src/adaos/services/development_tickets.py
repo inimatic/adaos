@@ -148,6 +148,17 @@ def _fingerprint(prefix: str, *parts: Any) -> str:
     return f"{prefix}:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
 
 
+def _normalized_failure_text(value: Any) -> str:
+    text = _text(value).lower()
+    text = re.sub(
+        r"\b(?:candidate|task|session|run|operation)\.[a-z0-9_.-]+\b",
+        "<execution-ref>",
+        text,
+    )
+    text = re.sub(r"sha256:[a-f0-9]{32,}", "sha256:<digest>", text)
+    return re.sub(r"\s+", " ", text).strip()[:1200]
+
+
 def _target_identity(target_scope: Mapping[str, Any]) -> str:
     target = _mapping(target_scope)
     target_type = _text(target.get("type")) or "unknown"
@@ -2550,6 +2561,17 @@ class DevelopmentTicketService:
         task_id: str | None = None,
         session_id: str | None = None,
         webspace_id: str = "desktop",
+        source: str = "builder_publication_gate",
+        producer: str = "builder_publication_gate",
+        publication_required: bool = True,
+        autonomous_repair_eligible: bool = True,
+        dedup_namespace: str = "publication-gate",
+        metadata: Mapping[str, Any] | None = None,
+        summary: str | None = None,
+        origin_type: str = "builder",
+        origin_surface: str = "publication_gate",
+        target_source: str = "dev",
+        run_policy: str = "block_publication",
     ) -> dict[str, Any]:
         """Capture a project-owned blocker raised by a release gate.
 
@@ -2566,13 +2588,9 @@ class DevelopmentTicketService:
         if not identifier:
             raise ValueError("publication gate component_id is required")
 
-        normalized_error = re.sub(
-            r"\b(?:candidate|task|session|run)\.[a-z0-9_.-]+\b",
-            "<execution-ref>",
-            error_text.lower(),
-        )
-        normalized_error = re.sub(r"sha256:[a-f0-9]{32,}", "sha256:<digest>", normalized_error)
-        normalized_error = re.sub(r"\s+", " ", normalized_error).strip()[:1200]
+        normalized_error = _normalized_failure_text(error_text)
+        source_token = _text(source) or "builder_publication_gate"
+        producer_token = _text(producer) or source_token
         component_ref = f"{kind}:{identifier}"
         linked_ids = list(
             dict.fromkeys(_text(item) for item in related_ticket_ids if _text(item))
@@ -2593,8 +2611,9 @@ class DevelopmentTicketService:
             "session_id": _text(session_id) or None,
             "webspace_id": _text(webspace_id) or "desktop",
         }
-        metadata = {
-            "producer": "builder_publication_gate",
+        gate_metadata = {
+            **_mapping(metadata),
+            "producer": producer_token,
             "actor": _text(actor) or "builder.automation",
             "gate": gate_token,
             "error": error_text,
@@ -2605,18 +2624,19 @@ class DevelopmentTicketService:
             "related_ticket_ids": linked_ids,
         }
         dedup_key = _fingerprint(
-            "publication-gate",
+            _text(dedup_namespace) or "publication-gate",
             component_ref,
             gate_token,
             normalized_error,
         )
         signal_result = self.capture_signal(
             kind="runtime_failure",
-            summary=f"{kind.capitalize()} {identifier} failed the {gate_token} publication gate",
+            summary=_text(summary)
+            or f"{kind.capitalize()} {identifier} failed the {gate_token} publication gate",
             owner_scope={"type": "workspace", "id": "local"},
             origin_scope={
-                "type": "builder",
-                "surface": "publication_gate",
+                "type": _text(origin_type) or "builder",
+                "surface": _text(origin_surface) or "publication_gate",
                 "id": _text(session_id) or _text(task_id) or component_ref,
             },
             target_scope={
@@ -2625,21 +2645,21 @@ class DevelopmentTicketService:
                 f"{kind}_id": identifier,
                 f"{kind}_ref": component_ref,
                 "component_ref": component_ref,
-                "source": "dev",
+                "source": _text(target_source) or "dev",
             },
             severity="high",
             blocking=True,
-            source="builder_publication_gate",
+            source=source_token,
             dedup_key=dedup_key,
             evidence_refs=[gate_evidence, *_sequence_of_mappings(evidence_refs)],
             policy={
                 "blocking": True,
-                "run_policy": "block_publication",
+                "run_policy": _text(run_policy) or "block_publication",
                 "design_time_fixable": True,
-                "autonomous_repair_eligible": True,
-                "publication_required": True,
+                "autonomous_repair_eligible": bool(autonomous_repair_eligible),
+                "publication_required": bool(publication_required),
             },
-            metadata=metadata,
+            metadata=gate_metadata,
             owner_area=kind,
             component_ref=component_ref,
         )
@@ -2647,9 +2667,9 @@ class DevelopmentTicketService:
             signal_result["signal"],
             kind="runtime_failure",
             status="accepted",
-            source="builder_publication_gate",
+            source=source_token,
             dedup_key=dedup_key,
-            metadata=metadata,
+            metadata=gate_metadata,
             owner_area=kind,
             component_ref=component_ref,
         )
@@ -2739,6 +2759,136 @@ class DevelopmentTicketService:
                 )
             closed.append(ticket)
         return closed
+
+    def report_runtime_activation_observation(
+        self,
+        observation: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Project manual/runtime activation outcomes into technical debt."""
+
+        status = _text(observation.get("status")).lower()
+        policy = _text(observation.get("report_policy")).lower() or "diagnostic_only"
+        kind = _text(observation.get("component_type")).lower().rstrip("s") or (
+            "scenario" if _text(observation.get("scenario_id")) else "skill"
+        )
+        identifier = _text(
+            observation.get("component_id")
+            or observation.get("skill_name")
+            or observation.get("scenario_id")
+        )
+        if kind not in {"skill", "scenario"} or not identifier:
+            return {"ok": True, "reported": False, "reason": "component_missing"}
+        if status == "failed":
+            if policy != "project_inbox":
+                return {
+                    "ok": True,
+                    "reported": False,
+                    "reason": "diagnostic_only",
+                    "component_ref": f"{kind}:{identifier}",
+                }
+            gate = _text(observation.get("failed_stage") or observation.get("stage")) or "activation"
+            error = _text(observation.get("error") or observation.get("failure_reason"))
+            source = _text(observation.get("source")) or "runtime_activation"
+            evidence = {
+                "type": "runtime_guard" if gate != "tests" else "test",
+                "id": _text(observation.get("operation_id"))
+                or f"{kind}:{identifier}:{gate}",
+                "status": "failed",
+                "gate": gate,
+                "space": _text(observation.get("space")) or "default",
+                "version": _text(
+                    observation.get("attempted_version") or observation.get("version")
+                )
+                or None,
+                "slot": _text(observation.get("slot")) or None,
+                "error": error or "runtime activation failed",
+            }
+            return self.report_publication_gate_failure(
+                component_type=kind,
+                component_id=identifier,
+                gate=gate,
+                error=error or "runtime activation failed",
+                actor=source,
+                evidence_refs=[evidence],
+                candidate_id=_text(observation.get("attempted_version")) or None,
+                webspace_id=_text(observation.get("webspace_id")) or "desktop",
+                source="runtime_activation",
+                producer="runtime_activation_observation",
+                publication_required=False,
+                autonomous_repair_eligible=True,
+                dedup_namespace="runtime-activation",
+                metadata={
+                    "report_policy": policy,
+                    "activation_source": source,
+                    "space": _text(observation.get("space")) or "default",
+                    "operation_id": _text(observation.get("operation_id")) or None,
+                    "attempted_version": _text(
+                        observation.get("attempted_version") or observation.get("version")
+                    )
+                    or None,
+                    "slot": _text(observation.get("slot")) or None,
+                },
+                summary=f"{kind.capitalize()} {identifier} failed runtime {gate}",
+                origin_type="runtime",
+                origin_surface="activation",
+                target_source=_text(observation.get("space")) or "default",
+                run_policy="block_activation",
+            )
+        if status != "passed":
+            return {"ok": True, "reported": False, "reason": status or "status_missing"}
+
+        component_ref = f"{kind}:{identifier}"
+        space = _text(observation.get("space")) or "default"
+        version = _text(observation.get("version") or observation.get("attempted_version"))
+        evidence = [
+            {
+                "type": "runtime_guard",
+                "id": _text(observation.get("operation_id")) or f"{component_ref}:activation",
+                "status": "passed",
+                "gate": "activation",
+                "space": space,
+                "version": version or None,
+                "slot": _text(observation.get("slot")) or None,
+            }
+        ]
+        tickets = self.list_tickets(
+            status_group="open",
+            component_ref=component_ref,
+            kind="runtime_failure",
+            source="runtime_activation",
+        )
+        closed: list[dict[str, Any]] = []
+        for ticket in tickets:
+            if _text(_mapping(ticket.get("metadata")).get("space")) not in {"", space}:
+                continue
+            ticket_id = _text(ticket.get("ticket_id"))
+            ticket_status = _text(ticket.get("status"))
+            if ticket_status not in {"resolved", "verified"}:
+                ticket = self.record_resolution(
+                    ticket_id,
+                    actor="runtime.activation",
+                    evidence_refs=evidence,
+                    resolved_by_version=version or None,
+                    resolved_by_overlay=(None if version else f"runtime:{space}"),
+                )["ticket"]
+                ticket_status = _text(ticket.get("status"))
+            if ticket_status == "resolved":
+                ticket = self.verify_ticket(
+                    ticket_id,
+                    actor="runtime.activation",
+                    evidence_refs=evidence,
+                    notes="A later runtime activation passed.",
+                )["ticket"]
+                ticket_status = _text(ticket.get("status"))
+            if ticket_status == "verified":
+                ticket = self.close_ticket(
+                    ticket_id,
+                    actor="runtime.activation",
+                    reason="verified",
+                    evidence_refs=evidence,
+                )
+            closed.append(ticket)
+        return {"ok": True, "reported": bool(closed), "closed_tickets": closed}
 
     def transition_core_ticket(
         self,
@@ -5173,6 +5323,28 @@ async def _on_compatibility_pending_action_response(evt: Any) -> None:
         )
     except Exception:
         _log.warning("failed to handle compatibility ticket pending action response", exc_info=True)
+
+
+@subscribe("skills.activation.failed")
+@subscribe("scenarios.activation.failed")
+async def _on_runtime_activation_failed(evt: Any) -> None:
+    try:
+        DevelopmentTicketService().report_runtime_activation_observation(
+            {**_event_payload(evt), "status": "failed"}
+        )
+    except Exception:
+        _log.warning("failed to record runtime activation Dev Ticket", exc_info=True)
+
+
+@subscribe("skills.activated")
+@subscribe("scenarios.synced")
+async def _on_runtime_activation_passed(evt: Any) -> None:
+    try:
+        DevelopmentTicketService().report_runtime_activation_observation(
+            {**_event_payload(evt), "status": "passed"}
+        )
+    except Exception:
+        _log.warning("failed to reconcile runtime activation Dev Ticket", exc_info=True)
 
 
 __all__ = [

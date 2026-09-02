@@ -29,6 +29,7 @@ from adaos.services.root.client import RootHttpClient
 from adaos.services.root.service import create_zip_bytes
 from adaos.services.scenario.manager import ScenarioManager
 from adaos.services.scenario.validation import validate_scenario_path
+from adaos.services.runtime_activation_observations import emit_runtime_activation_failure
 from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
 from adaos.services.scenario.scaffold import create as scaffold_create
 from adaos.services.workspace_registry import build_registry_entry, list_workspace_registry_entries
@@ -494,6 +495,18 @@ def install_cmd(
     try:
         meta = mgr.install_with_deps(name, pin=pin, webspace_id=default_webspace_id())
     except Exception as exc:
+        emit_runtime_activation_failure(
+            getattr(mgr, "bus", None),
+            component_type="scenario",
+            component_id=name,
+            stage="install",
+            error=f"{type(exc).__name__}: {exc}",
+            source="cli.scenario.install",
+            report_policy="project_inbox",
+            space="default",
+            webspace_id=default_webspace_id(),
+            operation_id=f"scenario-install:{name}",
+        )
         typer.secho(f"install failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(1) from exc
     try:
@@ -638,6 +651,18 @@ def validate_cmd(
         raise typer.Exit(0 if report.ok else 1)
 
     if errors:
+        emit_runtime_activation_failure(
+            getattr(ctx, "bus", None),
+            component_type="scenario",
+            component_id=scenario_id,
+            stage="validation",
+            error="; ".join(str(error) for error in errors[:8]),
+            source="cli.scenario.validate",
+            report_policy="project_inbox",
+            space="default",
+            webspace_id=default_webspace_id(),
+            operation_id=f"scenario-validate:{scenario_id}",
+        )
         typer.secho(_("cli.scenario.validate.errors"), fg=typer.colors.RED)
         for err in errors:
             typer.echo(_("cli.scenario.validate.error_item", error=str(err)))

@@ -689,6 +689,15 @@ may be resolved, verified, and closed automatically with the exact accepted
 `builder_trial` and published `project_release` evidence. User-authored tickets
 retain their own acceptance lifecycle even when they share that evidence.
 
+Activation outside Builder uses the typed event-shaped
+`adaos.runtime.activation_observation.v1` contract. Explicit CLI/API operations
+set `report_policy=project_inbox`; setup, migration, and internal orchestration
+default to `diagnostic_only`. Both remain observable, but only the former may
+create a scoped `runtime_failure` ticket. A later matching
+`skills.activated` or `scenarios.synced` event supplies runtime evidence to
+resolve, verify, and close that technical ticket without changing the
+user-authored feedback lifecycle.
+
 ## Runtime Compatibility Findings
 
 Compatibility findings are Development Signals created by deterministic

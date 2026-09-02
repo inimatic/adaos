@@ -305,7 +305,15 @@ def install(
                     runtime = None
                 version = getattr(runtime, "version", None) if runtime else None
                 slot = getattr(runtime, "slot", None) if runtime else None
-                skill_mgr.activate_for_space(skill_id, version=version, slot=slot, space="default", webspace_id=target_webspace)
+                skill_mgr.activate_for_space(
+                    skill_id,
+                    version=version,
+                    slot=slot,
+                    space="default",
+                    webspace_id=target_webspace,
+                    observation_source="setup",
+                    observation_policy="diagnostic_only",
+                )
                 if setup_skills:
                     try:
                         skill_mgr.setup_skill(skill_id)
@@ -525,6 +533,8 @@ def update(
                             slot=slot,
                             space="default",
                             webspace_id=target_webspace,
+                            observation_source="setup",
+                            observation_policy="diagnostic_only",
                         )
                         entry["runtime_migrated"] = True
                         entry["migrated_version"] = version
