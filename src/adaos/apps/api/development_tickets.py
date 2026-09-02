@@ -613,6 +613,49 @@ def _compact_builder_trial(value: Any) -> dict[str, Any]:
     }
 
 
+def _reconcile_builder_trial(
+    value: Mapping[str, Any],
+    *,
+    ticket: Mapping[str, Any],
+) -> dict[str, Any]:
+    summary = dict(value)
+    trial = dict(summary.get("trial")) if isinstance(summary.get("trial"), Mapping) else {}
+    candidate_id = str(trial.get("candidate_id") or "").strip()
+    if not candidate_id:
+        return summary
+    evidence = _mapping_list(ticket.get("evidence_refs"))
+    decisions = [
+        item
+        for item in evidence
+        if str(item.get("type") or "").strip() == "builder_trial"
+        and str(item.get("id") or "").strip() == candidate_id
+        and (
+            not item.get("digest")
+            or str(item.get("digest") or "").strip()
+            == str(trial.get("candidate_digest") or "").strip()
+        )
+    ]
+    if not decisions:
+        return summary
+    decision = decisions[-1]
+    decision_status = str(decision.get("status") or "").strip()
+    release_digest = str(trial.get("release_digest") or "").strip()
+    published = any(
+        str(item.get("type") or "").strip() == "project_release"
+        and str(item.get("status") or "").strip() == "published"
+        and bool(release_digest)
+        and str(item.get("digest") or "").strip() == release_digest
+        for item in evidence
+    )
+    if decision_status:
+        trial["status"] = "published" if decision_status == "accepted" and published else decision_status
+    for key in ("decision", "decided_at", "decided_by"):
+        if decision.get(key) not in (None, ""):
+            trial[key] = decision[key]
+    summary["trial"] = trial
+    return summary
+
+
 def _compact_builder_acceptance(value: Any) -> dict[str, Any]:
     acceptance = dict(value) if isinstance(value, Mapping) else {}
     if not acceptance:
@@ -819,6 +862,9 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
         builder_items.append(item)
         entries.append(_builder_stream_entry(item))
     entries = sorted(entries, key=lambda item: (str(item.get("created_at") or item.get("updated_at") or ""), str(item.get("entry_id") or "")))
+    current_trial = max(trial_candidates, key=lambda item: item[0])[1] if trial_candidates else {}
+    if current_trial:
+        current_trial = _reconcile_builder_trial(current_trial, ticket=ticket)
     return {
         "schema": "adaos.builder.ticket_work_stream.v1",
         "ticket_id": ticket_id,
@@ -835,7 +881,7 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
         },
         "builder_work_count": len(builder_items),
         "builder_work_items": builder_items,
-        "trial": max(trial_candidates, key=lambda item: item[0])[1] if trial_candidates else {},
+        "trial": current_trial,
         "entries": entries,
     }
 

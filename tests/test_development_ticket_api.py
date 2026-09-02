@@ -1021,6 +1021,67 @@ def test_builder_work_stream_selects_latest_trial_across_repair_cycles(
     ]
 
 
+def test_builder_work_stream_reconciles_published_trial_from_ticket_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = DevelopmentTicketService()
+    ticket = {
+        "ticket_id": "dticket.published",
+        "summary": "Publish one accepted change",
+        "status": "closed",
+        "evidence_refs": [
+            {
+                "type": "builder_trial",
+                "id": "candidate.published",
+                "digest": "sha256:" + "a" * 64,
+                "status": "accepted",
+                "decision": "accept",
+            },
+            {
+                "type": "project_release",
+                "id": "demo@0.2.0",
+                "digest": "sha256:" + "b" * 64,
+                "status": "published",
+            },
+        ],
+        "builder_refs": [
+            {
+                "repair_id": "repair.published",
+                "automation_task_id": "task.published",
+                "status": "resolved",
+            }
+        ],
+    }
+
+    class _RepairReadModel:
+        def list(self):
+            return [
+                {
+                    "repair_id": "repair.published",
+                    "updated_at": "2026-09-03T00:00:00+00:00",
+                    "context": {
+                        "automation": {"task_id": "task.published"},
+                        "trial": {
+                            "ok": True,
+                            "trial": {
+                                "status": "trial",
+                                "candidate_id": "candidate.published",
+                                "candidate_digest": "sha256:" + "a" * 64,
+                                "release_digest": "sha256:" + "b" * 64,
+                            },
+                        },
+                    },
+                }
+            ]
+
+    monkeypatch.setattr(tickets_api, "_repair_service_for", lambda _service: _RepairReadModel())
+
+    stream = tickets_api._builder_work_stream(service, ticket)
+
+    assert stream["trial"]["trial"]["status"] == "published"
+    assert stream["trial"]["trial"]["decision"] == "accept"
+
+
 def test_builder_work_stream_compacts_acceptance_evidence_and_timeline() -> None:
     acceptance = tickets_api._compact_builder_acceptance(
         {
