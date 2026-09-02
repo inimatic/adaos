@@ -46,6 +46,25 @@ def _write_scenario(root: Path, name: str, *, depends: list[str], route: str) ->
     return target
 
 
+def _write_toolless_skill(root: Path, name: str) -> None:
+    target = root / "skills" / name
+    target.mkdir(parents=True)
+    (target / "skill.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": name,
+                "version": "0.1.0",
+                "entry": "handlers/main.py",
+                "events": {"subscribe": ["desktop.toggleInstall"]},
+                "exports": {"tools": []},
+                "tools": [],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_scenario_validation_resolves_declared_dev_skill_tools(tmp_path: Path) -> None:
     _write_skill(tmp_path, "smoke_skill", "check")
     scenario = _write_scenario(
@@ -59,6 +78,37 @@ def test_scenario_validation_resolves_declared_dev_skill_tools(tmp_path: Path) -
 
     assert report.ok is True
     assert report.errors == []
+
+
+def test_scenario_validation_admits_toolless_ui_event_dependency(tmp_path: Path) -> None:
+    _write_toolless_skill(tmp_path, "desktop_shell")
+    _write_skill(tmp_path, "smoke_skill", "check")
+    scenario = _write_scenario(
+        tmp_path,
+        "smoke",
+        depends=["desktop_shell", "smoke_skill"],
+        route="smoke_skill.check",
+    )
+
+    report = validate_scenario_path(scenario)
+
+    assert report.ok is True
+    assert report.errors == []
+
+
+def test_scenario_validation_rejects_unknown_route_on_toolless_dependency(tmp_path: Path) -> None:
+    _write_toolless_skill(tmp_path, "desktop_shell")
+    scenario = _write_scenario(
+        tmp_path,
+        "smoke",
+        depends=["desktop_shell"],
+        route="desktop_shell.missing",
+    )
+
+    report = validate_scenario_path(scenario)
+
+    assert report.ok is False
+    assert {issue.code for issue in report.issues} == {"scenario.route.unknown"}
 
 
 def test_scenario_validation_admits_declared_conversational_package(tmp_path: Path) -> None:

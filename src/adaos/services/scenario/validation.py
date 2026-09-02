@@ -265,7 +265,7 @@ def _registry_with_dependencies(
     registry = default_registry()
     roots = list(dependency_roots)
     for dependency_id in dependency_ids:
-        skill_root, has_tools = _resolve_skill_root(dependency_id, roots)
+        skill_root, _has_tools = _resolve_skill_root(dependency_id, roots)
         if skill_root is None:
             issues.append(
                 ScenarioValidationIssue(
@@ -277,16 +277,9 @@ def _registry_with_dependencies(
             )
             continue
         tools = _skill_tools(skill_root)
-        if not has_tools:
-            issues.append(
-                ScenarioValidationIssue(
-                    "error",
-                    "scenario.dependency.tools_missing",
-                    f"declared skill dependency '{dependency_id}' exports no tools",
-                    "depends",
-                )
-            )
-            continue
+        # A scenario dependency may own UI, events, or projected data without
+        # exporting a callable tool. Exact route and Web UI references are
+        # validated below, so a missing tool still fails at its use site.
         for tool in tools:
             registry.register(f"{dependency_id}.{tool}", lambda _args: None)
             registry.register(f"{dependency_id}:{tool}", lambda _args: None)
