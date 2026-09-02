@@ -6942,32 +6942,30 @@ class BuilderAutomationService:
 
             task_id = str(session.get("current_task_id") or "").strip()
             package_digest = str(delivery.get("package_digest") or "").strip()
+            links = (
+                session.get("links")
+                if isinstance(session.get("links"), Mapping)
+                else {}
+            )
+            publication_project_ref = str(
+                links.get("development_ticket_project_ref")
+                or links.get("project_ref")
+                or ""
+            ).strip()
             result = lifecycle.prepare_trial(
                 object_type,
                 object_id,
                 actor="builder.automation",
-                idempotency_key=(
-                    f"dev-ticket-trial:{task_id or object_id}:"
-                    f"{package_digest[-24:] or 'checkpoint'}"
+                idempotency_key=self._aprobation_trial_idempotency_key(
+                    task_id=task_id or object_id,
+                    package_digest=package_digest,
+                    publication_project_ref=publication_project_ref or None,
                 ),
                 source_webspace_id=str(session.get("webspace_id") or "desktop").strip()
                 or "desktop",
                 target_webspace_id=str(session.get("webspace_id") or "desktop").strip()
                 or "desktop",
-                publication_project_ref=str(
-                    (
-                        session.get("links")
-                        if isinstance(session.get("links"), Mapping)
-                        else {}
-                    ).get("development_ticket_project_ref")
-                    or (
-                        session.get("links")
-                        if isinstance(session.get("links"), Mapping)
-                        else {}
-                    ).get("project_ref")
-                    or ""
-                ).strip()
-                or None,
+                publication_project_ref=publication_project_ref or None,
             )
             workflow = (
                 dict(result.get("workflow"))
@@ -7086,6 +7084,32 @@ class BuilderAutomationService:
         if projection is not None:
             receipt["component_update_projection"] = projection
         return receipt
+
+    @staticmethod
+    def _aprobation_trial_idempotency_key(
+        *,
+        task_id: str,
+        package_digest: str,
+        publication_project_ref: str | None,
+    ) -> str:
+        key = (
+            f"dev-ticket-trial:{str(task_id or '').strip() or 'task'}:"
+            f"{str(package_digest or '').strip()[-24:] or 'checkpoint'}"
+        )
+        project_ref = str(publication_project_ref or "").strip()
+        if not project_ref:
+            return key
+        if not project_ref.startswith("project:"):
+            raise RuntimeError("Builder Trial Project ref must use project:<id>")
+        from adaos.sdk.developer import compositions
+
+        project = compositions.get(project_ref.split(":", 1)[1])
+        manifest_identity = str(
+            project.get("manifest_digest") or project.get("version") or ""
+        ).strip()
+        if not manifest_identity:
+            raise RuntimeError("Builder Trial Project manifest identity is unavailable")
+        return f"{key}:project:{manifest_identity[-24:]}"
 
     def _persist_aprobation_trial_state(
         self,

@@ -4214,6 +4214,32 @@ def test_existing_trial_uses_project_version_when_delivery_omits_it(
     assert receipt["component_update"]["version"] == "0.11.4"
 
 
+def test_project_trial_idempotency_includes_composition_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.sdk.developer import compositions
+
+    monkeypatch.setattr(
+        compositions,
+        "get",
+        lambda project_id: {
+            "id": project_id,
+            "manifest_digest": "sha256:" + "a" * 64,
+        },
+    )
+
+    key = BuilderAutomationService._aprobation_trial_idempotency_key(
+        task_id="task.demo",
+        package_digest="sha256:" + "b" * 64,
+        publication_project_ref="project:demo_suite",
+    )
+
+    assert key == (
+        "dev-ticket-trial:task.demo:bbbbbbbbbbbbbbbbbbbbbbbb:"
+        "project:aaaaaaaaaaaaaaaaaaaaaaaa"
+    )
+
+
 @pytest.mark.parametrize(
     ("trial", "expected_source", "expected_skill_mode"),
     [
