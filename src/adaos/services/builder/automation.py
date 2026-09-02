@@ -79,6 +79,24 @@ _AUTOMATION_STEPS = (
     ("verification", "builder.automation.step.verification", 3),
     ("result", "builder.automation.step.result", 4),
 )
+
+
+def _preserved_candidate_has_changes(run_root: Path) -> bool:
+    workspace = run_root / "workspace"
+    if not (workspace / ".git").is_dir():
+        return False
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=workspace,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and bool(result.stdout.strip())
 _DEVELOPMENT_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
 _RUNTIME_DIAGNOSTIC_MAX_FILES = 4096
 _RUNTIME_DIAGNOSTIC_MAX_BYTES = 128 * 1024 * 1024
@@ -2897,6 +2915,8 @@ class BuilderAutomationService:
         if not (run_root / "workspace" / ".git").is_dir():
             return None
         if not (run_root / "input" / "assignment.json").is_file():
+            return None
+        if not _preserved_candidate_has_changes(run_root):
             return None
         return {
             "schema": "adaos.builder.automation_continuation_checkpoint.v1",

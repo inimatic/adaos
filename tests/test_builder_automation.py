@@ -1663,6 +1663,7 @@ def test_structured_edit_context_projection_keeps_authority_without_prompt_paylo
 )
 def test_validation_failure_reuses_original_budget_candidate_after_requalification(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     validation_failure_message: str,
     expected_reason: str,
 ) -> None:
@@ -1713,6 +1714,11 @@ def test_validation_failure_reuses_original_budget_candidate_after_requalificati
         },
     }
     service.factory = SimpleNamespace(read_task=lambda task_id: tasks[task_id])
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda _run_root: True,
+    )
 
     checkpoint = service._budget_continuation_checkpoint(
         {"current_task_id": finalizer_task_id}
@@ -1724,6 +1730,34 @@ def test_validation_failure_reuses_original_budget_candidate_after_requalificati
     assert checkpoint["failure_id"] == "failure.source-budget"
     assert checkpoint["trigger_failure_id"] == "failure.path-guard"
     assert checkpoint["reason"] == expected_reason
+
+
+def test_budget_continuation_skips_unchanged_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    task_id = "task.empty-budget-candidate"
+    run_root = service.runs_root / task_id
+    (run_root / "workspace" / ".git").mkdir(parents=True)
+    (run_root / "input").mkdir(parents=True)
+    (run_root / "input" / "assignment.json").write_text("{}", encoding="utf-8")
+    service.factory = SimpleNamespace(
+        read_task=lambda _task_id: {
+            "task_id": task_id,
+            "status": "failed",
+            "failure_history": [
+                {"message": "Codex token budget exceeded: observed 11 of 10 tokens."}
+            ],
+        }
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda _run_root: False,
+    )
+
+    assert service._budget_continuation_checkpoint({"current_task_id": task_id}) is None
 
 
 def test_failed_dev_ticket_resume_updates_brief_before_submitting_continuation(
