@@ -90,6 +90,10 @@ def test_capsule_graph_plan_compile_and_receipt(tmp_path: Path) -> None:
 
     assert binding["revision"] == 1
     assert plan["status"] == "ready"
+    assert plan["required_estimated_tokens"] == sum(
+        item["estimated_tokens"] for item in resolution["required"]
+    )
+    assert plan["omitted_required_refs"] == []
     assert compiled["model_text_format"] == "toon"
     assert compiled["stable_prefix_digest"].startswith("sha256:")
     assert receipt["usage"]["fresh_plus_output"] == 35

@@ -1068,6 +1068,9 @@ class ContextControlService:
         candidates = _mappings(resolution.get("candidates"))
         required.sort(key=lambda item: (len(item.get("path") or []), _text(item.get("kind")), _text(item.get("ref"))))
         candidates.sort(key=lambda item: (-float(item.get("utility") or 0), int(item.get("estimated_tokens") or 0), _text(item.get("ref"))))
+        required_estimated_tokens = sum(
+            max(1, int(item.get("estimated_tokens") or 1)) for item in required
+        )
         selected: list[dict[str, Any]] = []
         omitted = _mappings(resolution.get("omitted"))
         used = 0
@@ -1081,6 +1084,11 @@ class ContextControlService:
                 omitted.append({**unit, "reason": "token_budget"})
                 if unit.get("required"):
                     insufficient = True
+        omitted_required_refs = [
+            _text(item.get("ref"))
+            for item in omitted
+            if item.get("required") and _text(item.get("ref"))
+        ]
         canonical = {
             "schema": PLAN_SCHEMA,
             "resolution_ref": _text(query.get("resolution_ref") or resolution.get("resolution_ref")) or f"digest:{_digest(resolution)}",
@@ -1091,6 +1099,8 @@ class ContextControlService:
             "policy_ref": _text(query.get("policy_ref")) or None,
             "token_budget": token_budget,
             "estimated_tokens": used,
+            "required_estimated_tokens": required_estimated_tokens,
+            "omitted_required_refs": omitted_required_refs,
             "selected": selected,
             "omitted": omitted,
             "denied": _mappings(resolution.get("denied")),

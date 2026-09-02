@@ -4,6 +4,8 @@ from typing import Any, Mapping
 
 
 DEFAULT_BILLABLE_TOKEN_MULTIPLIER = 8
+DEFAULT_PROMPT_TOKEN_MIN_RESERVE = 1_024
+DEFAULT_PROMPT_TOKEN_MAX_RESERVE = 8_192
 
 
 def execution_token_metric(value: Mapping[str, Any] | None) -> str:
@@ -47,6 +49,17 @@ def execution_billable_token_limit(value: Mapping[str, Any] | None) -> int:
     return model_limit
 
 
+def execution_prompt_token_limit(model_token_limit: int) -> int:
+    limit = max(0, int(model_token_limit or 0))
+    if limit <= 0:
+        return 0
+    reserve = min(
+        DEFAULT_PROMPT_TOKEN_MAX_RESERVE,
+        max(DEFAULT_PROMPT_TOKEN_MIN_RESERVE, limit // 10),
+    )
+    return max(1, limit - reserve)
+
+
 def with_effective_billable_token_limit(
     value: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
@@ -61,8 +74,11 @@ def with_effective_billable_token_limit(
 
 __all__ = [
     "DEFAULT_BILLABLE_TOKEN_MULTIPLIER",
+    "DEFAULT_PROMPT_TOKEN_MAX_RESERVE",
+    "DEFAULT_PROMPT_TOKEN_MIN_RESERVE",
     "execution_billable_token_limit",
     "execution_model_token_limit",
+    "execution_prompt_token_limit",
     "execution_token_metric",
     "with_effective_billable_token_limit",
 ]

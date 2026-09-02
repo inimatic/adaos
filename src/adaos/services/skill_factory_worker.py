@@ -29,6 +29,7 @@ from adaos.domain.development_validation import (
 )
 from adaos.domain.development_budget import (
     execution_billable_token_limit,
+    execution_prompt_token_limit,
     execution_token_metric,
 )
 from adaos.services.node_config import load_config
@@ -64,8 +65,6 @@ MANIFEST_REWRITE_DELETION_RATIO = 4.0
 MANIFEST_REWRITE_SHRINK_RATIO = 0.5
 CODEX_TOKEN_BUDGET_CHECK_INTERVAL_SECONDS = 2.0
 CODEX_TOKEN_BUDGET_EXIT_CODE = 124
-CODEX_PROMPT_BUDGET_MIN_RESERVE = 1024
-CODEX_PROMPT_BUDGET_MAX_RESERVE = 8192
 CODEX_LIVE_BUDGET_SAFETY_FACTOR = 1.25
 CODEX_LIVE_PROVIDER_BASELINE_TOKENS = 40_000
 CODEX_LIVE_PROVIDER_TOKENS_PER_TOOL_ROUND = 18_000
@@ -1509,11 +1508,8 @@ def _codex_prompt_budget_check(
             "prompt_token_estimate": estimate,
         }
     max_tokens = int(budget["max_model_tokens"])
-    reserve = min(
-        CODEX_PROMPT_BUDGET_MAX_RESERVE,
-        max(CODEX_PROMPT_BUDGET_MIN_RESERVE, max_tokens // 10),
-    )
-    prompt_limit = max(1, max_tokens - reserve)
+    prompt_limit = execution_prompt_token_limit(max_tokens)
+    reserve = max(0, max_tokens - prompt_limit)
     status = "ok" if estimate <= prompt_limit else "blocked"
     return {
         "schema": "adaos.skill_factory.codex_prompt_budget_check.v1",

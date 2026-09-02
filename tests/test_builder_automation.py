@@ -15,6 +15,8 @@ from adaos.services.builder import automation as automation_module
 from adaos.services.builder.automation import (
     BuilderAutomationService,
     _brief_has_structured_edits,
+    _context_budget_window,
+    _context_plan_failure_message,
     _context_projection_brief,
     _iteration_context_projection,
 )
@@ -500,6 +502,69 @@ def test_dev_ticket_repair_projects_minimal_diff_constraints(tmp_path: Path) -> 
     assert "AdaOS bounded surgical UI repair" in prompt
     assert "widget:metrics-table.title" in prompt
     assert "Governed Development Session inputs" not in prompt
+
+
+def test_builder_adapts_inferred_context_budget_for_required_capsules(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    original_plan = ContextControlService.plan
+    requested_budgets: list[int] = []
+
+    def plan_with_first_pass_budget_miss(
+        context_service: ContextControlService,
+        request: dict,
+    ) -> dict:
+        planned = original_plan(context_service, request)
+        requested_budgets.append(int(request["token_budget"]))
+        if len(requested_budgets) == 1:
+            return {
+                **planned,
+                "status": "insufficient",
+                "required_estimated_tokens": 9_000,
+                "omitted_required_refs": ["capsule:required-task"],
+            }
+        return planned
+
+    monkeypatch.setattr(ContextControlService, "plan", plan_with_first_pass_budget_miss)
+
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Apply one bounded label refinement.",
+        execution_budget={
+            "max_model_tokens": 12_000,
+            "token_budget_metric": "fresh_plus_output",
+        },
+    )
+
+    control = started["session"]["context_control"]
+    assert requested_budgets == [8_000, 9_000]
+    assert control["initial_token_budget"] == 8_000
+    assert control["token_budget"] == 9_000
+    assert control["token_budget_adapted"] is True
+
+
+def test_explicit_context_budget_is_a_hard_limit_with_diagnostics() -> None:
+    assert _context_budget_window(
+        {"max_model_tokens": 12_000, "max_context_tokens": 8_000}
+    ) == (8_000, 8_000, True)
+
+    message = _context_plan_failure_message(
+        {
+            "token_budget": 8_000,
+            "required_estimated_tokens": 9_000,
+            "omitted_required_refs": ["capsule:required-task"],
+            "denied": [],
+            "unavailable": [],
+        },
+        budget_ceiling=8_000,
+    )
+
+    assert "required_tokens=9000" in message
+    assert "budget_ceiling=8000" in message
+    assert "omitted_required=capsule:required-task" in message
 
 
 def test_unqualified_dev_ticket_defaults_to_project_batch_repair(tmp_path: Path) -> None:

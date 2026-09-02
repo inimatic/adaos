@@ -24,6 +24,7 @@ import yaml
 from adaos.build_info import BUILD_INFO
 from adaos.domain.development_budget import (
     execution_billable_token_limit,
+    execution_prompt_token_limit,
     with_effective_billable_token_limit,
 )
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
@@ -80,10 +81,52 @@ _AUTOMATION_STEPS = (
 _DEVELOPMENT_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
 _RUNTIME_DIAGNOSTIC_MAX_FILES = 4096
 _RUNTIME_DIAGNOSTIC_MAX_BYTES = 128 * 1024 * 1024
+_CONTEXT_BUDGET_MIN = 8_000
+_CONTEXT_BUDGET_MAX = 32_000
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _context_budget_window(
+    execution_budget: Mapping[str, Any] | None,
+) -> tuple[int, int, bool]:
+    budget = execution_budget if isinstance(execution_budget, Mapping) else {}
+    explicit = int(budget.get("max_context_tokens") or 0)
+    if explicit > 0:
+        return explicit, explicit, True
+    model_budget = int(budget.get("max_model_tokens") or budget.get("max_tokens") or 0)
+    if model_budget <= 0:
+        return 16_000, _CONTEXT_BUDGET_MAX, False
+    ceiling = min(_CONTEXT_BUDGET_MAX, execution_prompt_token_limit(model_budget))
+    initial = min(
+        ceiling,
+        max(_CONTEXT_BUDGET_MIN, min(_CONTEXT_BUDGET_MAX, model_budget // 4)),
+    )
+    return initial, ceiling, False
+
+
+def _context_plan_failure_message(
+    plan: Mapping[str, Any],
+    *,
+    budget_ceiling: int,
+) -> str:
+    required_tokens = int(plan.get("required_estimated_tokens") or 0)
+    omitted = [
+        str(item).strip()
+        for item in plan.get("omitted_required_refs") or []
+        if str(item).strip()
+    ]
+    return (
+        "Builder Context Plan is insufficient for Automation: "
+        f"required_tokens={required_tokens}, "
+        f"token_budget={int(plan.get('token_budget') or 0)}, "
+        f"budget_ceiling={budget_ceiling}, "
+        f"omitted_required={','.join(omitted) or 'none'}, "
+        f"denied={len(plan.get('denied') or [])}, "
+        f"unavailable={len(plan.get('unavailable') or [])}"
+    )
 
 
 def _safe_token(value: Any, *, fallback: str = "project") -> str:
@@ -1012,9 +1055,10 @@ class BuilderAutomationService:
             if isinstance(session.get("execution_budget"), Mapping)
             else {}
         )
-        explicit_context_budget = int(execution_budget.get("max_context_tokens") or 0)
-        model_budget = int(execution_budget.get("max_model_tokens") or execution_budget.get("max_tokens") or 0)
-        context_budget = explicit_context_budget or max(8_000, min(32_000, model_budget // 4 if model_budget else 16_000))
+        context_budget, context_budget_ceiling, context_budget_explicit = (
+            _context_budget_window(execution_budget)
+        )
+        initial_context_budget = context_budget
         plan = service.plan(
             {
                 "resolution": resolution,
@@ -1022,8 +1066,29 @@ class BuilderAutomationService:
                 "model_profile": dict(session.get("agent_profile") or {}),
             }
         )
+        required_context_tokens = int(plan.get("required_estimated_tokens") or 0)
+        if (
+            plan["status"] != "ready"
+            and not context_budget_explicit
+            and resolution.get("status") == "ready"
+            and required_context_tokens > context_budget
+            and required_context_tokens <= context_budget_ceiling
+        ):
+            context_budget = required_context_tokens
+            plan = service.plan(
+                {
+                    "resolution": resolution,
+                    "token_budget": context_budget,
+                    "model_profile": dict(session.get("agent_profile") or {}),
+                }
+            )
         if plan["status"] != "ready":
-            raise ValueError("Builder Context Plan is insufficient for Automation")
+            raise ValueError(
+                _context_plan_failure_message(
+                    plan,
+                    budget_ceiling=context_budget_ceiling,
+                )
+            )
         compilation = service.compile(
             {
                 "plan": plan,
@@ -1075,6 +1140,10 @@ class BuilderAutomationService:
             "unavailable": plan["unavailable"],
             "estimated_tokens": plan["estimated_tokens"],
             "token_budget": plan["token_budget"],
+            "initial_token_budget": initial_context_budget,
+            "token_budget_adapted": plan["token_budget"] != initial_context_budget,
+            "required_estimated_tokens": plan.get("required_estimated_tokens", 0),
+            "omitted_required_refs": plan.get("omitted_required_refs", []),
             "context_latency_ms": max(
                 0,
                 int((time.perf_counter() - compile_started_at) * 1000),
@@ -5197,6 +5266,10 @@ class BuilderAutomationService:
                     "unavailable",
                     "estimated_tokens",
                     "token_budget",
+                    "initial_token_budget",
+                    "token_budget_adapted",
+                    "required_estimated_tokens",
+                    "omitted_required_refs",
                     "context_latency_ms",
                 )
             }
