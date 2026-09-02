@@ -254,17 +254,30 @@ def test_subscription_activation_does_not_invent_runtime_skip_policies() -> None
 def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks() -> None:
     captured: dict[str, object] = {}
     component = SimpleNamespace(
-        artifact_id="builder",
+        artifact_id="taiga_ui_demo_scenario",
         kind="scenario",
+        key="scenario:taiga_ui_demo_scenario",
         version="1.2.3",
         digest="sha256:" + "a" * 64,
         source_ref=SimpleNamespace(revision="revision-1"),
     )
     promoted = SimpleNamespace(
-        plan=SimpleNamespace(release=SimpleNamespace(components=[component])),
+        plan=SimpleNamespace(
+            release=SimpleNamespace(
+                components=[component],
+                composition_lock=SimpleNamespace(
+                    members=(
+                        SimpleNamespace(
+                            ref="scenario:taiga_ui_demo_scenario",
+                            role="primary",
+                        ),
+                    ),
+                ),
+            )
+        ),
         candidate=SimpleNamespace(
             candidate_id="candidate-1",
-            project_id="builder",
+            project_id="semantic_ui_demo",
             source_ref=SimpleNamespace(revision="revision-1"),
             validation_evidence=({"status": "passed", "validator": "test"},),
             trials=(
@@ -275,16 +288,26 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks() 
             ),
             updated_at="2026-08-05T12:00:00+00:00",
         ),
-        pointer=SimpleNamespace(release="builder@1.2.3", release_digest="sha256:" + "b" * 64),
+        pointer=SimpleNamespace(
+            release="semantic_ui_demo@1.2.3",
+            release_digest="sha256:" + "b" * 64,
+        ),
         activation=SimpleNamespace(
             operation_id="activation-1",
             workspace_lock=SimpleNamespace(
                 lock_revision=7,
-                slots=(SimpleNamespace(slot_id="builder", project_id="builder"),),
+                slots=(
+                    SimpleNamespace(
+                        slot_id="semantic_ui_demo",
+                        project_id="semantic_ui_demo",
+                    ),
+                ),
                 to_dict=lambda: {"lock_digest": "sha256:" + "c" * 64},
             ),
         ),
-        subscription=SimpleNamespace(to_dict=lambda: {"project_id": "builder"}),
+        subscription=SimpleNamespace(
+            to_dict=lambda: {"project_id": "semantic_ui_demo"}
+        ),
     )
 
     class _Publication:
@@ -292,7 +315,7 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks() 
             assert candidate_id == "candidate-1"
             return SimpleNamespace(
                 packages=(
-                    SimpleNamespace(key="scenario:builder"),
+                    SimpleNamespace(key="scenario:taiga_ui_demo_scenario"),
                     SimpleNamespace(key="skill:builder_skill"),
                 )
             )
@@ -333,13 +356,16 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks() 
     assert callable(captured["health_check"])
     captured["reload_runtime"](SimpleNamespace())
     captured["health_check"](SimpleNamespace())
-    expected_scope = frozenset({"scenario:builder", "skill:builder_skill"})
+    expected_scope = frozenset(
+        {"scenario:taiga_ui_demo_scenario", "skill:builder_skill"}
+    )
     assert reload_scopes == [expected_scope]
     assert health_scopes == [expected_scope]
     assert "reload_policy" not in captured
     assert "health_policy" not in captured
     assert result["apply_evidence"]["activation"]["operation_id"] == "activation-1"
     assert result["apply_evidence"]["approval"]["actor_id"] == "user:test"
+    assert result["name"] == "taiga_ui_demo_scenario"
 
 
 def test_workspace_runtime_callbacks_reload_and_verify_exact_lock(

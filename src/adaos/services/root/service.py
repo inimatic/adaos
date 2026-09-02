@@ -2625,17 +2625,34 @@ class RootDeveloperService:
                 "error": "candidate_base_moved",
                 "rebase_plan": exc.plan.to_dict(),
             }
+        release = promoted.plan.release
+        composition = getattr(release, "composition_lock", None)
+        primary_ref = next(
+            (
+                str(member.ref)
+                for member in (getattr(composition, "members", ()) or ())
+                if str(getattr(member, "role", "") or "").strip() == "primary"
+            ),
+            "",
+        )
         component = next(
             (
                 item
-                for item in promoted.plan.release.components
+                for item in release.components
+                if primary_ref and item.key == primary_ref
+            ),
+            None,
+        ) or next(
+            (
+                item
+                for item in release.components
                 if item.artifact_id == promoted.candidate.project_id
             ),
             None,
         )
         if component is None:
             raise RootServiceError(
-                "Promoted release does not contain its project component; workspace was not reconciled"
+                "Promoted release has no declared primary component; workspace was not reconciled"
             )
         promotion_operation = publication.load_promotion(candidate_id) or {}
         promotion_receipts = (
