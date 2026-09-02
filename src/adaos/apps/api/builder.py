@@ -418,6 +418,22 @@ def recover_validated_automation(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@router.post("/automation/reconcile-checkpoint")
+def reconcile_automation_checkpoint(
+    body: BuilderAutomationRecoveryRequest,
+    service: BuilderAutomationService = Depends(_get_automation_service),
+) -> dict[str, Any]:
+    """Retry failed Forge checkpoints without submitting another Codex task."""
+
+    try:
+        return service.reconcile_checkpoint(
+            object_type=body.object_type,
+            object_id=body.object_id,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post("/trial/decision")
 def decide_trial(
     body: BuilderTrialDecisionRequest,

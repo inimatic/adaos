@@ -868,3 +868,29 @@ def test_builder_api_recovers_validated_result_in_node_context() -> None:
     assert calls == [
         {"object_type": "skill", "object_id": "demo_metrics_skill"}
     ]
+
+
+def test_builder_api_reconciles_checkpoint_without_codex() -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _Automation:
+        def reconcile_checkpoint(self, **kwargs):
+            calls.append(dict(kwargs))
+            return {"ok": True, "reconciled": True, "model_started": False}
+
+    app = FastAPI()
+    app.include_router(builder_api.router, prefix="/api/builder")
+    app.dependency_overrides[require_token] = lambda: None
+    app.dependency_overrides[builder_api._get_automation_service] = lambda: _Automation()
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/builder/automation/reconcile-checkpoint",
+        json={"object_type": "scenario", "object_id": "taiga_ui_demo_scenario"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["model_started"] is False
+    assert calls == [
+        {"object_type": "scenario", "object_id": "taiga_ui_demo_scenario"}
+    ]
