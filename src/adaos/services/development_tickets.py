@@ -355,6 +355,46 @@ def _source_materialization_options(
     return payload
 
 
+def _source_materialization_ref(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    materialization = _mapping(value)
+    if not materialization:
+        return None
+    ref = {
+        key: materialization.get(key)
+        for key in (
+            "schema",
+            "fork_id",
+            "strategy",
+            "status",
+            "component_ref",
+            "project_id",
+            "project_ref",
+            "source_digest",
+            "idempotent",
+        )
+        if materialization.get(key) not in (None, "", [], {})
+    }
+    components = _sequence_of_mappings(materialization.get("components") or [])
+    if components:
+        ref["component_count"] = len(components)
+        ref["components"] = [
+            {
+                key: component.get(key)
+                for key in ("kind", "name", "status", "source_digest")
+                if component.get(key) not in (None, "", [], {})
+            }
+            for component in components
+        ]
+    recovery_plan = _mapping(materialization.get("source_recovery_plan"))
+    if recovery_plan:
+        ref["source_recovery_plan"] = {
+            key: recovery_plan.get(key)
+            for key in ("status", "plan_digest", "workspace_lock_digest")
+            if recovery_plan.get(key) not in (None, "", [], {})
+        }
+    return ref or None
+
+
 def development_source_options(target_scope: Mapping[str, Any]) -> dict[str, Any]:
     target = _mapping(target_scope)
     source = _text(target.get("source")).lower()
@@ -1973,7 +2013,9 @@ class DevelopmentTicketService:
                 f"development_ticket_{key}": value
                 for key, value in _project_identity_from_ticket(handoff["ticket"]).items()
             },
-            "development_source_materialization": materialization,
+            "development_source_materialization": _source_materialization_ref(
+                materialization
+            ),
             "source_precondition_validation": source_preconditions,
         }
         resume_failed = getattr(automation_service, "resume_failed_dev_ticket_repair", None)
@@ -2588,7 +2630,9 @@ class DevelopmentTicketService:
                 f"development_ticket_{key}": value
                 for key, value in project_identity.items()
             },
-            "development_source_materialization": materialization,
+            "development_source_materialization": _source_materialization_ref(
+                materialization
+            ),
             "source_precondition_validation": source_preconditions,
         }
         current = automation_service.status(

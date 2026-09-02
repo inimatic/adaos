@@ -123,6 +123,8 @@ class _FakeWorkspaceService:
                     "kind": kwargs.get("kind"),
                     "name": kwargs.get("artifact_id"),
                     "status": "materialized",
+                    "source_root": "workspace/source/that/must/not/reach/session",
+                    "artifact_root": "dev/source/that/must/not/reach/session",
                 }
             ],
         }
@@ -722,6 +724,13 @@ def test_development_ticket_api_starts_autonomous_repair_and_exposes_builder_usa
     assert automation.started[0]["execution_budget"]["max_tokens"] == 24000
     assert automation.started[0]["mcp"]["root_mcp"]["server_name"] == "adaos-root"
     assert "bearer_token_env_var" in automation.started[0]["mcp"]["root_mcp"]
+    materialization_ref = automation.started[0]["links"][
+        "development_source_materialization"
+    ]
+    assert materialization_ref["strategy"] == "create_local_fork"
+    assert materialization_ref["component_count"] == 1
+    assert "source_root" not in materialization_ref["components"][0]
+    assert len(json.dumps(materialization_ref)) < 1_000
     assert automation.workspace_service.materialized[0]["kind"] == "skill"
     assert automation.workspace_service.materialized[0]["artifact_id"] == "demo_metrics_skill"
     assert payload["materialization"]["strategy"] == "create_local_fork"
