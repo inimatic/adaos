@@ -2452,9 +2452,39 @@ def test_optional_root_mcp_is_omitted_without_credential(
     assert _root_mcp_profile_from_assignment(assignment, include_private_token=True) is None
 
 
+def test_api_serve_rebinds_stale_loopback_mcp_url_to_configured_local_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ADAOS_SUPERVISOR_ENABLED", raising=False)
+    monkeypatch.delenv("ADAOS_AUTOSTART_MANAGED", raising=False)
+    monkeypatch.setenv("ADAOS_HUB_URL", "http://127.0.0.1:8778")
+    monkeypatch.setattr(
+        worker_module,
+        "load_config",
+        lambda: SimpleNamespace(local_api_url="http://127.0.0.1:8777"),
+    )
+    assignment = {
+        "task_id": "task.local-api",
+        "mcp": {
+            "root_mcp": {
+                "enabled": True,
+                "url": "http://127.0.0.1:8778/v1/root/mcp/task/task.local-api",
+                "required": True,
+            },
+            "access_token": "task-secret",
+        },
+    }
+
+    profile = _root_mcp_profile_from_assignment(assignment, include_private_token=True)
+
+    assert profile is not None
+    assert profile["url"] == "http://127.0.0.1:8777/v1/root/mcp/task/task.local-api"
+
+
 def test_worker_projects_task_scoped_mcp_lease_without_prompt_secret(
     monkeypatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
     monkeypatch.setenv("ADAOS_HUB_URL", "http://127.0.0.1:8778")
     assignment = {
         "task_id": "task.lease",

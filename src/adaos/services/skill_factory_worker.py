@@ -27,6 +27,7 @@ from adaos.domain.development_validation import (
     derive_validation_budget,
     normalize_validation_budget,
 )
+from adaos.services.node_config import load_config
 from adaos.services.node_runtime_state import load_node_runtime_state
 from adaos.services.artifact_pipeline.storage import replace_with_retry
 from adaos.services.skill_factory import SkillFactoryService
@@ -188,7 +189,32 @@ def _estimate_codex_tokens_from_text(*parts: Any) -> int:
     return max(1, (len(payload.encode("utf-8", errors="replace")) + 3) // 4)
 
 
+def _supervisor_runtime_enabled() -> bool:
+    return any(
+        str(os.getenv(key) or "").strip().lower() in {"1", "true", "yes", "on"}
+        for key in ("ADAOS_SUPERVISOR_ENABLED", "ADAOS_AUTOSTART_MANAGED")
+    )
+
+
+def _configured_local_runtime_base_url() -> str | None:
+    if _supervisor_runtime_enabled():
+        return None
+    try:
+        raw = str(load_config().local_api_url or "").strip().rstrip("/")
+    except Exception:
+        raw = ""
+    if not raw:
+        return None
+    parsed = urlparse(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    return raw
+
+
 def _local_runtime_base_url() -> str | None:
+    configured = _configured_local_runtime_base_url()
+    if configured:
+        return configured
     for key in (
         "ADAOS_CONTROL_URL",
         "ADAOS_CONTROL_BASE",
@@ -213,6 +239,16 @@ def _resolve_mcp_http_url(value: Any) -> str:
         return ""
     parsed = urlparse(url)
     if parsed.scheme in {"http", "https"} and parsed.netloc:
+        configured = _configured_local_runtime_base_url()
+        if (
+            configured
+            and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+            and parsed.path.startswith("/v1/root/mcp")
+        ):
+            suffix = parsed.path
+            if parsed.query:
+                suffix += f"?{parsed.query}"
+            return f"{configured}{suffix}"
         return url
     if not url.startswith("/"):
         return ""
