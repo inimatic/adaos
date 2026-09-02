@@ -4000,6 +4000,48 @@ def test_governed_aprobation_trial_binds_candidate_and_changelog(
     assert receipt["component_update"]["version"] == "0.2.0"
 
 
+def test_existing_trial_uses_project_version_when_delivery_omits_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_workflow",
+        lambda self: SimpleNamespace(
+            describe=lambda *_: {
+                "generation": 7,
+                "delivery": {
+                    "status": "trial",
+                    "candidate_id": "candidate.demo",
+                    "package_digest": "sha256:" + "2" * 64,
+                    "release_digest": "sha256:" + "3" * 64,
+                },
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_project_version",
+        lambda self, object_type, object_id: "0.11.4",
+    )
+
+    receipt = service._ensure_governed_aprobation_trial(
+        {
+            "object_type": "scenario",
+            "object_id": "taiga_ui_demo_scenario",
+            "current_task_id": "task.demo",
+            "webspace_id": "desktop",
+            "links": {"development_ticket_id": "dticket.1"},
+            "implementation_brief": json.dumps({"summary": "Improve Demo Metrics"}),
+        },
+        {"ok": True, "mode": "devspace_to_workspace_runtime_overlay"},
+    )
+
+    assert receipt["trial"]["version"] == "0.11.4"
+    assert receipt["component_update"]["version"] == "0.11.4"
+
+
 @pytest.mark.parametrize(
     ("trial", "expected_source", "expected_skill_mode"),
     [

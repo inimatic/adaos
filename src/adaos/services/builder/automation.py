@@ -6695,6 +6695,7 @@ class BuilderAutomationService:
                 "version": str(
                     delivery.get("version")
                     or release.get("version")
+                    or self._project_version(object_type, object_id)
                     or ""
                 ).strip()
                 or None,
