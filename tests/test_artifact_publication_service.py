@@ -272,6 +272,23 @@ lifecycle:
         encoding="utf-8"
     ) == (project_dir / "project.yaml").read_text(encoding="utf-8")
 
+    replayed = service.prepare_project_candidate(
+        project_id="recipes_project",
+        project_dir=project_dir,
+        source_workspace_root=source_workspace,
+        source_ref=ArtifactSourceRef(
+            forge="github",
+            repository="inimatic/adaos-registry",
+            revision="a" * 40,
+            path_scope=("projects/recipes_project/",),
+        ),
+        change_ids=("change-project-1",),
+        validation_evidence={"status": "passed"},
+        idempotency_key="different-workflow-attempt",
+    )
+    assert replayed.candidate == prepared.candidate
+    assert replayed.trial_activation == prepared.trial_activation
+
     service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
     _promote(service, prepared.candidate.candidate_id)
     assert (

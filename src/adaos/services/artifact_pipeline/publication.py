@@ -1780,6 +1780,66 @@ class ArtifactPublicationService:
         candidate_id = (
             f"{project_id}-{plan.release.version.replace('.', '-')}-{release_digest[-12:]}"
         )
+        try:
+            existing_candidate = self.candidate_store.load(candidate_id)
+        except FileNotFoundError:
+            existing_candidate = None
+        if existing_candidate is not None:
+            activation_record = self.trial_activations.load(candidate_id)
+            expected_identity = {
+                "project_id": project_id,
+                "version": plan.release.version,
+                "release_digest": release_digest,
+                "package_digest": primary_package.digest,
+                "source_ref": plan.release.source_ref,
+                "source_tree": verified_source_tree,
+                "change_ids": tuple(sorted(change_ids)),
+            }
+            observed_identity = {
+                "project_id": existing_candidate.project_id,
+                "version": existing_candidate.version,
+                "release_digest": existing_candidate.release_digest,
+                "package_digest": existing_candidate.package_digest,
+                "source_ref": existing_candidate.source_ref,
+                "source_tree": existing_candidate.source_tree,
+                "change_ids": tuple(sorted(existing_candidate.change_ids)),
+            }
+            if observed_identity != expected_identity:
+                raise PublicationError(
+                    "existing Project candidate identity differs from the prepared release"
+                )
+            candidate_ref = (
+                activation_record.get("candidate_ref")
+                if isinstance(activation_record, Mapping)
+                and isinstance(activation_record.get("candidate_ref"), Mapping)
+                else {}
+            )
+            exact_activation = bool(
+                activation_record
+                and str(activation_record.get("status") or "")
+                in {"active", "completed"}
+                and str(candidate_ref.get("candidate_id") or "") == candidate_id
+                and str(candidate_ref.get("release_digest") or "") == release_digest
+                and str(candidate_ref.get("package_digest") or "")
+                == primary_package.digest
+            )
+            if existing_candidate.status in {"trial", "accepted"} and exact_activation:
+                self._snapshot_project_candidate_development_sources(
+                    candidate_id,
+                    project_id=project_id,
+                    project_dir=project_dir,
+                    source_workspace_root=source_workspace_root,
+                    plan=plan,
+                )
+                return PreparedCandidate(
+                    existing_candidate,
+                    plan,
+                    runtime_trial_workspace(self.workspace_root, candidate_id),
+                    dict(activation_record),
+                )
+            raise PublicationError(
+                "existing Project candidate has no exact resumable Trial activation"
+            )
         candidate = candidate_from_release(
             candidate_id=candidate_id,
             release=plan.release,
