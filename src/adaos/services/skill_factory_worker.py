@@ -1766,6 +1766,43 @@ def _codex_execution_timeout_seconds(
     return int(fallback)
 
 
+def _execution_model_attempt_limit(
+    assignment: Mapping[str, Any] | None,
+    *,
+    default: int,
+) -> int:
+    task = assignment if isinstance(assignment, Mapping) else {}
+    request = (
+        task.get("realize_request")
+        if isinstance(task.get("realize_request"), Mapping)
+        else {}
+    )
+    artifacts = (
+        request.get("artifacts")
+        if isinstance(request.get("artifacts"), Mapping)
+        else {}
+    )
+    development = (
+        artifacts.get("development_context")
+        if isinstance(artifacts.get("development_context"), Mapping)
+        else {}
+    )
+    for candidate in (
+        development.get("execution_budget"),
+        artifacts.get("execution_budget"),
+        task,
+    ):
+        if not isinstance(candidate, Mapping):
+            continue
+        try:
+            value = int(candidate.get("max_attempts") or 0)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return max(1, int(default))
+
+
 def _codex_execution_token_budget(assignment: Mapping[str, Any] | None) -> dict[str, Any]:
     task = assignment if isinstance(assignment, Mapping) else {}
     request = (
@@ -2909,8 +2946,17 @@ class LocalSkillFactoryWorker:
                     root_mcp=root_mcp,
                 )
 
+            model_attempt_limit = _execution_model_attempt_limit(
+                assignment,
+                default=self.max_repair_attempts + 1,
+            )
+            validation_repair_limit = (
+                0
+                if structured_edit_receipt is not None
+                else min(self.max_repair_attempts, max(0, model_attempt_limit - 1))
+            )
             test_report: dict[str, Any] = {}
-            for repair_attempt in range(self.max_repair_attempts + 1):
+            for repair_attempt in range(validation_repair_limit + 1):
                 self._ensure_task_active(task_id)
                 self._progress(task_id, "tests_running", "Validating generated manifests, Python and Web UI")
                 self._cleanup_generated_files(workspace)
@@ -2966,7 +3012,7 @@ class LocalSkillFactoryWorker:
                     break
                 if structured_edit_receipt is not None:
                     break
-                if repair_attempt >= self.max_repair_attempts:
+                if repair_attempt >= validation_repair_limit:
                     break
                 self._progress(task_id, "in_progress", "Codex is repairing deterministic validation failures")
                 repair_prompt = (

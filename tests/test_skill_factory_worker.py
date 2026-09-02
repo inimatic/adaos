@@ -4831,7 +4831,16 @@ def test_codex_executor_reports_actionable_missing_cli(
         SubprocessCodexExecutor()._resolve_executable()
 
 
-def test_worker_reasks_codex_to_repair_validation_failure(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("declared_attempts", "expected_calls", "expected_ok"),
+    [(None, 2, True), (1, 1, False)],
+)
+def test_worker_respects_model_attempt_budget_during_validation_repair(
+    tmp_path: Path,
+    declared_attempts: int | None,
+    expected_calls: int,
+    expected_ok: bool,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"
     dev_skills = tmp_path / "dev" / "skills"
@@ -4840,10 +4849,13 @@ def test_worker_reasks_codex_to_repair_validation_failure(tmp_path: Path) -> Non
     _scenario(dev_scenarios, "recipe_book")
     _core_created_skill_fixture(repo_root, dev_skills, "recipe_book_skill")
     factory = SkillFactoryService(state_dir=state_dir)
+    artifacts: dict[str, object] = {"companion_skill_id": "recipe_book_skill"}
+    if declared_attempts is not None:
+        artifacts["execution_budget"] = {"max_attempts": declared_attempts}
     factory.submit_realize_request(
         {
             "target": {"type": "scenario", "id": "recipe_book"},
-            "artifacts": {"companion_skill_id": "recipe_book_skill"},
+            "artifacts": artifacts,
             "repo": {
                 "sparse_paths": ["scenarios/recipe_book/", "skills/recipe_book_skill/"]
             },
@@ -4875,10 +4887,11 @@ def test_worker_reasks_codex_to_repair_validation_failure(tmp_path: Path) -> Non
 
     result = worker.run_once()
 
-    assert result["ok"] is True, result
-    assert len(calls) == 2
-    assert "Deterministic validation repair" in calls[1]
-    assert "required file missing" in calls[1]
+    assert result["ok"] is expected_ok, result
+    assert len(calls) == expected_calls
+    if expected_calls == 2:
+        assert "Deterministic validation repair" in calls[1]
+        assert "required file missing" in calls[1]
 
 
 def test_worker_reasks_codex_to_repair_source_boundary_violation(
