@@ -1,0 +1,56 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Mapping
+
+from adaos.domain.artifact_release import WorkspaceLock
+
+
+class WorkspaceSourceMutationBlocked(RuntimeError):
+    """Raised when a legacy source command targets release-owned Workspace data."""
+
+
+def _load_active_lock(workspace_root: Path) -> WorkspaceLock | None:
+    lock_path = Path(workspace_root).resolve() / ".adaos" / "workspace.lock.json"
+    if not lock_path.is_file():
+        return None
+    try:
+        payload: Any = json.loads(lock_path.read_text(encoding="utf-8-sig"))
+        if not isinstance(payload, Mapping):
+            raise ValueError("WorkspaceLock must contain an object")
+        return WorkspaceLock.from_mapping(payload)
+    except Exception as exc:
+        raise WorkspaceSourceMutationBlocked(
+            "cannot trust the active WorkspaceLock; refusing direct installed-Workspace mutation"
+        ) from exc
+
+
+def assert_workspace_component_mutable(
+    workspace_root: Path,
+    *,
+    kind: str,
+    artifact_id: str,
+) -> None:
+    """Fail closed when a legacy command would edit a lock-managed component."""
+
+    normalized_kind = str(kind or "").strip().lower().rstrip("s")
+    normalized_id = str(artifact_id or "").strip()
+    if normalized_kind not in {"skill", "scenario"} or not normalized_id:
+        raise ValueError("kind and artifact_id must identify a skill or scenario")
+    lock = _load_active_lock(Path(workspace_root))
+    if lock is None:
+        return
+    component_key = f"{normalized_kind}:{normalized_id}"
+    component = next((item for item in lock.components if item.key == component_key), None)
+    if component is None:
+        return
+    raise WorkspaceSourceMutationBlocked(
+        f"direct mutation of installed Workspace component {component_key} is blocked by "
+        f"active WorkspaceLock revision {lock.lock_revision} "
+        f"({component.version}, {component.digest}); edit its source under .adaos/dev and "
+        "publish an immutable Candidate through Trial and Publication"
+    )
+
+
+__all__ = ["WorkspaceSourceMutationBlocked", "assert_workspace_component_mutable"]

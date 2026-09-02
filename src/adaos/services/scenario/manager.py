@@ -34,6 +34,7 @@ from adaos.services.skill.manager import SkillManager
 from adaos.services.semver import bump_version
 from adaos.services.workspace_registry import upsert_workspace_registry_entry
 from adaos.services.component_manifest_versioning import write_component_version_atomically
+from adaos.services.workspace_release_guard import assert_workspace_component_mutable
 
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
 _log = logging.getLogger("adaos.scenario.manager")
@@ -770,6 +771,7 @@ class ScenarioManager:
         if not (Path(root) / ".git").exists():
             raise RuntimeError("Scenarios repo is not initialized. Run `adaos scenario sync` once.")
         sub = name.strip()
+        assert_workspace_component_mutable(Path(root), kind="scenario", artifact_id=sub)
         subpath = f"scenarios/{sub}"
         self._ensure_scenario_subpath_materialized(Path(root), sub)
         version = self._bump_scenario_manifest_patch(Path(root) / "scenarios" / sub) if bump else None

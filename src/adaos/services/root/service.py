@@ -50,6 +50,7 @@ from adaos.adapters.db import SqliteSkillRegistry
 from adaos.services.workspace_registry import upsert_workspace_registry_entry
 from adaos.services.skill.version_policy import RESERVED_DATA_MIGRATION_FILE, bump_index, effective_skill_bump
 from adaos.services.runtime_refresh import refresh_skill_runtime
+from adaos.services.workspace_release_guard import assert_workspace_component_mutable
 from adaos.domain.artifact_release import ArtifactSourceRef
 from adaos.services.artifact_pipeline import (
     ArtifactPublicationService,
@@ -3966,6 +3967,12 @@ class RootDeveloperService:
         self._validate_artifact_preflight(kind, name, source)
 
         target = (self.ctx.paths.scenarios_dir() if kind == "scenarios" else self.ctx.paths.skills_dir()) / name
+        if not dry_run:
+            assert_workspace_component_mutable(
+                self.ctx.paths.workspace_dir(),
+                kind=kind,
+                artifact_id=name,
+            )
 
         source_payload = self._manifest_payload(source, kind)
         source_data = source_payload[1] if source_payload else {}
