@@ -19,6 +19,7 @@ from adaos.services.builder.automation import (
     _iteration_context_projection,
 )
 from adaos.services.builder.workspace import BuilderWorkspaceService
+from adaos.services.context_control import ContextControlService
 from adaos.services.root.service import _rewrite_skill_template_identity
 from adaos.services.skill_factory_worker import CodexRunResult, LocalSkillFactoryWorker
 
@@ -178,6 +179,77 @@ def test_completed_builder_context_restores_from_cold_service(tmp_path: Path) ->
     )
     assert restored_inspection == first_inspection
     assert restored_inspection["receipt_count"] == 1
+
+
+def test_related_runs_reuse_project_capsule_and_isolate_task_overlay(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    session = {
+        "session_id": "automation.skill.metrics",
+        "iteration": 1,
+        "change_set_id": "CH-metrics",
+        "links": {"development_ticket_project_ref": "project:metrics"},
+    }
+    packet = {
+        "schema": "adaos.builder.context_packet.v1",
+        "digest": "sha256:" + "1" * 64,
+        "project": {"ref": "project:metrics"},
+        "change": {
+            "change_id": "CH-metrics",
+            "status": "active",
+            "issues": [],
+        },
+        "base": {"version": "0.1.0"},
+        "artifacts": {},
+        "dependencies": [],
+        "allowed_paths": ["skills/metrics/"],
+        "facets": {},
+    }
+    snapshot = {
+        "digest": "sha256:" + "2" * 64,
+        "created_at": "2026-09-02T00:00:00Z",
+    }
+
+    first = service._compile_iteration_context(
+        session=session,
+        kind="skill",
+        project_id="metrics",
+        context_packet=packet,
+        source_snapshot=snapshot,
+        implementation_brief="Repair the first ticket.",
+    )
+    session["iteration"] = 2
+    second = service._compile_iteration_context(
+        session=session,
+        kind="skill",
+        project_id="metrics",
+        context_packet=packet,
+        source_snapshot=snapshot,
+        implementation_brief="Repair another related ticket.",
+    )
+
+    first_capsules = [
+        service._contexts().get_capsule(ref) for ref in first["capsule_refs"]
+    ]
+    second_capsules = [
+        service._contexts().get_capsule(ref) for ref in second["capsule_refs"]
+    ]
+    first_project = next(item for item in first_capsules if item["kind"] == "project")
+    second_project = next(item for item in second_capsules if item["kind"] == "project")
+    first_task = next(item for item in first_capsules if item["kind"] == "task")
+    second_task = next(item for item in second_capsules if item["kind"] == "task")
+
+    assert first_project["capsule_id"] == second_project["capsule_id"]
+    assert first["project_context_digest"] == second["project_context_digest"]
+    assert first_task["capsule_id"] != second_task["capsule_id"]
+    assert "builder_context_packet" not in first_project["source_digests"]
+    binding = service._contexts().get_binding(
+        subject_ref="project:metrics",
+        purpose="builder.automation",
+        audience="builder",
+    )
+    assert binding["revision"] == 1
 
 
 def test_session_persists_workflow_and_request_once_by_content_address(tmp_path: Path) -> None:
@@ -743,7 +815,26 @@ def test_automation_materializes_governed_development_session_inputs(tmp_path: P
     assert task["realize_request"]["artifacts"]["agent_profile"]["model"] == "gpt-5.4"
     plan = service._contexts().get_plan(started["session"]["context_control"]["plan_id"])
     assert "project:recipe_program" in plan["subject_refs"]
+    assert f"development-session:{session_id}" in plan["subject_refs"]
     assert "project:recipes" not in plan["subject_refs"]
+    control = started["session"]["context_control"]
+    assert control["development_session_ref"] == f"development-session:{session_id}"
+    development_capsule = service._contexts().get_capsule(
+        control["development_session_capsule_ref"]
+    )
+    assert development_capsule["kind"] == "development_session"
+    capsule_content = service._contexts().get_artifact(
+        development_capsule["artifact_ref"]
+    )
+    canonical_ref = capsule_content["index"][0]["ref"]
+    cold_contexts = ContextControlService(state_dir=service.state_dir)
+    assert cold_contexts.get_artifact(canonical_ref) == session
+    inspection = cold_contexts.inspect(control["run_ref"])
+    assert inspection["receipts"][0]["subject_refs"] == [
+        control["run_ref"],
+        f"development-session:{session_id}",
+        "project:recipe_program",
+    ]
     attachments = task["forge"]["source_snapshot"]["attachments"]
     assert {item["name"] for item in attachments} >= {
         "development_artifact_00",

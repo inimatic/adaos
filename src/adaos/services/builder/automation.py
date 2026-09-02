@@ -336,6 +336,129 @@ def _iteration_context_projection(
     }
 
 
+def _project_context_projection(
+    context_packet: Mapping[str, Any],
+    *,
+    component_ref: str,
+    source_snapshot_digest: str | None,
+) -> dict[str, Any]:
+    """Project-stable context shared by task overlays for one source generation."""
+
+    facets = dict(context_packet.get("facets") or {})
+    project_facets = {
+        key: copy.deepcopy(facets[key])
+        for key in (
+            "target_structure",
+            "abi",
+            "workflow_definition",
+            "data_policy",
+        )
+        if isinstance(facets.get(key), Mapping)
+    }
+    change = dict(context_packet.get("change") or {})
+    return {
+        "schema": "adaos.builder.project_context_projection.v1",
+        "component_ref": component_ref,
+        "source_generation": source_snapshot_digest,
+        "project": copy.deepcopy(dict(context_packet.get("project") or {})),
+        "base": copy.deepcopy(dict(context_packet.get("base") or {})),
+        "artifacts": copy.deepcopy(dict(context_packet.get("artifacts") or {})),
+        "dependencies": copy.deepcopy(list(context_packet.get("dependencies") or []))[
+            :200
+        ],
+        "allowed_paths": copy.deepcopy(list(context_packet.get("allowed_paths") or []))[
+            :200
+        ],
+        "change": {
+            key: copy.deepcopy(change.get(key))
+            for key in ("change_id", "route", "gate", "status")
+            if change.get(key) not in (None, "", [], {})
+        },
+        "facets": project_facets,
+    }
+
+
+def _development_session_context_projection(
+    session: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Bounded policy header for an exact immutable Development Session."""
+
+    targets = dict(session.get("targets") or {})
+    handoff = dict(session.get("handoff") or {})
+    return {
+        "schema": "adaos.builder.development_session_context_projection.v1",
+        "session_id": session.get("session_id"),
+        "project_ref": session.get("project_ref"),
+        "base_release": copy.deepcopy(session.get("base_release")),
+        "focus_ref": dict(session.get("focus") or {}).get("ref"),
+        "target_refs": [
+            str(item.get("ref") or "").strip()
+            for group in (targets.get("primary") or [], targets.get("secondary") or [])
+            for item in group
+            if isinstance(item, Mapping) and str(item.get("ref") or "").strip()
+        ],
+        "context_members": [
+            {
+                key: copy.deepcopy(item.get(key))
+                for key in ("ref", "relation", "access", "context", "paths")
+                if item.get(key) not in (None, "", [], {})
+            }
+            for item in session.get("context_members") or []
+            if isinstance(item, Mapping)
+        ][:200],
+        "subject_refs": copy.deepcopy(list(session.get("subject_refs") or []))[:100],
+        "contract_inputs": [
+            {
+                key: copy.deepcopy(item.get(key))
+                for key in ("kind", "ref", "digest", "media_type")
+                if item.get(key) not in (None, "")
+            }
+            for item in session.get("contract_inputs") or []
+            if isinstance(item, Mapping)
+        ][:200],
+        "artifact_inputs": [
+            {
+                key: copy.deepcopy(item.get(key))
+                for key in ("ref", "manifest_digest", "context_digest", "audience")
+                if item.get(key) not in (None, "")
+            }
+            for item in session.get("artifact_inputs") or []
+            if isinstance(item, Mapping)
+        ][:200],
+        "instruction_inputs": [
+            {
+                key: copy.deepcopy(item.get(key))
+                for key in ("ref", "kind", "media_type", "content_digest")
+                if item.get(key) not in (None, "")
+            }
+            for item in session.get("instruction_inputs") or []
+            if isinstance(item, Mapping)
+        ][:20],
+        "acceptance_profiles": copy.deepcopy(
+            list(session.get("acceptance_profiles") or [])
+        )[:100],
+        "acceptance_requirements": copy.deepcopy(
+            list(session.get("acceptance_requirements") or [])
+        )[:50],
+        "handoff": {
+            key: copy.deepcopy(handoff.get(key))
+            for key in (
+                "automation_brief_digest",
+                "research_prototype_digest",
+                "artifact_manifest_digests",
+                "execution_budget",
+                "validation_budget",
+                "agent_profile",
+                "prohibited_actions",
+            )
+            if handoff.get(key) not in (None, "", [], {})
+        },
+        "status": session.get("status"),
+        "created_at": session.get("created_at"),
+        "created_by": session.get("created_by"),
+    }
+
+
 def _context_projection_brief(
     session: Mapping[str, Any],
     iteration_brief: str,
@@ -668,29 +791,112 @@ class BuilderAutomationService:
                 "metadata": {"utility": 1.0, "cache_class": "stable_prefix"},
             }
         )
-        project = service.register_capsule(
-            {
-                "kind": "project",
-                "subject_refs": [project_ref, component_ref],
-                "authority_ref": project_ref,
-                "trust_class": "accepted",
-                "sensitivity": "workspace",
-                "license": "internal",
-                "retention_class": "project_generation",
-                "source_digests": {
-                    "source_snapshot": source_snapshot.get("digest"),
-                    "builder_context_packet": context_packet.get("digest"),
-                },
-                "valid_from": str(source_snapshot.get("created_at") or now),
-                "recorded_at": now,
-                "summary": f"Current {component_ref} source generation and governed Change.",
-                "index": [
-                    {"kind": "canonical_builder_packet", "ref": packet_artifact["ref"], "digest": packet_artifact["digest"]},
-                ],
-                "content": projection,
-                "metadata": {"utility": 1.0, "source_generation": source_snapshot.get("digest")},
-            }
+        project_projection = _project_context_projection(
+            context_packet,
+            component_ref=component_ref,
+            source_snapshot_digest=str(source_snapshot.get("digest") or "").strip()
+            or None,
         )
+        project_context_digest = _canonical_digest(project_projection)
+        project: dict[str, Any] | None = None
+        try:
+            current_project_binding = service.get_binding(
+                subject_ref=project_ref,
+                purpose="builder.automation",
+                audience="builder",
+            )
+            current_project = service.get_capsule(
+                str(current_project_binding.get("capsule_id") or "")
+            )
+            if (
+                str(current_project.get("kind") or "") == "project"
+                and str(
+                    dict(current_project.get("source_digests") or {}).get(
+                        "project_context"
+                    )
+                    or ""
+                )
+                == project_context_digest
+            ):
+                project = current_project
+        except KeyError:
+            project = None
+        if project is None:
+            project = service.register_capsule(
+                {
+                    "kind": "project",
+                    "subject_refs": [project_ref, component_ref],
+                    "authority_ref": project_ref,
+                    "trust_class": "accepted",
+                    "sensitivity": "workspace",
+                    "license": "internal",
+                    "retention_class": "project_generation",
+                    "source_digests": {
+                        "source_snapshot": source_snapshot.get("digest"),
+                        "project_context": project_context_digest,
+                    },
+                    "valid_from": str(source_snapshot.get("created_at") or now),
+                    "recorded_at": now,
+                    "summary": (
+                        f"Current {component_ref} source generation and governed Change."
+                    ),
+                    "content": project_projection,
+                    "metadata": {
+                        "utility": 1.0,
+                        "source_generation": source_snapshot.get("digest"),
+                        "cache_class": "project_stable",
+                    },
+                }
+            )
+        development_session_ref: str | None = None
+        development_session_capsule: dict[str, Any] | None = None
+        development_session_id = str(
+            session.get("development_session_id") or ""
+        ).strip()
+        if development_session_id:
+            development_session, _ = self._load_development_session(
+                development_session_id,
+                target_ref=component_ref,
+            )
+            development_session_ref = f"development-session:{development_session_id}"
+            development_session_artifact = service.put_artifact(development_session)
+            development_session_capsule = service.register_capsule(
+                {
+                    "kind": "development_session",
+                    "subject_refs": [
+                        development_session_ref,
+                        project_ref,
+                        component_ref,
+                    ],
+                    "authority_ref": project_ref,
+                    "trust_class": "validated",
+                    "sensitivity": "workspace",
+                    "license": "internal",
+                    "retention_class": "development_session",
+                    "source_digests": {
+                        "development_session": development_session_artifact["digest"],
+                    },
+                    "valid_from": development_session.get("created_at") or now,
+                    "recorded_at": development_session.get("created_at") or now,
+                    "summary": (
+                        f"Development Session {development_session_id} for {project_ref}."
+                    ),
+                    "index": [
+                        {
+                            "kind": "canonical_development_session",
+                            "ref": development_session_artifact["ref"],
+                            "digest": development_session_artifact["digest"],
+                        }
+                    ],
+                    "content": _development_session_context_projection(
+                        development_session
+                    ),
+                    "metadata": {
+                        "utility": 1.0,
+                        "cache_class": "development_session",
+                    },
+                }
+            )
         ticket_ids = [
             str(item).strip()
             for item in [
@@ -717,6 +923,12 @@ class BuilderAutomationService:
                     "links": dict(session.get("links") or {}),
                     "change_set_id": session.get("change_set_id"),
                     "iteration": session.get("iteration"),
+                    "context_packet": {
+                        "ref": packet_artifact["ref"],
+                        "digest": context_packet.get("digest"),
+                        "artifact_digest": packet_artifact["digest"],
+                    },
+                    "projection": projection,
                 },
                 "metadata": {"utility": 1.0, "working_context": True},
             }
@@ -729,6 +941,23 @@ class BuilderAutomationService:
                 "required": True,
             }
         )
+        if development_session_capsule is not None:
+            service.add_relationship(
+                {
+                    "from_capsule_id": task["capsule_id"],
+                    "to_capsule_id": development_session_capsule["capsule_id"],
+                    "relation_type": "bounded_by",
+                    "required": True,
+                }
+            )
+            service.add_relationship(
+                {
+                    "from_capsule_id": development_session_capsule["capsule_id"],
+                    "to_capsule_id": project["capsule_id"],
+                    "relation_type": "scoped_to",
+                    "required": True,
+                }
+            )
         service.add_relationship(
             {
                 "from_capsule_id": project["capsule_id"],
@@ -737,14 +966,19 @@ class BuilderAutomationService:
                 "required": True,
             }
         )
-        service.bind_subject(
+        self._bind_context_subject(
+            service,
             subject_ref=project_ref,
             capsule_id=project["capsule_id"],
-            purpose="builder.automation",
-            audience="builder",
-            actor_ref="builder.automation",
             reason="source_generation_selected",
         )
+        if development_session_capsule is not None and development_session_ref:
+            self._bind_context_subject(
+                service,
+                subject_ref=development_session_ref,
+                capsule_id=development_session_capsule["capsule_id"],
+                reason="development_session_selected",
+            )
         service.bind_subject(
             subject_ref=run_ref,
             capsule_id=task["capsule_id"],
@@ -755,7 +989,11 @@ class BuilderAutomationService:
         )
         resolution = service.resolve(
             {
-                "subject_refs": [run_ref, project_ref],
+                "subject_refs": [
+                    run_ref,
+                    *([development_session_ref] if development_session_ref else []),
+                    project_ref,
+                ],
                 "purpose": "builder.automation",
                 "audience": "builder",
                 "policy": {
@@ -797,7 +1035,23 @@ class BuilderAutomationService:
         return {
             "run_ref": run_ref,
             "project_ref": project_ref,
-            "capsule_refs": [task["capsule_id"], project["capsule_id"], platform["capsule_id"]],
+            "development_session_ref": development_session_ref,
+            "development_session_capsule_ref": (
+                development_session_capsule["capsule_id"]
+                if development_session_capsule is not None
+                else None
+            ),
+            "capsule_refs": [
+                task["capsule_id"],
+                *(
+                    [development_session_capsule["capsule_id"]]
+                    if development_session_capsule is not None
+                    else []
+                ),
+                project["capsule_id"],
+                platform["capsule_id"],
+            ],
+            "project_context_digest": project_context_digest,
             "context_packet_ref": packet_artifact["ref"],
             "context_packet_digest": context_packet.get("digest"),
             "context_packet_artifact_digest": packet_artifact["digest"],
@@ -822,6 +1076,33 @@ class BuilderAutomationService:
                 int((time.perf_counter() - compile_started_at) * 1000),
             ),
         }
+
+    @staticmethod
+    def _bind_context_subject(
+        service: ContextControlService,
+        *,
+        subject_ref: str,
+        capsule_id: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        try:
+            current = service.get_binding(
+                subject_ref=subject_ref,
+                purpose="builder.automation",
+                audience="builder",
+            )
+        except KeyError:
+            current = None
+        if current and str(current.get("capsule_id") or "") == capsule_id:
+            return current
+        return service.bind_subject(
+            subject_ref=subject_ref,
+            capsule_id=capsule_id,
+            purpose="builder.automation",
+            audience="builder",
+            actor_ref="builder.automation",
+            reason=reason,
+        )
 
     def _context_project_ref(
         self,
@@ -3750,6 +4031,10 @@ class BuilderAutomationService:
                 if current.get("object_id")
                 else ""
             )
+        development_session_ref = str(
+            control.get("development_session_ref") or ""
+        ).strip()
+        zero_model = self._zero_model_execution(current, task_id)
         try:
             receipt = self._contexts().record_receipt(
                 {
@@ -3757,6 +4042,7 @@ class BuilderAutomationService:
                     "plan_ref": plan_ref,
                     "subject_refs": [
                         run_ref,
+                        *([development_session_ref] if development_session_ref else []),
                         *([project_ref] if project_ref else []),
                     ],
                     "purpose": "builder.automation",
@@ -3775,7 +4061,11 @@ class BuilderAutomationService:
                     },
                     "tool_boundary_count": 1,
                     "source_slice_coverage": self._source_slice_coverage(current),
-                    "execution_route": "skill_factory.local_codex",
+                    "execution_route": (
+                        f"skill_factory.{zero_model['strategy']}"
+                        if zero_model
+                        else "skill_factory.local_codex"
+                    ),
                     "validation": {
                         "task_status": task_status,
                         "ok": task_status == "completed",
@@ -4754,7 +5044,10 @@ class BuilderAutomationService:
                 for key in (
                     "run_ref",
                     "project_ref",
+                    "development_session_ref",
+                    "development_session_capsule_ref",
                     "capsule_refs",
+                    "project_context_digest",
                     "context_packet_ref",
                     "context_packet_digest",
                     "context_packet_artifact_digest",

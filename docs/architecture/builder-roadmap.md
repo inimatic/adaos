@@ -1983,7 +1983,14 @@ repair, ProjectRelease publication, accepted Trial, and ticket closure. Cold
 Skill Factory restoration now resolves digest-bound context packet, Development
 Session, prototype-handoff, continuation-checkpoint, result, and provenance
 artifacts after a process restart while keeping the authoritative task document
-compact. Full removal of Builder session/readiness compatibility copies,
+compact. Builder context compilation now gives an exact DevelopmentSession its
+own immutable subject and capsule, relates each task overlay through
+`bounded_by`, and reuses a project-stable capsule while the source generation
+and project projection digest remain unchanged. Related Dev Ticket runs
+therefore share stable project context without sharing their task overlays,
+budgets, acceptance, or rollback lifecycle. Context Attribution Receipts carry
+the run, DevelopmentSession, and Project refs, including deterministic
+zero-model execution routes. Full removal of Builder session/readiness compatibility copies,
 end-to-end cold publication replay, episodic-memory routing, and the deferred
 Research Workbench proof are still open.
 

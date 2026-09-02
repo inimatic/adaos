@@ -657,7 +657,13 @@ and transiently hydrates only domain inputs required by the worker, with exact
 artifact-ref and digest checks after a cold service restart. Completed task
 results refer to a separately stored provenance artifact; authoritative queue
 state keeps compact summaries and refs while read projections preserve the
-historical result contract. Broader Builder session/readiness compaction remains
+historical result contract. Automation compilation now separates the stable
+Project layer, immutable DevelopmentSession policy layer, and per-run task
+overlay. A matching Project projection and source generation reuse the existing
+capsule and binding instead of embedding the canonical Builder packet again;
+the DevelopmentSession capsule indexes its exact cold-loadable artifact and
+the task stores only its context-packet ref plus bounded iteration projection.
+Broader Builder session/readiness compaction remains
 open under the Phase 1A lifecycle-wide item.
 
 ### Phase 4. NLU Teacher Context Compression
