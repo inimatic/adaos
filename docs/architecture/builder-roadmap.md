@@ -1941,6 +1941,10 @@ envelopes. Architecture and generic sequencing remain in
 - [ ] `[must]` Resolve every qualification, planning, Automation, Codex,
   validation, and re-entry run from exact DevelopmentSession subject refs,
   purpose, audience, policy, source generation, and agent profile.
+- [x] `[must]` Apply a fail-closed execution preflight to singleton Dev Ticket
+  automation. Keep domain qualification separate from exact repair-envelope
+  admission, expose both in Builder context, and create no Builder/Skill
+  Factory work until source and acceptance coverage are qualified.
 - [x] `[must]` Persist one Context Plan and Context Attribution Receipt per run;
   show selected/omitted/denied refs, context misses, provider/local-Codex usage,
   cache contribution, latency, and evidence in Builder observability.
@@ -2000,6 +2004,15 @@ worker turn with the same Project authority and new source-generation/task
 capsules. End-to-end cold publication/Trial/Subscription replay,
 episodic-memory routing, and the deferred Research Workbench proof are still
 open.
+
+Cost-routing verification, 2026-09-02: the Demo Metrics project E2E showed two
+full-Codex attempts consuming 224,000 model/billable tokens before the exact
+structured route completed with zero. Builder and Dev Ticket projections now
+surface the independent domain qualification and execution preflight, including
+missing fields, route, model-call expectation, and estimated budget. Surgical
+UI/data/CRUD runs default to 24,000 `fresh_plus_output`; incomplete singleton
+repairs stop before work-item creation. Automatic bounded qualification from
+ordinary language and the reusable semantic source index remain open.
 
 Source recovery verification, 2026-09-02: the local Builder lock at release
 `builder@0.2.55` resolves `scenario:builder` as Project-owned and the three

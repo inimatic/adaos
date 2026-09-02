@@ -28,10 +28,12 @@ class _FakeAutomationService:
         self.started: list[dict] = []
         self.workspace_service = _FakeWorkspaceService()
         self.latest_links: dict = {}
+        self.latest_budget: dict = {"max_tokens": 200000}
 
     def start_from_execute(self, **kwargs):
         self.started.append(dict(kwargs))
         self.latest_links = dict(kwargs.get("links") or {})
+        self.latest_budget = dict(kwargs.get("execution_budget") or self.latest_budget)
         return self._payload(status="running")
 
     def status(self, *, object_type: str, object_id: str):
@@ -68,7 +70,7 @@ class _FakeAutomationService:
                 "project": {"object_type": object_type, "object_id": object_id},
                 "links": dict(self.latest_links),
                 "budget_usage": {
-                    "declared": {"max_tokens": 200000},
+                    "declared": dict(self.latest_budget),
                     "observed": {"total_tokens": 321, "input_tokens": 200, "output_tokens": 121},
                 },
             },
@@ -323,7 +325,6 @@ def test_development_ticket_api_updates_summary_and_keeps_artifact_refs(tmp_path
     )
     assert created.status_code == 201, created.text
     ticket_id = created.json()["ticket"]["ticket_id"]
-
     updated = client.patch(
         f"/api/development-tickets/{ticket_id}",
         headers=_headers(),
@@ -562,10 +563,23 @@ def test_development_ticket_api_starts_autonomous_repair_and_exposes_builder_usa
             },
             "owner_area": "skill",
             "component_ref": "skill:demo_metrics_skill",
+            "metadata": {
+                "builder_repair": {
+                    "profile": "resource_crud",
+                    "target_files": ["skills/demo_metrics_skill/webui.json"],
+                    "target_refs": ["modal:resource-workbench.operations"],
+                    "acceptance_checks": ["Edit and delete controls remain operable."],
+                    "max_changed_files": 1,
+                }
+            },
         },
     )
     assert created.status_code == 201, created.text
     ticket_id = created.json()["ticket"]["ticket_id"]
+    preflight = created.json()["detail"]["autonomous_repair_qualification"]
+    assert preflight["status"] == "ready"
+    assert preflight["execution_route"] == "bounded_patch_agent"
+    assert preflight["estimated_budget"]["max_tokens"] == 24000
 
     started = client.post(
         f"/api/development-tickets/{ticket_id}/autonomous-repair",
@@ -588,12 +602,13 @@ def test_development_ticket_api_starts_autonomous_repair_and_exposes_builder_usa
     assert started.status_code == 200, started.text
     payload = started.json()
     assert payload["started"] is True
+    assert payload["qualification"]["execution_route"] == "bounded_patch_agent"
     assert payload["sync"]["resolved"] is True
     assert payload["ticket"]["status"] == "resolved"
     assert automation.started[0]["object_type"] == "skill"
     assert automation.started[0]["object_id"] == "demo_metrics_skill"
     assert automation.started[0]["links"]["development_ticket_id"] == ticket_id
-    assert automation.started[0]["execution_budget"]["max_tokens"] == 200000
+    assert automation.started[0]["execution_budget"]["max_tokens"] == 24000
     assert automation.started[0]["mcp"]["root_mcp"]["server_name"] == "adaos-root"
     assert "bearer_token_env_var" in automation.started[0]["mcp"]["root_mcp"]
     assert automation.workspace_service.materialized[0]["kind"] == "skill"
@@ -603,7 +618,7 @@ def test_development_ticket_api_starts_autonomous_repair_and_exposes_builder_usa
     assert work_item["automation_session_id"] == "automation.session.api"
     assert work_item["automation_task_id"] == "factory.task.api"
     assert work_item["token_accounting"]["reported_usage"]["total_tokens"] == 321
-    assert work_item["token_accounting"]["estimate"]["max_tokens"] == 200000
+    assert work_item["token_accounting"]["estimate"]["max_tokens"] == 24000
 
     synced = client.post(
         f"/api/development-tickets/{ticket_id}/builder-sync",

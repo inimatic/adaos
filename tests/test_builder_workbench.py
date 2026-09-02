@@ -838,6 +838,15 @@ def test_builder_workbench_open_selects_development_ticket_context(tmp_path: Pat
     assert binding["development_ticket"]["component_ref"] == "skill:legacy_skill"
     assert binding["development_ticket"]["qualification"]["class"] == "needs_source"
     assert binding["development_ticket"]["qualification"]["repair_allowed"] is True
+    assert binding["development_ticket"]["execution_preflight"]["status"] == (
+        "qualification_required"
+    )
+    assert binding["development_ticket"]["execution_preflight"]["missing_fields"] == [
+        "profile",
+        "target_files",
+        "target_refs",
+        "acceptance_checks",
+    ]
     assert binding["development_ticket"]["repair_batch"]["count"] == 1
     assert binding["development_ticket"]["repair_batch"]["tickets"][0]["ticket_id"] == ticket["ticket_id"]
 

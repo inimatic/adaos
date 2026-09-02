@@ -96,10 +96,10 @@ TICKET_RELATION_KINDS = {
 DEFAULT_AUTONOMOUS_REPAIR_BUDGET = {
     "schema": "adaos.builder.execution_budget.v1",
     "source": "development_ticket.default",
-    "max_tokens": 200000,
+    "max_tokens": 45000,
     "token_budget_metric": "fresh_plus_output",
-    "max_billable_tokens": 1600000,
-    "max_wall_seconds": 1800,
+    "max_billable_tokens": 360000,
+    "max_wall_seconds": 1200,
 }
 INVERSE_TICKET_RELATION = {
     "blocks": "blocked_by",
@@ -817,6 +817,85 @@ def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
     if structured_edits:
         hints["structured_edits"] = structured_edits
     return {key: value for key, value in hints.items() if value not in (None, "", [])}
+
+
+def _autonomous_repair_qualification(ticket: Mapping[str, Any]) -> dict[str, Any]:
+    """Admit a bounded repair before any Builder or model work is created."""
+
+    hints = _bounded_repair_hints(ticket)
+    structured = _mapping(hints.get("structured_edits"))
+    missing: list[str] = []
+    if not _text(hints.get("profile")):
+        missing.append("profile")
+    if not hints.get("target_files"):
+        missing.append("target_files")
+    if not hints.get("target_refs") and not structured:
+        missing.append("target_refs")
+    if not hints.get("acceptance_checks"):
+        missing.append("acceptance_checks")
+    route = (
+        "structured_edits"
+        if structured
+        else "bounded_patch_agent"
+        if not missing
+        else "qualification"
+    )
+    ready = not missing
+    qualification = {
+        "schema": "adaos.builder.autonomous_repair_qualification.v1",
+        "status": "ready" if ready else "qualification_required",
+        "ready": ready,
+        "execution_route": route,
+        "model_call_expected": ready and route != "structured_edits",
+        "expected_model_tokens": 0 if route == "structured_edits" else None,
+        "missing_fields": missing,
+        "profile": hints.get("profile"),
+        "target_files": list(hints.get("target_files") or []),
+        "target_refs": list(hints.get("target_refs") or []),
+        "acceptance_checks": list(hints.get("acceptance_checks") or []),
+        "structured_operation_count": len(structured.get("operations") or []),
+        "reason": (
+            "qualified exact repair envelope is ready"
+            if ready
+            else "Builder must qualify exact source and acceptance before autonomous model spend"
+        ),
+    }
+    qualification["estimated_budget"] = (
+        _autonomous_repair_budget(qualification, None) if ready else None
+    )
+    return qualification
+
+
+def _autonomous_repair_budget(
+    qualification: Mapping[str, Any],
+    requested: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if isinstance(requested, Mapping):
+        budget = dict(requested)
+        budget.setdefault("token_budget_metric", "fresh_plus_output")
+        budget.setdefault("source", "development_ticket.requested")
+        return budget
+    profile = _text(qualification.get("profile"))
+    route = _text(qualification.get("execution_route"))
+    if route == "structured_edits":
+        max_tokens, max_wall_seconds = 8_000, 600
+        source = "development_ticket.structured_edits"
+    elif profile in {"surgical_ui", "surgical_data", "resource_crud"}:
+        max_tokens, max_wall_seconds = 24_000, 900
+        source = f"development_ticket.{profile}"
+    elif profile == "subnet_data_integration":
+        max_tokens, max_wall_seconds = 40_000, 1200
+        source = "development_ticket.subnet_data_integration"
+    else:
+        return dict(DEFAULT_AUTONOMOUS_REPAIR_BUDGET)
+    return {
+        "schema": "adaos.builder.execution_budget.v1",
+        "source": source,
+        "max_tokens": max_tokens,
+        "token_budget_metric": "fresh_plus_output",
+        "max_billable_tokens": max_tokens * 8,
+        "max_wall_seconds": max_wall_seconds,
+    }
 
 
 def _autonomous_repair_brief(ticket: Mapping[str, Any], repair: Mapping[str, Any], *, target: Mapping[str, str]) -> str:
@@ -1719,6 +1798,20 @@ class DevelopmentTicketService:
             if not materialization.get("ok"):
                 raise ValueError("development source materialization failed")
             development_source = _mapping(materialization.get("development_source")) or development_source
+        qualification = _autonomous_repair_qualification(ticket)
+        if not qualification["ready"]:
+            return {
+                "ok": True,
+                "started": False,
+                "status": "qualification_required",
+                "reason": "builder_qualification_required",
+                "qualification": qualification,
+                "ticket": ticket,
+                "repair": None,
+                "automation": None,
+                "development_source": development_source,
+                "materialization": materialization,
+            }
         service = repair_service or BuilderRepairService(state_dir=self.state_dir)
         handoff = self.handoff_ticket(
             ticket["ticket_id"],
@@ -1729,8 +1822,7 @@ class DevelopmentTicketService:
         repair = handoff["repair"]
         repair_id = _text(repair.get("repair_id"))
         brief = _autonomous_repair_brief(handoff["ticket"], repair, target=target)
-        bounded_budget = dict(execution_budget) if isinstance(execution_budget, Mapping) else dict(DEFAULT_AUTONOMOUS_REPAIR_BUDGET)
-        bounded_budget.setdefault("token_budget_metric", "fresh_plus_output")
+        bounded_budget = _autonomous_repair_budget(qualification, execution_budget)
         automation_links = {
             "development_ticket_id": ticket["ticket_id"],
             "builder_repair_id": repair_id,
@@ -1878,7 +1970,14 @@ class DevelopmentTicketService:
             "sync": sync,
             "development_source": development_source,
             "materialization": materialization,
+            "qualification": qualification,
         }
+
+    def autonomous_repair_qualification(self, ticket_id: str) -> dict[str, Any]:
+        ticket = self.get_ticket(ticket_id)
+        if not ticket:
+            raise KeyError(ticket_id)
+        return _autonomous_repair_qualification(ticket)
 
     def plan_builder_package(
         self,

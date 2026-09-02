@@ -401,6 +401,13 @@ Context optimization starts before prompt construction:
 4. Escalate a project task to a linked core capability ticket when public
    SDK/API constraints make it unsatisfiable.
 
+Steps 1-3 require an admitted repair envelope: profile, exact writable files,
+semantic target refs or exact structured operations, and acceptance checks.
+An incomplete envelope produces a typed `qualification_required` result before
+any Builder repair, Skill Factory task, or model budget is created. A
+qualification model may propose intent and target candidates, but core resolves
+source locations and edit preconditions and validates the final envelope.
+
 A missing context facet is not permission for broad exploration. The resolver
 either retrieves the facet, requests bounded clarification, or records a typed
 context/SDK gap.

@@ -379,6 +379,9 @@ def _ticket_detail(service: DevelopmentTicketService, ticket: dict[str, Any]) ->
         "ticket": ticket,
         "signals": signals,
         "development_source": development_source_options(source_scope),
+        "autonomous_repair_qualification": service.autonomous_repair_qualification(
+            str(ticket.get("ticket_id") or "")
+        ),
         "evidence": _evidence_view(ticket, signals),
         "work_stream": work_stream,
         "builder_work_items": work_stream["builder_work_items"],

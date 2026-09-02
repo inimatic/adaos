@@ -350,6 +350,7 @@ def _builder_ticket_qualification(
     *,
     target: Mapping[str, Any],
     development_source: Mapping[str, Any],
+    execution_preflight: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     owner_area = _ticket_owner_area(ticket, target)
     component_ref = _ticket_component_ref(ticket, target)
@@ -430,16 +431,27 @@ def _builder_ticket_qualification(
             "component_ref": component_ref or None,
             "guardrails": guardrails,
         }
+    preflight = dict(execution_preflight or {})
+    preflight_ready = preflight.get("ready") is True
     return {
         "schema": "adaos.builder.ticket_qualification.v1",
         "class": "project_solvable",
         "confidence": "medium",
         "repair_allowed": True,
-        "autonomous_allowed": True,
-        "recommended_next": "plan_builder_repair_with_validation_evidence",
-        "reason": "ticket targets a project-owned artifact with development source available",
+        "autonomous_allowed": preflight_ready,
+        "recommended_next": (
+            "plan_builder_repair_with_validation_evidence"
+            if preflight_ready
+            else "qualify_exact_source_and_acceptance"
+        ),
+        "reason": (
+            "ticket targets a project-owned artifact with a qualified repair envelope"
+            if preflight_ready
+            else "ticket is project-owned but exact source and acceptance qualification is incomplete"
+        ),
         "owner_area": owner_area,
         "component_ref": component_ref or None,
+        "execution_preflight": preflight or None,
         "guardrails": guardrails,
     }
 
@@ -1243,10 +1255,14 @@ class BuilderWorkbenchService:
             "source_recovery_plan": recovery_plan,
         }
         relation_refs = _ticket_relation_refs(ticket)
+        execution_preflight = ticket_service.autonomous_repair_qualification(
+            ticket_token
+        )
         qualification = _builder_ticket_qualification(
             ticket,
             target=target,
             development_source=development_source,
+            execution_preflight=execution_preflight,
         )
         repair_ids = {
             str(ref.get("repair_id") or "").strip()
@@ -1276,6 +1292,7 @@ class BuilderWorkbenchService:
             "target_scope": dict(target),
             "development_source": development_source,
             "qualification": qualification,
+            "execution_preflight": execution_preflight,
             "repair_batch": _builder_ticket_batch(ticket_service, ticket, target=target),
             "work_stream": work_stream,
             "builder_work_items": work_stream["builder_work_items"],

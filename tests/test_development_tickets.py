@@ -20,11 +20,13 @@ class _FakeBuilderAutomation:
         self.calls: list[dict] = []
         self.counter = 0
         self.latest_links: dict = {}
+        self.latest_budget: dict = {"max_tokens": 200000}
 
     def start_from_execute(self, **kwargs):
         self.counter += 1
         self.calls.append(dict(kwargs))
         self.latest_links = dict(kwargs.get("links") or {})
+        self.latest_budget = dict(kwargs.get("execution_budget") or self.latest_budget)
         return self._payload(status="running", suffix=str(self.counter), links=self.latest_links)
 
     def status(self, *, object_type: str, object_id: str):
@@ -57,7 +59,7 @@ class _FakeBuilderAutomation:
                 "webspace_id": "desktop",
                 "links": dict(links),
                 "budget_usage": {
-                    "declared": {"max_tokens": 200000},
+                    "declared": dict(self.latest_budget),
                     "observed": {
                         "input_tokens": 100,
                         "cached_input_tokens": 20,
@@ -130,6 +132,7 @@ class _FakeResumableBuilderAutomation(_FakeBuilderAutomation):
         self.resume_calls.append(dict(kwargs))
         self.counter += 1
         self.latest_links = dict(kwargs.get("links") or {})
+        self.latest_budget = dict(kwargs.get("execution_budget") or self.latest_budget)
         return self._payload(
             status="running",
             suffix=f"resumed-{self.counter}",
@@ -155,6 +158,7 @@ class _FakeFollowupBuilderAutomation(_FakeBuilderAutomation):
         self.followup_calls.append(dict(kwargs))
         self.counter += 1
         self.latest_links = dict(kwargs.get("links") or {})
+        self.latest_budget = dict(kwargs.get("execution_budget") or self.latest_budget)
         return self._payload(
             status="running",
             suffix=f"followup-{self.counter}",
@@ -834,6 +838,11 @@ def test_builder_repair_requalification_is_bounded_and_audited(tmp_path: Path) -
     assert updated["metadata"]["builder_repair"]["structured_edits"]["operations"][0]["id"] == (
         "rename-action"
     )
+    preflight = service.autonomous_repair_qualification(ticket["ticket_id"])
+    assert preflight["execution_route"] == "structured_edits"
+    assert preflight["model_call_expected"] is False
+    assert preflight["expected_model_tokens"] == 0
+    assert preflight["estimated_budget"]["max_tokens"] == 8000
     history = updated["history"][-1]
     assert history["kind"] == "builder_repair_requalified"
     assert history["previous_builder_repair"]["target_files"] == [
@@ -899,6 +908,7 @@ def test_qualified_modal_ticket_targets_its_owner_skill(tmp_path: Path) -> None:
                 "target_object_type": "skill",
                 "target_object_id": "subscription_status_skill",
                 "target_files": ["skills/subscription_status_skill/webui.json"],
+                "target_refs": ["modal:subscription_status_modal"],
                 "acceptance_checks": ["One Details click opens one modal."],
                 "max_changed_files": 1,
             }
@@ -953,6 +963,49 @@ def test_builder_package_requires_qualification_before_spending_tokens(tmp_path:
     assert result["status"] == "qualification_required"
     assert result["unqualified_ticket_ids"] == [ticket["ticket_id"]]
     assert result["repair"] is None
+    assert repair_service.list() == []
+    assert service.get_ticket(ticket["ticket_id"])["builder_refs"] == []
+
+
+def test_single_autonomous_repair_requires_qualification_before_spending_tokens(
+    tmp_path: Path,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    automation = _FakeBuilderAutomation()
+    signal = service.capture_signal(
+        kind="development_request",
+        summary="Rename a Demo Metrics heading",
+        target_scope={"type": "skill", "id": "demo_metrics_skill", "source": "dev"},
+        source="client_feedback",
+        owner_area="skill",
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="ready_for_builder",
+        owner_area="skill",
+    )["ticket"]
+
+    result = service.start_autonomous_repair(
+        ticket["ticket_id"],
+        actor="builder:automation",
+        repair_service=repair_service,
+        automation_service=automation,
+        webspace_id="desktop",
+    )
+
+    assert result["started"] is False
+    assert result["status"] == "qualification_required"
+    assert result["reason"] == "builder_qualification_required"
+    assert result["qualification"]["execution_route"] == "qualification"
+    assert result["qualification"]["missing_fields"] == [
+        "profile",
+        "target_files",
+        "target_refs",
+        "acceptance_checks",
+    ]
+    assert automation.calls == []
     assert repair_service.list() == []
     assert service.get_ticket(ticket["ticket_id"])["builder_refs"] == []
 
@@ -1139,7 +1192,7 @@ def test_autonomous_repair_links_builder_automation_and_resolves_with_evidence(t
     repair = next(item for item in repair_service.list(status="resolved") if item["repair_id"] == result["repair"]["repair_id"])
     assert repair["context"]["automation"]["session_id"] == "automation.session.1"
     assert repair["context"]["usage"]["billable_tokens"] == 130
-    assert repair["context"]["cost_estimate"]["max_tokens"] == 200000
+    assert repair["context"]["cost_estimate"]["max_tokens"] == 24000
     assert repair["acceptance"]["evidence_refs"]
 
     unrelated_usage = {
@@ -1257,6 +1310,15 @@ def test_autonomous_repair_starts_successor_after_published_workflow(tmp_path: P
         target_scope={"type": "skill", "id": "demo_metrics_skill", "source": "dev"},
         source="client_feedback",
         owner_area="skill",
+        metadata={
+            "builder_repair": {
+                "profile": "surgical_ui",
+                "target_files": ["skills/demo_metrics_skill/webui.json"],
+                "target_refs": ["widget:metric-trend.title"],
+                "acceptance_checks": ["The next selected metric heading is renamed."],
+                "max_changed_files": 1,
+            }
+        },
     )["signal"]
     ticket = service.ensure_ticket_for_signal(
         signal,
@@ -1295,6 +1357,15 @@ def test_failed_autonomous_repair_returns_ticket_to_builder_queue_with_evidence(
         source="client_feedback",
         owner_area="skill",
         component_ref="skill:demo_metrics_skill",
+        metadata={
+            "builder_repair": {
+                "profile": "surgical_ui",
+                "target_files": ["skills/demo_metrics_skill/webui.json"],
+                "target_refs": ["widget:resource-workbench.title"],
+                "acceptance_checks": ["The requested marker is visible after validation."],
+                "max_changed_files": 1,
+            }
+        },
     )["signal"]
     ticket = service.ensure_ticket_for_signal(
         signal,
@@ -1413,6 +1484,15 @@ def test_failed_autonomous_repair_resumes_same_ticket_session(tmp_path: Path) ->
         target_scope={"type": "skill", "id": "demo_metrics_skill", "source": "dev"},
         source="client_feedback",
         owner_area="skill",
+        metadata={
+            "builder_repair": {
+                "profile": "surgical_ui",
+                "target_files": ["skills/demo_metrics_skill/webui.json"],
+                "target_refs": ["widget:resource-workbench.title"],
+                "acceptance_checks": ["The bounded repair is validated."],
+                "max_changed_files": 1,
+            }
+        },
     )["signal"]
     ticket = service.ensure_ticket_for_signal(
         signal,

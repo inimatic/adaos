@@ -614,6 +614,11 @@ Priority labels:
 - [ ] `[must]` Build a semantic source index that resolves qualified widget,
   modal, event, projection, route, and workflow refs to exact source slices
   before a bounded repair starts.
+- [x] `[must]` Add an execution preflight before singleton autonomous repair:
+  no Builder repair, Skill Factory task, or model budget may be created until
+  profile, exact files, target refs/operations, and acceptance checks are
+  present. Publish the selected route and estimated budget in the Dev Ticket
+  and Builder projections.
 - [x] `[must]` Emit `adaos.agent.context_receipt.v1` with per-layer unique
   bytes/tokens, tool-boundary counts, cache use, source coverage,
   selected/omitted/denied refs, context misses, and validation outcome.
@@ -652,6 +657,15 @@ reconstruction, and unchanged MCP structured content. The service is still a
 single implementation unit rather than separately deployable Registry,
 Resolver, Compiler, and Curator services; source indexing, follow-up deltas,
 cold replay, and measured quality/cost evaluations remain open.
+
+Execution-preflight verification, 2026-09-02: singleton Dev Ticket repair now
+uses the same fail-closed qualification principle as package planning. An
+incomplete envelope returns `qualification_required` without creating Builder
+or Skill Factory work; an admitted envelope selects `bounded_patch_agent` or
+`structured_edits`, publishes its budget in both read models, and preserves
+the zero-model receipt path. The existing worker resolves qualified refs into
+bounded target context, but the reusable project/component semantic source
+index and ordinary-language qualification worker remain open.
 
 Skill Factory verification, 2026-09-02: normalized realize requests now retain
 canonical context packets, Development Session receipts, prototype handoffs,
