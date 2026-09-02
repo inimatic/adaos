@@ -826,6 +826,65 @@ def test_context_packet_is_bounded_stable_and_persistable(
     assert persisted["workflow"]["change"]["context_packet_digest"] == first["digest"]
 
 
+def test_context_packet_execution_scope_excludes_unrelated_change_history(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    (root / "scenario.yaml").write_text(
+        "id: recipes\nversion: 0.1.0\n",
+        encoding="utf-8",
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-scoped",
+            "request": "Old broad implementation request.",
+            "source_message_ids": ["dticket.old", "dticket.current"],
+            "issues": [
+                {
+                    "issue_id": "automation-followup-dticket.old",
+                    "title": "Old issue",
+                    "lane": "automation",
+                    "acceptance_criteria": ["Old behavior changes."],
+                    "source_message_ids": ["dticket.old"],
+                },
+                {
+                    "issue_id": "automation-followup-dticket.current",
+                    "title": "Current issue",
+                    "lane": "automation",
+                    "acceptance_criteria": ["Current behavior changes."],
+                    "source_message_ids": ["dticket.current"],
+                },
+            ],
+        },
+    )
+
+    packet = service.build_context_packet(
+        "scenario",
+        "recipes",
+        execution_scope={
+            "source_message_ids": ["dticket.current"],
+            "repair_ids": ["repair.current"],
+            "intent": "Apply only the current repair package.",
+        },
+    )
+
+    assert packet["change"]["intent"] == "Apply only the current repair package."
+    assert packet["change"]["source_message_ids"] == ["dticket.current"]
+    assert [item["issue_id"] for item in packet["change"]["issues"]] == [
+        "automation-followup-dticket.current"
+    ]
+    assert packet["change"]["request_addenda"] == []
+    assert packet["execution_scope"] == {
+        "source_message_ids": ["dticket.current"],
+        "repair_ids": ["repair.current"],
+        "active": True,
+    }
+    assert packet["budget"]["issue_count"] == 1
+
+
 def test_workflow_rejects_divergent_change_compatibility_identities(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

@@ -1510,6 +1510,23 @@ class BuilderAutomationService:
             raise ValueError("implementation_brief is required after Prompt IDE Execute")
         _reject_transport_corruption(brief, field="implementation_brief")
         external_links = dict(links) if isinstance(links, Mapping) else {}
+        external_ticket_ids = list(
+            dict.fromkeys(
+                [
+                    str(external_links.get("development_ticket_id") or "").strip(),
+                    *[
+                        str(item).strip()
+                        for item in external_links.get("development_ticket_ids") or []
+                        if str(item).strip()
+                    ],
+                ]
+            )
+        )
+        external_ticket_ids = [item for item in external_ticket_ids if item]
+        if external_ticket_ids:
+            external_links["development_ticket_id"] = external_ticket_ids[0]
+            external_links["development_ticket_ids"] = external_ticket_ids
+            external_links["development_ticket_history_ids"] = external_ticket_ids
         admitted_execution_budget = with_effective_billable_token_limit(execution_budget)
         admitted_agent_profile = dict(agent_profile) if isinstance(agent_profile, Mapping) else None
         admitted_mcp = _sanitized_mcp_profile(mcp)
@@ -1611,6 +1628,7 @@ class BuilderAutomationService:
                                 "acceptance_criteria": [
                                     f"The follow-up implementation satisfies: {issue_summary}"[:500]
                                 ],
+                                "source_message_ids": ([ticket_id] if ticket_id else []),
                             }
                         ],
                         "source_message_ids": ([ticket_id] if ticket_id else []),
@@ -1730,6 +1748,27 @@ class BuilderAutomationService:
                 if external_links:
                     current_links = current.get("links") if isinstance(current.get("links"), Mapping) else {}
                     merged_links = {**dict(current_links), **external_links}
+                    merged_links["development_ticket_history_ids"] = list(
+                        dict.fromkeys(
+                            [
+                                str(current_links.get("development_ticket_id") or "").strip(),
+                                *[
+                                    str(item).strip()
+                                    for item in current_links.get("development_ticket_ids") or []
+                                    if str(item).strip()
+                                ],
+                                *[
+                                    str(item).strip()
+                                    for item in current_links.get(
+                                        "development_ticket_history_ids"
+                                    )
+                                    or []
+                                    if str(item).strip()
+                                ],
+                                *external_ticket_ids,
+                            ]
+                        )
+                    )
                     if merged_links != current_links:
                         current["links"] = merged_links
                         current["updated_at"] = _now_iso()
@@ -2087,6 +2126,7 @@ class BuilderAutomationService:
                         "acceptance_criteria": [
                             f"The follow-up implementation satisfies: {summary}"[:500]
                         ],
+                        "source_message_ids": [ticket_id],
                     }
                 )
             if issues:
@@ -2113,7 +2153,7 @@ class BuilderAutomationService:
                 if isinstance(session.get("links"), Mapping)
                 else {}
             )
-            all_ticket_ids = list(
+            historical_ticket_ids = list(
                 dict.fromkeys(
                     [
                         str(current_links.get("development_ticket_id") or "").strip(),
@@ -2129,7 +2169,11 @@ class BuilderAutomationService:
             session["links"] = {
                 **current_links,
                 **incoming_links,
-                "development_ticket_ids": [item for item in all_ticket_ids if item],
+                "development_ticket_id": ticket_ids[0],
+                "development_ticket_ids": ticket_ids,
+                "development_ticket_history_ids": [
+                    item for item in historical_ticket_ids if item
+                ],
             }
             session["implementation_brief"] = brief
             session["webspace_id"] = str(webspace_id or session.get("webspace_id") or "desktop")
@@ -2748,7 +2792,19 @@ class BuilderAutomationService:
         reason = "codex_token_budget_exceeded"
         trigger_failure_id: str | None = None
         if "Codex token budget exceeded:" not in failure_message:
-            if "changed paths outside the exact repair files:" not in failure_message:
+            retry_reason = None
+            if "changed paths outside the exact repair files:" in failure_message:
+                retry_reason = "repair_envelope_requalified_after_path_guard"
+            elif any(
+                marker in failure_message
+                for marker in (
+                    "requires successful Root MCP evidence",
+                    "task-scoped Root MCP validation call failed",
+                    "requires an authenticated task-scoped Root MCP route",
+                )
+            ):
+                retry_reason = "trusted_root_mcp_validation_retry"
+            if retry_reason is None:
                 return None
             failed_run_root = Path(self.runs_root) / _safe_token(task_id)
             assignment_path = failed_run_root / "input" / "assignment.json"
@@ -2793,7 +2849,7 @@ class BuilderAutomationService:
             ):
                 return None
             trigger_failure_id = str(failure.get("failure_id") or "").strip() or None
-            reason = "repair_envelope_requalified_after_path_guard"
+            reason = retry_reason
         run_root = Path(self.runs_root) / _safe_token(source_task_id)
         if not (run_root / "workspace" / ".git").is_dir():
             return None
@@ -5214,6 +5270,26 @@ class BuilderAutomationService:
                     else []
                 ),
             ],
+            execution_scope={
+                "source_message_ids": [
+                    str(item).strip()
+                    for item in dict(session.get("links") or {}).get(
+                        "development_ticket_ids"
+                    )
+                    or []
+                    if str(item).strip()
+                ],
+                "repair_ids": [
+                    str(
+                        dict(session.get("links") or {}).get("builder_repair_id")
+                        or dict(session.get("links") or {}).get("repair_id")
+                        or ""
+                    ).strip()
+                ],
+                "intent": _brief_summary(
+                    iteration_instruction or session.get("implementation_brief")
+                ),
+            },
             run_purpose=str(session.get("run_purpose") or "iteration"),
             required_facets=required_context_facets,
             enforce_context_coverage=True,
@@ -5275,9 +5351,14 @@ class BuilderAutomationService:
                     "context_latency_ms",
                 )
             }
+        execution_change = (
+            dict(context_packet.get("change") or {})
+            if isinstance(context_packet.get("change"), Mapping)
+            else {}
+        )
         acceptance_checks = [
             str(criterion).strip()
-            for issue in change_set.get("issues") or []
+            for issue in execution_change.get("issues") or []
             if isinstance(issue, Mapping) and issue.get("status") != "deferred"
             for criterion in issue.get("acceptance_criteria") or []
             if str(criterion).strip()
@@ -5346,7 +5427,7 @@ class BuilderAutomationService:
                 "iteration_instruction": iteration_instruction,
                 "workflow_transition": session.get("pending_workflow_transition"),
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
-                "change_set": dict(change_set) if change_set else None,
+                "change_set": execution_change or None,
                 "context_packet": context_packet,
                 "context_packet_ref": context_control["context_packet_ref"],
                 "context_packet_digest": context_control["context_packet_digest"],

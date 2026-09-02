@@ -454,10 +454,20 @@ class BuilderRepairService:
             "reports": created,
         }
 
-    def task_context(self, project_id: str, *, limit: int = 30) -> dict[str, Any]:
+    def task_context(
+        self,
+        project_id: str,
+        *,
+        limit: int = 30,
+        repair_ids: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
+        selected_ids = {
+            str(item).strip() for item in repair_ids or [] if str(item).strip()
+        }
         active = [
             item
             for item in self.list(project_id=project_id)
+            if not selected_ids or str(item.get("repair_id") or "").strip() in selected_ids
             if str(item.get("work_status") or _work_status_for_legacy(item.get("status")))
             in ACTIVE_WORK_ITEM_STATES
         ][-max(1, min(int(limit or 30), 100)):]

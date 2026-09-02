@@ -16,6 +16,7 @@
     "previous_run": { "type": ["object", "null"] },
     "conversation": { "type": ["object", "null"], "additionalProperties": true },
     "pending_actions": { "type": "array", "maxItems": 30, "items": { "type": "object", "required": ["id"], "additionalProperties": true } },
+    "execution_scope": { "type": "object", "additionalProperties": true },
     "run": { "type": "object", "required": ["purpose"], "additionalProperties": true },
     "facets": { "type": "object", "additionalProperties": true },
     "coverage": {

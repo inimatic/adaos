@@ -1624,8 +1624,25 @@ def test_structured_edit_context_projection_keeps_authority_without_prompt_paylo
     ) == "Apply the next iteration."
 
 
-def test_path_guard_failure_reuses_original_budget_candidate_after_requalification(
+@pytest.mark.parametrize(
+    ("validation_failure_message", "expected_reason"),
+    [
+        (
+            "ValueError: Codex changed paths outside the exact repair files: "
+            "['skills/demo/tests/test_actual.py']",
+            "repair_envelope_requalified_after_path_guard",
+        ),
+        (
+            "ValueError: repair requires successful Root MCP evidence for "
+            "adaos_task_root:an admitted tool on the admitted target",
+            "trusted_root_mcp_validation_retry",
+        ),
+    ],
+)
+def test_validation_failure_reuses_original_budget_candidate_after_requalification(
     tmp_path: Path,
+    validation_failure_message: str,
+    expected_reason: str,
 ) -> None:
     service = _service(tmp_path)
     source_task_id = "task.source-budget-candidate"
@@ -1668,10 +1685,7 @@ def test_path_guard_failure_reuses_original_budget_candidate_after_requalificati
             "failure_history": [
                 {
                     "failure_id": "failure.path-guard",
-                    "message": (
-                        "ValueError: Codex changed paths outside the exact repair files: "
-                        "['skills/demo/tests/test_actual.py']"
-                    ),
+                    "message": validation_failure_message,
                 }
             ],
         },
@@ -1687,7 +1701,7 @@ def test_path_guard_failure_reuses_original_budget_candidate_after_requalificati
     assert checkpoint["source_task_id"] == source_task_id
     assert checkpoint["failure_id"] == "failure.source-budget"
     assert checkpoint["trigger_failure_id"] == "failure.path-guard"
-    assert checkpoint["reason"] == "repair_envelope_requalified_after_path_guard"
+    assert checkpoint["reason"] == expected_reason
 
 
 def test_failed_dev_ticket_resume_updates_brief_before_submitting_continuation(
@@ -2159,11 +2173,23 @@ def test_dev_ticket_followup_extends_active_trial_batch(tmp_path: Path) -> None:
         if item["issue_id"] == "automation-followup-dticket.followup"
     )
     assert followup["lane"] == "automation"
+    assert followup["source_message_ids"] == ["dticket.followup"]
+    assert started["session"]["links"]["development_ticket_ids"] == [
+        "dticket.followup"
+    ]
     assert "dticket.followup" in projected["change_set"]["source_message_ids"]
     assert projected["change_set"]["request_addenda"][-1] == (
         "Rename the visible metrics heading."
     )
     assert started["session"]["current_task_id"] != "task.first"
+    task = service.factory.read_task(started["session"]["current_task_id"])
+    task_checks = task["realize_request"]["acceptance"]["checks"]
+    assert any("Rename the visible metrics heading" in item for item in task_checks)
+    assert not any("first repair works" in item.lower() for item in task_checks)
+    execution_change = task["realize_request"]["artifacts"]["change_set"]
+    assert [item["issue_id"] for item in execution_change["issues"]] == [
+        "automation-followup-dticket.followup"
+    ]
 
 
 def test_followup_recovers_stale_trial_preparation_without_candidate(tmp_path: Path) -> None:

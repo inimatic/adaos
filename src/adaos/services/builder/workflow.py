@@ -440,6 +440,13 @@ def _normalize_issue(value: Any, *, index: int) -> dict[str, Any]:
                 if str(item).strip()
             )
         )[:100],
+        "source_message_ids": list(
+            dict.fromkeys(
+                str(item).strip()
+                for item in value.get("source_message_ids") or []
+                if str(item).strip()
+            )
+        )[:100],
         "structural_status": structural_status,
         "derived_from_issue_ids": list(
             dict.fromkeys(
@@ -3906,6 +3913,7 @@ class BuilderWorkflowService:
         instruction_refs: list[str] | tuple[str, ...] | None = None,
         conversation_context: Mapping[str, Any] | None = None,
         pending_action_refs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None = None,
+        execution_scope: Mapping[str, Any] | None = None,
         run_purpose: str = "iteration",
         required_facets: list[str] | tuple[str, ...] | None = None,
         enforce_context_coverage: bool = False,
@@ -3973,6 +3981,50 @@ class BuilderWorkflowService:
                 previous_run = copy.deepcopy(change["runs"][-1])
             bounded_conversation = _bounded_conversation_context(conversation_context)
             bounded_pending_actions = _bounded_pending_action_refs(pending_action_refs)
+            scope = dict(execution_scope or {})
+            scoped_source_ids = list(
+                dict.fromkeys(
+                    str(item).strip()
+                    for item in scope.get("source_message_ids") or []
+                    if str(item).strip()
+                )
+            )[:100]
+            scoped_repair_ids = list(
+                dict.fromkeys(
+                    str(item).strip()
+                    for item in scope.get("repair_ids") or []
+                    if str(item).strip()
+                )
+            )[:50]
+            scoped_intent = str(scope.get("intent") or "").strip()
+            if scoped_intent:
+                scoped_intent = _bounded_text(
+                    scoped_intent,
+                    field="execution scope intent",
+                    max_length=4000,
+                )
+            all_issues = [
+                copy.deepcopy(dict(item))
+                for item in change.get("issues") or []
+                if isinstance(item, Mapping)
+            ]
+            if scoped_source_ids:
+                scoped_source_set = set(scoped_source_ids)
+                scoped_issues = [
+                    item
+                    for item in all_issues
+                    if scoped_source_set.intersection(
+                        str(ref).strip()
+                        for ref in item.get("source_message_ids") or []
+                        if str(ref).strip()
+                    )
+                    or any(
+                        str(item.get("issue_id") or "").endswith(source_id)
+                        for source_id in scoped_source_ids
+                    )
+                ]
+            else:
+                scoped_issues = all_issues
             active_reviews = [
                 copy.deepcopy(dict(item))
                 for item in workflow.get("reviews") or []
@@ -3983,7 +4035,7 @@ class BuilderWorkflowService:
             semantic_refs = list(
                 dict.fromkeys(
                     str(ref).strip()
-                    for issue in change.get("issues") or []
+                    for issue in scoped_issues
                     if isinstance(issue, Mapping)
                     for ref in issue.get("semantic_refs") or []
                     if str(ref).strip()
@@ -4026,7 +4078,7 @@ class BuilderWorkflowService:
                         "issue_id": item.get("issue_id"),
                         "criteria": copy.deepcopy(item.get("acceptance_criteria") or []),
                     }
-                    for item in change.get("issues") or []
+                    for item in scoped_issues
                     if isinstance(item, Mapping)
                 ],
                 "acceptance_constraints": copy.deepcopy(
@@ -4451,7 +4503,10 @@ class BuilderWorkflowService:
 
             repair_context = BuilderRepairService(
                 state_dir=Path(self.state_dir)
-            ).task_context(project_id)
+            ).task_context(
+                project_id,
+                repair_ids=scoped_repair_ids or None,
+            )
             facets: dict[str, Any] = {
                 "target_structure": target_structure,
                 "abi": {
@@ -4508,15 +4563,23 @@ class BuilderWorkflowService:
                 },
                 "change": {
                     "change_id": change["change_id"],
-                    "intent": change.get("request"),
-                    "request_addenda": copy.deepcopy(change.get("request_addenda") or []),
+                    "intent": scoped_intent or change.get("request"),
+                    "request_addenda": (
+                        []
+                        if scoped_source_ids
+                        else copy.deepcopy(change.get("request_addenda") or [])
+                    ),
                     "route": change.get("route"),
                     "gate": change.get("gate"),
                     "status": change.get("status"),
-                    "issues": copy.deepcopy(change.get("issues") or []),
+                    "issues": scoped_issues,
                     "acceptance_constraints": copy.deepcopy(change.get("acceptance_constraints") or []),
                     "reviews": active_reviews,
-                    "source_message_ids": copy.deepcopy(change.get("source_message_ids") or []),
+                    "source_message_ids": (
+                        scoped_source_ids
+                        if scoped_source_ids
+                        else copy.deepcopy(change.get("source_message_ids") or [])
+                    ),
                     "teacher_candidate_refs": copy.deepcopy(change.get("teacher_candidate_refs") or []),
                     "promotion_privacy_scope": change.get("promotion_privacy_scope"),
                 },
@@ -4537,15 +4600,22 @@ class BuilderWorkflowService:
                 "previous_run": previous_run,
                 "conversation": bounded_conversation,
                 "pending_actions": bounded_pending_actions,
+                "execution_scope": {
+                    "source_message_ids": scoped_source_ids,
+                    "repair_ids": scoped_repair_ids,
+                    "active": bool(scoped_source_ids or scoped_repair_ids),
+                },
                 "run": {"purpose": purpose},
                 "facets": facets,
                 "coverage": coverage,
                 "budget": {
                     "max_state_bytes": _MAX_STATE_BYTES,
-                    "issue_count": len(change.get("issues") or []),
+                    "issue_count": len(scoped_issues),
                     "acceptance_constraint_count": len(change.get("acceptance_constraints") or []),
                     "run_count": len(change.get("runs") or []),
-                    "source_message_ref_count": len(change.get("source_message_ids") or []),
+                    "source_message_ref_count": len(
+                        scoped_source_ids or change.get("source_message_ids") or []
+                    ),
                     "conversation_message_count": len((bounded_conversation or {}).get("messages") or []),
                     "conversation_segment_count": len((bounded_conversation or {}).get("segments") or []),
                     "memory_item_count": len((bounded_conversation or {}).get("memory") or []),

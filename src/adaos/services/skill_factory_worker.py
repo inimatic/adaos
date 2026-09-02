@@ -20,6 +20,7 @@ from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import urlparse
 from uuid import uuid4
 
+import httpx
 import psutil
 import yaml
 
@@ -406,6 +407,112 @@ def _codex_jsonl_root_mcp_evidence(
         "repair requires successful Root MCP evidence for "
         f"{expected_server}:{allowed_label} on {bound_target_id or 'the admitted target'}"
     )
+
+
+def _task_mcp_validation_evidence(
+    *,
+    assignment: Mapping[str, Any],
+    root_mcp: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Run one bounded worker-owned Root MCP read for validation-only continuations."""
+
+    if not _root_mcp_required(assignment):
+        return None
+    profile = dict(root_mcp or {})
+    if not profile or profile.get("enabled") is False:
+        raise ValueError("repair requires Root MCP but no task-scoped route was admitted")
+    url = str(profile.get("url") or "").strip()
+    access_token = str(profile.get("_bearer_token_value") or "").strip()
+    if not url or not access_token:
+        raise ValueError("repair requires an authenticated task-scoped Root MCP route")
+
+    enabled_tools = {
+        str(item).strip()
+        for item in profile.get("enabled_tools") or []
+        if str(item).strip()
+    }
+    scopes = {
+        str(item).strip()
+        for item in dict(assignment.get("mcp") or {}).get("scope") or []
+        if str(item).strip()
+    }
+    bound_target_id = str(
+        profile.get("bound_target_id") or profile.get("target_id") or ""
+    ).strip()
+    candidates: list[tuple[str, dict[str, Any]]] = []
+    if "run_staging_validation" in scopes:
+        candidates.append(("list_managed_targets", {}))
+    if bound_target_id:
+        candidates.append(("get_managed_target", {"target_id": bound_target_id}))
+    candidates.append(("foundation", {}))
+    selected = next(
+        (
+            (tool, arguments)
+            for tool, arguments in candidates
+            if not enabled_tools or tool in enabled_tools
+        ),
+        None,
+    )
+    if selected is None:
+        raise ValueError("task-scoped Root MCP policy admits no deterministic validation tool")
+    tool, arguments = selected
+    task_id = str(assignment.get("task_id") or "").strip()
+    request_id = f"builder-validation-{_safe_token(task_id)}"
+    try:
+        response = httpx.post(
+            url,
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": "tools/call",
+                "params": {"name": tool, "arguments": arguments},
+            },
+            timeout=max(1, min(int(profile.get("tool_timeout_sec") or 30), 60)),
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(
+            f"task-scoped Root MCP validation call failed for {tool}: {type(exc).__name__}"
+        ) from exc
+    if not isinstance(payload, Mapping) or payload.get("error"):
+        raise ValueError(f"task-scoped Root MCP validation call failed for {tool}")
+    result = payload.get("result") if isinstance(payload.get("result"), Mapping) else {}
+    if not result or result.get("isError") is True:
+        raise ValueError(f"task-scoped Root MCP validation call failed for {tool}")
+    structured = (
+        result.get("structuredContent")
+        if isinstance(result.get("structuredContent"), Mapping)
+        else result.get("structured_content")
+        if isinstance(result.get("structured_content"), Mapping)
+        else {}
+    )
+    if not structured:
+        raise ValueError(f"task-scoped Root MCP validation returned no structured result for {tool}")
+    result_digest = "sha256:" + hashlib.sha256(
+        json.dumps(
+            result,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "schema": "adaos.skill_factory.root_mcp_evidence.v1",
+        "status": "passed",
+        "source": "worker_task_mcp_validation",
+        "server": str(profile.get("server_name") or "adaos_task_root").strip(),
+        "tool": tool,
+        "task_id": task_id,
+        "lease_id": str(profile.get("lease_id") or "").strip() or None,
+        "bound_target_id": bound_target_id or None,
+        "argument_target_id": str(arguments.get("target_id") or "").strip() or None,
+        "result_target_id": str(structured.get("target_id") or "").strip() or None,
+        "result_state": str(structured.get("state") or "").strip() or None,
+        "result_digest": result_digest,
+        "recorded_at": _now_iso(),
+    }
 
 
 def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, Any]:
@@ -3169,16 +3276,6 @@ class LocalSkillFactoryWorker:
         if not previous_digest or previous_digest != current_digest:
             raise ValueError("continuation candidate source snapshot is stale")
 
-        root_mcp = _root_mcp_profile_from_assignment(
-            previous_assignment,
-            include_private_token=True,
-        )
-        root_mcp_evidence = _codex_jsonl_root_mcp_evidence(
-            source_run / "output" / "codex-live.jsonl",
-            assignment=assignment,
-            root_mcp=root_mcp,
-        )
-
         changed_paths = self._changed_from_baseline(previous_workspace)
         if not changed_paths:
             # A live token guard can stop Codex during source discovery, before
@@ -3217,6 +3314,26 @@ class LocalSkillFactoryWorker:
 
         restored_paths = self._changed_paths(workspace)
         self._validate_changed_paths(assignment, restored_paths, workspace=workspace)
+        root_mcp_evidence: dict[str, Any] | None = None
+        if _root_mcp_required(assignment):
+            previous_root_mcp = _root_mcp_profile_from_assignment(
+                previous_assignment,
+                include_private_token=True,
+            )
+            try:
+                root_mcp_evidence = _codex_jsonl_root_mcp_evidence(
+                    source_run / "output" / "codex-live.jsonl",
+                    assignment=assignment,
+                    root_mcp=previous_root_mcp,
+                )
+            except ValueError:
+                root_mcp_evidence = _task_mcp_validation_evidence(
+                    assignment=assignment,
+                    root_mcp=_root_mcp_profile_from_assignment(
+                        assignment,
+                        include_private_token=True,
+                    ),
+                )
         return {
             "schema": "adaos.skill_factory.continuation_restore.v1",
             "mode": "validate_preserved_candidate",

@@ -105,6 +105,12 @@ def test_runtime_evidence_bundle_becomes_bounded_builder_task_context(tmp_path: 
         "memory_growth",
         "nlu_miss",
     }
+    selected = service.task_context(
+        "recipes",
+        repair_ids=[context["tasks"][0]["repair_id"]],
+    )
+    assert selected["active_count"] == 1
+    assert selected["tasks"][0]["repair_id"] == context["tasks"][0]["repair_id"]
 
 
 def test_builder_work_item_lifecycle_is_revisioned_and_not_a_user_ticket(tmp_path: Path) -> None:
@@ -196,8 +202,6 @@ def test_builder_work_item_can_fail_during_launch_preflight(tmp_path: Path) -> N
         "to": "failed",
         "reason": "automation_start:ValueError",
     }
-
-
 def test_builder_work_item_keeps_user_visible_trial_receipt(tmp_path: Path) -> None:
     service = BuilderRepairService(state_dir=tmp_path)
     task = service.report(

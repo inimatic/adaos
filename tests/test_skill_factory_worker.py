@@ -35,6 +35,7 @@ from adaos.services.skill_factory_worker import (
     _codex_prompt_budget_check,
     _context_packet_prompt_projection,
     _root_mcp_profile_from_assignment,
+    _task_mcp_validation_evidence,
 )
 
 
@@ -153,6 +154,59 @@ def test_codex_jsonl_root_mcp_evidence_rejects_wrong_target(tmp_path: Path) -> N
                 "bound_target_id": "hub:sn_demo",
             },
         )
+
+
+def test_task_mcp_validation_evidence_uses_bounded_task_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, Any] = {}
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "jsonrpc": "2.0",
+                "id": "builder-validation-task.current",
+                "result": {
+                    "content": [{"type": "text", "text": "not persisted"}],
+                    "structuredContent": {"targets": [{"target_id": "hub:sn_demo"}]},
+                },
+            }
+
+    def _post(url: str, **kwargs: Any) -> _Response:
+        observed.update({"url": url, **kwargs})
+        return _Response()
+
+    monkeypatch.setattr(worker_module.httpx, "post", _post)
+    evidence = _task_mcp_validation_evidence(
+        assignment={
+            "task_id": "task.current",
+            "mcp": {"scope": ["run_staging_validation"]},
+            "realize_request": {
+                "artifacts": {"repair_hints": {"requires_root_mcp": True}}
+            },
+        },
+        root_mcp={
+            "enabled": True,
+            "server_name": "adaos_task_root",
+            "url": "http://127.0.0.1:8777/v1/root/mcp/task/task.current",
+            "lease_id": "lease.current",
+            "_bearer_token_value": "secret-not-evidence",
+        },
+    )
+
+    assert evidence is not None
+    assert evidence["source"] == "worker_task_mcp_validation"
+    assert evidence["tool"] == "list_managed_targets"
+    assert evidence["lease_id"] == "lease.current"
+    assert "secret" not in json.dumps(evidence)
+    assert observed["headers"] == {"Authorization": "Bearer secret-not-evidence"}
+    assert observed["json"]["params"] == {
+        "name": "list_managed_targets",
+        "arguments": {},
+    }
 
 
 def test_codex_failure_detail_prefers_structured_jsonl_errors() -> None:
