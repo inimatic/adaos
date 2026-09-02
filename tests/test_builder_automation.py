@@ -167,6 +167,66 @@ def test_completed_builder_context_restores_from_cold_service(tmp_path: Path) ->
     assert restored_inspection["receipt_count"] == 1
 
 
+def test_session_persists_workflow_and_request_once_by_content_address(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    request = {
+        "schema": "adaos.skill_factory.realize_request.v1",
+        "request_id": "realize.compact",
+        "payload": "request-context-" * 4_000,
+    }
+    request_artifact = service._contexts().put_artifact(request)
+    workflow = {
+        "schema": "adaos.builder.workflow.v1",
+        "active_phase": "automation",
+        "workflow_state": "checkpoint",
+        "governed": {"generation": 7},
+        "change_set": {"change_set_id": "CH-compact", "status": "implemented"},
+        "delivery": {
+            "status": "checkpoint",
+            "package_digest": "sha256:" + "a" * 64,
+            "source_revision": "revision-1",
+        },
+        "history": ["workflow-history-" * 5_000],
+    }
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.skill.compact",
+        "object_type": "skill",
+        "object_id": "compact",
+        "status": "completed",
+        "current_task_id": "task.compact",
+        "task": {
+            "task_id": "task.compact",
+            "status": "completed",
+            "realize_request_ref": request_artifact["ref"],
+            "realize_request_digest": request_artifact["digest"],
+            "realize_request": request,
+        },
+        "completion_readiness": {
+            "ok": True,
+            "task_id": "task.compact",
+            "workflow_checkpoint": {"ok": True, "workflow": workflow},
+        },
+        "updated_at": "2026-09-02T00:00:00+00:00",
+    }
+
+    service._save_session(session)
+
+    session_path = service._session_path("skill", "compact")
+    persisted = json.loads(session_path.read_text(encoding="utf-8"))
+    checkpoint = persisted["completion_readiness"]["workflow_checkpoint"]
+    assert "realize_request" not in persisted["task"]
+    assert "workflow" not in checkpoint
+    assert checkpoint["workflow_ref"].startswith("artifact://context/sha256/")
+    assert checkpoint["workflow_summary"]["delivery"]["status"] == "checkpoint"
+    assert session_path.stat().st_size < 10_000
+
+    restored = service.get_session("skill", "compact")
+    assert restored is not None
+    assert restored["task"]["realize_request"] == request
+    assert restored["completion_readiness"]["workflow_checkpoint"]["workflow"] == workflow
+
+
 def test_compact_status_omits_private_session_payload_and_stays_bounded(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

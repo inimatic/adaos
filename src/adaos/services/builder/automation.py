@@ -4084,7 +4084,7 @@ class BuilderAutomationService:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (FileNotFoundError, json.JSONDecodeError):
             return None
-        return dict(raw) if isinstance(raw, Mapping) else None
+        return self._hydrate_session_compatibility(raw) if isinstance(raw, Mapping) else None
 
     def release_candidate_runtime(
         self,
@@ -7428,7 +7428,7 @@ class BuilderAutomationService:
             except (OSError, json.JSONDecodeError):
                 continue
             if isinstance(raw, Mapping) and str(raw.get("session_id") or "") == token:
-                return dict(raw)
+                return self._hydrate_session_compatibility(raw)
         return None
 
     def _project_ref(self, object_type: str, object_id: str) -> tuple[str, str]:
@@ -7494,13 +7494,144 @@ class BuilderAutomationService:
             "detail_available": True,
         }
 
+    @staticmethod
+    def _workflow_checkpoint_summary(workflow: Mapping[str, Any]) -> dict[str, Any]:
+        delivery = (
+            dict(workflow.get("delivery"))
+            if isinstance(workflow.get("delivery"), Mapping)
+            else {}
+        )
+        change_set = (
+            dict(workflow.get("change_set"))
+            if isinstance(workflow.get("change_set"), Mapping)
+            else {}
+        )
+        governed = (
+            dict(workflow.get("governed"))
+            if isinstance(workflow.get("governed"), Mapping)
+            else {}
+        )
+        return {
+            "schema": "adaos.builder.workflow_checkpoint_summary.v1",
+            "active_phase": str(workflow.get("active_phase") or "").strip() or None,
+            "workflow_state": str(workflow.get("workflow_state") or "").strip() or None,
+            "generation": governed.get("generation"),
+            "change_set_id": str(change_set.get("change_set_id") or "").strip() or None,
+            "change_set_status": str(change_set.get("status") or "").strip() or None,
+            "delivery": {
+                key: delivery.get(key)
+                for key in (
+                    "status",
+                    "package_digest",
+                    "source_revision",
+                    "checkpoint_change_id",
+                    "candidate_id",
+                    "release_digest",
+                )
+                if delivery.get(key) not in (None, "")
+            },
+        }
+
+    def _compact_readiness_checkpoint(self, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return copy.deepcopy(value)
+        readiness = copy.deepcopy(dict(value))
+        checkpoint = (
+            dict(readiness.get("workflow_checkpoint"))
+            if isinstance(readiness.get("workflow_checkpoint"), Mapping)
+            else {}
+        )
+        workflow = (
+            dict(checkpoint.get("workflow"))
+            if isinstance(checkpoint.get("workflow"), Mapping)
+            else {}
+        )
+        if workflow:
+            artifact = self._contexts().put_artifact(workflow)
+            checkpoint.pop("workflow", None)
+            checkpoint.update(
+                {
+                    "workflow_ref": artifact["ref"],
+                    "workflow_digest": artifact["digest"],
+                    "workflow_summary": self._workflow_checkpoint_summary(workflow),
+                }
+            )
+            readiness["workflow_checkpoint"] = checkpoint
+        return readiness
+
+    def _persistence_projection(self, session: Mapping[str, Any]) -> dict[str, Any]:
+        payload = copy.deepcopy(dict(session))
+        task = payload.get("task") if isinstance(payload.get("task"), Mapping) else None
+        if task is not None and str(task.get("realize_request_ref") or "").strip():
+            compact_task = dict(task)
+            compact_task.pop("realize_request", None)
+            payload["task"] = compact_task
+        if isinstance(payload.get("completion_readiness"), Mapping):
+            payload["completion_readiness"] = self._compact_readiness_checkpoint(
+                payload["completion_readiness"]
+            )
+        payload["completion_history"] = [
+            self._compact_readiness_checkpoint(item)
+            for item in payload.get("completion_history") or []
+            if isinstance(item, Mapping)
+        ][-20:]
+        if not payload["completion_history"]:
+            payload.pop("completion_history", None)
+        return payload
+
+    def _hydrate_readiness_compatibility(self, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return copy.deepcopy(value)
+        readiness = copy.deepcopy(dict(value))
+        checkpoint = (
+            dict(readiness.get("workflow_checkpoint"))
+            if isinstance(readiness.get("workflow_checkpoint"), Mapping)
+            else {}
+        )
+        workflow_ref = str(checkpoint.get("workflow_ref") or "").strip()
+        if workflow_ref and not isinstance(checkpoint.get("workflow"), Mapping):
+            try:
+                workflow = self._contexts().get_artifact(workflow_ref)
+            except KeyError:
+                workflow = None
+            if isinstance(workflow, Mapping):
+                checkpoint["workflow"] = dict(workflow)
+                readiness["workflow_checkpoint"] = checkpoint
+        return readiness
+
+    def _hydrate_session_compatibility(self, session: Mapping[str, Any]) -> dict[str, Any]:
+        payload = copy.deepcopy(dict(session))
+        task = payload.get("task") if isinstance(payload.get("task"), Mapping) else None
+        if task is not None and not isinstance(task.get("realize_request"), Mapping):
+            request_ref = str(task.get("realize_request_ref") or "").strip()
+            if request_ref:
+                try:
+                    request = self._contexts().get_artifact(request_ref)
+                except KeyError:
+                    request = None
+                if isinstance(request, Mapping):
+                    expanded_task = dict(task)
+                    expanded_task["realize_request"] = dict(request)
+                    payload["task"] = expanded_task
+        if isinstance(payload.get("completion_readiness"), Mapping):
+            payload["completion_readiness"] = self._hydrate_readiness_compatibility(
+                payload["completion_readiness"]
+            )
+        if isinstance(payload.get("completion_history"), list):
+            payload["completion_history"] = [
+                self._hydrate_readiness_compatibility(item)
+                for item in payload["completion_history"]
+                if isinstance(item, Mapping)
+            ]
+        return payload
+
     def _save_session(
         self,
         session: Mapping[str, Any],
         *,
         emit_projection: bool = True,
     ) -> dict[str, Any]:
-        payload = dict(session)
+        payload = self._persistence_projection(session)
         path = self._session_path(str(payload["object_type"]), str(payload["object_id"]))
         compact_path = self._compact_status_path(
             str(payload["object_type"]),
@@ -7515,18 +7646,19 @@ class BuilderAutomationService:
             if isinstance(previous, Mapping) and _prefer_persisted_session(previous, payload):
                 persisted = dict(previous)
                 _write_json(compact_path, self._compact_status_payload(persisted))
+                compatible = self._hydrate_session_compatibility(persisted)
                 if isinstance(session, dict):
                     session.clear()
-                    session.update(copy.deepcopy(persisted))
-                return persisted
+                    session.update(copy.deepcopy(compatible))
+                return compatible
             if previous == payload:
                 _write_json(compact_path, self._compact_status_payload(payload))
-                return payload
+                return self._hydrate_session_compatibility(payload)
             _write_json(path, payload)
             _write_json(compact_path, self._compact_status_payload(payload))
         if emit_projection and self.event_sink is not None:
             self.event_sink(self.project_session(payload))
-        return payload
+        return self._hydrate_session_compatibility(payload)
 
 
 __all__ = [
