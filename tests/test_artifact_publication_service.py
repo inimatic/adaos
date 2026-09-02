@@ -268,6 +268,17 @@ lifecycle:
         prepared.candidate.candidate_id
     )
     assert (snapshot / "skill" / "shopping_skill" / "tests" / "test_demo.py").is_file()
+    assert (snapshot / "project" / "recipes_project" / "project.yaml").read_text(
+        encoding="utf-8"
+    ) == (project_dir / "project.yaml").read_text(encoding="utf-8")
+
+    service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+    _promote(service, prepared.candidate.candidate_id)
+    assert (
+        tmp_path / "workspace" / "projects" / "recipes_project" / "project.yaml"
+    ).read_text(encoding="utf-8") == (project_dir / "project.yaml").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path) -> None:

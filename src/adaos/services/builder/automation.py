@@ -20,6 +20,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 import psutil
 import yaml
+from packaging.version import InvalidVersion, Version
 
 from adaos.build_info import BUILD_INFO
 from adaos.domain.development_budget import (
@@ -6063,6 +6064,20 @@ class BuilderAutomationService:
                 )
                 raise RuntimeError(f"Forge checkpoint failed for {failed_refs}")
 
+            if snapshot_project_ref and readiness["vcs_checkpoints"]:
+                with self._finalization_stage(
+                    current,
+                    readiness,
+                    "project_checkpoint",
+                    "Checkpointing the owning Project composition",
+                ):
+                    readiness["project_composition_checkpoint"] = (
+                        self._ensure_project_composition_checkpoint(
+                            session,
+                            checkpoints=readiness["vcs_checkpoints"],
+                        )
+                    )
+
             aprobation_scenario_id = object_id if object_type == "scenario" and object_id else None
 
             if object_type == "scenario" and object_id:
@@ -6520,6 +6535,180 @@ class BuilderAutomationService:
             return
 
         self._notify_completed_session(current)
+
+    @staticmethod
+    def _project_manifest_payload(project: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            key: copy.deepcopy(value)
+            for key, value in project.items()
+            if key not in {"ref", "manifest_digest", "source_path"}
+        }
+
+    @staticmethod
+    def _project_manifest_digest(project: Mapping[str, Any]) -> str:
+        payload = BuilderAutomationService._project_manifest_payload(project)
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+    def _ensure_project_composition_checkpoint(
+        self,
+        session: Mapping[str, Any],
+        *,
+        checkpoints: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Reserve one immutable Project version for an exact Builder Change."""
+
+        from adaos.sdk.developer import compositions
+        from adaos.services.root.service import RootDeveloperService
+        from adaos.services.semver import bump_version
+
+        links = session.get("links") if isinstance(session.get("links"), Mapping) else {}
+        project_ref = str(
+            links.get("development_ticket_project_ref")
+            or links.get("project_ref")
+            or ""
+        ).strip()
+        if not project_ref.startswith("project:"):
+            raise RuntimeError("Project composition checkpoint requires an explicit Project ref")
+        project_id = project_ref.split(":", 1)[1].strip()
+        change_id = str(session.get("change_id") or "").strip()
+        if not project_id or not change_id:
+            raise RuntimeError("Project composition checkpoint requires Project and Change identities")
+
+        changed_refs = sorted(
+            {
+                f"{str(item.get('kind') or '').strip().lower().rstrip('s')}:{str(item.get('name') or '').strip()}"
+                for item in checkpoints
+                if bool(item.get("ok"))
+                and str(item.get("kind") or "").strip().lower().rstrip("s")
+                in {"skill", "scenario"}
+                and str(item.get("name") or "").strip()
+            }
+        )
+        if not changed_refs:
+            raise RuntimeError("Project composition checkpoint has no confirmed component changes")
+
+        journal_root = (
+            self.state_dir
+            / "builder"
+            / "project_composition_checkpoints"
+            / _safe_token(project_id)
+        )
+        journal_path = journal_root / (
+            hashlib.sha256(change_id.encode("utf-8")).hexdigest() + ".json"
+        )
+        lock_path = journal_root / ".mutation.lock"
+        with mutation_lock(lock_path):
+            project = compositions.get(project_id)
+            owned_refs = {
+                str(item.get("ref") or "").strip()
+                for item in (project.get("components") or {}).get("owned") or []
+                if isinstance(item, Mapping)
+            }
+            foreign_refs = sorted(set(changed_refs).difference(owned_refs))
+            if foreign_refs:
+                raise RuntimeError(
+                    f"Project {project_ref} does not own checkpointed components: "
+                    + ", ".join(foreign_refs)
+                )
+
+            journal: dict[str, Any] = {}
+            if journal_path.is_file():
+                try:
+                    loaded = json.loads(journal_path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                    raise RuntimeError("Project composition checkpoint journal is unreadable") from exc
+                if not isinstance(loaded, Mapping):
+                    raise RuntimeError("Project composition checkpoint journal is invalid")
+                journal = dict(loaded)
+                if (
+                    str(journal.get("project_ref") or "") != project_ref
+                    or str(journal.get("change_id") or "") != change_id
+                ):
+                    raise RuntimeError("Project composition checkpoint journal identity mismatch")
+
+            current_digest = str(project.get("manifest_digest") or "").strip()
+            if not current_digest:
+                current_digest = self._project_manifest_digest(project)
+            if journal:
+                target_version = str(journal.get("version") or "").strip()
+                target_digest = str(journal.get("manifest_digest") or "").strip()
+                before_digest = str(journal.get("previous_manifest_digest") or "").strip()
+                if current_digest == target_digest and target_version:
+                    if journal.get("status") != "applied":
+                        journal["status"] = "applied"
+                        journal["recovered"] = True
+                        journal["updated_at"] = _now_iso()
+                        atomic_write_json(journal_path, journal)
+                    return {**journal, "ok": True, "duplicate": True}
+                if current_digest != before_digest:
+                    try:
+                        advanced = Version(str(project.get("version") or "0.0.0")) > Version(
+                            target_version
+                        )
+                    except InvalidVersion:
+                        advanced = False
+                    if advanced:
+                        return {
+                            **journal,
+                            "ok": True,
+                            "duplicate": True,
+                            "status": "superseded",
+                            "current_version": project.get("version"),
+                            "current_manifest_digest": current_digest,
+                        }
+                    raise RuntimeError(
+                        "Project composition changed after the Builder version reservation"
+                    )
+                target_payload = self._project_manifest_payload(project)
+                target_payload["version"] = target_version
+            else:
+                release_versions = RootDeveloperService().project_release_versions(project_id)
+                target_version = bump_version(str(project.get("version") or "0.0.0"), 2)
+                attempts = 0
+                while target_version in release_versions:
+                    target_version = bump_version(target_version, 2)
+                    attempts += 1
+                    if attempts > 10_000:
+                        raise RuntimeError("Cannot reserve an unused Project patch version")
+                target_payload = self._project_manifest_payload(project)
+                target_payload["version"] = target_version
+                target_payload = compositions.validate(target_payload)
+                target_digest = self._project_manifest_digest(target_payload)
+                journal = {
+                    "schema": "adaos.builder.project_composition_checkpoint.v1",
+                    "status": "prepared",
+                    "project_ref": project_ref,
+                    "change_id": change_id,
+                    "task_id": str(session.get("current_task_id") or "").strip() or None,
+                    "checkpointed_component_refs": changed_refs,
+                    "previous_version": str(project.get("version") or ""),
+                    "previous_manifest_digest": current_digest,
+                    "version": target_version,
+                    "manifest_digest": target_digest,
+                    "created_at": _now_iso(),
+                    "updated_at": _now_iso(),
+                }
+                atomic_write_json(journal_path, journal)
+
+            replaced = compositions.replace(
+                project_id,
+                target_payload,
+                expected_manifest_digest=current_digest,
+            )
+            replaced_digest = str(replaced.get("manifest_digest") or "").strip()
+            expected_digest = str(journal.get("manifest_digest") or "").strip()
+            if replaced_digest != expected_digest:
+                raise RuntimeError("Project composition checkpoint digest mismatch")
+            journal["status"] = "applied"
+            journal["updated_at"] = _now_iso()
+            atomic_write_json(journal_path, journal)
+            return {**journal, "ok": True, "duplicate": False}
 
     def _checkpoint_completed_artifacts(self, session: Mapping[str, Any]) -> list[dict[str, Any]]:
         from adaos.services.builder.workspace import BuilderWorkspaceService

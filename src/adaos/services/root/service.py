@@ -2457,6 +2457,7 @@ class RootDeveloperService:
             project_dir=project_dir,
             source_workspace_root=source_workspace,
             source_ref=source_ref,
+            source_tree=pushed.source_tree,
             change_ids=change_ids,
             validation_evidence=evidence,
             target_webspace_id=target_webspace_id,
@@ -2472,6 +2473,16 @@ class RootDeveloperService:
             "trial_workspace": str(prepared.trial_workspace),
             "trial_activation": dict(prepared.trial_activation),
         }
+
+    def project_release_versions(self, project_id: str) -> dict[str, str]:
+        """Return locally known immutable release identities for a Project."""
+
+        token = str(project_id or "").strip()
+        if not token:
+            raise RootServiceError("project_id is required")
+        cfg = self._load_config()
+        publication = self._artifact_publication_service(cfg)
+        return publication.release_cache.release_digests_by_version(token)
 
     def decide_artifact_candidate(
         self,

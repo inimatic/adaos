@@ -410,6 +410,8 @@ class ArtifactPublicationService:
         self,
         candidate_id: str,
         *,
+        project_id: str,
+        project_dir: Path,
         source_workspace_root: Path,
         plan: ReleasePlan,
     ) -> dict[str, Any]:
@@ -421,6 +423,12 @@ class ArtifactPublicationService:
         shutil.rmtree(staging, ignore_errors=True)
         staging.mkdir(parents=True, exist_ok=False)
         try:
+            project_manifest = Path(project_dir).resolve() / "project.yaml"
+            if not project_manifest.is_file():
+                raise PublicationError("Project source manifest is unavailable")
+            project_snapshot = staging / "project" / project_id / "project.yaml"
+            project_snapshot.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(project_manifest, project_snapshot)
             for package in plan.packages:
                 collection = "skills" if package.kind == "skill" else "scenarios"
                 source_root = workspace / collection / package.artifact_id
@@ -491,6 +499,17 @@ class ArtifactPublicationService:
             "candidate_id": candidate.candidate_id,
             "entries": entries,
         }
+        project_source = candidate_source / "project" / candidate.project_id / "project.yaml"
+        if project_source.is_file():
+            project_snapshot = root / "project" / candidate.project_id / "project.yaml"
+            if not project_snapshot.is_file():
+                project_snapshot.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(project_source, project_snapshot)
+            payload["project"] = {
+                "project_ref": f"project:{candidate.project_id}",
+                "snapshot_path": str(project_snapshot),
+                "sha256": hashlib.sha256(project_snapshot.read_bytes()).hexdigest(),
+            }
         payload["digest"] = canonical_payload_digest(payload)
         return payload
 
@@ -524,10 +543,38 @@ class ArtifactPublicationService:
                 shutil.copytree(source, target)
                 roots.append(name)
             projected.append({"package": package.key, "roots": roots})
+        project_projection: dict[str, Any] | None = None
+        raw_project = projection.get("project")
+        if isinstance(raw_project, Mapping):
+            project_ref = str(raw_project.get("project_ref") or "").strip()
+            prefix, separator, project_id = project_ref.partition(":")
+            if separator != ":" or prefix != "project" or not project_id:
+                raise PublicationError("development source projection has an invalid Project ref")
+            source = Path(str(raw_project.get("snapshot_path") or "")).resolve()
+            expected_digest = str(raw_project.get("sha256") or "").strip().lower()
+            if not source.is_file() or source.name != "project.yaml":
+                raise PublicationError("development Project source projection is missing")
+            actual_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+            if expected_digest != actual_digest:
+                raise PublicationError("development Project source projection digest mismatch")
+            projects_root = (self.workspace_root / "projects").resolve()
+            target = (projects_root / project_id / "project.yaml").resolve()
+            if projects_root not in target.parents:
+                raise PublicationError("development Project target escapes Workspace")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temporary = target.with_name(f".{target.name}.tmp")
+            shutil.copy2(source, temporary)
+            replace_with_retry(temporary, target)
+            project_projection = {
+                "project_ref": project_ref,
+                "path": str(target),
+                "sha256": actual_digest,
+            }
         return {
             "status": "completed",
             "candidate_id": str(projection.get("candidate_id") or ""),
             "packages": projected,
+            "project": project_projection,
         }
 
     def _record_builder_repair(self, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -1651,6 +1698,7 @@ class ArtifactPublicationService:
         source_ref: ArtifactSourceRef,
         change_ids: tuple[str, ...],
         validation_evidence: Mapping[str, Any],
+        source_tree: str | None = None,
         current_stable: ReleasePlan | None = None,
         audience: str = "owner",
         data_mode: str = "empty",
@@ -1682,6 +1730,12 @@ class ArtifactPublicationService:
         plan = built.plan
         if plan.release.project_id != str(project_id or "").strip():
             raise PublicationError("Project release identity differs from requested Project")
+        verified_source_tree = _source_tree(source_tree)
+        if not verified_source_tree:
+            verified_source_tree = _source_tree(
+                self.remote.tree_revision(source_ref),
+                required=True,
+            )
         stable = current_stable if current_stable is not None else self.current_stable(project_id)
         if stable is not None:
             self._require_forward_version(
@@ -1732,6 +1786,7 @@ class ArtifactPublicationService:
             base_release=stable.release if stable is not None else None,
             package_digest=primary_package.digest,
             change_ids=change_ids,
+            source_tree=verified_source_tree,
         )
         candidate = record_validation(candidate, validation_evidence, now=_now())
 
@@ -1844,6 +1899,8 @@ class ArtifactPublicationService:
             raise PublicationError(str(exc)) from exc
         self._snapshot_project_candidate_development_sources(
             candidate_id,
+            project_id=project_id,
+            project_dir=project_dir,
             source_workspace_root=source_workspace_root,
             plan=plan,
         )
@@ -2661,8 +2718,19 @@ class ArtifactPublicationService:
             ),
             None,
         )
+        composition = plan.release.composition_lock
+        if component is None and composition is not None:
+            primary_ref = next(
+                (member.ref for member in composition.members if member.role == "primary"),
+                "",
+            )
+            component = next(
+                (item for item in plan.release.components if item.key == primary_ref),
+                None,
+            )
         if component is None:
-            raise PublicationError("release does not contain the candidate project component")
+            raise PublicationError("release does not contain a primary Project component")
+        release_digest = plan.release.release_digest or plan.release.computed_digest()
         for package in plan.packages:
             package_plural = "skills" if package.kind == "skill" else "scenarios"
             package_dir = self.workspace_root / package_plural / package.artifact_id
@@ -2675,12 +2743,36 @@ class ArtifactPublicationService:
                         "mode": "package_lock",
                         "project_id": plan.release.project_id,
                         "release": f"{plan.release.project_id}@{plan.release.version}",
-                        "release_digest": (
-                            plan.release.release_digest
-                            or plan.release.computed_digest()
-                        ),
+                        "release_digest": release_digest,
                         "package_digest": package.digest,
                     }
+                },
+            )
+        project_dir = self.workspace_root / "projects" / plan.release.project_id
+        if (project_dir / "project.yaml").is_file():
+            upsert_workspace_registry_entry(
+                self.workspace_root,
+                "projects",
+                project_dir,
+                version=plan.release.version,
+                extra={
+                    "activation": {
+                        "mode": "package_lock",
+                        "project_id": plan.release.project_id,
+                        "release": f"{plan.release.project_id}@{plan.release.version}",
+                        "release_digest": release_digest,
+                        "primary_component": component.key,
+                        "package_digest": component.digest,
+                    },
+                    "channels": {
+                        "stable": {
+                            "release": f"{plan.release.project_id}@{plan.release.version}",
+                            "release_digest": release_digest,
+                            "source_revision": plan.release.source_ref.revision,
+                            "package_digest": component.digest,
+                            "version": plan.release.version,
+                        }
+                    },
                 },
             )
         plural = "skills" if component.kind == "skill" else "scenarios"

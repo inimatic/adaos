@@ -193,6 +193,11 @@ class ReleaseRepository:
             versions[stored.release.version] = digest
         return versions
 
+    def release_digests_by_version(self, project_id: str) -> dict[str, str]:
+        """Return the immutable local version index for one Project."""
+
+        return dict(self._release_digests_by_version(project_id))
+
     def put_release(self, plan: ReleasePlan) -> Path:
         digest = plan.release.release_digest or plan.release.computed_digest()
         path = self.release_path(plan.release.project_id, digest)

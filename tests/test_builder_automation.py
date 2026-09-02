@@ -3845,6 +3845,110 @@ def test_finalize_activates_dev_ticket_aprobation_overlay_after_checkpoint(
     )
 
 
+def test_project_composition_checkpoint_reserves_one_unused_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.sdk.developer import compositions
+    from adaos.services.root.service import RootDeveloperService
+
+    service = _service(tmp_path)
+    state = {
+        "schema": "adaos.project.v1",
+        "kind": "project",
+        "id": "recipes_project",
+        "version": "0.10.3",
+        "components": {
+            "owned": [{"ref": "scenario:recipes", "role": "primary"}],
+            "dependencies": [],
+        },
+    }
+    replacements: list[str] = []
+
+    def current_project() -> dict:
+        payload = dict(state)
+        payload["ref"] = "project:recipes_project"
+        payload["source_path"] = str(tmp_path / "dev" / "projects" / "recipes_project")
+        payload["manifest_digest"] = service._project_manifest_digest(payload)
+        return payload
+
+    def replace_project(project_id, value, *, expected_manifest_digest):
+        assert project_id == "recipes_project"
+        assert expected_manifest_digest == current_project()["manifest_digest"]
+        state.clear()
+        state.update(dict(value))
+        replacements.append(str(state["version"]))
+        return current_project()
+
+    monkeypatch.setattr(compositions, "get", lambda _project_id: current_project())
+    monkeypatch.setattr(compositions, "validate", lambda value: dict(value))
+    monkeypatch.setattr(compositions, "replace", replace_project)
+    monkeypatch.setattr(
+        RootDeveloperService,
+        "project_release_versions",
+        lambda self, project_id: {
+            "0.10.4": "sha256:" + "4" * 64,
+            "0.10.5": "sha256:" + "5" * 64,
+        },
+    )
+    session = {
+        "change_id": "builder_change.demo",
+        "current_task_id": "task.demo",
+        "links": {"development_ticket_project_ref": "project:recipes_project"},
+    }
+    checkpoints = [{"ok": True, "kind": "scenario", "name": "recipes"}]
+
+    created = service._ensure_project_composition_checkpoint(
+        session,
+        checkpoints=checkpoints,
+    )
+    replayed = service._ensure_project_composition_checkpoint(
+        session,
+        checkpoints=checkpoints,
+    )
+
+    assert created["version"] == "0.10.6"
+    assert created["duplicate"] is False
+    assert replayed["version"] == "0.10.6"
+    assert replayed["duplicate"] is True
+    assert replacements == ["0.10.6"]
+
+
+def test_project_composition_checkpoint_rejects_foreign_component(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.sdk.developer import compositions
+
+    service = _service(tmp_path)
+    monkeypatch.setattr(
+        compositions,
+        "get",
+        lambda _project_id: {
+            "ref": "project:recipes_project",
+            "manifest_digest": "sha256:" + "1" * 64,
+            "version": "0.1.0",
+            "components": {
+                "owned": [{"ref": "scenario:recipes", "role": "primary"}],
+                "dependencies": [],
+            },
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="does not own checkpointed components"):
+        service._ensure_project_composition_checkpoint(
+            {
+                "change_id": "builder_change.demo",
+                "links": {
+                    "development_ticket_project_ref": "project:recipes_project"
+                },
+            },
+            checkpoints=[
+                {"ok": True, "kind": "skill", "name": "foreign_skill"}
+            ],
+        )
+
+
 def test_finalize_scenario_only_repair_does_not_activate_unchanged_companion_skill(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
