@@ -6566,6 +6566,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
                         seed_result = await _await_bootstrap_step(
                             "seed_from_scenario",
                             ensure_webspace_seeded_from_scenario(ystore, **seed_kwargs),
+                            cancel_on_timeout=False,
                         )
                         if bool((seed_result or {}).get("fresh_ydoc_required")):
                             # The first room doc was partially mutated by a
@@ -6580,6 +6581,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
                             recovered_seed = await _await_bootstrap_step(
                                 "seed_after_corrupt_replay",
                                 ensure_webspace_seeded_from_scenario(ystore, **seed_kwargs),
+                                cancel_on_timeout=False,
                             )
                             seed_result = dict(recovered_seed or {})
                             seed_result["room_recreated_after_corrupt_replay"] = True
@@ -6600,6 +6602,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
                                         "materialization_identity"
                                     ),
                                 ),
+                                cancel_on_timeout=False,
                             )
                             if not bool((materialized_result or {}).get("ready")):
                                 raise RuntimeError("room bootstrap materialized payload was not ready")
@@ -6615,6 +6618,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
                                     ),
                                     space=space,
                                 ),
+                                cancel_on_timeout=False,
                             )
                             seed_result = dict(seed_result or {})
                             seed_result.update(
@@ -6642,6 +6646,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
                                     room,
                                     seed_result=seed_result,
                                 ),
+                                cancel_on_timeout=False,
                             )
                         await _await_bootstrap_step(
                             "finalize_rebuild_status",

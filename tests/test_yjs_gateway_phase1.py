@@ -1914,6 +1914,51 @@ def test_get_room_replaces_native_doc_after_corrupt_replay(monkeypatch) -> None:
     gateway_module._YROOM_LIFECYCLE.clear()
 
 
+def test_get_room_does_not_cancel_slow_durable_materialization(monkeypatch) -> None:
+    webspace_id = "gateway-room-slow-durable-materialization"
+    ensure_workspace(webspace_id)
+    fake_store = _FakeYStore()
+    completed: list[str] = []
+
+    async def _fake_seed(_ystore, **kwargs):  # noqa: ANN001
+        await asyncio.sleep(0.02)
+        completed.append("seed")
+        return {
+            "mode": "scenario_projection",
+            "scenario_id": kwargs["default_scenario_id"],
+        }
+
+    async def _fake_effective(*_args, **_kwargs):
+        await asyncio.sleep(0.02)
+        completed.append("effective")
+
+    class _Scheduler:
+        async def ensure_every(self, **kwargs) -> None:  # noqa: ARG002
+            return None
+
+    monkeypatch.setattr(gateway_module, "_YWS_ROOM_BOOTSTRAP_STEP_TIMEOUT_S", 0.005)
+    monkeypatch.setattr(gateway_module, "get_ystore_for_webspace", lambda _webspace_id: fake_store)
+    monkeypatch.setattr(gateway_module, "ensure_webspace_seeded_from_scenario", _fake_seed)
+    monkeypatch.setattr(gateway_module, "_ensure_room_effective_materialized", _fake_effective)
+    monkeypatch.setattr(gateway_module, "get_scheduler", lambda: _Scheduler())
+    monkeypatch.setattr(gateway_module, "attach_room_observers", lambda _webspace_id, _ydoc: None)
+
+    server = gateway_module.WorkspaceWebsocketServer(auto_clean_rooms=False)
+    monkeypatch.setattr(server, "start_room", lambda _room: asyncio.sleep(0))
+    gateway_module._YROOM_LIFECYCLE.clear()
+    room = asyncio.run(server.get_room(webspace_id))
+
+    assert completed == ["seed", "effective"]
+    assert room is server.rooms[webspace_id]
+    room_info = gateway_module.gateway_transport_snapshot()["rooms"][webspace_id]
+    assert room_info["bootstrap_success_total"] == 1
+    assert room_info["last_bootstrap_state"] == "ready"
+
+    asyncio.run(gateway_module._release_room_refs(webspace_id, room))
+    server.rooms.pop(webspace_id, None)
+    gateway_module._YROOM_LIFECYCLE.clear()
+
+
 def test_get_room_bootstraps_from_materialized_payload_without_semantic_rebuild(monkeypatch) -> None:
     webspace_id = "gateway-room-materialized"
     ensure_workspace(webspace_id)
