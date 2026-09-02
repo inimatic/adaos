@@ -1769,6 +1769,56 @@ def test_validation_only_context_projection_keeps_hash_guard_without_prompt_payl
     ) == brief
 
 
+def test_validation_only_continuation_keeps_no_model_context_semantics(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    source = service.dev_scenarios_root / "recipes" / "webui.json"
+    content = source.read_bytes()
+    brief = json.dumps(
+        {
+            "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+            "ticket_id": "dticket.validation-continuation",
+            "summary": "Validate the prepared scenario source.",
+            "repair_hints": {
+                "profile": "surgical_ui",
+                "validation_only": True,
+                "target_files": ["scenarios/recipes/webui.json"],
+                "source_preconditions": [
+                    {
+                        "path": "scenarios/recipes/webui.json",
+                        "sha256": "sha256:" + hashlib.sha256(content).hexdigest(),
+                        "size": len(content),
+                    }
+                ],
+            },
+        }
+    )
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief=brief,
+        links={"development_ticket_id": "dticket.validation-continuation"},
+        execution_budget={"max_context_tokens": 8_000, "max_model_tokens": 4_000},
+    )
+
+    service.submit_turn(
+        text="Resume the requalified Dev Ticket repair from its preserved candidate.",
+        object_type="scenario",
+        object_id="recipes",
+    )
+
+    current = service.get_session("scenario", "recipes")
+    assert current is not None
+    assert current["context_control"]["model_call_expected"] is False
+    assert current["context_control"]["context_budget_source"] == "explicit"
+    assert current["context_control"]["required_estimated_tokens"] < 4_000
+    task = service.factory.read_task(str(current["current_task_id"]))
+    assert task["status"] == "completed"
+    result = service._contexts().get_artifact(str(task["result_ref"]))
+    assert result["execution_strategy"] == "validation_only"
+
+
 def test_validation_only_budget_projection_is_not_applicable() -> None:
     task = {
         "assigned_at": "2026-09-01T23:00:00Z",

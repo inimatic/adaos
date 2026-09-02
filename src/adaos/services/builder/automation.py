@@ -515,6 +515,67 @@ def _project_context_projection(
     }
 
 
+def _deterministic_project_context_projection(
+    context_packet: Mapping[str, Any],
+    *,
+    component_ref: str,
+    source_snapshot_digest: str | None,
+    context_packet_ref: str,
+    context_packet_digest: str | None,
+    execution_strategy: str,
+) -> dict[str, Any]:
+    """Keep deterministic executor authority without compiling model context."""
+
+    project = dict(context_packet.get("project") or {})
+    base = dict(context_packet.get("base") or {})
+    change = dict(context_packet.get("change") or {})
+    allowed_paths = [
+        str(item).replace("\\", "/").strip("/")
+        for item in context_packet.get("allowed_paths") or []
+        if str(item).strip()
+    ]
+    return {
+        "schema": "adaos.builder.deterministic_project_context.v1",
+        "component_ref": component_ref,
+        "source_generation": source_snapshot_digest,
+        "project": {
+            key: copy.deepcopy(project.get(key))
+            for key in ("id", "project_id", "kind", "name", "version", "ref")
+            if project.get(key) not in (None, "", [], {})
+        },
+        "base": {
+            key: copy.deepcopy(base.get(key))
+            for key in ("ref", "version", "digest", "source_revision")
+            if base.get(key) not in (None, "", [], {})
+        },
+        "change": {
+            key: copy.deepcopy(change.get(key))
+            for key in ("change_id", "route", "gate", "status")
+            if change.get(key) not in (None, "", [], {})
+        },
+        "allowed_paths": {
+            "count": len(allowed_paths),
+            "digest": "sha256:"
+            + hashlib.sha256(
+                json.dumps(
+                    allowed_paths,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+        },
+        "context_packet": {
+            "ref": context_packet_ref,
+            "digest": context_packet_digest,
+        },
+        "authority": {
+            "write_scope": component_ref,
+            "core_mutation": "denied",
+            "execution_strategy": execution_strategy,
+        },
+    }
+
+
 def _development_session_context_projection(
     session: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -889,15 +950,13 @@ class BuilderAutomationService:
             component_ref=component_ref,
             fallback_project_id=project_id,
         )
+        effective_brief = _context_projection_brief(session, implementation_brief)
         run_ref = f"builder-run:{session.get('session_id')}:{int(session.get('iteration') or 0)}"
         change_ref = f"change:{session.get('change_set_id')}"
         packet_artifact = service.put_artifact(dict(context_packet))
         projection = _iteration_context_projection(
             context_packet,
-            implementation_brief=_context_projection_brief(
-                session,
-                implementation_brief,
-            ),
+            implementation_brief=effective_brief,
             packet_ref=packet_artifact["ref"],
             packet_digest=str(context_packet.get("digest") or "").strip() or None,
             kind=kind,
@@ -928,12 +987,26 @@ class BuilderAutomationService:
                 "metadata": {"utility": 1.0, "cache_class": "stable_prefix"},
             }
         )
-        project_projection = _project_context_projection(
-            context_packet,
-            component_ref=component_ref,
-            source_snapshot_digest=str(source_snapshot.get("digest") or "").strip()
-            or None,
+        execution_strategy = _brief_deterministic_strategy(effective_brief)
+        source_snapshot_digest = (
+            str(source_snapshot.get("digest") or "").strip() or None
         )
+        if execution_strategy:
+            project_projection = _deterministic_project_context_projection(
+                context_packet,
+                component_ref=component_ref,
+                source_snapshot_digest=source_snapshot_digest,
+                context_packet_ref=packet_artifact["ref"],
+                context_packet_digest=str(context_packet.get("digest") or "").strip()
+                or None,
+                execution_strategy=execution_strategy,
+            )
+        else:
+            project_projection = _project_context_projection(
+                context_packet,
+                component_ref=component_ref,
+                source_snapshot_digest=source_snapshot_digest,
+            )
         project_context_digest = _canonical_digest(project_projection)
         project: dict[str, Any] | None = None
         try:
@@ -1054,9 +1127,9 @@ class BuilderAutomationService:
                 "source_digests": {"builder_context_packet": context_packet.get("digest")},
                 "valid_from": now,
                 "recorded_at": now,
-                "summary": implementation_brief[:2000],
+                "summary": effective_brief[:2000],
                 "content": {
-                    "implementation_brief": implementation_brief,
+                    "implementation_brief": effective_brief,
                     "links": dict(session.get("links") or {}),
                     "change_set_id": session.get("change_set_id"),
                     "iteration": session.get("iteration"),
@@ -1145,7 +1218,7 @@ class BuilderAutomationService:
             if isinstance(session.get("execution_budget"), Mapping)
             else {}
         )
-        model_call_expected = not bool(_brief_deterministic_strategy(implementation_brief))
+        model_call_expected = not bool(_brief_deterministic_strategy(effective_brief))
         context_budget, context_budget_ceiling, context_budget_explicit = (
             _context_budget_window(
                 execution_budget,
