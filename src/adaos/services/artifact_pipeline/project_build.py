@@ -9,7 +9,11 @@ import yaml
 from packaging.specifiers import SpecifierSet
 from packaging.version import InvalidVersion, Version
 
-from adaos.domain.artifact_release import ArtifactSourceRef
+from adaos.domain.artifact_release import (
+    ArtifactPackageRef,
+    ArtifactSourceRef,
+    WorkspaceLock,
+)
 from adaos.sdk.developer.compositions import normalized_definition
 
 from .channels import ReleaseRepository
@@ -172,6 +176,7 @@ def build_workspace_project_release(
     package_store: ContentAddressedPackageStore,
     release_repository: ReleaseRepository,
     validation_evidence: tuple[Mapping[str, Any], ...] = (),
+    active_workspace_lock: WorkspaceLock | None = None,
 ) -> ProjectReleaseBuildResult:
     workspace = Path(workspace_root).expanduser().resolve()
     project_root = Path(project_dir).expanduser().resolve()
@@ -195,6 +200,20 @@ def build_workspace_project_release(
     owned_refs = tuple(
         str(item["ref"]) for item in definition["components"]["owned"]
     )
+    owned_ref_set = frozenset(owned_refs)
+    active_packages = {
+        package.key: package
+        for package in (
+            active_workspace_lock.components if active_workspace_lock is not None else ()
+        )
+    }
+    active_bindings_by_consumer: dict[str, list[str]] = {}
+    for binding in (
+        active_workspace_lock.bindings if active_workspace_lock is not None else ()
+    ):
+        active_bindings_by_consumer.setdefault(binding.consumer, []).append(
+            binding.dependency
+        )
     pending: list[tuple[str, bool]] = [(item, False) for item in owned_refs]
     for item in definition["components"]["dependencies"]:
         ref = str(item.get("ref") or "")
@@ -202,10 +221,26 @@ def build_workspace_project_release(
             pending.append((ref, False))
 
     built_by_ref: dict[str, BuiltArtifactPackage] = {}
+    external_by_ref: dict[str, ArtifactPackageRef] = {}
     requirements_by_digest: dict[str, tuple[DependencyRequirement, ...]] = {}
     while pending:
         ref, optional = pending.pop(0)
-        if ref in built_by_ref:
+        if ref in built_by_ref or ref in external_by_ref:
+            continue
+        active_package = active_packages.get(ref)
+        if ref not in owned_ref_set and active_package is not None:
+            external_by_ref[ref] = active_package
+            requirements = tuple(
+                DependencyRequirement(
+                    kind=dependency.kind,
+                    artifact_id=dependency.artifact_id,
+                    version_spec=f"=={dependency.version}",
+                )
+                for dependency_ref in active_bindings_by_consumer.get(ref, ())
+                if (dependency := active_packages.get(dependency_ref)) is not None
+            )
+            requirements_by_digest[active_package.digest] = requirements
+            pending.extend((item.key, item.optional) for item in requirements)
             continue
         try:
             root = _component_root(workspace, ref)
@@ -262,7 +297,12 @@ def build_workspace_project_release(
         )
     requirements_by_digest[primary.ref.digest] = tuple(declared_requirements)
 
-    catalog = PackageCatalog(item.ref for item in built_by_ref.values())
+    catalog = PackageCatalog(
+        [
+            *(item.ref for item in built_by_ref.values()),
+            *external_by_ref.values(),
+        ]
+    )
     owned = tuple(built_by_ref[ref].ref for ref in owned_refs)
     project_scope = project_root.relative_to(workspace).as_posix() + "/"
     plan = build_project_release(

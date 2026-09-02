@@ -1664,6 +1664,12 @@ class ArtifactPublicationService:
     ) -> PreparedCandidate:
         """Prepare one immutable Trial from a declarative Project closure."""
 
+        try:
+            active_lock = load_workspace_lock(
+                self.workspace_root / ".adaos" / "workspace.lock.json"
+            )
+        except TrialActivationError as exc:
+            raise PublicationError(str(exc)) from exc
         built = build_workspace_project_release(
             project_dir=project_dir,
             workspace_root=source_workspace_root,
@@ -1671,6 +1677,7 @@ class ArtifactPublicationService:
             package_store=self.package_store,
             release_repository=self.release_cache,
             validation_evidence=(dict(validation_evidence),),
+            active_workspace_lock=active_lock,
         )
         plan = built.plan
         if plan.release.project_id != str(project_id or "").strip():
@@ -1682,13 +1689,7 @@ class ArtifactPublicationService:
                 stable.release.version,
                 source="stable",
             )
-        try:
-            active_lock = load_workspace_lock(
-                self.workspace_root / ".adaos" / "workspace.lock.json"
-            )
-            conflicts = shared_skill_conflicts(plan, active_lock)
-        except TrialActivationError as exc:
-            raise PublicationError(str(exc)) from exc
+        conflicts = shared_skill_conflicts(plan, active_lock)
         if conflicts:
             summary = "; ".join(
                 f"{item['skill']} used by {', '.join(item['active_consumers'])}"
@@ -1699,10 +1700,14 @@ class ArtifactPublicationService:
                 + summary
             )
 
-        archives = {
-            package.digest: self.package_store.read(package.digest)
-            for package in plan.packages
-        }
+        archives: dict[str, bytes] = {}
+        for package in plan.packages:
+            try:
+                archive = self.package_store.read(package.digest)
+            except FileNotFoundError:
+                archive = self.remote.fetch_package(package)
+                self.package_store.put(archive, expected_digest=package.digest)
+            archives[package.digest] = archive
         self.remote.put_release(plan, archives)
         composition = plan.release.composition_lock
         primary_ref = next(

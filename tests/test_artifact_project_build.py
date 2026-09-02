@@ -4,9 +4,12 @@ from pathlib import Path
 
 import yaml
 
-from adaos.domain.artifact_release import ArtifactSourceRef
+from adaos.domain.artifact_release import ArtifactSourceRef, WorkspaceLock
 from adaos.services.artifact_pipeline.channels import ReleaseRepository
-from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
+from adaos.services.artifact_pipeline.packages import (
+    ContentAddressedPackageStore,
+    build_artifact_package,
+)
 from adaos.services.artifact_pipeline.project_build import (
     ProjectReleaseBuildError,
     build_workspace_project_release,
@@ -50,8 +53,13 @@ def test_workspace_project_build_persists_exact_dependency_closure(
             "version": "2.0.0",
             "title": "Viewer",
             "type": "desktop",
-            "depends": ["worker"],
-            "runtime": {"skills": {"required": ["worker"], "optional": []}},
+            "depends": ["worker", "web_desktop_skill"],
+            "runtime": {
+                "skills": {
+                    "required": ["worker", "web_desktop_skill"],
+                    "optional": [],
+                }
+            },
         },
     )
     (workspace / "scenarios" / "viewer_ui" / "webui.json").write_text(
@@ -121,6 +129,27 @@ def test_workspace_project_build_persists_exact_dependency_closure(
         revision="a" * 40,
         path_scope=("projects/viewer/",),
     )
+    external_root = tmp_path / "installed" / "skills" / "web_desktop_skill"
+    _write_yaml(
+        external_root / "skill.yaml",
+        {"name": "web_desktop_skill", "version": "0.2.4"},
+    )
+    external = build_artifact_package(
+        external_root,
+        kind="skill",
+        source_ref=ArtifactSourceRef(
+            forge="workspace-migration",
+            repository="installed-workspace",
+            revision="b" * 40,
+            path_scope=("skills/web_desktop_skill/",),
+        ),
+    )
+    package_store.put(external.archive_bytes, expected_digest=external.ref.digest)
+    active_lock = WorkspaceLock(
+        lock_revision=1,
+        updated_at="2026-09-02T00:00:00+00:00",
+        components=(external.ref,),
+    )
 
     first = build_workspace_project_release(
         project_dir=project_dir,
@@ -128,6 +157,7 @@ def test_workspace_project_build_persists_exact_dependency_closure(
         source_ref=source,
         package_store=package_store,
         release_repository=releases,
+        active_workspace_lock=active_lock,
     )
     second = build_workspace_project_release(
         project_dir=project_dir,
@@ -135,6 +165,7 @@ def test_workspace_project_build_persists_exact_dependency_closure(
         source_ref=source,
         package_store=package_store,
         release_repository=releases,
+        active_workspace_lock=active_lock,
     )
 
     assert first.plan.release.release_digest == second.plan.release.release_digest
@@ -145,7 +176,11 @@ def test_workspace_project_build_persists_exact_dependency_closure(
     assert {item.key for item in first.plan.packages} == {
         "scenario:viewer",
         "skill:worker",
+        "skill:web_desktop_skill",
     }
+    assert next(
+        item for item in first.plan.packages if item.key == "skill:web_desktop_skill"
+    ).digest == external.ref.digest
     assert all(path.is_file() for path in first.package_paths)
     stored = releases.get_release(
         "viewer", str(first.plan.release.release_digest)
