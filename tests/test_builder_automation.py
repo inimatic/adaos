@@ -1598,6 +1598,42 @@ def test_terminal_codex_usage_marks_structured_edits_as_exact_zero(tmp_path: Pat
     assert calls[0]["project_id"] == "demo"
 
 
+def test_terminal_codex_usage_marks_validation_only_as_exact_zero(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    calls: list[dict] = []
+    service.codex_usage_reporter = lambda event: (
+        calls.append(dict(event))
+        or {
+            "ok": True,
+            "duplicate": False,
+            "event": {"event_id": "codex_usage_validation_zero"},
+        }
+    )
+    session = {
+        "session_id": "automation.skill.demo",
+        "object_type": "skill",
+        "object_id": "demo",
+        "current_task_id": "task.validation-only",
+        "local_run": {"path": str(tmp_path / "missing")},
+        "last_result": {
+            "execution_strategy": "validation_only",
+            "provenance": {"execution_strategy": "validation_only"},
+        },
+    }
+
+    result = service._report_terminal_codex_usage(session, task_status="completed")
+
+    receipt = result["codex_usage_accounting"]
+    assert receipt["status"] == "reported"
+    assert receipt["execution_strategy"] == "validation_only"
+    assert receipt["total_tokens"] == 0
+    assert receipt["root_event_id"] == "codex_usage_validation_zero"
+    assert calls[0]["metering_disposition"] == "zero_model"
+    assert calls[0]["note"] == (
+        "builder_status=completed; deterministic_strategy=validation_only"
+    )
+
+
 def test_structured_edit_brief_supersedes_failed_model_continuation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1690,6 +1726,73 @@ def test_structured_edit_context_projection_keeps_authority_without_prompt_paylo
         {"implementation_brief": "General project brief."},
         "Apply the next iteration.",
     ) == "Apply the next iteration."
+
+
+def test_validation_only_context_projection_keeps_hash_guard_without_prompt_payload() -> None:
+    brief = json.dumps(
+        {
+            "ticket_id": "dticket.validation",
+            "repair_hints": {
+                "profile": "surgical_data",
+                "validation_only": True,
+                "target_files": ["skills/demo/handlers/main.py"],
+                "target_refs": ["skill:demo"],
+                "acceptance_checks": ["The prepared source passes validation."],
+                "source_preconditions": [
+                    {
+                        "path": "skills/demo/handlers/main.py",
+                        "sha256": "sha256:" + "a" * 64,
+                        "size": 42,
+                    }
+                ],
+            },
+        }
+    )
+
+    projection = _iteration_context_projection(
+        {"digest": "sha256:packet", "large_payload": "x" * 100_000},
+        implementation_brief=brief,
+        packet_ref="artifact://context/sha256/packet",
+        packet_digest="sha256:packet",
+        kind="skill",
+        project_id="demo",
+    )
+
+    assert projection["schema"] == "adaos.builder.deterministic_context_projection.v1"
+    assert projection["authority"]["execution_strategy"] == "validation_only"
+    assert projection["repair"]["source_precondition_count"] == 1
+    assert projection["repair"]["operation_count"] == 0
+    assert "large_payload" not in projection
+    assert _context_projection_brief(
+        {"implementation_brief": brief},
+        "Do more work.",
+    ) == brief
+
+
+def test_validation_only_budget_projection_is_not_applicable() -> None:
+    task = {
+        "assigned_at": "2026-09-01T23:00:00Z",
+        "updated_at": "2026-09-01T23:01:00Z",
+        "realize_request": {
+            "artifacts": {
+                "execution_budget": {
+                    "max_model_tokens": 8_000,
+                    "token_budget_metric": "fresh_plus_output",
+                },
+                "repair_hints": {"validation_only": True},
+            }
+        },
+    }
+
+    projected = BuilderAutomationService._budget_usage_projection(
+        status="completed",
+        task=task,
+        local_run={},
+    )
+
+    assert projected is not None
+    assert projected["observed"]["budget_tokens"] == 0
+    assert projected["status"] == "not_applicable"
 
 
 @pytest.mark.parametrize(

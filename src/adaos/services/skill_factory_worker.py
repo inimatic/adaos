@@ -2862,14 +2862,17 @@ class LocalSkillFactoryWorker:
             self._init_git_workspace(workspace, str((assignment.get("forge") or {}).get("branch") or f"realize/{task_id}"))
             continuation = self._restore_continuation_candidate(assignment, workspace)
             structured_edits = self._structured_edits_from_assignment(assignment)
+            validation_only = self._validation_only_from_assignment(assignment, workspace)
             prompt_budget = _codex_prompt_budget_check(assignment, prompt)
-            if continuation or structured_edits:
+            if continuation or structured_edits or validation_only:
                 prompt_budget = {
                     **prompt_budget,
                     "status": "not_applicable",
                     "reason": (
                         "validation_only_continuation"
                         if continuation
+                        else "qualified_source_validation_without_model"
+                        if validation_only
                         else "structured_edits_without_model"
                     ),
                 }
@@ -2896,6 +2899,25 @@ class LocalSkillFactoryWorker:
                     ),
                 )
                 _write_json(runtime_dir / "continuation.json", continuation)
+            elif validation_only:
+                if _root_mcp_required(assignment):
+                    raise ValueError(
+                        "validation-only repair cannot satisfy a required Root MCP check"
+                    )
+                self._progress(
+                    task_id,
+                    "tests_running",
+                    "Validating the qualified source snapshot without a model call",
+                )
+                self._ensure_task_active(task_id)
+                _write_json(runtime_dir / "validation-only.json", validation_only)
+                codex_result = CodexRunResult(
+                    returncode=0,
+                    final_message=(
+                        "Validated the qualified source snapshot without starting "
+                        "a model turn."
+                    ),
+                )
             elif structured_edits:
                 if _root_mcp_required(assignment):
                     raise ValueError(
@@ -2953,7 +2975,7 @@ class LocalSkillFactoryWorker:
             )
             validation_repair_limit = (
                 0
-                if structured_edit_receipt is not None
+                if structured_edit_receipt is not None or validation_only
                 else min(self.max_repair_attempts, max(0, model_attempt_limit - 1))
             )
             test_report: dict[str, Any] = {}
@@ -3091,11 +3113,14 @@ class LocalSkillFactoryWorker:
                 "execution_strategy": (
                     "structured_edits"
                     if structured_edit_receipt is not None
+                    else "validation_only"
+                    if validation_only
                     else "preserved_candidate"
                     if continuation
                     else "codex"
                 ),
                 "structured_edit_receipt": structured_edit_receipt,
+                "validation_only": validation_only or None,
                 "created_at": _now_iso(),
             }
             _write_json(evidence_root / "provenance.json", provenance)
@@ -3207,6 +3232,71 @@ class LocalSkillFactoryWorker:
         if not isinstance(operations, list) or not 1 <= len(operations) <= 24:
             raise ValueError("structured edit set requires 1..24 operations")
         return structured
+
+    @staticmethod
+    def _validation_only_from_assignment(
+        assignment: Mapping[str, Any],
+        workspace: Path,
+    ) -> dict[str, Any]:
+        constraints = dict(assignment.get("constraints") or {})
+        if str(constraints.get("mode") or "").strip() != "dev_ticket_repair":
+            return {}
+        artifacts = dict(dict(assignment.get("realize_request") or {}).get("artifacts") or {})
+        hints = dict(artifacts.get("repair_hints") or {})
+        if hints.get("validation_only") is not True:
+            return {}
+        allowed = {
+            str(item).replace("\\", "/").strip("/")
+            for item in constraints.get("exact_changed_paths") or []
+            if str(item).strip()
+        }
+        preconditions = [
+            dict(item)
+            for item in hints.get("source_preconditions") or []
+            if isinstance(item, Mapping)
+        ]
+        guarded = {
+            str(item.get("path") or "").replace("\\", "/").strip("/")
+            for item in preconditions
+            if str(item.get("path") or "").strip()
+        }
+        if not allowed or guarded != allowed:
+            raise ValueError(
+                "validation-only repair requires source preconditions for every exact path"
+            )
+        root = workspace.resolve()
+        verified: list[dict[str, Any]] = []
+        for item in preconditions:
+            relative = str(item.get("path") or "").replace("\\", "/").strip("/")
+            path = (root / Path(relative)).resolve()
+            try:
+                path.relative_to(root)
+            except ValueError as exc:
+                raise ValueError(f"validation-only path escapes workspace: {relative}") from exc
+            if not path.is_file():
+                raise ValueError(f"validation-only source is missing: {relative}")
+            raw = path.read_bytes()
+            actual_digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+            expected_digest = str(item.get("sha256") or "").strip().lower()
+            expected_size = int(item.get("size") or 0)
+            if actual_digest != expected_digest or len(raw) != expected_size:
+                raise ValueError(f"validation-only source precondition changed: {relative}")
+            verified.append(
+                {
+                    "path": relative,
+                    "sha256": actual_digest,
+                    "size": len(raw),
+                }
+            )
+        return {
+            "schema": "adaos.skill_factory.validation_only.v1",
+            "strategy": "validation_only",
+            "source_precondition_count": len(preconditions),
+            "guarded_paths": sorted(guarded),
+            "verified": verified,
+            "model_tokens": 0,
+            "created_at": _now_iso(),
+        }
 
     def _apply_structured_edits(
         self,

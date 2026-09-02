@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import shutil
@@ -2234,6 +2235,79 @@ def test_structured_edit_worker_never_calls_codex(tmp_path: Path) -> None:
     assert preflight["reason"] == "structured_edits_without_model"
     assert result["assignment"]["task_id"] == submitted["task"]["task_id"]
     assert "Current usage" in handler.read_text(encoding="utf-8")
+
+
+def test_validation_only_worker_never_calls_codex_or_changes_source(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    state_dir = tmp_path / "state"
+    dev_skills = tmp_path / "dev" / "skills"
+    skill = _core_created_skill_fixture(repo_root, dev_skills, "validated_demo")
+    manifest = skill / "skill.yaml"
+    before = manifest.read_bytes()
+    factory = SkillFactoryService(state_dir=state_dir)
+    submitted = factory.submit_realize_request(
+        {
+            "target": {"type": "skill", "id": "validated_demo"},
+            "artifacts": {
+                "implementation_brief": "Validate the prepared source snapshot.",
+                "execution_budget": {
+                    "source": "test.validation_only",
+                    "max_tokens": 1000,
+                    "max_wall_seconds": 300,
+                },
+                "repair_hints": {
+                    "profile": "surgical_data",
+                    "validation_only": True,
+                    "target_files": ["skills/validated_demo/skill.yaml"],
+                    "source_preconditions": [
+                        {
+                            "path": "skills/validated_demo/skill.yaml",
+                            "sha256": "sha256:" + hashlib.sha256(before).hexdigest(),
+                            "size": len(before),
+                        }
+                    ],
+                },
+            },
+            "repo": {"sparse_paths": ["skills/validated_demo/"]},
+            "constraints": {
+                "mode": "dev_ticket_repair",
+                "repair_profile": "surgical_data",
+                "exact_changed_paths": ["skills/validated_demo/skill.yaml"],
+                "max_changed_files": 1,
+            },
+            "mcp": {"enabled": False},
+        }
+    )
+
+    def forbidden_codex(**kwargs):  # noqa: ARG001
+        raise AssertionError("Codex must not run for validation-only repairs")
+
+    worker = LocalSkillFactoryWorker(
+        state_dir=state_dir,
+        repo_root=repo_root,
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+        executor=forbidden_codex,
+    )
+
+    result = worker.run_once()
+
+    assert result["ok"] is True, result
+    assert result["result"]["execution_strategy"] == "validation_only"
+    assert result["result"]["no_source_change"] is True
+    assert manifest.read_bytes() == before
+    preflight = json.loads(
+        (
+            tmp_path
+            / "runs"
+            / submitted["task"]["task_id"]
+            / "input"
+            / "token_budget_preflight.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert preflight["status"] == "not_applicable"
+    assert preflight["reason"] == "qualified_source_validation_without_model"
 
 
 def test_bounded_dev_ticket_rejects_large_manifest_collapse(tmp_path: Path) -> None:

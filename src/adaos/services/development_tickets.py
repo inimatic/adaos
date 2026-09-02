@@ -855,6 +855,8 @@ def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
         "target_object_type": target_object_type or None,
         "target_object_id": target_object_id or None,
     }
+    if raw.get("validation_only") is True:
+        hints["validation_only"] = True
     source_preconditions: list[dict[str, Any]] = []
     allowed_files = set(target_files)
     for value in raw.get("source_preconditions") or []:
@@ -885,6 +887,7 @@ def _autonomous_repair_qualification(ticket: Mapping[str, Any]) -> dict[str, Any
 
     hints = _bounded_repair_hints(ticket)
     structured = _mapping(hints.get("structured_edits"))
+    validation_only = hints.get("validation_only") is True
     missing: list[str] = []
     if not _text(hints.get("profile")):
         missing.append("profile")
@@ -894,8 +897,21 @@ def _autonomous_repair_qualification(ticket: Mapping[str, Any]) -> dict[str, Any
         missing.append("target_refs")
     if not hints.get("acceptance_checks"):
         missing.append("acceptance_checks")
+    if validation_only:
+        target_files = set(hints.get("target_files") or [])
+        precondition_files = {
+            _text(item.get("path"))
+            for item in hints.get("source_preconditions") or []
+            if isinstance(item, Mapping)
+        }
+        if not target_files or precondition_files != target_files:
+            missing.append("validation_source_preconditions")
+        if hints.get("requires_root_mcp") is True:
+            missing.append("validation_only_root_mcp")
     route = (
-        "structured_edits"
+        "validation_only"
+        if validation_only and not missing
+        else "structured_edits"
         if structured
         else "bounded_patch_agent"
         if not missing
@@ -907,8 +923,8 @@ def _autonomous_repair_qualification(ticket: Mapping[str, Any]) -> dict[str, Any
         "status": "ready" if ready else "qualification_required",
         "ready": ready,
         "execution_route": route,
-        "model_call_expected": ready and route != "structured_edits",
-        "expected_model_tokens": 0 if route == "structured_edits" else None,
+        "model_call_expected": ready and route not in {"structured_edits", "validation_only"},
+        "expected_model_tokens": 0 if route in {"structured_edits", "validation_only"} else None,
         "missing_fields": missing,
         "profile": hints.get("profile"),
         "target_files": list(hints.get("target_files") or []),
@@ -916,6 +932,7 @@ def _autonomous_repair_qualification(ticket: Mapping[str, Any]) -> dict[str, Any
         "acceptance_checks": list(hints.get("acceptance_checks") or []),
         "source_preconditions": list(hints.get("source_preconditions") or []),
         "requires_root_mcp": hints.get("requires_root_mcp") is True,
+        "validation_only": validation_only,
         "structured_operation_count": len(structured.get("operations") or []),
         "reason": (
             "qualified exact repair envelope is ready"
@@ -940,9 +957,9 @@ def _autonomous_repair_budget(
         return budget
     profile = _text(qualification.get("profile"))
     route = _text(qualification.get("execution_route"))
-    if route == "structured_edits":
+    if route in {"structured_edits", "validation_only"}:
         max_tokens, max_wall_seconds = 8_000, 600
-        source = "development_ticket.structured_edits"
+        source = f"development_ticket.{route}"
     elif profile in {"surgical_ui", "surgical_data", "resource_crud"}:
         max_tokens, max_wall_seconds = 24_000, 900
         source = f"development_ticket.{profile}"

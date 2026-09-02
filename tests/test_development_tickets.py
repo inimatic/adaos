@@ -224,6 +224,57 @@ def test_declared_dev_source_uses_authoritative_workspace_status(
     assert result["declared_source"] == "dev"
 
 
+def test_validation_only_qualification_requires_exact_source_preconditions(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    signal = service.capture_signal(
+        kind="development_request",
+        summary="Validate the prepared subscription usage projection.",
+        target_scope={"type": "skill", "id": "subscription_status_skill", "source": "dev"},
+        source="codex:test",
+        owner_area="skill",
+        metadata={
+            "builder_repair": {
+                "profile": "surgical_data",
+                "target_files": ["handlers/main.py", "webui.json"],
+                "target_refs": ["modal:subscription_status_modal"],
+                "acceptance_checks": ["The subscription projection tests pass."],
+                "source_preconditions": [
+                    {"path": "handlers/main.py", "sha256": "sha256:" + "a" * 64, "size": 10},
+                    {"path": "webui.json", "sha256": "sha256:" + "b" * 64, "size": 20},
+                ],
+                "validation_only": True,
+                "requires_root_mcp": False,
+            }
+        },
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="ready_for_builder",
+        owner_area="skill",
+    )["ticket"]
+
+    qualification = service.autonomous_repair_qualification(ticket["ticket_id"])
+
+    assert qualification["ready"] is True
+    assert qualification["execution_route"] == "validation_only"
+    assert qualification["model_call_expected"] is False
+    assert qualification["expected_model_tokens"] == 0
+
+    incomplete = dict(ticket["metadata"]["builder_repair"])
+    incomplete["source_preconditions"] = incomplete["source_preconditions"][:1]
+    updated = service.requalify_builder_repair(
+        ticket["ticket_id"],
+        builder_repair=incomplete,
+        actor="builder:test",
+        reason="exercise incomplete guard",
+        expected_revision=ticket["revision"],
+    )
+    blocked = service.autonomous_repair_qualification(updated["ticket_id"])
+    assert blocked["ready"] is False
+    assert "validation_source_preconditions" in blocked["missing_fields"]
+
+
 class _FakeFailingBuilderAutomation(_FakeBuilderAutomation):
     def status(self, *, object_type: str, object_id: str):
         suffix = str(self.counter or 1)

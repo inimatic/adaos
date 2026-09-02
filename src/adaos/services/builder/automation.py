@@ -320,6 +320,24 @@ def _brief_has_structured_edits(value: Any) -> bool:
     )
 
 
+def _brief_is_validation_only(value: Any) -> bool:
+    payload = _brief_payload(value)
+    repair_hints = (
+        payload.get("repair_hints")
+        if isinstance(payload.get("repair_hints"), Mapping)
+        else {}
+    )
+    return repair_hints.get("validation_only") is True
+
+
+def _brief_deterministic_strategy(value: Any) -> str:
+    if _brief_is_validation_only(value):
+        return "validation_only"
+    if _brief_has_structured_edits(value):
+        return "structured_edits"
+    return ""
+
+
 def _canonical_repair_path(value: Any, *, kind: str, object_id: str) -> str:
     path = str(value or "").replace("\\", "/").strip("/")
     if not path:
@@ -343,6 +361,18 @@ def _canonical_repair_hints(
         for item in hints.get("target_files") or []
         for path in [_canonical_repair_path(item, kind=kind, object_id=object_id)]
         if path
+    ]
+    hints["source_preconditions"] = [
+        {
+            **copy.deepcopy(dict(item)),
+            "path": _canonical_repair_path(
+                item.get("path"),
+                kind=kind,
+                object_id=object_id,
+            ),
+        }
+        for item in hints.get("source_preconditions") or []
+        if isinstance(item, Mapping) and str(item.get("path") or "").strip()
     ]
     structured = hints.get("structured_edits")
     if isinstance(structured, Mapping):
@@ -376,7 +406,8 @@ def _iteration_context_projection(
         context_packet,
         implementation_brief=implementation_brief,
     )
-    if not _brief_has_structured_edits(implementation_brief):
+    execution_strategy = _brief_deterministic_strategy(implementation_brief)
+    if not execution_strategy:
         return projection
     payload = _brief_payload(implementation_brief)
     repair_hints = (
@@ -389,9 +420,14 @@ def _iteration_context_projection(
         if isinstance(repair_hints.get("structured_edits"), Mapping)
         else {}
     )
-    structured_digest = "sha256:" + hashlib.sha256(
+    deterministic_input = (
+        structured
+        if execution_strategy == "structured_edits"
+        else repair_hints.get("source_preconditions") or []
+    )
+    deterministic_digest = "sha256:" + hashlib.sha256(
         json.dumps(
-            structured,
+            deterministic_input,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -422,13 +458,17 @@ def _iteration_context_projection(
                 for item in repair_hints.get("acceptance_checks") or []
                 if str(item).strip()
             ][:12],
-            "structured_edit_set_digest": structured_digest,
+            "deterministic_input_digest": deterministic_digest,
+            "structured_edit_set_digest": (
+                deterministic_digest if execution_strategy == "structured_edits" else None
+            ),
             "operation_count": len(structured.get("operations") or []),
+            "source_precondition_count": len(repair_hints.get("source_preconditions") or []),
         },
         "authority": {
             "write_scope": f"{kind}:{project_id}",
             "core_mutation": "denied",
-            "execution_strategy": "structured_edits",
+            "execution_strategy": execution_strategy,
         },
     }
 
@@ -563,7 +603,7 @@ def _context_projection_brief(
     canonical_brief = str(session.get("implementation_brief") or "")
     return (
         canonical_brief
-        if _brief_has_structured_edits(canonical_brief)
+        if _brief_deterministic_strategy(canonical_brief)
         else iteration_brief
     )
 
@@ -1105,7 +1145,7 @@ class BuilderAutomationService:
             if isinstance(session.get("execution_budget"), Mapping)
             else {}
         )
-        model_call_expected = not _brief_has_structured_edits(implementation_brief)
+        model_call_expected = not bool(_brief_deterministic_strategy(implementation_brief))
         context_budget, context_budget_ceiling, context_budget_explicit = (
             _context_budget_window(
                 execution_budget,
@@ -2505,7 +2545,7 @@ class BuilderAutomationService:
         self,
         session: Mapping[str, Any],
     ) -> dict[str, Any] | None:
-        if _brief_has_structured_edits(session.get("implementation_brief")):
+        if _brief_deterministic_strategy(session.get("implementation_brief")):
             return None
         return self._budget_continuation_checkpoint(session)
 
@@ -4113,6 +4153,7 @@ class BuilderAutomationService:
                     == "validate_preserved_candidate"
                 )
                 or bool(artifacts.get("structured_edits"))
+                or bool(dict(artifacts.get("repair_hints") or {}).get("validation_only"))
             )
         ):
             budget_status = "not_applicable"
@@ -4278,10 +4319,14 @@ class BuilderAutomationService:
             or provenance.get("execution_strategy")
             or ""
         ).strip()
-        if strategy == "structured_edits":
+        if strategy in {"structured_edits", "validation_only"}:
             return {
                 "strategy": strategy,
-                "reason": "Applied qualified structured edits and validation without starting a model turn.",
+                "reason": (
+                    "Validated the qualified source snapshot without starting a model turn."
+                    if strategy == "validation_only"
+                    else "Applied qualified structured edits and validation without starting a model turn."
+                ),
             }
         return None
 
