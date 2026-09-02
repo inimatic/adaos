@@ -497,6 +497,53 @@ def project_for_component(component_ref: str) -> dict[str, Any] | None:
     return matches[0]
 
 
+def prepare_candidate(
+    project_id: str,
+    *,
+    source_kind: str,
+    source_name: str,
+    source_revision: str,
+    change_ids: Sequence[str],
+    validation_evidence: Mapping[str, Any] | None = None,
+    target_webspace_id: str = "desktop",
+    target_space_kind: str = "development",
+    target_zone: str | None = None,
+    target_subnet_id: str | None = None,
+    idempotency_key: str | None = None,
+) -> dict[str, Any]:
+    """Prepare an immutable Trial for the Project owning a changed component."""
+
+    token = _project_id(project_id)
+    get(token)
+    component_kind = str(source_kind or "").strip().lower().rstrip("s")
+    if component_kind not in {"skill", "scenario"}:
+        raise ProjectCompositionError("source_kind must be skill or scenario")
+    component_id = _project_id(source_name)
+    revision = str(source_revision or "").strip()
+    if not revision:
+        raise ProjectCompositionError("source_revision is required")
+    bounded_changes = tuple(
+        dict.fromkeys(str(item).strip() for item in change_ids if str(item).strip())
+    )
+    if not bounded_changes:
+        raise ProjectCompositionError("candidate requires at least one Builder Change id")
+    from adaos.services.root.service import RootDeveloperService
+
+    return RootDeveloperService().prepare_project_candidate(
+        token,
+        source_kind=component_kind,  # type: ignore[arg-type]
+        source_name=component_id,
+        source_revision=revision,
+        change_ids=bounded_changes,
+        validation_evidence=validation_evidence,
+        target_webspace_id=target_webspace_id,
+        target_space_kind=target_space_kind,
+        target_zone=target_zone,
+        target_subnet_id=target_subnet_id,
+        idempotency_key=idempotency_key,
+    )
+
+
 def resolve_presentation(component_ref: str, *, project_id: str | None = None) -> dict[str, Any]:
     """Resolve Project entrypoint, skill default, then generic preview fallback."""
 
@@ -537,6 +584,7 @@ __all__ = [
     "get",
     "list_projects",
     "normalized_definition",
+    "prepare_candidate",
     "project_for_component",
     "resolve_presentation",
     "resolve_root",

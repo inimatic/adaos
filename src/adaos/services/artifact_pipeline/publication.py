@@ -50,6 +50,9 @@ from adaos.services.artifact_pipeline.packages import (
     ContentAddressedPackageStore,
     build_artifact_package,
 )
+from adaos.services.artifact_pipeline.project_build import (
+    build_workspace_project_release,
+)
 from adaos.services.artifact_pipeline.releases import (
     DependencyRequirement,
     PackageCatalog,
@@ -403,6 +406,36 @@ class ArtifactPublicationService:
             raise
         return self._development_source_manifest(target)
 
+    def _snapshot_project_candidate_development_sources(
+        self,
+        candidate_id: str,
+        *,
+        source_workspace_root: Path,
+        plan: ReleasePlan,
+    ) -> dict[str, Any]:
+        target = self._candidate_development_source_root(candidate_id)
+        if target.is_dir():
+            return self._development_source_manifest(target)
+        workspace = Path(source_workspace_root).expanduser().resolve()
+        staging = target.with_name(f".{target.name}.staging")
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True, exist_ok=False)
+        try:
+            for package in plan.packages:
+                collection = "skills" if package.kind == "skill" else "scenarios"
+                source_root = workspace / collection / package.artifact_id
+                package_root = staging / package.kind / package.artifact_id
+                for name in _DEVELOPMENT_SOURCE_ROOTS:
+                    source = source_root / name
+                    if source.is_dir():
+                        shutil.copytree(source, package_root / name)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            replace_with_retry(staging, target)
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        return self._development_source_manifest(target)
+
     def _workspace_package_target(self, package: ArtifactPackageRef) -> Path:
         relative = package.materialization_path or (
             f"skills/{package.artifact_id}"
@@ -428,8 +461,11 @@ class ArtifactPublicationService:
         entries = []
         candidate_source = self._candidate_development_source_root(candidate.candidate_id)
         for package in plan.packages:
+            project_candidate_source = candidate_source / package.kind / package.artifact_id
             source_root = (
-                candidate_source
+                project_candidate_source
+                if project_candidate_source.is_dir()
+                else candidate_source
                 if package.artifact_id == candidate.project_id and candidate_source.is_dir()
                 else self._workspace_package_target(package)
             )
@@ -1598,6 +1634,214 @@ class ArtifactPublicationService:
         except TrialActivationError as exc:
             raise PublicationError(str(exc)) from exc
         self._snapshot_candidate_development_sources(candidate_id, artifact_dir)
+        self.candidate_store.save(candidate)
+        return PreparedCandidate(
+            candidate,
+            plan,
+            trial_workspace,
+            activation_record,
+        )
+
+    def prepare_project_candidate(
+        self,
+        *,
+        project_id: str,
+        project_dir: Path,
+        source_workspace_root: Path,
+        source_ref: ArtifactSourceRef,
+        change_ids: tuple[str, ...],
+        validation_evidence: Mapping[str, Any],
+        current_stable: ReleasePlan | None = None,
+        audience: str = "owner",
+        data_mode: str = "empty",
+        data_ref: str | None = None,
+        data_isolation_evidence: Mapping[str, Any] | None = None,
+        target_webspace_id: str = "desktop",
+        target_space_kind: str = "development",
+        target_zone: str | None = None,
+        target_subnet_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> PreparedCandidate:
+        """Prepare one immutable Trial from a declarative Project closure."""
+
+        built = build_workspace_project_release(
+            project_dir=project_dir,
+            workspace_root=source_workspace_root,
+            source_ref=source_ref,
+            package_store=self.package_store,
+            release_repository=self.release_cache,
+            validation_evidence=(dict(validation_evidence),),
+        )
+        plan = built.plan
+        if plan.release.project_id != str(project_id or "").strip():
+            raise PublicationError("Project release identity differs from requested Project")
+        stable = current_stable if current_stable is not None else self.current_stable(project_id)
+        if stable is not None:
+            self._require_forward_version(
+                plan.release.version,
+                stable.release.version,
+                source="stable",
+            )
+        try:
+            active_lock = load_workspace_lock(
+                self.workspace_root / ".adaos" / "workspace.lock.json"
+            )
+            conflicts = shared_skill_conflicts(plan, active_lock)
+        except TrialActivationError as exc:
+            raise PublicationError(str(exc)) from exc
+        if conflicts:
+            summary = "; ".join(
+                f"{item['skill']} used by {', '.join(item['active_consumers'])}"
+                for item in conflicts
+            )
+            raise PublicationError(
+                "Trial activation would replace a shared active skill version: "
+                + summary
+            )
+
+        archives = {
+            package.digest: self.package_store.read(package.digest)
+            for package in plan.packages
+        }
+        self.remote.put_release(plan, archives)
+        composition = plan.release.composition_lock
+        primary_ref = next(
+            (
+                member.ref
+                for member in (composition.members if composition is not None else ())
+                if member.role == "primary"
+            ),
+            plan.release.components[0].key,
+        )
+        primary_package = next(
+            (package for package in plan.release.components if package.key == primary_ref),
+            plan.release.components[0],
+        )
+        release_digest = plan.release.release_digest or plan.release.computed_digest()
+        candidate_id = (
+            f"{project_id}-{plan.release.version.replace('.', '-')}-{release_digest[-12:]}"
+        )
+        candidate = candidate_from_release(
+            candidate_id=candidate_id,
+            release=plan.release,
+            base_release=stable.release if stable is not None else None,
+            package_digest=primary_package.digest,
+            change_ids=change_ids,
+        )
+        candidate = record_validation(candidate, validation_evidence, now=_now())
+
+        trial_workspace = runtime_trial_workspace(self.workspace_root, candidate_id)
+        trial_manager = WorkspaceActivationManager(
+            workspace_root=trial_workspace,
+            package_store=self.package_store,
+            state_root=self.state_root / "trials" / candidate_id / "state",
+        )
+        trial_idempotency_key = str(
+            idempotency_key or f"candidate-trial:{candidate.digest}"
+        )
+        trial_activation = trial_manager.activate(
+            plan,
+            idempotency_key=trial_idempotency_key,
+            audience=audience,
+            data_mode=data_mode,
+            data_ref=data_ref,
+            fetch_package=self.remote.fetch_package,
+            reload_policy={
+                "mode": "skip",
+                "approved_by": "artifact_pipeline.isolated_trial",
+                "reason": "isolated trial Workspace is not attached to a live runtime",
+            },
+            health_check=lambda lock: {
+                "status": "passed",
+                "check": "verified_package_materialization",
+                "lock_digest": lock.to_dict()["lock_digest"],
+            },
+        )
+        trial_operation = json.loads(
+            trial_manager.operation_path(trial_activation.operation_id).read_text(
+                encoding="utf-8"
+            )
+        )
+        isolation_evidence = data_isolation_evidence
+        if data_mode == "empty" and isolation_evidence is None:
+            isolation_evidence = {
+                "status": "verified",
+                "mode": "empty",
+                "reason": "isolated trial Workspace has no seeded data",
+            }
+        trial_started_at = _now()
+        primary_kind, _, primary_id = primary_ref.partition(":")
+        primary_collection = "skills" if primary_kind == "skill" else "scenarios"
+        primary_dir = Path(source_workspace_root) / primary_collection / primary_id
+        workflow_metrics = self._trial_workflow_metrics(
+            primary_dir,
+            kind=primary_kind,
+            validation_evidence=validation_evidence,
+            generated_at=trial_started_at,
+        )
+        candidate = begin_trial(
+            candidate,
+            trial_id=f"trial-{candidate_id}",
+            audience=audience,
+            data_mode=data_mode,  # type: ignore[arg-type]
+            lock_digest=trial_activation.workspace_lock.to_dict()["lock_digest"],
+            now=trial_started_at,
+            data_ref=data_ref,
+            isolation_evidence=isolation_evidence,
+            reload_receipt=trial_operation.get("reload_receipt"),
+            health_receipt=trial_operation.get("health_receipt"),
+            workflow_metrics=workflow_metrics,
+        )
+        scenario_id = (
+            primary_id
+            if primary_kind == "scenario"
+            else next(
+                (
+                    package.artifact_id
+                    for package in plan.release.components
+                    if package.kind == "scenario"
+                ),
+                None,
+            )
+        )
+        target = {
+            "zone": str(target_zone or "").strip() or None,
+            "subnet_id": str(target_subnet_id or "").strip() or None,
+            "webspace_id": str(target_webspace_id or "desktop").strip() or "desktop",
+            "space_kind": str(target_space_kind or "development").strip()
+            or "development",
+            "scenario_id": scenario_id,
+        }
+        try:
+            activation_record = build_trial_activation(
+                candidate=candidate.to_dict(),
+                plan=plan,
+                trial_id=f"trial-{candidate_id}",
+                activation_operation_id=trial_activation.operation_id,
+                workspace_root=self.workspace_root,
+                workspace_lock=trial_activation.workspace_lock,
+                target=target,
+                audience=audience,
+                data_mode=data_mode,
+                data_ref=data_ref,
+                isolation_evidence=isolation_evidence,
+                health_evidence=trial_operation.get("health_receipt"),
+                previous_bindings=(
+                    [item.to_dict() for item in active_lock.bindings]
+                    if active_lock is not None
+                    else []
+                ),
+                idempotency_key=trial_idempotency_key,
+                started_at=trial_started_at,
+            )
+            activation_record = self.trial_activations.save(activation_record)
+        except TrialActivationError as exc:
+            raise PublicationError(str(exc)) from exc
+        self._snapshot_project_candidate_development_sources(
+            candidate_id,
+            source_workspace_root=source_workspace_root,
+            plan=plan,
+        )
         self.candidate_store.save(candidate)
         return PreparedCandidate(
             candidate,

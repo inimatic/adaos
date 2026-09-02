@@ -2410,6 +2410,69 @@ class RootDeveloperService:
             "trial_activation": dict(prepared.trial_activation),
         }
 
+    def prepare_project_candidate(
+        self,
+        project_id: str,
+        *,
+        source_kind: Literal["skill", "scenario"],
+        source_name: str,
+        source_revision: str,
+        change_ids: tuple[str, ...],
+        validation_evidence: Mapping[str, Any] | None = None,
+        target_webspace_id: str = "desktop",
+        target_space_kind: str = "development",
+        target_zone: str | None = None,
+        target_subnet_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        cfg = self._load_config()
+        source_workspace = self._workspace_root(cfg)
+        project_dir = source_workspace / "projects" / project_id
+        if not (project_dir / "project.yaml").is_file():
+            raise ArtifactNotFoundError(
+                f"Project '{project_id}' not found at {project_dir}"
+            )
+        publication = self._artifact_publication_service(cfg)
+        pushed = publication.load_pushed_source(source_kind, source_name)
+        checkpoint_revision = str(source_revision or "").strip()
+        if not checkpoint_revision:
+            raise RootServiceError("Project candidate requires a checkpoint source revision")
+        if pushed.source_ref.revision != checkpoint_revision:
+            raise RootServiceError(
+                "Project candidate source revision differs from the confirmed component checkpoint"
+            )
+        source_ref = ArtifactSourceRef(
+            forge=pushed.source_ref.forge,
+            repository=pushed.source_ref.repository,
+            revision=checkpoint_revision,
+            path_scope=(f"projects/{project_id}/",),
+        )
+        evidence = dict(validation_evidence or {})
+        evidence.setdefault("status", "passed")
+        evidence.setdefault("validator", "adaos.project.preflight")
+        evidence.setdefault("checkpoint_source_revision", checkpoint_revision)
+        evidence.setdefault("checkpoint_component_ref", f"{source_kind}:{source_name}")
+        prepared = publication.prepare_project_candidate(
+            project_id=project_id,
+            project_dir=project_dir,
+            source_workspace_root=source_workspace,
+            source_ref=source_ref,
+            change_ids=change_ids,
+            validation_evidence=evidence,
+            target_webspace_id=target_webspace_id,
+            target_space_kind=target_space_kind,
+            target_zone=target_zone,
+            target_subnet_id=target_subnet_id,
+            idempotency_key=idempotency_key,
+        )
+        return {
+            "ok": True,
+            "candidate": prepared.candidate.to_dict(),
+            "release": prepared.plan.release.to_dict(),
+            "trial_workspace": str(prepared.trial_workspace),
+            "trial_activation": dict(prepared.trial_activation),
+        }
+
     def decide_artifact_candidate(
         self,
         candidate_id: str,

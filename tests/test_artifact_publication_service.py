@@ -189,6 +189,87 @@ def _promote(service: ArtifactPublicationService, candidate_id: str, **kwargs):
     return service.promote(candidate_id, **kwargs)
 
 
+def test_project_candidate_uses_full_owned_component_closure(tmp_path: Path) -> None:
+    remote = _Remote(tmp_path / "remote")
+    source_workspace = tmp_path / "dev"
+    scenario_dir = _scenario(source_workspace / "scenarios")
+    skill_dir = _skill(source_workspace / "skills")
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.0.0\ntitle: Recipes\ndepends:\n  - shopping_skill\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "tests").mkdir()
+    (skill_dir / "tests" / "test_demo.py").write_text(
+        "def test_demo():\n    assert True\n",
+        encoding="utf-8",
+    )
+    project_dir = source_workspace / "projects" / "recipes_project"
+    project_dir.mkdir(parents=True)
+    (project_dir / "project.yaml").write_text(
+        """schema: adaos.project.v1
+kind: project
+id: recipes_project
+version: 1.0.0
+profiles: [demo]
+components:
+  owned:
+    - ref: scenario:recipes
+      role: primary
+    - ref: skill:shopping_skill
+      role: implementation
+  dependencies: []
+entrypoints:
+  - id: main
+    presentation: scenario:recipes
+    default: true
+    bindings: {}
+catalog:
+  title: Recipes
+  description: Demo project
+  categories: [demo]
+  tags: [recipes]
+compatibility:
+  required_entrypoints: [main]
+lifecycle:
+  uninstall:
+    components: remove_if_unreferenced
+    runtime_data: retain
+    source_artifacts: retain
+""",
+        encoding="utf-8",
+    )
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+    )
+
+    prepared = service.prepare_project_candidate(
+        project_id="recipes_project",
+        project_dir=project_dir,
+        source_workspace_root=source_workspace,
+        source_ref=ArtifactSourceRef(
+            forge="github",
+            repository="inimatic/adaos-registry",
+            revision="a" * 40,
+            path_scope=("projects/recipes_project/",),
+        ),
+        change_ids=("change-project-1",),
+        validation_evidence={"status": "passed"},
+    )
+
+    assert prepared.candidate.project_id == "recipes_project"
+    assert {item.key for item in prepared.plan.release.components} == {
+        "scenario:recipes",
+        "skill:shopping_skill",
+    }
+    assert prepared.trial_activation["target"]["scenario_id"] == "recipes"
+    snapshot = service._candidate_development_source_root(
+        prepared.candidate.candidate_id
+    )
+    assert (snapshot / "skill" / "shopping_skill" / "tests" / "test_demo.py").is_file()
+
+
 def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path) -> None:
     dev = _scenario(tmp_path / "dev")
     (dev / "tests").mkdir()

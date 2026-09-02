@@ -3779,7 +3779,7 @@ def test_finalize_activates_dev_ticket_aprobation_overlay_after_checkpoint(
     monkeypatch.setattr(
         BuilderAutomationService,
         "_ensure_governed_aprobation_trial",
-        lambda self, session, receipt: calls.append("trial")
+        lambda self, session, receipt, **kwargs: calls.append("trial")
         or {
             **dict(receipt),
             "trial": {
@@ -3833,6 +3833,7 @@ def test_finalize_activates_dev_ticket_aprobation_overlay_after_checkpoint(
     assert calls == [
         "dev:recipes_skill",
         "checkpoint",
+        "trial",
         "overlay",
         "trial",
         "notify",
@@ -3888,7 +3889,7 @@ def test_finalize_scenario_only_repair_does_not_activate_unchanged_companion_ski
     monkeypatch.setattr(
         BuilderAutomationService,
         "_ensure_governed_aprobation_trial",
-        lambda self, session, receipt: {
+        lambda self, session, receipt, **kwargs: {
             **dict(receipt),
             "trial": {
                 "status": "trial",
@@ -4940,7 +4941,7 @@ def test_completed_workflow_reconciliation_backfills_aprobation_overlay(
     monkeypatch.setattr(
         BuilderAutomationService,
         "_ensure_governed_aprobation_trial",
-        lambda self, session, receipt: {
+        lambda self, session, receipt, **kwargs: {
             **dict(receipt),
             "trial": {
                 "status": "trial",

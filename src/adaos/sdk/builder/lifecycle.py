@@ -7,7 +7,7 @@ from typing import Any
 
 from adaos.sdk import navigation
 from adaos.sdk.builder import automation, preview, workflow
-from adaos.sdk.developer import projects
+from adaos.sdk.developer import compositions, projects
 
 
 ACTIVITY_COMMANDS = frozenset(
@@ -85,6 +85,7 @@ def prepare_trial(
     idempotency_key: str,
     source_webspace_id: str = "desktop",
     target_webspace_id: str | None = None,
+    publication_project_ref: str | None = None,
 ) -> dict[str, Any]:
     state = workflow.get_state(object_type, object_id)
     delivery = _mapping(state.get("delivery"))
@@ -140,7 +141,28 @@ def prepare_trial(
     scope = navigation.runtime_scope()
     try:
         stale_candidate = str(delivery.get("replaces_candidate_id") or "").strip()
-        if stale_candidate:
+        project_ref = str(publication_project_ref or "").strip()
+        if project_ref and not project_ref.startswith("project:"):
+            raise ValueError("publication_project_ref must use project:<id>")
+        if stale_candidate and project_ref:
+            raise ValueError(
+                "Project Trial rebase requires a fresh immutable project candidate"
+            )
+        if project_ref:
+            result = compositions.prepare_candidate(
+                project_ref.split(":", 1)[1],
+                source_kind=object_type,
+                source_name=object_id,
+                source_revision=str(delivery.get("source_revision") or "").strip(),
+                change_ids=change_ids,
+                validation_evidence=validation_evidence,
+                target_webspace_id=trial_webspace,
+                target_space_kind="development",
+                target_zone=str(scope.get("zone") or "").strip() or None,
+                target_subnet_id=str(scope.get("subnet_id") or "").strip() or None,
+                idempotency_key=idempotency_key,
+            )
+        elif stale_candidate:
             result = projects.prepare_rebased_candidate(
                 stale_candidate,
                 object_type,

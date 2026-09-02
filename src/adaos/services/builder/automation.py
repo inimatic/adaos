@@ -5792,25 +5792,27 @@ class BuilderAutomationService:
             if isinstance(readiness.get("aprobation"), Mapping)
             else {}
         )
-        if (
-            self._session_requires_aprobation_overlay(current)
-            and not self._aprobation_overlay_ready(existing_aprobation)
-        ):
-            companion_skill_ids = self._session_changed_companion_skill_ids(current)
-            scenario_id = object_id if object_type == "scenario" else None
-            if companion_skill_ids or scenario_id:
-                readiness["aprobation"] = self._prepare_and_activate_aprobation_overlay(
-                    current,
-                    skill_ids=companion_skill_ids,
-                    scenario_id=scenario_id,
-                    webspace_id=str(current.get("webspace_id") or "desktop").strip() or "desktop",
-                )
         if self._session_requires_aprobation_overlay(current):
+            trial_receipt = self._ensure_governed_aprobation_trial(
+                current,
+                existing_aprobation,
+                record_update=False,
+            )
+            overlay_receipt = existing_aprobation
+            if not self._aprobation_overlay_ready(existing_aprobation):
+                companion_skill_ids = self._session_changed_companion_skill_ids(current)
+                scenario_id = object_id if object_type == "scenario" else None
+                if companion_skill_ids or scenario_id:
+                    overlay_receipt = self._prepare_and_activate_aprobation_overlay(
+                        current,
+                        skill_ids=companion_skill_ids,
+                        scenario_id=scenario_id,
+                        webspace_id=str(current.get("webspace_id") or "desktop").strip()
+                        or "desktop",
+                    )
             readiness["aprobation"] = self._ensure_governed_aprobation_trial(
                 current,
-                readiness.get("aprobation")
-                if isinstance(readiness.get("aprobation"), Mapping)
-                else existing_aprobation,
+                {**dict(trial_receipt), **dict(overlay_receipt)},
             )
         completed_at = str(
             automation.get("completed_at")
@@ -6062,21 +6064,6 @@ class BuilderAutomationService:
                 raise RuntimeError(f"Forge checkpoint failed for {failed_refs}")
 
             aprobation_scenario_id = object_id if object_type == "scenario" and object_id else None
-            if self._session_requires_aprobation_overlay(current) and (
-                companion_skill_ids or aprobation_scenario_id
-            ):
-                with self._finalization_stage(
-                    current,
-                    readiness,
-                    "aprobation_activation",
-                    "Activating the DEV repair as a workspace runtime overlay",
-                ):
-                    readiness["aprobation"] = self._prepare_and_activate_aprobation_overlay(
-                        current,
-                        skill_ids=companion_skill_ids,
-                        scenario_id=aprobation_scenario_id,
-                        webspace_id=webspace_id,
-                    )
 
             if object_type == "scenario" and object_id:
                 from adaos.services.builder.workbench import BuilderWorkbenchService
@@ -6112,6 +6099,13 @@ class BuilderAutomationService:
                         **dict(overlay_projection),
                         "ok": True,
                         "skipped": "governed_aprobation_overlay_active",
+                        "webspace_id": webspace_id,
+                        "preview_webspace_id": None,
+                    }
+                elif self._session_requires_aprobation_overlay(current):
+                    readiness["materialization"] = {
+                        "ok": True,
+                        "skipped": "awaiting_governed_trial",
                         "webspace_id": webspace_id,
                         "preview_webspace_id": None,
                     }
@@ -6377,14 +6371,52 @@ class BuilderAutomationService:
                         current,
                         readiness,
                         "trial_projection",
-                        "Publishing the immutable Trial candidate and review notice",
+                        "Validating the immutable Project Trial candidate",
                     ):
-                        readiness["aprobation"] = self._ensure_governed_aprobation_trial(
+                        trial_receipt = self._ensure_governed_aprobation_trial(
                             current,
                             readiness.get("aprobation")
                             if isinstance(readiness.get("aprobation"), Mapping)
                             else {},
+                            record_update=False,
                         )
+                    if companion_skill_ids or aprobation_scenario_id:
+                        with self._finalization_stage(
+                            current,
+                            readiness,
+                            "aprobation_activation",
+                            "Activating the validated Project repair for user review",
+                        ):
+                            overlay_receipt = self._prepare_and_activate_aprobation_overlay(
+                                current,
+                                skill_ids=companion_skill_ids,
+                                scenario_id=aprobation_scenario_id,
+                                webspace_id=webspace_id,
+                            )
+                    else:
+                        overlay_receipt = {"ok": False, "skipped": "no_runtime_components"}
+                    readiness["aprobation"] = self._ensure_governed_aprobation_trial(
+                        current,
+                        {**dict(trial_receipt), **dict(overlay_receipt)},
+                    )
+                    if object_type == "scenario" and bool(overlay_receipt.get("ok")):
+                        scenario_overlay = (
+                            overlay_receipt.get("scenario")
+                            if isinstance(overlay_receipt.get("scenario"), Mapping)
+                            else {}
+                        )
+                        overlay_projection = (
+                            scenario_overlay.get("webspace_projection")
+                            if isinstance(scenario_overlay.get("webspace_projection"), Mapping)
+                            else {}
+                        )
+                        readiness["materialization"] = {
+                            **dict(overlay_projection),
+                            "ok": True,
+                            "skipped": "governed_aprobation_overlay_active",
+                            "webspace_id": webspace_id,
+                            "preview_webspace_id": None,
+                        }
             readiness["ok"] = True
             readiness["completed_at"] = _now_iso()
             current["completion_readiness"] = readiness
@@ -6686,6 +6718,8 @@ class BuilderAutomationService:
         self,
         session: Mapping[str, Any],
         overlay_receipt: Mapping[str, Any],
+        *,
+        record_update: bool = True,
     ) -> dict[str, Any]:
         """Bind the live runtime overlay to Builder's immutable Trial candidate."""
 
@@ -6718,6 +6752,20 @@ class BuilderAutomationService:
                 or "desktop",
                 target_webspace_id=str(session.get("webspace_id") or "desktop").strip()
                 or "desktop",
+                publication_project_ref=str(
+                    (
+                        session.get("links")
+                        if isinstance(session.get("links"), Mapping)
+                        else {}
+                    ).get("development_ticket_project_ref")
+                    or (
+                        session.get("links")
+                        if isinstance(session.get("links"), Mapping)
+                        else {}
+                    ).get("project_ref")
+                    or ""
+                ).strip()
+                or None,
             )
             workflow = (
                 dict(result.get("workflow"))
@@ -6826,6 +6874,8 @@ class BuilderAutomationService:
                 "ticket_ids": ticket_ids,
             },
         }
+        if not record_update:
+            return receipt
         component_update = self._record_component_update(session, receipt)
         if component_update is None:
             raise RuntimeError("Builder Trial component update notice was not persisted")

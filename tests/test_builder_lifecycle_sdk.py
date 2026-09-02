@@ -104,6 +104,63 @@ def test_prepare_trial_resumes_observed_candidate_without_restarting(monkeypatch
     assert result["resumed"] is True
 
 
+def test_prepare_trial_routes_component_checkpoint_through_owning_project(
+    monkeypatch,
+) -> None:
+    transitions: list[str] = []
+    captured: dict = {}
+    monkeypatch.setattr(lifecycle.workflow, "get_state", lambda *_args: _checkpoint_state())
+    monkeypatch.setattr(
+        lifecycle.workflow,
+        "transition",
+        lambda _kind, _project, action, **_kwargs: transitions.append(action)
+        or {"workflow": {"governed": {"state": action}}},
+    )
+
+    def prepare(project_id, **kwargs):
+        captured.update({"project_id": project_id, **kwargs})
+        return {
+            "ok": True,
+            "candidate": {
+                "candidate_id": "candidate-project-1",
+                "release_digest": "sha256:" + "c" * 64,
+                "package_digest": "sha256:" + "d" * 64,
+                "base_release": "unpublished",
+                "base_release_digest": "sha256:" + "e" * 64,
+            },
+            "release": {
+                "project_id": "semantic_ui_demo",
+                "version": "0.10.4",
+                "release_digest": "sha256:" + "c" * 64,
+            },
+            "trial_workspace": "trial://candidate-project-1",
+        }
+
+    monkeypatch.setattr(lifecycle.compositions, "prepare_candidate", prepare)
+    monkeypatch.setattr(
+        lifecycle.projects,
+        "prepare_candidate",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("component-only candidate must not be used")
+        ),
+    )
+
+    result = lifecycle.prepare_trial(
+        "skill",
+        "demo_metrics_skill",
+        actor="builder.automation",
+        idempotency_key="trial-project-1",
+        publication_project_ref="project:semantic_ui_demo",
+    )
+
+    assert captured["project_id"] == "semantic_ui_demo"
+    assert captured["source_kind"] == "skill"
+    assert captured["source_name"] == "demo_metrics_skill"
+    assert captured["source_revision"] == "b" * 40
+    assert transitions == ["candidate_preparation_started", "candidate_prepared"]
+    assert result["release"]["project_id"] == "semantic_ui_demo"
+
+
 def test_publish_candidate_passes_exact_apply_evidence_to_terminal_transition(
     monkeypatch,
 ) -> None:

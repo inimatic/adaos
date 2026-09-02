@@ -3922,7 +3922,13 @@ class BuilderWorkflowService:
             if change is None:
                 raise BuilderWorkflowError("an active Change is required to build a context packet")
             root = self.project_root(kind, project_id)
-            manifest_name = "scenario.yaml" if kind == "scenario" else "skill.yaml"
+            manifest_name = (
+                "project.yaml"
+                if kind == "project"
+                else "scenario.yaml"
+                if kind == "scenario"
+                else "skill.yaml"
+            )
             manifest_path = root / manifest_name
             manifest_raw = manifest_path.read_bytes()
             try:
