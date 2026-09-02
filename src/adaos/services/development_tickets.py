@@ -2536,6 +2536,210 @@ class DevelopmentTicketService:
         )
         return {**result, "reported": True}
 
+    def report_publication_gate_failure(
+        self,
+        *,
+        component_type: str,
+        component_id: str,
+        gate: str,
+        error: str,
+        actor: str = "builder.automation",
+        related_ticket_ids: Sequence[str] = (),
+        evidence_refs: Sequence[Mapping[str, Any]] = (),
+        candidate_id: str | None = None,
+        task_id: str | None = None,
+        session_id: str | None = None,
+        webspace_id: str = "desktop",
+    ) -> dict[str, Any]:
+        """Capture a project-owned blocker raised by a release gate.
+
+        Candidate and task identities remain evidence, but are intentionally
+        excluded from deduplication so retries cannot flood the inbox.
+        """
+
+        kind = _text(component_type).lower().rstrip("s")
+        identifier = _text(component_id)
+        gate_token = _text(gate).lower() or "publication"
+        error_text = _text(error) or "publication gate failed"
+        if kind not in {"skill", "scenario"}:
+            raise ValueError("publication gate component_type must be skill or scenario")
+        if not identifier:
+            raise ValueError("publication gate component_id is required")
+
+        normalized_error = re.sub(
+            r"\b(?:candidate|task|session|run)\.[a-z0-9_.-]+\b",
+            "<execution-ref>",
+            error_text.lower(),
+        )
+        normalized_error = re.sub(r"sha256:[a-f0-9]{32,}", "sha256:<digest>", normalized_error)
+        normalized_error = re.sub(r"\s+", " ", normalized_error).strip()[:1200]
+        component_ref = f"{kind}:{identifier}"
+        linked_ids = list(
+            dict.fromkeys(_text(item) for item in related_ticket_ids if _text(item))
+        )
+        evidence_type = (
+            "test"
+            if gate_token in {"tests", "test", "consumer_acceptance"}
+            else "runtime_guard"
+        )
+        gate_evidence = {
+            "type": evidence_type,
+            "id": f"{component_ref}:{gate_token}",
+            "status": "failed",
+            "gate": gate_token,
+            "error": error_text,
+            "candidate_id": _text(candidate_id) or None,
+            "task_id": _text(task_id) or None,
+            "session_id": _text(session_id) or None,
+            "webspace_id": _text(webspace_id) or "desktop",
+        }
+        metadata = {
+            "producer": "builder_publication_gate",
+            "actor": _text(actor) or "builder.automation",
+            "gate": gate_token,
+            "error": error_text,
+            "candidate_id": _text(candidate_id) or None,
+            "task_id": _text(task_id) or None,
+            "session_id": _text(session_id) or None,
+            "webspace_id": _text(webspace_id) or "desktop",
+            "related_ticket_ids": linked_ids,
+        }
+        dedup_key = _fingerprint(
+            "publication-gate",
+            component_ref,
+            gate_token,
+            normalized_error,
+        )
+        signal_result = self.capture_signal(
+            kind="runtime_failure",
+            summary=f"{kind.capitalize()} {identifier} failed the {gate_token} publication gate",
+            owner_scope={"type": "workspace", "id": "local"},
+            origin_scope={
+                "type": "builder",
+                "surface": "publication_gate",
+                "id": _text(session_id) or _text(task_id) or component_ref,
+            },
+            target_scope={
+                "type": kind,
+                "id": identifier,
+                f"{kind}_id": identifier,
+                f"{kind}_ref": component_ref,
+                "component_ref": component_ref,
+                "source": "dev",
+            },
+            severity="high",
+            blocking=True,
+            source="builder_publication_gate",
+            dedup_key=dedup_key,
+            evidence_refs=[gate_evidence, *_sequence_of_mappings(evidence_refs)],
+            policy={
+                "blocking": True,
+                "run_policy": "block_publication",
+                "design_time_fixable": True,
+                "autonomous_repair_eligible": True,
+                "publication_required": True,
+            },
+            metadata=metadata,
+            owner_area=kind,
+            component_ref=component_ref,
+        )
+        ticket_result = self.ensure_ticket_for_signal(
+            signal_result["signal"],
+            kind="runtime_failure",
+            status="accepted",
+            source="builder_publication_gate",
+            dedup_key=dedup_key,
+            metadata=metadata,
+            owner_area=kind,
+            component_ref=component_ref,
+        )
+        failure_ticket = ticket_result["ticket"]
+        for ticket_id in linked_ids:
+            if ticket_id == failure_ticket["ticket_id"]:
+                continue
+            try:
+                self.relate_ticket(
+                    failure_ticket["ticket_id"],
+                    related_ticket_id=ticket_id,
+                    relation="related",
+                    actor=_text(actor) or "builder.automation",
+                )
+                self.relate_ticket(
+                    ticket_id,
+                    related_ticket_id=failure_ticket["ticket_id"],
+                    relation="related",
+                    actor=_text(actor) or "builder.automation",
+                )
+            except KeyError:
+                continue
+        return {
+            "ok": True,
+            "reported": True,
+            "signal": signal_result["signal"],
+            "ticket": self.get_ticket(failure_ticket["ticket_id"]) or failure_ticket,
+            "signal_duplicate": bool(signal_result.get("duplicate")),
+            "ticket_duplicate": bool(ticket_result.get("duplicate")),
+        }
+
+    def close_publication_gate_failures(
+        self,
+        *,
+        component_type: str,
+        component_id: str,
+        actor: str,
+        evidence_refs: Sequence[Mapping[str, Any]],
+        resolved_by_version: str | None = None,
+        resolved_by_overlay: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Close technical gate findings after the exact candidate is published."""
+
+        kind = _text(component_type).lower().rstrip("s")
+        identifier = _text(component_id)
+        refs = _sequence_of_mappings(evidence_refs)
+        if kind not in {"skill", "scenario"} or not identifier:
+            return []
+        if not refs:
+            raise ValueError("publication gate closure requires evidence_refs")
+        tickets = self.list_tickets(
+            status_group="open",
+            component_ref=f"{kind}:{identifier}",
+            kind="runtime_failure",
+            source="builder_publication_gate",
+        )
+        closed: list[dict[str, Any]] = []
+        actor_token = _text(actor) or "builder.automation"
+        for ticket in tickets:
+            ticket_id = _text(ticket.get("ticket_id"))
+            status = _text(ticket.get("status"))
+            if not ticket_id:
+                continue
+            if status not in {"resolved", "verified"}:
+                ticket = self.record_resolution(
+                    ticket_id,
+                    actor=actor_token,
+                    evidence_refs=refs,
+                    resolved_by_version=resolved_by_version,
+                    resolved_by_overlay=resolved_by_overlay,
+                )["ticket"]
+                status = _text(ticket.get("status"))
+            if status == "resolved":
+                ticket = self.verify_ticket(
+                    ticket_id,
+                    actor=actor_token,
+                    evidence_refs=refs,
+                    notes="Publication gate passed for the accepted candidate.",
+                )["ticket"]
+                status = _text(ticket.get("status"))
+            if status == "verified":
+                ticket = self.close_ticket(
+                    ticket_id,
+                    actor=actor_token,
+                    reason="verified",
+                    evidence_refs=refs,
+                )
+            closed.append(ticket)
+        return closed
+
     def transition_core_ticket(
         self,
         ticket_id: str,

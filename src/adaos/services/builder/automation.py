@@ -3269,55 +3269,142 @@ class BuilderAutomationService:
                 idempotency_key=f"trial-decision:{candidate_id}:{decision_token}",
             )
         publication: dict[str, Any] | None = None
-        if accepted:
-            publication = (
-                {
-                    "ok": True,
-                    "status": "published",
-                    "duplicate": True,
-                    "workflow": workflow_before,
-                }
-                if published_already
-                else lifecycle.publish_candidate(
-                    kind,
-                    project_id,
-                    actor=actor_token,
-                    idempotency_key=f"trial-publication:{candidate_id}",
-                )
+        component_update: dict[str, Any] | None = None
+        component_update_projection: dict[str, Any] | None = None
+        persisted = dict(current)
+        persisted_aprobation = dict(aprobation)
+        if accepted and not published_already:
+            persisted, persisted_aprobation = self._persist_aprobation_trial_state(
+                persisted,
+                persisted_aprobation,
+                trial,
+                status="accepted",
+                decision=decision_token,
+                actor=actor_token,
             )
-            if not bool(publication.get("ok", True)) or publication.get("error"):
-                raise RuntimeError(
-                    str(publication.get("error") or "Builder Trial publication failed")
-                )
+            persisted, persisted_aprobation, component_update_projection = (
+                self._project_aprobation_state(persisted, persisted_aprobation)
+            )
+            component_update = dict(persisted_aprobation["component_update"])
 
-        workflow = self._workflow().describe(kind, project_id)
-        delivery = (
-            dict(workflow.get("delivery"))
-            if isinstance(workflow.get("delivery"), Mapping)
-            else {}
-        )
-        publication_state = (
-            dict(workflow.get("publication"))
-            if isinstance(workflow.get("publication"), Mapping)
-            else {}
-        )
-        published_release_record = (
-            dict(publication_state.get("release_record"))
-            if isinstance(publication_state.get("release_record"), Mapping)
-            else {}
-        )
-        if accepted and (
-            str(publication_state.get("status") or "").strip() != "published"
-            or str(
-                published_release_record.get("candidate_id")
-                or publication_state.get("candidate_id")
-                or ""
-            ).strip()
-            != candidate_id
-        ):
-            raise RuntimeError(
-                "Builder Trial publication did not durably publish the accepted candidate"
+        try:
+            if accepted:
+                publication = (
+                    {
+                        "ok": True,
+                        "status": "published",
+                        "duplicate": True,
+                        "workflow": workflow_before,
+                    }
+                    if published_already
+                    else lifecycle.publish_candidate(
+                        kind,
+                        project_id,
+                        actor=actor_token,
+                        idempotency_key=f"trial-publication:{candidate_id}",
+                    )
+                )
+                if not bool(publication.get("ok", True)) or publication.get("error"):
+                    raise RuntimeError(
+                        str(publication.get("error") or "Builder Trial publication failed")
+                    )
+
+            workflow = self._workflow().describe(kind, project_id)
+            delivery = (
+                dict(workflow.get("delivery"))
+                if isinstance(workflow.get("delivery"), Mapping)
+                else {}
             )
+            publication_state = (
+                dict(workflow.get("publication"))
+                if isinstance(workflow.get("publication"), Mapping)
+                else {}
+            )
+            published_release_record = (
+                dict(publication_state.get("release_record"))
+                if isinstance(publication_state.get("release_record"), Mapping)
+                else {}
+            )
+            if accepted and (
+                str(publication_state.get("status") or "").strip() != "published"
+                or str(
+                    published_release_record.get("candidate_id")
+                    or publication_state.get("candidate_id")
+                    or ""
+                ).strip()
+                != candidate_id
+            ):
+                raise RuntimeError(
+                    "Builder Trial publication did not durably publish the accepted candidate"
+                )
+        except Exception as exc:
+            if accepted:
+                failure_workflow = self._workflow().describe(kind, project_id)
+                failure_publication = (
+                    dict(failure_workflow.get("publication"))
+                    if isinstance(failure_workflow.get("publication"), Mapping)
+                    else {}
+                )
+                publication_status = str(
+                    failure_publication.get("status") or "publication_failed"
+                ).strip().lower()
+                failure_status = (
+                    "publication_unknown"
+                    if publication_status in {"unknown", "publication_unknown"}
+                    else "publication_failed"
+                )
+                error_text = str(exc).strip() or "Builder Trial publication failed"
+                gate_result: dict[str, Any] | None = None
+                try:
+                    gate_result = self._report_publication_gate_failure(
+                        persisted,
+                        gate="publication",
+                        error=error_text,
+                        candidate_id=candidate_id,
+                        evidence_refs=[
+                            {
+                                "type": "project_release",
+                                "id": candidate_id,
+                                "status": "failed",
+                                "error": error_text,
+                            }
+                        ],
+                    )
+                except Exception:
+                    _log.exception(
+                        "failed to capture publication gate ticket project=%s:%s",
+                        kind,
+                        project_id,
+                    )
+                failure = {
+                    "stage": "publication",
+                    "status": failure_status,
+                    "error": error_text,
+                    "candidate_id": candidate_id,
+                    "ticket_id": (
+                        str((gate_result or {}).get("ticket", {}).get("ticket_id") or "").strip()
+                        or None
+                    ),
+                    "recorded_at": _now_iso(),
+                }
+                try:
+                    persisted, persisted_aprobation = self._persist_aprobation_trial_state(
+                        persisted,
+                        persisted_aprobation,
+                        trial,
+                        status=failure_status,
+                        decision=decision_token,
+                        actor=actor_token,
+                        failure=failure,
+                    )
+                    self._project_aprobation_state(persisted, persisted_aprobation)
+                except Exception:
+                    _log.exception(
+                        "failed to project publication gate failure project=%s:%s",
+                        kind,
+                        project_id,
+                    )
+            raise RuntimeError(str(exc)) from exc
         evidence_refs = [
             {
                 "type": "builder_trial",
@@ -3373,55 +3460,38 @@ class BuilderAutomationService:
                 ]
             )
         )
-        now = _now_iso()
-        with _LOCK:
-            persisted = self.get_session(kind, project_id) or current
-            persisted_readiness = (
-                dict(persisted.get("completion_readiness"))
-                if isinstance(persisted.get("completion_readiness"), Mapping)
-                else {}
-            )
-            persisted_aprobation = (
-                dict(persisted_readiness.get("aprobation"))
-                if isinstance(persisted_readiness.get("aprobation"), Mapping)
-                else dict(aprobation)
-            )
-            persisted_trial = (
-                dict(persisted_aprobation.get("trial"))
-                if isinstance(persisted_aprobation.get("trial"), Mapping)
-                else dict(trial)
-            )
-            persisted_trial.update(
-                {
-                    "status": "published" if accepted else "rejected",
-                    "decision": decision_token,
-                    "decided_by": actor_token,
-                    "decided_at": now,
-                }
-            )
-            persisted_aprobation["trial"] = persisted_trial
-            if rollback is not None:
-                persisted_aprobation["rollback"] = rollback
-            persisted_readiness["aprobation"] = persisted_aprobation
-            persisted["completion_readiness"] = persisted_readiness
-            persisted["updated_at"] = now
-            self._save_session(persisted)
-
-        component_update = self._record_component_update(persisted, persisted_aprobation)
-        if component_update is None:
-            raise RuntimeError("Builder Trial component update notice was not persisted")
-        component_update_projection = self._refresh_component_update_projection(
+        persisted, persisted_aprobation = self._persist_aprobation_trial_state(
             persisted,
             persisted_aprobation,
+            trial,
+            status="published" if accepted else "rejected",
+            decision=decision_token,
+            actor=actor_token,
         )
-        persisted_aprobation["component_update"] = component_update
-        if component_update_projection is not None:
-            persisted_aprobation["component_update_projection"] = component_update_projection
-        with _LOCK:
-            persisted_readiness["aprobation"] = persisted_aprobation
-            persisted["completion_readiness"] = persisted_readiness
-            persisted["updated_at"] = _now_iso()
-            self._save_session(persisted)
+        if rollback is not None:
+            persisted_aprobation["rollback"] = rollback
+        persisted, persisted_aprobation, component_update_projection = (
+            self._project_aprobation_state(persisted, persisted_aprobation)
+        )
+        component_update = dict(persisted_aprobation["component_update"])
+        closed_gate_failures = (
+            ticket_service.close_publication_gate_failures(
+                component_type=kind,
+                component_id=project_id,
+                actor=actor_token,
+                evidence_refs=evidence_refs,
+                resolved_by_version=str(
+                    publication_state.get("version")
+                    or delivery.get("version")
+                    or trial.get("version")
+                    or ""
+                ).strip()
+                or None,
+                resolved_by_overlay=candidate_id,
+            )
+            if accepted
+            else []
+        )
 
         # Tickets become verified/closed only after the accepted release and
         # its user-visible notice are both projected into the target runtime.
@@ -3482,6 +3552,7 @@ class BuilderAutomationService:
             "evidence_refs": evidence_refs,
             "component_update": component_update,
             "component_update_projection": component_update_projection,
+            "closed_publication_gate_failures": closed_gate_failures,
         }
 
     def projection(
@@ -5747,11 +5818,10 @@ class BuilderAutomationService:
             "completed_at": None,
         }
         failed_checkpoints: list[Mapping[str, Any]] = []
-        acceptance_failed = False
         existing_binding: dict[str, Any] = {}
         preview_target: Mapping[str, Any] | None = None
+        pending_transition = str(current.get("pending_workflow_transition") or "").strip()
         try:
-            pending_transition = str(current.get("pending_workflow_transition") or "").strip()
             with self._finalization_stage(
                 current,
                 readiness,
@@ -5800,7 +5870,6 @@ class BuilderAutomationService:
                         activations=list(readiness.get("skills") or []),
                     )
                 if not bool(readiness["acceptance"].get("ok")):
-                    acceptance_failed = True
                     raise RuntimeError(
                         "Consumer acceptance failed: "
                         + "; ".join(
@@ -6154,6 +6223,12 @@ class BuilderAutomationService:
         except Exception as exc:
             readiness["error"] = f"{type(exc).__name__}: {exc}"
             readiness["completed_at"] = _now_iso()
+            failed_gate = str(readiness.get("stage") or "live_readiness").strip()
+            lowered_error = readiness["error"].lower()
+            if "validation failed" in lowered_error:
+                failed_gate = "validation"
+            elif "test" in lowered_error:
+                failed_gate = "tests"
             current["completion_readiness"] = readiness
             current["status"] = "failed"
             current["progress"] = {
@@ -6166,18 +6241,49 @@ class BuilderAutomationService:
             current.pop("pending_workflow_transition", None)
             current.pop("rebind_confirmed_checkpoint", None)
             current["last_failure"] = {
-                "stage": (
-                    "forge_checkpoint"
-                    if failed_checkpoints
-                    else "consumer_acceptance"
-                    if acceptance_failed
-                    else "live_readiness"
-                ),
+                "stage": failed_gate,
                 "message": readiness["error"],
                 "updated_at": readiness["completed_at"],
             }
             current["updated_at"] = readiness["completed_at"]
             self._save_session(current)
+            if pending_transition != "return_to_prototype":
+                try:
+                    gate_result = self._report_publication_gate_failure(
+                        current,
+                        gate=failed_gate,
+                        error=readiness["error"],
+                        evidence_refs=[
+                            {
+                                "type": "trace",
+                                "source": "builder.finalization",
+                                "status": "failed",
+                                "stage": failed_gate,
+                                "task_id": current.get("current_task_id"),
+                            }
+                        ],
+                    )
+                    if gate_result:
+                        failure_ticket = (
+                            dict(gate_result.get("ticket"))
+                            if isinstance(gate_result.get("ticket"), Mapping)
+                            else {}
+                        )
+                        readiness["publication_gate_failure"] = {
+                            "ticket_id": failure_ticket.get("ticket_id"),
+                            "duplicate": bool(gate_result.get("ticket_duplicate")),
+                            "gate": failed_gate,
+                        }
+                        current["completion_readiness"] = readiness
+                        current["updated_at"] = _now_iso()
+                        self._save_session(current)
+                except Exception:
+                    _log.exception(
+                        "failed to capture Builder finalization gate project=%s:%s stage=%s",
+                        object_type,
+                        object_id,
+                        failed_gate,
+                    )
             try:
                 self._workflow().transition(
                     object_type,
@@ -6546,6 +6652,125 @@ class BuilderAutomationService:
         if projection is not None:
             receipt["component_update_projection"] = projection
         return receipt
+
+    def _persist_aprobation_trial_state(
+        self,
+        session: Mapping[str, Any],
+        aprobation: Mapping[str, Any],
+        trial: Mapping[str, Any],
+        *,
+        status: str,
+        decision: str,
+        actor: str,
+        failure: Mapping[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        now = _now_iso()
+        kind = str(session.get("object_type") or "").strip()
+        project_id = str(session.get("object_id") or "").strip()
+        with _LOCK:
+            persisted = self.get_session(kind, project_id) or dict(session)
+            readiness = (
+                dict(persisted.get("completion_readiness"))
+                if isinstance(persisted.get("completion_readiness"), Mapping)
+                else {}
+            )
+            persisted_aprobation = (
+                dict(readiness.get("aprobation"))
+                if isinstance(readiness.get("aprobation"), Mapping)
+                else dict(aprobation)
+            )
+            persisted_trial = (
+                dict(persisted_aprobation.get("trial"))
+                if isinstance(persisted_aprobation.get("trial"), Mapping)
+                else dict(trial)
+            )
+            persisted_trial.update(
+                {
+                    "status": status,
+                    "decision": decision,
+                    "decided_by": actor,
+                    "decided_at": now,
+                }
+            )
+            if failure:
+                failure_payload = dict(failure)
+                persisted_trial["failure"] = failure_payload
+                persisted_aprobation["failure"] = failure_payload
+            else:
+                persisted_trial.pop("failure", None)
+                persisted_aprobation.pop("failure", None)
+            persisted_aprobation["trial"] = persisted_trial
+            readiness["aprobation"] = persisted_aprobation
+            persisted["completion_readiness"] = readiness
+            persisted["updated_at"] = now
+            self._save_session(persisted)
+        return persisted, persisted_aprobation
+
+    def _project_aprobation_state(
+        self,
+        session: dict[str, Any],
+        aprobation: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
+        component_update = self._record_component_update(session, aprobation)
+        if component_update is None:
+            raise RuntimeError("Builder Trial component update notice was not persisted")
+        projection = self._refresh_component_update_projection(session, aprobation)
+        aprobation["component_update"] = component_update
+        if projection is not None:
+            aprobation["component_update_projection"] = projection
+        readiness = (
+            dict(session.get("completion_readiness"))
+            if isinstance(session.get("completion_readiness"), Mapping)
+            else {}
+        )
+        readiness["aprobation"] = aprobation
+        session["completion_readiness"] = readiness
+        session["updated_at"] = _now_iso()
+        with _LOCK:
+            self._save_session(session)
+        return session, aprobation, projection
+
+    def _report_publication_gate_failure(
+        self,
+        session: Mapping[str, Any],
+        *,
+        gate: str,
+        error: str,
+        candidate_id: str | None = None,
+        evidence_refs: Sequence[Mapping[str, Any]] = (),
+    ) -> dict[str, Any] | None:
+        object_type = str(session.get("object_type") or "").strip().lower().rstrip("s")
+        object_id = str(session.get("object_id") or "").strip()
+        if object_type not in {"skill", "scenario"} or not object_id:
+            return None
+        links = session.get("links") if isinstance(session.get("links"), Mapping) else {}
+        ticket_ids = list(
+            dict.fromkeys(
+                [
+                    str(links.get("development_ticket_id") or "").strip(),
+                    *[
+                        str(item).strip()
+                        for item in links.get("development_ticket_ids") or []
+                        if str(item).strip()
+                    ],
+                ]
+            )
+        )
+        from adaos.services.development_tickets import DevelopmentTicketService
+
+        return DevelopmentTicketService(state_dir=self.state_dir).report_publication_gate_failure(
+            component_type=object_type,
+            component_id=object_id,
+            gate=gate,
+            error=error,
+            actor="builder.automation",
+            related_ticket_ids=tuple(item for item in ticket_ids if item),
+            evidence_refs=evidence_refs,
+            candidate_id=candidate_id,
+            task_id=str(session.get("current_task_id") or "").strip() or None,
+            session_id=str(session.get("session_id") or "").strip() or None,
+            webspace_id=str(session.get("webspace_id") or "desktop").strip() or "desktop",
+        )
 
     def _record_component_update(
         self,
@@ -7057,6 +7282,8 @@ class BuilderAutomationService:
         }
 
     def _prepare_and_activate_aprobation_scenario(self, scenario_id: str, *, webspace_id: str) -> dict[str, Any]:
+        from adaos.services.agent_context import get_ctx
+        from adaos.services.scenario.validation import validate_scenario_path
         from adaos.services.scenario.webspace_runtime import (
             canonical_materialization_identity,
             rebuild_webspace_from_sources,
@@ -7074,6 +7301,22 @@ class BuilderAutomationService:
                 "skipped": True,
                 "reason": "dev_scenario_source_missing",
             }
+        ctx = get_ctx()
+        validation = validate_scenario_path(
+            source_path,
+            dependency_roots=(source_path.parent.parent / "skills", ctx.paths.skills_dir()),
+        )
+        if not validation.ok:
+            errors = [
+                f"{getattr(issue, 'code', 'validation.error')}: "
+                f"{getattr(issue, 'message', issue)}"
+                for issue in validation.issues
+                if getattr(issue, "level", "error") == "error"
+            ]
+            raise RuntimeError(
+                f"Validation failed for scenario '{scenario_id}': "
+                + ("; ".join(errors[:8]) or "unknown validation error")
+            )
         content = scenarios_loader.read_content(scenario_id, space="dev")
         if not isinstance(content, Mapping) or not content:
             raise RuntimeError("DEV scenario content is unavailable")

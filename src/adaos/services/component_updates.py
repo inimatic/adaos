@@ -89,10 +89,21 @@ class ComponentUpdateService:
 
         decision = _text(trial.get("decision")).lower()
         trial_status = _text(trial.get("status")).lower()
+        failure = (
+            dict(trial.get("failure"))
+            if isinstance(trial.get("failure"), Mapping)
+            else dict(aprobation.get("failure"))
+            if isinstance(aprobation.get("failure"), Mapping)
+            else {}
+        )
         if trial_status == "published":
             stage = "stable"
             notice_status = "accepted"
             review_state = "accepted"
+        elif trial_status in {"publication_failed", "publication_unknown"}:
+            stage = "beta"
+            notice_status = "active"
+            review_state = trial_status
         elif decision == "accept" or trial_status == "accepted":
             stage = "beta"
             notice_status = "active"
@@ -139,6 +150,25 @@ class ComponentUpdateService:
             published_at = (previous or {}).get("published_at")
             if stage == "stable" and not published_at:
                 published_at = now
+            transition = {
+                "state": review_state,
+                "requires_user_decision": (
+                    stage == "alpha" and notice_status == "active"
+                ),
+                "workspace_committed": stage == "stable",
+                "workspace_version": (
+                    _text(trial.get("version")) or None
+                    if stage == "stable"
+                    else None
+                ),
+                "release_digest": (
+                    _text(trial.get("release_digest")) or None
+                    if stage == "stable"
+                    else None
+                ),
+            }
+            if failure:
+                transition["failure"] = failure
             notice = {
                 "schema": NOTICE_SCHEMA,
                 "notice_id": notice_id,
@@ -162,23 +192,7 @@ class ComponentUpdateService:
                     "release_digest": _text(trial.get("release_digest")) or None,
                     "workflow_generation": trial.get("workflow_generation"),
                 },
-                "transition": {
-                    "state": review_state,
-                    "requires_user_decision": (
-                        stage == "alpha" and notice_status == "active"
-                    ),
-                    "workspace_committed": stage == "stable",
-                    "workspace_version": (
-                        _text(trial.get("version")) or None
-                        if stage == "stable"
-                        else None
-                    ),
-                    "release_digest": (
-                        _text(trial.get("release_digest")) or None
-                        if stage == "stable"
-                        else None
-                    ),
-                },
+                "transition": transition,
                 "webspace_id": _text(webspace_id) or "desktop",
                 "created_at": created_at,
                 "updated_at": now,

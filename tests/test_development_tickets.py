@@ -434,6 +434,74 @@ def test_passed_artifact_activation_observation_does_not_create_ticket(tmp_path:
     assert service.list_tickets() == []
 
 
+def test_publication_gate_failure_creates_linked_deduplicated_project_ticket(
+    tmp_path: Path,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    signal = service.capture_signal(
+        kind="development_request",
+        summary="Improve Demo Metrics",
+        target_scope={"type": "skill", "id": "demo_metrics_skill", "source": "dev"},
+        source="client_feedback",
+    )["signal"]
+    original = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="resolved",
+    )["ticket"]
+
+    first = service.report_publication_gate_failure(
+        component_type="skill",
+        component_id="demo_metrics_skill",
+        gate="tests",
+        error="Candidate candidate.first failed test_resource_workbench",
+        candidate_id="candidate.first",
+        related_ticket_ids=[original["ticket_id"]],
+    )
+    duplicate = service.report_publication_gate_failure(
+        component_type="skill",
+        component_id="demo_metrics_skill",
+        gate="tests",
+        error="Candidate candidate.second failed test_resource_workbench",
+        candidate_id="candidate.second",
+        related_ticket_ids=[original["ticket_id"]],
+    )
+
+    assert first["ticket"]["ticket_id"] == duplicate["ticket"]["ticket_id"]
+    assert duplicate["ticket_duplicate"] is True
+    assert duplicate["ticket"]["occurrence_count"] == 2
+    assert duplicate["ticket"]["kind"] == "runtime_failure"
+    assert duplicate["ticket"]["owner_area"] == "skill"
+    assert duplicate["ticket"]["blocking"] is True
+    assert service.get_ticket(original["ticket_id"])["status"] == "resolved"
+    assert any(
+        ref.get("ticket_id") == duplicate["ticket"]["ticket_id"]
+        for ref in service.get_ticket(original["ticket_id"])["relation_refs"]
+    )
+    closed = service.close_publication_gate_failures(
+        component_type="skill",
+        component_id="demo_metrics_skill",
+        actor="builder.automation",
+        evidence_refs=[
+            {
+                "type": "builder_trial",
+                "id": "candidate.second",
+                "status": "accepted",
+                "decision": "accept",
+            },
+            {
+                "type": "project_release",
+                "id": "demo_metrics_skill@0.2.0",
+                "status": "published",
+            },
+        ],
+        resolved_by_version="0.2.0",
+        resolved_by_overlay="candidate.second",
+    )
+    assert [item["status"] for item in closed] == ["closed"]
+    assert service.get_ticket(duplicate["ticket"]["ticket_id"])["status"] == "closed"
+
+
 def test_ticket_resolution_requires_evidence_and_closes_linked_repair(tmp_path: Path) -> None:
     service = DevelopmentTicketService(state_dir=tmp_path)
     report = service.report_compatibility_finding(

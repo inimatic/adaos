@@ -325,6 +325,17 @@ Ticket and signals, and closes only with evidence.
   the same rule: materialize the user's workspace projection from DEV
   scenario/project source without replacing workspace source, keep an explicit
   receipt, and provide rollback/acceptance controls for the overlay.
+- [x] `[must]` `DS5-26` Bind component stages to release gates: validated Trial
+  is `alpha`, accepted publication is `beta`, and only durable promotion plus
+  activation health evidence may produce `stable`.
+- [x] `[must]` `DS5-27` Create/deduplicate project-owned `runtime_failure`
+  tickets when Builder tests, scenario validation, Trial activation, or
+  accepted-candidate publication fails; keep originating tickets open and
+  close technical gate findings only after successful publication evidence.
+- [ ] `[should]` `DS5-28` Reuse the publication-gate producer for manual CLI,
+  setup, migration, and other non-Builder skill/scenario activation paths,
+  with source-specific policy so unattended setup failures do not flood the
+  user's project inbox.
 - [ ] `[should]` `DS5-18` Add ticket artifact commands and SDK helpers for
   `artifact open`, screenshot preview, incremental evidence, optimistic
   revision, comment, claim, progress, resolve, verify, close, reopen,

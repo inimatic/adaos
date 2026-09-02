@@ -4119,6 +4119,14 @@ def test_accepting_aprobation_publishes_and_closes_resolved_ticket(
         evidence_refs=[{"type": "test", "id": "demo-focused", "status": "passed"}],
         resolved_by_overlay="candidate.demo",
     )
+    gate_failure = tickets.report_publication_gate_failure(
+        component_type="skill",
+        component_id="demo_metrics_skill",
+        gate="activation",
+        error="runtime health check failed",
+        related_ticket_ids=[ticket["ticket_id"]],
+        candidate_id="candidate.demo",
+    )["ticket"]
     session = {
         "schema": "adaos.builder.automation_session.v1",
         "session_id": "automation.skill.demo_metrics_skill",
@@ -4186,6 +4194,8 @@ def test_accepting_aprobation_publishes_and_closes_resolved_ticket(
 
     assert result["decision"] == "accept"
     assert result["tickets"][0]["status"] == "closed"
+    assert result["closed_publication_gate_failures"][0]["ticket_id"] == gate_failure["ticket_id"]
+    assert result["closed_publication_gate_failures"][0]["status"] == "closed"
     assert tickets.get_ticket(ticket["ticket_id"])["verification"]["kind"] == "verified"
     persisted = service.get_session("skill", "demo_metrics_skill")
     assert persisted["completion_readiness"]["aprobation"]["trial"]["status"] == "published"
@@ -4196,6 +4206,7 @@ def test_accepting_aprobation_does_not_close_for_stale_publication(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from adaos.sdk.builder import lifecycle
+    from adaos.services.component_updates import ComponentUpdateService
     from adaos.services.development_tickets import DevelopmentTicketService
 
     service = _service(tmp_path)
@@ -4281,6 +4292,22 @@ def test_accepting_aprobation_does_not_close_for_stale_publication(
         )
 
     assert tickets.get_ticket(ticket["ticket_id"])["status"] == "resolved"
+    failures = tickets.list_tickets(
+        kind="runtime_failure",
+        component_ref="skill:demo_metrics_skill",
+    )
+    assert len(failures) == 1
+    assert failures[0]["status"] == "accepted"
+    persisted = service.get_session("skill", "demo_metrics_skill")
+    failed_trial = persisted["completion_readiness"]["aprobation"]["trial"]
+    assert failed_trial["status"] == "publication_failed"
+    assert failed_trial["failure"]["ticket_id"] == failures[0]["ticket_id"]
+    notices = ComponentUpdateService(state_dir=service.state_dir).list_notices(
+        component_type="skill",
+        component_id="demo_metrics_skill",
+    )
+    assert notices[0]["stage"] == "beta"
+    assert notices[0]["review_state"] == "publication_failed"
 
 
 def test_revising_aprobation_rolls_back_and_reopens_ticket(
@@ -4422,6 +4449,51 @@ def test_aprobation_overlay_requires_ready_webspace_materialization() -> None:
             ],
         }
     )
+
+
+def test_aprobation_scenario_validation_blocks_runtime_overlay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.services import agent_context
+    from adaos.services.scenario import validation
+    from adaos.services.scenarios import loader as scenarios_loader
+
+    service = _service(tmp_path)
+    source = tmp_path / "dev" / "scenarios" / "invalid_scenario"
+    source.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        scenarios_loader,
+        "scenario_root_for_space",
+        lambda *args, **kwargs: source,
+    )
+    monkeypatch.setattr(
+        validation,
+        "validate_scenario_path",
+        lambda *args, **kwargs: SimpleNamespace(
+            ok=False,
+            issues=[
+                SimpleNamespace(
+                    level="error",
+                    code="scenario.invalid",
+                    message="Scenario contract is invalid",
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        agent_context,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            paths=SimpleNamespace(skills_dir=lambda: tmp_path / "workspace" / "skills")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="scenario.invalid"):
+        service._prepare_and_activate_aprobation_scenario(
+            "invalid_scenario",
+            webspace_id="desktop",
+        )
 
 
 def test_completed_workflow_reconciliation_backfills_aprobation_overlay(
@@ -4910,7 +4982,8 @@ def test_finalize_records_live_readiness_failure_without_success_chat(tmp_path: 
     )
 
     assert saved[-1]["status"] == "failed"
-    assert saved[-1]["last_failure"]["stage"] == "live_readiness"
+    assert saved[-1]["last_failure"]["stage"] == "activation"
+    assert saved[-1]["completion_readiness"]["publication_gate_failure"]["ticket_id"]
     assert saved[-1]["progress"]["status"] == "failed"
     assert notified == []
 

@@ -664,6 +664,31 @@ be scoped to the current component ref to reduce noise. The filter must remain
 visible and reversible so the user can switch to the wider scenario, project,
 or workspace queue.
 
+### Trial publication gates
+
+A Builder Trial is not a stable release. Its component stage is derived from
+the governed transition and its evidence:
+
+```text
+validated DEV overlay -> alpha
+user accepts exact candidate -> beta/publishing
+tests + scenario validation + activation health + durable promotion pass -> stable
+any gate fails -> beta/publication_failed + linked runtime_failure Dev Ticket
+```
+
+Skill tests run before the reviewable overlay is exposed. Scenario source is
+validated before its DEV content may replace the runtime materialization.
+Promotion repeats the package/WorkspaceLock activation and health gates. A
+failure must keep the stable Workspace source and release pointer unchanged,
+must not verify or close the originating user tickets, and must create or
+deduplicate a project-owned blocking ticket with test, runtime guard, trace,
+candidate, task, and session evidence.
+
+When a later candidate passes every gate, technical publication-gate findings
+may be resolved, verified, and closed automatically with the exact accepted
+`builder_trial` and published `project_release` evidence. User-authored tickets
+retain their own acceptance lifecycle even when they share that evidence.
+
 ## Runtime Compatibility Findings
 
 Compatibility findings are Development Signals created by deterministic

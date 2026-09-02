@@ -155,6 +155,29 @@ def test_component_update_current_view_returns_latest_changeset_per_component(
     assert demo["transition"]["workspace_committed"] is False
 
 
+def test_component_update_keeps_failed_publication_in_beta(tmp_path: Path) -> None:
+    service = ComponentUpdateService(state_dir=tmp_path)
+    aprobation = _aprobation(status="publication_failed", decision="accept")
+    aprobation["trial"]["failure"] = {
+        "stage": "publication",
+        "error": "activation health check failed",
+        "ticket_id": "dticket.failure",
+    }
+
+    failed = service.record_aprobation(
+        component_type="skill",
+        component_id="demo_metrics_skill",
+        aprobation=aprobation,
+    )
+
+    assert failed is not None
+    assert failed["stage"] == "beta"
+    assert failed["status"] == "active"
+    assert failed["review_state"] == "publication_failed"
+    assert failed["transition"]["workspace_committed"] is False
+    assert failed["transition"]["failure"]["ticket_id"] == "dticket.failure"
+
+
 def test_component_update_reconciles_builder_session_and_api(tmp_path: Path) -> None:
     automation_root = tmp_path / "builder" / "automation"
     automation_root.mkdir(parents=True)
