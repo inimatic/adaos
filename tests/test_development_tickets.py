@@ -392,6 +392,48 @@ def test_compatibility_pending_action_response_creates_builder_repair(tmp_path: 
     assert context["tasks"][0]["repair_id"] == response["repair"]["repair_id"]
 
 
+def test_failed_artifact_activation_observation_creates_deduplicated_core_ticket(
+    tmp_path: Path,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    observation = {
+        "observation_id": "observation-1",
+        "status": "failed",
+        "expected_lock_digest": "sha256:" + "a" * 64,
+        "observed_lock_digest": "sha256:" + "b" * 64,
+        "error": (
+            "ActivationError: materialized package file size changed: "
+            "scenario:builder:scenario.json"
+        ),
+    }
+
+    result = service.report_artifact_activation_observation(observation)
+    duplicate = service.report_artifact_activation_observation(
+        {**observation, "observation_id": "observation-2"}
+    )
+
+    assert result["reported"] is True
+    assert result["ticket"]["owner_area"] == "core"
+    assert result["ticket"]["component_ref"] == "core:artifact-pipeline.workspace-lock"
+    assert result["ticket"]["source"] == "artifact_activation_guard"
+    assert result["ticket"]["metadata"]["affected_component_ref"] == "scenario:builder"
+    assert result["ticket"]["evidence_refs"][0]["affected_component_ref"] == "scenario:builder"
+    assert duplicate["ticket_duplicate"] is True
+    assert duplicate["ticket"]["ticket_id"] == result["ticket"]["ticket_id"]
+    assert duplicate["ticket"]["occurrence_count"] == 2
+
+
+def test_passed_artifact_activation_observation_does_not_create_ticket(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+
+    result = service.report_artifact_activation_observation(
+        {"observation_id": "observation-ok", "status": "passed"}
+    )
+
+    assert result == {"ok": True, "reported": False, "reason": "passed"}
+    assert service.list_tickets() == []
+
+
 def test_ticket_resolution_requires_evidence_and_closes_linked_repair(tmp_path: Path) -> None:
     service = DevelopmentTicketService(state_dir=tmp_path)
     report = service.report_compatibility_finding(

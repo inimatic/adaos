@@ -642,12 +642,30 @@ async def _artifact_delayed_verification_worker(ctx: Any) -> None:
             )
             for result in results:
                 status = str(result.get("status") or "unknown")
+                ticket_id = None
+                if status == "failed":
+                    try:
+                        from adaos.services.development_tickets import (
+                            DevelopmentTicketService,
+                        )
+
+                        report = await asyncio.to_thread(
+                            DevelopmentTicketService().report_artifact_activation_observation,
+                            result,
+                        )
+                        ticket_id = (report.get("ticket") or {}).get("ticket_id")
+                    except Exception:
+                        _startup_log.debug(
+                            "failed to record delayed artifact verification Dev Ticket",
+                            exc_info=True,
+                        )
                 payload = {
                     "observation_id": result.get("observation_id"),
                     "status": status,
                     "expected_lock_digest": result.get("expected_lock_digest"),
                     "observed_lock_digest": result.get("observed_lock_digest"),
                     "error": result.get("error"),
+                    "dev_ticket_id": ticket_id,
                 }
                 try:
                     _publish_artifact_activation_observation(ctx, payload)

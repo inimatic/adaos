@@ -2382,6 +2382,8 @@ class DevelopmentTicketService:
         metadata: Mapping[str, Any] | None = None,
         policy: Mapping[str, Any] | None = None,
         status: str = "proposed",
+        source: str = "builder_intake",
+        origin_scope: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         text = _text(summary)
         component = _text(component_ref)
@@ -2395,6 +2397,7 @@ class DevelopmentTicketService:
         impact_token = (_text(impact) or "contract_gap").lower()
         if impact_token not in CORE_IMPACT_CLASSES:
             raise ValueError(f"unsupported core impact: {impact_token}")
+        source_token = _text(source) or "builder_intake"
         target = _mapping(target_scope) or {
             "type": "core",
             "id": component.split(":", 1)[1] if component.startswith("core:") else component,
@@ -2420,11 +2423,16 @@ class DevelopmentTicketService:
             kind="core_capability_request",
             summary=text,
             owner_scope={"type": "workspace", "id": "local"},
-            origin_scope={"type": "builder", "surface": "core_capability_request", "id": _text(actor) or "builder"},
+            origin_scope=_mapping(origin_scope)
+            or {
+                "type": "builder",
+                "surface": "core_capability_request",
+                "id": _text(actor) or "builder",
+            },
             target_scope=target,
             severity="high" if impact_token == "blocker" else "medium",
             blocking=impact_token == "blocker",
-            source="builder_intake",
+            source=source_token,
             dedup_key=_fingerprint("core-capability", component, contract.lower(), blocked_ids),
             evidence_refs=evidence_refs,
             metadata=meta,
@@ -2437,7 +2445,7 @@ class DevelopmentTicketService:
             signal_result["signal"],
             kind="core_capability_request",
             status="accepted" if impact_token == "blocker" and status == "proposed" else status,
-            source="builder_intake",
+            source=source_token,
             dedup_key=signal_result["signal"]["dedup_key"],
             metadata=meta,
             policy=policy,
@@ -2465,6 +2473,68 @@ class DevelopmentTicketService:
             "ticket_duplicate": bool(ticket_result.get("duplicate")),
             "lifecycle_event": lifecycle["event"],
         }
+
+    def report_artifact_activation_observation(
+        self,
+        observation: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        status = _text(observation.get("status")).lower()
+        if status != "failed":
+            return {"ok": True, "reported": False, "reason": status or "status_missing"}
+
+        error = _text(observation.get("error")) or "delayed activation verification failed"
+        component_match = re.search(
+            r"materialized package file (?:size |digest )?(?:changed|missing):\s*((?:skill|scenario):[^:\s]+)",
+            error,
+            flags=re.IGNORECASE,
+        )
+        affected_component_ref = component_match.group(1) if component_match else ""
+        observation_id = _text(observation.get("observation_id"))
+        evidence = {
+            "type": "runtime_guard",
+            "code": "artifact.workspace_lock_verification_failed",
+            "observation_id": observation_id or None,
+            "expected_lock_digest": _text(observation.get("expected_lock_digest")) or None,
+            "observed_lock_digest": _text(observation.get("observed_lock_digest")) or None,
+            "affected_component_ref": affected_component_ref or None,
+            "error": error,
+        }
+        result = self.create_core_capability_request(
+            summary="Workspace content diverged from its immutable package after activation",
+            component_ref="core:artifact-pipeline.workspace-lock",
+            desired_contract=(
+                "Materialized Workspace components remain byte-identical to the packages "
+                "selected by the active WorkspaceLock."
+            ),
+            actor="artifact.activation",
+            impact="compatibility_debt",
+            motivation=(
+                "Activation integrity must remain explainable and cannot silently accept "
+                "mutable installed source."
+            ),
+            observed_limitation=error,
+            evidence_refs=[evidence],
+            metadata={
+                "producer": "artifact_activation_observation",
+                "observation_id": observation_id or None,
+                "affected_component_ref": affected_component_ref or None,
+                "expected_lock_digest": _text(observation.get("expected_lock_digest")) or None,
+                "observed_lock_digest": _text(observation.get("observed_lock_digest")) or None,
+            },
+            policy={
+                "blocking": False,
+                "run_policy": "degrade",
+                "design_time_fixable": True,
+                "autonomous_repair_eligible": False,
+            },
+            source="artifact_activation_guard",
+            origin_scope={
+                "type": "runtime",
+                "surface": "artifact_activation_observation",
+                "id": observation_id or "delayed_verification",
+            },
+        )
+        return {**result, "reported": True}
 
     def transition_core_ticket(
         self,
