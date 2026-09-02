@@ -333,12 +333,13 @@ def publish_candidate(
         publication_status == "publishing"
         and str(publication_state.get("candidate_id") or "").strip() == candidate_id
     )
+    publication_attempt_key = idempotency_key
     if (
         publication_status == "unknown"
         and str(delivery_state.get("status") or "").strip() == "unknown"
         and str(delivery_state.get("candidate_id") or "").strip() == candidate_id
     ):
-        workflow.transition(
+        reconciled = workflow.transition(
             object_type,
             object_id,
             "reconcile_publication",
@@ -349,6 +350,20 @@ def publish_candidate(
                 "idempotency_key": f"{idempotency_key}:reconcile",
             },
         )
+        reconciled_workflow = _mapping(reconciled.get("workflow"))
+        reconciled_generation = int(
+            reconciled_workflow.get("generation") or int(state.get("generation") or 0) + 1
+        )
+        publication_attempt_key = f"{idempotency_key}:resume:{reconciled_generation}"
+    elif (
+        publication_status == "ready"
+        and publication_state.get("reconciled_at")
+        and str(delivery_state.get("status") or "").strip() == "accepted"
+        and str(delivery_state.get("candidate_id") or "").strip() == candidate_id
+    ):
+        publication_attempt_key = (
+            f"{idempotency_key}:resume:{int(state.get('generation') or 0)}"
+        )
     if not published_or_publishing_current:
         workflow.transition(
             object_type,
@@ -358,7 +373,7 @@ def publish_candidate(
             metadata={
                 "confirmed": True,
                 "run_id": f"candidate:{candidate_id}:publish",
-                "idempotency_key": f"{idempotency_key}:start",
+                "idempotency_key": f"{publication_attempt_key}:start",
             },
         )
     try:
@@ -379,7 +394,7 @@ def publish_candidate(
             actor=actor,
             metadata={
                 "error": str(exc),
-                "idempotency_key": f"{idempotency_key}:unknown",
+                "idempotency_key": f"{publication_attempt_key}:unknown",
             },
         )
         raise
@@ -392,7 +407,7 @@ def publish_candidate(
             actor=actor,
             metadata={
                 "error": "candidate_stale",
-                "idempotency_key": f"{idempotency_key}:failure",
+                "idempotency_key": f"{publication_attempt_key}:failure",
             },
         )
         stale = workflow.transition(
@@ -403,7 +418,7 @@ def publish_candidate(
             metadata={
                 "candidate_id": candidate_id,
                 "rebase_plan": result.get("rebase_plan"),
-                "idempotency_key": f"{idempotency_key}:stale",
+                "idempotency_key": f"{publication_attempt_key}:stale",
             },
         )
         return {**dict(result), "workflow": stale.get("workflow")}
@@ -415,7 +430,7 @@ def publish_candidate(
             actor=actor,
             metadata={
                 "error": result.get("error") or status or "publication_failed",
-                "idempotency_key": f"{idempotency_key}:failure",
+                "idempotency_key": f"{publication_attempt_key}:failure",
             },
         )
         return {**dict(result), "ok": False, "workflow": failed.get("workflow")}
@@ -432,7 +447,7 @@ def publish_candidate(
             "task_id": automation_state.get("head_task_id"),
             "apply_evidence": result.get("apply_evidence"),
             "run_id": f"candidate:{candidate_id}:published",
-            "idempotency_key": f"{idempotency_key}:success",
+            "idempotency_key": f"{publication_attempt_key}:success",
         },
     )
     return {**dict(result), "workflow": completed.get("workflow")}
