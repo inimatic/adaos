@@ -5981,16 +5981,6 @@ class BuilderAutomationService:
             if isinstance(workflow.get("delivery"), Mapping)
             else {}
         )
-        if not (
-            str(automation.get("status") or "").strip() == "completed"
-            and str(automation.get("head_task_id") or "").strip() == task_id
-            and str(delivery.get("status") or "").strip() == "checkpoint"
-            and str(delivery.get("checkpoint_change_id") or "").strip() == change_id
-            and str(delivery.get("package_digest") or "").strip()
-            and str(delivery.get("source_revision") or "").strip()
-        ):
-            return None
-
         current = dict(session)
         readiness = (
             dict(current.get("completion_readiness"))
@@ -6002,6 +5992,7 @@ class BuilderAutomationService:
             for item in readiness.get("vcs_checkpoints") or []
             if isinstance(item, Mapping) and bool(item.get("ok"))
         ]
+        confirmed_checkpoints = list(checkpoints)
         if not checkpoints:
             checkpoints = [
                 {
@@ -6020,13 +6011,52 @@ class BuilderAutomationService:
             if isinstance(readiness.get("aprobation"), Mapping)
             else {}
         )
+        automation_matches = bool(
+            str(automation.get("status") or "").strip() == "completed"
+            and str(automation.get("head_task_id") or "").strip() == task_id
+        )
+        delivery_status = str(delivery.get("status") or "").strip()
+        checkpoint_matches = bool(
+            automation_matches
+            and delivery_status == "checkpoint"
+            and str(delivery.get("checkpoint_change_id") or "").strip() == change_id
+            and str(delivery.get("package_digest") or "").strip()
+            and str(delivery.get("source_revision") or "").strip()
+        )
+        existing_trial = (
+            dict(existing_aprobation.get("trial"))
+            if isinstance(existing_aprobation.get("trial"), Mapping)
+            else {}
+        )
+        workflow_change = (
+            dict(workflow.get("change"))
+            if isinstance(workflow.get("change"), Mapping)
+            else {}
+        )
+        trial_matches = bool(
+            automation_matches
+            and delivery_status == "trial"
+            and str(readiness.get("task_id") or "").strip() == task_id
+            and confirmed_checkpoints
+            and str(workflow_change.get("status") or "").strip() == "trial"
+            and str(existing_trial.get("status") or "").strip() == "trial"
+            and str(delivery.get("candidate_id") or "").strip()
+            == str(existing_trial.get("candidate_id") or "").strip()
+            and str(delivery.get("package_digest") or "").strip()
+            == str(existing_trial.get("candidate_digest") or "").strip()
+            and str(workflow.get("generation") or "").strip()
+            == str(existing_trial.get("workflow_generation") or "").strip()
+        )
+        if not checkpoint_matches and not trial_matches:
+            return None
+
         links = current.get("links") if isinstance(current.get("links"), Mapping) else {}
         publication_project_ref = str(
             links.get("development_ticket_project_ref")
             or links.get("project_ref")
             or ""
         ).strip()
-        if publication_project_ref.startswith("project:"):
+        if publication_project_ref.startswith("project:") and checkpoint_matches:
             readiness["project_composition_checkpoint"] = (
                 self._ensure_project_composition_checkpoint(
                     current,
@@ -6058,9 +6088,22 @@ class BuilderAutomationService:
         completed_at = str(
             automation.get("completed_at")
             or delivery.get("checkpoint_at")
+            or delivery.get("prepared_at")
             or _now_iso()
         )
         reconciled_at = _now_iso()
+        primary_checkpoint = checkpoints[0] if checkpoints else {}
+        package_digest = str(
+            delivery.get("package_digest")
+            or primary_checkpoint.get("package_digest")
+            or ""
+        ).strip()
+        source_revision = str(
+            delivery.get("source_revision")
+            or primary_checkpoint.get("source_revision")
+            or primary_checkpoint.get("commit")
+            or ""
+        ).strip()
         readiness.update(
             {
                 "ok": True,
@@ -6069,11 +6112,17 @@ class BuilderAutomationService:
                 "vcs_checkpoints": checkpoints,
                 "completed_at": completed_at,
                 "workflow_reconciliation": {
-                    "status": "already_checkpointed",
+                    "status": (
+                        "existing_trial_overlay_recovered"
+                        if trial_matches
+                        else "already_checkpointed"
+                    ),
                     "generation": workflow.get("generation"),
                     "checkpoint_change_id": change_id,
-                    "package_digest": str(delivery.get("package_digest")),
-                    "source_revision": str(delivery.get("source_revision")),
+                    "candidate_id": str(delivery.get("candidate_id") or "").strip()
+                    or None,
+                    "package_digest": package_digest,
+                    "source_revision": source_revision,
                 },
             }
         )

@@ -5362,6 +5362,146 @@ def test_completed_workflow_reconciliation_backfills_aprobation_overlay(
     assert saved[-1]["updated_at"] != "2026-08-31T12:00:00+00:00"
 
 
+def test_completed_trial_reconciliation_recovers_only_missing_runtime_overlay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    saved: list[dict] = []
+    overlay_calls: list[dict] = []
+    trial_calls: list[dict] = []
+    candidate_id = "subscription-status-0-1-20"
+    candidate_digest = "sha256:" + "2" * 64
+    workflow = {
+        "generation": 38,
+        "automation": {
+            "status": "completed",
+            "head_task_id": "task.1",
+            "completed_at": "2026-09-02T21:50:43+00:00",
+        },
+        "change": {"change_id": "change.workflow", "status": "trial"},
+        "delivery": {
+            "status": "trial",
+            "candidate_id": candidate_id,
+            "package_digest": candidate_digest,
+            "prepared_at": "2026-09-02T21:54:42+00:00",
+        },
+    }
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_workflow",
+        lambda self: SimpleNamespace(describe=lambda *_: workflow),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_save_session",
+        lambda self, value: saved.append(dict(value)),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_ensure_project_composition_checkpoint",
+        lambda *args, **kwargs: pytest.fail("an existing Trial must not create a new Project checkpoint"),
+    )
+
+    def activate(self, session, *, skill_ids, scenario_id, webspace_id):  # noqa: ARG001
+        overlay_calls.append(
+            {
+                "skill_ids": list(skill_ids),
+                "scenario_id": scenario_id,
+                "webspace_id": webspace_id,
+            }
+        )
+        return {
+            "ok": True,
+            "mode": "devspace_to_workspace_runtime_overlay",
+            "skills": [{"id": "subscription_status_skill", "ok": True}],
+        }
+
+    def project_trial(self, session, receipt, **kwargs):  # noqa: ARG001
+        trial_calls.append({"receipt": dict(receipt), "kwargs": dict(kwargs)})
+        return {
+            **dict(receipt),
+            "ok": bool(receipt.get("ok")),
+            "trial": {
+                "status": "trial",
+                "candidate_id": candidate_id,
+                "candidate_digest": candidate_digest,
+                "workflow_generation": 38,
+            },
+        }
+
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_prepare_and_activate_aprobation_overlay",
+        activate,
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_ensure_governed_aprobation_trial",
+        project_trial,
+    )
+
+    reconciled = service._reconcile_completed_workflow(
+        {
+            "object_type": "skill",
+            "object_id": "subscription_status_skill",
+            "companion_skill_id": "subscription_status_skill",
+            "current_task_id": "task.1",
+            "change_id": "change.session",
+            "webspace_id": "desktop",
+            "links": {
+                "development_ticket_id": "dticket.1",
+                "development_ticket_project_ref": "project:subscription_status",
+            },
+            "implementation_brief": json.dumps(
+                {"execution_mode": "surgical_dev_ticket_repair", "policy": {}}
+            ),
+            "completion_readiness": {
+                "ok": True,
+                "task_id": "task.1",
+                "vcs_checkpoints": [
+                    {
+                        "ok": True,
+                        "kind": "skill",
+                        "name": "subscription_status_skill",
+                        "commit": "commit.1",
+                        "source_revision": "commit.1",
+                        "package_digest": "sha256:" + "1" * 64,
+                    }
+                ],
+                "project_composition_checkpoint": {"ok": True, "version": "0.1.2"},
+                "aprobation": {
+                    "ok": False,
+                    "trial": {
+                        "status": "trial",
+                        "candidate_id": candidate_id,
+                        "candidate_digest": candidate_digest,
+                        "workflow_generation": 38,
+                    },
+                },
+            },
+        }
+    )
+
+    assert overlay_calls == [
+        {
+            "skill_ids": ["subscription_status_skill"],
+            "scenario_id": None,
+            "webspace_id": "desktop",
+        }
+    ]
+    assert len(trial_calls) == 2
+    assert trial_calls[0]["kwargs"] == {"record_update": False}
+    assert reconciled["completion_readiness"]["aprobation"]["ok"] is True
+    assert reconciled["completion_readiness"]["workflow_reconciliation"]["status"] == (
+        "existing_trial_overlay_recovered"
+    )
+    assert reconciled["completion_readiness"]["workflow_reconciliation"][
+        "candidate_id"
+    ] == candidate_id
+    assert saved[-1]["status"] == "completed"
+
+
 def test_completed_automation_synchronizes_linked_dev_ticket_without_status_recursion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
