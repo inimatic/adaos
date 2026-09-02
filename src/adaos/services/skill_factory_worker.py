@@ -1064,6 +1064,34 @@ def _source_target_anchors(target_ref: str) -> list[str]:
     return result[:3]
 
 
+def _brief_literal_anchors(value: str) -> list[str]:
+    """Extract explicit quoted source text from a qualified repair brief."""
+
+    raw = str(value or "").strip()
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        parsed = {}
+    texts: list[str] = []
+    if isinstance(parsed, Mapping):
+        texts.append(str(parsed.get("summary") or ""))
+        texts.extend(str(item) for item in parsed.get("acceptance") or [])
+        hints = parsed.get("repair_hints")
+        if isinstance(hints, Mapping):
+            texts.extend(str(item) for item in hints.get("acceptance_checks") or [])
+    else:
+        texts.append(raw)
+    result: list[str] = []
+    for text in texts:
+        for match in re.finditer(r"(?P<quote>['\"`])(?P<value>[^'\"`\r\n]{2,120})(?P=quote)", text):
+            anchor = str(match.group("value") or "").strip()
+            if anchor and anchor not in result:
+                result.append(anchor)
+            if len(result) >= 8:
+                return result
+    return result
+
+
 def _python_symbol_ranges(source: str, anchors: Sequence[str]) -> list[dict[str, Any]]:
     """Resolve named Python definitions plus one local call hop."""
 
@@ -1145,6 +1173,8 @@ def _python_symbol_ranges(source: str, anchors: Sequence[str]) -> list[dict[str,
 def _bounded_repair_target_context(
     workspace: Path,
     repair_hints: Mapping[str, Any],
+    *,
+    implementation_brief: str = "",
 ) -> dict[str, Any]:
     """Resolve qualified JSON refs before Codex starts source discovery."""
 
@@ -1278,9 +1308,19 @@ def _bounded_repair_target_context(
         for anchor in _source_target_anchors(target_ref):
             if anchor not in anchors:
                 anchors.append(anchor)
+    literal_anchors = _brief_literal_anchors(implementation_brief)
+    for anchor in literal_anchors:
+        if anchor not in anchors:
+            anchors.append(anchor)
+    resolved_files = {
+        str(item.get("file") or "")
+        for item in resolved
+        if str(item.get("file") or "")
+    }
     source_slices: list[dict[str, Any]] = []
     for relative in target_files:
-        if relative.lower().endswith(".json"):
+        is_json = relative.lower().endswith(".json")
+        if is_json and relative in resolved_files and not missing:
             continue
         path = (workspace / relative).resolve(strict=False)
         if workspace.resolve() not in path.parents or not path.is_file():
@@ -1315,13 +1355,14 @@ def _bounded_repair_target_context(
                 used_ranges.add(range_key)
                 symbol_anchors.add(str(symbol_range["anchor"]))
                 source_slices.append(candidate)
-        for anchor in anchors:
+        file_anchors = literal_anchors if is_json else anchors
+        for anchor in file_anchors:
             if anchor in symbol_anchors:
                 continue
             matches = [index for index, line in enumerate(lines) if anchor in line][:3]
             for index in matches:
-                start = max(0, index - 6)
-                end = min(len(lines), index + 7)
+                start = max(0, index - 3)
+                end = min(len(lines), index + 4)
                 range_key = (start, end)
                 if range_key in used_ranges:
                     continue
@@ -3781,7 +3822,11 @@ class LocalSkillFactoryWorker:
             if isinstance(artifacts.get("repair_hints"), Mapping)
             else {}
         )
-        repair_target_context = _bounded_repair_target_context(workspace, repair_hints)
+        repair_target_context = _bounded_repair_target_context(
+            workspace,
+            repair_hints,
+            implementation_brief=brief,
+        )
         is_dev_ticket_repair = (
             str(constraints.get("mode") or "").strip() == "dev_ticket_repair"
             or constraints.get("minimal_diff") is True
@@ -3856,9 +3901,7 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
             if isinstance(repair_target_context.get("coverage"), Mapping)
             else {}
         )
-        qualified_repair_complete = bool(repair_coverage.get("complete")) and not list(
-            repair_target_context.get("missing") or []
-        )
+        qualified_repair_complete = bool(repair_coverage.get("complete"))
         if surgical_ui:
             if qualified_repair_complete:
                 required_result = """1. This is source work inside an existing AdaOS skill, not Codex skill authoring. Do not load generic skill-creator instructions.

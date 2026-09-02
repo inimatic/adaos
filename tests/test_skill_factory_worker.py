@@ -1944,6 +1944,81 @@ def test_bounded_repair_resolves_semantic_refs_in_json_and_yaml(
     )
 
 
+def test_surgical_repair_preloads_quoted_json_literals_when_refs_are_semantic(
+    tmp_path: Path,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    workspace = tmp_path / "workspace"
+    input_dir = tmp_path / "input"
+    skill = workspace / "skills" / "demo"
+    skill.mkdir(parents=True)
+    (skill / "webui.json").write_text(
+        json.dumps(
+            {
+                "views": [
+                    {"id": "first", "title": "Metric notes"},
+                    {"id": "second", "title": "Metric notes"},
+                    {"id": "fixture", "title": "Metric notes - Builder E2E validation"},
+                ]
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    brief = json.dumps(
+        {
+            "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+            "summary": (
+                "Rename only the two exact 'Metric notes' headings to "
+                "'Notes for metrics'; keep 'Builder E2E validation' unchanged."
+            ),
+        }
+    )
+    assignment = {
+        "task_id": "task.literal-context",
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {"sparse_paths": ["skills/demo/"]},
+        "constraints": {
+            "mode": "dev_ticket_repair",
+            "repair_profile": "surgical_ui",
+            "minimal_diff": True,
+        },
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": brief,
+                "repair_hints": {
+                    "target_files": ["skills/demo/webui.json"],
+                    "target_refs": ["view:demo.compat.notes", "view:demo.semantic.notes"],
+                },
+            }
+        },
+    }
+
+    worker._build_packet(assignment, workspace, input_dir)
+    packet = json.loads((input_dir / "packet.json").read_text(encoding="utf-8"))
+    prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+    context = packet["repair_target_context"]
+
+    assert context["missing"] == ["view:demo.compat.notes", "view:demo.semantic.notes"]
+    assert context["coverage"]["complete"] is True
+    assert [item["anchor"] for item in context["source_slices"]] == [
+        "Metric notes",
+        "Metric notes",
+        "Metric notes",
+    ]
+    assert any(
+        "Builder E2E validation" in item["source"]
+        for item in context["source_slices"]
+    )
+    assert "Apply the exact patch directly" in prompt
+    assert "Locate one exact target ID" not in prompt
+
+
 def test_bounded_repair_preloads_python_symbol_and_local_helper(
     tmp_path: Path,
 ) -> None:
