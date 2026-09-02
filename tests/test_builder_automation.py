@@ -1005,6 +1005,7 @@ def test_automation_materializes_governed_development_session_inputs(tmp_path: P
     assert receipt["instruction_inputs"][0]["content_digest"] == review_digest
     assert task["realize_request"]["links"]["development_context_digest"] == receipt["digest"]
     assert task["timeout_seconds"] == 7200
+    assert task["max_attempts"] == 1
     assert task["realize_request"]["artifacts"]["execution_budget"]["budget_view"] == "fixed_downstream"
     assert task["realize_request"]["artifacts"]["agent_profile"]["model"] == "gpt-5.4"
     plan = service._contexts().get_plan(started["session"]["context_control"]["plan_id"])

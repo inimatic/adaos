@@ -5583,6 +5583,8 @@ class BuilderAutomationService:
         if execution_budget:
             if execution_budget.get("max_wall_seconds"):
                 request["timeout_seconds"] = int(execution_budget["max_wall_seconds"])
+            if execution_budget.get("max_attempts"):
+                request["max_attempts"] = max(1, int(execution_budget["max_attempts"]))
             request["artifacts"]["execution_budget"] = copy.deepcopy(execution_budget)
         agent_profile = (
             development_context.get("agent_profile")

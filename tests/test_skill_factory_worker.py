@@ -1938,6 +1938,57 @@ def test_bounded_repair_resolves_semantic_refs_in_json_and_yaml(
     )
 
 
+def test_bounded_repair_preloads_python_symbol_and_local_helper(
+    tmp_path: Path,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    workspace = tmp_path / "workspace"
+    input_dir = tmp_path / "input"
+    handlers = workspace / "skills" / "demo" / "handlers"
+    handlers.mkdir(parents=True)
+    (handlers / "main.py").write_text(
+        "def _build_diagnostics():\n"
+        "    return {'node': 'node-1'}\n\n"
+        "def get_diagnostics():\n"
+        "    return _build_diagnostics()\n\n"
+        "def unrelated():\n"
+        "    return 'large unrelated body'\n",
+        encoding="utf-8",
+    )
+    assignment = {
+        "task_id": "task.python-symbol-context",
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {"sparse_paths": ["skills/demo/"]},
+        "constraints": {"mode": "dev_ticket_repair", "minimal_diff": True},
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": "Add node identity to diagnostics.",
+                "repair_hints": {
+                    "target_files": ["skills/demo/handlers/main.py"],
+                    "target_refs": ["skill:demo.get_diagnostics"],
+                },
+            }
+        },
+    }
+
+    worker._build_packet(assignment, workspace, input_dir)
+    packet = json.loads((input_dir / "packet.json").read_text(encoding="utf-8"))
+    slices = packet["repair_target_context"]["source_slices"]
+
+    assert [item["symbol"] for item in slices[:2]] == [
+        "get_diagnostics",
+        "_build_diagnostics",
+    ]
+    assert "return _build_diagnostics()" in slices[0]["source"]
+    assert "node-1" in slices[1]["source"]
+    assert all(item.get("symbol") != "unrelated" for item in slices)
+
+
 def test_fully_qualified_surgical_ui_prompt_forbids_model_discovery(
     tmp_path: Path,
 ) -> None:

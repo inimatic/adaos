@@ -1028,6 +1028,120 @@ def _semantic_target_parts(target_ref: str) -> tuple[str, str, str] | None:
     return match.group(1), match.group(2), str(match.group(3) or "").strip()
 
 
+def _source_target_anchors(target_ref: str) -> list[str]:
+    """Return specific source symbols before broad component identifiers."""
+
+    raw = str(target_ref or "").strip()
+    if not raw:
+        return []
+    selector_match = re.search(r"\[id=([^\]]+)\]", raw)
+    body = raw.split(":", 1)[1] if ":" in raw else raw
+    candidates: list[str] = []
+    if selector_match:
+        candidates.append(selector_match.group(1))
+    semantic = _semantic_target_parts(raw)
+    if semantic:
+        kind, semantic_id, suffix = semantic
+        if suffix:
+            candidates.append(re.split(r"[./]", suffix)[-1])
+            if kind != "skill" and (
+                kind in {"event", "projection", "route", "workflow"}
+                or "-" in semantic_id
+                or "_" in semantic_id
+            ):
+                candidates.append(semantic_id)
+        else:
+            candidates.append(semantic_id)
+    candidates.append(re.split(r"[./:]", body)[-1])
+
+    result: list[str] = []
+    for candidate in candidates:
+        token = str(candidate or "").strip().strip("[]")
+        if not token or token in {"data", "runtime", "skill", "scenario", "test"}:
+            continue
+        if token not in result:
+            result.append(token)
+    return result[:3]
+
+
+def _python_symbol_ranges(source: str, anchors: Sequence[str]) -> list[dict[str, Any]]:
+    """Resolve named Python definitions plus one local call hop."""
+
+    try:
+        module = ast.parse(source)
+    except SyntaxError:
+        return []
+    definitions = {
+        node.name: node
+        for node in ast.walk(module)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        and getattr(node, "end_lineno", None)
+    }
+    selected: list[tuple[str, Any, str]] = []
+    seen_names: set[str] = set()
+    for raw_anchor in anchors:
+        anchor = re.sub(r"\W+", "_", str(raw_anchor or "")).strip("_").lower()
+        if not anchor:
+            continue
+        ranked: list[tuple[int, int, str, Any]] = []
+        for name, node in definitions.items():
+            normalized = name.strip("_").lower()
+            if normalized == anchor:
+                score = 0
+            elif normalized.startswith(f"{anchor}_") or normalized.endswith(f"_{anchor}"):
+                score = 1
+            elif anchor in normalized.split("_") or anchor in normalized:
+                score = 2
+            else:
+                continue
+            ranked.append((score, int(node.lineno), name, node))
+        per_anchor_limit = 1 if "_" not in anchor and "-" not in anchor else 3
+        for _score, _line, name, node in sorted(ranked)[:per_anchor_limit]:
+            if name in seen_names:
+                continue
+            selected.append((name, node, str(raw_anchor)))
+            seen_names.add(name)
+            if len(selected) >= 8:
+                break
+        if len(selected) >= 8:
+            break
+
+    # A public tool wrapper is often only a few lines and delegates to the
+    # implementation helper. Include that helper without another model read.
+    for _name, node, anchor in list(selected):
+        if int(node.end_lineno) - int(node.lineno) > 20:
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call) or not isinstance(child.func, ast.Name):
+                continue
+            called = child.func.id
+            called_node = definitions.get(called)
+            if called_node is None or called in seen_names:
+                continue
+            selected.append((called, called_node, anchor))
+            seen_names.add(called)
+            break
+
+    ranges: list[dict[str, Any]] = []
+    for name, node, anchor in selected:
+        decorator_lines = [
+            int(item.lineno)
+            for item in getattr(node, "decorator_list", [])
+            if getattr(item, "lineno", None)
+        ]
+        start = min([int(node.lineno), *decorator_lines])
+        end = min(int(node.end_lineno), start + BOUNDED_REPAIR_COMMAND_OUTPUT_LINES - 1)
+        ranges.append(
+            {
+                "anchor": anchor,
+                "symbol": name,
+                "line_start": start,
+                "line_end": end,
+            }
+        )
+    return ranges
+
+
 def _bounded_repair_target_context(
     workspace: Path,
     repair_hints: Mapping[str, Any],
@@ -1161,11 +1275,9 @@ def _bounded_repair_target_context(
 
     anchors: list[str] = []
     for target_ref in refs:
-        selector_match = re.search(r"\[id=([^\]]+)\]", target_ref)
-        semantic = _semantic_target_parts(target_ref)
-        anchor = selector_match.group(1) if selector_match else semantic[1] if semantic else ""
-        if anchor and anchor not in anchors:
-            anchors.append(anchor)
+        for anchor in _source_target_anchors(target_ref):
+            if anchor not in anchors:
+                anchors.append(anchor)
     source_slices: list[dict[str, Any]] = []
     for relative in target_files:
         if relative.lower().endswith(".json"):
@@ -1179,11 +1291,40 @@ def _bounded_repair_target_context(
             lines = path.read_text(encoding="utf-8").splitlines()
         except (OSError, UnicodeDecodeError):
             continue
+        used_ranges: set[tuple[int, int]] = set()
+        symbol_anchors: set[str] = set()
+        if relative.lower().endswith(".py"):
+            for symbol_range in _python_symbol_ranges("\n".join(lines), anchors):
+                start = int(symbol_range["line_start"]) - 1
+                end = int(symbol_range["line_end"])
+                range_key = (start, end)
+                if range_key in used_ranges:
+                    continue
+                candidate = {
+                    "file": relative,
+                    "anchor": symbol_range["anchor"],
+                    "symbol": symbol_range["symbol"],
+                    "line_start": start + 1,
+                    "line_end": end,
+                    "source": "\n".join(lines[start:end]),
+                }
+                encoded = json.dumps(candidate, ensure_ascii=False, sort_keys=True).encode("utf-8")
+                if len(encoded) > 24 * 1024 or used_bytes + len(encoded) > BOUNDED_REPAIR_TARGET_CONTEXT_BYTES:
+                    continue
+                used_bytes += len(encoded)
+                used_ranges.add(range_key)
+                symbol_anchors.add(str(symbol_range["anchor"]))
+                source_slices.append(candidate)
         for anchor in anchors:
+            if anchor in symbol_anchors:
+                continue
             matches = [index for index, line in enumerate(lines) if anchor in line][:3]
             for index in matches:
                 start = max(0, index - 6)
                 end = min(len(lines), index + 7)
+                range_key = (start, end)
+                if range_key in used_ranges:
+                    continue
                 candidate = {
                     "file": relative,
                     "anchor": anchor,
@@ -1195,6 +1336,7 @@ def _bounded_repair_target_context(
                 if len(encoded) > 8 * 1024 or used_bytes + len(encoded) > BOUNDED_REPAIR_TARGET_CONTEXT_BYTES:
                     continue
                 used_bytes += len(encoded)
+                used_ranges.add(range_key)
                 source_slices.append(candidate)
     covered_files = {
         str(item.get("file") or "")
