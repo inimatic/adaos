@@ -552,8 +552,12 @@ Priority labels:
   successful trajectory cannot promote itself.
 - [x] `[must]` Add valid-time/recorded-time semantics, immutable supersession,
   exact `as_of` reconstruction, and independent invalidation by typed edge.
-- [ ] `[must]` Store content-addressed packet/checkpoint/result/provenance
-  artifacts once and replace nested execution-state copies with refs.
+- [x] `[must]` Store Builder/Skill Factory packet, checkpoint, snapshot,
+  result, and provenance artifacts once and replace nested automation-state
+  copies with refs while retaining compatibility read projections.
+- [ ] `[must]` Apply the same ref-only execution-state contract to remaining
+  agent/domain runtimes after their authoritative lifecycle boundaries are
+  identified.
 - [x] `[should]` Add optimistic subject bindings and explicit branch,
   merge/conflict, and concurrent-writer diagnostics.
 - [x] `[should]` Add provider-neutral canonical units plus model-specific layout
@@ -663,8 +667,14 @@ overlay. A matching Project projection and source generation reuse the existing
 capsule and binding instead of embedding the canonical Builder packet again;
 the DevelopmentSession capsule indexes its exact cold-loadable artifact and
 the task stores only its context-packet ref plus bounded iteration projection.
-Broader Builder session/readiness compaction remains
-open under the Phase 1A lifecycle-wide item.
+Builder session persistence also externalizes task requests, snapshots,
+results, provenance, last results, and workflow checkpoints. Skill Factory
+migrates legacy inline tasks on the next mutation; Builder performs the same
+migration per session. Historical API and worker contracts are hydrated only
+at read/assignment boundaries. A copy of the live local state measured a
+75.9 MB to 4.28 MB Skill Factory reduction and 13-24x reductions across three
+representative Builder sessions. Ref-only adoption in other agent/domain
+runtimes remains open under the Phase 1 lifecycle-wide item.
 
 ### Phase 4. NLU Teacher Context Compression
 

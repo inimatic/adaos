@@ -208,6 +208,97 @@ def test_queue_persists_request_by_ref_and_assigns_bounded_context(tmp_path: Pat
     assert assigned_artifacts["continuation_checkpoint"] == continuation_checkpoint
 
 
+def test_legacy_inline_task_migrates_on_write_and_cold_reads_restore_it(
+    tmp_path: Path,
+) -> None:
+    service = SkillFactoryService(state_dir=tmp_path)
+    submitted = service.submit_realize_request(
+        {
+            "request_id": "realize.legacy-inline",
+            "target": {"type": "skill", "id": "legacy_inline"},
+            "snapshot_context": {
+                "schema": "adaos.skill_factory.task_context.v1",
+                "provenance": [
+                    {"kind": "legacy", "ref": "legacy-snapshot-" + "s" * 40_000}
+                ],
+            },
+        }
+    )
+    task_id = submitted["task"]["task_id"]
+    legacy_task = service.read_task(task_id)
+    legacy_task["realize_request"]["legacy_payload"] = "request-" + "r" * 40_000
+    provenance = {
+        "schema": "adaos.skill_factory.task_provenance.v1",
+        "runner_version": "legacy-runner",
+        "snapshot_refs": ["provenance-" + "p" * 40_000],
+    }
+    legacy_result = {
+        "schema": "adaos.skill_factory.dev_result.v1",
+        "status": "completed",
+        "notes": ["result-" + "z" * 40_000],
+        "provenance": provenance,
+    }
+    legacy_task.update(
+        {
+            "result": legacy_result,
+            "provenance": provenance,
+        }
+    )
+    for key in (
+        "realize_request_ref",
+        "realize_request_digest",
+        "snapshot_context_ref",
+        "snapshot_context_digest",
+        "result_ref",
+        "result_digest",
+        "provenance_ref",
+        "provenance_digest",
+    ):
+        legacy_task.pop(key, None)
+    raw_state = json.loads(service.state_path.read_text(encoding="utf-8"))
+    raw_state["tasks"][task_id] = legacy_task
+    service.state_path.write_text(
+        json.dumps(raw_state, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    legacy_size = service.state_path.stat().st_size
+
+    service.register_dev_node({"node_id": "devnode.legacy-migration"})
+
+    migrated_state = json.loads(service.state_path.read_text(encoding="utf-8"))
+    migrated_task = migrated_state["tasks"][task_id]
+    assert service.state_path.stat().st_size < legacy_size // 4
+    for field in (
+        "realize_request",
+        "snapshot_context",
+        "result",
+        "provenance",
+    ):
+        assert field not in migrated_task
+    for field in (
+        "realize_request_ref",
+        "snapshot_context_ref",
+        "result_ref",
+        "provenance_ref",
+    ):
+        assert migrated_task[field].startswith("artifact://context/sha256/")
+
+    restarted = SkillFactoryService(state_dir=tmp_path)
+    restored = restarted.read_task(task_id)
+    assert restored["realize_request"]["legacy_payload"].startswith("request-")
+    assert restored["snapshot_context"]["provenance"][0]["ref"].startswith(
+        "legacy-snapshot-"
+    )
+    assert restored["result"]["notes"] == legacy_result["notes"]
+    assert restored["provenance"] == provenance
+    assignment = restarted.poll_assignment(
+        "devnode.legacy-migration",
+        task_id=task_id,
+    )["assignment"]
+    assert assignment["snapshot_context"] == restored["snapshot_context"]
+    assert assignment["realize_request"] == restored["realize_request"]
+
+
 def test_realize_request_rejects_mismatched_canonical_artifact_binding(
     tmp_path: Path,
 ) -> None:

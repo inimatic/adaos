@@ -180,6 +180,51 @@ def test_completed_builder_context_restores_from_cold_service(tmp_path: Path) ->
     assert restored_inspection == first_inspection
     assert restored_inspection["receipt_count"] == 1
 
+    continued = restored_service.submit_turn(
+        text="Apply one more scoped refinement to the same Dev Ticket project.",
+        object_type="scenario",
+        object_id="recipes",
+    )
+    assert continued["status"] == "automation_queued"
+    assert continued["session"]["status"] == "queued"
+    continued_session = restored_service.status(
+        object_type="scenario",
+        object_id="recipes",
+    )["session"]
+    continued_control = continued_session["context_control"]
+    assert continued_session["status"] == "completed"
+    assert continued_session["iteration"] == 1
+    assert continued_control["project_ref"] == "project:recipe_suite"
+    first_project_capsule = next(
+        ref
+        for ref in control["capsule_refs"]
+        if first._contexts().get_capsule(ref)["kind"] == "project"
+    )
+    continued_project_capsule = next(
+        ref
+        for ref in continued_control["capsule_refs"]
+        if restored_service._contexts().get_capsule(ref)["kind"] == "project"
+    )
+    assert continued_project_capsule != first_project_capsule
+    assert continued_control["project_context_digest"] != control[
+        "project_context_digest"
+    ]
+    first_task_capsule = next(
+        ref
+        for ref in control["capsule_refs"]
+        if first._contexts().get_capsule(ref)["kind"] == "task"
+    )
+    continued_task_capsule = next(
+        ref
+        for ref in continued_control["capsule_refs"]
+        if restored_service._contexts().get_capsule(ref)["kind"] == "task"
+    )
+    assert continued_task_capsule != first_task_capsule
+    assert continued_control["run_ref"] != control["run_ref"]
+    assert restored_service._contexts().inspect(continued_control["run_ref"])[
+        "receipt_count"
+    ] == 1
+
 
 def test_related_runs_reuse_project_capsule_and_isolate_task_overlay(
     tmp_path: Path,
@@ -260,6 +305,21 @@ def test_session_persists_workflow_and_request_once_by_content_address(tmp_path:
         "payload": "request-context-" * 4_000,
     }
     request_artifact = service._contexts().put_artifact(request)
+    snapshot_context = {
+        "schema": "adaos.skill_factory.task_context.v1",
+        "provenance": [{"kind": "legacy", "ref": "snapshot-" * 4_000}],
+    }
+    provenance = {
+        "schema": "adaos.skill_factory.task_provenance.v1",
+        "runner_version": "cold-restore-runner",
+        "snapshot_refs": ["provenance-" * 4_000],
+    }
+    result = {
+        "schema": "adaos.skill_factory.dev_result.v1",
+        "status": "completed",
+        "notes": ["result-context-" * 4_000],
+        "provenance": provenance,
+    }
     workflow = {
         "schema": "adaos.builder.workflow.v1",
         "active_phase": "automation",
@@ -286,7 +346,11 @@ def test_session_persists_workflow_and_request_once_by_content_address(tmp_path:
             "realize_request_ref": request_artifact["ref"],
             "realize_request_digest": request_artifact["digest"],
             "realize_request": request,
+            "snapshot_context": snapshot_context,
+            "result": result,
+            "provenance": provenance,
         },
+        "last_result": result,
         "completion_readiness": {
             "ok": True,
             "task_id": "task.compact",
@@ -300,15 +364,27 @@ def test_session_persists_workflow_and_request_once_by_content_address(tmp_path:
     session_path = service._session_path("skill", "compact")
     persisted = json.loads(session_path.read_text(encoding="utf-8"))
     checkpoint = persisted["completion_readiness"]["workflow_checkpoint"]
-    assert "realize_request" not in persisted["task"]
+    for field in (
+        "realize_request",
+        "snapshot_context",
+        "result",
+        "provenance",
+    ):
+        assert field not in persisted["task"]
+    assert "last_result" not in persisted
+    assert persisted["last_result_ref"].startswith("artifact://context/sha256/")
     assert "workflow" not in checkpoint
     assert checkpoint["workflow_ref"].startswith("artifact://context/sha256/")
     assert checkpoint["workflow_summary"]["delivery"]["status"] == "checkpoint"
-    assert session_path.stat().st_size < 10_000
+    assert session_path.stat().st_size < 15_000
 
     restored = service.get_session("skill", "compact")
     assert restored is not None
     assert restored["task"]["realize_request"] == request
+    assert restored["task"]["snapshot_context"] == snapshot_context
+    assert restored["task"]["result"] == result
+    assert restored["task"]["provenance"] == provenance
+    assert restored["last_result"] == result
     assert restored["completion_readiness"]["workflow_checkpoint"]["workflow"] == workflow
 
 

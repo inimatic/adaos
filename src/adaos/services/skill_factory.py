@@ -565,6 +565,10 @@ class SkillFactoryService:
         value = _json_clone(task)
         if not isinstance(value.get("realize_request"), Mapping):
             value["realize_request"] = self._realize_request(task)
+        if not isinstance(value.get("snapshot_context"), Mapping):
+            snapshot_context = self._stored_snapshot_context(task)
+            if snapshot_context:
+                value["snapshot_context"] = snapshot_context
         result = self._stored_result(task)
         if result:
             value["result"] = result
@@ -572,6 +576,16 @@ class SkillFactoryService:
         if provenance:
             value["provenance"] = provenance
         return value
+
+    def _stored_snapshot_context(self, task: Mapping[str, Any]) -> dict[str, Any]:
+        embedded = _mapping(task.get("snapshot_context"))
+        if embedded:
+            return embedded
+        return self._load_context_artifact(
+            task.get("snapshot_context_ref"),
+            artifact_digest=task.get("snapshot_context_digest"),
+            label="task snapshot context",
+        )
 
     def _assignment_realize_request(self, task: Mapping[str, Any]) -> dict[str, Any]:
         request = self._realize_request(task)
@@ -667,6 +681,86 @@ class SkillFactoryService:
         }
         task.pop("result", None)
         task.pop("provenance", None)
+
+    @staticmethod
+    def _realize_request_summary(request: Mapping[str, Any]) -> dict[str, Any]:
+        links = _mapping(request.get("links"))
+        return {
+            "schema": request.get("schema"),
+            "request_id": request.get("request_id"),
+            "status": request.get("status"),
+            "target": _mapping(request.get("target")),
+            "links": links,
+            "context_packet_digest": links.get("context_packet_digest"),
+            "context_plan_ref": links.get("context_plan_ref"),
+        }
+
+    @staticmethod
+    def _snapshot_context_summary(snapshot_context: Mapping[str, Any]) -> dict[str, Any]:
+        freshness = _mapping(snapshot_context.get("freshness"))
+        redaction = _mapping(snapshot_context.get("redaction"))
+        return {
+            "schema": snapshot_context.get("schema"),
+            "generated_at": snapshot_context.get("generated_at"),
+            "source_generation": freshness.get("source_generation"),
+            "redaction_level": redaction.get("level"),
+            "provenance_count": len(_list(snapshot_context.get("provenance"))),
+            "byte_budget": snapshot_context.get("byte_budget"),
+        }
+
+    def _persistence_task(self, task: Mapping[str, Any]) -> dict[str, Any]:
+        """Store authoritative task payloads by ref while preserving read compatibility."""
+
+        compact = _json_clone(task)
+        request = _mapping(compact.get("realize_request"))
+        if request:
+            request["artifacts"] = self._externalize_request_artifacts(
+                _mapping(request.get("artifacts"))
+            )
+            request_artifact = self._store_realize_request(request)
+            compact["realize_request_ref"] = request_artifact["ref"]
+            compact["realize_request_digest"] = request_artifact["digest"]
+            compact["realize_request_summary"] = self._realize_request_summary(
+                request
+            )
+        if _text(compact.get("realize_request_ref")):
+            compact.pop("realize_request", None)
+
+        snapshot_context = _mapping(compact.get("snapshot_context"))
+        if snapshot_context:
+            snapshot_artifact = self._contexts().put_artifact(snapshot_context)
+            compact["snapshot_context_ref"] = snapshot_artifact["ref"]
+            compact["snapshot_context_digest"] = snapshot_artifact["digest"]
+            compact["snapshot_context_summary"] = self._snapshot_context_summary(
+                snapshot_context
+            )
+        if _text(compact.get("snapshot_context_ref")):
+            compact.pop("snapshot_context", None)
+
+        result = _mapping(compact.get("result"))
+        if result:
+            if not isinstance(result.get("provenance"), Mapping):
+                provenance = _mapping(compact.get("provenance"))
+                if provenance:
+                    result["provenance"] = provenance
+            self._persist_task_result(compact, result)
+        elif isinstance(compact.get("provenance"), Mapping):
+            provenance = _mapping(compact.get("provenance"))
+            provenance_artifact = self._contexts().put_artifact(provenance)
+            compact["provenance_ref"] = provenance_artifact["ref"]
+            compact["provenance_digest"] = provenance_artifact["digest"]
+            compact["provenance_summary"] = {
+                "schema": provenance.get("schema"),
+                "dev_node_id": provenance.get("dev_node_id"),
+                "runner_version": provenance.get("runner_version"),
+                "reported_at": provenance.get("reported_at"),
+            }
+            compact.pop("provenance", None)
+        if _text(compact.get("result_ref")):
+            compact.pop("result", None)
+        if _text(compact.get("provenance_ref")):
+            compact.pop("provenance", None)
+        return compact
 
     @property
     def state_path(self) -> Path:
@@ -895,15 +989,7 @@ class SkillFactoryService:
                 },
                 "realize_request_ref": request_artifact["ref"],
                 "realize_request_digest": request_artifact["digest"],
-                "realize_request_summary": {
-                    "schema": request.get("schema"),
-                    "request_id": request.get("request_id"),
-                    "status": request.get("status"),
-                    "target": _mapping(request.get("target")),
-                    "links": _mapping(request.get("links")),
-                    "context_packet_digest": _mapping(request.get("links")).get("context_packet_digest"),
-                    "context_plan_ref": _mapping(request.get("links")).get("context_plan_ref"),
-                },
+                "realize_request_summary": self._realize_request_summary(request),
                 "assigned_node_id": None,
                 "progress": [],
                 "failure_history": [],
@@ -1705,6 +1791,10 @@ class SkillFactoryService:
 
     def _write_state(self, state: Mapping[str, Any]) -> None:
         payload = _json_clone(state)
+        payload["tasks"] = {
+            str(task_id): self._persistence_task(_mapping(task))
+            for task_id, task in _mapping(payload.get("tasks")).items()
+        }
         payload["schema"] = STATE_SCHEMA
         payload["updated_at"] = _now_iso()
         atomic_write_json(self.state_path, payload)
@@ -1902,7 +1992,7 @@ class SkillFactoryService:
                 "allowed_result_paths": _normalize_sparse_paths(forge.get("sparse_paths")),
                 "realization": _mapping(task.get("realization_policy")),
             },
-            "snapshot_context": _mapping(task.get("snapshot_context")),
+            "snapshot_context": self._stored_snapshot_context(task),
             # The worker gets a bounded, task-scoped projection plus immutable
             # context refs. Older producers without a projection retain their
             # normalized request for compatibility.

@@ -1944,7 +1944,7 @@ envelopes. Architecture and generic sequencing remain in
 - [x] `[must]` Persist one Context Plan and Context Attribution Receipt per run;
   show selected/omitted/denied refs, context misses, provider/local-Codex usage,
   cache contribution, latency, and evidence in Builder observability.
-- [ ] `[must]` Replace nested packet, snapshot, task, readiness, result, and
+- [x] `[must]` Replace nested packet, snapshot, task, readiness, result, and
   provenance copies in Builder/Skill Factory automation state with
   content-addressed refs and a bounded workflow checkpoint. Keep historical
   assignments readable through a compatibility projection.
@@ -1990,9 +1990,16 @@ and project projection digest remain unchanged. Related Dev Ticket runs
 therefore share stable project context without sharing their task overlays,
 budgets, acceptance, or rollback lifecycle. Context Attribution Receipts carry
 the run, DevelopmentSession, and Project refs, including deterministic
-zero-model execution routes. Full removal of Builder session/readiness compatibility copies,
-end-to-end cold publication replay, episodic-memory routing, and the deferred
-Research Workbench proof are still open.
+zero-model execution routes. Builder and Skill Factory persistence now migrate
+legacy inline request, snapshot, task, result, provenance, and workflow copies
+to immutable refs on the next mutation; compatibility hydration exists only at
+read and worker-assignment boundaries. A production-state copy measured Skill
+Factory reduction from 75.9 MB to 4.28 MB (17.7x), while representative Builder
+sessions shrank 13-24x. A cold simple Dev Ticket re-entry completed a successor
+worker turn with the same Project authority and new source-generation/task
+capsules. End-to-end cold publication/Trial/Subscription replay,
+episodic-memory routing, and the deferred Research Workbench proof are still
+open.
 
 Source recovery verification, 2026-09-02: the local Builder lock at release
 `builder@0.2.55` resolves `scenario:builder` as Project-owned and the three

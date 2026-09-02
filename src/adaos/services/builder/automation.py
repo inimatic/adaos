@@ -8095,13 +8095,188 @@ class BuilderAutomationService:
             readiness["workflow_checkpoint"] = checkpoint
         return readiness
 
+    @staticmethod
+    def _result_checkpoint_summary(result: Mapping[str, Any]) -> dict[str, Any]:
+        tests = result.get("tests") if isinstance(result.get("tests"), Mapping) else {}
+        return {
+            "schema": result.get("schema"),
+            "status": result.get("status"),
+            "branch": result.get("branch"),
+            "commit_hash": result.get("commit_hash"),
+            "tests": tests.get("status"),
+            "changed_path_count": len(
+                [item for item in result.get("changed_paths") or [] if str(item).strip()]
+            ),
+            "reported_at": result.get("reported_at"),
+        }
+
+    def _store_result_checkpoint(self, result: Mapping[str, Any]) -> dict[str, Any]:
+        stored_result = copy.deepcopy(dict(result))
+        provenance = (
+            dict(stored_result.pop("provenance"))
+            if isinstance(stored_result.get("provenance"), Mapping)
+            else {}
+        )
+        receipt: dict[str, Any] = {}
+        if provenance:
+            provenance_artifact = self._contexts().put_artifact(provenance)
+            stored_result["provenance_ref"] = provenance_artifact["ref"]
+            stored_result["provenance_digest"] = provenance_artifact["digest"]
+            receipt.update(
+                {
+                    "provenance_ref": provenance_artifact["ref"],
+                    "provenance_digest": provenance_artifact["digest"],
+                }
+            )
+        result_artifact = self._contexts().put_artifact(stored_result)
+        return {
+            **receipt,
+            "result_ref": result_artifact["ref"],
+            "result_digest": result_artifact["digest"],
+            "result_summary": self._result_checkpoint_summary(result),
+        }
+
+    def _compact_task_checkpoint(self, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return copy.deepcopy(value)
+        task = copy.deepcopy(dict(value))
+        request = (
+            dict(task.get("realize_request"))
+            if isinstance(task.get("realize_request"), Mapping)
+            else {}
+        )
+        if request:
+            request_artifact = self._contexts().put_artifact(request)
+            task["realize_request_ref"] = request_artifact["ref"]
+            task["realize_request_digest"] = request_artifact["digest"]
+            task.setdefault(
+                "realize_request_summary",
+                {
+                    "schema": request.get("schema"),
+                    "request_id": request.get("request_id"),
+                    "status": request.get("status"),
+                    "target": copy.deepcopy(request.get("target")),
+                    "links": copy.deepcopy(request.get("links")),
+                },
+            )
+        if str(task.get("realize_request_ref") or "").strip():
+            task.pop("realize_request", None)
+
+        snapshot_context = (
+            dict(task.get("snapshot_context"))
+            if isinstance(task.get("snapshot_context"), Mapping)
+            else {}
+        )
+        if snapshot_context:
+            snapshot_artifact = self._contexts().put_artifact(snapshot_context)
+            task["snapshot_context_ref"] = snapshot_artifact["ref"]
+            task["snapshot_context_digest"] = snapshot_artifact["digest"]
+            task["snapshot_context_summary"] = {
+                "schema": snapshot_context.get("schema"),
+                "generated_at": snapshot_context.get("generated_at"),
+                "provenance_count": len(snapshot_context.get("provenance") or []),
+                "byte_budget": snapshot_context.get("byte_budget"),
+            }
+        if str(task.get("snapshot_context_ref") or "").strip():
+            task.pop("snapshot_context", None)
+
+        result = (
+            dict(task.get("result"))
+            if isinstance(task.get("result"), Mapping)
+            else {}
+        )
+        if result:
+            if not isinstance(result.get("provenance"), Mapping) and isinstance(
+                task.get("provenance"), Mapping
+            ):
+                result["provenance"] = copy.deepcopy(dict(task["provenance"]))
+            task.update(self._store_result_checkpoint(result))
+        elif isinstance(task.get("provenance"), Mapping):
+            provenance_artifact = self._contexts().put_artifact(
+                dict(task["provenance"])
+            )
+            task["provenance_ref"] = provenance_artifact["ref"]
+            task["provenance_digest"] = provenance_artifact["digest"]
+        if str(task.get("result_ref") or "").strip():
+            task.pop("result", None)
+        if str(task.get("provenance_ref") or "").strip():
+            task.pop("provenance", None)
+        return task
+
+    def _load_checkpoint_artifact(self, ref: Any) -> dict[str, Any]:
+        token = str(ref or "").strip()
+        if not token:
+            return {}
+        try:
+            value = self._contexts().get_artifact(token)
+        except KeyError:
+            return {}
+        return dict(value) if isinstance(value, Mapping) else {}
+
+    def _hydrate_result_checkpoint(
+        self,
+        *,
+        result_ref: Any,
+        provenance_ref: Any = None,
+    ) -> dict[str, Any]:
+        result = self._load_checkpoint_artifact(result_ref)
+        if not result:
+            return {}
+        nested_provenance_ref = result.pop("provenance_ref", None)
+        result.pop("provenance_digest", None)
+        provenance = self._load_checkpoint_artifact(
+            provenance_ref or nested_provenance_ref
+        )
+        if provenance:
+            result["provenance"] = provenance
+        return result
+
+    def _hydrate_task_checkpoint(self, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return copy.deepcopy(value)
+        task = copy.deepcopy(dict(value))
+        if not isinstance(task.get("realize_request"), Mapping):
+            request = self._load_checkpoint_artifact(task.get("realize_request_ref"))
+            if request:
+                task["realize_request"] = request
+        if not isinstance(task.get("snapshot_context"), Mapping):
+            snapshot_context = self._load_checkpoint_artifact(
+                task.get("snapshot_context_ref")
+            )
+            if snapshot_context:
+                task["snapshot_context"] = snapshot_context
+        if not isinstance(task.get("result"), Mapping):
+            result = self._hydrate_result_checkpoint(
+                result_ref=task.get("result_ref"),
+                provenance_ref=task.get("provenance_ref"),
+            )
+            if result:
+                task["result"] = result
+        if not isinstance(task.get("provenance"), Mapping):
+            provenance = self._load_checkpoint_artifact(task.get("provenance_ref"))
+            if provenance:
+                task["provenance"] = provenance
+        return task
+
     def _persistence_projection(self, session: Mapping[str, Any]) -> dict[str, Any]:
         payload = copy.deepcopy(dict(session))
-        task = payload.get("task") if isinstance(payload.get("task"), Mapping) else None
-        if task is not None and str(task.get("realize_request_ref") or "").strip():
-            compact_task = dict(task)
-            compact_task.pop("realize_request", None)
-            payload["task"] = compact_task
+        if isinstance(payload.get("task"), Mapping):
+            payload["task"] = self._compact_task_checkpoint(payload["task"])
+        last_result = (
+            dict(payload.get("last_result"))
+            if isinstance(payload.get("last_result"), Mapping)
+            else {}
+        )
+        if last_result:
+            result_checkpoint = self._store_result_checkpoint(last_result)
+            payload.update(
+                {
+                    f"last_{key}": value
+                    for key, value in result_checkpoint.items()
+                }
+            )
+        if str(payload.get("last_result_ref") or "").strip():
+            payload.pop("last_result", None)
         if isinstance(payload.get("completion_readiness"), Mapping):
             payload["completion_readiness"] = self._compact_readiness_checkpoint(
                 payload["completion_readiness"]
@@ -8137,18 +8312,15 @@ class BuilderAutomationService:
 
     def _hydrate_session_compatibility(self, session: Mapping[str, Any]) -> dict[str, Any]:
         payload = copy.deepcopy(dict(session))
-        task = payload.get("task") if isinstance(payload.get("task"), Mapping) else None
-        if task is not None and not isinstance(task.get("realize_request"), Mapping):
-            request_ref = str(task.get("realize_request_ref") or "").strip()
-            if request_ref:
-                try:
-                    request = self._contexts().get_artifact(request_ref)
-                except KeyError:
-                    request = None
-                if isinstance(request, Mapping):
-                    expanded_task = dict(task)
-                    expanded_task["realize_request"] = dict(request)
-                    payload["task"] = expanded_task
+        if isinstance(payload.get("task"), Mapping):
+            payload["task"] = self._hydrate_task_checkpoint(payload["task"])
+        if not isinstance(payload.get("last_result"), Mapping):
+            last_result = self._hydrate_result_checkpoint(
+                result_ref=payload.get("last_result_ref"),
+                provenance_ref=payload.get("last_provenance_ref"),
+            )
+            if last_result:
+                payload["last_result"] = last_result
         if isinstance(payload.get("completion_readiness"), Mapping):
             payload["completion_readiness"] = self._hydrate_readiness_compatibility(
                 payload["completion_readiness"]
@@ -8179,7 +8351,10 @@ class BuilderAutomationService:
                 previous = json.loads(path.read_text(encoding="utf-8"))
             except (FileNotFoundError, json.JSONDecodeError):
                 previous = None
-            if isinstance(previous, Mapping) and _prefer_persisted_session(previous, payload):
+            if isinstance(previous, Mapping) and _prefer_persisted_session(
+                self._hydrate_session_compatibility(previous),
+                self._hydrate_session_compatibility(payload),
+            ):
                 persisted = dict(previous)
                 _write_json(compact_path, self._compact_status_payload(persisted))
                 compatible = self._hydrate_session_compatibility(persisted)
