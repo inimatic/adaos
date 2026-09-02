@@ -1218,6 +1218,78 @@ def test_builder_package_uses_one_work_item_budget_and_automation(tmp_path: Path
     assert started["rollup"]["total_tokens"] == 150
 
 
+def test_builder_package_starts_successor_after_published_workflow(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    automation = _FakePublishedBuilderAutomation()
+    ticket = _bounded_demo_ticket(
+        service,
+        summary="Rename the next Demo Metrics row",
+        target_files=["skills/demo_metrics_skill/handlers/main.py"],
+        acceptance="The next metric row uses its clearer title.",
+    )
+    planned = service.plan_builder_package(
+        [ticket["ticket_id"]],
+        actor="builder:qualifier",
+        repair_service=repair_service,
+    )
+
+    started = service.start_autonomous_package(
+        planned["package_id"],
+        actor="builder:automation",
+        repair_service=repair_service,
+        automation_service=automation,
+    )
+
+    assert started["started"] is True
+    assert len(automation.calls) == 1
+    assert automation.followup_calls == []
+    assert automation.calls[0]["links"]["development_ticket_id"] == ticket["ticket_id"]
+
+
+def test_builder_package_launch_failure_releases_every_ticket(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    automation = _FakePublishedBuilderAutomation()
+    tickets = [
+        _bounded_demo_ticket(
+            service,
+            summary="Rename the first Demo Metrics row",
+            target_files=["skills/demo_metrics_skill/handlers/main.py"],
+            acceptance="The first metric row uses its clearer title.",
+        ),
+        _bounded_demo_ticket(
+            service,
+            summary="Rename the second Demo Metrics row",
+            target_files=["skills/demo_metrics_skill/tests/test_resource_workbench.py"],
+            acceptance="The second metric row has a focused assertion.",
+        ),
+    ]
+    planned = service.plan_builder_package(
+        [ticket["ticket_id"] for ticket in tickets],
+        actor="builder:qualifier",
+        repair_service=repair_service,
+    )
+    automation.start_from_execute = lambda **kwargs: (_ for _ in ()).throw(  # type: ignore[method-assign]
+        RuntimeError("successor launch failed")
+    )
+
+    with pytest.raises(RuntimeError, match="successor launch failed"):
+        service.start_autonomous_package(
+            planned["package_id"],
+            actor="builder:automation",
+            repair_service=repair_service,
+            automation_service=automation,
+        )
+
+    assert {
+        service.get_ticket(ticket["ticket_id"])["status"]
+        for ticket in tickets
+    } == {"ready_for_builder"}
+    work_item = repair_service.list(package_id=planned["package_id"])[0]
+    assert work_item["work_status"] == "failed"
+
+
 def test_builder_package_adopts_standalone_dev_skill_into_project(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     dev_root = tmp_path / "dev" / "test-subnet"

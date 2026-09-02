@@ -2491,6 +2491,29 @@ class DevelopmentTicketService:
         )
         current_session = _automation_session(current)
         current_links = _mapping(current_session.get("links"))
+        workflow_head_method = getattr(
+            automation_service,
+            "current_workflow_head",
+            None,
+        )
+        workflow_head = (
+            _mapping(
+                workflow_head_method(
+                    object_type=target["object_type"],
+                    object_id=target["object_id"],
+                )
+            )
+            if callable(workflow_head_method)
+            else {}
+        )
+        workflow_state = _text(workflow_head.get("state"))
+        followup_state_ready = not workflow_state or workflow_state in {
+            "verification",
+            "trial_ready",
+            "trial_review",
+            "publication_ready",
+            "reconciliation_required",
+        }
         resume = (
             _text(current_session.get("status")) == "failed"
             and _text(current_links.get("builder_package_id")) == _text(package_id)
@@ -2505,6 +2528,7 @@ class DevelopmentTicketService:
                     _mapping(current_session.get("completion_readiness")).get("aprobation")
                 ).get("ok")
             )
+            and followup_state_ready
             and callable(getattr(automation_service, "start_followup_dev_ticket_repair", None))
         )
         start_method = (
@@ -2514,17 +2538,49 @@ class DevelopmentTicketService:
             if followup
             else automation_service.start_from_execute
         )
-        started = start_method(
-            object_type=target["object_type"],
-            object_id=target["object_id"],
-            implementation_brief=brief,
-            webspace_id=_text(webspace_id) or "desktop",
-            conversation_id=_text(conversation_id) or f"dev-ticket-package:{package_id}",
-            execution_budget=budget,
-            agent_profile=dict(agent_profile) if isinstance(agent_profile, Mapping) else None,
-            mcp=dict(mcp) if isinstance(mcp, Mapping) else None,
-            links=links,
-        )
+        try:
+            started = start_method(
+                object_type=target["object_type"],
+                object_id=target["object_id"],
+                implementation_brief=brief,
+                webspace_id=_text(webspace_id) or "desktop",
+                conversation_id=_text(conversation_id) or f"dev-ticket-package:{package_id}",
+                execution_budget=budget,
+                agent_profile=dict(agent_profile) if isinstance(agent_profile, Mapping) else None,
+                mcp=dict(mcp) if isinstance(mcp, Mapping) else None,
+                links=links,
+            )
+        except Exception as exc:
+            repair_id = _text(repair.get("repair_id"))
+            try:
+                service.transition_work_item(
+                    repair_id,
+                    status="failed",
+                    actor=_text(actor) or "builder.automation",
+                    reason=f"automation_start:{type(exc).__name__}",
+                )
+            except Exception:
+                _log.exception(
+                    "failed to mark autonomous Builder package launch failed package=%s repair=%s",
+                    package_id,
+                    repair_id,
+                )
+            for ticket_id in ticket_ids:
+                try:
+                    self._release_builder_start_failure(
+                        ticket_id,
+                        repair_id=repair_id,
+                        actor=_text(actor) or "builder.automation",
+                        error_type=type(exc).__name__,
+                    )
+                except Exception:
+                    _log.exception(
+                        "failed to release Dev Ticket after Builder package launch failure "
+                        "ticket=%s repair=%s",
+                        ticket_id,
+                        repair_id,
+                    )
+            raise
         correlated, correlation = _automation_matches_work(
             started,
             ticket_ids=ticket_ids,
