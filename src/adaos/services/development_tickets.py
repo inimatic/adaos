@@ -2597,7 +2597,7 @@ class DevelopmentTicketService:
         )
         evidence_type = (
             "test"
-            if gate_token in {"tests", "test", "consumer_acceptance"}
+            if gate_token in {"tests", "test", "validation", "consumer_acceptance"}
             else "runtime_guard"
         )
         gate_evidence = {
@@ -2840,12 +2840,17 @@ class DevelopmentTicketService:
         component_ref = f"{kind}:{identifier}"
         space = _text(observation.get("space")) or "default"
         version = _text(observation.get("version") or observation.get("attempted_version"))
+        gate = _text(
+            observation.get("stage")
+            or observation.get("passed_stage")
+            or observation.get("failed_stage")
+        ).lower() or "activation"
         evidence = [
             {
-                "type": "runtime_guard",
-                "id": _text(observation.get("operation_id")) or f"{component_ref}:activation",
+                "type": "test" if gate in {"tests", "test", "validation"} else "runtime_guard",
+                "id": _text(observation.get("operation_id")) or f"{component_ref}:{gate}",
                 "status": "passed",
-                "gate": "activation",
+                "gate": gate,
                 "space": space,
                 "version": version or None,
                 "slot": _text(observation.get("slot")) or None,
@@ -2859,7 +2864,11 @@ class DevelopmentTicketService:
         )
         closed: list[dict[str, Any]] = []
         for ticket in tickets:
-            if _text(_mapping(ticket.get("metadata")).get("space")) not in {"", space}:
+            ticket_metadata = _mapping(ticket.get("metadata"))
+            if _text(ticket_metadata.get("space")) not in {"", space}:
+                continue
+            ticket_gate = _text(ticket_metadata.get("gate")).lower() or "activation"
+            if ticket_gate != gate:
                 continue
             ticket_id = _text(ticket.get("ticket_id"))
             ticket_status = _text(ticket.get("status"))
@@ -5338,6 +5347,8 @@ async def _on_runtime_activation_failed(evt: Any) -> None:
 
 @subscribe("skills.activated")
 @subscribe("scenarios.synced")
+@subscribe("skills.activation.passed")
+@subscribe("scenarios.activation.passed")
 async def _on_runtime_activation_passed(evt: Any) -> None:
     try:
         DevelopmentTicketService().report_runtime_activation_observation(

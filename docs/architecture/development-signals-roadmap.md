@@ -336,6 +336,11 @@ Ticket and signals, and closes only with evidence.
   setup, migration, and other non-Builder skill/scenario activation paths,
   with source-specific policy so unattended setup failures do not flood the
   user's project inbox.
+- [x] `[must]` `DS5-29` Make activation observations gate-specific and
+  bidirectional: CLI/API skill tests, scenario tests/validation, preparation,
+  installation, and activation emit typed failure/success evidence; a success
+  closes only the matching component/space/gate finding, including JSON CLI
+  validation paths.
 - [ ] `[should]` `DS5-18` Add ticket artifact commands and SDK helpers for
   `artifact open`, screenshot preview, incremental evidence, optimistic
   revision, comment, claim, progress, resolve, verify, close, reopen,

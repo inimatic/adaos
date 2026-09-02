@@ -30,7 +30,10 @@ from adaos.services.artifact_subscription_update import (
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.operations import submit_install_operation
 from adaos.services.runtime_refresh import RuntimeRefreshError, rebuild_webspace_projection, refresh_skill_runtime
-from adaos.services.runtime_activation_observations import emit_runtime_activation_failure
+from adaos.services.runtime_activation_observations import (
+    emit_runtime_activation_failure,
+    emit_runtime_activation_success,
+)
 from adaos.services.skill.runtime_migration_worker import (
     read_status as read_skill_runtime_migration_status,
     start_background_migration,
@@ -655,6 +658,19 @@ def _install_skill_sync(body: InstallReq, mgr: SkillManager, webspace_id: str) -
             status_code=409,
             detail=f"runtime preparation failed for {skill_name}: {type(exc).__name__}: {exc}",
         ) from exc
+    emit_runtime_activation_success(
+        getattr(mgr, "bus", None),
+        component_type="skill",
+        component_id=skill_name,
+        stage="prepare",
+        source="api.skills.install",
+        report_policy="project_inbox",
+        space="default",
+        webspace_id=webspace_id,
+        version=str(getattr(prep, "version", "") or "") or None,
+        slot=str(getattr(prep, "slot", "") or "") or None,
+        operation_id=f"skill-install:{skill_name}",
+    )
     try:
         slot = mgr.activate_for_space(
             skill_name,
@@ -885,6 +901,18 @@ async def runtime_prepare(body: RuntimePrepareReq, mgr: SkillManager = Depends(_
         "resolved_manifest": str(result.resolved_manifest),
         "tests": {k: v.status for k, v in (result.tests or {}).items()},
     }
+    emit_runtime_activation_success(
+        getattr(mgr, "bus", None),
+        component_type="skill",
+        component_id=body.name,
+        stage="tests" if body.run_tests else "prepare",
+        source="api.skills.runtime_prepare",
+        report_policy="project_inbox",
+        space="default",
+        version=str(result.version or "") or None,
+        slot=str(result.slot or "") or None,
+        operation_id=f"skill-prepare:{body.name}",
+    )
     return payload
 
 

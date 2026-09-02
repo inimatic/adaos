@@ -693,10 +693,14 @@ Activation outside Builder uses the typed event-shaped
 `adaos.runtime.activation_observation.v1` contract. Explicit CLI/API operations
 set `report_policy=project_inbox`; setup, migration, and internal orchestration
 default to `diagnostic_only`. Both remain observable, but only the former may
-create a scoped `runtime_failure` ticket. A later matching
-`skills.activated` or `scenarios.synced` event supplies runtime evidence to
-resolve, verify, and close that technical ticket without changing the
-user-authored feedback lifecycle.
+create a scoped `runtime_failure` ticket. Observations carry the exact gate
+(`tests`, `validation`, `prepare`, `install`, or `activation`). A successful
+gate closes only a finding for that same component, runtime space, and gate;
+plain activation is not evidence that tests or scenario validation ran.
+Commands that own those checks, including machine-readable
+`scenario validate --json`, emit explicit `passed` or `failed` observations.
+A later matching success supplies evidence to resolve, verify, and close that
+technical ticket without changing the user-authored feedback lifecycle.
 
 ## Runtime Compatibility Findings
 

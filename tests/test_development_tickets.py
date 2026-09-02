@@ -546,6 +546,7 @@ def test_runtime_activation_observation_respects_policy_and_closes_on_retry(
             "status": "passed",
             "component_type": "skill",
             "skill_name": "demo_skill",
+            "stage": "tests",
             "space": "default",
             "webspace_id": "desktop",
             "version": "1.2.0",
@@ -555,6 +556,60 @@ def test_runtime_activation_observation_respects_policy_and_closes_on_retry(
     assert passed["reported"] is True
     assert passed["closed_tickets"][0]["ticket_id"] == ticket["ticket_id"]
     assert passed["closed_tickets"][0]["status"] == "closed"
+
+
+def test_runtime_activation_success_closes_only_the_matching_gate(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    validation = service.report_runtime_activation_observation(
+        {
+            "status": "failed",
+            "component_type": "scenario",
+            "scenario_id": "demo_metrics",
+            "failed_stage": "validation",
+            "error": "scenario schema rejected",
+            "report_policy": "project_inbox",
+            "space": "dev",
+        }
+    )["ticket"]
+    tests = service.report_runtime_activation_observation(
+        {
+            "status": "failed",
+            "component_type": "scenario",
+            "scenario_id": "demo_metrics",
+            "failed_stage": "tests",
+            "error": "test_workbench failed",
+            "report_policy": "project_inbox",
+            "space": "dev",
+        }
+    )["ticket"]
+
+    passed_validation = service.report_runtime_activation_observation(
+        {
+            "status": "passed",
+            "component_type": "scenario",
+            "scenario_id": "demo_metrics",
+            "stage": "validation",
+            "space": "dev",
+        }
+    )
+
+    assert [item["ticket_id"] for item in passed_validation["closed_tickets"]] == [
+        validation["ticket_id"]
+    ]
+    assert service.get_ticket(validation["ticket_id"])["status"] == "closed"
+    assert service.get_ticket(tests["ticket_id"])["status"] == "accepted"
+
+    passed_tests = service.report_runtime_activation_observation(
+        {
+            "status": "passed",
+            "component_type": "scenario",
+            "scenario_id": "demo_metrics",
+            "stage": "tests",
+            "space": "dev",
+        }
+    )
+    assert passed_tests["closed_tickets"][0]["ticket_id"] == tests["ticket_id"]
+    assert service.get_ticket(tests["ticket_id"])["status"] == "closed"
 
 
 def test_ticket_resolution_requires_evidence_and_closes_linked_repair(tmp_path: Path) -> None:

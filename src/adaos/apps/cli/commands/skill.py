@@ -39,7 +39,10 @@ from adaos.services.skill.runtime import (
 from adaos.services.skill.update import SkillUpdateService
 from adaos.services.skill.scaffold import create as scaffold_create
 from adaos.services.runtime_refresh import rebuild_webspace_projection_sync, refresh_skill_runtime
-from adaos.services.runtime_activation_observations import emit_runtime_activation_failure
+from adaos.services.runtime_activation_observations import (
+    emit_runtime_activation_failure,
+    emit_runtime_activation_success,
+)
 from adaos.services.workspace_registry import build_registry_entry, list_workspace_registry_entries
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.services.eventbus import emit as bus_emit
@@ -1571,6 +1574,20 @@ def cmd_install(
         )
         typer.secho(f"runtime preparation failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(1) from exc
+
+    emit_runtime_activation_success(
+        getattr(mgr, "bus", None),
+        component_type="skill",
+        component_id=skill_name,
+        stage="tests" if test else "prepare",
+        source="cli.skill.install",
+        report_policy="project_inbox",
+        space="default",
+        webspace_id=default_webspace_id(),
+        version=str(getattr(runtime, "version", "") or "") or None,
+        slot=str(getattr(runtime, "slot", "") or "") or None,
+        operation_id=f"skill-install:{skill_name}",
+    )
 
     _echo_runtime_install(runtime)
 

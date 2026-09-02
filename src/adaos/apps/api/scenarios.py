@@ -18,7 +18,10 @@ from adaos.services.scenario.manager import (
     dependency_failure_message,
 )
 from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
-from adaos.services.runtime_activation_observations import emit_runtime_activation_failure
+from adaos.services.runtime_activation_observations import (
+    emit_runtime_activation_failure,
+    emit_runtime_activation_success,
+)
 from adaos.services.scenarios import loader as scenarios_loader
 from adaos.services.workspaces import index as workspace_index
 from adaos.adapters.db import SqliteScenarioRegistry
@@ -397,6 +400,19 @@ def _install_scenario_sync(body: InstallReq, mgr: ScenarioManager, webspace_id: 
             operation_id=f"scenario-install:{body.name}",
         )
         raise
+    for stage in ("dependency_activation", "install"):
+        emit_runtime_activation_success(
+            getattr(mgr, "bus", None),
+            component_type="scenario",
+            component_id=body.name,
+            stage=stage,
+            source="api.scenarios.install",
+            report_policy="project_inbox",
+            space="default",
+            webspace_id=webspace_id,
+            version=str(getattr(meta, "version", "") or "") or None,
+            operation_id=f"scenario-install:{body.name}",
+        )
     return {
         "ok": True,
         "scenario": {

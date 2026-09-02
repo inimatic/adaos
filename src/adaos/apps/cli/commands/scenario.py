@@ -29,7 +29,10 @@ from adaos.services.root.client import RootHttpClient
 from adaos.services.root.service import create_zip_bytes
 from adaos.services.scenario.manager import ScenarioManager
 from adaos.services.scenario.validation import validate_scenario_path
-from adaos.services.runtime_activation_observations import emit_runtime_activation_failure
+from adaos.services.runtime_activation_observations import (
+    emit_runtime_activation_failure,
+    emit_runtime_activation_success,
+)
 from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
 from adaos.services.scenario.scaffold import create as scaffold_create
 from adaos.services.workspace_registry import build_registry_entry, list_workspace_registry_entries
@@ -509,6 +512,18 @@ def install_cmd(
         )
         typer.secho(f"install failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(1) from exc
+    emit_runtime_activation_success(
+        getattr(mgr, "bus", None),
+        component_type="scenario",
+        component_id=name,
+        stage="install",
+        source="cli.scenario.install",
+        report_policy="project_inbox",
+        space="default",
+        webspace_id=default_webspace_id(),
+        version=str(getattr(meta, "version", "") or "") or None,
+        operation_id=f"scenario-install:{name}",
+    )
     try:
         asyncio.run(
             rebuild_webspace_from_sources(
@@ -631,6 +646,27 @@ def validate_cmd(
     scenario_path = scenario_path / scenario_id
     report = validate_scenario_path(scenario_path)
     errors = report.errors
+    observation = {
+        "component_type": "scenario",
+        "component_id": scenario_id,
+        "stage": "validation",
+        "source": "cli.scenario.validate",
+        "report_policy": "project_inbox",
+        "space": "default",
+        "webspace_id": default_webspace_id(),
+        "operation_id": f"scenario-validate:{scenario_id}",
+    }
+    if errors:
+        emit_runtime_activation_failure(
+            getattr(ctx, "bus", None),
+            error="; ".join(str(error) for error in errors[:8]),
+            **observation,
+        )
+    else:
+        emit_runtime_activation_success(
+            getattr(ctx, "bus", None),
+            **observation,
+        )
 
     if json_output:
         payload = {
@@ -651,18 +687,6 @@ def validate_cmd(
         raise typer.Exit(0 if report.ok else 1)
 
     if errors:
-        emit_runtime_activation_failure(
-            getattr(ctx, "bus", None),
-            component_type="scenario",
-            component_id=scenario_id,
-            stage="validation",
-            error="; ".join(str(error) for error in errors[:8]),
-            source="cli.scenario.validate",
-            report_policy="project_inbox",
-            space="default",
-            webspace_id=default_webspace_id(),
-            operation_id=f"scenario-validate:{scenario_id}",
-        )
         typer.secho(_("cli.scenario.validate.errors"), fg=typer.colors.RED)
         for err in errors:
             typer.echo(_("cli.scenario.validate.error_item", error=str(err)))
@@ -694,6 +718,20 @@ def test_cmd(
 ) -> None:
     tests = _collect_scenario_tests(scenario_id)
     if not tests:
+        if scenario_id:
+            ctx = get_ctx()
+            emit_runtime_activation_failure(
+                getattr(ctx, "bus", None),
+                component_type="scenario",
+                component_id=scenario_id,
+                stage="tests",
+                error="scenario test suite is missing",
+                source="cli.scenario.test",
+                report_policy="project_inbox",
+                space="default",
+                webspace_id=default_webspace_id(),
+                operation_id=f"scenario-test:{scenario_id}",
+            )
         typer.secho(_("cli.scenario.test.none"), fg=typer.colors.YELLOW)
         raise typer.Exit(code=1)
 
@@ -704,6 +742,29 @@ def test_cmd(
     command = " ".join(args)
     typer.echo(_("cli.scenario.test.running", command=command))
     result = subprocess.run(args, text=True)
+    if scenario_id:
+        ctx = get_ctx()
+        observation = {
+            "component_type": "scenario",
+            "component_id": scenario_id,
+            "stage": "tests",
+            "source": "cli.scenario.test",
+            "report_policy": "project_inbox",
+            "space": "default",
+            "webspace_id": default_webspace_id(),
+            "operation_id": f"scenario-test:{scenario_id}",
+        }
+        if result.returncode:
+            emit_runtime_activation_failure(
+                getattr(ctx, "bus", None),
+                error=f"scenario tests failed with exit code {result.returncode}",
+                **observation,
+            )
+        else:
+            emit_runtime_activation_success(
+                getattr(ctx, "bus", None),
+                **observation,
+            )
     raise typer.Exit(code=result.returncode)
 
 

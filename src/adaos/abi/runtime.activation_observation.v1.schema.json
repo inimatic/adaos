@@ -9,19 +9,19 @@
     "status",
     "component_type",
     "component_id",
-    "failed_stage",
-    "error",
+    "stage",
     "source",
     "report_policy",
     "space"
   ],
   "properties": {
     "schema": { "const": "adaos.runtime.activation_observation.v1" },
-    "status": { "const": "failed" },
+    "status": { "enum": ["failed", "passed"] },
     "component_type": { "enum": ["skill", "scenario"] },
     "component_id": { "type": "string", "minLength": 1 },
     "skill_id": { "type": ["string", "null"] },
     "scenario_id": { "type": ["string", "null"] },
+    "stage": { "type": "string", "minLength": 1 },
     "failed_stage": { "type": "string", "minLength": 1 },
     "error": { "type": "string", "minLength": 1 },
     "source": { "type": "string", "minLength": 1 },
@@ -31,5 +31,11 @@
     "attempted_version": { "type": ["string", "null"] },
     "slot": { "type": ["string", "null"] },
     "operation_id": { "type": ["string", "null"] }
-  }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "failed" } } },
+      "then": { "required": ["failed_stage", "error"] }
+    }
+  ]
 }
