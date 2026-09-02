@@ -3700,7 +3700,16 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
 6. Do not edit manifest version/updated_at, publish, activate, or access external services.
 7. Stop immediately after the requested diff and focused check succeed."""
         elif bounded_repair:
-            required_result = """1. This is source work inside an existing AdaOS skill, not Codex skill authoring. Do not load generic skill-creator instructions.
+            if bool(repair_coverage.get("complete")):
+                required_result = """1. This is source work inside an existing AdaOS skill, not Codex skill authoring. Do not load generic skill-creator instructions.
+2. Qualified source slices cover every authorized file. Use them as the first and authoritative inspection context. Do not rediscover structures already shown there. If one acceptance edit point is absent from the slices, run at most one narrow source-read command for that exact point, then apply the complete patch.
+3. Implement only the scoped resource/data change in the exact authorized files. Use existing public AdaOS SDK/API contracts and preserve unrelated behavior.
+4. For subnet data, use only the admitted typed provider route and degrade without failing when it is unavailable. Do not invent or persist provider data.
+5. Add or update only focused regression coverage for the acceptance checks. Do not run tests or validation commands in the Codex turn; the trusted worker runs them and records evidence.
+6. Do not edit manifest version/updated_at, publish, activate, or access services not admitted by the ticket.
+7. Stop immediately after the scoped diff and focused check succeed."""
+            else:
+                required_result = """1. This is source work inside an existing AdaOS skill, not Codex skill authoring. Do not load generic skill-creator instructions.
 2. Locate one exact target ID at a time with `rg -n --max-count 12` in one file. Every discovery command must return at most {command_output_lines} lines and {command_output_bytes} bytes. Never use `rg -A`, `rg -B`, or `rg -C` across a manifest, multiple patterns, or multiple files. Read at most one 120-line surrounding slice after each exact match, and at most {discovery_lines} source lines before the first edit. Narrow a query instead of printing more output.
 3. Implement only the scoped resource/data change in the exact authorized files. Use existing public AdaOS SDK/API contracts and preserve unrelated behavior.
 4. For subnet data, use only the admitted typed provider route and degrade without failing when it is unavailable. Do not invent or persist provider data.

@@ -1851,6 +1851,8 @@ def test_bounded_repair_prompt_includes_only_qualified_json_target_slices(
     assert "collection_grid" in prompt
     assert "not selected" in prompt
     assert "edit directly and do not rediscover" in prompt
+    assert "Qualified source slices cover every authorized file" in prompt
+    assert "Locate one exact target ID" not in prompt
     assert "Keep the chart sibling unchanged." in prompt
 
 
