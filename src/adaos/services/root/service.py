@@ -2441,12 +2441,6 @@ class RootDeveloperService:
             raise RootServiceError(
                 "Project candidate source revision differs from the confirmed component checkpoint"
             )
-        source_ref = ArtifactSourceRef(
-            forge=pushed.source_ref.forge,
-            repository=pushed.source_ref.repository,
-            revision=checkpoint_revision,
-            path_scope=(f"projects/{project_id}/",),
-        )
         evidence = dict(validation_evidence or {})
         evidence.setdefault("status", "passed")
         evidence.setdefault("validator", "adaos.project.preflight")
@@ -2456,7 +2450,10 @@ class RootDeveloperService:
             project_id=project_id,
             project_dir=project_dir,
             source_workspace_root=source_workspace,
-            source_ref=source_ref,
+            # Project releases receive their aggregate projects/<id>/ SourceRef
+            # in the project builder. Promotion must retain the exact pushed
+            # component ref so Root can verify the immutable node source tree.
+            source_ref=pushed.source_ref,
             source_tree=pushed.source_tree,
             change_ids=change_ids,
             validation_evidence=evidence,

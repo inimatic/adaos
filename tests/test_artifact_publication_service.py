@@ -317,6 +317,16 @@ lifecycle:
         prepared.plan,
     ) == verification_source_ref
 
+    malformed_project_ref_candidate = replace(
+        prepared.candidate,
+        verification_source_ref=prepared.candidate.source_ref,
+        trials=(),
+    )
+    assert service._candidate_verification_source_ref(
+        malformed_project_ref_candidate,
+        prepared.plan,
+    ) == verification_source_ref
+
     service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
     _promote(service, prepared.candidate.candidate_id)
     assert (

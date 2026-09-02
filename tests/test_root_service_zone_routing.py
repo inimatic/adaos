@@ -7,6 +7,7 @@ import types
 import uuid
 
 import pytest
+from adaos.domain.artifact_release import ArtifactSourceRef
 
 fake_y_py = types.SimpleNamespace(
     YDoc=type("YDoc", (), {}),
@@ -83,6 +84,61 @@ def test_root_service_client_keeps_explicit_non_default_base_url(
     service = RootDeveloperService(config_loader=lambda: cfg, config_saver=lambda _cfg: None)
 
     assert service._client(cfg).base_url == "https://custom-root.example"
+
+
+def test_project_candidate_keeps_exact_pushed_component_source_ref(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    project_dir = workspace / "projects" / "media"
+    project_dir.mkdir(parents=True)
+    (project_dir / "project.yaml").write_text(
+        "schema: adaos.project.v1\nid: media\nversion: 1.0.0\n",
+        encoding="utf-8",
+    )
+    exact_ref = ArtifactSourceRef(
+        forge="adaos-root",
+        repository="inimatic/adaos-registry",
+        revision="a" * 40,
+        path_scope=("subnets/sn_test/nodes/node_test/skills/media_skill/",),
+    )
+    captured: dict = {}
+
+    class _Publication:
+        def load_pushed_source(self, kind: str, name: str):
+            assert (kind, name) == ("skill", "media_skill")
+            return SimpleNamespace(source_ref=exact_ref, source_tree="b" * 40)
+
+        def prepare_project_candidate(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                candidate=SimpleNamespace(to_dict=lambda: {"candidate_id": "candidate.media"}),
+                plan=SimpleNamespace(
+                    release=SimpleNamespace(to_dict=lambda: {"project_id": "media"})
+                ),
+                trial_workspace=tmp_path / "trial",
+                trial_activation={"status": "active"},
+            )
+
+    service = RootDeveloperService(config_loader=lambda: None, config_saver=lambda _cfg: None)
+    monkeypatch.setattr(service, "_load_config", lambda: object())
+    monkeypatch.setattr(service, "_workspace_root", lambda _cfg: workspace)
+    monkeypatch.setattr(service, "_artifact_publication_service", lambda _cfg: _Publication())
+
+    result = service.prepare_project_candidate(
+        "media",
+        source_kind="skill",
+        source_name="media_skill",
+        source_revision=exact_ref.revision,
+        change_ids=("change-1",),
+    )
+
+    assert result["candidate"]["candidate_id"] == "candidate.media"
+    assert captured["source_ref"] == exact_ref
+    assert captured["source_ref"].path_scope == (
+        "subnets/sn_test/nodes/node_test/skills/media_skill/",
+    )
 
 
 def test_root_init_reports_zone_aware_handshake_timeout(

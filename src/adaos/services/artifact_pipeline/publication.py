@@ -370,7 +370,19 @@ class ArtifactPublicationService:
         candidate: CandidateRecord,
         plan: ReleasePlan,
     ) -> ArtifactSourceRef:
-        if candidate.verification_source_ref is not None:
+        verification_source_ref = candidate.verification_source_ref
+        verification_scope = (
+            verification_source_ref.path_scope
+            if verification_source_ref is not None
+            else ()
+        )
+        aggregate_project_ref = bool(
+            len(verification_scope) == 1
+            and verification_scope[0].replace("\\", "/").strip("/").startswith(
+                "projects/"
+            )
+        )
+        if verification_source_ref is not None and not aggregate_project_ref:
             return candidate.verification_source_ref
 
         for evidence in reversed(candidate.validation_evidence):
@@ -422,7 +434,7 @@ class ArtifactPublicationService:
                 )
             return checkpoint.ref.source_ref
 
-        return candidate.source_ref
+        return verification_source_ref or candidate.source_ref
 
     @staticmethod
     def _development_source_manifest(root: Path) -> dict[str, Any]:
