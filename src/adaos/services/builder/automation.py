@@ -2476,12 +2476,30 @@ class BuilderAutomationService:
             else {}
         )
         changed_paths_value: Any = result.get("changed_paths")
-        if not isinstance(changed_paths_value, list):
-            provenance = (
-                result.get("provenance")
-                if isinstance(result.get("provenance"), Mapping)
+        provenance = (
+            result.get("provenance")
+            if isinstance(result.get("provenance"), Mapping)
+            else {}
+        )
+        if (
+            isinstance(changed_paths_value, list)
+            and str(result.get("execution_strategy") or "").strip()
+            == "validation_only"
+        ):
+            validation_only = (
+                provenance.get("validation_only")
+                if isinstance(provenance.get("validation_only"), Mapping)
                 else {}
             )
+            changed_paths_value = [
+                *changed_paths_value,
+                *[
+                    path
+                    for path in validation_only.get("guarded_paths") or []
+                    if str(path or "").strip()
+                ],
+            ]
+        if not isinstance(changed_paths_value, list):
             receipt = (
                 provenance.get("structured_edit_receipt")
                 if isinstance(provenance.get("structured_edit_receipt"), Mapping)

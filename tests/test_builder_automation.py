@@ -6824,6 +6824,35 @@ def test_validation_only_checkpoints_artifact_guarded_before_worker_run(
     ]
 
 
+def test_validation_only_marks_guarded_companion_skill_for_runtime_overlay(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    session = {
+        "object_type": "skill",
+        "object_id": "subscription_status_skill",
+        "companion_skill_ids": ["subscription_status_skill"],
+        "last_result": {
+            "changed_paths": [],
+            "no_source_change": True,
+            "execution_strategy": "validation_only",
+            "provenance": {
+                "execution_strategy": "validation_only",
+                "validation_only": {
+                    "guarded_paths": [
+                        "skills/subscription_status_skill/handlers/main.py",
+                        "skills/subscription_status_skill/webui.json",
+                    ]
+                },
+            },
+        },
+    }
+
+    assert service._session_changed_companion_skill_ids(session) == [
+        "subscription_status_skill"
+    ]
+
+
 def test_automation_checkpoints_primary_scenario_when_only_companion_skill_changed(
     tmp_path: Path,
     monkeypatch,
