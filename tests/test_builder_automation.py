@@ -3777,9 +3777,84 @@ def test_component_update_notice_refreshes_user_runtime_projection(
     )
 
     assert result is not None and result["ok"] is True
+    assert result["recovered"] is False
+    assert result["attempts"] == [
+        {"attempt": 1, "ok": True, "error": None, "request_id": None}
+    ]
     assert invalidations[0]["reason"] == "component_update_notice_changed"
     assert rebuilds[0]["source_of_truth"] == expected_source
     assert rebuilds[0]["skill_source_mode"] == expected_skill_mode
+
+
+def test_component_update_notice_retries_transient_webspace_rebuild(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.services import runtime_refresh
+    from adaos.services.scenario import webspace_runtime
+
+    service = _service(tmp_path)
+    rebuilds: list[dict[str, object]] = []
+    sleeps: list[float] = []
+    projections = iter(
+        [
+            {
+                "ok": False,
+                "error": "webspace_rebuild_failed",
+                "request_id": "rebuild.first",
+                "materialization": {"ready": False},
+            },
+            {
+                "ok": True,
+                "request_id": "rebuild.second",
+                "materialization": {"ready": True},
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        webspace_runtime,
+        "invalidate_webspace_materialization_cache",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_refresh,
+        "rebuild_webspace_projection_sync",
+        lambda **kwargs: rebuilds.append(dict(kwargs)) or next(projections),
+    )
+    monkeypatch.setattr("adaos.services.builder.automation.time.sleep", sleeps.append)
+
+    result = service._refresh_component_update_projection(
+        {
+            "object_type": "skill",
+            "object_id": "demo_metrics_skill",
+            "webspace_id": "desktop",
+        },
+        {
+            "mode": "devspace_to_workspace_runtime_overlay",
+            "webspace_id": "desktop",
+            "skills": [{"id": "demo_metrics_skill"}],
+            "trial": {"status": "published", "decision": "accept"},
+        },
+    )
+
+    assert result is not None and result["ok"] is True
+    assert result["recovered"] is True
+    assert result["attempts"] == [
+        {
+            "attempt": 1,
+            "ok": False,
+            "error": "webspace_rebuild_failed",
+            "request_id": "rebuild.first",
+        },
+        {
+            "attempt": 2,
+            "ok": True,
+            "error": None,
+            "request_id": "rebuild.second",
+        },
+    ]
+    assert len(rebuilds) == 2
+    assert sleeps == [1.0]
 
 
 def test_completed_session_reconciles_missing_component_update_projection(

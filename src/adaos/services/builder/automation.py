@@ -36,6 +36,8 @@ AUTOMATION_SESSION_SCHEMA = "adaos.builder.automation_session.v1"
 STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.12.0"
 FINALIZATION_HEARTBEAT_SECONDS = 10.0
 TRIAL_PREPARATION_RECOVERY_GRACE_SECONDS = 300.0
+COMPONENT_UPDATE_PROJECTION_MAX_ATTEMPTS = 3
+COMPONENT_UPDATE_PROJECTION_RETRY_SECONDS = 1.0
 AUTOMATION_PROJECTION_SCHEMA = "adaos.builder.automation_projection.v1"
 _LOCK = threading.RLock()
 _WORKER_LOCK = threading.Lock()
@@ -6327,49 +6329,83 @@ class BuilderAutomationService:
         object_type = str(session.get("object_type") or "").strip().lower()
         object_id = str(session.get("object_id") or "").strip()
 
-        invalidate_webspace_materialization_cache(
-            webspace_id,
-            reason="component_update_notice_changed",
-            action="builder_component_update_sync",
-            source_of_truth="component_update_notice",
-        )
-        if trial_pending and object_type == "scenario" and scenario and not bool(scenario.get("skipped")):
-            refreshed = self._prepare_and_activate_aprobation_scenario(
-                object_id,
-                webspace_id=webspace_id,
+        transient_errors = {
+            "stale_rebuild_superseded",
+            "webspace_rebuild_failed",
+            "webspace_rebuild_timeout",
+        }
+        attempt_receipts: list[dict[str, Any]] = []
+        projection: dict[str, Any] = {}
+        materialization: dict[str, Any] = {}
+        for attempt in range(1, COMPONENT_UPDATE_PROJECTION_MAX_ATTEMPTS + 1):
+            invalidate_webspace_materialization_cache(
+                webspace_id,
+                reason="component_update_notice_changed",
+                action="builder_component_update_sync",
+                source_of_truth="component_update_notice",
             )
-            projection = (
-                dict(refreshed.get("webspace_projection"))
-                if isinstance(refreshed.get("webspace_projection"), Mapping)
+            if (
+                trial_pending
+                and object_type == "scenario"
+                and scenario
+                and not bool(scenario.get("skipped"))
+            ):
+                refreshed = self._prepare_and_activate_aprobation_scenario(
+                    object_id,
+                    webspace_id=webspace_id,
+                )
+                projection = (
+                    dict(refreshed.get("webspace_projection"))
+                    if isinstance(refreshed.get("webspace_projection"), Mapping)
+                    else {}
+                )
+            else:
+                projection = rebuild_webspace_projection_sync(
+                    webspace_id=webspace_id,
+                    action="builder_component_update_sync",
+                    source_of_truth=(
+                        "devspace_runtime_overlay"
+                        if trial_pending
+                        else "component_update_notice"
+                    ),
+                    scenario_resolution=(
+                        "builder_aprobation_overlay" if trial_pending else None
+                    ),
+                    skill_source_mode=("dev" if trial_pending else "workspace"),
+                )
+            materialization = (
+                dict(projection.get("materialization"))
+                if isinstance(projection.get("materialization"), Mapping)
                 else {}
             )
-        else:
-            projection = rebuild_webspace_projection_sync(
-                webspace_id=webspace_id,
-                action="builder_component_update_sync",
-                source_of_truth=(
-                    "devspace_runtime_overlay" if trial_pending else "component_update_notice"
-                ),
-                scenario_resolution=("builder_aprobation_overlay" if trial_pending else None),
-                skill_source_mode=("dev" if trial_pending else "workspace"),
+            ready = bool(projection.get("ok")) and materialization.get("ready") is True
+            error = str(projection.get("error") or "").strip()
+            attempt_receipts.append(
+                {
+                    "attempt": attempt,
+                    "ok": ready,
+                    "error": error or None,
+                    "request_id": projection.get("request_id"),
+                }
             )
-        materialization = (
-            dict(projection.get("materialization"))
-            if isinstance(projection.get("materialization"), Mapping)
-            else {}
-        )
-        if not bool(projection.get("ok")) or materialization.get("ready") is not True:
-            raise RuntimeError(
-                str(
-                    projection.get("error")
+            if ready:
+                break
+            if (
+                error not in transient_errors
+                or attempt >= COMPONENT_UPDATE_PROJECTION_MAX_ATTEMPTS
+            ):
+                raise RuntimeError(
+                    error
                     or "Component update notice webspace materialization is not ready"
                 )
-            )
+            time.sleep(COMPONENT_UPDATE_PROJECTION_RETRY_SECONDS)
         return {
             "ok": True,
             "webspace_id": webspace_id,
             "stage": "alpha" if trial_pending else "published_or_reverted",
             "materialization": materialization,
+            "attempts": attempt_receipts,
+            "recovered": len(attempt_receipts) > 1,
         }
 
     def _rollback_aprobation_overlay(
