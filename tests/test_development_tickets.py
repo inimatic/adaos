@@ -1178,7 +1178,8 @@ def test_builder_package_uses_one_work_item_budget_and_automation(tmp_path: Path
     assert planned["ready"] is True
     assert planned["project_ref"] == "project:demo_metrics"
     assert planned["project_id"] == "demo_metrics"
-    assert planned["execution_budget"]["max_tokens"] == 60000
+    assert planned["execution_budget"]["max_tokens"] == 30000
+    assert planned["execution_budget"]["max_billable_tokens"] == 240000
     assert planned["repair_hints"]["profile"] == "project_batch"
     assert planned["repair_hints"]["target_files"] == [
         "skills/demo_metrics_skill/webui.json",
@@ -1200,7 +1201,7 @@ def test_builder_package_uses_one_work_item_budget_and_automation(tmp_path: Path
 
     assert started["started"] is True
     assert len(automation.calls) == 1
-    assert automation.calls[0]["execution_budget"]["max_tokens"] == 60000
+    assert automation.calls[0]["execution_budget"]["max_tokens"] == 30000
     assert automation.calls[0]["links"]["development_ticket_ids"] == ticket_ids
     assert automation.calls[0]["links"]["development_ticket_project_ref"] == "project:demo_metrics"
     assert automation.calls[0]["links"]["development_ticket_project_id"] == "demo_metrics"

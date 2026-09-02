@@ -870,6 +870,7 @@ def _autonomous_repair_qualification(ticket: Mapping[str, Any]) -> dict[str, Any
         "target_refs": list(hints.get("target_refs") or []),
         "acceptance_checks": list(hints.get("acceptance_checks") or []),
         "source_preconditions": list(hints.get("source_preconditions") or []),
+        "requires_root_mcp": hints.get("requires_root_mcp") is True,
         "structured_operation_count": len(structured.get("operations") or []),
         "reason": (
             "qualified exact repair envelope is ready"
@@ -2128,11 +2129,39 @@ class DevelopmentTicketService:
             raise ValueError("Builder package tickets must target one skill or scenario")
         target = targets[0]
         project_identity = _project_identity_for_package(tickets)
-        qualifications = [_bounded_repair_hints(ticket) for ticket in tickets]
+        qualification_candidates: dict[str, dict[str, Any]] = {}
+        qualifications = [_autonomous_repair_qualification(ticket) for ticket in tickets]
+        for index, (ticket, qualification) in enumerate(
+            zip(tickets, qualifications, strict=True)
+        ):
+            if qualification.get("ready") is True:
+                continue
+            prepared = self.prepare_builder_repair_qualification(
+                ticket["ticket_id"],
+                actor=_text(actor) or "builder.qualifier",
+                apply=False,
+            )
+            candidate = _mapping(prepared.get("qualification_candidate"))
+            qualification_candidates[ticket["ticket_id"]] = candidate
+            if (
+                candidate.get("ready") is not True
+                or _text(candidate.get("confidence")) != "high"
+            ):
+                continue
+            applied = self.prepare_builder_repair_qualification(
+                ticket["ticket_id"],
+                actor=_text(actor) or "builder.qualifier",
+                apply=True,
+                expected_revision=int(ticket.get("revision") or 1),
+            )
+            tickets[index] = _mapping(applied.get("ticket")) or ticket
+            qualifications[index] = _mapping(
+                applied.get("autonomous_repair_qualification")
+            )
         missing = [
             _text(ticket.get("ticket_id"))
             for ticket, qualification in zip(tickets, qualifications, strict=True)
-            if not qualification.get("profile") or not qualification.get("target_files")
+            if qualification.get("ready") is not True
         ]
         if missing:
             return {
@@ -2141,6 +2170,7 @@ class DevelopmentTicketService:
                 "status": "qualification_required",
                 "ticket_ids": ids,
                 "unqualified_ticket_ids": missing,
+                "qualification_candidates": qualification_candidates,
                 "target": target,
                 "repair": None,
             }
@@ -2172,13 +2202,30 @@ class DevelopmentTicketService:
             qualification.get("requires_root_mcp") is True
             for qualification in qualifications
         )
+        source_preconditions = list(
+            {
+                _text(item.get("path")): dict(item)
+                for qualification in qualifications
+                for item in _sequence_of_mappings(
+                    qualification.get("source_preconditions") or []
+                )
+                if _text(item.get("path"))
+            }.values()
+        )
         package_id = f"bpackage.{new_id()}"
         budget = dict(execution_budget) if isinstance(execution_budget, Mapping) else {
             "schema": "adaos.builder.execution_budget.v1",
-            "source": "development_ticket.package_default",
-            "max_tokens": min(200000, 30000 + 15000 * len(tickets)),
-            "max_wall_seconds": min(3600, 600 + 240 * len(tickets)),
+            "source": "development_ticket.bounded_package",
+            "max_tokens": min(
+                60000,
+                24000
+                + 6000 * max(0, len(tickets) - 1)
+                + 3000 * max(0, len(target_files) - 2),
+            ),
+            "token_budget_metric": "fresh_plus_output",
+            "max_wall_seconds": min(1800, 720 + 180 * len(tickets)),
         }
+        budget.setdefault("max_billable_tokens", int(budget.get("max_tokens") or 0) * 8)
         repair_hints = {
             "profile": "project_batch",
             "change_summary": "\n".join(
@@ -2190,6 +2237,7 @@ class DevelopmentTicketService:
             "acceptance_checks": acceptance_checks,
             "max_changed_files": len(target_files),
             "requires_root_mcp": requires_root_mcp,
+            "source_preconditions": source_preconditions,
         }
         source_refs = [
             {"type": "dev_ticket", "id": _text(ticket.get("ticket_id"))}
@@ -2300,6 +2348,22 @@ class DevelopmentTicketService:
             if not materialization.get("ok"):
                 raise ValueError("development source materialization failed")
             development_source = _mapping(materialization.get("development_source")) or development_source
+        if (
+            development_source.get("status") == "source_available"
+            and not _text(
+                development_source.get("dev_source_path")
+                or development_source.get("source_path")
+            )
+        ):
+            prepared_source = self.prepare_builder_repair_qualification(
+                ticket_list[0]["ticket_id"],
+                actor=_text(actor) or "builder.qualifier",
+                apply=False,
+            )
+            development_source = (
+                _mapping(prepared_source.get("development_source"))
+                or development_source
+            )
 
         package = _mapping(_mapping(repair.get("context")).get("package"))
         planned_project_identity = {
@@ -2311,6 +2375,51 @@ class DevelopmentTicketService:
             raise ValueError("Builder package project scope changed since planning")
         budget = _mapping(package.get("execution_budget")) or dict(DEFAULT_AUTONOMOUS_REPAIR_BUDGET)
         budget.setdefault("token_budget_metric", "fresh_plus_output")
+        repair_hints = _mapping(package.get("repair_hints"))
+        source_preconditions = _validate_repair_source_preconditions(
+            repair_hints,
+            development_source=development_source,
+            target=target,
+        )
+        if source_preconditions.get("ok") is not True:
+            repair_id = _text(repair.get("repair_id"))
+            service.transition_work_item(
+                repair_id,
+                status="blocked",
+                actor=_text(actor) or "builder.automation",
+                reason="qualified_source_changed",
+                evidence_refs=[
+                    {
+                        "type": "source_precondition_validation",
+                        "status": source_preconditions.get("status"),
+                    }
+                ],
+            )
+            released_tickets = [
+                self._release_builder_start_failure(
+                    ticket_id,
+                    repair_id=repair_id,
+                    actor=_text(actor) or "builder.automation",
+                    error_type="SourceChanged",
+                )
+                for ticket_id in ticket_ids
+            ]
+            return {
+                "ok": True,
+                "started": False,
+                "status": "source_changed",
+                "reason": "builder_requalification_required",
+                "package_id": _text(package_id),
+                "repair": next(
+                    iter(service.list(package_id=_text(package_id))),
+                    repair,
+                ),
+                "tickets": released_tickets,
+                "source_preconditions": source_preconditions,
+                "development_source": development_source,
+                "materialization": materialization,
+                "rollup": service.package_rollup(_text(package_id)),
+            }
         brief = _autonomous_package_brief(ticket_list, repair, target=target)
         links = {
             "development_ticket_id": ticket_ids[0],
@@ -2322,6 +2431,7 @@ class DevelopmentTicketService:
                 for key, value in project_identity.items()
             },
             "development_source_materialization": materialization,
+            "source_precondition_validation": source_preconditions,
         }
         current = automation_service.status(
             object_type=target["object_type"],

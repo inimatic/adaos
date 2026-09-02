@@ -314,7 +314,10 @@ Ticket and signals, and closes only with evidence.
   `uncertain_sdk`, and `needs_user_clarification`.
 - [x] `[must]` `DS5-16` Add batch repair planning for related tickets under the
   same project, source tree, skill/scenario/modal/component family, or shared
-  core blocker, while keeping per-ticket comments and evidence.
+  core blocker, while keeping per-ticket comments and evidence. Package
+  planning applies only high-confidence zero-model source qualifications,
+  merges exact files and digest preconditions once, and uses a bounded
+  incremental token budget rather than multiplying singleton budgets.
 - [x] `[must]` `DS5-17` Make the absent-dev-source choice explicit:
   `materialize`, `fork project`, `runtime overlay`, or `defer`.
 - [x] `[must]` `DS5-24` Publish completed Dev Ticket skill repairs to the user
@@ -463,8 +466,11 @@ structured repair completed with zero model tokens and a Root usage receipt.
 That measured failure mode led to `DS5-30`: an unqualified singleton now stops
 before repair/task creation, while admitted surgical/CRUD work defaults to a
 24,000 `fresh_plus_output` ceiling and structured work advertises a zero-model
-route. `DS5-31` supplies the zero-model automation step between ordinary user text
-and that exact envelope.
+route. `DS5-31` supplies the zero-model automation step between ordinary user
+text and that exact envelope; a related two-ticket package now defaults to
+30,000 tokens when it touches two files, adding only bounded per-ticket and
+per-file increments. The residual Root-accounted language path remains
+`DS5-32`.
 
 ## DS6. Analytics, Campaigns, And Policy Hardening
 
