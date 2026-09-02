@@ -2907,12 +2907,19 @@ class BuilderAutomationService:
                 and isinstance(current.get("last_result"), Mapping)
                 and not isinstance(current.get("completion_readiness"), Mapping)
             )
+            interrupted_finalization_pending = (
+                current_status == "commit_ready"
+                and task_status == "completed"
+                and isinstance(current.get("last_result"), Mapping)
+                and str(current.get("finalizing_task_id") or "").strip() == task_id
+            )
             if (
                 current_status != "failed"
                 and not recovered_transition_pending
                 and not workflow_checkpoint_pending
                 and not trial_checkpoint_rebind_pending
                 and not validated_activation_pending
+                and not interrupted_finalization_pending
             ):
                 raise ValueError("validated result recovery requires a failed Automation task")
             failure_stage = str(failure.get("stage") or "")
@@ -2921,6 +2928,7 @@ class BuilderAutomationService:
                 or workflow_checkpoint_pending
                 or trial_checkpoint_rebind_pending
                 or validated_activation_pending
+                or interrupted_finalization_pending
                 or task_status == "completed"
                 and failure_stage in {"snapshot", "live_readiness"}
                 and isinstance(current.get("last_result"), Mapping)
@@ -2938,6 +2946,8 @@ class BuilderAutomationService:
                         if trial_checkpoint_rebind_pending
                         else "validated_activation"
                         if validated_activation_pending
+                        else "interrupted_finalization"
+                        if interrupted_finalization_pending
                         else failure_stage
                     ),
                 }
