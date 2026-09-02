@@ -663,9 +663,13 @@ uses the same fail-closed qualification principle as package planning. An
 incomplete envelope returns `qualification_required` without creating Builder
 or Skill Factory work; an admitted envelope selects `bounded_patch_agent` or
 `structured_edits`, publishes its budget in both read models, and preserves
-the zero-model receipt path. The existing worker resolves qualified refs into
-bounded target context, but the reusable project/component semantic source
-index and ordinary-language qualification worker remain open.
+the zero-model receipt path. A first reusable component source index now reads
+JSON/YAML/Python through structured parsers, ranks a compact set of DEV files
+from ordinary English or Russian ticket text, and emits audited source-digest
+preconditions. High-confidence candidates can be applied without a model;
+unclear requests stop for clarification, and changed source blocks Builder work
+creation. Exact widget/modal/event/projection/route slice resolution and the
+small Root-accounted residual-language qualifier remain open.
 
 Skill Factory verification, 2026-09-02: normalized realize requests now retain
 canonical context packets, Development Session receipts, prototype handoffs,

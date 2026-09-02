@@ -2011,8 +2011,12 @@ structured route completed with zero. Builder and Dev Ticket projections now
 surface the independent domain qualification and execution preflight, including
 missing fields, route, model-call expectation, and estimated budget. Surgical
 UI/data/CRUD runs default to 24,000 `fresh_plus_output`; incomplete singleton
-repairs stop before work-item creation. Automatic bounded qualification from
-ordinary language and the reusable semantic source index remain open.
+repairs stop before work-item creation. The deterministic qualification stage
+now indexes authoritative component DEV source, resolves common English and
+Russian UI/data/CRUD language to at most four files plus focused validation,
+and verifies source digests immediately before work creation at zero model
+cost. Exact semantic slices and the Root-accounted residual-language qualifier
+remain open.
 
 Source recovery verification, 2026-09-02: the local Builder lock at release
 `builder@0.2.55` resolves `scenario:builder` as Project-owned and the three

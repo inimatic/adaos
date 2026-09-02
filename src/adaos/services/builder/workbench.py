@@ -351,6 +351,7 @@ def _builder_ticket_qualification(
     target: Mapping[str, Any],
     development_source: Mapping[str, Any],
     execution_preflight: Mapping[str, Any] | None = None,
+    qualification_candidate: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     owner_area = _ticket_owner_area(ticket, target)
     component_ref = _ticket_component_ref(ticket, target)
@@ -433,6 +434,11 @@ def _builder_ticket_qualification(
         }
     preflight = dict(execution_preflight or {})
     preflight_ready = preflight.get("ready") is True
+    candidate = dict(qualification_candidate or {})
+    local_candidate_ready = (
+        candidate.get("ready") is True
+        and str(candidate.get("confidence") or "").strip().lower() == "high"
+    )
     return {
         "schema": "adaos.builder.ticket_qualification.v1",
         "class": "project_solvable",
@@ -442,16 +448,21 @@ def _builder_ticket_qualification(
         "recommended_next": (
             "plan_builder_repair_with_validation_evidence"
             if preflight_ready
+            else "apply_local_qualification"
+            if local_candidate_ready
             else "qualify_exact_source_and_acceptance"
         ),
         "reason": (
             "ticket targets a project-owned artifact with a qualified repair envelope"
             if preflight_ready
+            else "authoritative DEV source produced a zero-model qualification candidate"
+            if local_candidate_ready
             else "ticket is project-owned but exact source and acceptance qualification is incomplete"
         ),
         "owner_area": owner_area,
         "component_ref": component_ref or None,
         "execution_preflight": preflight or None,
+        "qualification_candidate": candidate or None,
         "guardrails": guardrails,
     }
 
@@ -1258,11 +1269,19 @@ class BuilderWorkbenchService:
         execution_preflight = ticket_service.autonomous_repair_qualification(
             ticket_token
         )
+        try:
+            qualification_candidate = ticket_service.prepare_builder_repair_qualification(
+                ticket_token,
+                apply=False,
+            ).get("qualification_candidate") or {}
+        except (KeyError, ValueError):
+            qualification_candidate = {}
         qualification = _builder_ticket_qualification(
             ticket,
             target=target,
             development_source=development_source,
             execution_preflight=execution_preflight,
+            qualification_candidate=qualification_candidate,
         )
         repair_ids = {
             str(ref.get("repair_id") or "").strip()
@@ -1293,6 +1312,7 @@ class BuilderWorkbenchService:
             "development_source": development_source,
             "qualification": qualification,
             "execution_preflight": execution_preflight,
+            "qualification_candidate": qualification_candidate,
             "repair_batch": _builder_ticket_batch(ticket_service, ticket, target=target),
             "work_stream": work_stream,
             "builder_work_items": work_stream["builder_work_items"],

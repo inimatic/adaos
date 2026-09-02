@@ -810,6 +810,22 @@ def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
         "target_object_type": target_object_type or None,
         "target_object_id": target_object_id or None,
     }
+    source_preconditions: list[dict[str, Any]] = []
+    allowed_files = set(target_files)
+    for value in raw.get("source_preconditions") or []:
+        if not isinstance(value, Mapping):
+            continue
+        path = _text(value.get("path")).replace("\\", "/").strip("/")
+        digest = _text(value.get("sha256")).lower()
+        if path not in allowed_files or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            continue
+        try:
+            size = max(0, int(value.get("size") or 0))
+        except (TypeError, ValueError):
+            continue
+        source_preconditions.append({"path": path, "sha256": digest, "size": size})
+    if source_preconditions:
+        hints["source_preconditions"] = source_preconditions[:12]
     structured_edits = _normalize_structured_edits(
         raw.get("structured_edits"),
         target_files=target_files,
@@ -853,6 +869,7 @@ def _autonomous_repair_qualification(ticket: Mapping[str, Any]) -> dict[str, Any
         "target_files": list(hints.get("target_files") or []),
         "target_refs": list(hints.get("target_refs") or []),
         "acceptance_checks": list(hints.get("acceptance_checks") or []),
+        "source_preconditions": list(hints.get("source_preconditions") or []),
         "structured_operation_count": len(structured.get("operations") or []),
         "reason": (
             "qualified exact repair envelope is ready"
@@ -895,6 +912,68 @@ def _autonomous_repair_budget(
         "token_budget_metric": "fresh_plus_output",
         "max_billable_tokens": max_tokens * 8,
         "max_wall_seconds": max_wall_seconds,
+    }
+
+
+def _validate_repair_source_preconditions(
+    qualification: Mapping[str, Any],
+    *,
+    development_source: Mapping[str, Any],
+    target: Mapping[str, str],
+) -> dict[str, Any]:
+    preconditions = _sequence_of_mappings(qualification.get("source_preconditions") or [])
+    if not preconditions:
+        return {
+            "schema": "adaos.builder.source_precondition_validation.v1",
+            "status": "not_applicable",
+            "ok": True,
+            "checks": [],
+        }
+    source_root_text = _text(
+        development_source.get("dev_source_path") or development_source.get("source_path")
+    )
+    if not source_root_text:
+        return {
+            "schema": "adaos.builder.source_precondition_validation.v1",
+            "status": "unavailable",
+            "ok": False,
+            "reason": "qualified source preconditions require an authoritative DEV source path",
+            "checks": [],
+        }
+    source_root = Path(source_root_text).expanduser().resolve()
+    collection = "skills" if _text(target.get("object_type")) == "skill" else "scenarios"
+    prefix = f"{collection}/{_text(target.get('object_id'))}/"
+    checks: list[dict[str, Any]] = []
+    for item in preconditions:
+        workspace_path = _text(item.get("path")).replace("\\", "/").strip("/")
+        relative_path = workspace_path[len(prefix):] if workspace_path.startswith(prefix) else workspace_path
+        candidates = [source_root / relative_path, source_root / workspace_path]
+        source_path = next((path.resolve() for path in candidates if path.is_file()), None)
+        if source_path is None or source_root not in source_path.parents:
+            checks.append({"path": workspace_path, "status": "missing"})
+            continue
+        raw = source_path.read_bytes()
+        actual_digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+        expected_digest = _text(item.get("sha256")).lower()
+        expected_size = int(item.get("size") or 0)
+        matched = actual_digest == expected_digest and len(raw) == expected_size
+        checks.append(
+            {
+                "path": workspace_path,
+                "status": "matched" if matched else "changed",
+                "expected_sha256": expected_digest,
+                "actual_sha256": actual_digest,
+                "expected_size": expected_size,
+                "actual_size": len(raw),
+            }
+        )
+    ok = len(checks) == len(preconditions) and all(item.get("status") == "matched" for item in checks)
+    return {
+        "schema": "adaos.builder.source_precondition_validation.v1",
+        "status": "passed" if ok else "source_changed",
+        "ok": ok,
+        "reason": None if ok else "qualified DEV source changed; repair must be requalified",
+        "checks": checks,
     }
 
 
@@ -1799,6 +1878,26 @@ class DevelopmentTicketService:
                 raise ValueError("development source materialization failed")
             development_source = _mapping(materialization.get("development_source")) or development_source
         qualification = _autonomous_repair_qualification(ticket)
+        qualification_candidate: dict[str, Any] = {}
+        if not qualification["ready"]:
+            prepared = self.prepare_builder_repair_qualification(
+                ticket["ticket_id"],
+                actor=_text(actor) or "builder.qualifier",
+                apply=False,
+            )
+            qualification_candidate = _mapping(prepared.get("qualification_candidate"))
+            if (
+                qualification_candidate.get("ready") is True
+                and _text(qualification_candidate.get("confidence")) == "high"
+            ):
+                applied = self.prepare_builder_repair_qualification(
+                    ticket["ticket_id"],
+                    actor=_text(actor) or "builder.qualifier",
+                    apply=True,
+                    expected_revision=int(ticket.get("revision") or 1),
+                )
+                ticket = _mapping(applied.get("ticket")) or ticket
+                qualification = _mapping(applied.get("autonomous_repair_qualification"))
         if not qualification["ready"]:
             return {
                 "ok": True,
@@ -1806,6 +1905,27 @@ class DevelopmentTicketService:
                 "status": "qualification_required",
                 "reason": "builder_qualification_required",
                 "qualification": qualification,
+                "qualification_candidate": qualification_candidate,
+                "ticket": ticket,
+                "repair": None,
+                "automation": None,
+                "development_source": development_source,
+                "materialization": materialization,
+            }
+        source_preconditions = _validate_repair_source_preconditions(
+            qualification,
+            development_source=development_source,
+            target=target,
+        )
+        if source_preconditions.get("ok") is not True:
+            return {
+                "ok": True,
+                "started": False,
+                "status": "source_changed",
+                "reason": "builder_requalification_required",
+                "qualification": qualification,
+                "qualification_candidate": qualification_candidate,
+                "source_preconditions": source_preconditions,
                 "ticket": ticket,
                 "repair": None,
                 "automation": None,
@@ -1833,6 +1953,7 @@ class DevelopmentTicketService:
                 for key, value in _project_identity_from_ticket(handoff["ticket"]).items()
             },
             "development_source_materialization": materialization,
+            "source_precondition_validation": source_preconditions,
         }
         resume_failed = getattr(automation_service, "resume_failed_dev_ticket_repair", None)
         start_followup = getattr(automation_service, "start_followup_dev_ticket_repair", None)
@@ -3548,6 +3669,13 @@ class DevelopmentTicketService:
             )
             if structured_edits != normalized.get("structured_edits"):
                 raise ValueError("structured_edits changed during qualification normalization")
+        requested_preconditions = [
+            dict(value)
+            for value in raw.get("source_preconditions") or []
+            if isinstance(value, Mapping)
+        ]
+        if requested_preconditions != list(normalized.get("source_preconditions") or []):
+            raise ValueError("source_preconditions contain invalid paths or digests")
         reason_token = _text(reason)
         if not reason_token:
             raise ValueError("Builder repair requalification reason is required")
@@ -4982,6 +5110,83 @@ class DevelopmentTicketService:
             self._validate_ticket(ticket)
             self._write(state)
             return _normalized_ticket(ticket)
+
+    def prepare_builder_repair_qualification(
+        self,
+        ticket_id: str,
+        *,
+        actor: str = "builder.qualifier",
+        apply: bool = False,
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        """Derive a bounded repair envelope from authoritative DEV source without model use."""
+
+        ticket = self.get_ticket(ticket_id)
+        if not ticket:
+            raise KeyError(ticket_id)
+        if _text(ticket.get("status")) in {*TERMINAL_TICKET_STATES, "resolved", "verified"}:
+            raise ValueError("completed Dev Ticket cannot be qualified")
+        target = _automation_target_from_ticket(ticket)
+        source_scope = _development_source_scope(ticket, target)
+        development_source = development_source_options(source_scope)
+        if (
+            development_source.get("status") == "source_available"
+            and not _text(
+                development_source.get("dev_source_path")
+                or development_source.get("source_path")
+            )
+        ):
+            try:
+                from adaos.services.builder.workspace import BuilderWorkspaceService
+
+                resolved_source = BuilderWorkspaceService.from_context().development_source_status(
+                    kind=target["object_type"],
+                    artifact_id=target["object_id"],
+                    project_id=_project_id_for_materialization(ticket, development_source),
+                )
+                if resolved_source:
+                    development_source = {
+                        **development_source,
+                        **resolved_source,
+                    }
+            except Exception:
+                pass
+        from adaos.services.builder.ticket_qualification import prepare_repair_qualification
+
+        candidate = prepare_repair_qualification(
+            ticket,
+            development_source=development_source,
+            object_type=target["object_type"],
+            object_id=target["object_id"],
+        )
+        result: dict[str, Any] = {
+            "ok": True,
+            "applied": False,
+            "ticket": ticket,
+            "development_source": development_source,
+            "qualification_candidate": candidate,
+            "autonomous_repair_qualification": _autonomous_repair_qualification(ticket),
+        }
+        if not apply:
+            return result
+        if candidate.get("ready") is not True or _text(candidate.get("confidence")) != "high":
+            raise ValueError("local Builder qualification is not ready for automatic application")
+        builder_repair = _mapping(candidate.get("builder_repair"))
+        updated = self.requalify_builder_repair(
+            ticket_id,
+            builder_repair=builder_repair,
+            actor=_text(actor) or "builder.qualifier",
+            reason="deterministic qualification from authoritative DEV source index",
+            expected_revision=expected_revision,
+        )
+        result.update(
+            {
+                "applied": True,
+                "ticket": updated,
+                "autonomous_repair_qualification": _autonomous_repair_qualification(updated),
+            }
+        )
+        return result
 
     def _release_builder_start_failure(
         self,

@@ -201,6 +201,79 @@ def test_development_ticket_api_create_accepts_signal_kind_with_ticket_kind(tmp_
     ]
 
 
+def test_development_ticket_api_prepares_and_applies_zero_model_qualification(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path / "state")
+    client = _client(service)
+    source = tmp_path / "demo_metrics_skill"
+    (source / "handlers").mkdir(parents=True)
+    (source / "tests").mkdir()
+    (source / "webui.json").write_text(
+        json.dumps({"semantic": {"views": [{"id": "metrics", "title": "Live metrics"}]}}),
+        encoding="utf-8",
+    )
+    (source / "handlers" / "main.py").write_text(
+        "def refresh_metrics():\n    return []\n",
+        encoding="utf-8",
+    )
+    (source / "tests" / "test_demo_metrics.py").write_text(
+        "def test_metrics_refresh():\n    assert True\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "adaos.services.development_tickets.development_source_options",
+        lambda _scope: {
+            "status": "source_available",
+            "source": "dev",
+            "target_type": "skill",
+            "target_id": "demo_metrics_skill",
+            "dev_source_path": str(source),
+        },
+    )
+    created = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "summary": "Refresh должен сразу обновлять таблицу Metrics.",
+            "kind": "feedback",
+            "status": "captured",
+            "owner_area": "skill",
+            "component_ref": "skill:demo_metrics_skill",
+            "target_scope": {
+                "type": "skill",
+                "id": "demo_metrics_skill",
+                "source": "workspace",
+                "surface": "modal",
+            },
+        },
+    )
+    ticket = created.json()["ticket"]
+
+    prepared = client.post(
+        f"/api/development-tickets/{ticket['ticket_id']}/builder-qualification/prepare",
+        headers=_headers(),
+        json={"apply": False},
+    )
+    assert prepared.status_code == 200, prepared.text
+    candidate = prepared.json()["qualification_candidate"]
+    assert candidate["ready"] is True
+    assert candidate["model_call_expected"] is False
+    assert candidate["estimated_model_tokens"] == 0
+
+    applied = client.post(
+        f"/api/development-tickets/{ticket['ticket_id']}/builder-qualification/prepare",
+        headers=_headers(),
+        json={"apply": True, "expected_revision": ticket["revision"]},
+    )
+    assert applied.status_code == 200, applied.text
+    payload = applied.json()
+    assert payload["applied"] is True
+    assert payload["autonomous_repair_qualification"]["ready"] is True
+    assert payload["ticket"]["metadata"]["builder_repair"]["source_preconditions"]
+
+
 def test_development_ticket_api_plans_and_starts_builder_package(
     tmp_path: Path,
     monkeypatch,

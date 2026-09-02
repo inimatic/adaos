@@ -1010,6 +1010,142 @@ def test_single_autonomous_repair_requires_qualification_before_spending_tokens(
     assert service.get_ticket(ticket["ticket_id"])["builder_refs"] == []
 
 
+def test_autonomous_repair_applies_zero_model_source_qualification_before_builder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "demo_metrics_skill"
+    (source / "handlers").mkdir(parents=True)
+    (source / "tests").mkdir()
+    (source / "webui.json").write_text(
+        json.dumps({"semantic": {"views": [{"id": "metrics", "title": "Metrics"}]}}),
+        encoding="utf-8",
+    )
+    (source / "handlers" / "main.py").write_text(
+        "def refresh_metrics():\n    return []\n",
+        encoding="utf-8",
+    )
+    (source / "tests" / "test_demo_metrics.py").write_text(
+        "def test_refresh_metrics():\n    assert True\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "adaos.services.development_tickets.development_source_options",
+        lambda _scope: {
+            "status": "source_available",
+            "source": "dev",
+            "target_type": "skill",
+            "target_id": "demo_metrics_skill",
+            "dev_source_path": str(source),
+        },
+    )
+    service = DevelopmentTicketService(state_dir=tmp_path / "state")
+    repair_service = BuilderRepairService(state_dir=tmp_path / "state")
+    automation = _FakeBuilderAutomation()
+    signal = service.capture_signal(
+        kind="feedback_note",
+        summary="Refresh должен сразу обновлять таблицу Metrics.",
+        target_scope={
+            "type": "skill",
+            "id": "demo_metrics_skill",
+            "source": "workspace",
+            "surface": "modal",
+        },
+        source="client_feedback",
+        owner_area="skill",
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="feedback",
+        status="ready_for_builder",
+        owner_area="skill",
+    )["ticket"]
+
+    result = service.start_autonomous_repair(
+        ticket["ticket_id"],
+        actor="builder:automation",
+        repair_service=repair_service,
+        automation_service=automation,
+        webspace_id="desktop",
+    )
+
+    assert result["started"] is True
+    assert len(automation.calls) == 1
+    assert automation.calls[0]["execution_budget"]["max_tokens"] == 24000
+    source_validation = automation.calls[0]["links"]["source_precondition_validation"]
+    assert source_validation["status"] == "passed"
+    assert all(item["status"] == "matched" for item in source_validation["checks"])
+    brief = json.loads(automation.calls[0]["implementation_brief"])
+    assert brief["repair_hints"]["source_preconditions"]
+    assert any(
+        item["kind"] == "builder_repair_requalified"
+        for item in result["ticket"]["history"]
+    )
+
+
+def test_autonomous_repair_stops_when_qualified_source_digest_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "demo_metrics_skill"
+    source.mkdir()
+    webui = source / "webui.json"
+    webui.write_text(
+        json.dumps({"semantic": {"views": [{"id": "metrics", "title": "Metrics"}]}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "adaos.services.development_tickets.development_source_options",
+        lambda _scope: {
+            "status": "source_available",
+            "source": "dev",
+            "target_type": "skill",
+            "target_id": "demo_metrics_skill",
+            "dev_source_path": str(source),
+        },
+    )
+    service = DevelopmentTicketService(state_dir=tmp_path / "state")
+    repair_service = BuilderRepairService(state_dir=tmp_path / "state")
+    automation = _FakeBuilderAutomation()
+    signal = service.capture_signal(
+        kind="feedback_note",
+        summary="Переименовать заголовок таблицы Metrics.",
+        target_scope={"type": "skill", "id": "demo_metrics_skill", "source": "workspace"},
+        source="client_feedback",
+        owner_area="skill",
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="feedback",
+        status="ready_for_builder",
+        owner_area="skill",
+    )["ticket"]
+    qualified = service.prepare_builder_repair_qualification(
+        ticket["ticket_id"],
+        apply=True,
+        expected_revision=ticket["revision"],
+    )
+    assert qualified["autonomous_repair_qualification"]["ready"] is True
+    webui.write_text(
+        json.dumps({"semantic": {"views": [{"id": "metrics", "title": "Changed elsewhere"}]}}),
+        encoding="utf-8",
+    )
+
+    result = service.start_autonomous_repair(
+        ticket["ticket_id"],
+        actor="builder:automation",
+        repair_service=repair_service,
+        automation_service=automation,
+    )
+
+    assert result["started"] is False
+    assert result["status"] == "source_changed"
+    assert result["reason"] == "builder_requalification_required"
+    assert automation.calls == []
+    assert repair_service.list() == []
+    assert service.get_ticket(ticket["ticket_id"])["builder_refs"] == []
+
+
 def test_builder_package_uses_one_work_item_budget_and_automation(tmp_path: Path) -> None:
     service = DevelopmentTicketService(state_dir=tmp_path)
     repair_service = BuilderRepairService(state_dir=tmp_path)

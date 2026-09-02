@@ -347,11 +347,18 @@ Ticket and signals, and closes only with evidence.
   checks; expose `qualification_required`, `bounded_patch_agent`, or
   `structured_edits` plus the estimated budget in Dev Ticket and Builder read
   models.
-- [ ] `[must]` `DS5-31` Add the bounded qualification worker that turns an
-  ordinary-language ticket plus the semantic source index into an audited
-  repair envelope. Prefer deterministic extraction, use a small Root-accounted
-  LLM only for residual ambiguity, derive edit preconditions from authoritative
-  source rather than model output, and ask the user when confidence is low.
+- [x] `[must]` `DS5-31` Add the deterministic first stage of the bounded
+  qualification worker. Index the authoritative component DEV source through
+  JSON/YAML/Python-aware readers, map ordinary English or Russian ticket text
+  to a bounded profile/files/refs/checks envelope, retain source digest
+  preconditions, expose a dry-run/apply API and Builder read model, and stop for
+  clarification below high confidence. An explicit Autonomous action may apply
+  a high-confidence zero-model candidate; source drift blocks work creation.
+- [ ] `[must]` `DS5-32` Add the residual bounded-language qualifier for cases
+  that deterministic extraction cannot resolve. Use a small Root-accounted LLM
+  only to propose intent and candidate refs, resolve every ref and precondition
+  in core, persist its usage receipt, and ask the user rather than admit a
+  low-confidence envelope.
 - [ ] `[should]` `DS5-18` Add ticket artifact commands and SDK helpers for
   `artifact open`, screenshot preview, incremental evidence, optimistic
   revision, comment, claim, progress, resolve, verify, close, reopen,
@@ -456,7 +463,7 @@ structured repair completed with zero model tokens and a Root usage receipt.
 That measured failure mode led to `DS5-30`: an unqualified singleton now stops
 before repair/task creation, while admitted surgical/CRUD work defaults to a
 24,000 `fresh_plus_output` ceiling and structured work advertises a zero-model
-route. `DS5-31` remains the required automation step between ordinary user text
+route. `DS5-31` supplies the zero-model automation step between ordinary user text
 and that exact envelope.
 
 ## DS6. Analytics, Campaigns, And Policy Hardening

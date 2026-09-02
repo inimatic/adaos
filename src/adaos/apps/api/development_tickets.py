@@ -84,6 +84,12 @@ class DevTicketBuilderQualificationRequest(BaseModel):
     expected_revision: int | None = Field(default=None, ge=1)
 
 
+class DevTicketBuilderQualificationPrepareRequest(BaseModel):
+    apply: bool = False
+    actor: str = Field(default="builder.qualifier", min_length=1)
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
 class DevTicketResponseRequest(BaseModel):
     response_action_id: str = Field(..., min_length=1)
     pending_action_id: str | None = None
@@ -1485,6 +1491,29 @@ def requalify_builder_repair(
     except ValueError as exc:
         code = status.HTTP_409_CONFLICT if "changed since" in str(exc) or "revision conflict" in str(exc) else status.HTTP_400_BAD_REQUEST
         raise HTTPException(status_code=code, detail=str(exc)) from exc
+
+
+@router.post("/{ticket_id}/builder-qualification/prepare")
+def prepare_builder_repair_qualification(
+    ticket_id: str,
+    body: DevTicketBuilderQualificationPrepareRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        result = service.prepare_builder_repair_qualification(
+            ticket_id,
+            actor=body.actor,
+            apply=body.apply,
+            expected_revision=body.expected_revision,
+        )
+        return {
+            **result,
+            "detail": _ticket_detail(service, result["ticket"]),
+        }
+    except KeyError as exc:
+        raise _not_found(ticket_id) from exc
+    except ValueError as exc:
+        raise _ticket_mutation_error(exc) from exc
 
 
 @router.get("/{ticket_id}/evidence")
