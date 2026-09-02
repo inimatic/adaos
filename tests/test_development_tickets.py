@@ -1218,6 +1218,79 @@ def test_builder_package_uses_one_work_item_budget_and_automation(tmp_path: Path
     assert started["rollup"]["total_tokens"] == 150
 
 
+def test_builder_package_preserves_all_structured_edits_for_zero_model_route(
+    tmp_path: Path,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    target_file = "skills/demo_metrics_skill/handlers/main.py"
+    signal = service.capture_signal(
+        kind="development_request",
+        summary="Rename one generated Demo Metrics row",
+        target_scope={
+            "type": "skill",
+            "id": "demo_metrics_skill",
+            "source": "dev",
+            "project_ref": "project:demo_metrics",
+            "project_id": "demo_metrics",
+        },
+        source="client_feedback",
+        owner_area="skill",
+        metadata={
+            "builder_repair": {
+                "profile": "surgical_ui",
+                "target_files": [target_file],
+                "target_refs": ["demo.metric[id=open-dev-tickets].title"],
+                "acceptance_checks": ["The generated row uses its clearer title."],
+                "max_changed_files": 1,
+                "requires_root_mcp": False,
+                "structured_edits": {
+                    "schema": "adaos.builder.structured_edit_set.v1",
+                    "operations": [
+                        {
+                            "id": "rename-generated-title",
+                            "op": "replace_text",
+                            "path": target_file,
+                            "old": '"title": "Open Dev Tickets"',
+                            "new": '"title": "Open change requests"',
+                            "expected_count": 1,
+                        }
+                    ],
+                },
+            }
+        },
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="ready_for_builder",
+        owner_area="skill",
+    )["ticket"]
+
+    planned = service.plan_builder_package(
+        [ticket["ticket_id"]],
+        actor="builder:qualifier",
+        repair_service=repair_service,
+        execution_budget={"max_model_tokens": 4_000},
+    )
+
+    assert planned["repair_hints"]["structured_edits"]["operations"] == [
+        {
+            "id": "rename-generated-title",
+            "op": "replace_text",
+            "path": target_file,
+            "old": '"title": "Open Dev Tickets"',
+            "new": '"title": "Open change requests"',
+            "expected_count": 1,
+        }
+    ]
+    repair = repair_service.list(package_id=planned["package_id"])[0]
+    package = repair["context"]["package"]
+    assert package["repair_hints"]["structured_edits"] == planned["repair_hints"][
+        "structured_edits"
+    ]
+
+
 def test_builder_package_starts_successor_after_published_workflow(tmp_path: Path) -> None:
     service = DevelopmentTicketService(state_dir=tmp_path)
     repair_service = BuilderRepairService(state_dir=tmp_path)

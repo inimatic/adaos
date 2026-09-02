@@ -2253,6 +2253,29 @@ class DevelopmentTicketService:
             qualification.get("requires_root_mcp") is True
             for qualification in qualifications
         )
+        structured_edit_sets = [
+            _mapping(_bounded_repair_hints(ticket).get("structured_edits"))
+            for ticket in tickets
+        ]
+        package_structured_edits: dict[str, Any] = {}
+        if all(
+            _text(qualification.get("execution_route")) == "structured_edits"
+            and structured_edit_sets[index]
+            for index, qualification in enumerate(qualifications)
+        ):
+            package_structured_edits = _normalize_structured_edits(
+                {
+                    "schema": _STRUCTURED_EDIT_SCHEMA,
+                    "operations": [
+                        dict(operation)
+                        for edit_set in structured_edit_sets
+                        for operation in edit_set.get("operations") or []
+                        if isinstance(operation, Mapping)
+                    ],
+                },
+                target_files=target_files,
+                strict=True,
+            )
         source_preconditions = list(
             {
                 _text(item.get("path")): dict(item)
@@ -2290,6 +2313,8 @@ class DevelopmentTicketService:
             "requires_root_mcp": requires_root_mcp,
             "source_preconditions": source_preconditions,
         }
+        if package_structured_edits:
+            repair_hints["structured_edits"] = package_structured_edits
         source_refs = [
             {"type": "dev_ticket", "id": _text(ticket.get("ticket_id"))}
             for ticket in tickets
