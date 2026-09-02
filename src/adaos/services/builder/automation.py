@@ -338,6 +338,16 @@ def _brief_deterministic_strategy(value: Any) -> str:
     return ""
 
 
+def _brief_is_bounded_dev_ticket_repair(value: Any) -> bool:
+    payload = _brief_payload(value)
+    return (
+        str(payload.get("schema") or "").strip()
+        == "adaos.dev_ticket.autonomous_repair_brief.v1"
+        and isinstance(payload.get("repair_hints"), Mapping)
+        and bool(payload["repair_hints"].get("target_files"))
+    )
+
+
 def _canonical_repair_path(value: Any, *, kind: str, object_id: str) -> str:
     path = str(value or "").replace("\\", "/").strip("/")
     if not path:
@@ -407,7 +417,8 @@ def _iteration_context_projection(
         implementation_brief=implementation_brief,
     )
     execution_strategy = _brief_deterministic_strategy(implementation_brief)
-    if not execution_strategy:
+    bounded_repair = _brief_is_bounded_dev_ticket_repair(implementation_brief)
+    if not execution_strategy and not bounded_repair:
         return projection
     payload = _brief_payload(implementation_brief)
     repair_hints = (
@@ -433,8 +444,12 @@ def _iteration_context_projection(
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
-    return {
-        "schema": "adaos.builder.deterministic_context_projection.v1",
+    result = {
+        "schema": (
+            "adaos.builder.deterministic_context_projection.v1"
+            if execution_strategy
+            else "adaos.builder.bounded_repair_context_projection.v1"
+        ),
         "target": {"object_type": kind, "object_id": project_id},
         "context_packet": {
             "ref": packet_ref,
@@ -468,9 +483,13 @@ def _iteration_context_projection(
         "authority": {
             "write_scope": f"{kind}:{project_id}",
             "core_mutation": "denied",
-            "execution_strategy": execution_strategy,
+            "execution_strategy": execution_strategy or "bounded_patch_agent",
         },
     }
+    if not execution_strategy:
+        result["repair"].pop("deterministic_input_digest", None)
+        result["repair"].pop("structured_edit_set_digest", None)
+    return result
 
 
 def _project_context_projection(
@@ -572,6 +591,59 @@ def _deterministic_project_context_projection(
             "write_scope": component_ref,
             "core_mutation": "denied",
             "execution_strategy": execution_strategy,
+        },
+    }
+
+
+def _bounded_repair_project_context_projection(
+    context_packet: Mapping[str, Any],
+    *,
+    component_ref: str,
+    source_snapshot_digest: str | None,
+    context_packet_ref: str,
+    context_packet_digest: str | None,
+) -> dict[str, Any]:
+    """Retain bounded project authority without replaying full workflow history."""
+
+    projected = context_packet_prompt_projection(context_packet)
+    change = dict(projected.get("change") or {})
+    dependencies = []
+    for item in projected.get("dependencies") or []:
+        if isinstance(item, Mapping):
+            compact = {
+                key: copy.deepcopy(item.get(key))
+                for key in ("type", "id", "ref", "version", "status")
+                if item.get(key) not in (None, "", [], {})
+            }
+            if compact:
+                dependencies.append(compact)
+        elif str(item).strip():
+            dependencies.append(str(item).strip())
+        if len(dependencies) >= 20:
+            break
+    return {
+        "schema": "adaos.builder.bounded_repair_project_context.v1",
+        "component_ref": component_ref,
+        "source_generation": source_snapshot_digest,
+        "project": copy.deepcopy(dict(projected.get("project") or {})),
+        "base": copy.deepcopy(dict(projected.get("base") or {})),
+        "change": {
+            key: copy.deepcopy(change.get(key))
+            for key in ("change_id", "route", "gate", "status")
+            if change.get(key) not in (None, "", [], {})
+        },
+        "allowed_paths": copy.deepcopy(list(projected.get("allowed_paths") or []))[:20],
+        "dependencies": dependencies,
+        "facets": copy.deepcopy(dict(projected.get("facets") or {})),
+        "coverage": copy.deepcopy(dict(projected.get("coverage") or {})),
+        "context_packet": {
+            "ref": context_packet_ref,
+            "digest": context_packet_digest,
+        },
+        "authority": {
+            "write_scope": component_ref,
+            "core_mutation": "denied",
+            "execution_strategy": "bounded_patch_agent",
         },
     }
 
@@ -1000,6 +1072,15 @@ class BuilderAutomationService:
                 context_packet_digest=str(context_packet.get("digest") or "").strip()
                 or None,
                 execution_strategy=execution_strategy,
+            )
+        elif _brief_is_bounded_dev_ticket_repair(effective_brief):
+            project_projection = _bounded_repair_project_context_projection(
+                context_packet,
+                component_ref=component_ref,
+                source_snapshot_digest=source_snapshot_digest,
+                context_packet_ref=packet_artifact["ref"],
+                context_packet_digest=str(context_packet.get("digest") or "").strip()
+                or None,
             )
         else:
             project_projection = _project_context_projection(

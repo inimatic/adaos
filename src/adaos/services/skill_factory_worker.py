@@ -1861,12 +1861,48 @@ def _codex_prompt_budget_check(
     max_tokens = int(budget["max_model_tokens"])
     prompt_limit = execution_prompt_token_limit(max_tokens)
     reserve = max(0, max_tokens - prompt_limit)
-    status = "ok" if estimate <= prompt_limit else "blocked"
+    scaled_prompt_estimate = max(
+        1,
+        int(estimate * CODEX_LIVE_BUDGET_SAFETY_FACTOR),
+    )
+    provider_input_estimate = max(
+        scaled_prompt_estimate,
+        CODEX_LIVE_PROVIDER_BASELINE_TOKENS,
+    )
+    fresh_input_estimate = min(
+        provider_input_estimate,
+        scaled_prompt_estimate + CODEX_LIVE_FRESH_BASELINE_TOKENS,
+    )
+    metric = str(budget.get("metric") or "model_tokens")
+    primary_input_estimate = (
+        fresh_input_estimate
+        if metric == "fresh_plus_output"
+        else provider_input_estimate
+    )
+    required_primary_tokens = primary_input_estimate + reserve
+    max_billable_tokens = int(budget.get("max_billable_tokens") or 0)
+    required_billable_tokens = provider_input_estimate + reserve
+    blocked_reasons: list[str] = []
+    if required_primary_tokens > max_tokens:
+        blocked_reasons.append("primary_budget_below_estimated_first_turn")
+    if max_billable_tokens and required_billable_tokens > max_billable_tokens:
+        blocked_reasons.append("billable_budget_below_estimated_first_turn")
+    status = "blocked" if blocked_reasons else "ok"
     return {
         "schema": "adaos.skill_factory.codex_prompt_budget_check.v1",
         "status": status,
+        "blocked_reasons": blocked_reasons,
         "prompt_token_estimate": estimate,
         "prompt_token_limit": prompt_limit,
+        "scaled_prompt_token_estimate": scaled_prompt_estimate,
+        "estimated_first_turn": {
+            "primary_tokens": primary_input_estimate,
+            "billable_tokens": provider_input_estimate,
+            "fresh_input_tokens": fresh_input_estimate,
+            "provider_input_tokens": provider_input_estimate,
+            "required_primary_tokens": required_primary_tokens,
+            "required_billable_tokens": required_billable_tokens,
+        },
         "reserved_for_tools_and_output": reserve,
         "declared": budget,
     }
@@ -2878,11 +2914,14 @@ class LocalSkillFactoryWorker:
                 }
             _write_json(input_dir / "token_budget_preflight.json", prompt_budget)
             if prompt_budget.get("status") == "blocked":
+                first_turn = dict(prompt_budget.get("estimated_first_turn") or {})
                 raise ValueError(
-                    "Codex prompt token budget exceeded before launch: "
-                    f"estimated {prompt_budget['prompt_token_estimate']} > "
-                    f"limit {prompt_budget['prompt_token_limit']} "
-                    f"for declared {prompt_budget['declared']['max_model_tokens']} model tokens"
+                    "Codex token budget cannot admit the estimated first turn: "
+                    f"required primary {first_turn.get('required_primary_tokens', 0)} / "
+                    f"declared {prompt_budget['declared']['max_model_tokens']}; "
+                    f"required billable {first_turn.get('required_billable_tokens', 0)} / "
+                    f"declared {prompt_budget['declared']['max_billable_tokens']}; "
+                    f"reasons={','.join(prompt_budget.get('blocked_reasons') or [])}"
                 )
             structured_edit_receipt: dict[str, Any] | None = None
             root_mcp_evidence: dict[str, Any] | None = None

@@ -2994,6 +2994,64 @@ def test_codex_prompt_budget_blocks_oversized_instruction_before_launch() -> Non
     assert check["declared"]["max_model_tokens"] == 1600
     assert check["declared"]["max_billable_tokens"] == 1600
     assert check["prompt_token_estimate"] > check["prompt_token_limit"]
+    assert check["blocked_reasons"] == [
+        "primary_budget_below_estimated_first_turn",
+        "billable_budget_below_estimated_first_turn",
+    ]
+
+
+def test_codex_prompt_budget_blocks_known_provider_floors_before_launch() -> None:
+    assignment = {
+        "realize_request": {
+            "artifacts": {
+                "execution_budget": {
+                    "source": "test",
+                    "max_model_tokens": 4_000,
+                    "max_billable_tokens": 32_000,
+                    "token_budget_metric": "fresh_plus_output",
+                }
+            }
+        }
+    }
+
+    check = _codex_prompt_budget_check(assignment, "x" * 4_828)
+
+    assert check["status"] == "blocked"
+    assert check["prompt_token_estimate"] == 1_207
+    assert check["estimated_first_turn"] == {
+        "primary_tokens": 5_508,
+        "billable_tokens": 40_000,
+        "fresh_input_tokens": 5_508,
+        "provider_input_tokens": 40_000,
+        "required_primary_tokens": 6_532,
+        "required_billable_tokens": 41_024,
+    }
+    assert check["blocked_reasons"] == [
+        "primary_budget_below_estimated_first_turn",
+        "billable_budget_below_estimated_first_turn",
+    ]
+
+
+def test_codex_prompt_budget_admits_bounded_cached_turn() -> None:
+    assignment = {
+        "realize_request": {
+            "artifacts": {
+                "execution_budget": {
+                    "source": "test",
+                    "max_model_tokens": 8_000,
+                    "max_billable_tokens": 64_000,
+                    "token_budget_metric": "fresh_plus_output",
+                }
+            }
+        }
+    }
+
+    check = _codex_prompt_budget_check(assignment, "x" * 4_828)
+
+    assert check["status"] == "ok"
+    assert check["blocked_reasons"] == []
+    assert check["estimated_first_turn"]["required_primary_tokens"] == 6_532
+    assert check["estimated_first_turn"]["required_billable_tokens"] == 41_024
 
 
 def test_codex_live_budget_estimate_counts_growing_tool_context(tmp_path: Path) -> None:

@@ -476,6 +476,8 @@ def test_dev_ticket_repair_projects_minimal_diff_constraints(tmp_path: Path) -> 
     assert constraints["max_changed_files"] == 2
     assert task["realize_request"]["mcp"] == {"enabled": False, "requested_scope": []}
     context_control = started["session"]["context_control"]
+    assert context_control["model_call_expected"] is True
+    assert context_control["required_estimated_tokens"] < 4_000
     plan = service._contexts().get_plan(context_control["plan_id"])
     assert "project:recipe_suite" in plan["subject_refs"]
     assert "project:recipes" not in plan["subject_refs"]

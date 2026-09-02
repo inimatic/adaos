@@ -19,7 +19,6 @@ from adaos.sdk.core.errors import SdkError
 from adaos.sdk.developer import projects
 from adaos.sdk.developer.source_preprocessing import prepare_notebook_units, query_digest, select_units
 from adaos.services.artifact_pipeline.storage import atomic_write_bytes, mutation_lock
-from adaos.services.builder.sources import _source_analysis
 
 
 _GROUP_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
@@ -228,6 +227,9 @@ def add_path(
     context_policy: Mapping[str, Any] | None = None,
     replace_existing: bool = False,
 ) -> dict[str, Any]:
+    # Delay Builder package initialization so worker-first imports remain acyclic.
+    from adaos.services.builder.sources import _source_analysis
+
     source = Path(source_path).expanduser().resolve()
     if not source.is_file():
         raise ArtifactContextError("source_path must reference an existing regular file")

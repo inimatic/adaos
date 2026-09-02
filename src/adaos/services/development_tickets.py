@@ -1072,10 +1072,55 @@ def _validate_repair_source_preconditions(
 def _autonomous_repair_brief(ticket: Mapping[str, Any], repair: Mapping[str, Any], *, target: Mapping[str, str]) -> str:
     policy = _mapping(ticket.get("policy"))
     policy.setdefault("publication_required", True)
+    input_refs: list[dict[str, Any]] = []
+    for raw in reversed(
+        [
+            *_sequence_of_mappings(ticket.get("artifact_refs") or []),
+            *_sequence_of_mappings(ticket.get("evidence_refs") or []),
+        ]
+    ):
+        ref_type = _text(raw.get("type"))
+        ref_status = _text(raw.get("status")).lower()
+        if ref_type not in {"screenshot", "runtime_guard", "trace", "file", "validation"}:
+            continue
+        if ref_type in {"trace", "file", "validation"} and ref_status in {
+            "passed",
+            "completed",
+            "reported",
+        }:
+            continue
+        compact = {
+            key: raw.get(key)
+            for key in (
+                "type",
+                "id",
+                "path",
+                "digest",
+                "status",
+                "code",
+                "message",
+                "receiver",
+                "topic",
+            )
+            if raw.get(key) not in (None, "", [], {})
+        }
+        if compact and compact not in input_refs:
+            input_refs.append(compact)
+        if len(input_refs) >= 8:
+            break
+    relation_refs = [
+        {
+            key: ref.get(key)
+            for key in ("relation", "ticket_id", "target_ref", "status")
+            if ref.get(key) not in (None, "", [], {})
+        }
+        for ref in _sequence_of_mappings(ticket.get("relation_refs") or [])[:12]
+    ]
     payload = {
         "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
         "execution_mode": "surgical_dev_ticket_repair",
         "ticket_id": _text(ticket.get("ticket_id")),
+        "ticket_revision": ticket.get("revision"),
         "repair_id": _text(repair.get("repair_id")),
         "kind": _text(ticket.get("kind")),
         "summary": _text(ticket.get("summary")),
@@ -1084,10 +1129,8 @@ def _autonomous_repair_brief(ticket: Mapping[str, Any], repair: Mapping[str, Any
         "owner_area": _text(ticket.get("owner_area")),
         "component_ref": _text(ticket.get("component_ref")),
         "policy": policy,
-        "metadata": _mapping(ticket.get("metadata")),
-        "relation_refs": _sequence_of_mappings(ticket.get("relation_refs") or []),
-        "evidence_refs": _sequence_of_mappings(ticket.get("evidence_refs") or []),
-        "artifact_refs": _sequence_of_mappings(ticket.get("artifact_refs") or []),
+        "relation_refs": [ref for ref in relation_refs if ref],
+        "input_evidence_refs": list(reversed(input_refs)),
         "repair_hints": _bounded_repair_hints(ticket),
         "diff_policy": {
             "scope": "minimal",

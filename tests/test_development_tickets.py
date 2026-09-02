@@ -8,6 +8,7 @@ from jsonschema import Draft202012Validator
 
 from adaos.services.builder.repair import BuilderRepairService
 from adaos.services.builder.workspace import BuilderWorkspaceService
+from adaos.services import development_tickets as development_tickets_module
 from adaos.services.development_tickets import (
     COMPATIBILITY_PENDING_ACTION_KIND,
     COMPATIBILITY_RESPONSE_TOPIC,
@@ -15,6 +16,63 @@ from adaos.services.development_tickets import (
     development_source_options,
 )
 from adaos.services.skill.activation import stream_receiver_event_admission
+
+
+def test_autonomous_repair_brief_excludes_historical_builder_noise() -> None:
+    ticket = {
+        "ticket_id": "dticket.compact",
+        "revision": 9,
+        "kind": "development_request",
+        "summary": "Rename one visible heading.",
+        "target_scope": {"type": "skill", "id": "demo_metrics_skill"},
+        "owner_area": "skill",
+        "component_ref": "skill:demo_metrics_skill.heading",
+        "policy": {"publication_required": True},
+        "metadata": {
+            "builder_repair": {
+                "profile": "surgical_ui",
+                "target_files": ["skills/demo_metrics_skill/webui.json"],
+                "target_refs": ["view:demo.heading"],
+                "acceptance_checks": ["The heading is concise."],
+                "max_changed_files": 1,
+            },
+            "historical_builder_payload": "x" * 100_000,
+        },
+        "evidence_refs": [
+            {
+                "type": "builder_automation",
+                "id": f"automation.{index}",
+                "status": "completed",
+                "payload": "x" * 10_000,
+            }
+            for index in range(20)
+        ]
+        + [
+            {
+                "type": "screenshot",
+                "id": "artifact.screenshot",
+                "digest": "sha256:screenshot",
+            }
+        ],
+    }
+
+    brief_text = development_tickets_module._autonomous_repair_brief(
+        ticket,
+        {"repair_id": "repair.compact"},
+        target={"object_type": "skill", "object_id": "demo_metrics_skill"},
+    )
+    brief = json.loads(brief_text)
+
+    assert len(brief_text.encode("utf-8")) < 6_000
+    assert "metadata" not in brief
+    assert "evidence_refs" not in brief
+    assert brief["input_evidence_refs"] == [
+        {
+            "type": "screenshot",
+            "id": "artifact.screenshot",
+            "digest": "sha256:screenshot",
+        }
+    ]
 
 
 class _FakeBuilderAutomation:
