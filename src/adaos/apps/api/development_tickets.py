@@ -122,6 +122,10 @@ class DevTicketPackagePlanRequest(BaseModel):
     ticket_ids: list[str] = Field(..., min_length=1, max_length=12)
     actor: str = Field(default="builder", min_length=1)
     execution_budget: dict[str, Any] | None = None
+    source_strategy: str | None = Field(
+        default=None,
+        pattern="^(materialize_dev_source|create_local_fork)$",
+    )
 
 
 class DevTicketPackageStartRequest(BaseModel):
@@ -1240,6 +1244,7 @@ def plan_builder_package(
             actor=body.actor,
             repair_service=_repair_service_for(service),
             execution_budget=body.execution_budget,
+            source_strategy=body.source_strategy,
         )
     except KeyError as exc:
         raise _not_found(str(exc).strip("'")) from exc

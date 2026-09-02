@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import yaml
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
@@ -238,6 +239,63 @@ def test_materialize_dev_source_copies_workspace_project_owned_slice(tmp_path: P
     assert (service.dev_scenarios_root / "demo_scene" / "scenario.yaml").is_file()
     assert (service.dev_skills_root / "demo_skill" / "handlers" / "main.py").is_file()
     assert (service.dev_scenarios_root.parent / "projects" / "demo_project" / "project.yaml").is_file()
+
+
+def test_create_local_fork_materializes_standalone_workspace_skill_and_project(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    _write_demo_skill(tmp_path, "local_probe_skill")
+
+    receipt = service.create_local_fork(
+        kind="skill",
+        artifact_id="local_probe_skill",
+        actor="builder:test",
+    )
+    repeated = service.create_local_fork(
+        kind="skill",
+        artifact_id="local_probe_skill",
+        actor="builder:test",
+    )
+
+    assert receipt["schema"] == "adaos.builder.local_source_fork.v1"
+    assert receipt["strategy"] == "create_local_fork"
+    assert receipt["project_id"] == "local_probe"
+    assert receipt["project_ref"] == "project:local_probe"
+    assert receipt["components"][0]["status"] == "materialized"
+    assert receipt["components"][0]["source_digest"].startswith("sha256:")
+    assert (Path(service.dev_skills_root) / "local_probe_skill" / "skill.yaml").is_file()
+    assert (
+        Path(service.dev_skills_root).parent
+        / "projects"
+        / "local_probe"
+        / "project.yaml"
+    ).is_file()
+    assert repeated["fork_id"] == receipt["fork_id"]
+    assert repeated["idempotent"] is True
+
+
+def test_create_local_fork_rejects_divergent_orphaned_dev_source(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    _write_demo_skill(tmp_path, "conflicted_skill")
+    dev_skill = _write_dev_skill(service, "conflicted_skill")
+    (dev_skill / "skill.yaml").write_text(
+        "name: conflicted_skill\nversion: 9.9.9\ntools: []\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="intersects divergent DEV source"):
+        service.create_local_fork(
+            kind="skill",
+            artifact_id="conflicted_skill",
+            actor="builder:test",
+        )
+
+    assert not (
+        Path(service.dev_skills_root).parent
+        / "projects"
+        / "conflicted"
+    ).exists()
 
 
 def test_builder_skill_default_rewrites_conversation_manifest_refs(tmp_path: Path) -> None:
@@ -892,6 +950,31 @@ def test_builder_api_exposes_draft_and_preview(tmp_path: Path) -> None:
     assert preview["summary"]["approval_profile"] == "low_risk_auto_apply"
     assert preview["conversation"]["conversation_id"] == "conv.skill.builder_skill.default"
     assert preview["source_refs"]["conversation_id"] == "conv.skill.builder_skill.default"
+
+
+def test_builder_api_creates_idempotent_local_source_fork(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    _write_demo_skill(tmp_path, "api_probe_skill")
+    app = FastAPI()
+    app.include_router(builder_api.router, prefix="/api/builder")
+    app.dependency_overrides[require_token] = lambda: None
+    app.dependency_overrides[builder_api._get_service] = lambda: service
+    client = TestClient(app)
+    request = {
+        "kind": "skill",
+        "artifact_id": "api_probe_skill",
+        "actor": "builder:api-test",
+    }
+
+    response = client.post("/api/builder/source-recovery/local-fork", json=request)
+    repeated = client.post("/api/builder/source-recovery/local-fork", json=request)
+
+    assert response.status_code == 200, response.text
+    assert repeated.status_code == 200, repeated.text
+    receipt = response.json()["receipt"]
+    assert receipt["project_id"] == "api_probe"
+    assert receipt["idempotent"] is False
+    assert repeated.json()["receipt"] == {**receipt, "idempotent": True}
 
 
 def test_builder_api_exposes_trial_decision() -> None:

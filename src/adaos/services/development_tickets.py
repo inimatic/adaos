@@ -2109,6 +2109,7 @@ class DevelopmentTicketService:
         repair_service: BuilderRepairService | None = None,
         execution_budget: Mapping[str, Any] | None = None,
         workspace_service: Any | None = None,
+        source_strategy: str | None = None,
     ) -> dict[str, Any]:
         ids = list(dict.fromkeys(_text(item) for item in ticket_ids if _text(item)))
         if not ids:
@@ -2177,6 +2178,7 @@ class DevelopmentTicketService:
             }
 
         project_resolution: dict[str, Any] = {}
+        source_materialization: dict[str, Any] = {}
         if not project_identity:
             if workspace_service is None:
                 from adaos.services.builder.workspace import BuilderWorkspaceService
@@ -2193,6 +2195,43 @@ class DevelopmentTicketService:
                 "created",
                 "source_available",
             }:
+                strategy = _text(source_strategy)
+                if strategy == "materialize_dev_source":
+                    source_materialization = _mapping(
+                        workspace_service.materialize_dev_source(
+                            kind=target["object_type"],
+                            artifact_id=target["object_id"],
+                            project_id=_text(project_resolution.get("project_id"))
+                            or None,
+                        )
+                    )
+                elif strategy == "create_local_fork":
+                    source_materialization = _mapping(
+                        workspace_service.create_local_fork(
+                            kind=target["object_type"],
+                            artifact_id=target["object_id"],
+                            project_id=_text(project_resolution.get("project_id"))
+                            or None,
+                            actor=_text(actor) or "builder.qualifier",
+                        )
+                    )
+                elif strategy:
+                    raise ValueError(
+                        "Builder package source_strategy must be "
+                        "materialize_dev_source or create_local_fork"
+                    )
+                if source_materialization:
+                    project_resolution = _mapping(
+                        workspace_service.ensure_owning_dev_project(
+                            kind=target["object_type"],
+                            artifact_id=target["object_id"],
+                            actor=_text(actor) or "builder.qualifier",
+                        )
+                    )
+            if _text(project_resolution.get("status")) not in {
+                "created",
+                "source_available",
+            }:
                 return {
                     "ok": True,
                     "ready": False,
@@ -2200,6 +2239,7 @@ class DevelopmentTicketService:
                     "ticket_ids": ids,
                     "target": target,
                     "project_resolution": project_resolution,
+                    "source_materialization": source_materialization,
                     "repair": None,
                 }
             project_id = _text(project_resolution.get("project_id"))
@@ -2367,6 +2407,7 @@ class DevelopmentTicketService:
             "target": target,
             **project_identity,
             "project_resolution": project_resolution,
+            "source_materialization": source_materialization,
             "repair": repair,
             "tickets": linked,
             "repair_hints": repair_hints,

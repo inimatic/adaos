@@ -1446,6 +1446,72 @@ def test_builder_package_adopts_standalone_dev_skill_into_project(tmp_path: Path
         )
 
 
+def test_builder_package_can_explicitly_fork_unlocked_workspace_source(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    workspace_root = tmp_path / "workspace"
+    workspace_skill = workspace_root / "skills" / "local_probe_skill"
+    workspace_skill.mkdir(parents=True)
+    (workspace_skill / "skill.yaml").write_text(
+        "name: local_probe_skill\nversion: 0.1.0\ntools: []\n",
+        encoding="utf-8",
+    )
+    dev_root = tmp_path / "dev" / "test-subnet"
+    workspace_service = BuilderWorkspaceService(
+        state_dir=state_dir,
+        workspace_root=workspace_root,
+        skills_root=workspace_root / "skills",
+        scenarios_root=workspace_root / "scenarios",
+        dev_skills_root=dev_root / "skills",
+        dev_scenarios_root=dev_root / "scenarios",
+    )
+    service = DevelopmentTicketService(state_dir=state_dir)
+    repair_service = BuilderRepairService(state_dir=state_dir)
+    signal = service.capture_signal(
+        kind="development_request",
+        summary="Clarify the local probe description",
+        target_scope={"type": "skill", "id": "local_probe_skill", "source": "workspace"},
+        source="client_feedback",
+        owner_area="skill",
+        metadata={
+            "builder_repair": {
+                "profile": "surgical_ui",
+                "target_object_type": "skill",
+                "target_object_id": "local_probe_skill",
+                "target_files": ["skills/local_probe_skill/skill.yaml"],
+                "target_refs": ["skill:local_probe_skill.description"],
+                "acceptance_checks": ["The description is clear."],
+                "max_changed_files": 1,
+            }
+        },
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="ready_for_builder",
+        owner_area="skill",
+    )["ticket"]
+
+    planned = service.plan_builder_package(
+        [ticket["ticket_id"]],
+        actor="builder:qualifier",
+        repair_service=repair_service,
+        workspace_service=workspace_service,
+        source_strategy="create_local_fork",
+    )
+
+    assert planned["ready"] is True
+    assert planned["project_id"] == "local_probe"
+    assert planned["project_resolution"]["status"] == "source_available"
+    assert planned["source_materialization"]["strategy"] == "create_local_fork"
+    assert (dev_root / "skills" / "local_probe_skill" / "skill.yaml").is_file()
+    assert (dev_root / "projects" / "local_probe" / "project.yaml").is_file()
+    updated = service.get_ticket(ticket["ticket_id"])
+    assert updated is not None
+    assert updated["metadata"]["project_ref"] == "project:local_probe"
+
+
 def test_builder_package_rejects_same_skill_from_different_projects(tmp_path: Path) -> None:
     service = DevelopmentTicketService(state_dir=tmp_path)
     repair_service = BuilderRepairService(state_dir=tmp_path)

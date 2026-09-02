@@ -144,6 +144,13 @@ class BuilderSourceRecoveryApplyRequest(BaseModel):
     actor: str = Field(default="builder.api", min_length=1)
 
 
+class BuilderLocalSourceForkRequest(BaseModel):
+    kind: str = Field(..., pattern="^(skill|scenario)$")
+    artifact_id: str = Field(..., min_length=1)
+    project_id: str | None = None
+    actor: str = Field(default="builder.api", min_length=1)
+
+
 @router.get("/approval-profiles")
 def approval_profiles(service: BuilderWorkspaceService = Depends(_get_service)) -> dict[str, Any]:
     return {"ok": True, "profiles": service.approval_profiles()}
@@ -178,6 +185,25 @@ def apply_source_recovery(
             artifact_id=body.artifact_id,
             expected_plan_digest=body.expected_plan_digest,
             decisions=body.decisions,
+            project_id=body.project_id,
+            actor=body.actor,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"ok": True, "receipt": receipt}
+
+
+@router.post("/source-recovery/local-fork")
+def create_local_source_fork(
+    body: BuilderLocalSourceForkRequest,
+    service: BuilderWorkspaceService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        receipt = service.create_local_fork(
+            kind=body.kind,
+            artifact_id=body.artifact_id,
             project_id=body.project_id,
             actor=body.actor,
         )

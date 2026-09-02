@@ -15,6 +15,7 @@ import yaml
 from jsonschema import Draft202012Validator, Draft7Validator, ValidationError
 
 from adaos.services import conversation_links, conversation_safety
+from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from adaos.services.runtime_paths import current_base_dir, current_repo_root, current_state_dir
 from adaos.services.skill.validation import validate_data_route_contract
 
@@ -213,6 +214,37 @@ def _copytree(src: Path, dst: Path) -> None:
         return {name for name in names if name in _SKIP_DIRS}
 
     shutil.copytree(src, dst, ignore=_ignore)
+
+
+def _source_tree_snapshot(root: Path) -> dict[str, Any]:
+    source = Path(root).expanduser().resolve()
+    if not source.is_dir():
+        raise FileNotFoundError(f"source tree not found: {source}")
+    files: list[dict[str, Any]] = []
+    for path in sorted(source.rglob("*"), key=lambda item: item.as_posix()):
+        relative = path.relative_to(source)
+        if any(part in _SKIP_DIRS for part in relative.parts):
+            continue
+        if path.is_symlink():
+            raise ValueError(f"source tree must not contain symlinks: {relative.as_posix()}")
+        if not path.is_file():
+            continue
+        payload = path.read_bytes()
+        files.append(
+            {
+                "path": relative.as_posix(),
+                "size": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        )
+    identity = json.dumps(files, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return {
+        "root": str(source),
+        "file_count": len(files),
+        "size_bytes": sum(int(item["size"]) for item in files),
+        "digest": "sha256:" + hashlib.sha256(identity.encode("utf-8")).hexdigest(),
+        "files": files,
+    }
 
 
 def _is_text_file(path: Path) -> bool:
@@ -896,6 +928,198 @@ class BuilderWorkspaceService:
             project_id=project_id,
             actor=actor,
         )
+
+    def create_local_fork(
+        self,
+        *,
+        kind: str,
+        artifact_id: str,
+        project_id: str | None = None,
+        actor: str = "builder",
+    ) -> dict[str, Any]:
+        """Fork current Workspace source into DEV with a digest-bound receipt."""
+
+        normalized_kind = str(kind or "").strip().lower().rstrip("s")
+        artifact_token = _slug(artifact_id)
+        if normalized_kind not in {"skill", "scenario"}:
+            raise ValueError("local fork kind must be skill or scenario")
+        actor_token = str(actor or "").strip() or "builder"
+        component_ref = f"{normalized_kind}:{artifact_token}"
+        workspace_owners = self._workspace_project_ids_owning_ref(component_ref)
+        requested_project = _slug(project_id) if project_id else ""
+        if requested_project:
+            if workspace_owners and requested_project not in workspace_owners:
+                raise ValueError(
+                    f"Workspace Project {requested_project!r} does not own {component_ref}"
+                )
+            owner_ids = [requested_project]
+        else:
+            owner_ids = workspace_owners
+        if len(owner_ids) > 1:
+            raise ValueError(
+                f"local fork requires one Workspace Project owner for {component_ref}: "
+                + ", ".join(owner_ids)
+            )
+
+        entries: list[dict[str, Any]] = []
+        if owner_ids:
+            owner_id = owner_ids[0]
+            manifest_info = self._read_workspace_project_manifest(owner_id)
+            if manifest_info is None:
+                raise FileNotFoundError(f"workspace project source not found: {owner_id}")
+            manifest_path, manifest = manifest_info
+            entries.append(
+                {
+                    "kind": "project",
+                    "id": owner_id,
+                    "source": manifest_path.parent.resolve(),
+                    "target": (self._dev_projects_root() / owner_id).resolve(),
+                }
+            )
+            refs = self._project_owned_component_refs(manifest)
+            if component_ref not in refs:
+                raise ValueError(f"Workspace Project {owner_id!r} does not own {component_ref}")
+        else:
+            owner_id = ""
+            refs = [component_ref]
+
+        for ref in refs:
+            ref_kind, _, ref_id = ref.partition(":")
+            ref_kind = ref_kind.strip().lower().rstrip("s")
+            ref_id = _slug(ref_id)
+            if ref_kind not in {"skill", "scenario"} or not ref_id:
+                continue
+            source = self._workspace_artifact_root(ref_kind, ref_id)
+            if source is None:
+                raise FileNotFoundError(f"workspace {ref_kind} source not found: {ref_id}")
+            entries.append(
+                {
+                    "kind": ref_kind,
+                    "id": ref_id,
+                    "source": source.resolve(),
+                    "target": self._dev_artifact_root(ref_kind, ref_id),
+                }
+            )
+
+        state_root = Path(self.state_dir or current_state_dir()) / "builder" / "source_forks"
+        state_root.mkdir(parents=True, exist_ok=True)
+        with mutation_lock(state_root / ".mutation.lock", timeout_s=30.0):
+            for entry in entries:
+                entry["source_snapshot"] = _source_tree_snapshot(entry["source"])
+                target = Path(entry["target"])
+                if not target.is_dir():
+                    entry["target_status"] = "missing"
+                    continue
+                target_snapshot = _source_tree_snapshot(target)
+                if target_snapshot["digest"] != entry["source_snapshot"]["digest"]:
+                    raise ValueError(
+                        "local fork intersects divergent DEV source: "
+                        f"{entry['kind']}:{entry['id']}"
+                    )
+                entry["target_status"] = "identical"
+
+            fork_identity = {
+                "component_ref": component_ref,
+                "project_id": owner_id or None,
+                "sources": [
+                    {
+                        "kind": entry["kind"],
+                        "id": entry["id"],
+                        "digest": entry["source_snapshot"]["digest"],
+                    }
+                    for entry in entries
+                ],
+            }
+            identity_json = json.dumps(
+                fork_identity,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            identity_digest = "sha256:" + hashlib.sha256(
+                identity_json.encode("utf-8")
+            ).hexdigest()
+            fork_id = f"source_fork.{identity_digest.removeprefix('sha256:')[:26]}"
+            receipt_path = state_root / f"{fork_id}.json"
+            if receipt_path.is_file():
+                receipt = _read_json(receipt_path)
+                return {**receipt, "idempotent": True}
+
+            created_targets: list[Path] = []
+            created_project_root: Path | None = None
+            copied: list[dict[str, Any]] = []
+            try:
+                for entry in entries:
+                    source = Path(entry["source"])
+                    target = Path(entry["target"])
+                    if entry["target_status"] == "identical":
+                        status = "already_present"
+                    else:
+                        result = self._copy_workspace_dir(
+                            source_root=source,
+                            target_root=target,
+                            kind=str(entry["kind"]),
+                            artifact_id=str(entry["id"]),
+                        )
+                        status = str(result.get("status") or "materialized")
+                        if status == "materialized":
+                            created_targets.append(target)
+                    if _source_tree_snapshot(source)["digest"] != entry["source_snapshot"]["digest"]:
+                        raise RuntimeError(
+                            f"Workspace source changed during local fork: {entry['kind']}:{entry['id']}"
+                        )
+                    target_snapshot = _source_tree_snapshot(target)
+                    if target_snapshot["digest"] != entry["source_snapshot"]["digest"]:
+                        raise RuntimeError(
+                            f"DEV source verification failed after local fork: {entry['kind']}:{entry['id']}"
+                        )
+                    copied.append(
+                        {
+                            "kind": entry["kind"],
+                            "name": entry["id"],
+                            "status": status,
+                            "source_root": str(source),
+                            "artifact_root": str(target),
+                            "source_digest": entry["source_snapshot"]["digest"],
+                        }
+                    )
+
+                project_resolution = self.ensure_owning_dev_project(
+                    kind=normalized_kind,
+                    artifact_id=artifact_token,
+                    project_id=owner_id or None,
+                    actor=actor_token,
+                )
+                if project_resolution.get("status") not in {"created", "source_available"}:
+                    raise RuntimeError("local fork did not establish an owning DEV Project")
+                if project_resolution.get("created"):
+                    created_project_root = Path(
+                        str(project_resolution.get("project_source_path") or "")
+                    )
+                receipt = {
+                    "schema": "adaos.builder.local_source_fork.v1",
+                    "fork_id": fork_id,
+                    "strategy": "create_local_fork",
+                    "status": "materialized",
+                    "component_ref": component_ref,
+                    "project_id": project_resolution.get("project_id"),
+                    "project_ref": project_resolution.get("project_ref"),
+                    "source_digest": identity_digest,
+                    "components": copied,
+                    "project_resolution": project_resolution,
+                    "actor": actor_token,
+                    "created_at": _now_iso(),
+                    "idempotent": False,
+                }
+                atomic_write_json(receipt_path, receipt)
+            except Exception:
+                if created_project_root is not None and created_project_root.is_dir():
+                    shutil.rmtree(created_project_root)
+                for target in reversed(created_targets):
+                    if target.is_dir():
+                        shutil.rmtree(target)
+                raise
+            return receipt
 
     def materialize_dev_source(
         self,
