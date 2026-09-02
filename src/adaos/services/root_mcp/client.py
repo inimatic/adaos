@@ -173,6 +173,45 @@ class RootMcpClient:
             dry_run=dry_run,
         )
 
+    def plan_builder_source_recovery(
+        self,
+        *,
+        kind: str,
+        artifact_id: str,
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
+        arguments = {"kind": str(kind), "artifact_id": str(artifact_id)}
+        if project_id:
+            arguments["project_id"] = str(project_id)
+        return self.call("builder.source_recovery.plan", arguments=arguments)
+
+    def apply_builder_source_recovery(
+        self,
+        *,
+        kind: str,
+        artifact_id: str,
+        expected_plan_digest: str,
+        decisions: Mapping[str, str] | None = None,
+        project_id: str | None = None,
+        actor: str | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "kind": str(kind),
+            "artifact_id": str(artifact_id),
+            "expected_plan_digest": str(expected_plan_digest),
+            "decisions": dict(decisions or {}),
+        }
+        if project_id:
+            arguments["project_id"] = str(project_id)
+        if actor:
+            arguments["actor"] = str(actor)
+        return self.call(
+            "builder.source_recovery.apply",
+            arguments=arguments,
+            dry_run=dry_run,
+        )
+
     def list_dev_tickets(self, **filters: Any) -> dict[str, Any]:
         arguments = {key: value for key, value in filters.items() if value is not None}
         return self.call("dev_ticket.list", arguments=arguments)

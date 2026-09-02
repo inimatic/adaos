@@ -1900,13 +1900,25 @@ Architecture owner:
   classifies clean, one-sided drift, converged unpublished work, invalid source,
   missing package, and three-way conflict. Lock-backed materialization fails
   closed on every non-reviewable result instead of creating a blank scaffold.
-- [ ] `[must]` Complete reviewed source recovery apply: preserve divergent
+- [x] `[must]` Complete reviewed source recovery apply: preserve divergent
   Workspace and DEV trees as immutable evidence, synthesize a Project
   definition from the exact release when the legacy project directory is
   absent, create a Change from the selected owned-source delta, and require a
   new Candidate/Trial/acceptance/Publication before moving `WorkspaceLock`.
   Dependencies remain read-only unless their owning Project is opened through
   a separately scoped Change.
+
+Reviewed recovery is exposed through the Builder service facade, public SDK,
+authenticated REST API, and Root MCP. Apply requires the exact reviewed plan
+digest and explicit decisions for ambiguous owned components. It snapshots
+divergent valid trees into the content-addressed package store and Project
+source evidence, never materializes dependencies into another Project's DEV
+scope, reconstructs a missing legacy Project declaration from the immutable
+release, and creates only a `planned` Change. A durable operation journal makes
+partial outcomes visible and blocks replay after an uncertain post-Change
+failure; an immutable receipt makes completed replay idempotent. WorkspaceLock
+bytes remain unchanged until the ordinary Candidate, isolated Trial, explicit
+acceptance, and Publication workflow completes.
 - [ ] `[should]` Add Project/Application catalog projections with profiles,
   localized categories, free tags, deployment scopes, and an advanced raw
   component view.

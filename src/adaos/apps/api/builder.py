@@ -135,9 +135,57 @@ class BuilderTrialDecisionRequest(BaseModel):
     reason: str = ""
 
 
+class BuilderSourceRecoveryApplyRequest(BaseModel):
+    kind: str = Field(..., pattern="^(skill|scenario|project)$")
+    artifact_id: str = Field(..., min_length=1)
+    expected_plan_digest: str = Field(..., pattern="^sha256:[0-9a-f]{64}$")
+    decisions: dict[str, str] = Field(default_factory=dict)
+    project_id: str | None = None
+    actor: str = Field(default="builder.api", min_length=1)
+
+
 @router.get("/approval-profiles")
 def approval_profiles(service: BuilderWorkspaceService = Depends(_get_service)) -> dict[str, Any]:
     return {"ok": True, "profiles": service.approval_profiles()}
+
+
+@router.get("/source-recovery/plan")
+def source_recovery_plan(
+    kind: str,
+    artifact_id: str,
+    project_id: str | None = None,
+    service: BuilderWorkspaceService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        plan = service.development_source_recovery_plan(
+            kind=kind,
+            artifact_id=artifact_id,
+            project_id=project_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "plan": plan}
+
+
+@router.post("/source-recovery/apply")
+def apply_source_recovery(
+    body: BuilderSourceRecoveryApplyRequest,
+    service: BuilderWorkspaceService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        receipt = service.apply_development_source_recovery(
+            kind=body.kind,
+            artifact_id=body.artifact_id,
+            expected_plan_digest=body.expected_plan_digest,
+            decisions=body.decisions,
+            project_id=body.project_id,
+            actor=body.actor,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"ok": True, "receipt": receipt}
 
 
 @router.put("/projects/{kind}/{project_id}/sources/{filename:path}")

@@ -29,6 +29,7 @@ DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
         *DEFAULT_BEARER_CAPABILITIES,
         "development.read.ticket_artifacts",
         "development.write.tickets",
+        "development.write.source_recovery",
         "context.read",
         "context.receipt.write",
         "context.memory.propose",

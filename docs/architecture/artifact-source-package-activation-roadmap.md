@@ -742,6 +742,16 @@ and live Builder inspection on core commit `bc603cb8`. `POST
 `legacy_allowed=false`, and `status=up_to_date`; it did not mutate Workspace or
 turn an already-current subscription into `409 Conflict`.
 
+Builder source recovery now treats the immutable package and WorkspaceLock as
+the base of a three-way review, not as an editable source checkout. A
+digest-bound plan/apply contract preserves divergent Workspace and DEV trees,
+keeps consumed dependencies read-only, and materializes only the owning
+Project into DEV. Apply cannot promote or move WorkspaceLock: it opens a normal
+Builder Change whose later Candidate, Trial, acceptance, and Publication
+provide the only path back to an active workspace release. REST, SDK, and Root
+MCP expose the same contract; MCP mutation requires the dedicated
+`development.write.source_recovery` capability.
+
 ## Milestone AP7: End-To-End Proof And Legacy Retirement Decision
 
 **Outcome:** the representative single-user pipeline is reproducible on this

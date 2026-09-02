@@ -159,7 +159,12 @@ def _event_class(payload: dict[str, Any]) -> str:
         return "access_token"
     if tool_id.startswith("hub."):
         return "target_operation"
-    if tool_id.startswith("development.") or tool_id.startswith("adaos_dev.") or tool_id.startswith("dev_ticket."):
+    if (
+        tool_id.startswith("development.")
+        or tool_id.startswith("adaos_dev.")
+        or tool_id.startswith("builder.")
+        or tool_id.startswith("dev_ticket.")
+    ):
         return "development"
     return "audit_event"
 

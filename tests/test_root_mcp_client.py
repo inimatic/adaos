@@ -12,6 +12,31 @@ class _StubRootHttpClient:
         return {"ok": True, "path": path}
 
 
+def test_root_mcp_client_exposes_builder_source_recovery() -> None:
+    stub = _StubRootHttpClient()
+    client = RootMcpClient(
+        config=RootMcpClientConfig(root_url="https://root.example.test"),
+        http=stub,  # type: ignore[arg-type]
+    )
+
+    client.plan_builder_source_recovery(kind="project", artifact_id="demo")
+    client.apply_builder_source_recovery(
+        kind="project",
+        artifact_id="demo",
+        expected_plan_digest="sha256:" + "a" * 64,
+        decisions={"scenario:demo": "keep_dev"},
+        actor="builder:test",
+        dry_run=True,
+    )
+
+    assert stub.calls[0][2]["json"]["tool_id"] == "builder.source_recovery.plan"
+    assert stub.calls[1][2]["json"]["tool_id"] == "builder.source_recovery.apply"
+    assert stub.calls[1][2]["json"]["arguments"]["decisions"] == {
+        "scenario:demo": "keep_dev"
+    }
+    assert stub.calls[1][2]["json"]["dry_run"] is True
+
+
 def test_root_mcp_client_uses_root_url_scope_and_bearer_headers() -> None:
     stub = _StubRootHttpClient()
     config = RootMcpClientConfig(

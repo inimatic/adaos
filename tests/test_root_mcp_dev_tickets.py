@@ -132,3 +132,66 @@ def test_root_mcp_dev_ticket_capabilities_are_explicit() -> None:
     assert contracts["dev_ticket.get_artifact"].required_capability == "development.read.ticket_artifacts"
     assert contracts["dev_ticket.operate"].required_capability == "development.write.tickets"
     assert contracts["dev_ticket.operate"].side_effects == "write"
+
+
+def test_root_mcp_builder_source_recovery_is_typed_and_governed(monkeypatch) -> None:
+    from adaos.sdk.builder import source_recovery as sdk
+    from adaos.services.root_mcp.policy import list_capability_classes
+    from adaos.services.root_mcp.sessions import DEFAULT_CAPABILITY_PROFILES
+
+    calls: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        sdk,
+        "plan",
+        lambda **request: {
+            "schema": "adaos.builder.source_recovery_plan.v1",
+            "plan_digest": "sha256:" + "a" * 64,
+            "request": request,
+        },
+    )
+
+    def _apply(**request):
+        calls.append(("apply", request))
+        return {"schema": "adaos.builder.source_recovery_receipt.v1", "status": "applied_to_dev"}
+
+    monkeypatch.setattr(sdk, "apply", _apply)
+    planned = _invoke(
+        "builder.source_recovery.plan",
+        {"kind": "project", "artifact_id": "demo"},
+        "development.read.descriptors",
+    )
+    dry_run = root_mcp_service.invoke_tool(
+        "builder.source_recovery.apply",
+        arguments={
+            "kind": "project",
+            "artifact_id": "demo",
+            "expected_plan_digest": "sha256:" + "a" * 64,
+        },
+        actor="codex:test",
+        auth_method="mcp_session",
+        auth_context={"capabilities": ["development.write.source_recovery"]},
+        dry_run=True,
+    )
+    applied = _invoke(
+        "builder.source_recovery.apply",
+        {
+            "kind": "project",
+            "artifact_id": "demo",
+            "expected_plan_digest": "sha256:" + "a" * 64,
+            "decisions": {"scenario:demo": "keep_dev"},
+        },
+        "development.write.source_recovery",
+    )
+    contracts = {item.id: item for item in root_mcp_service.list_tool_contracts()}
+    capabilities = {item["capability"] for item in list_capability_classes()}
+
+    assert planned.result["plan"]["request"]["artifact_id"] == "demo"
+    assert dry_run.result["would_apply"] is True
+    assert calls[0][1]["actor"] == "builder.mcp"
+    assert applied.result["receipt"]["status"] == "applied_to_dev"
+    assert contracts["builder.source_recovery.apply"].required_capability == (
+        "development.write.source_recovery"
+    )
+    assert contracts["builder.source_recovery.apply"].side_effects == "write"
+    assert "development.write.source_recovery" in capabilities
+    assert "development.write.source_recovery" in DEFAULT_CAPABILITY_PROFILES["BuilderDeveloper"]

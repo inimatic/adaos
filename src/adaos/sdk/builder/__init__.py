@@ -19,6 +19,7 @@ from . import (
     releases,
     review,
     semantic_ui,
+    source_recovery,
     sources,
     workflow,
 )
@@ -35,6 +36,7 @@ __all__ = [
     "releases",
     "review",
     "semantic_ui",
+    "source_recovery",
     "sources",
     "workflow",
 ]

@@ -668,6 +668,37 @@ class BuilderWorkspaceService:
             project_id=project_id,
         )
 
+    def apply_development_source_recovery(
+        self,
+        *,
+        kind: str,
+        artifact_id: str,
+        expected_plan_digest: str,
+        decisions: Mapping[str, str] | None = None,
+        project_id: str | None = None,
+        actor: str = "builder",
+    ) -> dict[str, Any]:
+        from adaos.services.builder.source_recovery import BuilderSourceRecoveryService
+
+        if self.workspace_root is None:
+            raise ValueError("AdaOS workspace is not available in the current context")
+        if self.dev_skills_root is None or self.dev_scenarios_root is None:
+            raise ValueError("AdaOS dev workspace is not available in the current context")
+        return BuilderSourceRecoveryService(
+            state_dir=Path(self.state_dir or current_state_dir()),
+            workspace_root=Path(self.workspace_root),
+            dev_skills_root=Path(self.dev_skills_root),
+            dev_scenarios_root=Path(self.dev_scenarios_root),
+            dev_projects_root=self._dev_projects_root(),
+        ).apply(
+            kind=kind,
+            artifact_id=artifact_id,
+            expected_plan_digest=expected_plan_digest,
+            decisions=decisions,
+            project_id=project_id,
+            actor=actor,
+        )
+
     def materialize_dev_source(
         self,
         *,

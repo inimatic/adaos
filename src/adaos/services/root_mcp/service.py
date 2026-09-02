@@ -476,6 +476,70 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             metadata={"published_by": "plane:adaos_dev", "handler": "builder_get_context"},
         ),
         RootMcpToolContract(
+            id="builder.source_recovery.plan",
+            title="Plan Builder source recovery",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary=(
+                "Compare immutable release, Workspace, and DEV source and return admissible "
+                "recovery decisions without mutation."
+            ),
+            input_schema=schema_object(
+                properties={
+                    "kind": {"type": "string", "enum": ["project", "scenario", "skill"]},
+                    "artifact_id": {"type": "string"},
+                    "project_id": {"type": "string"},
+                },
+                required=["kind", "artifact_id"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.descriptors",
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "builder_source_recovery_plan",
+            },
+        ),
+        RootMcpToolContract(
+            id="builder.source_recovery.apply",
+            title="Apply reviewed Builder source recovery",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary=(
+                "Apply digest-bound reviewed recovery decisions to DEV, preserve source "
+                "evidence, and create a planned Builder Change."
+            ),
+            input_schema=schema_object(
+                properties={
+                    "kind": {"type": "string", "enum": ["project", "scenario", "skill"]},
+                    "artifact_id": {"type": "string"},
+                    "project_id": {"type": "string"},
+                    "expected_plan_digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                    },
+                    "decisions": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "string",
+                            "enum": [
+                                "keep_dev",
+                                "adopt_workspace",
+                                "reset_to_locked",
+                                "read_only",
+                            ],
+                        },
+                    },
+                    "actor": {"type": "string"},
+                },
+                required=["kind", "artifact_id", "expected_plan_digest"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.write.source_recovery",
+            side_effects="write",
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "builder_source_recovery_apply",
+            },
+        ),
+        RootMcpToolContract(
             id="dev_ticket.list",
             title="List relevant Dev Tickets",
             surface=RootMcpSurface.DEVELOPMENT,
@@ -3421,6 +3485,33 @@ def _development_ticket_sdk():
     return development_tickets
 
 
+def _builder_source_recovery_sdk():
+    from adaos.sdk.builder import source_recovery
+
+    return source_recovery
+
+
+def _handle_builder_source_recovery_plan(
+    arguments: dict[str, Any],
+    *,
+    dry_run: bool,
+) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    return {"plan": _builder_source_recovery_sdk().plan(**request)}
+
+
+def _handle_builder_source_recovery_apply(
+    arguments: dict[str, Any],
+    *,
+    dry_run: bool,
+) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    request.setdefault("actor", "builder.mcp")
+    if dry_run:
+        return {"would_apply": True, "request": request}
+    return {"receipt": _builder_source_recovery_sdk().apply(**request)}
+
+
 def _handle_dev_ticket_list(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     filters = {
         key: value
@@ -3616,6 +3707,8 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "adaos_dev.get_public_scenario_registry": lambda arguments, dry_run=False: _handle_adaos_dev_descriptor(arguments, descriptor_id="public_scenario_registry_summary"),
     "adaos_dev.get_named_entity_registry": lambda arguments, dry_run=False: _handle_adaos_dev_named_entity_registry(arguments, dry_run=dry_run),
     "builder.get_context": lambda arguments, dry_run=False: _handle_builder_context(arguments, dry_run=dry_run),
+    "builder.source_recovery.plan": lambda arguments, dry_run=False: _handle_builder_source_recovery_plan(arguments, dry_run=dry_run),
+    "builder.source_recovery.apply": lambda arguments, dry_run=False: _handle_builder_source_recovery_apply(arguments, dry_run=dry_run),
     "dev_ticket.list": lambda arguments, dry_run=False: _handle_dev_ticket_list(arguments, dry_run=dry_run),
     "dev_ticket.show": lambda arguments, dry_run=False: _handle_dev_ticket_show(arguments, dry_run=dry_run),
     "dev_ticket.core_backlog": lambda arguments, dry_run=False: _handle_dev_ticket_core_backlog(arguments, dry_run=dry_run),
@@ -3872,6 +3965,8 @@ def _execution_adapter_for_tool(tool_id: str) -> str:
         return "nlu_authoring.context"
     if token.startswith("adaos_dev."):
         return "adaos_dev.descriptor_registry"
+    if token.startswith("builder.source_recovery."):
+        return "adaos_dev.builder_source_recovery"
     if token.startswith("dev_ticket."):
         return "adaos_dev.dev_ticket_store"
     if token.startswith("development."):

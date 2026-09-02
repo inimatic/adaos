@@ -159,6 +159,16 @@ def list_capability_classes() -> list[dict[str, Any]]:
             default_grants=["owner_token"],
         ),
         _capability_entry(
+            "development.write.source_recovery",
+            surface="development",
+            risk="high",
+            summary=(
+                "Apply reviewed WorkspaceLock source-recovery decisions to DEV and create "
+                "a planned Builder Change."
+            ),
+            default_grants=["owner_token"],
+        ),
+        _capability_entry(
             "context.read",
             surface="development",
             risk="low",

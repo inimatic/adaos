@@ -23,6 +23,7 @@ DEFAULT_CODEX_TARGET_CAPABILITIES: list[str] = [
     "hub.run_healthchecks",
     "development.read.ticket_artifacts",
     "development.write.tickets",
+    "development.write.source_recovery",
 ]
 
 

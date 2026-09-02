@@ -5,8 +5,17 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
-from adaos.domain.artifact_release import ArtifactSourceRef, WorkspaceLock, WorkspaceSlot
+from adaos.apps.api import builder as builder_api
+from adaos.apps.api.auth import require_token
+from adaos.domain.artifact_release import (
+    ArtifactSourceRef,
+    WorkspaceLock,
+    WorkspaceSlot,
+)
 from adaos.services.artifact_pipeline import (
     ContentAddressedPackageStore,
     DependencyRequirement,
@@ -205,3 +214,181 @@ def test_workspace_materialization_fails_closed_on_locked_workspace_drift(tmp_pa
     assert captured.value.plan["status"] == "review_required"
     assert captured.value.plan["components"][0]["classification"] == "workspace_drift"
     assert not (recovery.dev_scenarios_root / "demo_scene").exists()
+
+
+def test_reviewed_recovery_preserves_evidence_materializes_owned_source_and_plans_change(
+    tmp_path: Path,
+) -> None:
+    service, workspace_scenario, _, _, _ = _fixture(tmp_path)
+    (workspace_scenario / "webui.json").write_text(
+        '{"title":"reviewed workspace edit"}\n',
+        encoding="utf-8",
+    )
+    (service.dev_projects_root / "demo_project").mkdir(parents=True)
+    plan = service.plan(kind="project", artifact_id="demo_project")
+    lock_before = (service.workspace_root / ".adaos" / "workspace.lock.json").read_bytes()
+
+    receipt = service.apply(
+        kind="project",
+        artifact_id="demo_project",
+        expected_plan_digest=plan["plan_digest"],
+        decisions={"scenario:demo_scene": "adopt_workspace"},
+        actor="user:test",
+    )
+
+    dev_scenario = service.dev_scenarios_root / "demo_scene"
+    project_manifest = service.dev_projects_root / "demo_project" / "project.yaml"
+    assert receipt["status"] == "applied_to_dev"
+    assert receipt["change_id"].startswith("chg_recovery_")
+    assert receipt["change_status"] == "planned"
+    assert receipt["workspace_lock_digest"] == plan["workspace_lock_digest"]
+    assert receipt["project_manifest"]["synthesized"] is True
+    assert receipt["decisions"] == {
+        "scenario:demo_scene": "adopt_workspace",
+        "skill:demo_skill": "read_only",
+    }
+    assert len(receipt["evidence_refs"]) == 1
+    assert receipt["evidence_refs"][0]["source"] == "workspace"
+    assert dev_scenario.joinpath("webui.json").read_text(encoding="utf-8") == (
+        '{"title":"reviewed workspace edit"}\n'
+    )
+    assert project_manifest.is_file()
+    project = yaml.safe_load(project_manifest.read_text(encoding="utf-8"))
+    assert project["components"]["owned"][0]["ref"] == "scenario:demo_scene"
+    assert project["components"]["dependencies"][0]["ref"] == "skill:demo_skill"
+    assert not (service.dev_skills_root / "demo_skill").exists()
+    assert (service.workspace_root / ".adaos" / "workspace.lock.json").read_bytes() == lock_before
+    assert (service.dev_projects_root / "demo_project" / "prompt_state.json").is_file()
+
+    repeated = service.apply(
+        kind="project",
+        artifact_id="demo_project",
+        expected_plan_digest=plan["plan_digest"],
+        decisions={"scenario:demo_scene": "adopt_workspace"},
+        actor="user:test",
+    )
+    assert repeated["idempotent"] is True
+    assert repeated["receipt_digest"] == receipt["receipt_digest"]
+    operation = json.loads(
+        (
+            service.recovery_root
+            / "operations"
+            / f"{plan['plan_digest'].removeprefix('sha256:')}.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert operation["status"] == "completed"
+    assert operation["receipt_digest"] == receipt["receipt_digest"]
+
+
+def test_reviewed_recovery_rejects_stale_digest_and_missing_conflict_decision(
+    tmp_path: Path,
+) -> None:
+    service, workspace_scenario, _, scenario_source, _ = _fixture(tmp_path)
+    (workspace_scenario / "webui.json").write_text('{"title":"workspace"}\n', encoding="utf-8")
+    dev_scenario = service.dev_scenarios_root / "demo_scene"
+    shutil.copytree(scenario_source, dev_scenario)
+    (dev_scenario / "webui.json").write_text('{"title":"dev"}\n', encoding="utf-8")
+    plan = service.plan(kind="project", artifact_id="demo_project")
+
+    with pytest.raises(ValueError, match="unknown components"):
+        service.apply(
+            kind="project",
+            artifact_id="demo_project",
+            expected_plan_digest=plan["plan_digest"],
+            decisions={"scenario:not_in_plan": "keep_dev"},
+        )
+
+    with pytest.raises(ValueError, match="reviewed decision is required"):
+        service.apply(
+            kind="project",
+            artifact_id="demo_project",
+            expected_plan_digest=plan["plan_digest"],
+        )
+
+    (dev_scenario / "webui.json").write_text('{"title":"newer dev"}\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="plan changed"):
+        service.apply(
+            kind="project",
+            artifact_id="demo_project",
+            expected_plan_digest=plan["plan_digest"],
+            decisions={"scenario:demo_scene": "keep_dev"},
+        )
+
+
+def test_builder_source_recovery_api_exposes_reviewed_plan_and_apply(tmp_path: Path) -> None:
+    recovery, workspace_scenario, _, _, _ = _fixture(tmp_path)
+    (workspace_scenario / "webui.json").write_text(
+        '{"title":"api reviewed"}\n',
+        encoding="utf-8",
+    )
+    service = BuilderWorkspaceService(
+        state_dir=recovery.state_dir,
+        workspace_root=recovery.workspace_root,
+        skills_root=recovery.workspace_root / "skills",
+        scenarios_root=recovery.workspace_root / "scenarios",
+        dev_skills_root=recovery.dev_skills_root,
+        dev_scenarios_root=recovery.dev_scenarios_root,
+    )
+    app = FastAPI()
+    app.include_router(builder_api.router, prefix="/api/builder")
+    app.dependency_overrides[require_token] = lambda: None
+    app.dependency_overrides[builder_api._get_service] = lambda: service
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/builder/source-recovery/plan",
+        params={"kind": "project", "artifact_id": "demo_project"},
+    )
+
+    assert response.status_code == 200, response.text
+    plan = response.json()["plan"]
+    assert plan["status"] == "review_required"
+    response = client.post(
+        "/api/builder/source-recovery/apply",
+        json={
+            "kind": "project",
+            "artifact_id": "demo_project",
+            "expected_plan_digest": plan["plan_digest"],
+            "decisions": {"scenario:demo_scene": "adopt_workspace"},
+            "actor": "user:api-test",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    receipt = response.json()["receipt"]
+    assert receipt["status"] == "applied_to_dev"
+    assert receipt["actor"] == "user:api-test"
+    assert receipt["change_status"] == "planned"
+
+
+def test_builder_source_recovery_sdk_uses_workspace_facade(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recovery, _, _, _, _ = _fixture(tmp_path)
+    service = BuilderWorkspaceService(
+        state_dir=recovery.state_dir,
+        workspace_root=recovery.workspace_root,
+        skills_root=recovery.workspace_root / "skills",
+        scenarios_root=recovery.workspace_root / "scenarios",
+        dev_skills_root=recovery.dev_skills_root,
+        dev_scenarios_root=recovery.dev_scenarios_root,
+    )
+    monkeypatch.setattr(
+        BuilderWorkspaceService,
+        "from_context",
+        classmethod(lambda cls: service),
+    )
+    from adaos.sdk.builder import source_recovery
+
+    plan = source_recovery.plan(kind="project", artifact_id="demo_project")
+    receipt = source_recovery.apply(
+        kind="project",
+        artifact_id="demo_project",
+        expected_plan_digest=plan["plan_digest"],
+        actor="builder:sdk-test",
+    )
+
+    assert receipt["status"] == "applied_to_dev"
+    assert receipt["decisions"]["scenario:demo_scene"] == "reset_to_locked"
+    assert receipt["decisions"]["skill:demo_skill"] == "read_only"
