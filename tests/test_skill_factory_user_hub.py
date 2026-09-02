@@ -28,6 +28,19 @@ def _assigned(tmp_path: Path) -> tuple[SkillFactoryService, dict, dict]:
 
 
 def _result(task: dict, assignment: dict) -> dict:
+    expected = assignment["evidence"]["expected_paths"]
+    evidence_artifacts = [
+        {
+            "kind": kind,
+            "logical_path": expected[kind],
+            "digest": "sha256:" + token * 64,
+            "size_bytes": 1,
+        }
+        for kind, token in zip(
+            ("result", "test_report", "changed_files", "provenance"),
+            ("1", "2", "3", "4"),
+        )
+    ]
     return {
         "schema": "adaos.skill_factory.dev_result.v1",
         "task_id": task["task_id"],
@@ -35,10 +48,7 @@ def _result(task: dict, assignment: dict) -> dict:
         "status": "completed",
         "commit_hash": "abc1234",
         "branch": assignment["forge"]["branch"],
-        "changed_paths": [
-            "skills/example_skill/skill.yaml",
-            assignment["evidence"]["expected_paths"]["provenance"],
-        ],
+        "changed_paths": ["skills/example_skill/skill.yaml"],
         "tests": {"status": "passed"},
         "validation": {"status": "passed"},
         "provenance": {
@@ -51,6 +61,11 @@ def _result(task: dict, assignment: dict) -> dict:
             "dependency_changes": [],
             "snapshot_refs": [],
             "reported_at": "2026-08-05T00:00:00+00:00",
+        },
+        "evidence": {
+            "schema": "adaos.skill_factory.task_evidence_manifest.v1",
+            "storage": "worker_task_envelope",
+            "artifacts": evidence_artifacts,
         },
     }
 
@@ -150,4 +165,3 @@ def test_user_hub_result_fails_closed_on_digest_or_path_violation(tmp_path: Path
             fetcher=lambda _url: bad,
             pending_action_publisher=lambda **payload: payload,
         )
-

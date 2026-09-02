@@ -1980,9 +1980,12 @@ partially unknown project scope before worker launch, preserving one stable
 Project capsule and independent user-ticket lifecycles. The Home Shopping List
 absent-DEV-source run proves project materialization, zero-model structured
 repair, ProjectRelease publication, accepted Trial, and ticket closure. Cold
-restoration after a process restart, full removal of nested compatibility
-copies, episodic-memory routing, and the deferred Research Workbench proof are
-still open.
+Skill Factory restoration now resolves digest-bound context packet, Development
+Session, prototype-handoff, continuation-checkpoint, result, and provenance
+artifacts after a process restart while keeping the authoritative task document
+compact. Full removal of Builder session/readiness compatibility copies,
+end-to-end cold publication replay, episodic-memory routing, and the deferred
+Research Workbench proof are still open.
 
 Source recovery verification, 2026-09-02: the local Builder lock at release
 `builder@0.2.55` resolves `scenario:builder` as Project-owned and the three

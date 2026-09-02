@@ -602,7 +602,7 @@ Priority labels:
 - [x] `[must]` Materialize the typed platform/domain/project/component/task
   capsule graph and purpose-specific projections. Keep the model executor
   replaceable and treat warm provider sessions as disposable caches.
-- [ ] `[must]` Replace repeated stringified packet/provenance copies in Skill
+- [x] `[must]` Replace repeated stringified packet/provenance copies in Skill
   Factory assignments with one canonical packet plus digest-bound refs.
 - [ ] `[must]` Exclude resolved repair histories and complete workflow/ABI
   catalogs from task projections unless deterministic relevance selection
@@ -648,6 +648,17 @@ reconstruction, and unchanged MCP structured content. The service is still a
 single implementation unit rather than separately deployable Registry,
 Resolver, Compiler, and Curator services; source indexing, follow-up deltas,
 cold replay, and measured quality/cost evaluations remain open.
+
+Skill Factory verification, 2026-09-02: normalized realize requests now retain
+canonical context packets, Development Session receipts, prototype handoffs,
+and continuation checkpoints only as content-addressed refs. A DEV assignment
+uses the bounded context projection without re-embedding the canonical packet
+and transiently hydrates only domain inputs required by the worker, with exact
+artifact-ref and digest checks after a cold service restart. Completed task
+results refer to a separately stored provenance artifact; authoritative queue
+state keeps compact summaries and refs while read projections preserve the
+historical result contract. Broader Builder session/readiness compaction remains
+open under the Phase 1A lifecycle-wide item.
 
 ### Phase 4. NLU Teacher Context Compression
 

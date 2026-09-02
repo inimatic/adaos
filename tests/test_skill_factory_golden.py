@@ -15,8 +15,18 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "skill_factory"
 def _result(task: dict, assignment: dict, *, changed_paths: list[str] | None = None) -> dict:
     expected = assignment["evidence"]["expected_paths"]
     paths = list(changed_paths or [f"skills/{task['target']['id']}/skill.yaml"])
-    if expected["provenance"] not in paths:
-        paths.append(expected["provenance"])
+    evidence_artifacts = [
+        {
+            "kind": kind,
+            "logical_path": expected[kind],
+            "digest": "sha256:" + token * 64,
+            "size_bytes": 1,
+        }
+        for kind, token in zip(
+            ("result", "test_report", "changed_files", "provenance"),
+            ("1", "2", "3", "4"),
+        )
+    ]
     return {
         "schema": "adaos.skill_factory.dev_result.v1",
         "task_id": task["task_id"],
@@ -28,6 +38,11 @@ def _result(task: dict, assignment: dict, *, changed_paths: list[str] | None = N
         "tests": {"status": "passed"},
         "validation": {"status": "passed"},
         "provenance": {"runner_version": "golden-fixture/1"},
+        "evidence": {
+            "schema": "adaos.skill_factory.task_evidence_manifest.v1",
+            "storage": "worker_task_envelope",
+            "artifacts": evidence_artifacts,
+        },
     }
 
 

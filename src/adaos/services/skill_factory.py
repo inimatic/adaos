@@ -37,6 +37,17 @@ DEV_NODE_DEFAULT_CAPABILITIES = ["codex", "git_sparse_checkout", "adaos_sdk", "m
 REALIZATION_POLICY_SCHEMA = "adaos.skill_factory.realization_policy.v1"
 TASK_CONTEXT_SCHEMA = "adaos.skill_factory.task_context.v1"
 TASK_PROVENANCE_SCHEMA = "adaos.skill_factory.task_provenance.v1"
+REQUEST_CONTENT_ARTIFACT_FIELDS = (
+    "context_packet",
+    "development_context",
+    "prototype_handoff",
+    "continuation_checkpoint",
+)
+ASSIGNMENT_HYDRATED_ARTIFACT_FIELDS = (
+    "development_context",
+    "prototype_handoff",
+    "continuation_checkpoint",
+)
 
 MANUAL_ONLY_CONSTRAINT_KEYS = {
     "new_permissions",
@@ -466,6 +477,76 @@ class SkillFactoryService:
     def _store_realize_request(self, request: Mapping[str, Any]) -> dict[str, Any]:
         return self._contexts().put_artifact(dict(request))
 
+    def _externalize_request_artifacts(
+        self,
+        artifacts: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        compact = _json_clone(dict(artifacts))
+        contexts = self._contexts()
+        for field in REQUEST_CONTENT_ARTIFACT_FIELDS:
+            value = compact.get(field)
+            if not isinstance(value, Mapping):
+                if value is None:
+                    compact.pop(field, None)
+                continue
+            content = dict(value)
+            logical_digest = _text(content.get("digest"))
+            declared_logical_digest = _text(compact.get(f"{field}_digest"))
+            if (
+                logical_digest
+                and declared_logical_digest
+                and logical_digest != declared_logical_digest
+            ):
+                raise ValueError(f"artifacts.{field}_digest does not match {field}.digest")
+            artifact = contexts.put_artifact(content)
+            declared_ref = _text(compact.get(f"{field}_ref"))
+            if (
+                declared_ref.startswith("artifact://context/sha256/")
+                and declared_ref != artifact["ref"]
+            ):
+                raise ValueError(f"artifacts.{field}_ref does not match canonical content")
+            declared_artifact_digest = _text(
+                compact.get(f"{field}_artifact_digest")
+            )
+            if (
+                declared_artifact_digest
+                and declared_artifact_digest != artifact["digest"]
+            ):
+                raise ValueError(
+                    f"artifacts.{field}_artifact_digest does not match canonical content"
+                )
+            compact[f"{field}_ref"] = artifact["ref"]
+            compact[f"{field}_artifact_digest"] = artifact["digest"]
+            if logical_digest:
+                compact[f"{field}_digest"] = logical_digest
+            compact.pop(field, None)
+        return compact
+
+    def _load_context_artifact(
+        self,
+        artifact_ref: Any,
+        *,
+        artifact_digest: Any = None,
+        label: str,
+    ) -> dict[str, Any]:
+        ref = _text(artifact_ref)
+        if not ref:
+            return {}
+        try:
+            contexts = self._contexts()
+            value = contexts.get_artifact(ref)
+        except KeyError as exc:
+            raise RuntimeError(f"{label} artifact is unavailable: {ref}") from exc
+        if not isinstance(value, Mapping):
+            raise RuntimeError(f"{label} artifact must contain an object")
+        verified = contexts.put_artifact(dict(value))
+        expected_digest = _text(artifact_digest)
+        if expected_digest and verified["digest"] != expected_digest:
+            raise RuntimeError(f"{label} artifact digest does not match its request")
+        if verified["ref"] != ref:
+            raise RuntimeError(f"{label} artifact content does not match its reference")
+        return dict(value)
+
     def _realize_request(self, task: Mapping[str, Any]) -> dict[str, Any]:
         embedded = _mapping(task.get("realize_request"))
         if embedded:
@@ -484,18 +565,108 @@ class SkillFactoryService:
         value = _json_clone(task)
         if not isinstance(value.get("realize_request"), Mapping):
             value["realize_request"] = self._realize_request(task)
+        result = self._stored_result(task)
+        if result:
+            value["result"] = result
+        provenance = _mapping(result.get("provenance")) or self._stored_provenance(task)
+        if provenance:
+            value["provenance"] = provenance
         return value
 
     def _assignment_realize_request(self, task: Mapping[str, Any]) -> dict[str, Any]:
         request = self._realize_request(task)
         artifacts = _mapping(request.get("artifacts"))
-        if isinstance(artifacts.get("context_projection"), Mapping):
+        has_projection = isinstance(artifacts.get("context_projection"), Mapping)
+        if has_projection:
             # The exact canonical packet remains content-addressed. The worker
             # receives its bounded projection and refs, avoiding a second full
             # packet copy in every assignment and local-run checkpoint.
             artifacts.pop("context_packet", None)
-            request["artifacts"] = artifacts
+        elif not isinstance(artifacts.get("context_packet"), Mapping):
+            packet = self._load_context_artifact(
+                artifacts.get("context_packet_ref"),
+                artifact_digest=artifacts.get("context_packet_artifact_digest"),
+                label="context_packet",
+            )
+            if packet:
+                artifacts["context_packet"] = packet
+        for field in ASSIGNMENT_HYDRATED_ARTIFACT_FIELDS:
+            if isinstance(artifacts.get(field), Mapping):
+                continue
+            content = self._load_context_artifact(
+                artifacts.get(f"{field}_ref"),
+                artifact_digest=artifacts.get(f"{field}_artifact_digest"),
+                label=field,
+            )
+            if content:
+                artifacts[field] = content
+        request["artifacts"] = artifacts
         return request
+
+    def _stored_provenance(self, task: Mapping[str, Any]) -> dict[str, Any]:
+        embedded = _mapping(task.get("provenance"))
+        if embedded:
+            return embedded
+        return self._load_context_artifact(
+            task.get("provenance_ref"),
+            artifact_digest=task.get("provenance_digest"),
+            label="task provenance",
+        )
+
+    def _stored_result(self, task: Mapping[str, Any]) -> dict[str, Any]:
+        embedded = _mapping(task.get("result"))
+        if embedded:
+            return embedded
+        result = self._load_context_artifact(
+            task.get("result_ref"),
+            artifact_digest=task.get("result_digest"),
+            label="task result",
+        )
+        if not result:
+            return {}
+        if not isinstance(result.get("provenance"), Mapping):
+            provenance = self._stored_provenance(task)
+            if provenance:
+                result["provenance"] = provenance
+        result.pop("provenance_ref", None)
+        result.pop("provenance_digest", None)
+        return result
+
+    def _persist_task_result(
+        self,
+        task: dict[str, Any],
+        result: Mapping[str, Any],
+    ) -> None:
+        full_result = _json_clone(dict(result))
+        provenance = _mapping(full_result.pop("provenance", None))
+        provenance_artifact = self._contexts().put_artifact(provenance)
+        stored_result = {
+            **full_result,
+            "provenance_ref": provenance_artifact["ref"],
+            "provenance_digest": provenance_artifact["digest"],
+        }
+        result_artifact = self._contexts().put_artifact(stored_result)
+        task["result_ref"] = result_artifact["ref"]
+        task["result_digest"] = result_artifact["digest"]
+        task["result_summary"] = {
+            "schema": full_result.get("schema"),
+            "status": full_result.get("status"),
+            "branch": full_result.get("branch"),
+            "commit_hash": full_result.get("commit_hash"),
+            "tests": _text(_mapping(full_result.get("tests")).get("status")) or None,
+            "changed_path_count": len(_string_list(full_result.get("changed_paths"))),
+            "reported_at": full_result.get("reported_at"),
+        }
+        task["provenance_ref"] = provenance_artifact["ref"]
+        task["provenance_digest"] = provenance_artifact["digest"]
+        task["provenance_summary"] = {
+            "schema": provenance.get("schema"),
+            "dev_node_id": provenance.get("dev_node_id"),
+            "runner_version": provenance.get("runner_version"),
+            "reported_at": provenance.get("reported_at"),
+        }
+        task.pop("result", None)
+        task.pop("provenance", None)
 
     @property
     def state_path(self) -> Path:
@@ -618,6 +789,7 @@ class SkillFactoryService:
         created_at = _text(raw.get("created_at")) or now
         realization_policy = _classify_realization_policy(raw, target, default_constraints)
         snapshot_context = _snapshot_context(raw, artifacts, now=now)
+        artifacts = self._externalize_request_artifacts(artifacts)
         normalized_mcp = {
             key: value
             for key, value in mcp.items()
@@ -977,22 +1149,26 @@ class SkillFactoryService:
             result = self._normalize_result(raw, task)
             self.validate_result_paths(task, result)
             if _text(task.get("status")) == "completed":
-                existing = _mapping(task.get("result"))
+                existing = self._stored_result(task)
                 if (
                     _text(existing.get("branch")) == result["branch"]
                     and _text(existing.get("commit_hash")) == result["commit_hash"]
                     and (_text(existing.get("node_id")) or node_id) == (node_id or _text(existing.get("node_id")))
                 ):
                     ready_event = self._ready_event(task, existing)
-                    return {"ok": True, "duplicate": True, "task": _json_clone(task), "ready_event": ready_event}
+                    return {
+                        "ok": True,
+                        "duplicate": True,
+                        "task": self._compat_task(task),
+                        "ready_event": ready_event,
+                    }
                 raise ValueError(f"task '{task_id}' is already completed with a different result")
             if _text(task.get("status")) in {"failed", "cancelled", "expired"}:
                 raise ValueError(f"task '{task_id}' is terminal: {task.get('status')}")
             now = _now_iso()
             task["status"] = "completed"
-            task["result"] = result
             task["dependency_delta"] = _mapping(result.get("dependency_delta"))
-            task["provenance"] = _mapping(result.get("provenance"))
+            self._persist_task_result(task, result)
             task["completed_at"] = now
             task["updated_at"] = now
             self._release_node_after_task(state, task, status="cleanup")
@@ -1001,7 +1177,11 @@ class SkillFactoryService:
             state.setdefault("ready_events", []).append(ready_event)
             self._append_event(state, "skill_factory.task_completed", {"task_id": task_id, "branch": result["branch"]})
             self._write_state(state)
-            return {"ok": True, "task": _json_clone(task), "ready_event": ready_event}
+            return {
+                "ok": True,
+                "task": self._compat_task(task),
+                "ready_event": ready_event,
+            }
 
     def recover_task_result(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         """Accept an already validated result after a retryable post-commit failure.
@@ -1036,9 +1216,8 @@ class SkillFactoryService:
             self.validate_result_paths(task, result)
             now = _now_iso()
             task["status"] = "completed"
-            task["result"] = result
             task["dependency_delta"] = _mapping(result.get("dependency_delta"))
-            task["provenance"] = _mapping(result.get("provenance"))
+            self._persist_task_result(task, result)
             recovery_entry = {
                 "reason": _text(recovery.get("reason")),
                 "validated_run_dir": _text(recovery.get("validated_run_dir")),
@@ -1064,7 +1243,7 @@ class SkillFactoryService:
             return {
                 "ok": True,
                 "recovered": True,
-                "task": _json_clone(task),
+                "task": self._compat_task(task),
                 "ready_event": ready_event,
             }
 

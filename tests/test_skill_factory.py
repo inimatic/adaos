@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from adaos.services.builder import BuilderWorkspaceService
+from adaos.services.context_control import ContextControlService
 from adaos.services.skill_factory import REALIZE_REQUEST_SCHEMA, SkillFactoryService
 
 
@@ -140,6 +141,21 @@ def test_queue_persists_request_by_ref_and_assigns_bounded_context(tmp_path: Pat
         "schema": "adaos.builder.context_projection.v1",
         "requirements": {"summary": "bounded-context-marker"},
     }
+    development_context = {
+        "schema": "adaos.builder.development_context_receipt.v1",
+        "digest": "sha256:" + "c" * 64,
+        "execution_budget": {"max_tokens": 10_000},
+    }
+    prototype_handoff = {
+        "schema": "adaos.builder.prototype_handoff.v1",
+        "digest": "sha256:" + "d" * 64,
+        "prototype_id": "prototype.ref-only",
+    }
+    continuation_checkpoint = {
+        "schema": "adaos.builder.automation_continuation_checkpoint.v1",
+        "digest": "sha256:" + "e" * 64,
+        "mode": "continue",
+    }
     submitted = service.submit_realize_request(
         {
             "request_id": "realize.ref-only-context",
@@ -149,6 +165,9 @@ def test_queue_persists_request_by_ref_and_assigns_bounded_context(tmp_path: Pat
                 "context_packet_ref": "artifact:sha256:" + "b" * 64,
                 "context_packet_digest": full_packet["digest"],
                 "context_projection": projection,
+                "development_context": development_context,
+                "prototype_handoff": prototype_handoff,
+                "continuation_checkpoint": continuation_checkpoint,
             },
         }
     )
@@ -158,16 +177,83 @@ def test_queue_persists_request_by_ref_and_assigns_bounded_context(tmp_path: Pat
     assert "realize_request" not in persisted
     assert persisted["realize_request_ref"].startswith("artifact://context/sha256/")
     assert "large-context-marker" not in service.state_path.read_text(encoding="utf-8")
-    assert service.read_task(submitted["task"]["task_id"])["realize_request"]["artifacts"][
-        "context_packet"
-    ] == full_packet
+    request_artifacts = service.read_task(submitted["task"]["task_id"])[
+        "realize_request"
+    ]["artifacts"]
+    for field in (
+        "context_packet",
+        "development_context",
+        "prototype_handoff",
+        "continuation_checkpoint",
+    ):
+        assert field not in request_artifacts
+        assert request_artifacts[f"{field}_ref"].startswith(
+            "artifact://context/sha256/"
+        )
+        assert request_artifacts[f"{field}_artifact_digest"].startswith("sha256:")
+    contexts = ContextControlService(state_dir=tmp_path)
+    assert contexts.get_artifact(request_artifacts["context_packet_ref"]) == full_packet
 
-    service.register_dev_node({"node_id": "devnode.ref-only"})
-    assignment = service.poll_assignment("devnode.ref-only")["assignment"]
+    restarted = SkillFactoryService(state_dir=tmp_path)
+    restarted.register_dev_node({"node_id": "devnode.ref-only"})
+    assignment = restarted.poll_assignment("devnode.ref-only")["assignment"]
     assigned_artifacts = assignment["realize_request"]["artifacts"]
     assert "context_packet" not in assigned_artifacts
     assert assigned_artifacts["context_projection"] == projection
-    assert assigned_artifacts["context_packet_ref"].startswith("artifact:sha256:")
+    assert assigned_artifacts["context_packet_ref"].startswith(
+        "artifact://context/sha256/"
+    )
+    assert assigned_artifacts["development_context"] == development_context
+    assert assigned_artifacts["prototype_handoff"] == prototype_handoff
+    assert assigned_artifacts["continuation_checkpoint"] == continuation_checkpoint
+
+
+def test_realize_request_rejects_mismatched_canonical_artifact_binding(
+    tmp_path: Path,
+) -> None:
+    service = SkillFactoryService(state_dir=tmp_path)
+
+    with pytest.raises(ValueError, match="context_packet_ref does not match"):
+        service.submit_realize_request(
+            {
+                "target": {"type": "skill", "id": "mismatched_context"},
+                "artifacts": {
+                    "context_packet": {
+                        "schema": "adaos.builder.context_packet.v1",
+                        "digest": "sha256:" + "a" * 64,
+                    },
+                    "context_packet_ref": (
+                        "artifact://context/sha256/" + "b" * 64
+                    ),
+                },
+            }
+        )
+
+
+def test_assignment_fails_closed_when_required_handoff_artifact_is_missing(
+    tmp_path: Path,
+) -> None:
+    service = SkillFactoryService(state_dir=tmp_path)
+    submitted = service.submit_realize_request(
+        {
+            "target": {"type": "skill", "id": "missing_handoff"},
+            "artifacts": {
+                "development_context": {
+                    "schema": "adaos.builder.development_context_receipt.v1",
+                    "digest": "sha256:" + "c" * 64,
+                },
+            },
+        }
+    )
+    request = submitted["task"]["realize_request"]
+    ref = request["artifacts"]["development_context_ref"]
+    artifact_name = ref.rsplit("/", 1)[-1]
+    (ContextControlService(state_dir=tmp_path).artifact_root / f"{artifact_name}.json").unlink()
+    restarted = SkillFactoryService(state_dir=tmp_path)
+    restarted.register_dev_node({"node_id": "devnode.missing-handoff"})
+
+    with pytest.raises(RuntimeError, match="development_context artifact is unavailable"):
+        restarted.poll_assignment("devnode.missing-handoff")
 
 
 def test_targeted_poll_assigns_the_requested_task_not_an_older_queue_item(tmp_path: Path) -> None:
@@ -342,15 +428,33 @@ def test_skill_factory_idempotent_completion_survives_restart(tmp_path: Path) ->
         node_id="devnode.test",
         changed_paths=["skills/restart_demo/skill.yaml"],
     )
+    result["notes"] = ["large-result-marker-" + "z" * 20_000]
 
     completed = service.complete_task(result)
     duplicate = service.complete_task(result)
     restarted = SkillFactoryService(state_dir=tmp_path).snapshot(include_tasks=True)
+    raw_state_text = service.state_path.read_text(encoding="utf-8")
+    raw_state = json.loads(raw_state_text)
+    raw_task = raw_state["tasks"][task["task_id"]]
 
     assert completed["task"]["status"] == "completed"
+    assert completed["task"]["result"]["notes"] == result["notes"]
+    assert completed["task"]["provenance"]["schema"] == (
+        "adaos.skill_factory.task_provenance.v1"
+    )
     assert duplicate["duplicate"] is True
+    assert duplicate["ready_event"]["event_id"] == completed["ready_event"]["event_id"]
+    assert "result" not in raw_task
+    assert "provenance" not in raw_task
+    assert raw_task["result_ref"].startswith("artifact://context/sha256/")
+    assert raw_task["provenance_ref"].startswith("artifact://context/sha256/")
+    assert "large-result-marker" not in raw_state_text
     persisted = {item["task_id"]: item for item in restarted["tasks"]}
     assert persisted[task["task_id"]]["status"] == "completed"
+    assert persisted[task["task_id"]]["result"]["notes"] == result["notes"]
+    assert persisted[task["task_id"]]["provenance"]["runner_version"] == (
+        "pytest-runner/1.0"
+    )
     assert restarted["ready_events"][0]["task_id"] == task["task_id"]
 
 

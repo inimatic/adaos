@@ -89,6 +89,19 @@ def _service(tmp_path: Path) -> BuilderAutomationService:
     )
 
 
+def _realize_content_artifact(
+    service: BuilderAutomationService,
+    task: dict,
+    field: str,
+) -> dict:
+    artifacts = task["realize_request"]["artifacts"]
+    assert field not in artifacts
+    ref = artifacts[f"{field}_ref"]
+    value = service._contexts().get_artifact(ref)
+    assert isinstance(value, dict)
+    return value
+
+
 def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) -> None:
     service = _service(tmp_path)
 
@@ -717,7 +730,7 @@ def test_automation_materializes_governed_development_session_inputs(tmp_path: P
         for item in service.factory.snapshot(include_tasks=True)["tasks"]
         if item["task_id"] == started["session"]["current_task_id"]
     )
-    receipt = task["realize_request"]["artifacts"]["development_context"]
+    receipt = _realize_content_artifact(service, task, "development_context")
     assert receipt["session_id"] == session_id
     assert receipt["request"] == "Implement the frozen calibration request."
     assert receipt["execution_budget"]["max_model_tokens"] == 80000
@@ -848,10 +861,9 @@ def test_terminal_followup_rebinds_to_new_digest_verified_development_session(
         if item["task_id"] == session["current_task_id"]
     )
     assert task["realize_request"]["links"]["development_session_id"] == second_id
-    assert (
-        task["realize_request"]["artifacts"]["development_context"]["session_id"]
-        == second_id
-    )
+    assert _realize_content_artifact(service, task, "development_context")[
+        "session_id"
+    ] == second_id
     assert (
         json.loads(task["realize_request"]["artifacts"]["implementation_brief"])["digest"]
         == second_digest
@@ -1759,7 +1771,7 @@ def test_automation_carries_active_change_set_into_isolated_codex_request(tmp_pa
     assert request["links"]["canonical_change_id"] == "CS-recipes-store-sync"
     assert request["links"]["context_packet_digest"].startswith("sha256:")
     assert request["artifacts"]["change_set"]["issues"][0]["issue_id"] == "store-sync"
-    packet = request["artifacts"]["context_packet"]
+    packet = _realize_content_artifact(service, task, "context_packet")
     assert packet["schema"] == "adaos.builder.context_packet.v1"
     assert packet["digest"] == request["links"]["context_packet_digest"]
     assert packet["change"]["change_id"] == "CS-recipes-store-sync"
@@ -2440,7 +2452,9 @@ def test_completed_automation_rebinds_to_approved_successor_change(tmp_path: Pat
     request = task["realize_request"]
     assert request["links"]["change_set_id"] == second_change_id
     assert request["links"]["canonical_change_id"] == second_change_id
-    assert request["artifacts"]["context_packet"]["change"]["change_id"] == second_change_id
+    assert _realize_content_artifact(service, task, "context_packet")["change"][
+        "change_id"
+    ] == second_change_id
     assert request["artifacts"]["change_set"]["issues"][0]["issue_id"] == "input-policy"
 
 
