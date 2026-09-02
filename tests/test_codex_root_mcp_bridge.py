@@ -7,6 +7,7 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 if "y_py" not in sys.modules:
@@ -682,6 +683,21 @@ def test_codex_bridge_profile_roundtrip(tmp_path: Path) -> None:
     assert loaded.zone == "lab-a"
     assert loaded.bootstrap_mode == "mcp_session_lease"
     assert loaded.resolved_access_token() == "secret-token"
+
+
+def test_codex_bridge_rejects_target_outside_binding() -> None:
+    bridge = bridge_mod.CodexRootMcpBridge(
+        bridge_mod.CodexBridgeProfile(
+            root_url="https://root.example.test",
+            target_id="hub:sn_bound",
+            access_token="access-123",
+        )
+    )
+
+    assert bridge._effective_target_id({}) == "hub:sn_bound"
+    assert bridge._effective_target_id({"target_id": "hub:sn_bound"}) == "hub:sn_bound"
+    with pytest.raises(ValueError, match="outside this bridge binding"):
+        bridge._effective_target_id({"target_id": "hub:sn_other"})
 
 
 def test_model_text_formats_preserve_canonical_structured_content(monkeypatch) -> None:

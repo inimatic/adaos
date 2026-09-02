@@ -440,10 +440,10 @@ def _task_mcp_validation_evidence(
         profile.get("bound_target_id") or profile.get("target_id") or ""
     ).strip()
     candidates: list[tuple[str, dict[str, Any]]] = []
-    if "run_staging_validation" in scopes:
-        candidates.append(("list_managed_targets", {}))
     if bound_target_id:
         candidates.append(("get_managed_target", {"target_id": bound_target_id}))
+    if "run_staging_validation" in scopes:
+        candidates.append(("list_managed_targets", {}))
     candidates.append(("foundation", {}))
     selected = next(
         (
@@ -1226,6 +1226,7 @@ def _root_mcp_profile_from_assignment(
             "lease_id": mcp.get("lease_id"),
             "token_ref": mcp.get("token_ref"),
             "expires_at": mcp.get("expires_at"),
+            "bound_target_id": mcp.get("bound_target_id"),
         }
     if not root or root.get("enabled") is False:
         return None
@@ -1278,7 +1279,12 @@ def _root_mcp_profile_from_assignment(
     if env_var:
         profile["bearer_token_env_var"] = env_var
         profile["bearer_env_present"] = bool(token or os.getenv(env_var))
-    bound_target_id = str(root.get("bound_target_id") or root.get("target_id") or "").strip()
+    bound_target_id = str(
+        root.get("bound_target_id")
+        or root.get("target_id")
+        or mcp.get("bound_target_id")
+        or ""
+    ).strip()
     if bound_target_id:
         profile["bound_target_id"] = bound_target_id
     for key in ("enabled_tools", "disabled_tools", "scope"):

@@ -757,7 +757,10 @@ def test_skill_factory_projects_root_mcp_profile_without_secret(tmp_path: Path) 
 def test_skill_factory_validates_task_bearer_and_rejects_cross_task_use(tmp_path: Path) -> None:
     service = SkillFactoryService(state_dir=tmp_path)
     first = service.submit_realize_request(
-        {"target": {"type": "skill", "id": "lease_first"}}
+        {
+            "target": {"type": "skill", "id": "lease_first"},
+            "user_subnet_id": "sn_lease",
+        }
     )["task"]
     second = service.submit_realize_request(
         {"target": {"type": "skill", "id": "lease_second"}}
@@ -775,6 +778,10 @@ def test_skill_factory_validates_task_bearer_and_rejects_cross_task_use(tmp_path
     assert validated["task_id"] == first["task_id"]
     assert validated["node_id"] == "devnode.lease"
     assert "read_capability_snapshot" in validated["scopes"]
+    assert validated["subnet_id"] == "sn_lease"
+    assert validated["allowed_target_ids"] == ["hub:sn_lease"]
+    assert assignment["subnet_id"] == "sn_lease"
+    assert assignment["mcp"]["bound_target_id"] == "hub:sn_lease"
     with pytest.raises(ValueError, match="another task"):
         service.validate_task_access_token(access_token, task_id=second["task_id"])
     with pytest.raises(ValueError, match="does not allow scope"):

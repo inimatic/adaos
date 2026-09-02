@@ -239,6 +239,8 @@ def _skill_factory_task_auth(access_token: str, *, task_id: str | None = None) -
         "dev_node_id": lease.get("node_id"),
         "task_scopes": list(lease.get("scopes") or []),
         "task_access_lease_id": lease.get("lease_id"),
+        "allowed_target_ids": list(lease.get("allowed_target_ids") or []),
+        "subnet_id": lease.get("subnet_id"),
         "audience": "adaos-builder-task",
     }
 

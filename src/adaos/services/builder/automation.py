@@ -155,6 +155,33 @@ def _sanitized_mcp_profile(value: Any) -> dict[str, Any] | None:
     return mcp or None
 
 
+def _builder_subnet_id(session: Mapping[str, Any]) -> str | None:
+    links = session.get("links") if isinstance(session.get("links"), Mapping) else {}
+    mcp = session.get("mcp") if isinstance(session.get("mcp"), Mapping) else {}
+    for value in (
+        session.get("subnet_id"),
+        links.get("subnet_id"),
+        mcp.get("subnet_id"),
+    ):
+        token = str(value or "").strip()
+        if token:
+            return token
+    try:
+        from adaos.services.agent_context import get_ctx
+
+        config = getattr(get_ctx(), "config", None)
+        token = str(
+            getattr(config, "subnet_id_value", None)
+            or getattr(config, "subnet_id", None)
+            or ""
+        ).strip()
+        if token:
+            return token
+    except Exception:
+        pass
+    return str(os.getenv("ADAOS_SUBNET_ID") or "").strip() or None
+
+
 def _reject_transport_corruption(value: Any, *, field: str) -> None:
     """Reject new durable Automation text after Unicode code points were lost."""
 
@@ -5411,8 +5438,26 @@ class BuilderAutomationService:
             f"{_safe_token(session.get('change_id'), fallback='change')}."
             f"{max(0, int(session.get('iteration') or 0))}"
         )
+        request_mcp = (
+            {"enabled": False, "requested_scope": []}
+            if is_dev_ticket_repair and repair_hints.get("requires_root_mcp") is False
+            else _sanitized_mcp_profile(session.get("mcp"))
+            or {
+                "requested_scope": [
+                    "capability_snapshot",
+                    "requirement_spec",
+                    "mock_runtime",
+                    "staging_validation",
+                ]
+            }
+        )
+        subnet_id = _builder_subnet_id(session)
+        if request_mcp.get("enabled") is not False and subnet_id:
+            request_mcp.setdefault("subnet_id", subnet_id)
+            request_mcp.setdefault("bound_target_id", f"hub:{subnet_id}")
         request = {
             "request_id": request_id,
+            "user_subnet_id": subnet_id,
             "target": {"type": kind, "id": project_id},
             "source": {
                 "type": "prompt_ide_execute" if not iteration_instruction else "builder_automation_chat",
@@ -5450,19 +5495,7 @@ class BuilderAutomationService:
             "constraints": {
                 **realization_constraints,
             },
-            "mcp": (
-                {"enabled": False, "requested_scope": []}
-                if is_dev_ticket_repair and repair_hints.get("requires_root_mcp") is False
-                else _sanitized_mcp_profile(session.get("mcp"))
-                or {
-                    "requested_scope": [
-                        "capability_snapshot",
-                        "requirement_spec",
-                        "mock_runtime",
-                        "staging_validation",
-                    ]
-                }
-            ),
+            "mcp": request_mcp,
             "acceptance": {
                 "checks": [
                     *acceptance_checks,
@@ -5748,6 +5781,7 @@ class BuilderAutomationService:
                 )
             worker_result = worker.run_once(task_id=expected_task_id or None)
             should_finalize = False
+            failed_session: dict[str, Any] | None = None
             finalizing_projection: dict[str, Any] | None = None
             with _LOCK:
                 session = self._find_session_by_id(session_id)
@@ -5779,6 +5813,7 @@ class BuilderAutomationService:
                             )
                         except Exception:
                             pass
+                        failed_session = dict(session)
                     should_finalize = bool(
                         isinstance(worker_result, Mapping)
                         and worker_result.get("ok")
@@ -5797,6 +5832,10 @@ class BuilderAutomationService:
                         session["updated_at"] = session["progress"]["updated_at"]
                         self._save_session(session)
                         finalizing_projection = self.project_session(session)
+            if failed_session is not None:
+                failed_session = self._sync_linked_development_ticket_tasks(failed_session)
+                if self.event_sink:
+                    self.event_sink(self.project_session(failed_session))
             if should_finalize and session:
                 if self.event_sink and finalizing_projection:
                     self.event_sink(finalizing_projection)
@@ -6625,6 +6664,7 @@ class BuilderAutomationService:
                 )
             except Exception:
                 pass
+            current = self._sync_linked_development_ticket_tasks(current)
             if self.event_sink:
                 self.event_sink(self.project_session(current))
             return

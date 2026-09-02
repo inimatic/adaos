@@ -209,6 +209,61 @@ def test_task_mcp_validation_evidence_uses_bounded_task_lease(
     }
 
 
+def test_task_mcp_validation_prefers_bound_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, Any] = {}
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "jsonrpc": "2.0",
+                "id": "builder-validation-task.bound",
+                "result": {
+                    "content": [{"type": "text", "text": "not persisted"}],
+                    "structuredContent": {
+                        "target_id": "hub:sn_demo",
+                        "state": "ready",
+                    },
+                },
+            }
+
+    def _post(url: str, **kwargs: Any) -> _Response:
+        observed.update({"url": url, **kwargs})
+        return _Response()
+
+    monkeypatch.setattr(worker_module.httpx, "post", _post)
+    evidence = _task_mcp_validation_evidence(
+        assignment={
+            "task_id": "task.bound",
+            "mcp": {"scope": ["run_staging_validation"]},
+            "realize_request": {
+                "artifacts": {"repair_hints": {"requires_root_mcp": True}}
+            },
+        },
+        root_mcp={
+            "enabled": True,
+            "server_name": "adaos_task_root",
+            "url": "http://127.0.0.1:8777/v1/root/mcp/task/task.bound",
+            "lease_id": "lease.bound",
+            "bound_target_id": "hub:sn_demo",
+            "_bearer_token_value": "secret-not-evidence",
+        },
+    )
+
+    assert evidence is not None
+    assert evidence["tool"] == "get_managed_target"
+    assert evidence["bound_target_id"] == "hub:sn_demo"
+    assert evidence["result_target_id"] == "hub:sn_demo"
+    assert observed["json"]["params"] == {
+        "name": "get_managed_target",
+        "arguments": {"target_id": "hub:sn_demo"},
+    }
+
+
 def test_codex_failure_detail_prefers_structured_jsonl_errors() -> None:
     result = CodexRunResult(
         returncode=1,

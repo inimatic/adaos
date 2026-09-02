@@ -5290,6 +5290,59 @@ def test_completed_automation_synchronizes_every_ticket_in_package(
     assert saved[-1]["development_ticket_sync_revision"] == 3
 
 
+def test_failed_worker_synchronizes_linked_dev_ticket(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    synced: list[dict] = []
+    failed = {
+        "session_id": "automation.skill.demo_metrics_skill",
+        "object_type": "skill",
+        "object_id": "demo_metrics_skill",
+        "status": "failed",
+        "current_task_id": "task.failed",
+        "last_failure": {"message": "Codex execution failed"},
+        "links": {
+            "development_ticket_id": "dticket.failed",
+            "builder_repair_id": "repair.failed",
+        },
+    }
+
+    class FailingWorker:
+        def run_once(self, *, task_id=None):  # noqa: ARG002
+            return {"ok": False, "status": "failed"}
+
+    class FakeWorkflow:
+        def transition(self, *args, **kwargs):  # noqa: ARG002
+            return {"ok": True}
+
+    service.worker_factory = FailingWorker
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_find_session_by_id",
+        lambda self, session_id: dict(failed),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "refresh_session",
+        lambda self, session: dict(failed),
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: None)
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: FakeWorkflow())
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_sync_linked_development_ticket_tasks",
+        lambda self, value: synced.append(dict(value)) or dict(value),
+    )
+
+    service._run_worker(failed["session_id"])
+
+    assert len(synced) == 1
+    assert synced[0]["status"] == "failed"
+    assert synced[0]["current_task_id"] == "task.failed"
+
+
 def test_finalize_reconciles_exact_canonical_checkpoint_without_replay(
     tmp_path: Path,
     monkeypatch,
@@ -5536,6 +5589,7 @@ def test_finalize_records_live_readiness_failure_without_success_chat(
     service = _service(tmp_path)
     saved: list[dict] = []
     notified: list[dict] = []
+    synchronized: list[dict] = []
     monkeypatch.setattr(
         BuilderAutomationService,
         "_checkpoint_completed_artifacts",
@@ -5551,6 +5605,11 @@ def test_finalize_records_live_readiness_failure_without_success_chat(
         BuilderAutomationService,
         "_notify_completed_session",
         lambda self, value: notified.append(dict(value)) or dict(value),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_sync_linked_development_ticket_tasks",
+        lambda self, value: synchronized.append(dict(value)) or dict(value),
     )
 
     service._finalize_completed_session(
@@ -5568,6 +5627,7 @@ def test_finalize_records_live_readiness_failure_without_success_chat(
     assert saved[-1]["completion_readiness"]["publication_gate_failure"]["ticket_id"]
     assert saved[-1]["progress"]["status"] == "failed"
     assert notified == []
+    assert synchronized[-1]["status"] == "failed"
 
 
 def test_prepare_dev_runtime_runs_slot_shaped_tests_before_activation(

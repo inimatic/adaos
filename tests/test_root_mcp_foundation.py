@@ -273,10 +273,18 @@ def test_root_mcp_accepts_bounded_builder_task_lease(monkeypatch) -> None:
             "node_id": "devnode.builder",
             "scopes": ["read_capability_snapshot"],
             "credential_refs": [],
+            "allowed_target_ids": ["hub:sn_builder"],
+            "subnet_id": "sn_builder",
             "expires_at": "2099-01-01T00:00:00+00:00",
         }
 
     monkeypatch.setattr(SkillFactoryService, "validate_task_access_token", _validate)
+    from adaos.apps.api.root_endpoints import _skill_factory_task_auth
+
+    task_auth = _skill_factory_task_auth("sf_task_test-secret", task_id=task_id)
+    assert task_auth is not None
+    assert task_auth["allowed_target_ids"] == ["hub:sn_builder"]
+    assert task_auth["subnet_id"] == "sn_builder"
     client = _make_client()
     headers = {"Authorization": "Bearer sf_task_test-secret"}
 

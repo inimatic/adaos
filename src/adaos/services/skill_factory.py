@@ -237,6 +237,18 @@ def _assignment_mcp_scope(raw_scope: Any) -> list[str]:
     return scope
 
 
+def _mcp_bound_target_id(mcp: Mapping[str, Any]) -> str | None:
+    root = _mapping(mcp.get("root_mcp"))
+    candidates = [
+        _text(mcp.get("bound_target_id") or mcp.get("target_id")),
+        _text(root.get("bound_target_id") or root.get("target_id")),
+    ]
+    targets = list(dict.fromkeys(item for item in candidates if item))
+    if len(targets) > 1:
+        raise ValueError("mcp target bindings are inconsistent")
+    return targets[0] if targets else None
+
+
 def _normalize_root_mcp_profile(value: Any) -> dict[str, Any]:
     root = _mapping(value)
     if not root:
@@ -893,6 +905,17 @@ class SkillFactoryService:
         normalized_mcp["requested_scope"] = requested_scope
         if root_mcp:
             normalized_mcp["root_mcp"] = root_mcp
+        if mcp_enabled:
+            bound_target_id = _mcp_bound_target_id(normalized_mcp)
+            expected_target_id = f"hub:{user_subnet_id}" if user_subnet_id else None
+            if bound_target_id and expected_target_id and bound_target_id != expected_target_id:
+                raise ValueError("mcp target binding does not match user_subnet_id")
+            if expected_target_id and not bound_target_id:
+                bound_target_id = expected_target_id
+            if bound_target_id:
+                normalized_mcp["bound_target_id"] = bound_target_id
+            if user_subnet_id:
+                normalized_mcp["subnet_id"] = user_subnet_id
 
         return {
             **raw,
@@ -1739,6 +1762,8 @@ class SkillFactoryService:
                 "node_id": observed_node_id,
                 "scopes": scopes,
                 "credential_refs": _string_list(lease.get("credential_refs")),
+                "allowed_target_ids": _string_list(lease.get("allowed_target_ids")),
+                "subnet_id": _text(lease.get("subnet_id")) or None,
                 "expires_at": lease["expires_at"],
             }
 
@@ -1917,6 +1942,9 @@ class SkillFactoryService:
             + timedelta(seconds=timeout_seconds)
         ).isoformat()
         mcp = _mapping(task.get("mcp"))
+        realize_request = self._realize_request(task)
+        subnet_id = _text(mcp.get("subnet_id") or realize_request.get("user_subnet_id")) or None
+        bound_target_id = _mcp_bound_target_id(mcp)
         task["access_lease"] = {
             "schema": TASK_ACCESS_LEASE_SCHEMA,
             "lease_id": f"lease.{new_id()}",
@@ -1926,6 +1954,8 @@ class SkillFactoryService:
             "token_hash": hashlib.sha256(token.encode("utf-8")).hexdigest(),
             "scopes": _assignment_mcp_scope(mcp.get("requested_scope")),
             "credential_refs": _string_list(mcp.get("credential_refs")),
+            "allowed_target_ids": [bound_target_id] if bound_target_id else [],
+            "subnet_id": subnet_id,
             "issued_at": _now_iso(),
             "expires_at": expires_at,
             "last_used_at": None,
@@ -1956,6 +1986,13 @@ class SkillFactoryService:
             "expires_at": lease.get("expires_at"),
             "credential_refs": _string_list(lease.get("credential_refs")),
         }
+        allowed_target_ids = _string_list(lease.get("allowed_target_ids"))
+        if allowed_target_ids:
+            assignment_mcp["bound_target_id"] = allowed_target_ids[0]
+            assignment_mcp["allowed_target_ids"] = allowed_target_ids
+        subnet_id = _text(lease.get("subnet_id"))
+        if subnet_id:
+            assignment_mcp["subnet_id"] = subnet_id
         root_mcp = _normalize_root_mcp_profile(mcp.get("root_mcp"))
         if root_mcp:
             assignment_mcp["root_mcp"] = root_mcp

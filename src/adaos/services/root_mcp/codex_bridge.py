@@ -328,7 +328,14 @@ class CodexRootMcpBridge:
         return RootMcpClient(self.profile.client_config())
 
     def _effective_target_id(self, arguments: Mapping[str, Any] | None) -> str:
-        target_id = _normalize_text((arguments or {}).get("target_id")) or self.profile.target_id
+        requested_target_id = _normalize_text((arguments or {}).get("target_id"))
+        if (
+            requested_target_id
+            and self.profile.target_id
+            and requested_target_id != self.profile.target_id
+        ):
+            raise ValueError("target_id is outside this bridge binding")
+        target_id = requested_target_id or self.profile.target_id
         if not target_id:
             raise ValueError("target_id is required for this bridge call")
         return target_id
