@@ -106,6 +106,11 @@ def test_component_update_tracks_release_and_viewer_lifecycle(tmp_path: Path) ->
         "release_digest": "sha256:release-candidate.demo.1",
     }
     assert service.active_component_metadata("skill", "demo_metrics_skill") is None
+    current_metadata = service.current_component_metadata("skill", "demo_metrics_skill")
+    assert current_metadata is not None
+    assert current_metadata["stage"] == "stable"
+    assert current_metadata["version"] == "0.2.0"
+    assert "viewer_state" not in current_metadata
     assert service.list_notices(status="accepted")[0]["notice_id"] == alpha["notice_id"]
 
 

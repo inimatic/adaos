@@ -242,7 +242,7 @@ class WebspaceSkillCatalogService:
             payload["version"] = version
         if component_update_service is not None:
             try:
-                component_update = component_update_service.active_component_metadata(
+                component_update = component_update_service.current_component_metadata(
                     "skill",
                     skill_name,
                 )

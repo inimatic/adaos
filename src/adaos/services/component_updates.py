@@ -306,6 +306,19 @@ class ComponentUpdateService:
             component_id=component_id,
             status="active",
         )
+        return self._component_metadata(notices)
+
+    def current_component_metadata(self, component_type: str, component_id: str) -> dict[str, Any] | None:
+        """Return the latest active or accepted changeset for runtime projection."""
+        notices = self.list_notices(
+            component_type=component_type,
+            component_id=component_id,
+            status="current",
+        )
+        return self._component_metadata(notices)
+
+    @staticmethod
+    def _component_metadata(notices: list[dict[str, Any]]) -> dict[str, Any] | None:
         if not notices:
             return None
         notice = dict(notices[0])

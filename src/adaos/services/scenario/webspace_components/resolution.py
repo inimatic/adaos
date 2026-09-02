@@ -95,16 +95,21 @@ def _apply_component_metadata(
     metadata["component"] = component
     if version:
         metadata["version"] = str(version)
-        data.setdefault("version", str(version))
+        data["version"] = str(version)
     if source_authority:
         metadata["sourceAuthority"] = str(source_authority)
-        data.setdefault("source_authority", str(source_authority))
+        data["source_authority"] = str(source_authority)
     if isinstance(component_update, Mapping) and component_update:
         update = dict(component_update)
         metadata["componentUpdate"] = update
         metadata["releaseStage"] = str(update.get("stage") or "").strip() or None
         data["component_update"] = update
         data["release_stage"] = metadata["releaseStage"]
+    else:
+        metadata.pop("componentUpdate", None)
+        metadata.pop("releaseStage", None)
+        data.pop("component_update", None)
+        data.pop("release_stage", None)
     data["_adaos"] = metadata
     return data
 
@@ -335,7 +340,7 @@ class WebspaceResolutionService:
         except Exception:
             component_updates = None
         scenario_update = (
-            component_updates.active_component_metadata("scenario", scenario_id)
+            component_updates.current_component_metadata("scenario", scenario_id)
             if component_updates is not None
             else None
         )
@@ -529,7 +534,7 @@ class WebspaceResolutionService:
                         component_type="scenario",
                         component_id=sid,
                         component_update=(
-                            component_updates.active_component_metadata("scenario", sid)
+                            component_updates.current_component_metadata("scenario", sid)
                             if component_updates is not None
                             else None
                         ),

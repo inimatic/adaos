@@ -28,6 +28,7 @@ except Exception:
     sys.modules["ypy_websocket.ystore"] = ystore_mod
 
 from adaos.services.scenario import webspace_runtime as webspace_runtime_module
+from adaos.services.scenario.webspace_components.resolution import _apply_component_metadata
 from adaos.services.workspaces import (
     ensure_workspace,
     get_workspace,
@@ -80,6 +81,45 @@ def test_json_fingerprint_normalizes_yjs_integral_float_roundtrip() -> None:
     assert webspace_runtime_module._fingerprint_json_like({"ratio": 1.25}) != (  # noqa: SLF001
         webspace_runtime_module._fingerprint_json_like({"ratio": 1.5})  # noqa: SLF001
     )
+
+
+def test_component_metadata_replaces_stale_publication_projection() -> None:
+    projected = _apply_component_metadata(
+        {
+            "id": "demo-metrics",
+            "version": "0.13.25",
+            "release_stage": "beta",
+            "component_update": {"stage": "beta", "version": "0.13.25"},
+            "_adaos": {
+                "version": "0.13.25",
+                "releaseStage": "beta",
+                "componentUpdate": {"stage": "beta", "version": "0.13.25"},
+            },
+        },
+        component_type="skill",
+        component_id="demo_metrics_skill",
+        version="0.13.26",
+        source_authority="workspace",
+        component_update={"stage": "stable", "version": "0.13.26"},
+    )
+
+    assert projected["version"] == "0.13.26"
+    assert projected["release_stage"] == "stable"
+    assert projected["_adaos"]["version"] == "0.13.26"
+    assert projected["_adaos"]["releaseStage"] == "stable"
+
+    without_notice = _apply_component_metadata(
+        projected,
+        component_type="skill",
+        component_id="demo_metrics_skill",
+        version="0.13.26",
+        source_authority="workspace",
+    )
+
+    assert "release_stage" not in without_notice
+    assert "component_update" not in without_notice
+    assert "releaseStage" not in without_notice["_adaos"]
+    assert "componentUpdate" not in without_notice["_adaos"]
 
 
 def test_build_local_desktop_catalog_snapshot_uses_runtime_skill_decls(monkeypatch) -> None:
