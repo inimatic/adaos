@@ -88,15 +88,22 @@ class ComponentUpdateService:
 
         decision = _text(trial.get("decision")).lower()
         trial_status = _text(trial.get("status")).lower()
-        if decision == "accept" or trial_status in {"accepted", "published"}:
+        if trial_status == "published":
+            stage = "stable"
+            notice_status = "accepted"
+            review_state = "accepted"
+        elif decision == "accept" or trial_status == "accepted":
             stage = "beta"
             notice_status = "active"
+            review_state = "publishing"
         elif trial_status in {"rejected", "rolled_back", "rollback"}:
             stage = "alpha"
             notice_status = "rolled_back" if decision == "rollback" else "withdrawn"
+            review_state = "rolled_back" if decision == "rollback" else "changes_requested"
         else:
             stage = _text(aprobation.get("audience")).lower() or "alpha"
             notice_status = "active"
+            review_state = "pending"
 
         notice_id = _notice_id(kind, identifier, identity)
         component_key = _component_key(kind, identifier)
@@ -126,7 +133,7 @@ class ComponentUpdateService:
             if stage == "beta" and title.lower().endswith(" alpha update"):
                 title = f"{title[:-len(' alpha update')]} beta update"
             published_at = (previous or {}).get("published_at")
-            if stage == "beta" and not published_at:
+            if stage == "stable" and not published_at:
                 published_at = now
             notice = {
                 "schema": NOTICE_SCHEMA,
@@ -139,6 +146,7 @@ class ComponentUpdateService:
                 "version": _text(trial.get("version")) or None,
                 "stage": stage,
                 "status": notice_status,
+                "review_state": review_state,
                 "source_kind": _text(aprobation.get("source_kind")) or "devspace",
                 "title": title,
                 "summary": _text(changelog.get("summary")) or "An updated component is ready for review.",
@@ -165,7 +173,7 @@ class ComponentUpdateService:
             if comparable == previous_comparable:
                 return copy.deepcopy(dict(previous))
 
-            if notice_status == "active":
+            if notice_status in {"active", "accepted"}:
                 for other_id, raw_other in list(notices.items()):
                     if other_id == notice_id or not isinstance(raw_other, Mapping):
                         continue

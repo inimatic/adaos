@@ -516,6 +516,55 @@ def test_ticket_resolution_requires_evidence_and_closes_linked_repair(tmp_path: 
     assert reopened["history"][-1]["previous_verification"]["kind"] == "verified"
 
 
+def test_publication_required_ticket_verification_requires_accepted_release(
+    tmp_path: Path,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    signal = service.capture_signal(
+        kind="development_request",
+        summary="Publish the reviewed Demo Metrics changeset",
+        target_scope={"type": "skill", "id": "demo_metrics_skill"},
+        policy={"publication_required": True},
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="in_builder",
+    )["ticket"]
+    service.record_resolution(
+        ticket["ticket_id"],
+        evidence_refs=[{"type": "test", "id": "demo-metrics-tests", "status": "passed"}],
+        actor="builder:test",
+    )
+
+    with pytest.raises(ValueError, match="accept the current changeset"):
+        service.verify_ticket(
+            ticket["ticket_id"],
+            evidence_refs=[{"type": "test", "id": "human-review", "status": "passed"}],
+            actor="browser",
+        )
+
+    verified = service.verify_ticket(
+        ticket["ticket_id"],
+        evidence_refs=[
+            {
+                "type": "builder_trial",
+                "id": "candidate.demo.1",
+                "status": "accepted",
+                "decision": "accept",
+            },
+            {
+                "type": "project_release",
+                "id": "demo_metrics@0.2.0",
+                "status": "published",
+            },
+        ],
+        actor="builder:publication",
+    )
+
+    assert verified["ticket"]["status"] == "verified"
+
+
 def test_postponed_ticket_does_not_create_builder_repair(tmp_path: Path) -> None:
     service = DevelopmentTicketService(state_dir=tmp_path)
     report = service.report_compatibility_finding(

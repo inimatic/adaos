@@ -46,6 +46,7 @@ def test_component_update_tracks_release_and_viewer_lifecycle(tmp_path: Path) ->
 
     assert alpha is not None
     assert alpha["stage"] == "alpha"
+    assert alpha["review_state"] == "pending"
     assert alpha["version"] == "0.2.0"
     assert service.list_notices(actor="user:owner", webspace_id="desktop")[0]["auto_prompt"] is True
 
@@ -67,6 +68,17 @@ def test_component_update_tracks_release_and_viewer_lifecycle(tmp_path: Path) ->
     assert reviewed["unread"] is False
     assert reviewed["viewer_state"]["review_started_at"]
 
+    publishing = service.record_aprobation(
+        component_type="skill",
+        component_id="demo_metrics_skill",
+        aprobation=_aprobation(status="accepted", decision="accept"),
+        webspace_id="desktop",
+    )
+    assert publishing is not None
+    assert publishing["stage"] == "beta"
+    assert publishing["status"] == "active"
+    assert publishing["review_state"] == "publishing"
+
     published = service.record_aprobation(
         component_type="skill",
         component_id="demo_metrics_skill",
@@ -75,8 +87,11 @@ def test_component_update_tracks_release_and_viewer_lifecycle(tmp_path: Path) ->
     )
     assert published is not None
     assert published["notice_id"] == alpha["notice_id"]
-    assert published["stage"] == "beta"
-    assert service.active_component_metadata("skill", "demo_metrics_skill")["stage"] == "beta"
+    assert published["stage"] == "stable"
+    assert published["status"] == "accepted"
+    assert published["review_state"] == "accepted"
+    assert service.active_component_metadata("skill", "demo_metrics_skill") is None
+    assert service.list_notices(status="accepted")[0]["notice_id"] == alpha["notice_id"]
 
 
 def test_component_update_reconciles_builder_session_and_api(tmp_path: Path) -> None:

@@ -3324,6 +3324,33 @@ class DevelopmentTicketService:
                 blockers.append(blocker_id)
         return sorted(set(blockers))
 
+    @staticmethod
+    def _missing_publication_verification_evidence(
+        ticket: Mapping[str, Any],
+        refs: Sequence[Mapping[str, Any]],
+    ) -> list[str]:
+        if _mapping(ticket.get("policy")).get("publication_required") is not True:
+            return []
+        accepted_trial = any(
+            _text(ref.get("type")) == "builder_trial"
+            and _text(ref.get("status")).lower() == "accepted"
+            and _text(ref.get("decision")).lower() == "accept"
+            and bool(_text(ref.get("id")))
+            for ref in refs
+        )
+        published_release = any(
+            _text(ref.get("type")) == "project_release"
+            and _text(ref.get("status")).lower() == "published"
+            and bool(_text(ref.get("id")))
+            for ref in refs
+        )
+        missing: list[str] = []
+        if not accepted_trial:
+            missing.append("accepted builder_trial")
+        if not published_release:
+            missing.append("published project_release")
+        return missing
+
     def verify_ticket(
         self,
         ticket_id: str,
@@ -3368,6 +3395,16 @@ class DevelopmentTicketService:
             self._assert_expected_revision(ticket, expected_revision)
             if _text(ticket.get("status")) != "resolved":
                 raise ValueError("ticket verification requires resolved status")
+            missing_publication_evidence = self._missing_publication_verification_evidence(
+                ticket,
+                refs,
+            )
+            if missing_publication_evidence:
+                missing = ", ".join(missing_publication_evidence)
+                raise ValueError(
+                    "ticket verification requires publication evidence "
+                    f"({missing}); accept the current changeset before verifying the ticket"
+                )
             now = _now()
             verification = {
                 "kind": "verified",
