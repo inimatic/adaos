@@ -6962,6 +6962,25 @@ class BuilderAutomationService:
                 for path in changed_paths_value
                 if str(path or "").strip()
             }
+            provenance = (
+                dict(result.get("provenance"))
+                if isinstance(result.get("provenance"), Mapping)
+                else {}
+            )
+            validation_only = (
+                dict(provenance.get("validation_only"))
+                if isinstance(provenance.get("validation_only"), Mapping)
+                else {}
+            )
+            if (
+                str(result.get("execution_strategy") or "").strip()
+                == "validation_only"
+            ):
+                changed_paths.update(
+                    str(path or "").replace("\\", "/").lstrip("./")
+                    for path in validation_only.get("guarded_paths") or []
+                    if str(path or "").strip()
+                )
             created_artifacts = {
                 (
                     str(item.get("kind") or "").strip().lower().rstrip("s"),

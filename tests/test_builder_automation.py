@@ -6770,6 +6770,60 @@ def test_automation_does_not_checkpoint_unchanged_companion_skill(tmp_path: Path
     assert checkpoints == [{"ok": True, "kind": "scenario", "name": "recipes"}]
 
 
+def test_validation_only_checkpoints_artifact_guarded_before_worker_run(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    calls: list[dict] = []
+
+    class _Workspace:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def checkpoint_artifact(self, **kwargs):
+            calls.append(dict(kwargs))
+            return {"ok": True, "kind": kwargs["kind"], "name": kwargs["artifact_id"]}
+
+    import adaos.services.builder.workspace as workspace
+
+    monkeypatch.setattr(workspace, "BuilderWorkspaceService", _Workspace)
+
+    checkpoints = service._checkpoint_completed_artifacts(
+        {
+            "object_type": "skill",
+            "object_id": "subscription_status_skill",
+            "last_result": {
+                "summary": "Validated the prepared subscription projection.",
+                "changed_paths": [],
+                "no_source_change": True,
+                "execution_strategy": "validation_only",
+                "provenance": {
+                    "execution_strategy": "validation_only",
+                    "validation_only": {
+                        "guarded_paths": [
+                            "skills/subscription_status_skill/handlers/main.py",
+                            "skills/subscription_status_skill/webui.json",
+                        ]
+                    },
+                },
+            },
+        }
+    )
+
+    assert calls == [
+        {
+            "kind": "skill",
+            "artifact_id": "subscription_status_skill",
+            "message": "Validated the prepared subscription projection.",
+        }
+    ]
+    assert checkpoints == [
+        {"ok": True, "kind": "skill", "name": "subscription_status_skill"}
+    ]
+
+
 def test_automation_checkpoints_primary_scenario_when_only_companion_skill_changed(
     tmp_path: Path,
     monkeypatch,
