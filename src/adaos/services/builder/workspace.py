@@ -110,6 +110,17 @@ _ENDPOINT_RE = re.compile(r"(endpoint|websocket|tunnel|route[_-]?reset|browser[_
 _DESTRUCTIVE_ACTION_RE = re.compile(r"(delete|remove|purge|drop|format|shutdown|restart|reset|rollback|deactivate|kill)", re.I)
 
 
+class BuilderSourceRecoveryRequired(RuntimeError):
+    def __init__(self, plan: Mapping[str, Any]):
+        self.plan = dict(plan)
+        status = str(plan.get("status") or "review_required")
+        digest = str(plan.get("plan_digest") or "unavailable")
+        super().__init__(
+            "development source materialization requires reviewed recovery "
+            f"(status={status}, plan={digest})"
+        )
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -632,6 +643,31 @@ class BuilderWorkspaceService:
             "default_option": "materialize_dev_source",
         }
 
+    def development_source_recovery_plan(
+        self,
+        *,
+        kind: str,
+        artifact_id: str,
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
+        from adaos.services.builder.source_recovery import BuilderSourceRecoveryService
+
+        if self.workspace_root is None:
+            raise ValueError("AdaOS workspace is not available in the current context")
+        if self.dev_skills_root is None or self.dev_scenarios_root is None:
+            raise ValueError("AdaOS dev workspace is not available in the current context")
+        return BuilderSourceRecoveryService(
+            state_dir=Path(self.state_dir or current_state_dir()),
+            workspace_root=Path(self.workspace_root),
+            dev_skills_root=Path(self.dev_skills_root),
+            dev_scenarios_root=Path(self.dev_scenarios_root),
+            dev_projects_root=self._dev_projects_root(),
+        ).plan(
+            kind=kind,
+            artifact_id=artifact_id,
+            project_id=project_id,
+        )
+
     def materialize_dev_source(
         self,
         *,
@@ -648,6 +684,11 @@ class BuilderWorkspaceService:
             artifact_id=artifact_id,
             project_id=project_id,
         )
+        recovery_plan = self.development_source_recovery_plan(
+            kind=normalized_kind,
+            artifact_id=artifact_id,
+            project_id=project_id,
+        )
         if status.get("status") == "source_available":
             return {
                 "ok": True,
@@ -656,8 +697,13 @@ class BuilderWorkspaceService:
                 "target_type": normalized_kind,
                 "target_id": artifact_id,
                 "development_source": status,
+                "source_recovery_plan": recovery_plan,
                 "components": [],
             }
+        if recovery_plan.get("workspace_lock_digest") and not recovery_plan.get(
+            "safe_to_apply"
+        ):
+            raise BuilderSourceRecoveryRequired(recovery_plan)
 
         project_ids: list[str] = []
         if normalized_kind == "project":
@@ -739,6 +785,7 @@ class BuilderWorkspaceService:
             "target_id": artifact_id,
             "project_id": project_ids[0] if len(project_ids) == 1 else None,
             "components": components,
+            "source_recovery_plan": recovery_plan,
             "development_source": self.development_source_status(
                 kind=normalized_kind,
                 artifact_id=artifact_id,

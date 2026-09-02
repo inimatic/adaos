@@ -1222,6 +1222,26 @@ class BuilderWorkbenchService:
             persist_projection=False,
         )
         development_source = development_source_options(target)
+        try:
+            from adaos.services.builder.workspace import BuilderWorkspaceService
+
+            recovery_plan = BuilderWorkspaceService.from_context().development_source_recovery_plan(
+                kind=str(development_source.get("target_type") or target_type),
+                artifact_id=str(development_source.get("target_id") or target_id),
+                project_id=str(development_source.get("project_id") or "").strip() or None,
+            )
+        except Exception as exc:
+            recovery_plan = {
+                "schema": "adaos.builder.source_recovery_plan.v1",
+                "status": "unavailable",
+                "safe_to_apply": False,
+                "requires_review": True,
+                "errors": [f"{type(exc).__name__}:{exc}"],
+            }
+        development_source = {
+            **development_source,
+            "source_recovery_plan": recovery_plan,
+        }
         relation_refs = _ticket_relation_refs(ticket)
         qualification = _builder_ticket_qualification(
             ticket,

@@ -60,6 +60,9 @@ exact revision.
 7. Do not report deferred collaboration or edition support as implemented.
 8. Preserve registry v1 read compatibility until representative package-backed
    installs pass local and stand validation.
+9. Do not fork or materialize a lock-backed development source until the exact
+   package, installed Workspace projection, DEV projection, Project ownership,
+   and dependency role have been compared in a digest-bound recovery plan.
 
 ## Current Baseline
 

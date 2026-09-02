@@ -1892,6 +1892,21 @@ Architecture owner:
 - [x] `[must]` Make runtime action approval publication use the asynchronous
   Pending Actions room owner. A live-room thread handoff failure must never
   suppress the global review affordance.
+- [x] `[must]` Resolve an absent or divergent DEV source against the exact
+  `WorkspaceLock`, cached `ProjectRelease`, and content-addressed package before
+  materialization. The read-only recovery plan identifies Project ownership,
+  distinguishes owned components from immutable dependencies, fingerprints
+  Workspace and DEV projections with the locked package build policy, and
+  classifies clean, one-sided drift, converged unpublished work, invalid source,
+  missing package, and three-way conflict. Lock-backed materialization fails
+  closed on every non-reviewable result instead of creating a blank scaffold.
+- [ ] `[must]` Complete reviewed source recovery apply: preserve divergent
+  Workspace and DEV trees as immutable evidence, synthesize a Project
+  definition from the exact release when the legacy project directory is
+  absent, create a Change from the selected owned-source delta, and require a
+  new Candidate/Trial/acceptance/Publication before moving `WorkspaceLock`.
+  Dependencies remain read-only unless their owning Project is opened through
+  a separately scoped Change.
 - [ ] `[should]` Add Project/Application catalog projections with profiles,
   localized categories, free tags, deployment scopes, and an advanced raw
   component view.
@@ -1956,6 +1971,13 @@ repair, ProjectRelease publication, accepted Trial, and ticket closure. Cold
 restoration after a process restart, full removal of nested compatibility
 copies, episodic-memory routing, and the deferred Research Workbench proof are
 still open.
+
+Source recovery verification, 2026-09-02: the local Builder lock at release
+`builder@0.2.55` resolves `scenario:builder` as Project-owned and the three
+companion skills as dependencies. The deterministic preflight blocks automatic
+materialization because current Workspace and DEV sources contain independent
+changes; package bytes remain available. Focused Builder source/workbench/worker
+regressions pass 57/57 without mutating either source tree.
 
 ## Cross-Document Anchors
 
