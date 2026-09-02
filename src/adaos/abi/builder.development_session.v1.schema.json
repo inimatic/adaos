@@ -41,9 +41,15 @@
           "type": "object",
           "required": ["budget_view", "max_wall_seconds", "max_model_tokens", "max_attempts", "max_human_interventions"],
           "properties": {
+            "schema": {"const": "adaos.builder.execution_budget.v1"},
+            "source": {"type": "string", "minLength": 1, "maxLength": 160},
             "budget_view": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"},
             "max_wall_seconds": {"type": "integer", "minimum": 60, "maximum": 86400},
             "max_model_tokens": {"type": "integer", "minimum": 1},
+            "max_tokens": {"type": "integer", "minimum": 1},
+            "token_budget_metric": {"enum": ["model_tokens", "fresh_plus_output"]},
+            "max_billable_tokens": {"type": "integer", "minimum": 1},
+            "max_context_tokens": {"type": "integer", "minimum": 1},
             "max_attempts": {"type": "integer", "minimum": 1, "maximum": 20},
             "max_human_interventions": {"type": "integer", "minimum": 0, "maximum": 100}
           },

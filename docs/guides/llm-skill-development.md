@@ -551,10 +551,15 @@ declares wall time, charged model tokens, attempts and human interventions.
 The profile declares the provider, exact model, reasoning effort and tool
 profile. Builder carries both into the immutable context receipt and Skill
 Factory assignment; the local Codex executor applies the model and reasoning
-settings to initial and repair turns. Model-token limits are currently measured
-from retained Codex JSONL and scored after a turn; wall time is an active task
-expiry/cancellation boundary. Do not describe the token limit as streaming
-preemption until the provider exposes a trustworthy live counter.
+settings to initial and repair turns. Keep two token limits when the primary
+metric is `fresh_plus_output`: `max_model_tokens` bounds marginal context and
+output, while `max_billable_tokens` bounds the total provider tokens metered by
+Root, including cached input. If the latter is omitted, Builder derives a
+conservative cap from the primary limit. The worker actively terminates a turn
+when a conservative JSONL/tool-round estimate crosses either limit, preserves
+the candidate, and replaces the estimate with provider-reported usage when a
+terminal usage event is available. The live estimate is a safety boundary, not
+an exact billing counter; Root receipts remain authoritative for Subscription.
 
 Keep developer validation independent of the generated skill. The
 `builder.project_validation` capability can validate the exact DEV target,

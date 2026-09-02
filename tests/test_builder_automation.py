@@ -1224,6 +1224,8 @@ def test_automation_budget_projection_uses_fresh_plus_output_metric(tmp_path: Pa
     assert observed["budget_tokens"] == 6_835
     assert projected["budget_usage"]["status"] == "within_budget"
     assert projected["budget_usage"]["overrun_tokens"] == 0
+    assert projected["budget_usage"]["billable_limit_tokens"] == 96_000
+    assert projected["budget_usage"]["billable_status"] == "within_budget"
 
 
 def test_terminal_codex_usage_is_reported_once_with_provider_counts(tmp_path: Path) -> None:

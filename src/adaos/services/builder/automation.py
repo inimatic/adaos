@@ -22,6 +22,10 @@ import psutil
 import yaml
 
 from adaos.build_info import BUILD_INFO
+from adaos.domain.development_budget import (
+    execution_billable_token_limit,
+    with_effective_billable_token_limit,
+)
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from adaos.services.builder.workspace import BuilderWorkspaceService
 from adaos.services.builder.workflow import BuilderWorkflowService
@@ -1436,7 +1440,7 @@ class BuilderAutomationService:
             raise ValueError("implementation_brief is required after Prompt IDE Execute")
         _reject_transport_corruption(brief, field="implementation_brief")
         external_links = dict(links) if isinstance(links, Mapping) else {}
-        admitted_execution_budget = dict(execution_budget) if isinstance(execution_budget, Mapping) else None
+        admitted_execution_budget = with_effective_billable_token_limit(execution_budget)
         admitted_agent_profile = dict(agent_profile) if isinstance(agent_profile, Mapping) else None
         admitted_mcp = _sanitized_mcp_profile(mcp)
         admitted_development_session_id = str(development_session_id or "").strip() or None
@@ -2389,7 +2393,9 @@ class BuilderAutomationService:
                     if isinstance(session.get("execution_budget"), Mapping)
                     else {}
                 )
-                next_budget = {**previous_budget, **dict(execution_budget)}
+                next_budget = with_effective_billable_token_limit(
+                    {**previous_budget, **dict(execution_budget)}
+                ) or {}
                 try:
                     max_model_tokens = int(
                         next_budget.get("max_model_tokens")
@@ -3882,6 +3888,7 @@ class BuilderAutomationService:
             except (TypeError, ValueError):
                 declared_model_tokens = 0
         observed_model_tokens = int(usage.get("model_tokens") or 0)
+        declared_billable_tokens = execution_billable_token_limit(declared)
         budget_metric = str((declared or {}).get("token_budget_metric") or "model_tokens").strip()
         observed_budget_tokens = observed_model_tokens
         if budget_metric == "fresh_plus_output":
@@ -3891,12 +3898,21 @@ class BuilderAutomationService:
             ) + int(usage.get("output_tokens") or 0)
         budget_status = "unknown"
         overrun_tokens = 0
+        billable_status = "unknown"
+        billable_overrun_tokens = 0
         if declared_model_tokens > 0 and observed_budget_tokens > 0:
             if observed_budget_tokens > declared_model_tokens:
                 budget_status = "exceeded"
                 overrun_tokens = observed_budget_tokens - declared_model_tokens
             else:
                 budget_status = "within_budget"
+        if declared_billable_tokens > 0 and observed_model_tokens > 0:
+            if observed_model_tokens > declared_billable_tokens:
+                billable_status = "exceeded"
+                billable_overrun_tokens = observed_model_tokens - declared_billable_tokens
+                budget_status = "exceeded"
+            else:
+                billable_status = "within_budget"
         elif (
             declared_model_tokens > 0
             and status in _TERMINAL_STATUSES
@@ -3910,6 +3926,7 @@ class BuilderAutomationService:
             )
         ):
             budget_status = "not_applicable"
+            billable_status = "not_applicable"
         return {
             "declared": declared,
             "observed": {
@@ -3920,12 +3937,16 @@ class BuilderAutomationService:
                 "reasoning_tokens": int(usage.get("reasoning_tokens") or 0),
                 "budget_metric": budget_metric,
                 "budget_tokens": observed_budget_tokens,
+                "billable_tokens": observed_model_tokens,
                 "attempts": int(usage.get("attempts") or 0),
                 "wall_seconds": wall_seconds,
                 "terminal": status in _TERMINAL_STATUSES,
             },
             "status": budget_status,
             "overrun_tokens": overrun_tokens,
+            "billable_limit_tokens": declared_billable_tokens,
+            "billable_status": billable_status,
+            "billable_overrun_tokens": billable_overrun_tokens,
         }
 
     @staticmethod

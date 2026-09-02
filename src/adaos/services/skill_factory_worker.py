@@ -27,6 +27,10 @@ from adaos.domain.development_validation import (
     derive_validation_budget,
     normalize_validation_budget,
 )
+from adaos.domain.development_budget import (
+    execution_billable_token_limit,
+    execution_token_metric,
+)
 from adaos.services.node_config import load_config
 from adaos.services.node_runtime_state import load_node_runtime_state
 from adaos.services.artifact_pipeline.storage import replace_with_retry
@@ -63,6 +67,10 @@ CODEX_TOKEN_BUDGET_EXIT_CODE = 124
 CODEX_PROMPT_BUDGET_MIN_RESERVE = 1024
 CODEX_PROMPT_BUDGET_MAX_RESERVE = 8192
 CODEX_LIVE_BUDGET_SAFETY_FACTOR = 1.25
+CODEX_LIVE_PROVIDER_BASELINE_TOKENS = 40_000
+CODEX_LIVE_PROVIDER_TOKENS_PER_TOOL_ROUND = 18_000
+CODEX_LIVE_FRESH_BASELINE_TOKENS = 4_000
+CODEX_LIVE_FRESH_TOKENS_PER_TOOL_ROUND = 2_000
 BOUNDED_REPAIR_COMMAND_OUTPUT_BYTES = 8 * 1024
 BOUNDED_REPAIR_COMMAND_OUTPUT_LINES = 120
 BOUNDED_REPAIR_DISCOVERY_LINES = 400
@@ -416,6 +424,7 @@ def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, A
     context_bytes = len(str(prompt or "").encode("utf-8", errors="replace"))
     cumulative_tokens = 0
     tool_rounds = 0
+    assistant_output_bytes = 0
     if path.is_file():
         try:
             if path.stat().st_size > 16 * 1024 * 1024:
@@ -426,7 +435,15 @@ def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, A
                 except json.JSONDecodeError:
                     continue
                 item = event.get("item") if isinstance(event.get("item"), Mapping) else {}
-                if event.get("type") != "item.completed" or item.get("type") not in {
+                if event.get("type") != "item.completed":
+                    continue
+                item_type = str(item.get("type") or "")
+                if item_type == "agent_message":
+                    raw_bytes = len(raw_line.encode("utf-8", errors="replace"))
+                    context_bytes += raw_bytes
+                    assistant_output_bytes += raw_bytes
+                    continue
+                if item_type not in {
                     "command_execution",
                     "file_change",
                     "mcp_tool_call",
@@ -439,10 +456,24 @@ def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, A
             return {}
     cumulative_tokens += max(1, (context_bytes + 3) // 4)
     unique_tokens = max(1, (context_bytes + 3) // 4)
-    estimated = max(1, int(cumulative_tokens * CODEX_LIVE_BUDGET_SAFETY_FACTOR))
+    visible_estimate = max(
+        1,
+        int(cumulative_tokens * CODEX_LIVE_BUDGET_SAFETY_FACTOR),
+    )
+    provider_context_floor = (
+        CODEX_LIVE_PROVIDER_BASELINE_TOKENS
+        + CODEX_LIVE_PROVIDER_TOKENS_PER_TOOL_ROUND * tool_rounds
+    )
+    estimated = max(visible_estimate, provider_context_floor)
+    visible_fresh_estimate = max(
+        1,
+        int(unique_tokens * CODEX_LIVE_BUDGET_SAFETY_FACTOR),
+    )
     estimated_fresh = min(
         estimated,
-        max(1, int(unique_tokens * CODEX_LIVE_BUDGET_SAFETY_FACTOR)),
+        visible_fresh_estimate
+        + CODEX_LIVE_FRESH_BASELINE_TOKENS
+        + CODEX_LIVE_FRESH_TOKENS_PER_TOOL_ROUND * tool_rounds,
     )
     return {
         "accuracy": "estimated",
@@ -455,8 +486,14 @@ def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, A
         "visible_unique_tokens": unique_tokens,
         "estimated_fresh_input_tokens": estimated_fresh,
         "visible_context_bytes": context_bytes,
+        "assistant_output_bytes": assistant_output_bytes,
         "tool_rounds": tool_rounds,
         "safety_factor": CODEX_LIVE_BUDGET_SAFETY_FACTOR,
+        "provider_context_floor_tokens": provider_context_floor,
+        "fresh_context_floor_tokens": (
+            CODEX_LIVE_FRESH_BASELINE_TOKENS
+            + CODEX_LIVE_FRESH_TOKENS_PER_TOOL_ROUND * tool_rounds
+        ),
     }
 
 
@@ -474,6 +511,75 @@ def _codex_budget_observed_tokens(
         usage.get("model_tokens")
         or int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
     )
+
+
+def _codex_budget_exceeded_receipt(
+    *,
+    provider_usage: Mapping[str, Any],
+    live_estimate: Mapping[str, Any],
+    metric: str,
+    max_tokens: int,
+    max_billable_tokens: int | None,
+) -> dict[str, Any] | None:
+    provider_budget_tokens = _codex_budget_observed_tokens(
+        provider_usage,
+        metric=metric,
+    )
+    estimated_budget_tokens = _codex_budget_observed_tokens(
+        live_estimate,
+        metric=metric,
+    )
+    observed_budget_tokens = max(provider_budget_tokens, estimated_budget_tokens)
+    provider_billable_tokens = int(provider_usage.get("model_tokens") or 0)
+    estimated_billable_tokens = int(live_estimate.get("model_tokens") or 0)
+    observed_billable_tokens = max(
+        provider_billable_tokens,
+        estimated_billable_tokens,
+    )
+    exceeded_limits: list[str] = []
+    if max_tokens > 0 and observed_budget_tokens > max_tokens:
+        exceeded_limits.append(metric)
+    if (
+        max_billable_tokens is not None
+        and max_billable_tokens > 0
+        and observed_billable_tokens > max_billable_tokens
+    ):
+        exceeded_limits.append("billable_tokens")
+    if not exceeded_limits:
+        return None
+    usage = (
+        {**provider_usage, "accuracy": "provider_reported"}
+        if provider_billable_tokens or provider_budget_tokens
+        else dict(live_estimate)
+    )
+    trigger_metric = exceeded_limits[0]
+    trigger_observed = (
+        observed_billable_tokens
+        if trigger_metric == "billable_tokens"
+        else observed_budget_tokens
+    )
+    trigger_limit = (
+        int(max_billable_tokens or 0)
+        if trigger_metric == "billable_tokens"
+        else max_tokens
+    )
+    return {
+        "schema": "adaos.skill_factory.codex_token_budget_receipt.v1",
+        "status": "exceeded",
+        "metric": metric,
+        "max_tokens": max_tokens,
+        "observed_tokens": observed_budget_tokens,
+        "max_model_tokens": max_tokens,
+        "observed_model_tokens": observed_billable_tokens,
+        "max_billable_tokens": max_billable_tokens,
+        "observed_billable_tokens": observed_billable_tokens,
+        "trigger_metric": trigger_metric,
+        "trigger_limit": trigger_limit,
+        "trigger_observed_tokens": trigger_observed,
+        "exceeded_limits": exceeded_limits,
+        "usage": usage,
+        "checked_at": _now_iso(),
+    }
 
 
 def context_packet_prompt_projection(value: Any, *, implementation_brief: str = "") -> dict[str, Any]:
@@ -1377,17 +1483,14 @@ def _codex_execution_token_budget(assignment: Mapping[str, Any] | None) -> dict[
             except (TypeError, ValueError):
                 value = 0
             if value > 0:
+                metric = execution_token_metric(raw_budget)
                 return {
                     "schema": "adaos.skill_factory.codex_token_budget.v1",
                     "source": source,
                     "field": key,
                     "max_model_tokens": value,
-                    "metric": (
-                        "fresh_plus_output"
-                        if str(raw_budget.get("token_budget_metric") or "").strip()
-                        == "fresh_plus_output"
-                        else "model_tokens"
-                    ),
+                    "max_billable_tokens": execution_billable_token_limit(raw_budget),
+                    "metric": metric,
                     "raw": dict(raw_budget),
                 }
     return {}
@@ -1514,6 +1617,7 @@ class SubprocessCodexExecutor:
         output_dir: Path,
         root_mcp: Mapping[str, Any] | None = None,
         max_model_tokens: int | None = None,
+        max_billable_tokens: int | None = None,
         token_budget_metric: str = "model_tokens",
         cancel_check: Callable[[], bool] | None = None,
     ) -> CodexRunResult:
@@ -1595,32 +1699,14 @@ class SubprocessCodexExecutor:
                                 live_events_path,
                                 prompt=prompt,
                             )
-                            provider_tokens = _codex_budget_observed_tokens(
-                                provider_usage,
+                            budget_exceeded = _codex_budget_exceeded_receipt(
+                                provider_usage=provider_usage,
+                                live_estimate=live_estimate,
                                 metric=token_budget_metric,
+                                max_tokens=int(max_model_tokens),
+                                max_billable_tokens=max_billable_tokens,
                             )
-                            estimated_tokens = _codex_budget_observed_tokens(
-                                live_estimate,
-                                metric=token_budget_metric,
-                            )
-                            observed = max(provider_tokens, estimated_tokens)
-                            if observed > int(max_model_tokens):
-                                usage: dict[str, Any] = (
-                                    {**provider_usage, "accuracy": "provider_reported"}
-                                    if provider_tokens
-                                    else live_estimate
-                                )
-                                budget_exceeded = {
-                                    "schema": "adaos.skill_factory.codex_token_budget_receipt.v1",
-                                    "status": "exceeded",
-                                    "metric": token_budget_metric,
-                                    "max_tokens": int(max_model_tokens),
-                                    "observed_tokens": observed,
-                                    "max_model_tokens": int(max_model_tokens),
-                                    "observed_model_tokens": observed,
-                                    "usage": usage,
-                                    "checked_at": _now_iso(),
-                                }
+                            if budget_exceeded is not None:
                                 self._terminate_process_tree(process)
                                 break
                             next_budget_check = now + CODEX_TOKEN_BUDGET_CHECK_INTERVAL_SECONDS
@@ -1642,39 +1728,20 @@ class SubprocessCodexExecutor:
         if budget_exceeded is None and max_model_tokens is not None and max_model_tokens > 0:
             provider_usage = _codex_jsonl_usage(live_events_path)
             live_estimate = _codex_jsonl_live_budget_estimate(live_events_path, prompt=prompt)
-            provider_tokens = _codex_budget_observed_tokens(
-                provider_usage,
+            budget_exceeded = _codex_budget_exceeded_receipt(
+                provider_usage=provider_usage,
+                live_estimate=live_estimate,
                 metric=token_budget_metric,
+                max_tokens=int(max_model_tokens),
+                max_billable_tokens=max_billable_tokens,
             )
-            estimated_tokens = _codex_budget_observed_tokens(
-                live_estimate,
-                metric=token_budget_metric,
-            )
-            observed = max(provider_tokens, estimated_tokens)
-            if observed > int(max_model_tokens):
-                usage = (
-                    {**provider_usage, "accuracy": "provider_reported"}
-                    if provider_tokens
-                    else live_estimate
-                )
-                budget_exceeded = {
-                    "schema": "adaos.skill_factory.codex_token_budget_receipt.v1",
-                    "status": "exceeded",
-                    "metric": token_budget_metric,
-                    "max_tokens": int(max_model_tokens),
-                    "observed_tokens": observed,
-                    "max_model_tokens": int(max_model_tokens),
-                    "observed_model_tokens": observed,
-                    "usage": usage,
-                    "checked_at": _now_iso(),
-                }
         if budget_exceeded is not None:
             stderr = (
                 stderr.rstrip()
                 + "\nCodex token budget exceeded: "
-                + f"observed {budget_exceeded['observed_tokens']} "
-                + f"of {budget_exceeded['max_tokens']} "
-                + f"{budget_exceeded['metric']} tokens."
+                + f"observed {budget_exceeded['trigger_observed_tokens']} "
+                + f"of {budget_exceeded['trigger_limit']} "
+                + f"{budget_exceeded['trigger_metric']} tokens."
                 + "\n"
             )
         sdk_snapshot = (
@@ -2934,6 +3001,7 @@ class LocalSkillFactoryWorker:
             )
             token_budget = _codex_execution_token_budget(assignment)
             max_model_tokens = int(token_budget.get("max_model_tokens") or 0) or None
+            max_billable_tokens = int(token_budget.get("max_billable_tokens") or 0) or None
             token_budget_metric = str(token_budget.get("metric") or "model_tokens")
             if profile or timeout_seconds != self.executor.timeout_seconds:
                 executor = SubprocessCodexExecutor(
@@ -2950,6 +3018,7 @@ class LocalSkillFactoryWorker:
                 output_dir=output_dir,
                 root_mcp=root_mcp,
                 max_model_tokens=max_model_tokens,
+                max_billable_tokens=max_billable_tokens,
                 token_budget_metric=token_budget_metric,
                 cancel_check=lambda: self._task_status(task_id) in {"cancelled", "expired"},
             )

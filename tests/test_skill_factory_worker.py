@@ -26,6 +26,7 @@ from adaos.services.skill_factory_worker import (
     CodexRunResult,
     LocalSkillFactoryWorker,
     SubprocessCodexExecutor,
+    _codex_budget_exceeded_receipt,
     _codex_failure_detail,
     _codex_budget_observed_tokens,
     _codex_jsonl_usage,
@@ -2640,6 +2641,7 @@ def test_codex_prompt_budget_blocks_oversized_instruction_before_launch() -> Non
 
     assert check["status"] == "blocked"
     assert check["declared"]["max_model_tokens"] == 1600
+    assert check["declared"]["max_billable_tokens"] == 1600
     assert check["prompt_token_estimate"] > check["prompt_token_limit"]
 
 
@@ -2666,6 +2668,8 @@ def test_codex_live_budget_estimate_counts_growing_tool_context(tmp_path: Path) 
     assert usage["tool_rounds"] == 4
     assert usage["model_tokens"] > 12_000
     assert usage["cached_input_tokens"] > 0
+    assert usage["provider_context_floor_tokens"] == 112_000
+    assert usage["fresh_context_floor_tokens"] == 12_000
     assert usage["estimated_fresh_input_tokens"] == (
         usage["input_tokens"] - usage["cached_input_tokens"]
     )
@@ -2673,6 +2677,45 @@ def test_codex_live_budget_estimate_counts_growing_tool_context(tmp_path: Path) 
         usage,
         metric="fresh_plus_output",
     ) < usage["model_tokens"]
+
+
+def test_codex_live_budget_enforces_primary_and_billable_limits(
+    tmp_path: Path,
+) -> None:
+    journal = tmp_path / "codex-events.jsonl"
+    journal.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "command_execution",
+                        "aggregated_output": "ok",
+                    },
+                }
+            )
+            for _ in range(4)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    estimate = _codex_jsonl_live_budget_estimate(journal, prompt="small task")
+
+    receipt = _codex_budget_exceeded_receipt(
+        provider_usage={},
+        live_estimate=estimate,
+        metric="fresh_plus_output",
+        max_tokens=12_000,
+        max_billable_tokens=96_000,
+    )
+
+    assert receipt is not None
+    assert receipt["trigger_metric"] == "fresh_plus_output"
+    assert receipt["observed_billable_tokens"] >= 112_000
+    assert receipt["exceeded_limits"] == [
+        "fresh_plus_output",
+        "billable_tokens",
+    ]
 
 
 def test_codex_fresh_budget_excludes_cached_input_but_keeps_output() -> None:

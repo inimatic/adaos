@@ -98,6 +98,7 @@ DEFAULT_AUTONOMOUS_REPAIR_BUDGET = {
     "source": "development_ticket.default",
     "max_tokens": 200000,
     "token_budget_metric": "fresh_plus_output",
+    "max_billable_tokens": 1600000,
     "max_wall_seconds": 1800,
 }
 INVERSE_TICKET_RELATION = {
