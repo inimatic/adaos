@@ -323,7 +323,16 @@ def test_submit_skill_install_operation_prepares_and_activates_runtime(monkeypat
             calls.append(f"prepare_runtime:{name}:{int(run_tests)}")
             return SimpleNamespace(version="1.2.3", slot="B")
 
-        def activate_for_space(self, name: str, *, version: str | None = None, slot: str | None = None, space: str = "default", webspace_id: str = "default"):
+        def activate_for_space(
+            self,
+            name: str,
+            *,
+            version: str | None = None,
+            slot: str | None = None,
+            space: str = "default",
+            webspace_id: str = "default",
+            **_kwargs,
+        ):
             calls.append(f"activate_for_space:{name}:{version}:{slot}:{space}:{webspace_id}")
             return slot or "B"
 
@@ -348,7 +357,7 @@ def test_submit_skill_install_operation_prepares_and_activates_runtime(monkeypat
     assert result["target_id"] == "demo_skill"
     assert "sync" in calls
     assert "install:demo_skill" in calls
-    assert "prepare_runtime:demo_skill:0" in calls
+    assert "prepare_runtime:demo_skill:1" in calls
     assert "activate_for_space:demo_skill:1.2.3:B:default:default" in calls
     assert rebuilds == [("default", "skill_install_sync", "skill_runtime", None)]
 

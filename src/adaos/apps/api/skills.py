@@ -31,6 +31,7 @@ from adaos.services.eventbus import emit as bus_emit
 from adaos.services.operations import submit_install_operation
 from adaos.services.runtime_refresh import RuntimeRefreshError, rebuild_webspace_projection, refresh_skill_runtime
 from adaos.services.runtime_activation_observations import (
+    classify_runtime_activation_failure,
     emit_runtime_activation_failure,
     emit_runtime_activation_success,
 )
@@ -417,6 +418,7 @@ class InstallReq(BaseModel):
     perform_validation: bool = True
     strict: bool = True
     probe_tools: bool = False
+    run_tests: bool = True
     async_operation: bool = False
     webspace_id: str | None = None
 
@@ -626,9 +628,38 @@ def _install_skill_sync(body: InstallReq, mgr: SkillManager, webspace_id: str) -
         meta, report = result
     else:
         meta, report = result, None
+    skill_name = str(getattr(getattr(meta, "id", None), "value", "") or body.name)
+    version = str(getattr(meta, "version", "") or "").strip() or None
+    operation_id = f"skill-install:{skill_name}"
     if body.strict and report is not None and hasattr(report, "ok") and not report.ok:
         detail = report.to_dict() if hasattr(report, "to_dict") else repr(report)
+        emit_runtime_activation_failure(
+            getattr(mgr, "bus", None),
+            component_type="skill",
+            component_id=skill_name,
+            stage="validation",
+            error=f"skill validation failed: {detail}",
+            source="api.skills.install",
+            report_policy="project_inbox",
+            space="default",
+            webspace_id=webspace_id,
+            version=version,
+            operation_id=operation_id,
+        )
         raise HTTPException(status_code=409, detail={"error": "skill_validation_failed", "report": detail})
+    if body.perform_validation:
+        emit_runtime_activation_success(
+            getattr(mgr, "bus", None),
+            component_type="skill",
+            component_id=skill_name,
+            stage="validation",
+            source="api.skills.install",
+            report_policy="project_inbox",
+            space="default",
+            webspace_id=webspace_id,
+            version=version,
+            operation_id=operation_id,
+        )
     payload: Dict[str, Any] = {
         "ok": True,
         "skill": {
@@ -637,40 +668,44 @@ def _install_skill_sync(body: InstallReq, mgr: SkillManager, webspace_id: str) -
             "path": str(getattr(meta, "path", "")),
         },
     }
-    skill_name = str(payload["skill"].get("id") or body.name)
     try:
-        prep = mgr.prepare_runtime(skill_name, run_tests=False)
+        prep = mgr.prepare_runtime(skill_name, run_tests=body.run_tests)
     except Exception as exc:
+        failed_stage = classify_runtime_activation_failure(exc, default="prepare")
         emit_runtime_activation_failure(
             getattr(mgr, "bus", None),
             component_type="skill",
             component_id=skill_name,
-            stage="prepare",
+            stage=failed_stage,
             error=f"{type(exc).__name__}: {exc}",
             source="api.skills.install",
             report_policy="project_inbox",
             space="default",
             webspace_id=webspace_id,
-            operation_id=f"skill-install:{skill_name}",
+            version=version,
+            operation_id=operation_id,
         )
         log.exception("runtime preparation failed after skill install: %s", skill_name)
         raise HTTPException(
             status_code=409,
             detail=f"runtime preparation failed for {skill_name}: {type(exc).__name__}: {exc}",
         ) from exc
-    emit_runtime_activation_success(
-        getattr(mgr, "bus", None),
-        component_type="skill",
-        component_id=skill_name,
-        stage="prepare",
-        source="api.skills.install",
-        report_policy="project_inbox",
-        space="default",
-        webspace_id=webspace_id,
-        version=str(getattr(prep, "version", "") or "") or None,
-        slot=str(getattr(prep, "slot", "") or "") or None,
-        operation_id=f"skill-install:{skill_name}",
-    )
+    prepared_version = str(getattr(prep, "version", "") or "") or None
+    prepared_slot = str(getattr(prep, "slot", "") or "") or None
+    for passed_stage in (["tests", "prepare"] if body.run_tests else ["prepare"]):
+        emit_runtime_activation_success(
+            getattr(mgr, "bus", None),
+            component_type="skill",
+            component_id=skill_name,
+            stage=passed_stage,
+            source="api.skills.install",
+            report_policy="project_inbox",
+            space="default",
+            webspace_id=webspace_id,
+            version=prepared_version,
+            slot=prepared_slot,
+            operation_id=operation_id,
+        )
     try:
         slot = mgr.activate_for_space(
             skill_name,
@@ -681,14 +716,41 @@ def _install_skill_sync(body: InstallReq, mgr: SkillManager, webspace_id: str) -
             emit_activation=False,
             observation_source="api.skills.install",
             observation_policy="project_inbox",
-            operation_id=f"skill-install:{skill_name}",
+            operation_id=operation_id,
         )
     except Exception as exc:
+        emit_runtime_activation_failure(
+            getattr(mgr, "bus", None),
+            component_type="skill",
+            component_id=skill_name,
+            stage="activation",
+            error=f"{type(exc).__name__}: {exc}",
+            source="api.skills.install",
+            report_policy="project_inbox",
+            space="default",
+            webspace_id=webspace_id,
+            version=prepared_version,
+            slot=prepared_slot,
+            operation_id=operation_id,
+        )
         log.exception("runtime activation failed after skill install: %s", skill_name)
         raise HTTPException(
             status_code=409,
             detail=f"runtime activation failed for {skill_name}: {type(exc).__name__}: {exc}",
         ) from exc
+    emit_runtime_activation_success(
+        getattr(mgr, "bus", None),
+        component_type="skill",
+        component_id=skill_name,
+        stage="activation",
+        source="api.skills.install",
+        report_policy="project_inbox",
+        space="default",
+        webspace_id=webspace_id,
+        version=prepared_version,
+        slot=str(slot or "").strip() or prepared_slot,
+        operation_id=operation_id,
+    )
     payload["runtime"] = {
         "version": getattr(prep, "version", None),
         "slot": slot,

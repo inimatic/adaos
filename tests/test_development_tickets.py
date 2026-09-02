@@ -571,6 +571,7 @@ def test_runtime_activation_success_closes_only_the_matching_gate(tmp_path: Path
             "space": "dev",
         }
     )["ticket"]
+    assert validation["evidence_refs"][0]["type"] == "test"
     tests = service.report_runtime_activation_observation(
         {
             "status": "failed",
@@ -582,6 +583,7 @@ def test_runtime_activation_success_closes_only_the_matching_gate(tmp_path: Path
             "space": "dev",
         }
     )["ticket"]
+    assert tests["evidence_refs"][0]["type"] == "test"
 
     passed_validation = service.report_runtime_activation_observation(
         {

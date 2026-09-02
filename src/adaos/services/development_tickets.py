@@ -2790,7 +2790,7 @@ class DevelopmentTicketService:
             error = _text(observation.get("error") or observation.get("failure_reason"))
             source = _text(observation.get("source")) or "runtime_activation"
             evidence = {
-                "type": "runtime_guard" if gate != "tests" else "test",
+                "type": "test" if gate in {"tests", "validation"} else "runtime_guard",
                 "id": _text(observation.get("operation_id"))
                 or f"{kind}:{identifier}:{gate}",
                 "status": "failed",

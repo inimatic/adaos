@@ -40,6 +40,7 @@ from adaos.services.skill.update import SkillUpdateService
 from adaos.services.skill.scaffold import create as scaffold_create
 from adaos.services.runtime_refresh import rebuild_webspace_projection_sync, refresh_skill_runtime
 from adaos.services.runtime_activation_observations import (
+    classify_runtime_activation_failure,
     emit_runtime_activation_failure,
     emit_runtime_activation_success,
 )
@@ -1490,6 +1491,7 @@ def cmd_install(
         return
 
     mgr = _mgr()
+    meta = None
     runtime_source_path: Path | None = None
     if source_mode == "registry":
         try:
@@ -1547,8 +1549,34 @@ def cmd_install(
         skill_name = name
 
     if report is not None and hasattr(report, "ok") and not report.ok:
+        emit_runtime_activation_failure(
+            getattr(mgr, "bus", None),
+            component_type="skill",
+            component_id=skill_name,
+            stage="validation",
+            error=f"skill validation failed: {report}",
+            source="cli.skill.install",
+            report_policy="project_inbox",
+            space="default",
+            webspace_id=default_webspace_id(),
+            version=str(getattr(meta, "version", "") or "") or None,
+            operation_id=f"skill-install:{skill_name}",
+        )
         typer.secho(str(report), fg=typer.colors.RED)
         raise typer.Exit(1)
+    if report is not None:
+        emit_runtime_activation_success(
+            getattr(mgr, "bus", None),
+            component_type="skill",
+            component_id=skill_name,
+            stage="validation",
+            source="cli.skill.install",
+            report_policy="project_inbox",
+            space="default",
+            webspace_id=default_webspace_id(),
+            version=str(getattr(meta, "version", "") or "") or None,
+            operation_id=f"skill-install:{skill_name}",
+        )
 
     try:
         prepare_kwargs: dict[str, Any] = {
@@ -1560,11 +1588,12 @@ def cmd_install(
             prepare_kwargs["allow_deactivated"] = True
         runtime = mgr.prepare_runtime(skill_name, **prepare_kwargs)
     except Exception as exc:
+        failed_stage = classify_runtime_activation_failure(exc, default="prepare")
         emit_runtime_activation_failure(
             getattr(mgr, "bus", None),
             component_type="skill",
             component_id=skill_name,
-            stage="tests" if test else "prepare",
+            stage=failed_stage,
             error=f"{type(exc).__name__}: {exc}",
             source="cli.skill.install",
             report_policy="project_inbox",
@@ -1600,8 +1629,36 @@ def cmd_install(
             webspace_id=default_webspace_id(),
         )
     except Exception as exc:
+        emit_runtime_activation_failure(
+            getattr(mgr, "bus", None),
+            component_type="skill",
+            component_id=skill_name,
+            stage="activation",
+            error=f"{type(exc).__name__}: {exc}",
+            source="cli.skill.install",
+            report_policy="project_inbox",
+            space="default",
+            webspace_id=default_webspace_id(),
+            version=str(getattr(runtime, "version", "") or "") or None,
+            slot=str(getattr(runtime, "slot", "") or "") or None,
+            operation_id=f"skill-install:{skill_name}",
+        )
         typer.secho(f"activation failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(1) from exc
+
+    emit_runtime_activation_success(
+        getattr(mgr, "bus", None),
+        component_type="skill",
+        component_id=skill_name,
+        stage="activation",
+        source="cli.skill.install",
+        report_policy="project_inbox",
+        space="default",
+        webspace_id=default_webspace_id(),
+        version=str(getattr(runtime, "version", "") or "") or None,
+        slot=str(activated_slot or "").strip() or None,
+        operation_id=f"skill-install:{skill_name}",
+    )
 
     typer.secho(f"skill {skill_name} now active on slot {activated_slot}", fg=typer.colors.GREEN)
     _refresh_runtime_side_effects(

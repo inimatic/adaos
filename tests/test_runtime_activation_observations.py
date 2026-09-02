@@ -6,9 +6,16 @@ from pathlib import Path
 from jsonschema import Draft202012Validator
 
 from adaos.services.runtime_activation_observations import (
+    classify_runtime_activation_failure,
     emit_runtime_activation_failure,
     emit_runtime_activation_success,
 )
+
+
+def test_activation_failure_classifier_preserves_gate_semantics() -> None:
+    assert classify_runtime_activation_failure("skill tests failed: test_demo", default="prepare") == "tests"
+    assert classify_runtime_activation_failure("scenario validation failed", default="install") == "validation"
+    assert classify_runtime_activation_failure("dependency unavailable", default="prepare") == "prepare"
 
 
 class _Bus:

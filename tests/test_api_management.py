@@ -280,7 +280,9 @@ def test_skill_api_install_rejects_project_owned_skill_before_sync() -> None:
     assert manager.calls == ["preflight:demo:skill install"]
 
 
-def test_skill_api_install_rejects_strict_validation_before_runtime_prepare() -> None:
+def test_skill_api_install_rejects_strict_validation_before_runtime_prepare(monkeypatch) -> None:
+    failures: list[dict[str, Any]] = []
+
     class _InvalidSkillManager(_FakeSkillManager):
         def install(self, name: str, **kwargs: Any):
             self.calls.append(f"install:{name}")
@@ -292,6 +294,11 @@ def test_skill_api_install_rejects_strict_validation_before_runtime_prepare() ->
             raise AssertionError("invalid skill must not be prepared")
 
     skill_mgr = _InvalidSkillManager()
+    monkeypatch.setattr(
+        skills,
+        "emit_runtime_activation_failure",
+        lambda _bus, **kwargs: failures.append(dict(kwargs)) or kwargs,
+    )
     client = _make_client(skill_mgr, _FakeScenarioManager())
 
     response = client.post("/api/skills/install", json={"name": "demo"})
@@ -299,6 +306,30 @@ def test_skill_api_install_rejects_strict_validation_before_runtime_prepare() ->
     assert response.status_code == 409
     assert response.json()["detail"]["error"] == "skill_validation_failed"
     assert "prepare_runtime:demo" not in skill_mgr.calls
+    assert failures[0]["stage"] == "validation"
+    assert failures[0]["report_policy"] == "project_inbox"
+
+
+def test_skill_api_install_reports_test_failure_as_blocking_gate(monkeypatch) -> None:
+    failures: list[dict[str, Any]] = []
+
+    class _FailingTestsSkillManager(_FakeSkillManager):
+        def prepare_runtime(self, name: str, run_tests: bool = False):
+            assert run_tests is True
+            raise RuntimeError("skill tests failed: test_subscription_refresh")
+
+    monkeypatch.setattr(
+        skills,
+        "emit_runtime_activation_failure",
+        lambda _bus, **kwargs: failures.append(dict(kwargs)) or kwargs,
+    )
+    client = _make_client(_FailingTestsSkillManager(), _FakeScenarioManager())
+
+    response = client.post("/api/skills/install", json={"name": "demo"})
+
+    assert response.status_code == 409
+    assert failures[-1]["stage"] == "tests"
+    assert failures[-1]["report_policy"] == "project_inbox"
 
 
 def test_skill_runtime_prepare_recovery_requires_tests_and_forwards_explicit_flag() -> None:

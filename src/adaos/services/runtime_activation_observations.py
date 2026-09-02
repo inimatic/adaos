@@ -10,6 +10,17 @@ ACTIVATION_REPORT_POLICIES = frozenset({"project_inbox", "diagnostic_only"})
 ACTIVATION_OBSERVATION_STATUSES = frozenset({"failed", "passed"})
 
 
+def classify_runtime_activation_failure(error: object, *, default: str = "activation") -> str:
+    """Map channel-specific failure text to a stable activation gate."""
+
+    text = str(error or "").strip().lower()
+    if "validation" in text or "schema" in text and "invalid" in text:
+        return "validation"
+    if any(token in text for token in ("skill tests failed", "pytest", "test suite", "tests failed")):
+        return "tests"
+    return str(default or "").strip().lower() or "activation"
+
+
 def emit_runtime_activation_observation(
     bus: EventBus | None,
     *,
@@ -144,6 +155,7 @@ def emit_runtime_activation_success(
 __all__ = [
     "ACTIVATION_OBSERVATION_STATUSES",
     "ACTIVATION_REPORT_POLICIES",
+    "classify_runtime_activation_failure",
     "emit_runtime_activation_failure",
     "emit_runtime_activation_observation",
     "emit_runtime_activation_success",

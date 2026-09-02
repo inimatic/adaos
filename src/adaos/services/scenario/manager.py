@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import logging
 import re, os, json
 from pathlib import Path
-from typing import Any, Optional, Literal
+from typing import TYPE_CHECKING, Any, Optional, Literal
 
 import yaml
 from adaos.adapters.git.workspace import wait_for_materialized
@@ -34,7 +34,14 @@ from adaos.services.skill.manager import SkillManager
 from adaos.services.semver import bump_version
 from adaos.services.workspace_registry import upsert_workspace_registry_entry
 from adaos.services.component_manifest_versioning import write_component_version_atomically
+from adaos.services.runtime_activation_observations import (
+    emit_runtime_activation_failure,
+    emit_runtime_activation_success,
+)
 from adaos.services.workspace_release_guard import assert_workspace_component_mutable
+
+if TYPE_CHECKING:
+    from adaos.services.scenario.validation import ScenarioValidationReport
 
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
 _log = logging.getLogger("adaos.scenario.manager")
@@ -92,6 +99,17 @@ class ScenarioDependencyLifecycleError(RuntimeError):
     def __init__(self, result: dict[str, Any] | None):
         self.result = dict(result or {})
         super().__init__(dependency_failure_message(self.result))
+
+
+class ScenarioValidationLifecycleError(RuntimeError):
+    def __init__(self, report: ScenarioValidationReport):
+        self.report = report
+        details = "; ".join(
+            f"{issue.code}: {issue.message}"
+            for issue in report.issues
+            if str(issue.level).lower() == "error"
+        )
+        super().__init__(f"scenario validation failed: {details or 'unknown validation error'}")
 
 
 def _local_node_id() -> str:
@@ -172,6 +190,7 @@ class ScenarioManager:
         self.repo, self.reg, self.git, self.paths, self.bus, self.caps = repo, registry, git, paths, bus, caps
         self.ctx: AgentContext = get_ctx()
         self.last_dependency_bootstrap_result: dict[str, Any] | None = None
+        self.last_validation_report: ScenarioValidationReport | None = None
 
     def list_installed(self) -> list[SkillRecord]:
         self.caps.require("core", "scenarios.manage")
@@ -243,6 +262,36 @@ class ScenarioManager:
             meta = self.ctx.scenarios_repo.install(name, branch=None)
             if not meta:
                 raise FileNotFoundError(f"scenario '{name}' not found in monorepo")
+            from adaos.services.scenario.validation import validate_scenario_path
+
+            report = validate_scenario_path(Path(str(getattr(meta, "path", "") or "")))
+            self.last_validation_report = report
+            component_id = str(getattr(getattr(meta, "id", None), "value", "") or name).strip() or name
+            version = str(getattr(meta, "version", "") or "").strip() or None
+            if not report.ok:
+                error = ScenarioValidationLifecycleError(report)
+                emit_runtime_activation_failure(
+                    self.bus,
+                    component_type="scenario",
+                    component_id=component_id,
+                    stage="validation",
+                    error=str(error),
+                    source="scenario.manager.install",
+                    report_policy="project_inbox",
+                    version=version,
+                    operation_id=f"scenario-install:{component_id}",
+                )
+                raise error
+            emit_runtime_activation_success(
+                self.bus,
+                component_type="scenario",
+                component_id=component_id,
+                stage="validation",
+                source="scenario.manager.install",
+                report_policy="project_inbox",
+                version=version,
+                operation_id=f"scenario-install:{component_id}",
+            )
             try:
                 self.reg.register(name, pin=pin, active_version=getattr(meta, "version", None))
             except Exception:

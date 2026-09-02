@@ -5276,7 +5276,19 @@ def test_finalize_follows_completed_automation_only_when_preview_choice_is_uncha
     assert saved[-1]["status"] == "completed"
 
 
-def test_finalize_records_live_readiness_failure_without_success_chat(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("failure_message", "expected_stage"),
+    [
+        ("activation failed", "activation"),
+        ("skill tests failed: test_demo", "tests"),
+    ],
+)
+def test_finalize_records_live_readiness_failure_without_success_chat(
+    tmp_path: Path,
+    monkeypatch,
+    failure_message: str,
+    expected_stage: str,
+) -> None:
     service = _service(tmp_path)
     saved: list[dict] = []
     notified: list[dict] = []
@@ -5288,7 +5300,7 @@ def test_finalize_records_live_readiness_failure_without_success_chat(tmp_path: 
     monkeypatch.setattr(
         BuilderAutomationService,
         "_prepare_and_activate_dev_skill",
-        lambda self, *args, **kwargs: (_ for _ in ()).throw(RuntimeError("activation failed")),
+        lambda self, *args, **kwargs: (_ for _ in ()).throw(RuntimeError(failure_message)),
     )
     monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: saved.append(dict(value)))
     monkeypatch.setattr(
@@ -5308,7 +5320,7 @@ def test_finalize_records_live_readiness_failure_without_success_chat(tmp_path: 
     )
 
     assert saved[-1]["status"] == "failed"
-    assert saved[-1]["last_failure"]["stage"] == "activation"
+    assert saved[-1]["last_failure"]["stage"] == expected_stage
     assert saved[-1]["completion_readiness"]["publication_gate_failure"]["ticket_id"]
     assert saved[-1]["progress"]["status"] == "failed"
     assert notified == []

@@ -14,6 +14,7 @@ from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.scenario.manager import (
     ScenarioDependencyLifecycleError,
     ScenarioManager,
+    ScenarioValidationLifecycleError,
     dependency_failure_blocks_scenario_activation,
     dependency_failure_message,
 )
@@ -372,6 +373,23 @@ async def sync(mgr: ScenarioManager = Depends(_get_manager)):
 def _install_scenario_sync(body: InstallReq, mgr: ScenarioManager, webspace_id: str) -> Dict[str, Any]:
     try:
         meta = mgr.install_with_deps(body.name, pin=body.pin, webspace_id=webspace_id)
+    except ScenarioValidationLifecycleError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "scenario_validation_failed",
+                "message": str(exc),
+                "issues": [
+                    {
+                        "level": issue.level,
+                        "code": issue.code,
+                        "message": issue.message,
+                        "where": issue.where,
+                    }
+                    for issue in exc.report.issues
+                ],
+            },
+        ) from exc
     except ScenarioDependencyLifecycleError as exc:
         emit_runtime_activation_failure(
             getattr(mgr, "bus", None),

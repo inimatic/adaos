@@ -25,6 +25,11 @@ from adaos.services.scenario.manager import (
     dependency_failure_blocks_scenario_activation,
     dependency_failure_message,
 )
+from adaos.services.runtime_activation_observations import (
+    classify_runtime_activation_failure,
+    emit_runtime_activation_failure,
+    emit_runtime_activation_success,
+)
 from adaos.services.scenario.webspace_runtime import (
     get_webspace_rebuild_materialized_payload,
     invalidate_webspace_materialization_cache,
@@ -99,7 +104,7 @@ def _use_subprocess_install() -> bool:
 def _install_subprocess_argv(*, target_kind: str, target_id: str) -> list[str]:
     argv = [sys.executable, "-m", "adaos"]
     if target_kind == "skill":
-        return [*argv, "skill", "install", target_id, "--local", "--silent"]
+        return [*argv, "skill", "install", target_id, "--local", "--silent", "--test"]
     return [*argv, "scenario", "install", target_id]
 
 
@@ -1195,8 +1200,61 @@ def submit_install_operation(
                 meta, report = result
             else:
                 meta, report = result, None
+            if report is not None and hasattr(report, "ok") and not report.ok:
+                emit_runtime_activation_failure(
+                    getattr(mgr, "bus", None),
+                    component_type="skill",
+                    component_id=target_id,
+                    stage="validation",
+                    error=f"skill validation failed: {report}",
+                    source="operations.skill.install",
+                    report_policy="project_inbox",
+                    webspace_id=ws,
+                    version=str(getattr(meta, "version", "") or "") or None,
+                    operation_id=handle.operation_id,
+                )
+                raise RuntimeError(f"skill validation failed: {report}")
+            emit_runtime_activation_success(
+                getattr(mgr, "bus", None),
+                component_type="skill",
+                component_id=target_id,
+                stage="validation",
+                source="operations.skill.install",
+                report_policy="project_inbox",
+                webspace_id=ws,
+                version=str(getattr(meta, "version", "") or "") or None,
+                operation_id=handle.operation_id,
+            )
             handle.update(progress=70, message="Preparing runtime", current_step="skill.prepare_runtime")
-            prep = await asyncio.to_thread(partial(mgr.prepare_runtime, target_id, run_tests=False))
+            try:
+                prep = await asyncio.to_thread(partial(mgr.prepare_runtime, target_id, run_tests=True))
+            except Exception as exc:
+                emit_runtime_activation_failure(
+                    getattr(mgr, "bus", None),
+                    component_type="skill",
+                    component_id=target_id,
+                    stage=classify_runtime_activation_failure(exc, default="prepare"),
+                    error=f"{type(exc).__name__}: {exc}",
+                    source="operations.skill.install",
+                    report_policy="project_inbox",
+                    webspace_id=ws,
+                    version=str(getattr(meta, "version", "") or "") or None,
+                    operation_id=handle.operation_id,
+                )
+                raise
+            for passed_stage in ("tests", "prepare"):
+                emit_runtime_activation_success(
+                    getattr(mgr, "bus", None),
+                    component_type="skill",
+                    component_id=target_id,
+                    stage=passed_stage,
+                    source="operations.skill.install",
+                    report_policy="project_inbox",
+                    webspace_id=ws,
+                    version=str(getattr(prep, "version", "") or "") or None,
+                    slot=str(getattr(prep, "slot", "") or "") or None,
+                    operation_id=handle.operation_id,
+                )
             handle.update(progress=88, message="Activating skill", current_step="skill.activate")
             active_slot = await asyncio.to_thread(
                 partial(
@@ -1206,6 +1264,9 @@ def submit_install_operation(
                     slot=getattr(prep, "slot", None),
                     space="default",
                     webspace_id=ws,
+                    observation_source="operations.skill.install",
+                    observation_policy="project_inbox",
+                    operation_id=handle.operation_id,
                 )
             )
             handle.update(progress=95, message="Refreshing webspace", current_step="webspace.rebuild")

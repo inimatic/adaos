@@ -30,6 +30,7 @@ from adaos.services.root.service import create_zip_bytes
 from adaos.services.scenario.manager import ScenarioManager
 from adaos.services.scenario.validation import validate_scenario_path
 from adaos.services.runtime_activation_observations import (
+    classify_runtime_activation_failure,
     emit_runtime_activation_failure,
     emit_runtime_activation_success,
 )
@@ -502,7 +503,7 @@ def install_cmd(
             getattr(mgr, "bus", None),
             component_type="scenario",
             component_id=name,
-            stage="install",
+            stage=classify_runtime_activation_failure(exc, default="install"),
             error=f"{type(exc).__name__}: {exc}",
             source="cli.scenario.install",
             report_policy="project_inbox",

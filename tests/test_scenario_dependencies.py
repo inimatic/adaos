@@ -62,6 +62,10 @@ def test_install_writes_materialized_scenario_version_to_registry(monkeypatch) -
         "install_scenario_in_capacity",
         lambda *args, **kwargs: side_effects.append(("capacity_install", *args, kwargs)),
     )
+    monkeypatch.setattr(
+        "adaos.services.scenario.validation.validate_scenario_path",
+        lambda _path: SimpleNamespace(ok=True, issues=()),
+    )
     monkeypatch.setattr(scenario_manager, "load_config", lambda: SimpleNamespace(role="member"))
 
     registry = _FakeScenarioRegistry()
@@ -84,9 +88,80 @@ def test_install_writes_materialized_scenario_version_to_registry(monkeypatch) -
     assert unregister_calls == []
     assert side_effects == [
         ("repo_install", "demo_scene", None),
+        ("event", "scenarios.activation.passed"),
         ("event", "scenario.installed"),
         ("capacity_install", "demo_scene", "2.3.4", {"active": True}),
     ]
+
+
+def test_install_validation_failure_is_observed_before_scenario_activation(monkeypatch) -> None:
+    register_calls: list[dict[str, Any]] = []
+    unregister_calls: list[str] = []
+    events: list[Any] = []
+    capacity_calls: list[tuple[Any, ...]] = []
+
+    class _Registry:
+        def register(self, name: str, **kwargs: Any) -> None:
+            register_calls.append({"name": name, **kwargs})
+
+        def unregister(self, name: str) -> None:
+            unregister_calls.append(name)
+
+    class _Repo:
+        def install(self, name: str, branch: str | None = None):
+            return SimpleNamespace(
+                id=SimpleNamespace(value=name),
+                name=name,
+                version="2.3.5",
+                path=f"/scenarios/{name}",
+            )
+
+    issue = SimpleNamespace(
+        level="error",
+        code="scenario.route.unknown",
+        message="unknown route demo.missing",
+        where="steps",
+    )
+    monkeypatch.delenv("ADAOS_TESTING", raising=False)
+    monkeypatch.setattr(
+        scenario_manager,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            sql=object(),
+            scenarios_repo=_Repo(),
+            skills_repo=object(),
+            git=object(),
+            paths=object(),
+            caps=object(),
+        ),
+    )
+    monkeypatch.setattr(
+        "adaos.services.scenario.validation.validate_scenario_path",
+        lambda _path: SimpleNamespace(ok=False, issues=(issue,)),
+    )
+    monkeypatch.setattr(
+        scenario_manager,
+        "install_scenario_in_capacity",
+        lambda *args, **kwargs: capacity_calls.append((*args, kwargs)),
+    )
+    manager = scenario_manager.ScenarioManager(
+        repo=object(),
+        registry=_Registry(),
+        git=object(),
+        paths=object(),
+        bus=SimpleNamespace(publish=events.append),
+        caps=SimpleNamespace(require=lambda *args, **kwargs: None),
+    )
+
+    with pytest.raises(scenario_manager.ScenarioValidationLifecycleError):
+        manager.install("invalid_scene")
+
+    assert register_calls == [{"name": "invalid_scene", "pin": None}]
+    assert unregister_calls == ["invalid_scene"]
+    assert capacity_calls == []
+    assert events[-1].type == "scenarios.activation.failed"
+    assert events[-1].payload["failed_stage"] == "validation"
+    assert events[-1].payload["report_policy"] == "project_inbox"
 
 
 def test_bootstrap_dependencies_reports_structured_lifecycle_results(monkeypatch) -> None:
