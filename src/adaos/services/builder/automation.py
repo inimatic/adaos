@@ -3010,6 +3010,7 @@ class BuilderAutomationService:
                 in {
                     "snapshot",
                     "live_readiness",
+                    "project_checkpoint",
                     "aprobation_activation",
                     "trial_projection",
                 }
@@ -6960,6 +6961,11 @@ class BuilderAutomationService:
                     task_id=task_id or object_id,
                     package_digest=package_digest,
                     publication_project_ref=publication_project_ref or None,
+                    checkpoint_epoch=str(
+                        delivery.get("checkpoint_at")
+                        or delivery.get("source_revision")
+                        or ""
+                    ),
                 ),
                 source_webspace_id=str(session.get("webspace_id") or "desktop").strip()
                 or "desktop",
@@ -7091,11 +7097,16 @@ class BuilderAutomationService:
         task_id: str,
         package_digest: str,
         publication_project_ref: str | None,
+        checkpoint_epoch: str | None = None,
     ) -> str:
         key = (
             f"dev-ticket-trial:{str(task_id or '').strip() or 'task'}:"
             f"{str(package_digest or '').strip()[-24:] or 'checkpoint'}"
         )
+        epoch = str(checkpoint_epoch or "").strip()
+        if epoch:
+            epoch_digest = hashlib.sha256(epoch.encode("utf-8")).hexdigest()[:16]
+            key = f"{key}:epoch:{epoch_digest}"
         project_ref = str(publication_project_ref or "").strip()
         if not project_ref:
             return key

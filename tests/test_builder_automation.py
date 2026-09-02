@@ -4232,12 +4232,13 @@ def test_project_trial_idempotency_includes_composition_identity(
         task_id="task.demo",
         package_digest="sha256:" + "b" * 64,
         publication_project_ref="project:demo_suite",
+        checkpoint_epoch="2026-09-02T12:00:00+00:00",
     )
 
-    assert key == (
-        "dev-ticket-trial:task.demo:bbbbbbbbbbbbbbbbbbbbbbbb:"
-        "project:aaaaaaaaaaaaaaaaaaaaaaaa"
+    assert key.startswith(
+        "dev-ticket-trial:task.demo:bbbbbbbbbbbbbbbbbbbbbbbb:epoch:"
     )
+    assert key.endswith(":project:aaaaaaaaaaaaaaaaaaaaaaaa")
 
 
 @pytest.mark.parametrize(
@@ -6038,9 +6039,11 @@ def test_validated_result_recovery_records_missing_workflow_checkpoint_without_r
     assert finalized[0]["reuse_confirmed_checkpoints"] is True
 
 
+@pytest.mark.parametrize("failure_stage", ["snapshot", "project_checkpoint"])
 def test_validated_result_recovery_retries_snapshot_without_rerunning_codex(
     tmp_path: Path,
     monkeypatch,
+    failure_stage: str,
 ) -> None:
     service = _service(tmp_path)
     session = {
@@ -6055,13 +6058,13 @@ def test_validated_result_recovery_retries_snapshot_without_rerunning_codex(
         },
         "last_result": {"summary": "validated"},
         "last_failure": {
-            "stage": "snapshot",
+            "stage": failure_stage,
             "message": "project-owned UI was not resolved",
         },
         "completion_readiness": {
             "ok": False,
             "task_id": "task.snapshot",
-            "stage": "snapshot",
+            "stage": failure_stage,
             "vcs_checkpoints": [],
         },
     }
@@ -6096,7 +6099,7 @@ def test_validated_result_recovery_retries_snapshot_without_rerunning_codex(
 
     assert result["ok"] is True
     assert result["worker"]["reused_validated_result"] is True
-    assert result["worker"]["recovery_stage"] == "snapshot"
+    assert result["worker"]["recovery_stage"] == failure_stage
     assert finalized[0]["status"] == "commit_ready"
     assert "reuse_confirmed_checkpoints" not in finalized[0]
 
