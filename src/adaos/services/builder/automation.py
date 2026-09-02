@@ -5793,6 +5793,19 @@ class BuilderAutomationService:
             if isinstance(readiness.get("aprobation"), Mapping)
             else {}
         )
+        links = current.get("links") if isinstance(current.get("links"), Mapping) else {}
+        publication_project_ref = str(
+            links.get("development_ticket_project_ref")
+            or links.get("project_ref")
+            or ""
+        ).strip()
+        if publication_project_ref.startswith("project:"):
+            readiness["project_composition_checkpoint"] = (
+                self._ensure_project_composition_checkpoint(
+                    current,
+                    checkpoints=checkpoints,
+                )
+            )
         if self._session_requires_aprobation_overlay(current):
             trial_receipt = self._ensure_governed_aprobation_trial(
                 current,

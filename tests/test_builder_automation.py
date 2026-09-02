@@ -5001,6 +5001,7 @@ def test_completed_workflow_reconciliation_backfills_aprobation_overlay(
     service = _service(tmp_path)
     saved: list[dict] = []
     overlay_calls: list[dict] = []
+    composition_calls: list[list[dict]] = []
     workflow = {
         "generation": 4,
         "automation": {
@@ -5044,15 +5045,27 @@ def test_completed_workflow_reconciliation_backfills_aprobation_overlay(
     )
     monkeypatch.setattr(
         BuilderAutomationService,
+        "_ensure_project_composition_checkpoint",
+        lambda self, session, *, checkpoints: composition_calls.append(
+            [dict(item) for item in checkpoints]
+        )
+        or {"ok": True, "version": "0.4.2"},
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
         "_ensure_governed_aprobation_trial",
-        lambda self, session, receipt, **kwargs: {
-            **dict(receipt),
-            "trial": {
-                "status": "trial",
-                "candidate_id": "candidate.subscription",
-                "candidate_digest": "sha256:" + "2" * 64,
-            },
-        },
+        lambda self, session, receipt, **kwargs: (
+            {
+                **dict(receipt),
+                "trial": {
+                    "status": "trial",
+                    "candidate_id": "candidate.subscription",
+                    "candidate_digest": "sha256:" + "2" * 64,
+                },
+            }
+            if composition_calls
+            else pytest.fail("Project checkpoint must precede Trial reconciliation")
+        ),
     )
 
     reconciled = service._reconcile_completed_workflow(
@@ -5063,7 +5076,10 @@ def test_completed_workflow_reconciliation_backfills_aprobation_overlay(
             "current_task_id": "task.1",
             "change_id": "change.1",
             "webspace_id": "desktop",
-            "links": {"development_ticket_id": "dticket.1"},
+            "links": {
+                "development_ticket_id": "dticket.1",
+                "development_ticket_project_ref": "project:subscription_status",
+            },
             "implementation_brief": json.dumps(
                 {"execution_mode": "surgical_dev_ticket_repair", "policy": {}}
             ),
@@ -5081,6 +5097,9 @@ def test_completed_workflow_reconciliation_backfills_aprobation_overlay(
         }
     ]
     assert reconciled["completion_readiness"]["aprobation"]["ok"] is True
+    assert reconciled["completion_readiness"]["project_composition_checkpoint"][
+        "version"
+    ] == "0.4.2"
     assert saved[-1]["status"] == "completed"
     assert saved[-1]["updated_at"] != "2026-08-31T12:00:00+00:00"
 
