@@ -2216,7 +2216,10 @@ class BuilderAutomationService:
             self._save_session(session)
 
         result = self.submit_turn(
-            text="Resume the requalified Dev Ticket repair from its preserved candidate.",
+            # Keep the qualified repair envelope authoritative for context
+            # projection. A generic resume message would downgrade this turn to
+            # the full project context even when no candidate can be reused.
+            text=brief,
             object_type=kind,
             object_id=project_id,
             webspace_id=webspace_id,

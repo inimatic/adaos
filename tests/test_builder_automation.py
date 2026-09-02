@@ -2099,6 +2099,7 @@ def test_failed_dev_ticket_resume_updates_brief_before_submitting_continuation(
     assert updated is not None
     assert updated["implementation_brief"] == "requalified brief"
     assert updated["links"]["builder_repair_id"] == "repair.demo"
+    assert submitted[0]["text"] == "requalified brief"
     assert submitted[0]["execution_budget"]["max_tokens"] == 45000
     assert result["resumed_failed_dev_ticket"] is True
 
