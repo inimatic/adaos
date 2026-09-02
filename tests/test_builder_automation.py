@@ -5591,6 +5591,69 @@ def test_validated_result_recovery_records_missing_workflow_checkpoint_without_r
     assert finalized[0]["reuse_confirmed_checkpoints"] is True
 
 
+def test_validated_result_recovery_retries_snapshot_without_rerunning_codex(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    session = {
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "current_task_id": "task.snapshot",
+        "status": "failed",
+        "task": {
+            "task_id": "task.snapshot",
+            "status": "completed",
+            "result": {"summary": "validated"},
+        },
+        "last_result": {"summary": "validated"},
+        "last_failure": {
+            "stage": "snapshot",
+            "message": "project-owned UI was not resolved",
+        },
+        "completion_readiness": {
+            "ok": False,
+            "task_id": "task.snapshot",
+            "stage": "snapshot",
+            "vcs_checkpoints": [],
+        },
+    }
+    service._save_session(session)
+    finalized: list[dict] = []
+
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "refresh_session",
+        lambda self, value: dict(value),
+    )
+
+    def finalize(_service, value):
+        finalized.append(dict(value))
+        completed = dict(value)
+        completed["status"] = "completed"
+        _service._save_session(completed)
+
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_finalize_completed_session",
+        finalize,
+    )
+    service.worker_factory = lambda: (_ for _ in ()).throw(
+        AssertionError("worker must not run")
+    )
+
+    result = service.recover_validated_result(
+        object_type="scenario",
+        object_id="recipes",
+    )
+
+    assert result["ok"] is True
+    assert result["worker"]["reused_validated_result"] is True
+    assert result["worker"]["recovery_stage"] == "snapshot"
+    assert finalized[0]["status"] == "commit_ready"
+    assert "reuse_confirmed_checkpoints" not in finalized[0]
+
+
 def test_validated_result_recovery_rebinds_checkpoint_after_unknown_trial_reconciliation(
     tmp_path: Path,
     monkeypatch,

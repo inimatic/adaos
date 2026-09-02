@@ -2922,7 +2922,7 @@ class BuilderAutomationService:
                 or trial_checkpoint_rebind_pending
                 or validated_activation_pending
                 or task_status == "completed"
-                and failure_stage == "live_readiness"
+                and failure_stage in {"snapshot", "live_readiness"}
                 and isinstance(current.get("last_result"), Mapping)
             ):
                 recovered_result = {
@@ -2938,11 +2938,15 @@ class BuilderAutomationService:
                         if trial_checkpoint_rebind_pending
                         else "validated_activation"
                         if validated_activation_pending
-                        else "live_readiness"
+                        else failure_stage
                     ),
                 }
                 if (
-                    not recovered_transition_pending
+                    any(
+                        isinstance(item, Mapping) and bool(item.get("ok"))
+                        for item in readiness.get("vcs_checkpoints") or []
+                    )
+                    and not recovered_transition_pending
                     and not validated_activation_pending
                 ):
                     current["reuse_confirmed_checkpoints"] = True
@@ -5823,6 +5827,19 @@ class BuilderAutomationService:
         existing_binding: dict[str, Any] = {}
         preview_target: Mapping[str, Any] | None = None
         pending_transition = str(current.get("pending_workflow_transition") or "").strip()
+        companion_skill_ids = self._session_changed_companion_skill_ids(session)
+        session_links = (
+            dict(current.get("links"))
+            if isinstance(current.get("links"), Mapping)
+            else {}
+        )
+        snapshot_project_ref = str(
+            session_links.get("development_ticket_project_ref")
+            or session_links.get("project_ref")
+            or ""
+        ).strip()
+        if not snapshot_project_ref.startswith("project:"):
+            snapshot_project_ref = ""
         try:
             with self._finalization_stage(
                 current,
@@ -5842,8 +5859,9 @@ class BuilderAutomationService:
                         object_type,
                         object_id,
                         task_id=str(current.get("current_task_id") or "").strip() or None,
+                        project_ref=snapshot_project_ref or None,
+                        component_refs=[f"skill:{skill_id}" for skill_id in companion_skill_ids],
                     )
-            companion_skill_ids = self._session_changed_companion_skill_ids(session)
             if companion_skill_ids:
                 with self._finalization_stage(
                     current,

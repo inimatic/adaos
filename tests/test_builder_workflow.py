@@ -2047,3 +2047,84 @@ def test_only_latest_automation_snapshot_is_retained(
     retained = json.loads((first_path / "webui.json").read_text(encoding="utf-8"))
     assert retained["ui"]["application"]["desktop"]["pageSchema"]["title"] == "Automated v2"
     assert not first_path.with_name(".automation.previous").exists()
+
+
+def test_automation_snapshot_uses_project_owned_skill_ui_when_scenario_has_none(
+    tmp_path: Path,
+) -> None:
+    scenarios = tmp_path / "scenarios"
+    scenario = scenarios / "metrics"
+    scenario.mkdir(parents=True)
+    (scenario / "scenario.yaml").write_text(
+        "id: metrics\nversion: 0.1.0\n",
+        encoding="utf-8",
+    )
+    skills = tmp_path / "skills"
+    skill = skills / "metrics_skill"
+    skill.mkdir(parents=True)
+    (skill / "skill.yaml").write_text(
+        "name: metrics_skill\nversion: 0.1.0\n",
+        encoding="utf-8",
+    )
+    (skill / "webui.json").write_text(
+        json.dumps({"schema": "adaos.webui.v1", "ui": {"modals": {}}}),
+        encoding="utf-8",
+    )
+    projects = tmp_path / "projects"
+    project = projects / "metrics_project"
+    project.mkdir(parents=True)
+    (project / "project.yaml").write_text(
+        "schema: adaos.project.v1\nid: metrics_project\nversion: 0.1.0\n",
+        encoding="utf-8",
+    )
+    service = BuilderWorkflowService(
+        dev_skills_root=skills,
+        dev_scenarios_root=scenarios,
+        dev_projects_root=projects,
+        state_dir=tmp_path / "state",
+    )
+
+    result = service.snapshot_current_automation(
+        "scenario",
+        "metrics",
+        task_id="task.project-ui",
+        project_ref="project:metrics_project",
+        component_refs=["skill:metrics_skill"],
+    )
+
+    snapshot = Path(result["path"])
+    assert result["schema"] == "adaos.builder.automation_snapshot.v2"
+    assert result["object_id"] == "metrics"
+    assert result["project_ref"] == "project:metrics_project"
+    assert result["components"] == [
+        {
+            "ref": "skill:metrics_skill",
+            "files": [
+                "components/skills/metrics_skill/skill.yaml",
+                "components/skills/metrics_skill/webui.json",
+            ],
+        }
+    ]
+    assert (snapshot / "project" / "project.yaml").is_file()
+    assert (
+        snapshot / "components" / "skills" / "metrics_skill" / "webui.json"
+    ).is_file()
+
+
+def test_automation_snapshot_rejects_descriptorless_scenario_without_owned_ui(
+    tmp_path: Path,
+) -> None:
+    scenario = tmp_path / "scenarios" / "empty"
+    scenario.mkdir(parents=True)
+    (scenario / "scenario.yaml").write_text(
+        "id: empty\nversion: 0.1.0\n",
+        encoding="utf-8",
+    )
+    service = BuilderWorkflowService(
+        dev_skills_root=tmp_path / "skills",
+        dev_scenarios_root=tmp_path / "scenarios",
+        state_dir=tmp_path / "state",
+    )
+
+    with pytest.raises(BuilderWorkflowError, match="owned components provide webui.json"):
+        service.snapshot_current_automation("scenario", "empty")

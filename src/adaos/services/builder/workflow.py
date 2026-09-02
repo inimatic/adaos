@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import yaml
 
@@ -5580,8 +5580,10 @@ class BuilderWorkflowService:
         object_id: str,
         *,
         task_id: str | None = None,
+        project_ref: str | None = None,
+        component_refs: Sequence[str] = (),
     ) -> dict[str, Any]:
-        """Replace the one retained Automation snapshot used by Preview and the next cycle."""
+        """Replace the retained project-aware Automation snapshot."""
 
         kind = _kind(object_type)
         project_id = _project_id(object_id)
@@ -5592,6 +5594,7 @@ class BuilderWorkflowService:
             shutil.rmtree(temporary)
         temporary.mkdir(parents=True, exist_ok=False)
         copied: list[str] = []
+        components: list[dict[str, Any]] = []
         names = ("webui.json", "scenario.yaml", "scenario.json") if kind == "scenario" else ("skill.yaml",)
         try:
             for name in names:
@@ -5600,13 +5603,60 @@ class BuilderWorkflowService:
                     continue
                 shutil.copy2(source, temporary / name)
                 copied.append(name)
-            if kind == "scenario" and "webui.json" not in copied:
-                raise BuilderWorkflowError("cannot snapshot Automation: webui.json is missing")
+            project_token = str(project_ref or "").strip()
+            if project_token.startswith("project:"):
+                project_manifest_id = _project_id(project_token.split(":", 1)[1])
+                project_source = (
+                    Path(self.dev_projects_root) / project_manifest_id / "project.yaml"
+                )
+                if not project_source.is_file():
+                    raise BuilderWorkflowError(
+                        "cannot snapshot Automation: "
+                        f"DEV project {project_manifest_id!r} is missing"
+                    )
+                project_target = temporary / "project" / "project.yaml"
+                project_target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(project_source, project_target)
+                copied.append("project/project.yaml")
+
+            for component_ref in dict.fromkeys(str(item or "").strip() for item in component_refs):
+                if not component_ref.startswith("skill:"):
+                    continue
+                skill_id = _project_id(component_ref.split(":", 1)[1])
+                skill_source = Path(self.dev_skills_root) / skill_id
+                component_files: list[str] = []
+                for name in ("skill.yaml", "webui.json"):
+                    source = skill_source / name
+                    if not source.is_file():
+                        continue
+                    relative = Path("components") / "skills" / skill_id / name
+                    target = temporary / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, target)
+                    relative_text = relative.as_posix()
+                    copied.append(relative_text)
+                    component_files.append(relative_text)
+                if component_files:
+                    components.append(
+                        {
+                            "ref": f"skill:{skill_id}",
+                            "files": component_files,
+                        }
+                    )
+            has_ui = "webui.json" in copied or any(
+                path.endswith("/webui.json") for path in copied
+            )
+            if kind == "scenario" and not has_ui:
+                raise BuilderWorkflowError(
+                    "cannot snapshot Automation: neither scenario nor owned components provide webui.json"
+                )
             created_at = _now()
             metadata = {
-                "schema": "adaos.builder.automation_snapshot.v1",
+                "schema": "adaos.builder.automation_snapshot.v2",
                 "object_type": kind,
                 "object_id": project_id,
+                "project_ref": project_token or None,
+                "components": components,
                 "task_id": str(task_id or "").strip() or None,
                 "version": self._project_version(kind, project_id),
                 "created_at": created_at,
