@@ -3767,7 +3767,6 @@ def test_finalize_activates_dev_ticket_aprobation_overlay_after_checkpoint(
         "dev:recipes_skill",
         "checkpoint",
         "overlay",
-        "ensure",
         "trial",
         "notify",
     ]
@@ -3885,9 +3884,13 @@ def test_finalize_scenario_only_repair_does_not_activate_unchanged_companion_ski
         }
     )
 
-    assert calls == ["checkpoint", "overlay", "ensure"]
+    assert calls == ["checkpoint", "overlay"]
     assert saved[-1]["completion_readiness"]["ok"] is True
     assert saved[-1]["completion_readiness"]["skills"] == []
+    assert (
+        saved[-1]["completion_readiness"]["materialization"]["skipped"]
+        == "governed_aprobation_overlay_active"
+    )
 
 
 def test_dev_ticket_repair_defaults_to_aprobation_overlay() -> None:

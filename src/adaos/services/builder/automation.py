@@ -5960,7 +5960,33 @@ class BuilderAutomationService:
                     if isinstance(existing_binding.get("preview_target"), Mapping)
                     else None
                 )
-                if preview_target:
+                aprobation_overlay = (
+                    readiness.get("aprobation")
+                    if isinstance(readiness.get("aprobation"), Mapping)
+                    else {}
+                )
+                if bool(aprobation_overlay.get("ok")):
+                    # The governed overlay already rebuilt the user's source
+                    # webspace. The selected Builder preview may now belong to
+                    # another ticket and must remain untouched.
+                    scenario_overlay = (
+                        aprobation_overlay.get("scenario")
+                        if isinstance(aprobation_overlay.get("scenario"), Mapping)
+                        else {}
+                    )
+                    overlay_projection = (
+                        scenario_overlay.get("webspace_projection")
+                        if isinstance(scenario_overlay.get("webspace_projection"), Mapping)
+                        else {}
+                    )
+                    readiness["materialization"] = {
+                        **dict(overlay_projection),
+                        "ok": True,
+                        "skipped": "governed_aprobation_overlay_active",
+                        "webspace_id": webspace_id,
+                        "preview_webspace_id": None,
+                    }
+                elif preview_target:
                     readiness["materialization"] = {
                         "ok": True,
                         "skipped": "explicit_preview_target_preserved",
