@@ -504,6 +504,52 @@ def test_dev_ticket_repair_projects_minimal_diff_constraints(tmp_path: Path) -> 
     assert "Governed Development Session inputs" not in prompt
 
 
+def test_dev_ticket_repair_with_root_mcp_uses_only_bound_target_validation(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief=json.dumps(
+            {
+                "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+                "ticket_id": "dticket.root-data",
+                "summary": "Show the bound subnet node identity.",
+                "repair_hints": {
+                    "profile": "subnet_data_integration",
+                    "target_files": ["scenarios/recipes/webui.json"],
+                    "target_refs": ["node:current"],
+                    "acceptance_checks": ["The bound node identity is visible."],
+                    "max_changed_files": 1,
+                    "requires_root_mcp": True,
+                },
+            }
+        ),
+        links={
+            "development_ticket_id": "dticket.root-data",
+            "development_ticket_project_ref": "project:recipe_suite",
+            "development_ticket_project_id": "recipe_suite",
+            "subnet_id": "sn_demo",
+        },
+        execution_budget={"max_wall_seconds": 300, "max_tokens": 20000},
+    )
+
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == started["session"]["current_task_id"]
+    )
+
+    assert task["realize_request"]["mcp"] == {
+        "enabled": True,
+        "requested_scope": ["staging_validation"],
+        "subnet_id": "sn_demo",
+        "bound_target_id": "hub:sn_demo",
+    }
+
+
 def test_builder_adapts_inferred_context_budget_for_required_capsules(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -1467,7 +1467,8 @@ def _root_mcp_profile_from_assignment(
     explicit_tools = _string_list(root.get("enabled_tools"))
     if task_scoped:
         scoped_tools = task_scope_enabled_tools(
-            _string_list(mcp.get("scope") or mcp.get("requested_scope"))
+            _string_list(mcp.get("scope") or mcp.get("requested_scope")),
+            bound_target_id=bound_target_id,
         )
         if explicit_tools:
             scoped_tool_set = set(scoped_tools)

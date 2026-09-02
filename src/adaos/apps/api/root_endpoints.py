@@ -459,7 +459,8 @@ def _root_mcp_http_bridge(
         capabilities=list(auth.get("capabilities") or []),
         enabled_tools=(
             task_scope_enabled_tools(
-                [str(item) for item in auth.get("task_scopes") or []]
+                [str(item) for item in auth.get("task_scopes") or []],
+                bound_target_id=target_id,
             )
             if auth.get("task_id")
             else None

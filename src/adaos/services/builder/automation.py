@@ -5476,11 +5476,15 @@ class BuilderAutomationService:
             f"{_safe_token(session.get('change_id'), fallback='change')}."
             f"{max(0, int(session.get('iteration') or 0))}"
         )
-        request_mcp = (
-            {"enabled": False, "requested_scope": []}
-            if is_dev_ticket_repair and repair_hints.get("requires_root_mcp") is False
-            else _sanitized_mcp_profile(session.get("mcp"))
-            or {
+        if is_dev_ticket_repair:
+            if repair_hints.get("requires_root_mcp") is False:
+                request_mcp = {"enabled": False, "requested_scope": []}
+            else:
+                request_mcp = _sanitized_mcp_profile(session.get("mcp")) or {}
+                request_mcp["enabled"] = True
+                request_mcp["requested_scope"] = ["staging_validation"]
+        else:
+            request_mcp = _sanitized_mcp_profile(session.get("mcp")) or {
                 "requested_scope": [
                     "capability_snapshot",
                     "requirement_spec",
@@ -5488,7 +5492,6 @@ class BuilderAutomationService:
                     "staging_validation",
                 ]
             }
-        )
         subnet_id = _builder_subnet_id(session)
         if request_mcp.get("enabled") is not False and subnet_id:
             request_mcp.setdefault("subnet_id", subnet_id)

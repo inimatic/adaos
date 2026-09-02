@@ -16,6 +16,7 @@ import yaml
 from adaos.services import skill_factory_worker as worker_module
 from adaos.services.root.service import _rewrite_skill_template_identity
 from adaos.services.skill_factory import SkillFactoryService
+from adaos.services.skill_factory_mcp import task_scope_enabled_tools
 from adaos.services.skill_factory_sources import (
     SourceSnapshotError,
     capture_source_snapshot,
@@ -2809,6 +2810,17 @@ def test_task_lease_overrides_generic_root_mcp_credential(
     assert profile["_bearer_token_value"] == "task-lease-secret"
     assert profile["lease_id"] == "lease.scoped"
     assert profile["enabled_tools"] == ["get_managed_target"]
+
+
+def test_bound_staging_scope_omits_managed_target_discovery() -> None:
+    assert task_scope_enabled_tools(
+        ["run_staging_validation"],
+        bound_target_id="hub:sn_demo",
+    ) == ["get_managed_target"]
+    assert task_scope_enabled_tools(["run_staging_validation"]) == [
+        "list_managed_targets",
+        "get_managed_target",
+    ]
 
 
 def test_worker_projects_task_scoped_mcp_lease_without_prompt_secret(

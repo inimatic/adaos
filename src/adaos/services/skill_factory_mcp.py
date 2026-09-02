@@ -22,17 +22,28 @@ TASK_SCOPE_TOOL_ALLOWLIST: dict[str, tuple[str, ...]] = {
 }
 
 
-def task_scope_enabled_tools(scopes: Sequence[str] | None) -> list[str]:
+def task_scope_enabled_tools(
+    scopes: Sequence[str] | None,
+    *,
+    bound_target_id: str | None = None,
+) -> list[str]:
     """Compile Builder task scopes into the smallest Root MCP tool surface."""
 
     enabled: list[str] = []
     seen_scopes: set[str] = set()
+    target_is_bound = bool(str(bound_target_id or "").strip())
     for raw_scope in scopes or ():
         scope = str(raw_scope or "").strip()
         if not scope or scope in seen_scopes:
             continue
         seen_scopes.add(scope)
         for tool in TASK_SCOPE_TOOL_ALLOWLIST.get(scope, ()):
+            if (
+                target_is_bound
+                and scope == "run_staging_validation"
+                and tool == "list_managed_targets"
+            ):
+                continue
             if tool not in enabled:
                 enabled.append(tool)
     return enabled
