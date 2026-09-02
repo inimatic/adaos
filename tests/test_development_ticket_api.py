@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from adaos.apps.api import development_tickets as tickets_api
+from adaos.services.builder.workspace import BuilderSourceRecoveryRequired
 from adaos.services.development_tickets import DevelopmentTicketService
 
 
@@ -125,6 +126,37 @@ class _FakeWorkspaceService:
                 }
             ],
         }
+
+    def create_local_fork(self, **kwargs):
+        result = self.materialize_dev_source(**kwargs)
+        return {**result, "strategy": "create_local_fork"}
+
+    def development_source_status(self, **kwargs):
+        return {
+            "status": "source_available",
+            "source": "dev",
+            "target_type": kwargs.get("kind"),
+            "target_id": kwargs.get("artifact_id"),
+            "project_id": kwargs.get("project_id"),
+            "dev_source_path": f"dev/{kwargs.get('kind')}s/{kwargs.get('artifact_id')}",
+            "options": ["use_existing_dev_source"],
+            "default_option": "use_existing_dev_source",
+        }
+
+
+class _RecoveryRequiredWorkspaceService(_FakeWorkspaceService):
+    def materialize_dev_source(self, **kwargs):
+        raise BuilderSourceRecoveryRequired(
+            {
+                "status": "blocked",
+                "safe_to_apply": False,
+                "plan_digest": "sha256:recovery-plan",
+                "target": {
+                    "kind": kwargs.get("kind"),
+                    "artifact_id": kwargs.get("artifact_id"),
+                },
+            }
+        )
 
 
 def test_development_ticket_api_create_list_show_evidence_and_defer(tmp_path: Path) -> None:
@@ -666,7 +698,7 @@ def test_development_ticket_api_starts_autonomous_repair_and_exposes_builder_usa
         json={
             "actor": "browser",
             "webspace_id": "desktop",
-            "source_strategy": "materialize_dev_source",
+            "source_strategy": "create_local_fork",
             "mcp": {
                 "root_mcp": {
                     "url": "https://ru.api.inimatic.com/v1/root/mcp",
@@ -692,6 +724,7 @@ def test_development_ticket_api_starts_autonomous_repair_and_exposes_builder_usa
     assert "bearer_token_env_var" in automation.started[0]["mcp"]["root_mcp"]
     assert automation.workspace_service.materialized[0]["kind"] == "skill"
     assert automation.workspace_service.materialized[0]["artifact_id"] == "demo_metrics_skill"
+    assert payload["materialization"]["strategy"] == "create_local_fork"
     work_item = payload["detail"]["work_stream"]["builder_work_items"][0]
     assert work_item["repair_id"] == payload["repair"]["repair_id"]
     assert work_item["automation_session_id"] == "automation.session.api"
@@ -707,6 +740,57 @@ def test_development_ticket_api_starts_autonomous_repair_and_exposes_builder_usa
     assert synced.status_code == 200, synced.text
     assert synced.json()["detail"]["work_stream"]["builder_work_count"] == 1
     assert synced.json()["detail"]["work_stream"]["builder_work_items"][0]["automation_status"] == "completed"
+
+
+def test_autonomous_repair_reports_reviewed_source_recovery_as_conflict(
+    tmp_path: Path,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    automation = _FakeAutomationService()
+    automation.workspace_service = _RecoveryRequiredWorkspaceService()
+    client = _client(service)
+    client.app.dependency_overrides[tickets_api._get_automation_service] = lambda: automation
+    created = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "summary": "Use plain language in the skill description",
+            "kind": "development_request",
+            "target_scope": {
+                "type": "skill",
+                "id": "greet_on_boot_skill",
+                "source": "workspace",
+                "project_id": "web_desktop",
+            },
+            "owner_area": "skill",
+            "component_ref": "skill:greet_on_boot_skill",
+            "metadata": {
+                "builder_repair": {
+                    "profile": "metadata_text",
+                    "target_files": ["skills/greet_on_boot_skill/skill.yaml"],
+                    "acceptance_checks": ["Skill description uses plain language."],
+                    "max_changed_files": 1,
+                }
+            },
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    response = client.post(
+        f"/api/development-tickets/{created.json()['ticket']['ticket_id']}/autonomous-repair",
+        headers=_headers(),
+        json={
+            "actor": "builder:test",
+            "source_strategy": "materialize_dev_source",
+        },
+    )
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "source_recovery_required"
+    assert detail["plan"]["plan_digest"] == "sha256:recovery-plan"
+    assert detail["allowed_source_strategies"] == ["create_local_fork", "defer"]
+    assert automation.started == []
 
 
 def test_builder_work_stream_keeps_task_usage_and_repair_aggregate_separate() -> None:
@@ -859,6 +943,7 @@ def test_builder_work_stream_compacts_acceptance_evidence_and_timeline() -> None
                 {"type": "test", "id": "focused"},
             ],
         }
+
     )
     timeline = tickets_api._compact_builder_timeline(
         [

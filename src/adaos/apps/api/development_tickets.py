@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from adaos.apps.api.auth import require_token
 from adaos.services.builder.repair import BuilderRepairService
+from adaos.services.builder.workspace import BuilderSourceRecoveryRequired
 from adaos.services.development_tickets import (
     DevelopmentTicketService,
     development_source_options,
@@ -36,6 +37,18 @@ def _get_automation_service() -> Any:
     from adaos.services.builder.automation import BuilderAutomationService
 
     return BuilderAutomationService.from_context()
+
+
+def _source_recovery_required(exc: BuilderSourceRecoveryRequired) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "source_recovery_required",
+            "message": str(exc),
+            "plan": exc.plan,
+            "allowed_source_strategies": ["create_local_fork", "defer"],
+        },
+    )
 
 
 class DevTicketCreateRequest(BaseModel):
@@ -112,7 +125,10 @@ class DevTicketAutonomousRepairRequest(BaseModel):
     actor: str = "ui"
     webspace_id: str = "desktop"
     conversation_id: str | None = None
-    source_strategy: str | None = None
+    source_strategy: str | None = Field(
+        default=None,
+        pattern="^(materialize_dev_source|create_local_fork|defer)$",
+    )
     execution_budget: dict[str, Any] | None = None
     agent_profile: dict[str, Any] | None = None
     mcp: dict[str, Any] | None = None
@@ -132,7 +148,10 @@ class DevTicketPackageStartRequest(BaseModel):
     actor: str = Field(default="builder", min_length=1)
     webspace_id: str = "desktop"
     conversation_id: str | None = None
-    source_strategy: str | None = None
+    source_strategy: str | None = Field(
+        default=None,
+        pattern="^(materialize_dev_source|create_local_fork)$",
+    )
     agent_profile: dict[str, Any] | None = None
     mcp: dict[str, Any] | None = None
 
@@ -1246,6 +1265,8 @@ def plan_builder_package(
             execution_budget=body.execution_budget,
             source_strategy=body.source_strategy,
         )
+    except BuilderSourceRecoveryRequired as exc:
+        raise _source_recovery_required(exc) from exc
     except KeyError as exc:
         raise _not_found(str(exc).strip("'")) from exc
     except ValueError as exc:
@@ -1270,6 +1291,8 @@ def start_builder_package(
             agent_profile=body.agent_profile,
             mcp=body.mcp,
         )
+    except BuilderSourceRecoveryRequired as exc:
+        raise _source_recovery_required(exc) from exc
     except KeyError as exc:
         missing_id = str(exc).strip("'")
         raise HTTPException(
@@ -1681,6 +1704,8 @@ def start_autonomous_repair(
             mcp=body.mcp,
         )
         return {"ok": True, **result, "detail": _ticket_detail(service, result["ticket"])}
+    except BuilderSourceRecoveryRequired as exc:
+        raise _source_recovery_required(exc) from exc
     except KeyError as exc:
         raise _not_found(ticket_id) from exc
     except ValueError as exc:

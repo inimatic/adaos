@@ -1863,21 +1863,41 @@ class DevelopmentTicketService:
                     "reason": "development_source_deferred",
                     "development_source": development_source,
                 }
-            if strategy != "materialize_dev_source":
-                raise ValueError(f"development source strategy is not implemented for autonomous repair: {strategy}")
             workspace_service = getattr(automation_service, "workspace_service", None)
             if workspace_service is None:
                 from adaos.services.builder.workspace import BuilderWorkspaceService
 
                 workspace_service = BuilderWorkspaceService.from_context()
-            materialization = workspace_service.materialize_dev_source(
-                kind=target["object_type"],
-                artifact_id=target["object_id"],
-                project_id=_project_id_for_materialization(ticket, development_source),
-            )
-            if not materialization.get("ok"):
+            project_id = _project_id_for_materialization(ticket, development_source)
+            if strategy == "materialize_dev_source":
+                materialization = workspace_service.materialize_dev_source(
+                    kind=target["object_type"],
+                    artifact_id=target["object_id"],
+                    project_id=project_id,
+                )
+            elif strategy == "create_local_fork":
+                materialization = workspace_service.create_local_fork(
+                    kind=target["object_type"],
+                    artifact_id=target["object_id"],
+                    project_id=project_id,
+                    actor=_text(actor) or "builder",
+                )
+            else:
+                raise ValueError(
+                    "development source strategy must be materialize_dev_source, "
+                    "create_local_fork, or defer"
+                )
+            if not materialization or materialization.get("ok") is False:
                 raise ValueError("development source materialization failed")
-            development_source = _mapping(materialization.get("development_source")) or development_source
+            development_source = _mapping(materialization.get("development_source"))
+            if not development_source:
+                development_source = _mapping(
+                    workspace_service.development_source_status(
+                        kind=target["object_type"],
+                        artifact_id=target["object_id"],
+                        project_id=project_id,
+                    )
+                )
         qualification = _autonomous_repair_qualification(ticket)
         qualification_candidate: dict[str, Any] = {}
         if not qualification["ready"]:
@@ -2451,21 +2471,41 @@ class DevelopmentTicketService:
             automation_service = BuilderAutomationService.from_context()
         if development_source.get("status") == "needs_materialization":
             strategy = _text(source_strategy)
-            if strategy != "materialize_dev_source":
-                raise ValueError("autonomous Builder package requires materialize_dev_source when source is missing")
             workspace_service = getattr(automation_service, "workspace_service", None)
             if workspace_service is None:
                 from adaos.services.builder.workspace import BuilderWorkspaceService
 
                 workspace_service = BuilderWorkspaceService.from_context()
-            materialization = workspace_service.materialize_dev_source(
-                kind=target["object_type"],
-                artifact_id=target["object_id"],
-                project_id=_project_id_for_materialization(ticket_list[0], development_source),
-            )
-            if not materialization.get("ok"):
+            project_id = _project_id_for_materialization(ticket_list[0], development_source)
+            if strategy == "materialize_dev_source":
+                materialization = workspace_service.materialize_dev_source(
+                    kind=target["object_type"],
+                    artifact_id=target["object_id"],
+                    project_id=project_id,
+                )
+            elif strategy == "create_local_fork":
+                materialization = workspace_service.create_local_fork(
+                    kind=target["object_type"],
+                    artifact_id=target["object_id"],
+                    project_id=project_id,
+                    actor=_text(actor) or "builder",
+                )
+            else:
+                raise ValueError(
+                    "autonomous Builder package requires materialize_dev_source "
+                    "or create_local_fork when source is missing"
+                )
+            if not materialization or materialization.get("ok") is False:
                 raise ValueError("development source materialization failed")
-            development_source = _mapping(materialization.get("development_source")) or development_source
+            development_source = _mapping(materialization.get("development_source"))
+            if not development_source:
+                development_source = _mapping(
+                    workspace_service.development_source_status(
+                        kind=target["object_type"],
+                        artifact_id=target["object_id"],
+                        project_id=project_id,
+                    )
+                )
         if (
             development_source.get("status") == "source_available"
             and not _text(
