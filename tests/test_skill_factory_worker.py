@@ -2647,16 +2647,23 @@ def test_codex_prompt_budget_blocks_oversized_instruction_before_launch() -> Non
 
 def test_codex_live_budget_estimate_counts_growing_tool_context(tmp_path: Path) -> None:
     journal = tmp_path / "codex-events.jsonl"
-    events = [
-        {
-            "type": "item.completed",
-            "item": {
-                "type": "command_execution",
-                "output": "x" * 4000,
-            },
-        }
-        for _ in range(4)
-    ]
+    events = []
+    for _ in range(4):
+        events.extend(
+            [
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "Inspect next."},
+                },
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "command_execution",
+                        "output": "x" * 4000,
+                    },
+                },
+            ]
+        )
     journal.write_text(
         "\n".join(json.dumps(item) for item in events) + "\n",
         encoding="utf-8",
@@ -2679,22 +2686,75 @@ def test_codex_live_budget_estimate_counts_growing_tool_context(tmp_path: Path) 
     ) < usage["model_tokens"]
 
 
+def test_codex_live_budget_groups_parallel_tools_into_model_rounds(
+    tmp_path: Path,
+) -> None:
+    journal = tmp_path / "codex-events.jsonl"
+    events = [
+        {
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": "Inspect targets."},
+        },
+        *[
+            {
+                "type": "item.completed",
+                "item": {"type": "command_execution", "output": "match"},
+            }
+            for _ in range(2)
+        ],
+        {
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": "Read focused ranges."},
+        },
+        *[
+            {
+                "type": "item.completed",
+                "item": {"type": "command_execution", "output": "range"},
+            }
+            for _ in range(3)
+        ],
+    ]
+    journal.write_text(
+        "\n".join(json.dumps(item) for item in events) + "\n",
+        encoding="utf-8",
+    )
+
+    usage = _codex_jsonl_live_budget_estimate(journal, prompt="small task")
+    receipt = _codex_budget_exceeded_receipt(
+        provider_usage={},
+        live_estimate=usage,
+        metric="fresh_plus_output",
+        max_tokens=12_000,
+        max_billable_tokens=96_000,
+    )
+
+    assert usage["tool_rounds"] == 2
+    assert usage["provider_context_floor_tokens"] == 76_000
+    assert usage["fresh_context_floor_tokens"] == 8_000
+    assert receipt is None
+
+
 def test_codex_live_budget_enforces_primary_and_billable_limits(
     tmp_path: Path,
 ) -> None:
     journal = tmp_path / "codex-events.jsonl"
     journal.write_text(
         "\n".join(
-            json.dumps(
+            json.dumps(item)
+            for _ in range(4)
+            for item in (
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "Continue."},
+                },
                 {
                     "type": "item.completed",
                     "item": {
                         "type": "command_execution",
                         "aggregated_output": "ok",
                     },
-                }
+                },
             )
-            for _ in range(4)
         )
         + "\n",
         encoding="utf-8",

@@ -421,9 +421,19 @@ def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, A
     """
 
     context_bytes = len(str(prompt or "").encode("utf-8", errors="replace"))
-    cumulative_tokens = 0
+    cumulative_tokens = max(1, (context_bytes + 3) // 4)
     tool_rounds = 0
+    tool_batch_open = False
     assistant_output_bytes = 0
+
+    def close_tool_batch() -> None:
+        nonlocal cumulative_tokens, tool_rounds, tool_batch_open
+        if not tool_batch_open:
+            return
+        cumulative_tokens += max(1, (context_bytes + 3) // 4)
+        tool_rounds += 1
+        tool_batch_open = False
+
     if path.is_file():
         try:
             if path.stat().st_size > 16 * 1024 * 1024:
@@ -438,6 +448,7 @@ def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, A
                     continue
                 item_type = str(item.get("type") or "")
                 if item_type == "agent_message":
+                    close_tool_batch()
                     raw_bytes = len(raw_line.encode("utf-8", errors="replace"))
                     context_bytes += raw_bytes
                     assistant_output_bytes += raw_bytes
@@ -448,12 +459,11 @@ def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, A
                     "mcp_tool_call",
                 }:
                     continue
-                cumulative_tokens += max(1, (context_bytes + 3) // 4)
                 context_bytes += len(raw_line.encode("utf-8", errors="replace"))
-                tool_rounds += 1
+                tool_batch_open = True
         except OSError:
             return {}
-    cumulative_tokens += max(1, (context_bytes + 3) // 4)
+    close_tool_batch()
     unique_tokens = max(1, (context_bytes + 3) // 4)
     visible_estimate = max(
         1,
