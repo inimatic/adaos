@@ -922,9 +922,14 @@ def test_builder_work_stream_preserves_attempt_status_and_snapshot(tmp_path: Pat
         "task.completed",
     ]
     assert stream["builder_work_items"][0]["parent_work_status"] == "validating"
+    assert stream["builder_work_items"][0]["current_attempt"] is False
+    assert stream["builder_work_items"][1]["current_attempt"] is True
+    assert stream["builder_work_items"][1]["repair_current_attempt"] is True
+    assert stream["builder_work_items"][0]["acceptance"] == {}
     assert all(item["trial"] == {} for item in stream["builder_work_items"])
     assert all("timeline" not in item for item in stream["builder_work_items"])
-    assert stream["builder_work_items"][0]["timeline_summary"]["event_count"] > 0
+    assert stream["builder_work_items"][0]["timeline_summary"]["event_count"] == 0
+    assert stream["builder_work_items"][0]["parent_timeline_summary"]["event_count"] > 0
     assert all("token_accounting" not in item for item in stream["entries"])
     assert stream["trial"]["schema"] == "adaos.builder.ticket_trial_summary.v1"
     assert stream["trial"]["trial"]["candidate_id"] == "candidate.demo"
@@ -938,6 +943,82 @@ def test_builder_work_stream_preserves_attempt_status_and_snapshot(tmp_path: Pat
     ]
     assert len(json.dumps(stream["trial"])) < 2_000
     assert len(json.dumps(stream)) < 20_000
+
+
+def test_builder_work_stream_selects_latest_trial_across_repair_cycles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = DevelopmentTicketService()
+    ticket = {
+        "ticket_id": "dticket.retried",
+        "summary": "Retry one user request",
+        "status": "resolved",
+        "builder_refs": [
+            {
+                "repair_id": "repair.new",
+                "automation_task_id": "task.new",
+                "status": "resolved",
+            },
+            {
+                "repair_id": "repair.old",
+                "automation_task_id": "task.old",
+                "status": "resolved",
+            },
+        ],
+    }
+
+    class _RepairReadModel:
+        def list(self):
+            return [
+                {
+                    "repair_id": "repair.old",
+                    "updated_at": "2026-09-01T10:01:00+00:00",
+                    "acceptance": {"accepted": True, "actor": "builder:old"},
+                    "context": {
+                        "automation": {"task_id": "task.old"},
+                        "trial": {
+                            "ok": True,
+                            "trial": {
+                                "candidate_id": "candidate.old",
+                                "started_at": "2026-09-01T10:00:00+00:00",
+                            },
+                        },
+                    },
+                },
+                {
+                    "repair_id": "repair.new",
+                    "updated_at": "2026-09-01T11:01:00+00:00",
+                    "acceptance": {"accepted": True, "actor": "builder:new"},
+                    "context": {
+                        "automation": {"task_id": "task.new"},
+                        "trial": {
+                            "ok": True,
+                            "trial": {
+                                "candidate_id": "candidate.new",
+                                "started_at": "2026-09-01T11:00:00+00:00",
+                            },
+                        },
+                    },
+                },
+            ]
+
+    monkeypatch.setattr(tickets_api, "_repair_service_for", lambda _service: _RepairReadModel())
+
+    stream = tickets_api._builder_work_stream(service, ticket)
+
+    assert stream["trial"]["trial"]["candidate_id"] == "candidate.new"
+    assert [item["current_attempt"] for item in stream["builder_work_items"]] == [
+        True,
+        False,
+    ]
+    assert [item["repair_current_attempt"] for item in stream["builder_work_items"]] == [
+        True,
+        True,
+    ]
+    assert [item["acceptance"]["actor"] for item in stream["builder_work_items"]] == [
+        "builder:new",
+        "builder:old",
+    ]
 
 
 def test_builder_work_stream_compacts_acceptance_evidence_and_timeline() -> None:

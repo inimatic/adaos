@@ -445,6 +445,55 @@ def _builder_automation_context(ref: Mapping[str, Any], task: Mapping[str, Any])
     return dict(automation) if isinstance(automation, Mapping) else {}
 
 
+def _builder_attempt_is_current(ref: Mapping[str, Any], task: Mapping[str, Any]) -> bool:
+    ref_task_id = str(ref.get("automation_task_id") or ref.get("task_id") or "").strip()
+    context = task.get("context") if isinstance(task.get("context"), Mapping) else {}
+    automation = context.get("automation") if isinstance(context.get("automation"), Mapping) else {}
+    current_task_id = str(automation.get("task_id") or "").strip()
+    if not ref_task_id:
+        return not current_task_id
+    return bool(current_task_id and ref_task_id == current_task_id)
+
+
+def _builder_trial_sort_key(
+    trial: Mapping[str, Any],
+    *,
+    task: Mapping[str, Any],
+    ref: Mapping[str, Any],
+) -> tuple[str, str]:
+    detail = trial.get("trial") if isinstance(trial.get("trial"), Mapping) else {}
+    timestamp = str(
+        detail.get("decided_at")
+        or detail.get("started_at")
+        or task.get("updated_at")
+        or ref.get("updated_at")
+        or task.get("created_at")
+        or ref.get("created_at")
+        or ""
+    ).strip()
+    return timestamp, str(detail.get("candidate_id") or "")
+
+
+def _builder_repair_sort_key(
+    repair_id: str,
+    *,
+    task: Mapping[str, Any],
+    refs: list[Mapping[str, Any]],
+) -> tuple[str, str]:
+    timestamps = [
+        str(task.get("updated_at") or "").strip(),
+        str(task.get("created_at") or "").strip(),
+    ]
+    for ref in refs:
+        timestamps.extend(
+            [
+                str(ref.get("updated_at") or "").strip(),
+                str(ref.get("created_at") or "").strip(),
+            ]
+        )
+    return max(timestamps, default=""), repair_id
+
+
 def _builder_token_accounting(ref: Mapping[str, Any], task: Mapping[str, Any]) -> dict[str, Any]:
     context = task.get("context") if isinstance(task.get("context"), Mapping) else {}
     economic = context.get("economic") if isinstance(context.get("economic"), Mapping) else {}
@@ -614,6 +663,8 @@ def _builder_stream_entry(item: Mapping[str, Any]) -> dict[str, Any]:
             "repair_id",
             "automation_task_id",
             "automation_status",
+            "current_attempt",
+            "repair_current_attempt",
             "human_manageable",
             "read_only",
             "created_at",
@@ -641,8 +692,28 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
             }
         except Exception:
             repair_tasks = {}
+    refs_by_repair: dict[str, list[Mapping[str, Any]]] = {
+        repair_id: [
+            ref
+            for ref in refs
+            if str(ref.get("repair_id") or "").strip() == repair_id
+        ]
+        for repair_id in repair_ids
+    }
+    latest_repair_id = (
+        max(
+            repair_ids,
+            key=lambda repair_id: _builder_repair_sort_key(
+                repair_id,
+                task=repair_tasks.get(repair_id) or {},
+                refs=refs_by_repair.get(repair_id) or [],
+            ),
+        )
+        if repair_ids
+        else ""
+    )
     builder_items: list[dict[str, Any]] = []
-    current_trial: dict[str, Any] = {}
+    trial_candidates: list[tuple[tuple[str, str], dict[str, Any]]] = []
     entries: list[dict[str, Any]] = [
         {
             "entry_id": f"{ticket_id}:ticket",
@@ -679,9 +750,16 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
         task = repair_tasks.get(repair_id) or {}
         context = task.get("context") if isinstance(task.get("context"), Mapping) else {}
         compact_trial = _compact_builder_trial(context.get("trial"))
-        if compact_trial:
-            current_trial = compact_trial
+        if compact_trial and repair_id == latest_repair_id:
+            trial_candidates.append(
+                (
+                    _builder_trial_sort_key(compact_trial, task=task, ref=ref),
+                    compact_trial,
+                )
+            )
         automation = _builder_automation_context(ref, task)
+        repair_current_attempt = _builder_attempt_is_current(ref, task)
+        current_attempt = repair_current_attempt and repair_id == latest_repair_id
         has_automation_attempt = bool(
             str(ref.get("automation_task_id") or automation.get("task_id") or "").strip()
         )
@@ -700,6 +778,8 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
             "compatibility_status": ref.get("status") or task.get("status") or "linked",
             "parent_work_status": task.get("work_status") or task.get("status") or None,
             "parent_compatibility_status": task.get("status") or None,
+            "current_attempt": current_attempt,
+            "repair_current_attempt": repair_current_attempt,
             "revision": task.get("revision"),
             "package_id": task.get("package_id"),
             "ticket_ids": list(task.get("ticket_ids") or []),
@@ -710,7 +790,13 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
             "read_only": True,
             "created_at": task.get("created_at") or ref.get("created_at"),
             "updated_at": task.get("updated_at") or ref.get("updated_at") or ref.get("created_at"),
-            "acceptance": _compact_builder_acceptance(task.get("acceptance")),
+            "acceptance": _compact_builder_acceptance(
+                ref.get("acceptance")
+                if isinstance(ref.get("acceptance"), Mapping)
+                else task.get("acceptance")
+                if repair_current_attempt
+                else {}
+            ),
             "automation": automation,
             # Trial belongs to the user ticket/release candidate, not to each
             # historical Builder attempt. Keep it once at work-stream level.
@@ -719,7 +805,14 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
             "automation_task_id": automation.get("task_id") or ref.get("automation_task_id"),
             "automation_status": automation.get("status") or ref.get("automation_status"),
             "token_accounting": _builder_token_accounting(ref, task),
-            "timeline_summary": _compact_builder_timeline(task.get("timeline")),
+            "timeline_summary": _compact_builder_timeline(
+                ref.get("timeline")
+                if isinstance(ref.get("timeline"), list)
+                else task.get("timeline")
+                if repair_current_attempt
+                else []
+            ),
+            "parent_timeline_summary": _compact_builder_timeline(task.get("timeline")),
         }
         builder_items.append(item)
         entries.append(_builder_stream_entry(item))
@@ -740,7 +833,7 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
         },
         "builder_work_count": len(builder_items),
         "builder_work_items": builder_items,
-        "trial": current_trial,
+        "trial": max(trial_candidates, key=lambda item: item[0])[1] if trial_candidates else {},
         "entries": entries,
     }
 
