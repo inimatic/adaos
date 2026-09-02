@@ -208,6 +208,54 @@ def test_publish_candidate_resumes_external_promotion_without_restarting(monkeyp
     assert result["workflow"]["governed"]["state"] == "publish"
 
 
+def test_publish_candidate_reconciles_unknown_promotion_before_resuming(monkeypatch) -> None:
+    state = {
+        "automation": {"status": "completed", "head_task_id": "task-1"},
+        "delivery": {
+            "status": "unknown",
+            "candidate_id": "candidate-1",
+            "package_digest": "sha256:" + "d" * 64,
+        },
+        "publication": {"status": "unknown", "error": "admission interrupted"},
+    }
+    transitions: list[tuple[str, dict]] = []
+    monkeypatch.setattr(lifecycle.workflow, "get_state", lambda *_args: state)
+
+    def transition(_kind, _project, action, **kwargs):
+        transitions.append((action, dict(kwargs.get("metadata") or {})))
+        return {"workflow": {"governed": {"state": action}}}
+
+    monkeypatch.setattr(lifecycle.workflow, "transition", transition)
+    monkeypatch.setattr(
+        lifecycle.projects,
+        "promote_candidate",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "status": "published",
+            "version": "0.2.0",
+            "release": "recipes@0.2.0",
+            "apply_evidence": {"validation_evidence": [{"status": "passed"}]},
+        },
+    )
+
+    lifecycle.publish_candidate(
+        "scenario",
+        "recipes",
+        actor="user:test",
+        idempotency_key="publish-1",
+    )
+
+    assert [item[0] for item in transitions] == [
+        "reconcile_publication",
+        "publication_started",
+        "publish",
+    ]
+    assert transitions[0][1]["idempotency_key"] == "publish-1:reconcile"
+    assert transitions[0][1]["evidence_refs"] == [
+        "candidate:candidate-1:idempotent-promotion-resume"
+    ]
+
+
 def test_publish_candidate_does_not_reuse_previous_candidate_publication(monkeypatch) -> None:
     state = {
         "automation": {"status": "completed", "head_task_id": "task-2"},

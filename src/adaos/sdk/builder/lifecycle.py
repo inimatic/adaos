@@ -315,6 +315,7 @@ def publish_candidate(
     state = workflow.get_state(object_type, object_id)
     candidate_id, candidate_digest = _candidate_identity(state)
     automation_state = _mapping(state.get("automation"))
+    delivery_state = _mapping(state.get("delivery"))
     publication_state = _mapping(state.get("publication"))
     publication_status = str(publication_state.get("status") or "not_started").strip()
     if _published_candidate_matches(
@@ -332,6 +333,22 @@ def publish_candidate(
         publication_status == "publishing"
         and str(publication_state.get("candidate_id") or "").strip() == candidate_id
     )
+    if (
+        publication_status == "unknown"
+        and str(delivery_state.get("status") or "").strip() == "unknown"
+        and str(delivery_state.get("candidate_id") or "").strip() == candidate_id
+    ):
+        workflow.transition(
+            object_type,
+            object_id,
+            "reconcile_publication",
+            actor=actor,
+            metadata={
+                "evidence_refs": [f"candidate:{candidate_id}:idempotent-promotion-resume"],
+                "run_id": f"candidate:{candidate_id}:reconcile-publication",
+                "idempotency_key": f"{idempotency_key}:reconcile",
+            },
+        )
     if not published_or_publishing_current:
         workflow.transition(
             object_type,

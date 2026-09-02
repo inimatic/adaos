@@ -3258,6 +3258,11 @@ class BuilderAutomationService:
         current_delivery = (
             str(delivery_before.get("candidate_id") or "").strip() == candidate_id
         )
+        accepted_trial_recorded = any(
+            isinstance(item, Mapping)
+            and str(item.get("status") or "").strip().lower() == "accepted"
+            for item in delivery_before.get("decision_observations") or []
+        )
         current_publication = (
             str(publication_before.get("status") or "").strip() == "published"
             and str(
@@ -3267,11 +3272,15 @@ class BuilderAutomationService:
             ).strip()
             == candidate_id
         )
-        accepted_already = accepted and governed_state in {
-            "publication_ready",
-            "publication_waiting",
-            "published",
-        } and current_delivery
+        accepted_already = accepted and current_delivery and (
+            governed_state
+            in {
+                "publication_ready",
+                "publication_waiting",
+                "published",
+            }
+            or accepted_trial_recorded
+        )
         published_already = accepted and current_publication
         if accepted_already:
             decision_result = {

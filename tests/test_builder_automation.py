@@ -4427,6 +4427,106 @@ def test_accepting_aprobation_publishes_and_closes_resolved_ticket(
     assert persisted["completion_readiness"]["aprobation"]["trial"]["status"] == "published"
 
 
+def test_accepting_aprobation_resumes_an_already_accepted_unknown_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.sdk.builder import lifecycle
+
+    service = _service(tmp_path)
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation.skill.demo_metrics_skill",
+            "object_type": "skill",
+            "object_id": "demo_metrics_skill",
+            "status": "completed",
+            "completion_readiness": {
+                "ok": True,
+                "aprobation": {
+                    "ok": True,
+                    "trial": {
+                        "status": "publication_unknown",
+                        "candidate_id": "candidate.demo",
+                        "candidate_digest": "sha256:" + "2" * 64,
+                        "release_digest": "sha256:" + "3" * 64,
+                        "version": "0.2.0",
+                    },
+                },
+            },
+        }
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "refresh_session",
+        lambda self, value: dict(value),
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "decide_trial",
+        lambda *args, **kwargs: pytest.fail("accepted trial must not be decided twice"),
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "publish_candidate",
+        lambda *args, **kwargs: calls.append("publish")
+        or {"ok": True, "version": "0.2.0"},
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_project_aprobation_state",
+        lambda self, current, aprobation: (
+            dict(current),
+            {**dict(aprobation), "component_update": {"notice_id": "update.demo"}},
+            {"ok": True},
+        ),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_workflow",
+        lambda self: SimpleNamespace(
+            describe=lambda *_: (
+                {
+                    "governed": {"state": "published"},
+                    "delivery": {
+                        "status": "published",
+                        "candidate_id": "candidate.demo",
+                        "release": "demo_metrics_skill@0.2.0",
+                        "release_digest": "sha256:" + "3" * 64,
+                    },
+                    "publication": {
+                        "status": "published",
+                        "version": "0.2.0",
+                        "release_record": {"candidate_id": "candidate.demo"},
+                    },
+                }
+                if calls
+                else {
+                    "governed": {"state": "reconciliation_required"},
+                    "delivery": {
+                        "status": "unknown",
+                        "candidate_id": "candidate.demo",
+                        "decision_observations": [{"status": "accepted"}],
+                    },
+                    "publication": {"status": "unknown"},
+                }
+            ),
+        ),
+    )
+
+    result = service.decide_aprobation(
+        object_type="skill",
+        object_id="demo_metrics_skill",
+        decision="accept",
+        actor="user:owner",
+    )
+
+    assert calls == ["publish"]
+    assert result["decision_result"]["duplicate"] is True
+    assert result["publication"]["ok"] is True
+
+
 def test_accepting_aprobation_does_not_close_for_stale_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
