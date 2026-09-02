@@ -12,6 +12,7 @@ from adaos.services.development_tickets import (
     COMPATIBILITY_PENDING_ACTION_KIND,
     COMPATIBILITY_RESPONSE_TOPIC,
     DevelopmentTicketService,
+    development_source_options,
 )
 from adaos.services.skill.activation import stream_receiver_event_admission
 
@@ -177,6 +178,50 @@ class _FakePublishedBuilderAutomation(_FakeFollowupBuilderAutomation):
             "change_set_id": "CH-published",
             "change_set_status": "published",
         }
+
+
+def test_declared_dev_source_uses_authoritative_workspace_status(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "skills" / "subscription_status_skill"
+    source_path.mkdir(parents=True)
+
+    class _Workspace:
+        def development_source_status(self, *, kind: str, artifact_id: str, project_id: str | None):
+            assert (kind, artifact_id, project_id) == (
+                "skill",
+                "subscription_status_skill",
+                "subscription_status",
+            )
+            return {
+                "status": "source_available",
+                "source": "dev",
+                "target_type": kind,
+                "target_id": artifact_id,
+                "project_id": project_id,
+                "dev_source_path": str(source_path),
+                "options": ["use_existing_dev_source"],
+                "default_option": "use_existing_dev_source",
+            }
+
+    monkeypatch.setattr(
+        BuilderWorkspaceService,
+        "from_context",
+        classmethod(lambda cls: _Workspace()),
+    )
+
+    result = development_source_options(
+        {
+            "type": "skill",
+            "id": "subscription_status_skill",
+            "project_id": "subscription_status",
+            "source": "dev",
+        }
+    )
+
+    assert result["dev_source_path"] == str(source_path)
+    assert result["declared_source"] == "dev"
 
 
 class _FakeFailingBuilderAutomation(_FakeBuilderAutomation):

@@ -402,6 +402,26 @@ def development_source_options(target_scope: Mapping[str, Any]) -> dict[str, Any
     target_type = str(resolved.get("type") or "unknown")
     target_id = _text(resolved.get("id"))
     project_id = _text(resolved.get("project_id")) or None
+    if target_type in {"project", "scenario", "skill"} and target_id:
+        try:
+            from adaos.services.builder.workspace import BuilderWorkspaceService
+
+            actual = BuilderWorkspaceService.from_context().development_source_status(
+                kind=target_type,
+                artifact_id=target_id,
+                project_id=project_id,
+            )
+            declared_dev = source in {"dev", "local", "source"}
+            if actual and (
+                not declared_dev
+                or _text(actual.get("status")) == "source_available"
+                or bool(_text(actual.get("dev_source_path") or actual.get("source_path")))
+            ):
+                if source:
+                    actual = {**actual, "declared_source": source}
+                return actual
+        except Exception:
+            pass
     if source in {"dev", "local", "source"}:
         return {
             "status": "source_available",
@@ -412,21 +432,6 @@ def development_source_options(target_scope: Mapping[str, Any]) -> dict[str, Any
             "options": ["use_existing_dev_source"],
             "default_option": "use_existing_dev_source",
         }
-    if target_type in {"project", "scenario", "skill"} and target_id:
-        try:
-            from adaos.services.builder.workspace import BuilderWorkspaceService
-
-            actual = BuilderWorkspaceService.from_context().development_source_status(
-                kind=target_type,
-                artifact_id=target_id,
-                project_id=project_id,
-            )
-            if actual:
-                if source:
-                    actual = {**actual, "declared_source": source}
-                return actual
-        except Exception:
-            pass
     return _source_materialization_options(
         source=source or "unknown",
         target_type=target_type,
