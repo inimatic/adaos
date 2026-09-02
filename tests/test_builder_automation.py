@@ -4356,6 +4356,7 @@ def test_accepting_aprobation_publishes_and_closes_resolved_ticket(
         "updated_at": "2026-09-01T10:00:00+00:00",
     }
     service._save_session(session)
+    calls: list[str] = []
     monkeypatch.setattr(
         BuilderAutomationService,
         "refresh_session",
@@ -4369,26 +4370,45 @@ def test_accepting_aprobation_publishes_and_closes_resolved_ticket(
     monkeypatch.setattr(
         lifecycle,
         "publish_candidate",
-        lambda *args, **kwargs: {"ok": True, "version": "0.2.0"},
+        lambda *args, **kwargs: calls.append("publish")
+        or {"ok": True, "version": "0.2.0"},
+    )
+    original_project = service._project_aprobation_state
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_project_aprobation_state",
+        lambda self, current, aprobation: calls.append("project")
+        or original_project(current, aprobation),
     )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_workflow",
         lambda self: SimpleNamespace(
-            describe=lambda *_: {
-                "delivery": {
-                    "status": "published",
-                    "release": "demo_metrics_skill@0.2.0",
-                    "release_digest": "sha256:" + "3" * 64,
-                },
+            describe=lambda *_: (
+                {
+                    "delivery": {
+                        "status": "published",
+                        "candidate_id": "candidate.demo",
+                        "release": "demo_metrics_skill@0.2.0",
+                        "release_digest": "sha256:" + "3" * 64,
+                    },
                     "publication": {
                         "status": "published",
                         "version": "0.2.0",
                         "release_record": {"candidate_id": "candidate.demo"},
                     },
                 }
+                if "publish" in calls
+                else {
+                    "delivery": {
+                        "status": "trial",
+                        "candidate_id": "candidate.demo",
+                    },
+                    "publication": {"status": "not_started"},
+                }
             ),
-        )
+        ),
+    )
 
     result = service.decide_aprobation(
         object_type="skill",
@@ -4398,6 +4418,7 @@ def test_accepting_aprobation_publishes_and_closes_resolved_ticket(
     )
 
     assert result["decision"] == "accept"
+    assert calls == ["publish", "project"]
     assert result["tickets"][0]["status"] == "closed"
     assert result["closed_publication_gate_failures"][0]["ticket_id"] == gate_failure["ticket_id"]
     assert result["closed_publication_gate_failures"][0]["status"] == "closed"

@@ -3302,10 +3302,17 @@ class BuilderAutomationService:
                 decision=decision_token,
                 actor=actor_token,
             )
-            persisted, persisted_aprobation, component_update_projection = (
-                self._project_aprobation_state(persisted, persisted_aprobation)
+            # Persist the accepted notice, but do not rebuild the user
+            # webspace for this transient state. Publication owns source
+            # promotion and is followed by one final projection below.
+            recorded_update = self._record_component_update(
+                persisted,
+                persisted_aprobation,
             )
-            component_update = dict(persisted_aprobation["component_update"])
+            if recorded_update is None:
+                raise RuntimeError("Builder Trial component update notice was not persisted")
+            component_update = dict(recorded_update)
+            persisted_aprobation["component_update"] = component_update
 
         try:
             if accepted:
