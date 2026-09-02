@@ -21,6 +21,7 @@
     "updated_at": {"type": "string", "minLength": 1},
     "status": {"enum": ["draft", "validated", "trial", "accepted", "rejected", "stale"]},
     "source_tree": {"type": "string", "minLength": 1},
+    "verification_source_ref": {"type": "object"},
     "validation_evidence": {"type": "array", "items": {"type": "object"}},
     "trials": {"type": "array", "items": {"type": "object"}},
     "stale_reason": {"type": "string", "minLength": 1}

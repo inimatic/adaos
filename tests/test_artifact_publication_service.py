@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -243,22 +244,40 @@ lifecycle:
         workspace_root=tmp_path / "workspace",
         remote=remote,
     )
+    verification_source_ref = ArtifactSourceRef(
+        forge="adaos-root",
+        repository="inimatic/adaos-registry",
+        revision="a" * 40,
+        path_scope=(
+            "subnets/sn_test/nodes/node_test/skills/shopping_skill/",
+        ),
+    )
+    checkpoint = package_module.build_artifact_package(
+        skill_dir,
+        kind="skill",
+        source_ref=verification_source_ref,
+    )
+    service.package_store.put(
+        checkpoint.archive_bytes,
+        expected_digest=checkpoint.ref.digest,
+    )
 
     prepared = service.prepare_project_candidate(
         project_id="recipes_project",
         project_dir=project_dir,
         source_workspace_root=source_workspace,
-        source_ref=ArtifactSourceRef(
-            forge="github",
-            repository="inimatic/adaos-registry",
-            revision="a" * 40,
-            path_scope=("projects/recipes_project/",),
-        ),
+        source_ref=verification_source_ref,
         change_ids=("change-project-1",),
-        validation_evidence={"status": "passed"},
+        validation_evidence={
+            "status": "passed",
+            "checkpoint_package_digest": checkpoint.ref.digest,
+            "checkpoint_component_ref": "skill:shopping_skill",
+        },
     )
 
     assert prepared.candidate.project_id == "recipes_project"
+    assert prepared.candidate.source_ref.path_scope == ("projects/recipes_project/",)
+    assert prepared.candidate.verification_source_ref == verification_source_ref
     assert {item.key for item in prepared.plan.release.components} == {
         "scenario:recipes",
         "skill:shopping_skill",
@@ -276,18 +295,27 @@ lifecycle:
         project_id="recipes_project",
         project_dir=project_dir,
         source_workspace_root=source_workspace,
-        source_ref=ArtifactSourceRef(
-            forge="github",
-            repository="inimatic/adaos-registry",
-            revision="a" * 40,
-            path_scope=("projects/recipes_project/",),
-        ),
+        source_ref=verification_source_ref,
         change_ids=("change-project-1",),
-        validation_evidence={"status": "passed"},
+        validation_evidence={
+            "status": "passed",
+            "checkpoint_package_digest": checkpoint.ref.digest,
+            "checkpoint_component_ref": "skill:shopping_skill",
+        },
         idempotency_key="different-workflow-attempt",
     )
     assert replayed.candidate == prepared.candidate
     assert replayed.trial_activation == prepared.trial_activation
+
+    legacy_candidate = replace(
+        prepared.candidate,
+        verification_source_ref=None,
+        trials=(),
+    )
+    assert service._candidate_verification_source_ref(
+        legacy_candidate,
+        prepared.plan,
+    ) == verification_source_ref
 
     service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
     _promote(service, prepared.candidate.candidate_id)

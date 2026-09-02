@@ -199,6 +199,7 @@ class CandidateRecord:
     updated_at: str
     status: CandidateStatus = "draft"
     source_tree: str | None = None
+    verification_source_ref: ArtifactSourceRef | None = None
     validation_evidence: tuple[Mapping[str, Any], ...] = ()
     trials: tuple[TrialEvidence, ...] = ()
     stale_reason: str | None = None
@@ -212,6 +213,10 @@ class CandidateRecord:
             self.base_source_ref, ArtifactSourceRef
         ):
             raise CandidateError("candidate source references must be ArtifactSourceRef")
+        if self.verification_source_ref is not None and not isinstance(
+            self.verification_source_ref, ArtifactSourceRef
+        ):
+            raise CandidateError("candidate verification source ref must be ArtifactSourceRef")
         for field, value in (
             ("candidate_id", self.candidate_id),
             ("project_id", self.project_id),
@@ -249,6 +254,8 @@ class CandidateRecord:
         }
         if self.source_tree:
             payload["source_tree"] = self.source_tree
+        if self.verification_source_ref is not None:
+            payload["verification_source_ref"] = self.verification_source_ref.to_dict()
         return payload
 
     def unsigned_dict(self) -> dict[str, Any]:
@@ -287,6 +294,7 @@ class CandidateRecord:
             "updated_at",
             "status",
             "source_tree",
+            "verification_source_ref",
             "validation_evidence",
             "trials",
             "stale_reason",
@@ -324,8 +332,13 @@ class CandidateRecord:
             )
         source = value.get("source_ref")
         base_source = value.get("base_source_ref")
+        verification_source = value.get("verification_source_ref")
         if not isinstance(source, Mapping) or not isinstance(base_source, Mapping):
             raise CandidateError("candidate source refs must be objects")
+        if verification_source is not None and not isinstance(
+            verification_source, Mapping
+        ):
+            raise CandidateError("candidate verification source ref must be an object")
         raw_change_ids = value.get("change_ids")
         raw_validation = value.get("validation_evidence")
         raw_trials = value.get("trials")
@@ -356,6 +369,11 @@ class CandidateRecord:
             updated_at=str(value.get("updated_at") or ""),
             status=value.get("status") or "draft",
             source_tree=value.get("source_tree"),
+            verification_source_ref=(
+                ArtifactSourceRef.from_mapping(verification_source)
+                if isinstance(verification_source, Mapping)
+                else None
+            ),
             validation_evidence=tuple(raw_validation),
             trials=tuple(
                 TrialEvidence.from_mapping(item)
@@ -377,6 +395,7 @@ def candidate_from_release(
     package_digest: str,
     change_ids: tuple[str, ...],
     source_tree: str | None = None,
+    verification_source_ref: ArtifactSourceRef | None = None,
     now: str | None = None,
 ) -> CandidateRecord:
     timestamp = now or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -402,6 +421,7 @@ def candidate_from_release(
         created_at=timestamp,
         updated_at=timestamp,
         source_tree=source_tree,
+        verification_source_ref=verification_source_ref,
     )
 
 

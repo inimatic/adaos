@@ -48,7 +48,9 @@ from adaos.services.artifact_pipeline.channels import (
 from adaos.services.artifact_pipeline.packages import (
     BuiltArtifactPackage,
     ContentAddressedPackageStore,
+    PackageVerificationError,
     build_artifact_package,
+    verify_artifact_package,
 )
 from adaos.services.artifact_pipeline.project_build import (
     build_workspace_project_release,
@@ -362,6 +364,65 @@ class ArtifactPublicationService:
             / "candidate-development-sources"
             / self.candidate_store.path(candidate_id).stem
         )
+
+    def _candidate_verification_source_ref(
+        self,
+        candidate: CandidateRecord,
+        plan: ReleasePlan,
+    ) -> ArtifactSourceRef:
+        if candidate.verification_source_ref is not None:
+            return candidate.verification_source_ref
+
+        for evidence in reversed(candidate.validation_evidence):
+            digest = str(evidence.get("checkpoint_package_digest") or "").strip()
+            if not digest:
+                continue
+            try:
+                checkpoint = verify_artifact_package(
+                    self.package_store.read(digest),
+                    expected_digest=digest,
+                )
+            except (FileNotFoundError, PackageVerificationError, ValueError) as exc:
+                raise PublicationError(
+                    "candidate checkpoint package cannot provide source verification"
+                ) from exc
+            component_ref = str(evidence.get("checkpoint_component_ref") or "").strip()
+            if component_ref and checkpoint.ref.key != component_ref:
+                raise PublicationError(
+                    "candidate checkpoint evidence identifies another component"
+                )
+            release_package = next(
+                (item for item in plan.packages if item.key == checkpoint.ref.key),
+                None,
+            )
+            if release_package is None:
+                raise PublicationError(
+                    "candidate checkpoint component is outside the Project release closure"
+                )
+            try:
+                released = verify_artifact_package(
+                    self.package_store.read(release_package.digest),
+                    expected_digest=release_package.digest,
+                )
+            except (FileNotFoundError, PackageVerificationError, ValueError) as exc:
+                raise PublicationError(
+                    "Project release package cannot be matched to checkpoint evidence"
+                ) from exc
+            checkpoint_payload = dict(checkpoint.package_manifest)
+            released_payload = dict(released.package_manifest)
+            checkpoint_payload.pop("source_ref", None)
+            released_payload.pop("source_ref", None)
+            if checkpoint_payload != released_payload:
+                raise PublicationError(
+                    "Project release component differs from its verified checkpoint package"
+                )
+            if checkpoint.ref.source_ref.revision != candidate.source_ref.revision:
+                raise PublicationError(
+                    "candidate checkpoint and Project release revisions differ"
+                )
+            return checkpoint.ref.source_ref
+
+        return candidate.source_ref
 
     @staticmethod
     def _development_source_manifest(root: Path) -> dict[str, Any]:
@@ -1792,6 +1853,7 @@ class ArtifactPublicationService:
                 "release_digest": release_digest,
                 "package_digest": primary_package.digest,
                 "source_ref": plan.release.source_ref,
+                "verification_source_ref": source_ref,
                 "source_tree": verified_source_tree,
                 "change_ids": tuple(sorted(change_ids)),
             }
@@ -1801,6 +1863,10 @@ class ArtifactPublicationService:
                 "release_digest": existing_candidate.release_digest,
                 "package_digest": existing_candidate.package_digest,
                 "source_ref": existing_candidate.source_ref,
+                "verification_source_ref": (
+                    existing_candidate.verification_source_ref
+                    or self._candidate_verification_source_ref(existing_candidate, plan)
+                ),
                 "source_tree": existing_candidate.source_tree,
                 "change_ids": tuple(sorted(existing_candidate.change_ids)),
             }
@@ -1847,6 +1913,7 @@ class ArtifactPublicationService:
             package_digest=primary_package.digest,
             change_ids=change_ids,
             source_tree=verified_source_tree,
+            verification_source_ref=source_ref,
         )
         candidate = record_validation(candidate, validation_evidence, now=_now())
 
@@ -2333,7 +2400,11 @@ class ArtifactPublicationService:
             )
             if not candidate.source_tree:
                 raise PublicationError("candidate has no verified public source tree identity")
-            actual_tree = self.remote.tree_revision(candidate.source_ref)
+            verification_source_ref = self._candidate_verification_source_ref(
+                candidate,
+                plan,
+            )
+            actual_tree = self.remote.tree_revision(verification_source_ref)
             if actual_tree != candidate.source_tree:
                 raise PublicationError(
                     f"candidate public source tree changed: {actual_tree} != {candidate.source_tree}"
@@ -2363,6 +2434,7 @@ class ArtifactPublicationService:
                     "base_release": candidate.base_release,
                     "base_release_digest": candidate.base_release_digest,
                     "source_revision": candidate.source_ref.revision,
+                    "verification_source_ref": verification_source_ref.to_dict(),
                     "source_tree": candidate.source_tree,
                 },
             )
