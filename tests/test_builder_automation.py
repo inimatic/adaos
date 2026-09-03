@@ -121,7 +121,7 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["status"] == "completed"
     assert status["session"]["source_prototype_version"] == "0.1.0"
     assert status["automation"]["source_prototype_version"] == "0.1.0"
-    assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.13.0"
+    assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.14.0"
     assert status["session"]["created_artifacts"][0]["kind"] == "skill"
     assert status["session"]["created_artifacts"][0]["name"] == "recipes_skill"
     task = next(
@@ -2155,6 +2155,57 @@ def test_failed_dev_ticket_resume_updates_brief_before_submitting_continuation(
     assert submitted[0]["text"] == "requalified brief"
     assert submitted[0]["execution_budget"]["max_tokens"] == 45000
     assert result["resumed_failed_dev_ticket"] is True
+
+
+def test_core_unblocked_dev_ticket_resume_reuses_waiting_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation.skill.demo",
+            "object_type": "skill",
+            "object_id": "demo",
+            "status": "waiting_for_core",
+            "implementation_brief": "blocked brief",
+            "links": {"development_ticket_id": "dticket.demo"},
+            "created_at": "2026-09-01T00:00:00+00:00",
+            "updated_at": "2026-09-01T00:00:00+00:00",
+        }
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "refresh_session",
+        lambda _service, session: session,
+    )
+    submitted: list[dict] = []
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "submit_turn",
+        lambda _service, **kwargs: submitted.append(dict(kwargs))
+        or {"ok": True, "status": "automation_queued"},
+    )
+
+    result = service.resume_waiting_for_core_dev_ticket_repair(
+        object_type="skill",
+        object_id="demo",
+        implementation_brief="unblocked brief",
+        links={
+            "development_ticket_id": "dticket.demo",
+            "builder_repair_id": "repair.demo",
+        },
+        execution_budget={"max_tokens": 24000, "max_wall_seconds": 600},
+    )
+
+    updated = service.get_session("skill", "demo")
+    assert updated is not None
+    assert updated["implementation_brief"] == "unblocked brief"
+    assert updated["links"]["builder_repair_id"] == "repair.demo"
+    assert submitted[0]["text"] == "unblocked brief"
+    assert submitted[0]["execution_budget"]["max_tokens"] == 24000
+    assert result["resumed_core_unblocked_dev_ticket"] is True
 
 
 def test_terminal_codex_usage_reports_live_budget_estimate(tmp_path: Path) -> None:

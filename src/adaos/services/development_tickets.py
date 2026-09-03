@@ -2119,10 +2119,20 @@ class DevelopmentTicketService:
             "source_precondition_validation": source_preconditions,
         }
         resume_failed = getattr(automation_service, "resume_failed_dev_ticket_repair", None)
+        resume_waiting_for_core = getattr(
+            automation_service,
+            "resume_waiting_for_core_dev_ticket_repair",
+            None,
+        )
         start_followup = getattr(automation_service, "start_followup_dev_ticket_repair", None)
         can_resume = False
+        can_resume_waiting_for_core = False
         can_followup = False
-        if callable(resume_failed) or callable(start_followup):
+        if (
+            callable(resume_failed)
+            or callable(resume_waiting_for_core)
+            or callable(start_followup)
+        ):
             current = automation_service.status(
                 object_type=target["object_type"],
                 object_id=target["object_id"],
@@ -2131,6 +2141,11 @@ class DevelopmentTicketService:
             current_links = _mapping(current_session.get("links"))
             can_resume = (
                 _text(current_session.get("status")) == "failed"
+                and _text(current_links.get("development_ticket_id")) == ticket["ticket_id"]
+            )
+            can_resume_waiting_for_core = (
+                callable(resume_waiting_for_core)
+                and _text(current_session.get("status")) == "waiting_for_core"
                 and _text(current_links.get("development_ticket_id")) == ticket["ticket_id"]
             )
             readiness = _mapping(current_session.get("completion_readiness"))
@@ -2165,7 +2180,9 @@ class DevelopmentTicketService:
                 and followup_state_ready
             )
         start_method = (
-            resume_failed
+            resume_waiting_for_core
+            if can_resume_waiting_for_core
+            else resume_failed
             if can_resume
             else start_followup
             if can_followup

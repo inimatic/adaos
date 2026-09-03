@@ -200,6 +200,40 @@ class _FakeResumableBuilderAutomation(_FakeBuilderAutomation):
         )
 
 
+class _FakeCoreUnblockedBuilderAutomation(_FakeBuilderAutomation):
+    def __init__(self) -> None:
+        super().__init__()
+        self.resume_calls: list[dict] = []
+        self.ticket_id = ""
+
+    def status(self, *, object_type: str, object_id: str):
+        return {
+            "ok": True,
+            "session": {
+                "session_id": "automation.session.waiting",
+                "status": "waiting_for_core",
+                "links": {"development_ticket_id": self.ticket_id},
+            },
+            "automation": {
+                "session_id": "automation.session.waiting",
+                "status": "waiting_for_core",
+                "terminal": False,
+                "project": {"object_type": object_type, "object_id": object_id},
+            },
+        }
+
+    def resume_waiting_for_core_dev_ticket_repair(self, **kwargs):
+        self.resume_calls.append(dict(kwargs))
+        self.counter += 1
+        self.latest_links = dict(kwargs.get("links") or {})
+        self.latest_budget = dict(kwargs.get("execution_budget") or self.latest_budget)
+        return self._payload(
+            status="running",
+            suffix=f"core-resumed-{self.counter}",
+            links=self.latest_links,
+        )
+
+
 class _FakeFollowupBuilderAutomation(_FakeBuilderAutomation):
     def __init__(self) -> None:
         super().__init__()
@@ -1884,6 +1918,32 @@ def test_autonomous_repair_joins_completed_builder_trial_as_followup(tmp_path: P
     assert automation.calls == []
     assert len(automation.followup_calls) == 1
     assert automation.followup_calls[0]["links"]["development_ticket_id"] == ticket["ticket_id"]
+
+
+def test_autonomous_repair_resumes_same_session_after_core_is_verified(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    automation = _FakeCoreUnblockedBuilderAutomation()
+    ticket = _bounded_demo_ticket(
+        service,
+        summary="Show Codex usage through the newly released public SDK",
+        target_files=["skills/demo_metrics_skill/handlers/main.py"],
+        acceptance="The skill uses the public subscription SDK.",
+    )
+    automation.ticket_id = ticket["ticket_id"]
+
+    result = service.start_autonomous_repair(
+        ticket["ticket_id"],
+        actor="builder:automation",
+        repair_service=repair_service,
+        automation_service=automation,
+        webspace_id="desktop",
+    )
+
+    assert result["started"] is True
+    assert automation.calls == []
+    assert len(automation.resume_calls) == 1
+    assert automation.resume_calls[0]["links"]["development_ticket_id"] == ticket["ticket_id"]
 
 
 def test_autonomous_repair_starts_successor_after_published_workflow(tmp_path: Path) -> None:
