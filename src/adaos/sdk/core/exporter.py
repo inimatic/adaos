@@ -316,7 +316,10 @@ def export(
             ),
             key=lambda row: (-row[0], str(row[1].get("name") or "")),
         )
-        tools = [item for score, item in ranked if score > 0][:bounded_limit]
+        # A single weak summary hit (for example, "typed") is not enough to
+        # spend task context on an unrelated SDK function. Exact/name hits or
+        # at least two corroborating summary terms remain discoverable.
+        tools = [item for score, item in ranked if score >= 4][:bounded_limit]
 
     events = [
         {

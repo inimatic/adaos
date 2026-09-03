@@ -237,7 +237,11 @@ def _sdk_metadata(
             schema_id=f"sdk:{name}:input",
             required_args=input_schema.get("required") or item.get("a") or [],
             capabilities={"approval_scope": meta.get("approval_scope"), "idempotent": meta.get("idempotent")},
-            metadata={"module": item.get("m") or item.get("module"), "qualname": item.get("qualname")},
+            metadata={
+                "module": item.get("m") or item.get("module"),
+                "qualname": item.get("qualname"),
+                "args": list(item.get("a") or []),
+            },
         )
         if level == "mini":
             row = {
@@ -254,6 +258,7 @@ def _sdk_metadata(
                     "owner",
                     "fingerprint",
                     "drill_down",
+                    "metadata",
                 }
                 and value not in (None, "", [], {})
             }

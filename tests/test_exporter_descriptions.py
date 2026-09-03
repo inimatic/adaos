@@ -49,4 +49,14 @@ def test_sdk_metadata_mini_is_a_bounded_nonduplicated_mcp_projection():
         row["row_id"] == "adaos.sdk.control_plane.list_quota_objects"
         for row in payload["overview_rows"]
     )
+    quota_row = next(
+        row
+        for row in payload["overview_rows"]
+        if row["row_id"] == "adaos.sdk.control_plane.list_quota_objects"
+    )
+    assert quota_row["metadata"]["args"] == ["webspace_id?"]
+    assert not any(
+        row["row_id"] == "adaos.sdk.research.apply_projection_patch"
+        for row in payload["overview_rows"]
+    )
     assert len(json.dumps(descriptor, ensure_ascii=False).encode("utf-8")) < 12_000

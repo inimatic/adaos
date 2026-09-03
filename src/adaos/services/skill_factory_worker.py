@@ -934,6 +934,83 @@ def _bounded_repair_brief_prompt(value: str) -> str:
     return json.dumps(projected, ensure_ascii=False, indent=2, sort_keys=True)
 
 
+def _bounded_repair_hints_prompt(
+    value: Mapping[str, Any],
+    *,
+    approved_brief: str,
+) -> str:
+    """Keep source authority while removing qualification duplicates."""
+
+    hints = dict(value or {})
+    approved_summary = ""
+    try:
+        approved = json.loads(str(approved_brief or ""))
+    except (TypeError, ValueError):
+        approved = {}
+    if isinstance(approved, Mapping):
+        approved_summary = str(approved.get("summary") or "").strip()
+    acceptance_checks: list[str] = []
+    for raw in hints.get("acceptance_checks") or []:
+        check = str(raw or "").strip()
+        if not check:
+            continue
+        visible_prefix = "User-visible acceptance:"
+        if check.startswith(visible_prefix) and check[len(visible_prefix) :].strip() == approved_summary:
+            continue
+        acceptance_checks.append(check)
+    projected = {
+        key: copy.deepcopy(hints.get(key))
+        for key in (
+            "profile",
+            "target_files",
+            "target_refs",
+            "max_changed_files",
+            "requires_root_mcp",
+        )
+        if hints.get(key) not in (None, "", [], {})
+    }
+    if acceptance_checks:
+        projected["focused_checks"] = acceptance_checks[:12]
+    return json.dumps(projected, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def _bounded_repair_iteration_prompt(value: str, *, approved_brief: str) -> str:
+    """Project only follow-up requirements that differ from the approved brief."""
+
+    raw = str(value or "").strip()
+    if not raw:
+        return "No additional follow-up instruction; apply the approved ticket brief."
+    try:
+        current = json.loads(raw)
+    except (TypeError, ValueError):
+        return raw[:6_000]
+    if not isinstance(current, Mapping):
+        return raw[:6_000]
+    try:
+        approved = json.loads(str(approved_brief or ""))
+    except (TypeError, ValueError):
+        approved = {}
+    approved = approved if isinstance(approved, Mapping) else {}
+    projected: dict[str, Any] = {}
+    for key in (
+        "summary",
+        "component_ref",
+        "acceptance",
+        "guardrails",
+        "revision_reason",
+        "user_feedback",
+        "comments",
+        "relation_refs",
+    ):
+        item = current.get(key)
+        if item in (None, "", [], {}) or item == approved.get(key):
+            continue
+        projected[key] = copy.deepcopy(item)
+    if not projected:
+        return "No additional follow-up instruction; apply the approved ticket brief."
+    return json.dumps(projected, ensure_ascii=False, indent=2, sort_keys=True)
+
+
 _JSON_TARGET_SEGMENT_RE = re.compile(
     r"^(?P<key>[^\[\]]+)(?:\[(?:(?P<index>\d+)|id=(?P<id>[^\]]+))\])?$"
 )
@@ -3940,7 +4017,7 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
         elif bounded_repair:
             if bool(repair_coverage.get("complete")):
                 required_result = """1. This is source work inside an existing AdaOS skill, not Codex skill authoring. Do not load generic skill-creator instructions.
-2. Qualified source slices cover every authorized file. Use them as the first and authoritative inspection context. Do not rediscover structures already shown there. If one acceptance edit point is absent from the slices, run at most one narrow source-read command for that exact point, then apply the complete patch.
+2. Qualified source slices cover every authorized file. Use them as the first and authoritative inspection context. Do not rediscover structures already shown there. If one acceptance edit point is absent, run at most one narrow source-read command for one exact pattern in one file, returning no more than {command_output_lines} lines and {command_output_bytes} bytes. Do not use alternation, `rg -A`, `rg -B`, or `rg -C`; narrow the query instead. Then apply the complete patch.
 3. Implement only the scoped resource/data change in the exact authorized files. Use existing public AdaOS SDK/API contracts and preserve unrelated behavior.
 4. For subnet data, use only the admitted typed provider route and degrade without failing when it is unavailable. Do not invent or persist provider data.
 5. Add or update only focused regression coverage for the acceptance checks. Do not run tests or validation commands in the Codex turn; the trusted worker runs them and records evidence.
@@ -4065,6 +4142,14 @@ Do not read, print, or inspect bearer-token environment values.
                 else "AdaOS bounded Dev Ticket repair"
             )
             bounded_brief = _bounded_repair_brief_prompt(brief)
+            bounded_hints = _bounded_repair_hints_prompt(
+                repair_hints,
+                approved_brief=brief,
+            )
+            bounded_iteration = _bounded_repair_iteration_prompt(
+                iteration,
+                approved_brief=brief,
+            )
             qualified_targets = (
                 json.dumps(
                     repair_target_context,
@@ -4086,7 +4171,7 @@ Target: {target_type}:{target_id}
 ## Exact repair hints
 
 ```json
-{json.dumps(repair_hints, ensure_ascii=False, indent=2, sort_keys=True)}
+{bounded_hints}
 ```
 
 The bounded governed projection and immutable packet reference are retained in
@@ -4105,7 +4190,7 @@ the requested change, edit directly and do not rediscover the same structures.
 
 ## Current repair instruction
 
-{iteration_text}
+{bounded_iteration}
 
 {root_mcp_section if root_mcp else ''}
 

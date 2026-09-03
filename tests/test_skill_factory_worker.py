@@ -1898,7 +1898,83 @@ def test_bounded_repair_prompt_includes_only_qualified_json_target_slices(
     assert "edit directly and do not rediscover" in prompt
     assert "Qualified source slices cover every authorized file" in prompt
     assert "Locate one exact target ID" not in prompt
+    assert "returning no more than" in prompt
     assert "Keep the chart sibling unchanged." in prompt
+
+
+def test_bounded_repair_prompt_keeps_full_follow_up_only_in_packet(tmp_path: Path) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    workspace = tmp_path / "workspace"
+    input_dir = tmp_path / "input"
+    skill = workspace / "skills" / "demo"
+    skill.mkdir(parents=True)
+    (skill / "webui.json").write_text(
+        json.dumps({"widgets": [{"id": "usage", "title": "Usage"}]}),
+        encoding="utf-8",
+    )
+    summary = "Show current quota usage."
+    brief = json.dumps(
+        {
+            "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+            "ticket_id": "dticket.compact",
+            "summary": summary,
+        }
+    )
+    iteration = {
+        "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+        "ticket_id": "dticket.compact",
+        "ticket_revision": 8,
+        "summary": summary,
+        "evidence_refs": [
+            {"type": "trace", "path": "old-run/codex-live.jsonl", "status": "failed"}
+        ],
+        "repair_hints": {"change_summary": summary},
+    }
+    assignment = {
+        "task_id": "task.compact-follow-up",
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {"sparse_paths": ["skills/demo/"]},
+        "constraints": {
+            "mode": "dev_ticket_repair",
+            "repair_profile": "resource_crud",
+            "minimal_diff": True,
+        },
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": brief,
+                "iteration_instruction": json.dumps(iteration),
+                "repair_hints": {
+                    "change_summary": summary,
+                    "target_files": ["skills/demo/webui.json"],
+                    "target_refs": ["widget:usage"],
+                    "acceptance_checks": [
+                        f"User-visible acceptance: {summary}",
+                        "Validate skill:demo.",
+                    ],
+                    "source_preconditions": [
+                        {"path": "skills/demo/webui.json", "sha256": "sha256:source-only"}
+                    ],
+                },
+            }
+        },
+    }
+
+    worker._build_packet(assignment, workspace, input_dir)
+    prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+    packet = json.loads((input_dir / "packet.json").read_text(encoding="utf-8"))
+
+    assert prompt.count(summary) == 1
+    assert "old-run/codex-live.jsonl" not in prompt
+    assert "sha256:source-only" not in prompt
+    assert "No additional follow-up instruction" in prompt
+    assert "Validate skill:demo." in prompt
+    assert packet["iteration_instruction"] == json.dumps(iteration)
+    assert packet["repair_hints"]["source_preconditions"]
 
 
 def test_bounded_repair_resolves_semantic_refs_in_json_and_yaml(
