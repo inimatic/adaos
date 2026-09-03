@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import sys
 import types
 
 import pytest
@@ -207,7 +208,7 @@ def test_api_preflight_uses_successful_port_repair(monkeypatch, tmp_path):
     assert calls["probe"] == 2
 
 
-def test_api_serve_preflight_failure_keeps_previous_server(monkeypatch):
+def test_api_serve_skips_runtime_import_preflight_and_sets_background_boot(monkeypatch, tmp_path):
     runner = CliRunner()
     conf = NodeConfig(
         node_id="n1",
@@ -218,33 +219,45 @@ def test_api_serve_preflight_failure_keeps_previous_server(monkeypatch):
         token="t1",
     )
     stopped: list[tuple[str, int]] = []
+    fake_server = types.ModuleType("adaos.apps.api.server")
+    fake_app = object()
+    fake_server.app = fake_app
+    uvicorn_calls: list[dict[str, object]] = []
 
-    monkeypatch.setattr("adaos.apps.cli.commands.api.load_config", lambda: conf)
+    async def _no_sidecar(*_args, **_kwargs):
+        return None
+
+    def _unexpected_runtime_import_preflight(*_args, **_kwargs):
+        raise AssertionError("api serve must not duplicate runtime handler imports in preflight")
+
+    monkeypatch.delenv("ADAOS_RUNTIME_BACKGROUND_BOOT", raising=False)
+    monkeypatch.setitem(sys.modules, "adaos.apps.api.server", fake_server)
+    monkeypatch.setattr(api_cmd, "load_config", lambda: conf)
+    monkeypatch.setattr(api_cmd, "save_config", lambda _conf: None)
+    monkeypatch.setattr(api_cmd, "_repo_root_for_runtime_preflight", lambda: tmp_path)
+    monkeypatch.setattr(api_cmd, "_missing_runtime_preflight_required_files", lambda _repo_root: [])
+    monkeypatch.setattr(api_cmd, "_probe_api_bind_availability", lambda host, port: {"ok": True})
+    monkeypatch.setattr(api_cmd, "_run_runtime_import_preflight", _unexpected_runtime_import_preflight)
+    monkeypatch.setattr(api_cmd, "_stop_previous_server", lambda host, port: stopped.append((host, port)))
+    monkeypatch.setattr(api_cmd, "_pidfile_path", lambda host, port: tmp_path / "serve.json")
+    monkeypatch.setattr(api_cmd, "_write_pidfile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api_cmd, "_cleanup_pidfile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api_cmd.atexit, "register", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api_cmd, "_ensure_api_serve_dev_sidecar", _no_sidecar)
     monkeypatch.setattr(
-        "adaos.apps.cli.commands.api._run_api_pre_stop_preflight",
-        lambda host, port: {
-            "ok": False,
-            "errors": [
-                {
-                    "phase": "skill_handler_import",
-                    "error": "ModuleNotFoundError",
-                    "message": "No module named 'adaos.sdk.redevice'",
-                    "path": ".adaos/workspace/skills/.runtime/redevice_list/handlers/main.py",
-                }
-            ],
-        },
+        api_cmd.uvicorn,
+        "run",
+        lambda *args, **kwargs: uvicorn_calls.append({"args": args, "kwargs": kwargs}),
     )
-    monkeypatch.setattr("adaos.apps.cli.commands.api._stop_previous_server", lambda host, port: stopped.append((host, port)))
-    monkeypatch.setattr("adaos.apps.cli.commands.api._write_pidfile", lambda *args, **kwargs: None)
-    monkeypatch.setattr("adaos.apps.cli.commands.api._ensure_api_serve_dev_sidecar", lambda *args, **kwargs: None)
-    monkeypatch.setattr("adaos.apps.cli.commands.api.uvicorn.run", lambda *args, **kwargs: None)
 
     result = runner.invoke(app, ["serve", "--host", "127.0.0.1", "--port", "8779"])
 
-    assert result.exit_code == 1
-    assert stopped == []
-    assert "preflight failed" in result.stdout
-    assert "keeping existing API server running" in result.stdout
+    assert result.exit_code == 0
+    assert stopped == [("127.0.0.1", 8779)]
+    assert os.environ["ADAOS_RUNTIME_BACKGROUND_BOOT"] == "1"
+    assert uvicorn_calls
+    assert uvicorn_calls[0]["args"][0] is fake_app
+    assert "preflight failed" not in result.stdout
 
 
 def test_api_restart_preflight_failure_keeps_previous_server(monkeypatch):
@@ -577,6 +590,20 @@ def test_configure_runtime_endpoint_env_uses_actual_api_bind(monkeypatch):
     assert os.environ["ADAOS_RUNTIME_HOST"] == "127.0.0.1"
     assert os.environ["ADAOS_RUNTIME_PORT"] == "8779"
     assert os.environ["ADAOS_RUNTIME_LAUNCH_MODE"] == "api_serve"
+
+
+def test_api_serve_startup_env_sets_background_boot_default(monkeypatch):
+    monkeypatch.delenv("ADAOS_RUNTIME_BACKGROUND_BOOT", raising=False)
+
+    api_cmd._configure_api_serve_startup_env(launch_mode="api_serve")
+
+    assert os.environ["ADAOS_RUNTIME_BACKGROUND_BOOT"] == "1"
+
+    monkeypatch.setenv("ADAOS_RUNTIME_BACKGROUND_BOOT", "0")
+
+    api_cmd._configure_api_serve_startup_env(launch_mode="api_serve")
+
+    assert os.environ["ADAOS_RUNTIME_BACKGROUND_BOOT"] == "0"
 
 
 def test_api_serve_reports_autostart_conflict_without_traceback(monkeypatch):

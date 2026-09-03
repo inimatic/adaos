@@ -639,7 +639,12 @@ def _run_runtime_import_preflight(
     return payload
 
 
-def _run_api_pre_stop_preflight(host: str, port: int) -> dict[str, object]:
+def _run_api_pre_stop_preflight(
+    host: str,
+    port: int,
+    *,
+    include_runtime_import: bool = True,
+) -> dict[str, object]:
     if _env_flag("ADAOS_API_SKIP_PRESTOP_PREFLIGHT", default=False):
         return {"ok": True, "skipped": True, "host": host, "port": int(port)}
     repo_root = _repo_root_for_runtime_preflight()
@@ -682,6 +687,14 @@ def _run_api_pre_stop_preflight(host: str, port: int) -> dict[str, object]:
                 "port": int(port),
                 "errors": [error],
             }
+    if not include_runtime_import:
+        return {
+            "ok": True,
+            "repo_root": str(repo_root),
+            "host": host,
+            "port": int(port),
+            "runtime_import_skipped": True,
+        }
     try:
         skills_root = _skills_root_for_runtime_preflight(repo_root)
     except Exception as exc:
@@ -704,8 +717,17 @@ def _run_api_pre_stop_preflight(host: str, port: int) -> dict[str, object]:
     return result
 
 
-def _ensure_api_pre_stop_preflight_or_exit(host: str, port: int, *, action: str) -> None:
-    result = _run_api_pre_stop_preflight(host, port)
+def _ensure_api_pre_stop_preflight_or_exit(
+    host: str,
+    port: int,
+    *,
+    action: str,
+    include_runtime_import: bool = True,
+) -> None:
+    if include_runtime_import:
+        result = _run_api_pre_stop_preflight(host, port)
+    else:
+        result = _run_api_pre_stop_preflight(host, port, include_runtime_import=False)
     if result.get("ok") is True:
         if result.get("skipped") is True:
             typer.secho(
@@ -762,6 +784,11 @@ def _uvicorn_loop_mode() -> str:
         # the process-wide event loop policy we set in the CLI / API server.
         return "none"
     return "auto"
+
+
+def _configure_api_serve_startup_env(*, launch_mode: str) -> None:
+    if str(launch_mode or "").strip().lower() == "api_serve":
+        os.environ.setdefault("ADAOS_RUNTIME_BACKGROUND_BOOT", "1")
 
 
 def _is_local_url(url: str | None) -> bool:
@@ -1837,7 +1864,12 @@ def run_api_runtime(
     advertised_base = _advertise_base(host, port)
     pidfile = _pidfile_path(host, port)
 
-    _ensure_api_pre_stop_preflight_or_exit(host, port, action="api serve")
+    _ensure_api_pre_stop_preflight_or_exit(
+        host,
+        port,
+        action="api serve",
+        include_runtime_import=str(launch_mode or "").strip().lower() != "api_serve",
+    )
     try:
         _stop_previous_server(host, port)
     except ManagedRuntimeConflict as exc:
@@ -1854,6 +1886,7 @@ def run_api_runtime(
         raise typer.Exit(code=1)
 
     _configure_runtime_endpoint_env(advertised_base=advertised_base, launch_mode=launch_mode)
+    _configure_api_serve_startup_env(launch_mode=launch_mode)
     if token:
         os.environ["ADAOS_TOKEN"] = token
 

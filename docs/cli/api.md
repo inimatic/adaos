@@ -11,6 +11,8 @@ adaos api restart
 ## Local runtime notes
 
 - `adaos api serve` starts the local API directly, without the slot supervisor.
+- `adaos api serve` keeps startup fast by skipping the isolated runtime import preflight; `api restart` still runs that preflight before shutting down the existing server.
+- `adaos api serve` enables background runtime boot by default, unless `ADAOS_RUNTIME_BACKGROUND_BOOT` is set explicitly. The HTTP process may bind before skill boot has fully completed; use `GET /health/ready` for full runtime readiness.
 - If `--port` is passed explicitly, AdaOS persists the resulting local address as `local_api_url` in `.adaos/node.yaml`.
 - Later `adaos api serve` runs reuse that persisted local port unless you pass another explicit one.
 - `8777` and `8778` are the browser-discoverable local hub ports.
