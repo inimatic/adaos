@@ -89,9 +89,9 @@
     },
     {
       "id": "adaos_connect",
-      "version": "android-poc.3",
+      "version": "android-poc.4",
       "descriptor": "adaos_connect.webui.json",
-      "sha256": "3fe0926fb8c8767338bd3b6bd6a23570ae15192e83c13b8f0c251f0d71d1488b"
+      "sha256": "1404980fd8707078ea7db21aecb67ae674ee3053fce43739cc17c5f87698b54b"
     },
     {
       "id": "browsers_skill",
