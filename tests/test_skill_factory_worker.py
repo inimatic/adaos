@@ -5474,6 +5474,7 @@ def test_worker_restores_candidate_after_deterministic_project_validation(
                     "source_task_id": source_task_id,
                     "failure_id": failure_id,
                     "reason": continuation_reason,
+                    "source_changed_paths": ["skills/demo/webui.json"],
                     "continuation_contract": continuation_contract,
                 },
             }

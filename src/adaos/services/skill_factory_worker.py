@@ -4295,6 +4295,13 @@ class LocalSkillFactoryWorker:
             # continue with the newly submitted bounded turn instead of
             # converting a recoverable budget stop into another failed task.
             return None
+        expected_source_paths = {
+            str(item).replace("\\", "/").strip("/")
+            for item in checkpoint.get("source_changed_paths") or []
+            if str(item).strip()
+        }
+        if expected_source_paths and set(changed_paths) != expected_source_paths:
+            raise ValueError("continuation candidate changed since checkpoint qualification")
         try:
             self._validate_changed_paths(
                 assignment,

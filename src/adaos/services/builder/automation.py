@@ -100,6 +100,67 @@ def _preserved_candidate_has_changes(run_root: Path) -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
     return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def _preserved_candidate_changed_paths(run_root: Path) -> list[str]:
+    workspace = run_root / "workspace"
+    if not (workspace / ".git").is_dir():
+        return []
+    paths: set[str] = set()
+    for command in (
+        ["git", "diff", "--name-only", "-z", "HEAD"],
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+    ):
+        try:
+            result = subprocess.run(
+                command,
+                cwd=workspace,
+                check=False,
+                capture_output=True,
+                timeout=15,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return []
+        if result.returncode != 0:
+            return []
+        paths.update(
+            value.decode("utf-8", errors="strict").replace("\\", "/").strip("/")
+            for value in result.stdout.split(b"\0")
+            if value
+        )
+    return sorted(path for path in paths if path)
+
+
+def _repair_hints_with_continuation_paths(
+    repair_hints: Mapping[str, Any],
+    checkpoint: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    merged = dict(repair_hints)
+    source_paths = [
+        str(item).replace("\\", "/").strip("/")
+        for item in (checkpoint or {}).get("source_changed_paths") or []
+        if str(item).strip()
+    ]
+    if not source_paths:
+        return merged
+    target_files = list(
+        dict.fromkeys(
+            [
+                *[
+                    str(item).replace("\\", "/").strip("/")
+                    for item in merged.get("target_files") or []
+                    if str(item).strip()
+                ],
+                *source_paths,
+            ]
+        )
+    )
+    merged["target_files"] = target_files
+    merged["max_changed_files"] = max(
+        int(merged.get("max_changed_files") or 0),
+        len(target_files),
+    )
+    return merged
 _DEVELOPMENT_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
 _RUNTIME_DIAGNOSTIC_MAX_FILES = 4096
 _RUNTIME_DIAGNOSTIC_MAX_BYTES = 128 * 1024 * 1024
@@ -2912,6 +2973,23 @@ class BuilderAutomationService:
             return None
         if not _preserved_candidate_has_changes(run_root):
             return None
+        source_changed_paths = _preserved_candidate_changed_paths(run_root)
+        source_constraints = (
+            dict(request.get("constraints") or {})
+            if isinstance(request.get("constraints"), Mapping)
+            else {}
+        )
+        source_allowed_paths = {
+            str(item).replace("\\", "/").strip("/")
+            for item in source_constraints.get("exact_changed_paths") or []
+            if str(item).strip()
+        }
+        if (
+            not source_changed_paths
+            or not source_allowed_paths
+            or not set(source_changed_paths).issubset(source_allowed_paths)
+        ):
+            return None
         return {
             "schema": "adaos.builder.automation_continuation_checkpoint.v1",
             "mode": "validate_preserved_candidate",
@@ -2919,6 +2997,7 @@ class BuilderAutomationService:
             "failure_id": str(source_failure.get("failure_id") or "").strip() or None,
             "trigger_failure_id": None,
             "reason": "publication_gate_validation_failure",
+            "source_changed_paths": source_changed_paths,
             "continuation_contract": continuation_contract,
             "created_at": _now_iso(),
         }
@@ -6034,6 +6113,12 @@ class BuilderAutomationService:
             repair_hints,
             kind=kind,
             object_id=project_id,
+        )
+        repair_hints = _repair_hints_with_continuation_paths(
+            repair_hints,
+            session.get("pending_continuation_checkpoint")
+            if isinstance(session.get("pending_continuation_checkpoint"), Mapping)
+            else None,
         )
         if is_dev_ticket_repair and not str(repair_hints.get("profile") or "").strip():
             repair_hints["profile"] = "project_batch"

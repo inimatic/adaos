@@ -2266,6 +2266,11 @@ def test_publication_gate_reuses_related_failed_task_candidate_across_sessions(
                 "realize_request": {
                     "target": {"type": "skill", "id": "demo_metrics_skill"},
                     "artifacts": {"continuation_contract": continuation_contract},
+                    "constraints": {
+                        "exact_changed_paths": [
+                            "skills/demo_metrics_skill/skill.yaml"
+                        ]
+                    },
                     "links": {
                         "development_ticket_id": "dticket.parent",
                         "development_ticket_history_ids": ["dticket.user", "dticket.parent"],
@@ -2292,6 +2297,11 @@ def test_publication_gate_reuses_related_failed_task_candidate_across_sessions(
         "_preserved_candidate_has_changes",
         lambda _run_root: True,
     )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda _run_root: ["skills/demo_metrics_skill/skill.yaml"],
+    )
     session = {
         "object_type": "skill",
         "object_id": "demo_metrics_skill",
@@ -2308,10 +2318,34 @@ def test_publication_gate_reuses_related_failed_task_candidate_across_sessions(
     assert checkpoint["source_task_id"] == source_task_id
     assert checkpoint["failure_id"] == "failure.validation"
     assert checkpoint["reason"] == "publication_gate_validation_failure"
+    assert checkpoint["source_changed_paths"] == [
+        "skills/demo_metrics_skill/skill.yaml"
+    ]
     session["links"]["development_ticket_gate_parent_ticket_ids"] = [
         "dticket.unrelated"
     ]
     assert service._trusted_publication_gate_continuation_checkpoint(session) is None
+
+
+def test_continuation_candidate_paths_expand_the_exact_repair_envelope() -> None:
+    merged = automation_module._repair_hints_with_continuation_paths(
+        {
+            "target_files": ["skills/demo/tests/test_manifest.py"],
+            "max_changed_files": 1,
+        },
+        {
+            "source_changed_paths": [
+                "skills/demo/skill.yaml",
+                "skills/demo/tests/test_manifest.py",
+            ]
+        },
+    )
+
+    assert merged["target_files"] == [
+        "skills/demo/tests/test_manifest.py",
+        "skills/demo/skill.yaml",
+    ]
+    assert merged["max_changed_files"] == 2
 
 
 def test_structured_repair_can_reuse_project_validation_candidate(
