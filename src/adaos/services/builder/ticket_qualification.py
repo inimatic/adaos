@@ -520,7 +520,18 @@ def prepare_repair_qualification(
         }
 
     target_files = [_text(item.get("workspace_path")) for item in selected]
-    target_refs = [f"file:{path}" for path in target_files]
+    component_ref = _text(
+        ticket.get("component_ref") or target_scope.get("component_ref")
+    )
+    target_refs = [
+        *(
+            [component_ref]
+            if component_ref.partition(":")[0]
+            in {"component", "modal", "panel", "view", "widget"}
+            else []
+        ),
+        *[f"file:{path}" for path in target_files],
+    ]
     acceptance_checks = [f"User-visible acceptance: {summary[:420]}"]
     test_paths = [
         _text(item.get("workspace_path"))

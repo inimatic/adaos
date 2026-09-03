@@ -100,12 +100,14 @@ def test_local_qualification_stops_when_language_does_not_resolve_source(tmp_pat
 
 def test_local_qualification_routes_public_sdk_usage_to_subnet_data(tmp_path: Path) -> None:
     source = _source_tree(tmp_path / "subscription_status_skill")
+    ticket = _ticket(
+        "В окне добавь расход Codex: сколько токенов использовано и осталось. "
+        "Данные обновляются через публичный SDK AdaOS."
+    )
+    ticket["component_ref"] = "modal:subscription_status_modal"
 
     result = prepare_repair_qualification(
-        _ticket(
-            "В окне добавь расход Codex: сколько токенов использовано и осталось. "
-            "Данные обновляются через публичный SDK AdaOS."
-        ),
+        ticket,
         development_source={"status": "source_available", "dev_source_path": str(source)},
         object_type="skill",
         object_id="subscription_status_skill",
@@ -115,6 +117,9 @@ def test_local_qualification_routes_public_sdk_usage_to_subnet_data(tmp_path: Pa
     assert set(result["concepts"]) >= {"data", "subnet", "ui"}
     assert result["builder_repair"]["profile"] == "subnet_data_integration"
     assert result["builder_repair"]["requires_root_mcp"] is True
+    assert result["builder_repair"]["target_refs"][0] == (
+        "modal:subscription_status_modal"
+    )
 
 
 def test_service_can_apply_high_confidence_local_qualification(
