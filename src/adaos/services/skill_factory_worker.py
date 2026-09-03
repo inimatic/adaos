@@ -1464,6 +1464,54 @@ def _selected_prompt_rule_capsules(
                 ],
             }
         )
+    if any(
+        marker in evidence
+        for marker in (
+            "llm",
+            "model call",
+            "prompt",
+            "response_job",
+            "codex",
+            "research",
+        )
+    ):
+        capsules.append(
+            {
+                "id": "adaos.skill.async_llm_job.v1",
+                "source": (
+                    "docs/guides/llm-skill-development.md"
+                    "#structured-llm-candidate-boundary"
+                ),
+                "rules": [
+                    "Submit long or Builder-like model work through the Root-accounted async LLM job SDK, persist its job_id, and resume by polling; use synchronous calls only for bounded short work.",
+                    "Validate model output against the admitted schema before applying it, and retain provider usage and failure evidence for Subscription accounting.",
+                    "Do not call model providers directly or introduce an unmetered fallback path.",
+                ],
+            }
+        )
+    if any(
+        marker in evidence
+        for marker in (
+            "member-aware",
+            "member_id",
+            "member status",
+            "subnet member",
+            "node identity",
+            "device identity",
+            "fanout",
+        )
+    ):
+        capsules.append(
+            {
+                "id": "adaos.skill.member_subnet.v1",
+                "source": "docs/guides/llm-skill-development.md#member-aware-skills",
+                "rules": [
+                    "Derive member and device identity from trusted event or routing metadata; never accept caller-selected ownership or hardcode the local node.",
+                    "Bound per-receiver payload and subnet fanout, and represent dormant, disconnected, partial, and stale member data explicitly.",
+                    "Coalesce high-frequency membership updates and keep handlers idempotent across reconnect and replay.",
+                ],
+            }
+        )
     return capsules
 
 

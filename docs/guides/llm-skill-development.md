@@ -1975,7 +1975,9 @@ cover:
 - data-route, receiver, projection, and causal-read ownership;
 - typed resource/provider storage and governed CRUD behavior;
 - activation, rehydrate, guarding, and observability;
-- localization, NLU, voice/Telegram semantics, and Pending Actions.
+- localization, NLU, voice/Telegram semantics, and Pending Actions;
+- Root-accounted asynchronous LLM jobs and schema-validated application;
+- member/subnet identity, bounded fanout, and reconnect-safe handling.
 
 Detailed UI recipes, examples, migration notes, rationale, and reference
 tables remain retrievable documentation. They enter a task only through an

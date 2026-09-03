@@ -1932,6 +1932,23 @@ def test_prompt_rule_capsules_are_selected_from_task_facets() -> None:
     ]
 
 
+def test_prompt_rule_capsules_select_async_llm_and_member_contracts() -> None:
+    capsules = worker_module._selected_prompt_rule_capsules(
+        target_type="skill",
+        repair_hints={
+            "profile": "subnet_data_integration",
+            "target_files": ["skills/demo/handlers/main.py"],
+            "target_refs": ["subnet member status", "response_job"],
+            "acceptance_checks": ["Root accounts model call tokens"],
+        },
+        context_packet={},
+    )
+
+    ids = [item["id"] for item in capsules]
+    assert "adaos.skill.async_llm_job.v1" in ids
+    assert "adaos.skill.member_subnet.v1" in ids
+
+
 def test_unqualified_dev_ticket_uses_bounded_repair_prompt(tmp_path: Path) -> None:
     worker = LocalSkillFactoryWorker(
         state_dir=tmp_path / "state",

@@ -539,6 +539,8 @@ Research Workbench.
 - `packet.json.prompt_rule_capsules` is the current deterministic compiler
   projection. Its rule text is compact execution policy; the full development
   guides remain retrievable documentation rather than permanent model input.
+  Long-running LLM and member/subnet work receive separate conditional
+  capsules; ordinary component repairs do not pay for those rules.
 - Development Signals and Dev Tickets provide change intent and lifecycle, not
   project memory storage.
 - Research Fabric owns Direction/Task/Compilation/ImplementationTrack
