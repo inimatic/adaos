@@ -254,6 +254,22 @@ shows status/category counts before full details. The projection is read-only;
 triage, comments, acceptance, rejection, and promotion remain explicit
 resource operations with role checks.
 
+Builder also exposes that projection as a project-scoped Development Feedback
+review view with text, stage, and category filters. It is a view over the same
+workspace authority, not a Builder-private store. Saved review filters,
+artifact opening, and promotion preview may extend the view without moving
+lifecycle authority into Builder.
+
+The trusted Skill Factory validator is a producer after the bounded repair
+budget is exhausted. It captures only recognized public-contract failures,
+including WebUI/tool closure, browser data routes, the SDK-only import policy,
+and admitted consumer operation ABI mismatches. A record contains the exact
+contract ref, operation and diagnostic codes when available, expected and
+observed behavior, test-report ref, Skill Factory task, and related Dev Ticket.
+Replaying one task is idempotent; recurrence in another task increments the
+same active observation and adds its evidence. Generic test failures remain in
+the Builder task and do not inflate this registry.
+
 This is an agent/developer review queue, not a second end-user ticket system.
 Its purpose is to preserve multi-sided evidence about AdaOS as a product for
 builders while keeping user-authored request state and Builder execution state

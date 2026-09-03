@@ -698,10 +698,16 @@ expected behavior, trace evidence, and optional links back to project tickets.
 Pre-Codex LLM and Codex observations now enter a separate workspace review
 registry and are visible through Resource Workbench, Root MCP, and the scoped
 Builder Context Inspector. Legacy Builder session feedback imports
-idempotently. Promotion remains an explicit human/policy operation. Validator
-application traces, replay/eval creation, richer rejection taxonomy,
-docs/example routing, the dedicated review view, and qualification metrics
-remain open.
+idempotently. Builder now has a project-scoped review tab over that same
+authority, with text, status, and category filters. Exhausted trusted-worker
+validation captures recognized WebUI/tool, data-route, SDK-only, and admitted
+operation ABI failures with exact task, report, contract, operation, expected,
+and observed refs. Replay of one task remains idempotent while recurrence in a
+different task aggregates evidence. Promotion remains an explicit human/policy
+operation. Runtime method-application traces, user rejection linkage,
+replay/eval creation, richer rejection taxonomy, docs/example routing, saved
+review filters, direct artifact opening, promotion preview, and qualification
+metrics remain open.
 
 ## Recommended First Slice
 

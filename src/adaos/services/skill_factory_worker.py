@@ -3538,6 +3538,7 @@ class LocalSkillFactoryWorker:
         runtime_dir = run_root / "runtime"
         agent_profile = dict((assignment.get("codex") or {}).get("agent_profile") or {})
         root_mcp: dict[str, Any] | None = None
+        failure_feedback_refs: list[str] = []
         for path in (input_dir, output_dir, runtime_dir):
             path.mkdir(parents=True, exist_ok=True)
         process_owner = self._current_process_owner()
@@ -3912,6 +3913,26 @@ class LocalSkillFactoryWorker:
                 )
             _write_json(output_dir / "test_report.json", test_report)
             if not test_report["ok"]:
+                try:
+                    validator_feedback = self._record_validator_development_feedback(
+                        assignment,
+                        test_report,
+                        report_ref=f"skill_factory:{task_id}:test_report",
+                    )
+                    failure_feedback_refs = [
+                        str(item.get("feedback_id") or "").strip()
+                        for item in validator_feedback
+                        if str(item.get("feedback_id") or "").strip()
+                    ]
+                    if failure_feedback_refs:
+                        test_report["development_feedback_refs"] = failure_feedback_refs
+                        _write_json(output_dir / "test_report.json", test_report)
+                except Exception:
+                    _log.warning(
+                        "validator development feedback capture failed task=%s",
+                        task_id,
+                        exc_info=True,
+                    )
                 raise RuntimeError("Generated project validation failed: " + "; ".join(test_report["errors"]))
 
             evidence_paths = dict((assignment.get("evidence") or {}).get("expected_paths") or {})
@@ -4028,13 +4049,24 @@ class LocalSkillFactoryWorker:
                 {"schema": LOCAL_SESSION_SCHEMA, "owner": process_owner, **failure},
             )
             try:
+                failure_report = {
+                    "task_id": task_id,
+                    "node_id": self.node_id,
+                    "message": failure["error"],
+                    "retryable": True,
+                }
+                if failure_feedback_refs:
+                    failure_report.update(
+                        {
+                            "failure_class": "validation_failed",
+                            "stage": "deterministic_validation",
+                            "details": {
+                                "development_feedback_refs": failure_feedback_refs,
+                            },
+                        }
+                    )
                 self.factory.fail_task(
-                    {
-                        "task_id": task_id,
-                        "node_id": self.node_id,
-                        "message": failure["error"],
-                        "retryable": True,
-                    }
+                    failure_report
                 )
             except Exception:
                 pass
@@ -4431,6 +4463,209 @@ class LocalSkillFactoryWorker:
                     ).hexdigest()
                 ),
                 actor=f"codex:{self.node_id}",
+                idempotent_replay=True,
+            )
+            records.append(result["feedback"])
+        return records
+
+    def _record_validator_development_feedback(
+        self,
+        assignment: Mapping[str, Any],
+        test_report: Mapping[str, Any],
+        *,
+        report_ref: str,
+    ) -> list[dict[str, Any]]:
+        """Capture exhausted public-contract failures as governed feedback."""
+
+        if bool(test_report.get("ok")):
+            return []
+        errors = [
+            str(item).strip()
+            for item in test_report.get("errors") or []
+            if str(item).strip()
+        ]
+        if not errors:
+            return []
+
+        rules = (
+            (
+                "sdk:skill.webui_tool_contract",
+                "validation_gap",
+                "public WebUI tool contract",
+                "Every public UI action resolves to a tool declared by the same skill manifest.",
+                lambda code, text: code.startswith("webui.action.")
+                or "webui tool contract" in text,
+            ),
+            (
+                "sdk:skill.data_routes",
+                "validation_gap",
+                "skill data-route contract",
+                "Every browser data route declares its exact source, receiver or projection, bounded budget, and read policy.",
+                lambda code, text: code.startswith("data_routes.")
+                or "data route validation" in text,
+            ),
+            (
+                "sdk:runtime.sdk_only",
+                "policy_block",
+                "public SDK import boundary",
+                "Project runtime code uses only the public adaos.sdk surface admitted to the task.",
+                lambda code, text: code.startswith("runtime.sdk_only")
+                or "sdk-only" in text
+                or "sdk_only" in text,
+            ),
+            (
+                "sdk:contract.operation",
+                "conflicting_contract",
+                "admitted operation contract",
+                "Provider declarations and tool schemas match the admitted consumer operation ABI.",
+                lambda code, text: "admitted operation" in text
+                or "admitted consumer abi" in text
+                or "provider contract" in text
+                or "implementation brief provider requirement" in text,
+            ),
+            (
+                "sdk:public_contract",
+                "ambiguous_contract",
+                "public SDK or API contract",
+                "The requested behavior is expressible through an unambiguous public SDK or API contract.",
+                lambda code, text: "public sdk" in text or "public api" in text,
+            ),
+        )
+        grouped: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+        for error in errors:
+            lowered = error.casefold()
+            code_match = re.search(r":\s*([a-z][a-z0-9_.-]+):\s", lowered)
+            code = code_match.group(1) if code_match else ""
+            for contract_ref, category, label, expected, predicate in rules:
+                if not predicate(code, lowered):
+                    continue
+                group = grouped.setdefault(
+                    (contract_ref, category, label, expected),
+                    {"errors": [], "codes": set(), "operations": set()},
+                )
+                group["errors"].append(error)
+                if code:
+                    group["codes"].add(code)
+                for pattern in (
+                    r"provider contract\s+([A-Za-z0-9_.-]+).*?operation\s+([A-Za-z0-9_.-]+)",
+                    r"contract\s+([A-Za-z0-9_.-]+)\.([A-Za-z0-9_.-]+)",
+                    r"tool\s+['\"]([^'\"]+)['\"]",
+                ):
+                    match = re.search(pattern, error, flags=re.IGNORECASE)
+                    if match:
+                        group["operations"].add(".".join(match.groups()))
+                        break
+                break
+        if not grouped:
+            return []
+
+        from adaos.services.development_feedback import DevelopmentFeedbackService
+
+        request = dict(assignment.get("realize_request") or {})
+        artifacts = dict(request.get("artifacts") or {})
+        repair_hints = (
+            dict(artifacts.get("repair_hints"))
+            if isinstance(artifacts.get("repair_hints"), Mapping)
+            else {}
+        )
+        target = dict(assignment.get("target") or {})
+        target_type = str(target.get("type") or "skill").strip().lower()
+        target_id = str(target.get("id") or "").strip()
+        task_id = str(assignment.get("task_id") or "").strip()
+        target_refs = list(
+            dict.fromkeys(
+                ref
+                for ref in (
+                    f"{target_type}:{target_id}" if target_id else "",
+                    *[
+                        str(value).strip()
+                        for value in repair_hints.get("target_refs") or []
+                        if str(value).strip()
+                    ],
+                )
+                if ":" in ref
+            )
+        )
+        ticket_id = ""
+        brief = str(artifacts.get("implementation_brief") or "").strip()
+        if brief:
+            try:
+                parsed_brief = json.loads(brief)
+                if isinstance(parsed_brief, Mapping):
+                    ticket_id = str(parsed_brief.get("ticket_id") or "").strip()
+            except (TypeError, ValueError):
+                pass
+        relations = [
+            {"type": "skill_factory_task", "id": task_id},
+            *([{"type": "dev_ticket", "id": ticket_id}] if ticket_id else []),
+        ]
+        service = DevelopmentFeedbackService(state_dir=self.state_dir)
+        records: list[dict[str, Any]] = []
+        for (contract_ref, category, label, expected), group in list(grouped.items())[:4]:
+            error_codes = sorted(group["codes"])
+            operation_ids = sorted(group["operations"])
+            observed = "\n".join(group["errors"][:12])[:12000]
+            result = service.capture(
+                source="validator",
+                category=category,
+                summary=(
+                    f"Builder could not satisfy the {label} for "
+                    f"{target_type} {target_id or '<unknown>'}."
+                ),
+                blocking=True,
+                confidence=1.0,
+                impact=["correctness", "reliability"],
+                target_refs=[*target_refs, contract_ref],
+                details=observed,
+                recommendation=(
+                    "Review the failed application trace before retrying. If the project "
+                    "cannot satisfy the contract through the admitted SDK/API, qualify and "
+                    "promote this observation to SDK Understanding or Core."
+                ),
+                evidence_refs=[
+                    {
+                        "type": "test",
+                        "ref": report_ref,
+                        "result": "failed",
+                        "error_codes": error_codes,
+                    },
+                    {
+                        "type": "skill_factory_task",
+                        "id": task_id,
+                        "node_id": self.node_id,
+                    },
+                ],
+                relation_refs=relations,
+                classification={
+                    "producer": "deterministic_validator",
+                    "stage": "deterministic_validation",
+                    "target_type": target_type,
+                    "target_id": target_id,
+                    "public_contract_ref": contract_ref,
+                    "operation_ids": operation_ids,
+                    "error_codes": error_codes,
+                    "expected_behavior": expected,
+                    "observed_behavior": observed,
+                    "validation_result": "failed",
+                    "task_id": task_id,
+                    "report_ref": report_ref,
+                },
+                dedup_key=(
+                    "validator-feedback:"
+                    + hashlib.sha256(
+                        json.dumps(
+                            {
+                                "target": f"{target_type}:{target_id}",
+                                "contract_ref": contract_ref,
+                                "error_codes": error_codes,
+                                "operations": operation_ids,
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ).encode("utf-8")
+                    ).hexdigest()
+                ),
+                actor=f"validator:{self.node_id}",
                 idempotent_replay=True,
             )
             records.append(result["feedback"])

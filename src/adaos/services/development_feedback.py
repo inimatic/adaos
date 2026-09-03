@@ -183,7 +183,18 @@ class DevelopmentFeedbackService:
             state = self._read()
             for record in state["records"].values():
                 if record.get("dedup_key") == key and record.get("status") in ACTIVE_STATUSES:
-                    if idempotent_replay:
+                    incoming_relations = _dedup_mappings(relation_refs)
+                    recorded_relation_keys = {
+                        json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
+                        for item in _dedup_mappings(record.get("relation_refs") or [])
+                    }
+                    incoming_relation_keys = {
+                        json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
+                        for item in incoming_relations
+                    }
+                    if idempotent_replay and incoming_relation_keys.issubset(
+                        recorded_relation_keys
+                    ):
                         return {
                             "ok": True,
                             "duplicate": True,
@@ -196,7 +207,7 @@ class DevelopmentFeedbackService:
                         [*(record.get("evidence_refs") or []), *evidence_refs]
                     )[:100]
                     record["relation_refs"] = _dedup_mappings(
-                        [*(record.get("relation_refs") or []), *relation_refs]
+                        [*(record.get("relation_refs") or []), *incoming_relations]
                     )[:100]
                     self._advance(record, actor=actor, kind="duplicate_observed")
                     event = self._event(state, record, "observed_again", actor)

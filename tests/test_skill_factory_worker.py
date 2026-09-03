@@ -2026,6 +2026,174 @@ def test_worker_records_codex_development_feedback_as_workspace_resource(
     }
 
 
+def test_worker_records_exhausted_public_contract_validation_feedback(
+    tmp_path: Path,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    assignment = {
+        "task_id": "task.validation-one",
+        "target": {"type": "skill", "id": "demo"},
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": json.dumps(
+                    {
+                        "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+                        "ticket_id": "dticket.demo",
+                    }
+                ),
+                "repair_hints": {
+                    "target_refs": ["project:demo_project", "modal:demo"]
+                },
+            }
+        },
+    }
+    report = {
+        "ok": False,
+        "status": "failed",
+        "checks": [],
+        "errors": [
+            "skills/demo/skill.yaml: webui.action.skill_tool_unknown: "
+            "tool 'refresh_metrics' is not declared (webui.json)",
+            "skills/demo/tests/test_other.py: assertion failed",
+        ],
+    }
+
+    first = worker._record_validator_development_feedback(
+        assignment,
+        report,
+        report_ref="skill_factory:task.validation-one:test_report",
+    )
+    replay = worker._record_validator_development_feedback(
+        assignment,
+        report,
+        report_ref="skill_factory:task.validation-one:test_report",
+    )
+    second_assignment = copy.deepcopy(assignment)
+    second_assignment["task_id"] = "task.validation-two"
+    second = worker._record_validator_development_feedback(
+        second_assignment,
+        report,
+        report_ref="skill_factory:task.validation-two:test_report",
+    )
+
+    assert len(first) == len(replay) == len(second) == 1
+    feedback = second[0]
+    assert feedback["feedback_id"] == first[0]["feedback_id"]
+    assert replay[0]["occurrence_count"] == 1
+    assert feedback["occurrence_count"] == 2
+    assert feedback["source"] == "validator"
+    assert feedback["category"] == "validation_gap"
+    assert feedback["target_refs"] == [
+        "skill:demo",
+        "project:demo_project",
+        "modal:demo",
+        "sdk:skill.webui_tool_contract",
+    ]
+    classification = feedback["classification"]
+    assert classification["public_contract_ref"] == "sdk:skill.webui_tool_contract"
+    assert classification["operation_ids"] == ["refresh_metrics"]
+    assert classification["error_codes"] == ["webui.action.skill_tool_unknown"]
+    assert classification["validation_result"] == "failed"
+    assert {item["id"] for item in feedback["relation_refs"]} == {
+        "task.validation-one",
+        "task.validation-two",
+        "dticket.demo",
+    }
+
+
+def test_worker_links_final_validator_feedback_to_failed_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    state_dir = tmp_path / "state"
+    dev_skills = tmp_path / "dev" / "skills"
+    skill = _core_created_skill_fixture(repo_root, dev_skills, "feedback_demo")
+    factory = SkillFactoryService(state_dir=state_dir)
+    submitted = factory.submit_realize_request(
+        {
+            "target": {"type": "skill", "id": "feedback_demo"},
+            "artifacts": {
+                "implementation_brief": json.dumps(
+                    {
+                        "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+                        "ticket_id": "dticket.feedback-demo",
+                    }
+                )
+            },
+            "repo": {"sparse_paths": ["skills/feedback_demo/"]},
+        }
+    )
+
+    def fake_codex(
+        *, workspace: Path, prompt: str, output_dir: Path  # noqa: ARG001
+    ) -> CodexRunResult:
+        handler = workspace / "skills" / "feedback_demo" / "handlers" / "main.py"
+        handler.write_text(
+            handler.read_text(encoding="utf-8") + "\n# candidate change\n",
+            encoding="utf-8",
+        )
+        return CodexRunResult(returncode=0, final_message="Implemented the change.")
+
+    worker = LocalSkillFactoryWorker(
+        state_dir=state_dir,
+        repo_root=repo_root,
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+        executor=fake_codex,
+        max_repair_attempts=0,
+    )
+    monkeypatch.setattr(
+        worker,
+        "_validate_workspace",
+        lambda assignment, workspace: {
+            "ok": False,
+            "status": "failed",
+            "checks": [],
+            "errors": [
+                "skills/feedback_demo/skill.yaml: data_routes.receiver_missing: "
+                "stream route must reference an exact receiver "
+                "(skill.yaml:data_routes[0].receiver)"
+            ],
+        },
+    )
+
+    result = worker.run_once()
+
+    assert result["ok"] is False
+    task = factory.read_task(submitted["task"]["task_id"])
+    failure = task["failure_history"][-1]
+    assert failure["failure_class"] == "validation_failed"
+    assert failure["stage"] == "deterministic_validation"
+    feedback_refs = failure["details"]["development_feedback_refs"]
+    assert len(feedback_refs) == 1
+    report = json.loads(
+        (
+            tmp_path
+            / "runs"
+            / submitted["task"]["task_id"]
+            / "output"
+            / "test_report.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert report["development_feedback_refs"] == feedback_refs
+    from adaos.services.development_feedback import DevelopmentFeedbackService
+
+    feedback = DevelopmentFeedbackService(state_dir=state_dir).get(feedback_refs[0])
+    assert feedback is not None
+    assert feedback["classification"]["public_contract_ref"] == "sdk:skill.data_routes"
+    assert feedback["ticket_refs"] == []
+    assert (skill / "handlers" / "main.py").read_text(encoding="utf-8").find(
+        "candidate change"
+    ) == -1
+
+
 def test_prompt_rule_capsules_select_async_llm_and_member_contracts() -> None:
     capsules = worker_module._selected_prompt_rule_capsules(
         target_type="skill",

@@ -85,6 +85,50 @@ def test_development_feedback_requires_acceptance_and_optimistic_revision(tmp_pa
         )
 
 
+def test_idempotent_feedback_replay_aggregates_distinct_task_observations(
+    tmp_path: Path,
+) -> None:
+    service = DevelopmentFeedbackService(state_dir=tmp_path)
+    common = {
+        "source": "validator",
+        "category": "validation_gap",
+        "summary": "The public tool contract remains unsatisfied.",
+        "target_refs": ["skill:demo", "sdk:skill.webui_tool_contract"],
+        "dedup_key": "validator:demo:webui",
+        "actor": "validator:test",
+        "idempotent_replay": True,
+    }
+
+    first = service.capture(
+        **common,
+        evidence_refs=[{"type": "test", "ref": "task.one:test_report"}],
+        relation_refs=[{"type": "skill_factory_task", "id": "task.one"}],
+    )["feedback"]
+    replay = service.capture(
+        **common,
+        evidence_refs=[{"type": "test", "ref": "task.one:test_report"}],
+        relation_refs=[{"type": "skill_factory_task", "id": "task.one"}],
+    )["feedback"]
+    second_task = service.capture(
+        **common,
+        evidence_refs=[{"type": "test", "ref": "task.two:test_report"}],
+        relation_refs=[{"type": "skill_factory_task", "id": "task.two"}],
+    )["feedback"]
+
+    assert replay["feedback_id"] == first["feedback_id"]
+    assert replay["occurrence_count"] == 1
+    assert second_task["feedback_id"] == first["feedback_id"]
+    assert second_task["occurrence_count"] == 2
+    assert {item["id"] for item in second_task["relation_refs"]} == {
+        "task.one",
+        "task.two",
+    }
+    assert {item["ref"] for item in second_task["evidence_refs"]} == {
+        "task.one:test_report",
+        "task.two:test_report",
+    }
+
+
 def test_legacy_builder_feedback_import_is_idempotent(tmp_path: Path) -> None:
     feedback_dir = tmp_path / "builder" / "development_sessions" / "session.demo" / "feedback"
     feedback_dir.mkdir(parents=True)
