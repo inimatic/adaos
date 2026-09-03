@@ -75,6 +75,45 @@ def test_autonomous_repair_brief_excludes_historical_builder_noise() -> None:
     ]
 
 
+def test_publication_gate_lineage_requires_authoritative_failed_task_evidence() -> None:
+    ticket = {
+        "source": "builder_publication_gate",
+        "component_ref": "skill:demo_metrics_skill",
+        "metadata": {
+            "producer": "builder_publication_gate",
+            "task_id": "task.failed-validation",
+            "related_ticket_ids": ["dticket.parent"],
+        },
+        "evidence_refs": [
+            {
+                "type": "test",
+                "task_id": "task.failed-validation",
+                "status": "failed",
+                "gate": "validation",
+            }
+        ],
+    }
+
+    lineage = development_tickets_module._trusted_publication_gate_lineage(
+        ticket,
+        target={"object_type": "skill", "object_id": "demo_metrics_skill"},
+    )
+
+    assert lineage == {
+        "development_ticket_source": "builder_publication_gate",
+        "development_ticket_gate_parent_task_id": "task.failed-validation",
+        "development_ticket_gate_parent_ticket_ids": ["dticket.parent"],
+        "development_ticket_gate": "validation",
+    }
+    assert (
+        development_tickets_module._trusted_publication_gate_lineage(
+            {**ticket, "source": "client_feedback"},
+            target={"object_type": "skill", "object_id": "demo_metrics_skill"},
+        )
+        == {}
+    )
+
+
 class _FakeBuilderAutomation:
     def __init__(self) -> None:
         self.calls: list[dict] = []

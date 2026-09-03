@@ -2250,6 +2250,70 @@ def test_project_validation_failure_preserves_candidate_for_structured_repair(
     assert checkpoint["reason"] == "deterministic_validation_failure"
 
 
+def test_publication_gate_reuses_related_failed_task_candidate_across_sessions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    source_task_id = "task.failed-publication-gate"
+    run_root = service.runs_root / source_task_id
+    (run_root / "workspace" / ".git").mkdir(parents=True)
+    (run_root / "input").mkdir(parents=True)
+    continuation_contract = automation_module._continuation_contract()
+    (run_root / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "target": {"type": "skill", "id": "demo_metrics_skill"},
+                    "artifacts": {"continuation_contract": continuation_contract},
+                    "links": {
+                        "development_ticket_id": "dticket.parent",
+                        "development_ticket_history_ids": ["dticket.user", "dticket.parent"],
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    service.factory = SimpleNamespace(
+        read_task=lambda _task_id: {
+            "task_id": source_task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.validation",
+                    "message": "Generated project validation failed: pytest.failed",
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda _run_root: True,
+    )
+    session = {
+        "object_type": "skill",
+        "object_id": "demo_metrics_skill",
+        "links": {
+            "development_ticket_source": "builder_publication_gate",
+            "development_ticket_gate_parent_task_id": source_task_id,
+            "development_ticket_gate_parent_ticket_ids": ["dticket.parent"],
+        },
+    }
+
+    checkpoint = service._trusted_publication_gate_continuation_checkpoint(session)
+
+    assert checkpoint is not None
+    assert checkpoint["source_task_id"] == source_task_id
+    assert checkpoint["failure_id"] == "failure.validation"
+    assert checkpoint["reason"] == "publication_gate_validation_failure"
+    session["links"]["development_ticket_gate_parent_ticket_ids"] = [
+        "dticket.unrelated"
+    ]
+    assert service._trusted_publication_gate_continuation_checkpoint(session) is None
+
+
 def test_structured_repair_can_reuse_project_validation_candidate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

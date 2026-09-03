@@ -2150,6 +2150,11 @@ class BuilderAutomationService:
                 iteration=0,
                 seed=str(session["created_at"]),
             )
+            gate_checkpoint = self._trusted_publication_gate_continuation_checkpoint(
+                session
+            )
+            if gate_checkpoint:
+                session["pending_continuation_checkpoint"] = gate_checkpoint
             self._capture_preview_binding(session)
             submitted = self._submit(session, iteration_instruction="")
             session["status"] = "queued"
@@ -2821,6 +2826,97 @@ class BuilderAutomationService:
         ):
             return checkpoint
         return None
+
+    def _trusted_publication_gate_continuation_checkpoint(
+        self,
+        session: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Recover a gate candidate across repair sessions without trusting user refs."""
+
+        links = session.get("links") if isinstance(session.get("links"), Mapping) else {}
+        if str(links.get("development_ticket_source") or "").strip() != "builder_publication_gate":
+            return None
+        source_task_id = str(
+            links.get("development_ticket_gate_parent_task_id") or ""
+        ).strip()
+        parent_ticket_ids = {
+            str(item).strip()
+            for item in links.get("development_ticket_gate_parent_ticket_ids") or []
+            if str(item).strip()
+        }
+        if not source_task_id or not parent_ticket_ids:
+            return None
+        try:
+            source_task = self.factory.read_task(source_task_id)
+        except (KeyError, RuntimeError):
+            return None
+        if str(source_task.get("status") or "").strip() != "failed":
+            return None
+        failures = [
+            dict(item)
+            for item in source_task.get("failure_history") or []
+            if isinstance(item, Mapping)
+        ]
+        source_failure = failures[-1] if failures else {}
+        if "Generated project validation failed:" not in str(
+            source_failure.get("message") or ""
+        ):
+            return None
+        run_root = Path(self.runs_root) / _safe_token(source_task_id)
+        if not (run_root / "workspace" / ".git").is_dir():
+            return None
+        assignment_path = run_root / "input" / "assignment.json"
+        try:
+            assignment = json.loads(assignment_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            return None
+        request = (
+            dict(assignment.get("realize_request") or {})
+            if isinstance(assignment, Mapping)
+            else {}
+        )
+        target = request.get("target") if isinstance(request.get("target"), Mapping) else {}
+        if not self._preview_target_matches_project(
+            {
+                "object_type": target.get("object_type") or target.get("type"),
+                "object_id": target.get("object_id") or target.get("id"),
+            },
+            object_type=str(session.get("object_type") or ""),
+            object_id=str(session.get("object_id") or ""),
+        ):
+            return None
+        source_links = request.get("links") if isinstance(request.get("links"), Mapping) else {}
+        source_ticket_ids = {
+            str(item).strip()
+            for item in [
+                source_links.get("development_ticket_id"),
+                *(source_links.get("development_ticket_ids") or []),
+                *(source_links.get("development_ticket_history_ids") or []),
+            ]
+            if str(item or "").strip()
+        }
+        if not source_ticket_ids.intersection(parent_ticket_ids):
+            return None
+        artifacts = (
+            dict(request.get("artifacts") or {})
+            if isinstance(request.get("artifacts"), Mapping)
+            else {}
+        )
+        continuation_contract = _continuation_contract()
+        if artifacts.get("continuation_contract") != continuation_contract:
+            return None
+        if not _preserved_candidate_has_changes(run_root):
+            return None
+        return {
+            "schema": "adaos.builder.automation_continuation_checkpoint.v1",
+            "mode": "validate_preserved_candidate",
+            "source_task_id": source_task_id,
+            "failure_id": str(source_failure.get("failure_id") or "").strip() or None,
+            "trigger_failure_id": None,
+            "reason": "publication_gate_validation_failure",
+            "continuation_contract": continuation_contract,
+            "created_at": _now_iso(),
+        }
 
     def submit_turn(
         self,

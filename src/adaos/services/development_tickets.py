@@ -500,6 +500,66 @@ def _automation_target_from_ticket(ticket: Mapping[str, Any]) -> dict[str, str]:
     raise ValueError("Dev Ticket target must resolve to a skill or scenario before autonomous repair")
 
 
+def _trusted_publication_gate_lineage(
+    ticket: Mapping[str, Any],
+    *,
+    target: Mapping[str, str],
+) -> dict[str, Any]:
+    """Project a failed Builder task only from an authoritative gate ticket."""
+
+    metadata = _mapping(ticket.get("metadata"))
+    if (
+        _text(ticket.get("source")) != "builder_publication_gate"
+        or _text(metadata.get("producer")) != "builder_publication_gate"
+    ):
+        return {}
+    object_type = _text(target.get("object_type")).lower().rstrip("s")
+    object_id = _text(target.get("object_id"))
+    component_ref = f"{object_type}:{object_id}"
+    if _text(ticket.get("component_ref")) != component_ref:
+        return {}
+    task_id = _text(metadata.get("task_id"))
+    if not task_id:
+        return {}
+    matching_evidence = next(
+        (
+            item
+            for item in _sequence_of_mappings(ticket.get("evidence_refs") or [])
+            if _text(item.get("task_id")) == task_id
+            and _text(item.get("status")).lower() == "failed"
+            and _text(item.get("gate")).lower()
+            in {"test", "tests", "validation", "consumer_acceptance"}
+        ),
+        None,
+    )
+    if matching_evidence is None:
+        return {}
+    related_ticket_ids = list(
+        dict.fromkeys(
+            [
+                *[
+                    _text(item)
+                    for item in metadata.get("related_ticket_ids") or []
+                    if _text(item)
+                ],
+                *[
+                    _text(item.get("ticket_id"))
+                    for item in _sequence_of_mappings(ticket.get("relation_refs") or [])
+                    if _text(item.get("ticket_id"))
+                ],
+            ]
+        )
+    )
+    if not related_ticket_ids:
+        return {}
+    return {
+        "development_ticket_source": "builder_publication_gate",
+        "development_ticket_gate_parent_task_id": task_id,
+        "development_ticket_gate_parent_ticket_ids": related_ticket_ids,
+        "development_ticket_gate": _text(matching_evidence.get("gate")).lower(),
+    }
+
+
 def _development_source_scope(
     ticket: Mapping[str, Any],
     target: Mapping[str, str],
@@ -2117,6 +2177,10 @@ class DevelopmentTicketService:
                 materialization
             ),
             "source_precondition_validation": source_preconditions,
+            **_trusted_publication_gate_lineage(
+                handoff["ticket"],
+                target=target,
+            ),
         }
         resume_failed = getattr(automation_service, "resume_failed_dev_ticket_repair", None)
         resume_waiting_for_core = getattr(
