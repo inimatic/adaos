@@ -15,10 +15,46 @@ from adaos.sdk.web import (
     skill_view,
     validate_webui,
 )
-from adaos.services.webui_contract import validate_webui_contract
+from adaos.services.webui_contract import (
+    validate_skill_tool_references,
+    validate_webui_contract,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_same_skill_tool_reference_validation_covers_actions_and_data_sources() -> None:
+    issues = validate_skill_tool_references(
+        {
+            "widgets": [
+                {
+                    "id": "items",
+                    "dataSource": {
+                        "kind": "skill",
+                        "name": "demo_skill.list_items",
+                    },
+                    "actions": [
+                        {
+                            "type": "callSkill",
+                            "target": "demo_skill:refresh_items",
+                        },
+                        {
+                            "type": "callSkill",
+                            "target": "other_skill.refresh_items",
+                        },
+                    ],
+                }
+            ]
+        },
+        skill_id="demo_skill",
+        declared_tools=[],
+    )
+
+    assert [issue.code for issue in issues] == [
+        "webui.data_source.skill_tool_unknown",
+        "webui.action.skill_tool_unknown"
+    ]
 
 
 def test_sdk_helpers_build_valid_addressed_modal_contract() -> None:

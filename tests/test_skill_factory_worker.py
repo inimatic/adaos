@@ -1885,6 +1885,8 @@ def test_bounded_repair_prompt_requires_targeted_reads(
     assert "Never use `rg -A`, `rg -B`, or `rg -C`" in prompt
     assert "at most 400 source lines before the first edit" in prompt
     assert "Do not run tests or validation commands in the Codex turn" in prompt
+    assert "same-skill WebUI `callSkill`" in prompt
+    assert "matching `skill.yaml` tool declaration" in prompt
     assert "Task-scoped Root MCP route" in prompt
     assert "hub:sn_demo" in prompt
     assert "Never substitute a skill, scenario, project, or component ID" in prompt
@@ -3980,6 +3982,54 @@ def test_worker_treats_browser_data_route_warnings_as_strict_errors(
 
     assert any("data_routes.budget_missing" in error for error in errors)
     assert any("data_routes.read_policy_missing" in error for error in errors)
+    assert checks == []
+
+
+def test_worker_rejects_same_skill_webui_action_for_undeclared_tool(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    skill_root = workspace / "skills" / "demo"
+    skill_root.mkdir(parents=True)
+    (skill_root / "skill.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "demo",
+                "tools": [{"name": "ping", "input_schema": {"type": "object"}}],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (skill_root / "webui.json").write_text(
+        json.dumps(
+            {
+                "widgets": [
+                    {
+                        "id": "refresh",
+                        "type": "ui.list",
+                        "actions": [
+                            {
+                                "on": "click:refresh",
+                                "type": "callSkill",
+                                "target": "demo.refresh_usage",
+                                "params": {},
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_skill_webui_contracts(
+        workspace, checks, errors
+    )
+
+    assert any("webui.action.skill_tool_unknown" in error for error in errors)
     assert checks == []
 
 

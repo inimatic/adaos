@@ -4503,6 +4503,8 @@ This is a bounded Dev Ticket repair, not a full project implementation pass. Tre
 
 Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.json`, `webui.json`, `scenario.yaml`, or `skill.yaml` unless the ticket explicitly requires that manifest change. It is acceptable for a Dev Ticket repair to leave manifests untouched when the fix is in handlers, tests, resource data, comments, or scoped UI text. If the requested result needs core/API/SDK support that is unavailable to this project, do not edit source and do not patch around the limitation. Return exactly one machine-readable proposal in the final response so the trusted orchestrator can create and link the governed Core Dev Ticket. Use this bounded form (one envelope can contain several independently actionable core tasks):
 
+Treat every same-skill WebUI `callSkill` or skill `dataSource` target as a public manifest contract. When a repair adds, renames, or removes its `@tool` handler, update the matching `skill.yaml` tool declaration in the same patch, including its `entry`, `input_schema`, and `output_schema`. Browser-read tools also require a matching bounded `data_route`; never leave a UI target available only through Python discovery.
+
 ```adaos-development-escalation
 {"schema":"adaos.development_escalations.v1","items":[{"kind":"core_capability_request","summary":"...","component_ref":"core:sdk.<area>","desired_contract":"...","impact":"blocker","motivation":"...","observed_limitation":"...","rejected_workarounds":[{"approach":"...","reason":"..."}]}]}
 ```
@@ -5063,6 +5065,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             errors,
             changed_paths=changed_paths,
         )
+        self._validate_skill_webui_contracts(workspace, checks, errors)
         self._validate_skill_data_routes(workspace, checks, errors)
         self._validate_skill_dependency_isolation(workspace, checks, errors)
         self._validate_brief_contract_requirements(assignment, workspace, checks, errors)
@@ -5720,6 +5723,56 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                         "kind": "package_test_context_independence",
                         "path": relative,
                         "ok": True,
+                    }
+                )
+
+    @staticmethod
+    def _validate_skill_webui_contracts(
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        """Reject UI actions that cannot resolve through the public skill manifest."""
+
+        from adaos.services.skill.validation import validate_webui_file_contract
+
+        for path in sorted(workspace.glob("skills/*/skill.yaml")):
+            relative = path.relative_to(workspace).as_posix()
+            try:
+                manifest = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except Exception as exc:
+                errors.append(
+                    f"{relative}: WebUI tool contract validation failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                continue
+            if not isinstance(manifest, Mapping):
+                errors.append(f"{relative}: skill manifest must be an object")
+                continue
+            skill_id = str(manifest.get("name") or path.parent.name).strip()
+            declared_tools = [
+                str(item.get("name") or "").strip()
+                for item in manifest.get("tools") or []
+                if isinstance(item, Mapping) and str(item.get("name") or "").strip()
+            ]
+            issues = validate_webui_file_contract(
+                path.parent,
+                skill_name=skill_id,
+                declared_tools=declared_tools,
+            )
+            blocking = [issue for issue in issues if issue.level == "error"]
+            if blocking:
+                errors.extend(
+                    f"{relative}: {issue.code}: {issue.message} ({issue.where})"
+                    for issue in blocking
+                )
+            else:
+                checks.append(
+                    {
+                        "kind": "skill.webui_tool_contract.strict",
+                        "path": relative,
+                        "ok": True,
+                        "warnings": len(issues),
                     }
                 )
 

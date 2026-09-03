@@ -878,6 +878,89 @@ def ping():
     assert "data_routes.tool_missing" in {issue.code for issue in report.issues}
 
 
+def test_skill_validation_rejects_same_skill_webui_action_for_undeclared_tool(
+    tmp_path: Path,
+) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+""",
+        extra_files={
+            "webui.json": """
+{
+  "widgets": [
+    {
+      "id": "refresh",
+      "type": "ui.list",
+      "actions": [
+        {
+          "on": "click:refresh",
+          "type": "callSkill",
+          "target": "demo_skill.refresh_usage",
+          "params": {}
+        }
+      ]
+    }
+  ]
+}
+"""
+        },
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir)
+
+    assert report.ok is False
+    assert "webui.action.skill_tool_unknown" in {
+        issue.code for issue in report.issues
+    }
+
+
+def test_skill_validation_accepts_same_skill_webui_action_for_declared_tool(
+    tmp_path: Path,
+) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+""",
+        extra_files={
+            "webui.json": """
+{
+  "widgets": [
+    {
+      "id": "refresh",
+      "type": "ui.list",
+      "actions": [
+        {
+          "on": "click:refresh",
+          "type": "callSkill",
+          "target": "demo_skill.ping",
+          "params": {}
+        }
+      ]
+    }
+  ]
+}
+"""
+        },
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir)
+
+    assert "webui.action.skill_tool_unknown" not in {
+        issue.code for issue in report.issues
+    }
+
+
 def test_skill_validation_accepts_bounded_causal_tool_read(tmp_path: Path) -> None:
     skill_dir = _write_skill(
         tmp_path,

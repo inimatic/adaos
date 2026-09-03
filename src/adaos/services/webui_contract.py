@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 import json
 import logging
 import re
@@ -142,6 +142,16 @@ _DIAGNOSTIC_CATALOG: dict[str, dict[str, str]] = {
         "owner": "skill",
         "remediation": "Pass all required route params in navigateModal.params.params.",
     },
+    "webui.action.skill_tool_unknown": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Declare the same-skill callSkill target in skill.yaml or change the target.",
+    },
+    "webui.data_source.skill_tool_unknown": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Declare the same-skill dataSource target in skill.yaml or change the target.",
+    },
 }
 
 
@@ -191,6 +201,59 @@ def validate_webui_contract(
         source=source,
         default_skill=declared_skill,
     )
+
+
+def validate_skill_tool_references(
+    webui: Mapping[str, Any] | None,
+    *,
+    skill_id: str,
+    declared_tools: Iterable[str],
+    source: str = "webui.json",
+) -> list[WebUiContractIssue]:
+    """Validate same-skill WebUI references against the public tool manifest."""
+
+    raw = _mapping(webui)
+    skill = _clean_token(skill_id)
+    if not raw or not skill:
+        return []
+    tools = {
+        str(item).strip()
+        for item in declared_tools
+        if str(item or "").strip()
+    }
+    issues: list[WebUiContractIssue] = []
+    for path, item in _walk_mappings(raw):
+        data_source = item.get("dataSource")
+        if isinstance(data_source, Mapping) and str(data_source.get("kind") or "").strip() == "skill":
+            target = str(data_source.get("name") or "").strip()
+            tool_name = _same_skill_tool_name(target, skill)
+            if tool_name and tool_name not in tools:
+                issues.append(
+                    _issue(
+                        "error",
+                        "webui.data_source.skill_tool_unknown",
+                        f"skill dataSource references undeclared tool '{target}'.",
+                        f"{source}:{path}.dataSource",
+                        skill_id=skill,
+                        source=source,
+                    )
+                )
+
+        if str(item.get("type") or "").strip() == "callSkill":
+            target = str(item.get("target") or "").strip()
+            tool_name = _same_skill_tool_name(target, skill)
+            if tool_name and tool_name not in tools:
+                issues.append(
+                    _issue(
+                        "error",
+                        "webui.action.skill_tool_unknown",
+                        f"callSkill references undeclared tool '{target}'.",
+                        f"{source}:{path}",
+                        skill_id=skill,
+                        source=source,
+                    )
+                )
+    return issues
 
 
 def validate_application_ui_contract(
@@ -934,6 +997,27 @@ def _issue(
 
 def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _walk_mappings(
+    value: Any,
+    path: str = "$",
+) -> Iterable[tuple[str, Mapping[str, Any]]]:
+    if isinstance(value, Mapping):
+        yield path, value
+        for key, nested in value.items():
+            yield from _walk_mappings(nested, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            yield from _walk_mappings(nested, f"{path}[{index}]")
+
+
+def _same_skill_tool_name(target: str, skill_id: str) -> str | None:
+    for separator in (".", ":"):
+        prefix = f"{skill_id}{separator}"
+        if target.startswith(prefix):
+            return target[len(prefix) :].strip() or None
+    return None
 
 
 def _list(value: Any) -> list[Any]:

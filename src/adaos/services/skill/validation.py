@@ -12,7 +12,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import yaml
 from jsonschema import Draft202012Validator, ValidationError
@@ -20,7 +20,7 @@ from jsonschema import Draft202012Validator, ValidationError
 from adaos.domain.personalization_access import CAPABILITY_VOCABULARY, validate_capability
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.conversational_pipeline import compile_conversational_package
-from adaos.services.webui_contract import validate_webui_contract
+from adaos.services.webui_contract import validate_skill_tool_references, validate_webui_contract
 from adaos.services.workflow_artifacts import WorkflowArtifactError, load_manifest_bound_workflow
 from adaos.services.workflow_registry import (
     WorkflowAdapterRegistryError,
@@ -190,7 +190,12 @@ def _read_yaml(path: Path) -> Dict[str, Any]:
         raise RuntimeError(f"failed to read yaml: {e}")
 
 
-def validate_webui_file_contract(skill_dir: Path, *, skill_name: str | None = None) -> List[Issue]:
+def validate_webui_file_contract(
+    skill_dir: Path,
+    *,
+    skill_name: str | None = None,
+    declared_tools: Iterable[str] | None = None,
+) -> List[Issue]:
     """Validate only webui.json schema and UI addressing/domain contract."""
 
     issues: List[Issue] = []
@@ -205,6 +210,14 @@ def validate_webui_file_contract(skill_dir: Path, *, skill_name: str | None = No
         Draft202012Validator(_load_webui_schema()).validate(raw)
         for issue in validate_webui_contract(raw, skill_id=skill_name, source="webui.json"):
             issues.append(Issue(issue.level, issue.code, issue.message, issue.where))
+        if declared_tools is not None and skill_name:
+            for issue in validate_skill_tool_references(
+                raw,
+                skill_id=skill_name,
+                declared_tools=declared_tools,
+                source="webui.json",
+            ):
+                issues.append(Issue(issue.level, issue.code, issue.message, issue.where))
     except ValidationError as e:
         issues.append(Issue("error", "webui.schema.invalid", f"webui.json schema violation: {e.message}", "webui.json"))
     except Exception as e:
@@ -281,7 +294,13 @@ def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
 
     # webui.json (optional): validate declarative WebUI contributions and
     # cross-link the public skill interface with modal routes/actions.
-    issues.extend(validate_webui_file_contract(skill_dir, skill_name=str(data.get("name") or "")))
+    issues.extend(
+        validate_webui_file_contract(
+            skill_dir,
+            skill_name=str(data.get("name") or ""),
+            declared_tools=names,
+        )
+    )
     try:
         workflow = load_manifest_bound_workflow(
             skill_dir,
