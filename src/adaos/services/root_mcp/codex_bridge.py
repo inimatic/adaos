@@ -313,16 +313,18 @@ def _tool_text(
     *,
     error: bool = False,
     model_text_format: str = "json",
+    model_payload: Any | None = None,
 ) -> dict[str, Any]:
     output_format = str(model_text_format or "json").strip().lower()
     if output_format not in _MODEL_TEXT_FORMATS:
         raise ValueError(f"unsupported model_text_format: {output_format}")
     canonical_text = _json_text(payload)
+    projected_payload = payload if model_payload is None else model_payload
     text = {
-        "json": canonical_text,
-        "min_json": _min_json_text(payload),
-        "jsonl": _jsonl_text(payload),
-        "toon": _toon_text(payload),
+        "json": _json_text(projected_payload),
+        "min_json": _min_json_text(projected_payload),
+        "jsonl": _jsonl_text(projected_payload),
+        "toon": _toon_text(projected_payload),
     }[output_format]
     response = {
         "content": [{"type": "text", "text": text}],
@@ -340,6 +342,15 @@ def _tool_text(
     if error:
         response["isError"] = True
     return response
+
+
+def _descriptor_model_payload(payload: Mapping[str, Any], key: str) -> dict[str, Any]:
+    """Keep the canonical Root response but expose only the useful model slice."""
+
+    response = payload.get("response") if isinstance(payload.get("response"), Mapping) else {}
+    result = response.get("result") if isinstance(response.get("result"), Mapping) else {}
+    selected = result.get(key) if key in result else payload.get(key)
+    return {key: selected} if selected is not None else dict(payload)
 
 
 class CodexRootMcpBridge:
@@ -715,8 +726,8 @@ class CodexRootMcpBridge:
                         "limit": {
                             "type": "integer",
                             "minimum": 1,
-                            "maximum": 12 if self.profile.task_id else 64,
-                            "default": 8 if self.profile.task_id else 12,
+                            "maximum": 6 if self.profile.task_id else 64,
+                            "default": 4 if self.profile.task_id else 12,
                         },
                     },
                     "additionalProperties": False,
@@ -1531,32 +1542,44 @@ class CodexRootMcpBridge:
                 raise ValueError("descriptor search query is required")
             raw_descriptor_ids = args.get("descriptor_ids")
             raw_kinds = args.get("kinds")
-            return _tool_text(
-                client.search_descriptors(
-                    query,
-                    descriptor_ids=_normalize_unique(
-                        raw_descriptor_ids if isinstance(raw_descriptor_ids, list) else None
-                    ),
-                    kinds=_normalize_unique(raw_kinds if isinstance(raw_kinds, list) else None),
-                    limit=max(
-                        1,
-                        min(
-                            int(args.get("limit") or (8 if task_scoped else 12)),
-                            12 if task_scoped else 64,
-                        ),
+            payload = client.search_descriptors(
+                query,
+                descriptor_ids=_normalize_unique(
+                    raw_descriptor_ids if isinstance(raw_descriptor_ids, list) else None
+                ),
+                kinds=_normalize_unique(raw_kinds if isinstance(raw_kinds, list) else None),
+                limit=max(
+                    1,
+                    min(
+                        int(args.get("limit") or (4 if task_scoped else 12)),
+                        6 if task_scoped else 64,
                     ),
                 ),
+            )
+            return _tool_text(
+                payload,
                 model_text_format="min_json" if task_scoped else model_text_format,
+                model_payload=(
+                    _descriptor_model_payload(payload, "search")
+                    if task_scoped
+                    else None
+                ),
             )
         if tool == "get_descriptor_item":
             task_scoped = bool(self.profile.task_id)
+            payload = client.get_descriptor_item(
+                str(args.get("descriptor_id") or ""),
+                str(args.get("item_id") or ""),
+                level="std" if task_scoped else str(args.get("level") or "std"),
+            )
             return _tool_text(
-                client.get_descriptor_item(
-                    str(args.get("descriptor_id") or ""),
-                    str(args.get("item_id") or ""),
-                    level="std" if task_scoped else str(args.get("level") or "std"),
-                ),
+                payload,
                 model_text_format="min_json" if task_scoped else model_text_format,
+                model_payload=(
+                    _descriptor_model_payload(payload, "descriptor_item")
+                    if task_scoped
+                    else None
+                ),
             )
         if tool == "get_template_catalog":
             return _tool_text(client.get_adaos_dev_template_catalog())

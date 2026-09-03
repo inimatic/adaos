@@ -52,7 +52,7 @@ from adaos.services.workflow_artifacts import (
 )
 
 
-RUNNER_VERSION = "adaos-local-codex-worker/0.9.0"
+RUNNER_VERSION = "adaos-local-codex-worker/0.10.0"
 PACKET_SCHEMA = "adaos.skill_factory.codex_packet.v1"
 LOCAL_SESSION_SCHEMA = "adaos.skill_factory.local_run.v1"
 _log = logging.getLogger("adaos.skill_factory.local_worker")
@@ -77,6 +77,10 @@ BOUNDED_REPAIR_COMMAND_OUTPUT_BYTES = 8 * 1024
 BOUNDED_REPAIR_COMMAND_OUTPUT_LINES = 120
 BOUNDED_REPAIR_DISCOVERY_LINES = 400
 BOUNDED_REPAIR_TARGET_CONTEXT_BYTES = 48 * 1024
+DESCRIPTOR_WORKING_SET_QUERY_CHARS = 1600
+DESCRIPTOR_WORKING_SET_SEARCH_LIMIT = 4
+DESCRIPTOR_WORKING_SET_DETAIL_LIMIT = 3
+DESCRIPTOR_WORKING_SET_MAX_BYTES = 32 * 1024
 STRUCTURED_EDIT_SCHEMA = "adaos.builder.structured_edit_set.v1"
 
 
@@ -359,6 +363,205 @@ def _mcp_result_succeeded(result: Mapping[str, Any]) -> bool:
         }:
             return False
     return True
+
+
+def _mcp_structured_payload(result: Mapping[str, Any]) -> dict[str, Any]:
+    structured = (
+        result.get("structuredContent")
+        if isinstance(result.get("structuredContent"), Mapping)
+        else result.get("structured_content")
+        if isinstance(result.get("structured_content"), Mapping)
+        else {}
+    )
+    response = structured.get("response") if isinstance(structured, Mapping) else None
+    response_result = response.get("result") if isinstance(response, Mapping) else None
+    return dict(response_result) if isinstance(response_result, Mapping) else dict(structured)
+
+
+def _call_task_root_mcp_tool(
+    *,
+    assignment: Mapping[str, Any],
+    root_mcp: Mapping[str, Any] | None,
+    tool: str,
+    arguments: Mapping[str, Any],
+    request_suffix: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    profile = dict(root_mcp or {})
+    if not profile or profile.get("enabled") is False:
+        raise ValueError("task-scoped Root MCP route is unavailable")
+    url = str(profile.get("url") or "").strip()
+    access_token = str(profile.get("_bearer_token_value") or "").strip()
+    if not url or not access_token:
+        raise ValueError("task-scoped Root MCP route is not authenticated")
+    enabled_tools = {
+        str(item).strip()
+        for item in profile.get("enabled_tools") or []
+        if str(item).strip()
+    }
+    if enabled_tools and tool not in enabled_tools:
+        raise ValueError(f"task-scoped Root MCP policy does not admit {tool}")
+    task_id = str(assignment.get("task_id") or "").strip()
+    try:
+        response = httpx.post(
+            url,
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={
+                "jsonrpc": "2.0",
+                "id": f"builder-{request_suffix}-{_safe_token(task_id)}",
+                "method": "tools/call",
+                "params": {"name": tool, "arguments": dict(arguments)},
+            },
+            timeout=max(1, min(int(profile.get("tool_timeout_sec") or 30), 60)),
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(
+            f"task-scoped Root MCP call failed for {tool}: {type(exc).__name__}"
+        ) from exc
+    if not isinstance(payload, Mapping) or payload.get("error"):
+        raise ValueError(f"task-scoped Root MCP call failed for {tool}")
+    result = payload.get("result") if isinstance(payload.get("result"), Mapping) else {}
+    if not result or not _mcp_result_succeeded(result):
+        raise ValueError(f"task-scoped Root MCP call failed for {tool}")
+    structured = _mcp_structured_payload(result)
+    if not structured:
+        raise ValueError(f"task-scoped Root MCP returned no structured result for {tool}")
+    return structured, dict(result)
+
+
+def _descriptor_working_set_query(assignment: Mapping[str, Any]) -> str:
+    request = assignment.get("realize_request")
+    request = dict(request) if isinstance(request, Mapping) else {}
+    artifacts = request.get("artifacts")
+    artifacts = dict(artifacts) if isinstance(artifacts, Mapping) else {}
+    hints = artifacts.get("repair_hints")
+    hints = dict(hints) if isinstance(hints, Mapping) else {}
+    checks = hints.get("acceptance_checks")
+    checks = checks if isinstance(checks, Sequence) and not isinstance(checks, str) else []
+    values = [hints.get("change_summary"), *checks]
+    query = "\n".join(str(item).strip() for item in values if str(item or "").strip())
+    return query[:DESCRIPTOR_WORKING_SET_QUERY_CHARS]
+
+
+def _task_mcp_descriptor_working_set(
+    *,
+    assignment: Mapping[str, Any],
+    root_mcp: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Prefetch a bounded descriptor slice before starting the expensive Codex turn."""
+
+    if not _root_mcp_required(assignment):
+        return None
+    profile = dict(root_mcp or {})
+    enabled = {
+        str(item).strip()
+        for item in profile.get("enabled_tools") or []
+        if str(item).strip()
+    }
+    if not {"search_descriptors", "get_descriptor_item"}.issubset(enabled):
+        return None
+    query = _descriptor_working_set_query(assignment)
+    if not query:
+        return None
+    search_payload, search_result = _call_task_root_mcp_tool(
+        assignment=assignment,
+        root_mcp=profile,
+        tool="search_descriptors",
+        arguments={
+            "query": query,
+            "descriptor_ids": ["sdk_metadata", "architecture_catalog"],
+            "limit": DESCRIPTOR_WORKING_SET_SEARCH_LIMIT,
+            "model_text_format": "min_json",
+        },
+        request_suffix="descriptor-search",
+    )
+    search = search_payload.get("search")
+    if not isinstance(search, Mapping):
+        raise ValueError("task-scoped descriptor search returned no search projection")
+    headers = [dict(item) for item in search.get("items") or [] if isinstance(item, Mapping)]
+    details: list[dict[str, Any]] = []
+    call_digests = [
+        {
+            "tool": "search_descriptors",
+            "result_digest": "sha256:"
+            + hashlib.sha256(
+                json.dumps(search_result, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            ).hexdigest(),
+        }
+    ]
+    for index, header in enumerate(headers[:DESCRIPTOR_WORKING_SET_DETAIL_LIMIT]):
+        descriptor_id = str(header.get("descriptor_id") or "").strip()
+        item_id = str(header.get("item_id") or "").strip()
+        if not descriptor_id or not item_id:
+            continue
+        detail_payload, detail_result = _call_task_root_mcp_tool(
+            assignment=assignment,
+            root_mcp=profile,
+            tool="get_descriptor_item",
+            arguments={
+                "descriptor_id": descriptor_id,
+                "item_id": item_id,
+                "level": "std",
+                "model_text_format": "min_json",
+            },
+            request_suffix=f"descriptor-detail-{index + 1}",
+        )
+        detail = detail_payload.get("descriptor_item")
+        if isinstance(detail, Mapping):
+            candidate_details = [*details, dict(detail)]
+            candidate_size = len(
+                json.dumps(
+                    {"headers": headers, "details": candidate_details},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            if candidate_size <= DESCRIPTOR_WORKING_SET_MAX_BYTES:
+                details = candidate_details
+        call_digests.append(
+            {
+                "tool": "get_descriptor_item",
+                "descriptor_id": descriptor_id,
+                "item_id": item_id,
+                "result_digest": "sha256:"
+                + hashlib.sha256(
+                    json.dumps(
+                        detail_result,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest(),
+            }
+        )
+    task_id = str(assignment.get("task_id") or "").strip()
+    working_set = {
+        "schema": "adaos.builder.descriptor_working_set.v1",
+        "query_digest": search.get("query_digest"),
+        "headers": headers,
+        "details": details,
+        "evidence": {
+            "schema": "adaos.skill_factory.root_mcp_evidence.v1",
+            "status": "passed",
+            "source": "worker_descriptor_prefetch",
+            "server": str(profile.get("server_name") or "adaos_task_root").strip(),
+            "task_id": task_id,
+            "lease_id": str(profile.get("lease_id") or "").strip() or None,
+            "bound_target_id": str(
+                profile.get("bound_target_id") or profile.get("target_id") or ""
+            ).strip()
+            or None,
+            "calls": call_digests,
+            "recorded_at": _now_iso(),
+        },
+    }
+    encoded = json.dumps(working_set, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    working_set["digest"] = "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    return working_set
 
 
 def _codex_jsonl_root_mcp_evidence(
@@ -1611,7 +1814,9 @@ def _root_mcp_profile_from_assignment(
         if explicit_tools:
             scoped_tool_set = set(scoped_tools)
             admitted_tools = [
-                tool for tool in explicit_tools if tool in scoped_tool_set
+                tool
+                for tool in explicit_tools
+                if tool in scoped_tool_set and tool != "get_sdk_metadata"
             ]
             if "get_sdk_metadata" in explicit_tools:
                 for replacement in ("search_descriptors", "get_descriptor_item"):
@@ -3088,14 +3293,45 @@ class LocalSkillFactoryWorker:
             # like a forbidden edit to an immutable companion skill.
             self._cleanup_generated_files(workspace)
             _write_json(input_dir / "assignment.json", dict(assignment))
-            packet = self._build_packet(assignment, workspace, input_dir)
-            prompt = (input_dir / "task.md").read_text(encoding="utf-8")
-            packet_hash = "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-
-            self._init_git_workspace(workspace, str((assignment.get("forge") or {}).get("branch") or f"realize/{task_id}"))
+            self._init_git_workspace(
+                workspace,
+                str((assignment.get("forge") or {}).get("branch") or f"realize/{task_id}"),
+            )
             continuation = self._restore_continuation_candidate(assignment, workspace)
             structured_edits = self._structured_edits_from_assignment(assignment)
             validation_only = self._validation_only_from_assignment(assignment, workspace)
+            descriptor_working_set: dict[str, Any] | None = None
+            if (
+                root_mcp is not None
+                and _root_mcp_required(assignment)
+                and not continuation
+                and not structured_edits
+                and not validation_only
+            ):
+                try:
+                    descriptor_working_set = _task_mcp_descriptor_working_set(
+                        assignment=assignment,
+                        root_mcp=root_mcp,
+                    )
+                except ValueError as exc:
+                    _log.warning(
+                        "Builder descriptor prefetch deferred to Codex task=%s error=%s",
+                        task_id,
+                        exc,
+                    )
+            if descriptor_working_set:
+                _write_json(
+                    input_dir / "descriptor-working-set.json",
+                    descriptor_working_set,
+                )
+            packet = self._build_packet(
+                assignment,
+                workspace,
+                input_dir,
+                descriptor_working_set=descriptor_working_set,
+            )
+            prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+            packet_hash = "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()
             prompt_budget = _codex_prompt_budget_check(assignment, prompt)
             if continuation or structured_edits or validation_only:
                 prompt_budget = {
@@ -3121,7 +3357,11 @@ class LocalSkillFactoryWorker:
                     f"reasons={','.join(prompt_budget.get('blocked_reasons') or [])}"
                 )
             structured_edit_receipt: dict[str, Any] | None = None
-            root_mcp_evidence: dict[str, Any] | None = None
+            root_mcp_evidence: dict[str, Any] | None = (
+                dict(descriptor_working_set.get("evidence") or {})
+                if descriptor_working_set
+                else None
+            )
             if continuation:
                 self._progress(task_id, "tests_running", "Validating preserved Codex candidate")
                 root_mcp_evidence = (
@@ -3190,7 +3430,7 @@ class LocalSkillFactoryWorker:
                     prompt=prompt,
                     output_dir=output_dir,
                     agent_profile=agent_profile,
-                    root_mcp=root_mcp,
+                    root_mcp=None if descriptor_working_set else root_mcp,
                 )
                 self._ensure_task_active(task_id)
                 self._record_codex_attempt(runtime_dir, codex_result, attempt=0)
@@ -3199,11 +3439,12 @@ class LocalSkillFactoryWorker:
                         f"Codex exited with code {codex_result.returncode}: "
                         f"{_codex_failure_detail(codex_result)}"
                     )
-                root_mcp_evidence = _codex_jsonl_root_mcp_evidence(
-                    output_dir / "codex-live.jsonl",
-                    assignment=assignment,
-                    root_mcp=root_mcp,
-                )
+                if root_mcp_evidence is None:
+                    root_mcp_evidence = _codex_jsonl_root_mcp_evidence(
+                        output_dir / "codex-live.jsonl",
+                        assignment=assignment,
+                        root_mcp=root_mcp,
+                    )
 
             development_escalations = parse_development_escalations(
                 codex_result.final_message
@@ -4028,7 +4269,14 @@ class LocalSkillFactoryWorker:
                 result.append(token)
         return result if explicit_values else (result or ["generated_skill"])
 
-    def _build_packet(self, assignment: Mapping[str, Any], workspace: Path, input_dir: Path) -> dict[str, Any]:
+    def _build_packet(
+        self,
+        assignment: Mapping[str, Any],
+        workspace: Path,
+        input_dir: Path,
+        *,
+        descriptor_working_set: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         request = dict(assignment.get("realize_request") or {})
         target = dict(assignment.get("target") or {})
         target_type = str(target.get("type") or "skill")
@@ -4109,6 +4357,7 @@ class LocalSkillFactoryWorker:
             "contract_execution_checklist": contract_checklist or None,
             "validation_budget": _generated_test_budget(assignment),
             "root_mcp": root_mcp,
+            "descriptor_working_set": dict(descriptor_working_set or {}) or None,
             "repair_hints": repair_hints or None,
             "repair_target_context": repair_target_context or None,
         }
@@ -4282,7 +4531,19 @@ Allowed impact values are `blocker`, `speed`, `generalization`, `contract_gap`, 
             if root_mcp
             else "No task-scoped Root MCP route was admitted."
         )
-        root_mcp_section = f"""## Task-scoped Root MCP route
+        if descriptor_working_set:
+            root_mcp_section = f"""## Prefetched descriptor working set
+
+```json
+{json.dumps(dict(descriptor_working_set), ensure_ascii=False, indent=2, sort_keys=True)}
+```
+
+The trusted worker already performed the task-scoped MCP search and exact
+drill-downs above. Treat this bounded working set as authoritative evidence.
+No MCP server is exposed to this model turn; do not repeat descriptor discovery.
+"""
+        else:
+            root_mcp_section = f"""## Task-scoped Root MCP route
 
 ```json
 {root_mcp_context}
@@ -4356,14 +4617,22 @@ change, edit directly and do not rediscover the same structures.
 
 {bounded_iteration}
 
+{dev_ticket_repair_requirements}
+
 {root_mcp_section if root_mcp else ''}
 
 ## Required result
 
 {required_result}
 
-Return a concise summary of the changed files and focused check. The worker owns
-the final commit, package validation, activation, and evidence.
+## Final response contract
+
+When the project can own the repair, return a concise summary of changed files
+and the focused check. When the prefetched/public contracts prove that required
+core/API/SDK support is unavailable, make no source changes and return exactly
+one `adaos-development-escalation` fenced JSON envelope in the form specified
+above; explanatory text may precede it, but nothing may follow the fence. The
+trusted orchestrator, not this model, creates and links the Core Dev Ticket.
 """
         else:
             prompt = f"""# AdaOS local realization task

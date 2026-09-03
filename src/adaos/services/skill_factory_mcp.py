@@ -13,7 +13,6 @@ TASK_SCOPE_TOOL_ALLOWLIST: dict[str, tuple[str, ...]] = {
         "search_descriptors",
         "get_descriptor_item",
         "get_architecture_catalog",
-        "get_sdk_metadata",
         "get_template_catalog",
     ),
     "read_mock_data": ("get_builder_context",),

@@ -801,6 +801,18 @@ def test_model_text_formats_preserve_canonical_structured_content(monkeypatch) -
     assert projections["json"]["content"][0]["text"] != projections["min_json"]["content"][0]["text"]
     assert projections["toon"]["content"][0]["text"].startswith("path\tvalue")
 
+    compact = bridge_mod._tool_text(
+        {"response": {"result": {"search": payload}}, "audit": {"large": "metadata"}},
+        model_text_format="min_json",
+        model_payload={"search": payload},
+    )
+    assert json.loads(compact["content"][0]["text"]) == {"search": payload}
+    assert compact["structuredContent"]["audit"] == {"large": "metadata"}
+    assert (
+        compact["_meta"]["adaos/modelProjection"]["token_estimate"]
+        < compact["_meta"]["adaos/modelProjection"]["canonical_token_estimate"]
+    )
+
     profile = bridge_mod.CodexBridgeProfile(
         root_url="https://root.example.test",
         target_id="hub:test-subnet",
@@ -1454,14 +1466,16 @@ def test_task_scoped_descriptor_search_defaults_query_and_bounds_drilldown(monke
         },
     )
 
-    assert definitions["search_descriptors"]["inputSchema"]["properties"]["limit"]["maximum"] == 12
+    assert definitions["search_descriptors"]["inputSchema"]["properties"]["limit"]["maximum"] == 6
     assert definitions["get_descriptor_item"]["inputSchema"]["properties"]["level"]["enum"] == ["std"]
     assert search["_meta"]["adaos/modelProjection"]["model_text_format"] == "min_json"
     assert detail["_meta"]["adaos/modelProjection"]["model_text_format"] == "min_json"
+    assert json.loads(search["content"][0]["text"]) == search["structuredContent"]
+    assert json.loads(detail["content"][0]["text"]) == detail["structuredContent"]
     assert (
         "search_descriptors",
         "Show token usage and remaining quota",
-        {"descriptor_ids": [], "kinds": [], "limit": 12},
+        {"descriptor_ids": [], "kinds": [], "limit": 6},
     ) in fake_client.calls
     assert (
         "get_descriptor_item",

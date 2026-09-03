@@ -38,6 +38,7 @@ from adaos.services.skill_factory_worker import (
     _context_packet_prompt_projection,
     _loads_strict_json,
     _root_mcp_profile_from_assignment,
+    _task_mcp_descriptor_working_set,
     _task_mcp_validation_evidence,
 )
 
@@ -357,6 +358,114 @@ def test_task_mcp_validation_prefers_bound_target(
         "name": "get_managed_target",
         "arguments": {"target_id": "hub:sn_demo"},
     }
+
+
+def test_task_mcp_descriptor_working_set_prefetches_search_and_exact_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _Response:
+        def __init__(self, payload: dict[str, Any]) -> None:
+            self.payload = payload
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return self.payload
+
+    def _post(url: str, **kwargs: Any) -> _Response:
+        request = dict(kwargs["json"])
+        calls.append({"url": url, "headers": kwargs["headers"], **request})
+        params = dict(request["params"])
+        arguments = dict(params["arguments"])
+        if params["name"] == "search_descriptors":
+            result = {
+                "search": {
+                    "schema": "adaos.descriptor.search.v1",
+                    "query_digest": "sha256:query",
+                    "items": [
+                        {
+                            "descriptor_id": "sdk_metadata",
+                            "item_id": "adaos.sdk.control_plane.list_quota_objects",
+                            "kind": "sdk_function",
+                            "title": "list_quota_objects",
+                            "summary": "Transport quota objects only.",
+                            "rank": 1,
+                        },
+                        {
+                            "descriptor_id": "sdk_metadata",
+                            "item_id": "adaos.sdk.research.normalize_llm_usage",
+                            "kind": "sdk_function",
+                            "title": "normalize_llm_usage",
+                            "summary": "Normalize one response usage record.",
+                            "rank": 2,
+                        },
+                    ],
+                }
+            }
+        else:
+            item_id = arguments["item_id"]
+            result = {
+                "descriptor_item": {
+                    "schema": "adaos.descriptor.item.v1",
+                    "descriptor_id": "sdk_metadata",
+                    "item_id": item_id,
+                    "level": "std",
+                    "item": {"name": item_id, "description": f"Contract for {item_id}"},
+                }
+            }
+        return _Response(
+            {
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "result": {
+                    "content": [{"type": "text", "text": "compact"}],
+                    "structuredContent": {
+                        "ok": True,
+                        "response": {"ok": True, "result": result},
+                    },
+                },
+            }
+        )
+
+    monkeypatch.setattr(worker_module.httpx, "post", _post)
+    working_set = _task_mcp_descriptor_working_set(
+        assignment={
+            "task_id": "task.descriptors",
+            "realize_request": {
+                "artifacts": {
+                    "repair_hints": {
+                        "requires_root_mcp": True,
+                        "change_summary": "Show Codex token usage and remaining allowance.",
+                    }
+                }
+            },
+        },
+        root_mcp={
+            "enabled": True,
+            "server_name": "adaos_task_root",
+            "url": "http://127.0.0.1:8777/v1/root/mcp/task/task.descriptors",
+            "lease_id": "lease.descriptors",
+            "bound_target_id": "hub:sn_demo",
+            "enabled_tools": ["search_descriptors", "get_descriptor_item"],
+            "_bearer_token_value": "secret-not-evidence",
+        },
+    )
+
+    assert working_set is not None
+    assert len(working_set["headers"]) == 2
+    assert len(working_set["details"]) == 2
+    assert working_set["evidence"]["source"] == "worker_descriptor_prefetch"
+    assert working_set["evidence"]["bound_target_id"] == "hub:sn_demo"
+    assert "secret" not in json.dumps(working_set)
+    assert [call["params"]["name"] for call in calls] == [
+        "search_descriptors",
+        "get_descriptor_item",
+        "get_descriptor_item",
+    ]
+    assert calls[0]["params"]["arguments"]["limit"] == 4
 
 
 def test_codex_failure_detail_prefers_structured_jsonl_errors() -> None:
@@ -5406,6 +5515,9 @@ def test_worker_returns_core_escalation_without_validating_unchanged_project(
     )
 
     def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:
+        assert "## Dev Ticket repair constraints" in prompt
+        assert "## Final response contract" in prompt
+        assert "adaos-development-escalation" in prompt
         return CodexRunResult(
             returncode=0,
             final_message="""The required subscription metering contract is not public.
