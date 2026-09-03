@@ -2842,11 +2842,14 @@ class BuilderAutomationService:
         if conventional in candidates:
             candidates.remove(conventional)
             candidates.insert(0, conventional)
-        mutable = [skill_id for skill_id in candidates if self._is_mutable_companion_skill(skill_id)]
-        return mutable if candidates else [conventional]
+        return [
+            skill_id
+            for skill_id in candidates
+            if self._is_mutable_companion_skill(skill_id)
+        ]
 
     def _resolve_companion_skill_id(self, kind: str, project_id: str) -> str:
-        """Compatibility accessor for the primary scenario companion skill."""
+        """Return the first explicitly declared mutable companion skill."""
         companions = self._resolve_companion_skill_ids(kind, project_id)
         return companions[0] if companions else ""
 

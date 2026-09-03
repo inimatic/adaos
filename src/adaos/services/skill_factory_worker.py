@@ -4993,17 +4993,15 @@ class LocalSkillFactoryWorker:
     def _companion_skill_ids(self, assignment: Mapping[str, Any]) -> list[str]:
         request = dict(assignment.get("realize_request") or {})
         artifacts = dict(request.get("artifacts") or {})
-        target = dict(assignment.get("target") or {})
         values = artifacts.get("companion_skill_ids")
-        explicit_values = isinstance(values, (list, tuple))
-        if not explicit_values:
-            values = [artifacts.get("companion_skill_id") or f"{target.get('id')}_skill"]
+        if not isinstance(values, (list, tuple)):
+            return []
         result: list[str] = []
         for value in values:
             token = _safe_token(value, fallback="")
             if token and token not in result:
                 result.append(token)
-        return result if explicit_values else (result or ["generated_skill"])
+        return result
 
     def _build_packet(
         self,

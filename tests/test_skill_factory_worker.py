@@ -900,7 +900,7 @@ def test_local_worker_realizes_scenario_and_companion_skill(tmp_path: Path) -> N
             },
             "artifacts": {
                 "implementation_brief": "Recipes must be searchable and open a detailed view.",
-                "companion_skill_id": "recipe_book_skill",
+                "companion_skill_ids": ["recipe_book_skill"],
             },
             "repo": {
                 "sparse_paths": [
@@ -1056,7 +1056,6 @@ def test_local_worker_materializes_and_syncs_all_companion_skills(
             "target": {"type": "scenario", "id": "recipe_book"},
             "artifacts": {
                 "implementation_brief": "Implement both declared recipe capabilities.",
-                "companion_skill_id": "recipe_book_skill",
                 "companion_skill_ids": [
                     "recipe_book_skill",
                     "recipe_book_control_skill",
@@ -1153,7 +1152,7 @@ def test_local_worker_rejects_out_of_scope_codex_change(tmp_path: Path) -> None:
     factory.submit_realize_request(
         {
             "target": {"type": "scenario", "id": "recipe_book"},
-            "artifacts": {"companion_skill_id": "recipe_book_skill"},
+            "artifacts": {"companion_skill_ids": ["recipe_book_skill"]},
             "repo": {
                 "sparse_paths": ["scenarios/recipe_book/", "skills/recipe_book_skill/"]
             },
@@ -1202,7 +1201,7 @@ def test_local_worker_does_not_overwrite_dev_that_changed_after_task_snapshot(
     factory.submit_realize_request(
         {
             "target": {"type": "scenario", "id": "recipe_book"},
-            "artifacts": {"companion_skill_id": "recipe_book_skill"},
+            "artifacts": {"companion_skill_ids": ["recipe_book_skill"]},
             "repo": {
                 "base_revision": snapshot["digest"],
                 "source_snapshot": snapshot,
@@ -1273,7 +1272,7 @@ def test_local_worker_recovers_committed_validated_result_without_rerunning_code
     submitted = factory.submit_realize_request(
         {
             "target": {"type": "scenario", "id": "recipe_book"},
-            "artifacts": {"companion_skill_id": "recipe_book_skill"},
+            "artifacts": {"companion_skill_ids": ["recipe_book_skill"]},
             "repo": {
                 "base_revision": snapshot["digest"],
                 "source_snapshot": snapshot,
@@ -1357,7 +1356,7 @@ def test_local_worker_recovers_precommit_result_without_rerunning_codex(
     submitted = factory.submit_realize_request(
         {
             "target": {"type": "scenario", "id": "recipe_book"},
-            "artifacts": {"companion_skill_id": "recipe_book_skill"},
+            "artifacts": {"companion_skill_ids": ["recipe_book_skill"]},
             "repo": {
                 "base_revision": snapshot["digest"],
                 "source_snapshot": snapshot,
@@ -1436,7 +1435,7 @@ def test_local_worker_recovers_terminal_orphan_after_api_restart_without_rerunni
     submitted = factory.submit_realize_request(
         {
             "target": {"type": "scenario", "id": "recipe_book"},
-            "artifacts": {"companion_skill_id": "recipe_book_skill"},
+            "artifacts": {"companion_skill_ids": ["recipe_book_skill"]},
             "repo": {
                 "base_revision": snapshot["digest"],
                 "source_snapshot": snapshot,
@@ -1531,7 +1530,7 @@ def test_local_worker_repairs_preserved_precommit_result_once(tmp_path: Path) ->
     submitted = factory.submit_realize_request(
         {
             "target": {"type": "scenario", "id": "recipe_book"},
-            "artifacts": {"companion_skill_id": "recipe_book_skill"},
+            "artifacts": {"companion_skill_ids": ["recipe_book_skill"]},
             "repo": {
                 "base_revision": snapshot["digest"],
                 "source_snapshot": snapshot,
@@ -1715,7 +1714,7 @@ def test_return_to_prototype_uses_snapshot_but_cannot_modify_automation_skill(
         {
             "target": {"type": "scenario", "id": "recipe_book"},
             "artifacts": {
-                "companion_skill_id": "recipe_book_skill",
+                "companion_skill_ids": ["recipe_book_skill"],
                 "workflow_transition": "return_to_prototype",
             },
             "repo": {
@@ -1776,7 +1775,7 @@ def test_automation_cannot_modify_current_publication_baseline(tmp_path: Path) -
             ]
         },
         "realize_request": {
-            "artifacts": {"companion_skill_id": "recipe_book_skill"},
+            "artifacts": {"companion_skill_ids": ["recipe_book_skill"]},
         },
     }
 
@@ -3210,7 +3209,7 @@ def test_return_to_prototype_skips_frozen_skill_tests_but_enforces_safe_ui(
         "target": {"type": "scenario", "id": "recipe_book"},
         "realize_request": {
             "artifacts": {
-                "companion_skill_id": "recipe_book_skill",
+                "companion_skill_ids": ["recipe_book_skill"],
                 "workflow_transition": "return_to_prototype",
             }
         },
@@ -3298,7 +3297,7 @@ def test_return_to_prototype_ignores_preexisting_generated_skill_caches(
         {
             "target": {"type": "scenario", "id": "recipe_book"},
             "artifacts": {
-                "companion_skill_id": "recipe_book_skill",
+                "companion_skill_ids": ["recipe_book_skill"],
                 "workflow_transition": "return_to_prototype",
             },
             "repo": {
@@ -6163,7 +6162,7 @@ def test_worker_respects_model_attempt_budget_during_validation_repair(
     _scenario(dev_scenarios, "recipe_book")
     _core_created_skill_fixture(repo_root, dev_skills, "recipe_book_skill")
     factory = SkillFactoryService(state_dir=state_dir)
-    artifacts: dict[str, object] = {"companion_skill_id": "recipe_book_skill"}
+    artifacts: dict[str, object] = {"companion_skill_ids": ["recipe_book_skill"]}
     if declared_attempts is not None:
         artifacts["execution_budget"] = {"max_attempts": declared_attempts}
     factory.submit_realize_request(
@@ -6277,7 +6276,7 @@ def test_worker_reasks_codex_to_repair_source_boundary_violation(
     factory.submit_realize_request(
         {
             "target": {"type": "scenario", "id": "recipe_book"},
-            "artifacts": {"companion_skill_id": "recipe_book_skill"},
+            "artifacts": {"companion_skill_ids": ["recipe_book_skill"]},
             "repo": {
                 "sparse_paths": ["scenarios/recipe_book/", "skills/recipe_book_skill/"]
             },

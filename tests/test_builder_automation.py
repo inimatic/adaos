@@ -66,7 +66,11 @@ def _service(tmp_path: Path) -> BuilderAutomationService:
 
     def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:  # noqa: ARG001
         handler = workspace / "skills" / "recipes_skill" / "handlers" / "main.py"
-        handler.write_text(handler.read_text(encoding="utf-8") + "\n# automation iteration\n", encoding="utf-8")
+        target = handler if handler.is_file() else workspace / "scenarios" / "recipes" / "webui.json"
+        target.write_text(
+            target.read_text(encoding="utf-8") + "\n",
+            encoding="utf-8",
+        )
         return CodexRunResult(returncode=0, final_message="Automation iteration completed.")
 
     def worker_factory() -> LocalSkillFactoryWorker:
@@ -176,8 +180,7 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["source_prototype_version"] == "0.1.0"
     assert status["automation"]["source_prototype_version"] == "0.1.0"
     assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.18.1"
-    assert status["session"]["created_artifacts"][0]["kind"] == "skill"
-    assert status["session"]["created_artifacts"][0]["name"] == "recipes_skill"
+    assert status["session"]["created_artifacts"] == []
     task = next(
         item
         for item in service.factory.snapshot(include_tasks=True)["tasks"]
@@ -185,10 +188,7 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     )
     assert task["forge"]["base_revision"].startswith("sha256:")
     assert task["forge"]["base_revision"] == task["forge"]["source_snapshot"]["digest"]
-    assert (service.dev_skills_root / "recipes_skill" / "skill.yaml").exists()
-    assert "new_skill" not in (service.dev_skills_root / "recipes_skill" / "handlers" / "main.py").read_text(
-        encoding="utf-8"
-    )
+    assert not (service.dev_skills_root / "recipes_skill").exists()
     assert status["session"]["local_run"]["events_path"].endswith("codex-live.jsonl")
 
 
@@ -3358,6 +3358,29 @@ def test_scenario_automation_uses_declared_runtime_skill_as_companion(tmp_path: 
     assert companion == "recipes_control_skill"
 
 
+def test_ui_only_scenario_does_not_invent_conventional_companion_skill(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Rename one label in the approved declarative UI.",
+        webspace_id="prompt-dev",
+    )
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == started["session"]["current_task_id"]
+    )
+
+    assert started["session"]["companion_skill_id"] is None
+    assert started["session"]["companion_skill_ids"] == []
+    assert task["realize_request"]["artifacts"]["companion_skill_ids"] == []
+    assert not (service.dev_skills_root / "recipes_skill").exists()
+
+
 def test_scenario_automation_retains_all_previous_automation_companions(tmp_path: Path) -> None:
     service = _service(tmp_path)
     snapshot = (
@@ -3520,6 +3543,13 @@ def test_followup_refreshes_companions_from_current_publication(tmp_path: Path) 
             sort_keys=False,
         ),
         encoding="utf-8",
+    )
+    assert service.workspace_service is not None
+    service.workspace_service.create_draft(
+        kind="skill",
+        artifact_id="recipes_skill",
+        source_idea="Existing published recipe dependency.",
+        template_id="skill_default",
     )
     assert service.workspace_service is not None
     service.workspace_service.create_draft(
@@ -3951,8 +3981,8 @@ def test_automation_projection_is_render_safe_and_abi_valid(tmp_path: Path) -> N
     assert projection["project"] == {
         "type": "scenario",
         "id": "recipes",
-        "companion_skill_id": "recipes_skill",
-        "companion_skill_ids": ["recipes_skill"],
+        "companion_skill_id": None,
+        "companion_skill_ids": [],
     }
     assert projection["result_branch"] == result["session"]["last_result"]["branch"]
     assert projection["steps"][-1]["state"] == "completed"
