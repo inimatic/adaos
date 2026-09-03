@@ -8,7 +8,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from jsonschema import Draft202012Validator
 
@@ -819,6 +819,7 @@ _REPAIR_HINT_PROFILES = {
     "resource_crud",
     "subnet_data_integration",
 }
+_REPAIR_HINT_CONCEPTS = {"ui", "data", "crud", "subnet", "validation"}
 _STRUCTURED_EDIT_SCHEMA = "adaos.builder.structured_edit_set.v1"
 _STRUCTURED_EDIT_OPS = {
     "replace_text",
@@ -933,6 +934,179 @@ def _normalize_contract_closure(
     }
 
 
+def _parse_language_qualification_output(value: Any) -> dict[str, Any]:
+    text = _text(value)
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    parsed = json.loads(text)
+    if not isinstance(parsed, Mapping):
+        raise ValueError("language qualification output must be one JSON object")
+    return dict(parsed)
+
+
+def _language_qualification_usage_receipt(
+    response: Mapping[str, Any],
+    *,
+    request_id: str,
+    status: str,
+) -> dict[str, Any]:
+    usage: Mapping[str, Any] = {}
+    for candidate in (
+        response.get("usage"),
+        _mapping(response.get("response")).get("usage"),
+        _mapping(response.get("result")).get("usage"),
+        _mapping(response.get("error")).get("usage"),
+        _mapping(response.get("_protocol")).get("usage"),
+    ):
+        if isinstance(candidate, Mapping) and candidate:
+            usage = candidate
+            break
+    input_details = _mapping(usage.get("input_tokens_details"))
+    output_details = _mapping(usage.get("output_tokens_details"))
+
+    def count(*values: Any) -> int | None:
+        for raw in values:
+            if raw is None:
+                continue
+            try:
+                return max(0, int(raw))
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    input_tokens = count(usage.get("input_tokens"), usage.get("prompt_tokens"))
+    output_tokens = count(usage.get("output_tokens"), usage.get("completion_tokens"))
+    total_tokens = count(usage.get("total_tokens"))
+    if total_tokens is None and input_tokens is not None and output_tokens is not None:
+        total_tokens = input_tokens + output_tokens
+    response_id = _text(
+        response.get("id")
+        or response.get("job_id")
+        or _mapping(response.get("response")).get("id")
+    )
+    return {
+        "schema": "adaos.builder.language_qualification_usage.v1",
+        "request_id": request_id,
+        "root_response_id": response_id or None,
+        "status": status,
+        "accounting_scope": "builder_qualification_llm",
+        "source_of_truth": "root_llm_response",
+        "input_tokens": input_tokens,
+        "cached_input_tokens": count(
+            input_details.get("cached_tokens"), usage.get("cached_input_tokens")
+        ),
+        "output_tokens": output_tokens,
+        "reasoning_tokens": count(
+            output_details.get("reasoning_tokens"), usage.get("reasoning_tokens")
+        ),
+        "total_tokens": total_tokens,
+        "accuracy": "provider_reported" if usage else "unavailable",
+    }
+
+
+def _language_qualification_messages(
+    ticket: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    entries = [
+        {
+            "workspace_path": _text(item.get("workspace_path")),
+            "role": _text(item.get("role")),
+            "semantic_refs": [
+                _text(value) for value in item.get("semantic_refs") or [] if _text(value)
+            ][:12],
+        }
+        for item in _sequence_of_mappings(
+            _mapping(candidate.get("source_index")).get("entries") or []
+        )[:24]
+    ]
+    payload = {
+        "ticket": {
+            "summary": _text(ticket.get("summary"))[:1000],
+            "component_ref": _text(ticket.get("component_ref")) or None,
+            "target_scope": {
+                key: value
+                for key, value in _mapping(ticket.get("target_scope")).items()
+                if key
+                in {
+                    "type",
+                    "id",
+                    "surface",
+                    "modal_id",
+                    "skill_id",
+                    "scenario_id",
+                }
+            },
+        },
+        "candidate_source_refs": entries,
+    }
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Classify one AdaOS Dev Ticket without designing or implementing a solution. "
+                "Select at most four exact workspace_path values only from candidate_source_refs. "
+                "Use one or more concepts from ui,data,crud,subnet,validation. "
+                "Return one JSON object with schema, concepts, candidate_paths, confidence from 0 to 1, "
+                "clarification_question, and a short rationale. If the target is ambiguous, use low confidence "
+                "and ask one bounded clarification question. Never invent a path or SDK capability."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        },
+    ]
+
+
+def _language_qualification_request_id(
+    ticket: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> str:
+    source_index = _mapping(candidate.get("source_index"))
+    digest = hashlib.sha256(
+        json.dumps(
+            {
+                "ticket_id": _text(ticket.get("ticket_id")),
+                "ticket_revision": int(ticket.get("revision") or 1),
+                "summary": _text(ticket.get("summary")),
+                "source_index": source_index,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return f"builder.language_qualification.{digest[:40]}"
+
+
+def _language_qualification_candidate_projection(
+    candidate: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        key: _clone(candidate.get(key))
+        for key in (
+            "schema",
+            "status",
+            "ready",
+            "confidence",
+            "recommended_next",
+            "reason",
+            "clarification_question",
+            "concepts",
+            "candidate_files",
+            "invalid_candidate_paths",
+            "builder_repair",
+        )
+        if candidate.get(key) not in (None, "", [], {})
+    }
+
+
 def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
     raw = _mapping(_mapping(ticket.get("metadata")).get("builder_repair"))
     if not raw:
@@ -940,6 +1114,13 @@ def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
     profile = _text(raw.get("profile")).lower()
     if profile not in _REPAIR_HINT_PROFILES:
         profile = ""
+    concepts = list(
+        dict.fromkeys(
+            _text(value).lower()
+            for value in raw.get("concepts") or []
+            if _text(value).lower() in _REPAIR_HINT_CONCEPTS
+        )
+    )
     target_files: list[str] = []
     for value in raw.get("target_files") or []:
         path = _text(value).replace("\\", "/").strip("/")
@@ -967,6 +1148,7 @@ def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
         max_changed_files = max(1, len(target_files))
     hints: dict[str, Any] = {
         "profile": profile or None,
+        "concepts": concepts,
         "change_summary": _text(raw.get("change_summary"))[:1000] or None,
         "target_files": target_files,
         "target_refs": target_refs,
@@ -1067,6 +1249,7 @@ def _autonomous_repair_qualification(ticket: Mapping[str, Any]) -> dict[str, Any
         "expected_model_tokens": 0 if route in {"structured_edits", "validation_only"} else None,
         "missing_fields": missing,
         "profile": hints.get("profile"),
+        "concepts": list(hints.get("concepts") or []),
         "target_files": list(hints.get("target_files") or []),
         "target_refs": list(hints.get("target_refs") or []),
         "acceptance_checks": list(hints.get("acceptance_checks") or []),
@@ -5976,6 +6159,257 @@ class DevelopmentTicketService:
             }
         )
         return result
+
+    def qualify_builder_repair_language(
+        self,
+        ticket_id: str,
+        *,
+        actor: str = "builder.language_qualifier",
+        apply: bool = False,
+        expected_revision: int | None = None,
+        llm_call: Callable[..., Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Use one Root-accounted LLM call only when local qualification is ambiguous."""
+
+        deterministic = self.prepare_builder_repair_qualification(
+            ticket_id,
+            actor=actor,
+            apply=False,
+            expected_revision=expected_revision,
+        )
+        ticket = dict(deterministic["ticket"])
+        candidate = _mapping(deterministic.get("qualification_candidate"))
+        if candidate.get("ready") is True and _text(candidate.get("confidence")) == "high":
+            if apply:
+                deterministic = self.prepare_builder_repair_qualification(
+                    ticket_id,
+                    actor=actor,
+                    apply=True,
+                    expected_revision=expected_revision,
+                )
+            return {
+                **deterministic,
+                "qualification_mode": "deterministic",
+                "language_model_called": False,
+                "language_qualification_usage": None,
+            }
+        if _text(candidate.get("recommended_next")) != (
+            "bounded_language_qualification_or_user_clarification"
+        ):
+            return {
+                **deterministic,
+                "qualification_mode": "deterministic",
+                "language_model_called": False,
+                "language_qualification_usage": None,
+            }
+        source_index = _mapping(candidate.get("source_index"))
+        if not _sequence_of_mappings(source_index.get("entries") or []):
+            return {
+                **deterministic,
+                "qualification_mode": "deterministic",
+                "language_model_called": False,
+                "language_qualification_usage": None,
+            }
+
+        request_id = _language_qualification_request_id(ticket, candidate)
+        caller = llm_call
+        if caller is None:
+            from adaos.sdk.llm.llm_client import send_response
+
+            caller = send_response
+        response: Mapping[str, Any] = {}
+        try:
+            response = caller(
+                _language_qualification_messages(ticket, candidate),
+                max_tokens=800,
+                reasoning={"effort": "low"},
+                text={"format": {"type": "json_object"}, "verbosity": "low"},
+                request_id=request_id,
+                prompt_cache_key="adaos.builder.ticket-language-qualification.v1",
+                timeout=45,
+            )
+            if not isinstance(response, Mapping):
+                raise ValueError("Root LLM qualification response must be an object")
+        except Exception as exc:
+            usage = _language_qualification_usage_receipt(
+                response,
+                request_id=request_id,
+                status="failed",
+            )
+            self._record_builder_language_qualification(
+                ticket_id,
+                record={
+                    "schema": "adaos.builder.language_qualification_record.v1",
+                    "request_id": request_id,
+                    "status": "failed",
+                    "error_type": type(exc).__name__,
+                    "error": _text(exc)[:1000],
+                    "usage": usage,
+                    "base_ticket_revision": ticket.get("revision"),
+                    "recorded_at": _now(),
+                },
+                actor=actor,
+                expected_updated_at=_text(ticket.get("updated_at")),
+                expected_revision=expected_revision,
+            )
+            raise RuntimeError(
+                f"Root language qualification failed for {ticket_id}: {exc}"
+            ) from exc
+
+        usage = _language_qualification_usage_receipt(
+            response,
+            request_id=request_id,
+            status="completed",
+        )
+        try:
+            proposal = _parse_language_qualification_output(response.get("output_text"))
+            errors = sorted(
+                Draft202012Validator(
+                    _schema("builder.language_qualification_proposal.v1")
+                ).iter_errors(proposal),
+                key=lambda item: list(item.path),
+            )
+            if errors:
+                raise ValueError(
+                    "invalid language qualification proposal: " + errors[0].message
+                )
+            target = _automation_target_from_ticket(ticket)
+            from adaos.services.builder.ticket_qualification import (
+                resolve_language_qualification_proposal,
+            )
+
+            resolved = resolve_language_qualification_proposal(
+                ticket,
+                proposal,
+                development_source=_mapping(deterministic.get("development_source")),
+                object_type=target["object_type"],
+                object_id=target["object_id"],
+            )
+        except ValueError as exc:
+            proposal = {}
+            resolved = {
+                "schema": "adaos.builder.repair_qualification_candidate.v1",
+                "status": "needs_clarification",
+                "ready": False,
+                "confidence": "low",
+                "model_call_expected": False,
+                "recommended_next": "user_clarification",
+                "reason": f"bounded language qualification was rejected: {_text(exc)[:500]}",
+                "clarification_question": (
+                    "Which visible component or action should be changed?"
+                ),
+            }
+
+        applied = False
+        updated_ticket = ticket
+        if resolved.get("ready") is True and _text(resolved.get("confidence")) == "high" and apply:
+            updated_ticket = self.requalify_builder_repair(
+                ticket_id,
+                builder_repair=_mapping(resolved.get("builder_repair")),
+                actor=_text(actor) or "builder.language_qualifier",
+                reason="Root language proposal resolved against authoritative DEV source index",
+                expected_updated_at=_text(ticket.get("updated_at")),
+                expected_revision=expected_revision,
+            )
+            applied = True
+
+        record_status = (
+            "applied"
+            if applied
+            else "qualified"
+            if resolved.get("ready") is True
+            else "needs_clarification"
+        )
+        record = {
+            "schema": "adaos.builder.language_qualification_record.v1",
+            "request_id": request_id,
+            "status": record_status,
+            "proposal": proposal,
+            "qualification_candidate": _language_qualification_candidate_projection(
+                resolved
+            ),
+            "usage": usage,
+            "base_ticket_revision": ticket.get("revision"),
+            "recorded_at": _now(),
+        }
+        updated_ticket = self._record_builder_language_qualification(
+            ticket_id,
+            record=record,
+            actor=actor,
+            expected_updated_at=_text(updated_ticket.get("updated_at")),
+            expected_revision=None if applied else expected_revision,
+        )
+        return {
+            "ok": True,
+            "applied": applied,
+            "ticket": updated_ticket,
+            "development_source": deterministic.get("development_source"),
+            "qualification_candidate": resolved,
+            "autonomous_repair_qualification": _autonomous_repair_qualification(
+                updated_ticket
+            ),
+            "qualification_mode": "bounded_language_llm",
+            "language_model_called": True,
+            "language_qualification_usage": usage,
+        }
+
+    def _record_builder_language_qualification(
+        self,
+        ticket_id: str,
+        *,
+        record: Mapping[str, Any],
+        actor: str,
+        expected_updated_at: str,
+        expected_revision: int | None,
+    ) -> dict[str, Any]:
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                raise KeyError(ticket_id)
+            self._assert_expected_revision(ticket, expected_revision)
+            if expected_updated_at and expected_updated_at != _text(ticket.get("updated_at")):
+                raise ValueError("Dev Ticket changed while language qualification was running")
+            now = _now()
+            item = _clone(record)
+            item["recorded_at"] = now
+            metadata = _mapping(ticket.get("metadata"))
+            metadata["builder_language_qualification"] = item
+            ticket["metadata"] = metadata
+            usage = _mapping(item.get("usage"))
+            ticket["evidence_refs"] = _merge_refs(
+                ticket.get("evidence_refs") or [],
+                [
+                    {
+                        "type": "llm_usage",
+                        "id": _text(item.get("request_id")),
+                        "purpose": "builder_language_qualification",
+                        "status": _text(item.get("status")),
+                        "root_response_id": usage.get("root_response_id"),
+                        "input_tokens": usage.get("input_tokens"),
+                        "cached_input_tokens": usage.get("cached_input_tokens"),
+                        "output_tokens": usage.get("output_tokens"),
+                        "reasoning_tokens": usage.get("reasoning_tokens"),
+                        "total_tokens": usage.get("total_tokens"),
+                        "accuracy": usage.get("accuracy"),
+                    }
+                ],
+            )
+            ticket["updated_at"] = now
+            self._append_history(
+                ticket,
+                {
+                    "kind": "builder_language_qualification",
+                    "actor": _text(actor) or "builder.language_qualifier",
+                    "request_id": _text(item.get("request_id")),
+                    "status": _text(item.get("status")),
+                    "total_tokens": usage.get("total_tokens"),
+                    "recorded_at": now,
+                },
+            )
+            self._validate_ticket(ticket)
+            self._write(state)
+            return _normalized_ticket(ticket)
 
     def bind_ticket_project_scope(
         self,

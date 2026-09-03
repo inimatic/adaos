@@ -362,7 +362,7 @@ Ticket and signals, and closes only with evidence.
   retain manifest/WebUI/handler source preconditions and a typed
   `skill_public_tool_graph` closure through package planning, and reject an
   incomplete exact change scope before the first model token.
-- [ ] `[must]` `DS5-32` Add the residual bounded-language qualifier for cases
+- [x] `[must]` `DS5-32` Add the residual bounded-language qualifier for cases
   that deterministic extraction cannot resolve. Use a small Root-accounted LLM
   only to propose intent and candidate refs, resolve every ref and precondition
   in core, persist its usage receipt, and ask the user rather than admit a
@@ -374,6 +374,16 @@ Ticket and signals, and closes only with evidence.
   one validated alpha Project when no owner exists. Bind every package ticket
   and source signal to that Project before creating the repair so publication,
   trial, acceptance, and rollback share one ProjectRelease lineage.
+
+Implementation note, 2026-09-03: `DS5-32` is deterministic-first. The
+`builder-qualification/language` endpoint calls the Root LLM only after the
+source-index qualifier returns an ambiguous bounded candidate. The model may
+propose at most four indexed paths and typed concepts; core validates the
+proposal schema, resolves paths and SHA preconditions from authoritative DEV
+source, closes the public skill-tool graph, and persists provider usage as
+ticket evidence. Invalid refs or confidence below the admission threshold
+remain user clarification and cannot create Builder work.
+
 - [ ] `[should]` `DS5-18` Add ticket artifact commands and SDK helpers for
   `artifact open`, screenshot preview, incremental evidence, optimistic
   revision, comment, claim, progress, resolve, verify, close, reopen,

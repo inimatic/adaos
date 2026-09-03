@@ -4,7 +4,11 @@ import json
 from pathlib import Path
 
 from adaos.services.builder.repair import BuilderRepairService
-from adaos.services.builder.ticket_qualification import prepare_repair_qualification
+from adaos.services.builder.ticket_qualification import (
+    LANGUAGE_QUALIFICATION_PROPOSAL_SCHEMA,
+    prepare_repair_qualification,
+    resolve_language_qualification_proposal,
+)
 from adaos.services.development_tickets import DevelopmentTicketService
 
 
@@ -146,6 +150,68 @@ def test_local_qualification_stops_when_language_does_not_resolve_source(tmp_pat
     assert result["status"] == "needs_clarification"
     assert result["recommended_next"] == "bounded_language_qualification_or_user_clarification"
     assert result["model_call_expected"] is False
+
+
+def test_language_proposal_is_resolved_only_through_authoritative_source_index(
+    tmp_path: Path,
+) -> None:
+    source = _source_tree(tmp_path / "subscription_status_skill")
+
+    result = resolve_language_qualification_proposal(
+        _ticket("Make the visible subscription refresh behavior clearer."),
+        {
+            "schema": LANGUAGE_QUALIFICATION_PROPOSAL_SCHEMA,
+            "concepts": ["ui", "data"],
+            "candidate_paths": [
+                "skills/subscription_status_skill/webui.json",
+                "skills/subscription_status_skill/handlers/main.py",
+            ],
+            "confidence": 0.94,
+            "clarification_question": None,
+            "rationale": "The named refresh UI and its handler own the behavior.",
+        },
+        development_source={"status": "source_available", "dev_source_path": str(source)},
+        object_type="skill",
+        object_id="subscription_status_skill",
+    )
+
+    assert result["ready"] is True
+    assert result["concepts"] == ["data", "ui"]
+    assert result["builder_repair"]["concepts"] == ["data", "ui"]
+    assert set(result["builder_repair"]["target_files"]) == {
+        "skills/subscription_status_skill/handlers/main.py",
+        "skills/subscription_status_skill/tests/test_subscription_status_skill.py",
+        "skills/subscription_status_skill/webui.json",
+    }
+    assert len(result["builder_repair"]["source_preconditions"]) == 3
+
+
+def test_language_proposal_rejects_invented_source_path(tmp_path: Path) -> None:
+    source = _source_tree(tmp_path / "subscription_status_skill")
+
+    result = resolve_language_qualification_proposal(
+        _ticket("Make this behavior clearer."),
+        {
+            "schema": LANGUAGE_QUALIFICATION_PROPOSAL_SCHEMA,
+            "concepts": ["ui"],
+            "candidate_paths": [
+                "skills/subscription_status_skill/handlers/invented.py"
+            ],
+            "confidence": 0.99,
+            "clarification_question": None,
+            "rationale": "Proposed handler.",
+        },
+        development_source={"status": "source_available", "dev_source_path": str(source)},
+        object_type="skill",
+        object_id="subscription_status_skill",
+    )
+
+    assert result["ready"] is False
+    assert result["status"] == "needs_clarification"
+    assert result["recommended_next"] == "user_clarification"
+    assert result["invalid_candidate_paths"] == [
+        "skills/subscription_status_skill/handlers/invented.py"
+    ]
 
 
 def test_local_qualification_routes_public_sdk_usage_to_subnet_data(tmp_path: Path) -> None:
@@ -411,6 +477,148 @@ def test_service_can_apply_high_confidence_local_qualification(
     assert applied["autonomous_repair_qualification"]["ready"] is True
     assert applied["autonomous_repair_qualification"]["source_preconditions"]
     assert applied["ticket"]["history"][-1]["kind"] == "builder_repair_requalified"
+
+
+def test_service_uses_root_accounted_language_qualification_only_after_local_miss(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state_dir = tmp_path / "state"
+    source = _source_tree(tmp_path / "subscription_status_skill")
+    service = DevelopmentTicketService(state_dir=state_dir)
+    signal = service.capture_signal(
+        kind="feedback_note",
+        summary="Make this better.",
+        target_scope={
+            "type": "skill",
+            "id": "subscription_status_skill",
+            "source": "workspace",
+            "surface": "modal",
+        },
+        source="client_feedback",
+        owner_area="skill",
+        component_ref="skill:subscription_status_skill",
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="feedback",
+        status="captured",
+        owner_area="skill",
+        component_ref="skill:subscription_status_skill",
+    )["ticket"]
+    monkeypatch.setattr(
+        "adaos.services.development_tickets.development_source_options",
+        lambda _scope: {
+            "status": "source_available",
+            "source": "dev",
+            "target_type": "skill",
+            "target_id": "subscription_status_skill",
+            "dev_source_path": str(source),
+        },
+    )
+    calls: list[dict] = []
+
+    def fake_llm(messages, **kwargs):
+        calls.append({"messages": messages, **kwargs})
+        return {
+            "id": "resp.language.1",
+            "output_text": json.dumps(
+                {
+                    "schema": LANGUAGE_QUALIFICATION_PROPOSAL_SCHEMA,
+                    "concepts": ["ui", "data"],
+                    "candidate_paths": [
+                        "skills/subscription_status_skill/webui.json",
+                        "skills/subscription_status_skill/handlers/main.py",
+                    ],
+                    "confidence": 0.93,
+                    "clarification_question": None,
+                    "rationale": "The visible modal and refresh handler are the bounded target.",
+                }
+            ),
+            "usage": {
+                "input_tokens": 310,
+                "output_tokens": 92,
+                "total_tokens": 402,
+                "input_tokens_details": {"cached_tokens": 120},
+            },
+        }
+
+    result = service.qualify_builder_repair_language(
+        ticket["ticket_id"],
+        apply=True,
+        expected_revision=ticket["revision"],
+        llm_call=fake_llm,
+    )
+
+    assert result["applied"] is True
+    assert result["qualification_mode"] == "bounded_language_llm"
+    assert result["language_model_called"] is True
+    assert result["language_qualification_usage"]["total_tokens"] == 402
+    assert len(calls) == 1
+    assert calls[0]["max_tokens"] == 800
+    assert calls[0]["reasoning"] == {"effort": "low"}
+    assert calls[0]["request_id"].startswith("builder.language_qualification.")
+    updated = result["ticket"]
+    assert updated["metadata"]["builder_repair"]["concepts"] == ["data", "ui"]
+    assert updated["metadata"]["builder_language_qualification"]["status"] == "applied"
+    assert updated["history"][-1]["kind"] == "builder_language_qualification"
+    usage_ref = next(
+        ref
+        for ref in updated["evidence_refs"]
+        if ref.get("type") == "llm_usage"
+    )
+    assert usage_ref["total_tokens"] == 402
+    assert result["autonomous_repair_qualification"]["ready"] is True
+
+
+def test_service_skips_language_model_when_deterministic_qualification_is_ready(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = _source_tree(tmp_path / "subscription_status_skill")
+    service = DevelopmentTicketService(state_dir=tmp_path / "state")
+    signal = service.capture_signal(
+        kind="feedback_note",
+        summary="Rename the Subscription modal table title.",
+        target_scope={
+            "type": "skill",
+            "id": "subscription_status_skill",
+            "source": "workspace",
+            "surface": "modal",
+        },
+        source="client_feedback",
+        owner_area="skill",
+        component_ref="skill:subscription_status_skill",
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="feedback",
+        status="captured",
+        owner_area="skill",
+    )["ticket"]
+    monkeypatch.setattr(
+        "adaos.services.development_tickets.development_source_options",
+        lambda _scope: {
+            "status": "source_available",
+            "source": "dev",
+            "target_type": "skill",
+            "target_id": "subscription_status_skill",
+            "dev_source_path": str(source),
+        },
+    )
+
+    def unexpected_llm(*_args, **_kwargs):
+        raise AssertionError("deterministic qualification must not spend LLM tokens")
+
+    result = service.qualify_builder_repair_language(
+        ticket["ticket_id"],
+        llm_call=unexpected_llm,
+    )
+
+    assert result["qualification_mode"] == "deterministic"
+    assert result["language_model_called"] is False
+    assert result["language_qualification_usage"] is None
+    assert result["ticket"]["revision"] == ticket["revision"]
 
 
 def test_package_plan_qualifies_related_tickets_once_with_bounded_budget(

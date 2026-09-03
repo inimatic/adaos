@@ -12,6 +12,9 @@ import yaml
 
 
 QUALIFICATION_CANDIDATE_SCHEMA = "adaos.builder.repair_qualification_candidate.v1"
+LANGUAGE_QUALIFICATION_PROPOSAL_SCHEMA = (
+    "adaos.builder.language_qualification_proposal.v1"
+)
 SOURCE_INDEX_SCHEMA = "adaos.builder.component_source_index.v1"
 
 _SOURCE_EXTENSIONS = {
@@ -785,8 +788,21 @@ def _compact_source_index(
         "truncated": source_index.get("truncated"),
         "entries": [
             {
-                key: entry.get(key)
-                for key in ("relative_path", "workspace_path", "role", "sha256", "size")
+                **{
+                    key: entry.get(key)
+                    for key in (
+                        "relative_path",
+                        "workspace_path",
+                        "role",
+                        "sha256",
+                        "size",
+                    )
+                },
+                "semantic_refs": [
+                    _text(value)[:180]
+                    for value in entry.get("semantic_refs") or []
+                    if _text(value)
+                ][:12],
             }
             for entry in entries[: max(1, min(limit, 24))]
         ],
@@ -977,6 +993,7 @@ def prepare_repair_qualification(
         )
     repair = {
         "profile": _profile_for(concepts),
+        "concepts": sorted(concepts),
         "change_summary": summary[:1000],
         "target_files": target_files,
         "target_refs": target_refs,
@@ -1011,9 +1028,196 @@ def prepare_repair_qualification(
     }
 
 
+def resolve_language_qualification_proposal(
+    ticket: Mapping[str, Any],
+    proposal: Mapping[str, Any],
+    *,
+    development_source: Mapping[str, Any],
+    object_type: str,
+    object_id: str,
+) -> dict[str, Any]:
+    """Resolve an LLM proposal only through the authoritative source index."""
+
+    source_root_text = _text(
+        development_source.get("dev_source_path")
+        or development_source.get("source_path")
+    )
+    if _text(development_source.get("status")) != "source_available" or not source_root_text:
+        return {
+            "schema": QUALIFICATION_CANDIDATE_SCHEMA,
+            "status": "needs_source",
+            "ready": False,
+            "confidence": "high",
+            "model_call_expected": False,
+            "recommended_next": "materialize_or_resolve_development_source",
+            "reason": "development source is required to resolve language qualification refs",
+        }
+    source_index = build_component_source_index(
+        source_root=Path(source_root_text).expanduser().resolve(),
+        object_type=object_type,
+        object_id=object_id,
+    )
+    entries = [
+        item for item in source_index.get("entries") or [] if isinstance(item, Mapping)
+    ]
+    by_path = {_text(item.get("workspace_path")): item for item in entries}
+    raw_paths = proposal.get("candidate_paths")
+    candidate_paths = (
+        [_text(value).replace("\\", "/").strip("/") for value in raw_paths]
+        if isinstance(raw_paths, list)
+        else []
+    )
+    candidate_paths = [path for path in candidate_paths if path]
+    invalid_paths = sorted(
+        {
+            path
+            for path in candidate_paths
+            if path not in by_path
+        }
+    )
+    raw_concepts = proposal.get("concepts")
+    concepts = (
+        {
+            _text(value).lower()
+            for value in raw_concepts
+            if _text(value).lower() in _CONCEPT_PREFIXES
+        }
+        if isinstance(raw_concepts, list)
+        else set()
+    )
+    try:
+        confidence = float(proposal.get("confidence"))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+    clarification = _text(proposal.get("clarification_question"))[:500]
+    if (
+        _text(proposal.get("schema")) != LANGUAGE_QUALIFICATION_PROPOSAL_SCHEMA
+        or not candidate_paths
+        or len(candidate_paths) > 4
+        or len(set(candidate_paths)) != len(candidate_paths)
+        or invalid_paths
+        or not concepts
+        or confidence < 0.82
+    ):
+        reason = (
+            "language qualifier proposed refs outside the authoritative source index"
+            if invalid_paths
+            else "language qualifier did not produce one high-confidence bounded source selection"
+        )
+        return {
+            "schema": QUALIFICATION_CANDIDATE_SCHEMA,
+            "status": "needs_clarification",
+            "ready": False,
+            "confidence": "medium" if confidence >= 0.5 else "low",
+            "model_call_expected": False,
+            "recommended_next": "user_clarification",
+            "reason": reason,
+            "clarification_question": clarification
+            or "Which visible component or action should be changed?",
+            "invalid_candidate_paths": invalid_paths,
+            "language_proposal": dict(proposal),
+            "source_index": _compact_source_index(source_index, entries),
+        }
+
+    selected = [by_path[path] for path in candidate_paths]
+    if not any(_text(item.get("role")) == "test" for item in selected):
+        query_tokens = _tokens(ticket.get("summary"))
+        ranked = _rank_entries(
+            entries,
+            query_tokens=query_tokens,
+            concepts=concepts,
+            evidence_paths=_evidence_file_paths(ticket),
+        )
+        test_entry = next(
+            (item for _score, item in ranked if _text(item.get("role")) == "test"),
+            None,
+        )
+        if test_entry is not None and len(selected) < 5:
+            selected.append(test_entry)
+    selected, contract_closure = _close_skill_public_tool_scope(
+        selected,
+        entries=entries,
+        object_type=object_type,
+    )
+    target_files = list(
+        dict.fromkeys(_text(item.get("workspace_path")) for item in selected)
+    )
+    component_ref = _text(
+        ticket.get("component_ref")
+        or (
+            ticket.get("target_scope", {}).get("component_ref")
+            if isinstance(ticket.get("target_scope"), Mapping)
+            else None
+        )
+    )
+    target_refs = [
+        *(
+            [component_ref]
+            if component_ref.partition(":")[0]
+            in {"component", "modal", "panel", "view", "widget"}
+            else []
+        ),
+        *(["contract:skill_public_tool_graph"] if contract_closure else []),
+        *[f"file:{path}" for path in target_files],
+    ]
+    summary = _text(ticket.get("summary"))
+    acceptance_checks = [
+        f"User-visible acceptance: {summary[:420]}",
+        *[
+            f"Run focused test file: {_text(item.get('workspace_path'))}"
+            for item in selected
+            if _text(item.get("role")) == "test"
+        ][:2],
+        f"Validate {object_type}:{object_id} after the bounded change.",
+    ]
+    if contract_closure:
+        acceptance_checks.append(
+            "Reconcile every changed public tool across webui.json, skill.yaml tools/exports, handler entry, and schemas."
+        )
+    repair: dict[str, Any] = {
+        "profile": _profile_for(concepts),
+        "concepts": sorted(concepts),
+        "change_summary": summary[:1000],
+        "target_files": target_files,
+        "target_refs": target_refs,
+        "acceptance_checks": acceptance_checks,
+        "max_changed_files": len(target_files),
+        "requires_root_mcp": "subnet" in concepts,
+        "target_object_type": object_type,
+        "target_object_id": object_id,
+        "source_preconditions": [
+            {
+                "path": _text(item.get("workspace_path")),
+                "sha256": _text(item.get("sha256")),
+                "size": int(item.get("size") or 0),
+            }
+            for item in selected
+        ],
+    }
+    if contract_closure:
+        repair["contract_closure"] = contract_closure
+    return {
+        "schema": QUALIFICATION_CANDIDATE_SCHEMA,
+        "status": "ready",
+        "ready": True,
+        "confidence": "high",
+        "model_call_expected": False,
+        "estimated_model_tokens": 0,
+        "recommended_next": "apply_language_qualification",
+        "reason": "Root LLM proposal was resolved against authoritative DEV source",
+        "concepts": sorted(concepts),
+        "language_proposal": dict(proposal),
+        "builder_repair": repair,
+        "source_index": _compact_source_index(source_index, selected),
+    }
+
+
 __all__ = [
+    "LANGUAGE_QUALIFICATION_PROPOSAL_SCHEMA",
     "QUALIFICATION_CANDIDATE_SCHEMA",
     "SOURCE_INDEX_SCHEMA",
     "build_component_source_index",
     "prepare_repair_qualification",
+    "resolve_language_qualification_proposal",
 ]

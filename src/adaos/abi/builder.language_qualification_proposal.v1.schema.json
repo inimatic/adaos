@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/builder.language_qualification_proposal.v1.schema.json",
+  "title": "AdaOS Builder Language Qualification Proposal v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "concepts",
+    "candidate_paths",
+    "confidence",
+    "clarification_question",
+    "rationale"
+  ],
+  "properties": {
+    "schema": {
+      "const": "adaos.builder.language_qualification_proposal.v1"
+    },
+    "concepts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["ui", "data", "crud", "subnet", "validation"]
+      }
+    },
+    "candidate_paths": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      }
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "clarification_question": {
+      "type": ["string", "null"],
+      "maxLength": 500
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    }
+  }
+}

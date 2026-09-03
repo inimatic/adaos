@@ -104,6 +104,12 @@ class DevTicketBuilderQualificationPrepareRequest(BaseModel):
     expected_revision: int | None = Field(default=None, ge=1)
 
 
+class DevTicketBuilderLanguageQualificationRequest(BaseModel):
+    apply: bool = False
+    actor: str = Field(default="builder.language_qualifier", min_length=1)
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
 class DevTicketResponseRequest(BaseModel):
     response_action_id: str = Field(..., min_length=1)
     pending_action_id: str | None = None
@@ -1661,6 +1667,34 @@ def prepare_builder_repair_qualification(
         }
     except KeyError as exc:
         raise _not_found(ticket_id) from exc
+    except ValueError as exc:
+        raise _ticket_mutation_error(exc) from exc
+
+
+@router.post("/{ticket_id}/builder-qualification/language")
+def qualify_builder_repair_language(
+    ticket_id: str,
+    body: DevTicketBuilderLanguageQualificationRequest,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        result = service.qualify_builder_repair_language(
+            ticket_id,
+            actor=body.actor,
+            apply=body.apply,
+            expected_revision=body.expected_revision,
+        )
+        return {
+            **result,
+            "detail": _ticket_detail(service, result["ticket"]),
+        }
+    except KeyError as exc:
+        raise _not_found(ticket_id) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
     except ValueError as exc:
         raise _ticket_mutation_error(exc) from exc
 
