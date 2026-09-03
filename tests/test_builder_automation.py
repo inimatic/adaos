@@ -2247,6 +2247,61 @@ def test_background_automation_launches_durable_worker_process(tmp_path: Path, m
             assert launch["resource_policy"]["job_breakaway"] is True
 
 
+def test_background_automation_accepts_booting_handshake(tmp_path: Path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    service.background = True
+    worker_root = (
+        service.state_dir
+        / "builder"
+        / "automation_workers"
+        / "automation.skill.booting"
+    )
+
+    def _popen(command, **kwargs):
+        worker_root.mkdir(parents=True, exist_ok=True)
+        (worker_root / "ready.json").write_text(
+            json.dumps(
+                {
+                    "schema": "adaos.builder.automation_worker_ready.v1",
+                    "session_id": "automation.skill.booting",
+                    "status": "booting",
+                    "pid": 5253,
+                    "recorded_at": "2026-09-03T00:00:00+00:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(pid=5252, poll=lambda: None)
+
+    monkeypatch.setattr(automation_module.subprocess, "Popen", _popen)
+
+    result = service._launch_worker_process("automation.skill.booting")
+
+    assert result["status"] == "booting"
+    assert result["worker_pid"] == 5253
+    assert result["booting_at"] == "2026-09-03T00:00:00+00:00"
+
+
+def test_background_automation_does_not_relaunch_active_worker(tmp_path: Path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    service.background = True
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_detached_worker_is_active",
+        lambda _self, _session_id: True,
+    )
+    launches: list[str] = []
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_launch_worker_process",
+        lambda _self, session_id: launches.append(session_id),
+    )
+
+    service._launch_worker("automation.skill.active")
+
+    assert launches == []
+
+
 def test_background_automation_rejects_worker_without_ready_handshake(
     tmp_path: Path, monkeypatch
 ) -> None:

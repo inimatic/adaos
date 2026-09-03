@@ -5918,6 +5918,8 @@ class BuilderAutomationService:
 
     def _launch_worker(self, session_id: str) -> None:
         if self.background:
+            if self._detached_worker_is_active(session_id):
+                return
             self._launch_worker_process(session_id)
         else:
             self._run_worker(session_id)
@@ -6013,6 +6015,7 @@ class BuilderAutomationService:
         ready_timeout = min(180.0, max(5.0, ready_timeout))
         deadline = time.monotonic() + ready_timeout
         ready: dict[str, Any] | None = None
+        booting: dict[str, Any] | None = None
         while time.monotonic() < deadline:
             try:
                 value = json.loads(ready_path.read_text(encoding="utf-8"))
@@ -6021,10 +6024,14 @@ class BuilderAutomationService:
             if (
                 isinstance(value, Mapping)
                 and str(value.get("session_id") or "") == str(session_id)
-                and str(value.get("status") or "") == "ready"
             ):
-                ready = dict(value)
-                break
+                handshake_status = str(value.get("status") or "").strip()
+                if handshake_status == "ready":
+                    ready = dict(value)
+                    break
+                if handshake_status == "booting":
+                    booting = dict(value)
+                    break
             poll = getattr(process, "poll", None)
             return_code = poll() if callable(poll) else None
             if return_code is not None:
@@ -6041,7 +6048,7 @@ class BuilderAutomationService:
                 _write_json(launch_path, launched)
                 raise RuntimeError(str(launched["error"]))
             time.sleep(0.05)
-        if ready is None:
+        if ready is None and booting is None:
             launched.update(
                 {
                     "status": "failed",
@@ -6060,11 +6067,20 @@ class BuilderAutomationService:
                 except OSError:
                     pass
             raise RuntimeError(str(launched["error"]))
+        handshake = ready or booting or {}
+        handshake_status = "ready" if ready is not None else "booting"
+        handshake_at = (
+            handshake.get("ready_at")
+            or handshake.get("recorded_at")
+            or _now_iso()
+        )
         launched.update(
             {
-                "status": "ready",
-                "worker_pid": ready.get("pid"),
-                "ready_at": ready.get("ready_at") or _now_iso(),
+                "status": handshake_status,
+                "worker_pid": handshake.get("pid"),
+                (
+                    "ready_at" if handshake_status == "ready" else "booting_at"
+                ): handshake_at,
             }
         )
         _write_json(launch_path, launched)
