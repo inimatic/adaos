@@ -30,8 +30,20 @@ _SOURCE_EXTENSIONS = {
     ".yaml",
     ".yml",
 }
-_IGNORED_PARTS = {"__pycache__", ".git", ".runtime", "dist", "node_modules"}
-_IGNORED_FILES = {"prompt_state.json"}
+_IGNORED_PARTS = {
+    "__pycache__",
+    ".git",
+    ".runtime",
+    "dist",
+    "llm_jobs",
+    "node_modules",
+    "ui_revisions",
+}
+_IGNORED_FILES = {
+    "builder.draft.json",
+    "prompt_state.json",
+    "scenario.json",
+}
 _MAX_SOURCE_BYTES = 512 * 1024
 _MAX_INDEXED_FILES = 160
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u0400-\u04ff]+")
@@ -46,6 +58,8 @@ _DATA_ROUTE_LOCATION_RE = re.compile(r"data_routes\[(?P<index>\d+)]\.budget")
 _WEBUI_TOOL_REFERENCE_RE = re.compile(
     r"(?:callSkill|skill dataSource) references undeclared tool ['\"](?P<target>[^'\"]+)['\"]"
 )
+_QUOTED_UI_TEXT_RE = re.compile(r"«(?P<value>[^»\r\n]{1,200})»")
+_UI_TEXT_RENAME_OPERATIONS = {"rename_ui_text", "rename_text", "rename_label"}
 _DEFAULT_BOUNDED_ROUTE_PAYLOAD_BYTES = 65_536
 _STOP_WORDS = {
     "and",
@@ -237,6 +251,36 @@ def _concepts(tokens: set[str]) -> set[str]:
     }
 
 
+def _typed_ticket_features(ticket: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = (
+        dict(ticket.get("metadata"))
+        if isinstance(ticket.get("metadata"), Mapping)
+        else {}
+    )
+    operation_kinds = {
+        _text(value).lower()
+        for value in metadata.get("operation_kinds") or []
+        if _text(value)
+    }
+    concepts: set[str] = set()
+    if any("ui" in operation or "label" in operation for operation in operation_kinds):
+        concepts.add("ui")
+    if any(
+        operation.startswith(("create", "update", "delete", "edit", "rename", "move"))
+        for operation in operation_kinds
+    ):
+        concepts.add("crud")
+    return {
+        "concepts": concepts,
+        "operation_kinds": operation_kinds,
+        "surface_kind": _text(metadata.get("surface_kind")).lower(),
+        "requires_i18n": metadata.get("requires_i18n") is True,
+        "requires_access": metadata.get("requires_access") is True,
+        "requires_conversation": metadata.get("requires_conversation") is True,
+        "requires_lifecycle": metadata.get("requires_lifecycle") is True,
+    }
+
+
 def _prompt_facts(
     ticket: Mapping[str, Any],
     *,
@@ -247,6 +291,7 @@ def _prompt_facts(
     """Compile semantic routing hints without granting execution authority."""
 
     proposal = dict(proposed or {})
+    typed = _typed_ticket_features(ticket)
     target_scope = (
         dict(ticket.get("target_scope"))
         if isinstance(ticket.get("target_scope"), Mapping)
@@ -290,6 +335,9 @@ def _prompt_facts(
         )
 
     surfaces = proposed_values("surface_kinds", _PROMPT_SURFACE_KINDS)
+    typed_surface = _text(typed.get("surface_kind"))
+    if typed_surface in _PROMPT_SURFACE_KINDS:
+        surfaces.add(typed_surface)
     component_kind = _text(ticket.get("component_ref")).partition(":")[0].lower()
     if component_kind in _PROMPT_SURFACE_KINDS:
         surfaces.add(component_kind)
@@ -302,6 +350,10 @@ def _prompt_facts(
         surfaces.add("scenario")
 
     operations = proposed_values("operation_kinds", _PROMPT_OPERATION_KINDS)
+    typed_operations = set(typed.get("operation_kinds") or [])
+    if any(operation.startswith("rename") for operation in typed_operations):
+        operations.add("update")
+    operations.update(typed_operations & _PROMPT_OPERATION_KINDS)
     operation_prefixes = {
         "read": ("read", "show", "list", "search", "inspect", "view"),
         "create": ("create", "add", "new"),
@@ -363,12 +415,16 @@ def _prompt_facts(
         "data_planes": sorted(data_planes),
         "effects": sorted(effects),
         "requires_i18n": bool(proposal.get("requires_i18n"))
+        or bool(typed.get("requires_i18n"))
         or has_prefix("i18n", "locale", "localiz", "translat"),
         "requires_access": bool(proposal.get("requires_access"))
+        or bool(typed.get("requires_access"))
         or has_prefix("access", "permission", "capability", "role", "auth"),
         "requires_conversation": bool(proposal.get("requires_conversation"))
+        or bool(typed.get("requires_conversation"))
         or bool(data_planes & {"conversation"}),
         "requires_lifecycle": bool(proposal.get("requires_lifecycle"))
+        or bool(typed.get("requires_lifecycle"))
         or has_prefix(
             "activation",
             "activate",
@@ -919,6 +975,101 @@ def _validation_gate_qualification(
     }
 
 
+def _ui_text_rename_qualification(
+    ticket: Mapping[str, Any],
+    *,
+    source_root: Path,
+    source_index: Mapping[str, Any],
+    entries: list[Mapping[str, Any]],
+    object_type: str,
+    object_id: str,
+) -> dict[str, Any] | None:
+    typed = _typed_ticket_features(ticket)
+    if not (set(typed.get("operation_kinds") or []) & _UI_TEXT_RENAME_OPERATIONS):
+        return None
+    values = [
+        match.group("value").strip()
+        for match in _QUOTED_UI_TEXT_RE.finditer(_text(ticket.get("summary")))
+    ]
+    if len(values) != 2 or not all(values) or values[0] == values[1]:
+        return None
+    old, new = values
+    current_ui = [
+        entry
+        for entry in entries
+        if _text(entry.get("relative_path")) == "webui.json"
+        and _text(entry.get("role")) == "ui"
+    ]
+    if len(current_ui) != 1:
+        return None
+    entry = current_ui[0]
+    source_path = (source_root / "webui.json").resolve()
+    try:
+        source_path.relative_to(source_root.resolve())
+        source = source_path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    expected_count = source.count(old)
+    if not 1 <= expected_count <= 20 or new in source:
+        return None
+
+    path = _text(entry.get("workspace_path"))
+    concepts = {"crud", "ui"}
+    prompt_facts = _prompt_facts(
+        ticket,
+        concepts=concepts,
+        selected=[entry],
+    )
+    return {
+        "schema": QUALIFICATION_CANDIDATE_SCHEMA,
+        "status": "ready",
+        "ready": True,
+        "confidence": "high",
+        "model_call_expected": False,
+        "estimated_model_tokens": 0,
+        "recommended_next": "apply_local_qualification",
+        "reason": "typed UI text rename resolved against canonical webui.json",
+        "concepts": sorted(concepts),
+        "builder_repair": {
+            "profile": "surgical_ui",
+            "concepts": sorted(concepts),
+            "prompt_facts": prompt_facts,
+            "change_summary": _text(ticket.get("summary"))[:1000],
+            "target_files": [path],
+            "target_refs": [f"file:{path}"],
+            "acceptance_checks": [
+                f"Replace every current UI occurrence of {old!r} with {new!r}.",
+                f"Validate {object_type}:{object_id} after the bounded change.",
+            ],
+            "max_changed_files": 1,
+            "requires_root_mcp": False,
+            "target_object_type": object_type,
+            "target_object_id": object_id,
+            "source_preconditions": [
+                {
+                    "path": path,
+                    "sha256": _text(entry.get("sha256")),
+                    "size": int(entry.get("size") or 0),
+                }
+            ],
+            "structured_edits": {
+                "schema": "adaos.builder.structured_edit_set.v1",
+                "operations": [
+                    {
+                        "id": "rename-current-ui-text",
+                        "op": "replace_text",
+                        "path": path,
+                        "old": old,
+                        "new": new,
+                        "expected_count": expected_count,
+                    }
+                ],
+            },
+        },
+        "source_index": _compact_source_index(source_index, [entry]),
+    }
+
+
 def _rank_entries(
     entries: list[Mapping[str, Any]],
     *,
@@ -1085,14 +1236,28 @@ def prepare_repair_qualification(
     if validation_qualification is not None:
         return validation_qualification
 
+    ui_text_rename = _ui_text_rename_qualification(
+        ticket,
+        source_root=Path(source_root_text).expanduser().resolve(),
+        source_index=source_index,
+        entries=entries,
+        object_type=object_type,
+        object_id=object_id,
+    )
+    if ui_text_rename is not None:
+        return ui_text_rename
+
     summary = _text(ticket.get("summary"))
     summary_tokens = _tokens(summary)
-    summary_concepts = _concepts(summary_tokens)
+    typed = _typed_ticket_features(ticket)
+    summary_concepts = _concepts(summary_tokens) | set(typed.get("concepts") or [])
     query_tokens = set(summary_tokens)
     target_scope = ticket.get("target_scope") if isinstance(ticket.get("target_scope"), Mapping) else {}
     query_tokens.update(_tokens(ticket.get("component_ref")))
     query_tokens.update(_tokens(target_scope.get("surface")))
-    concepts = _concepts(query_tokens)
+    query_tokens.update(_tokens(" ".join(typed.get("operation_kinds") or [])))
+    query_tokens.update(_tokens(typed.get("surface_kind")))
+    concepts = _concepts(query_tokens) | set(typed.get("concepts") or [])
     evidence_paths = _evidence_file_paths(ticket)
     ranked = _rank_entries(
         entries,

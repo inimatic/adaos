@@ -61,6 +61,55 @@ data_routes:
     return root
 
 
+def _scenario_source_tree(root: Path) -> Path:
+    root.mkdir(parents=True)
+    (root / "ui_revisions").mkdir()
+    (root / "llm_jobs").mkdir()
+    current_ui = {
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "layout": {"areas": [{"id": "planned", "label": "Запланировано"}]},
+                        "widgets": [
+                            {
+                                "id": "planned",
+                                "title": "Запланировано",
+                                "dataSource": {
+                                    "kind": "static",
+                                    "value": [
+                                        {"id": "one", "status": "Запланировано"},
+                                        {"id": "two", "status": "Запланировано"},
+                                    ],
+                                },
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    (root / "webui.json").write_text(
+        json.dumps(current_ui, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (root / "scenario.yaml").write_text(
+        "id: kanban\nversion: 0.1.0\nname: kanban\n",
+        encoding="utf-8",
+    )
+    for path in (
+        root / "scenario.json",
+        root / "builder.draft.json",
+        root / "ui_revisions" / "002.json",
+        root / "llm_jobs" / "job.json",
+    ):
+        path.write_text(
+            json.dumps(current_ui, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    return root
+
+
 def _ticket(summary: str) -> dict:
     return {
         "ticket_id": "dticket.test",
@@ -118,6 +167,51 @@ def test_local_qualification_maps_plain_language_to_bounded_source(tmp_path: Pat
     assert not any("prompt_state" in path for path in repair["target_files"])
     assert len(repair["source_preconditions"]) == 3
     assert all(item["sha256"].startswith("sha256:") for item in repair["source_preconditions"])
+
+
+def test_typed_ui_text_rename_uses_canonical_webui_without_model(tmp_path: Path) -> None:
+    source = _scenario_source_tree(tmp_path / "kanban")
+    ticket = {
+        "ticket_id": "dticket.rename",
+        "summary": "Переименуй колонку «Запланировано» в «Очередь». Больше ничего не меняй.",
+        "component_ref": "scenario:kanban",
+        "target_scope": {"type": "scenario", "id": "kanban"},
+        "metadata": {
+            "operation_kinds": ["rename_ui_text"],
+            "surface_kind": "scenario",
+            "requires_i18n": True,
+            "requires_lifecycle": True,
+        },
+        "evidence_refs": [],
+    }
+
+    result = prepare_repair_qualification(
+        ticket,
+        development_source={"status": "source_available", "dev_source_path": str(source)},
+        object_type="scenario",
+        object_id="kanban",
+    )
+
+    assert result["ready"] is True
+    assert result["confidence"] == "high"
+    assert result["model_call_expected"] is False
+    assert result["estimated_model_tokens"] == 0
+    assert result["source_index"]["file_count"] == 2
+    repair = result["builder_repair"]
+    assert repair["profile"] == "surgical_ui"
+    assert repair["target_files"] == ["scenarios/kanban/webui.json"]
+    assert repair["prompt_facts"]["operation_kinds"] == ["update"]
+    assert repair["prompt_facts"]["requires_i18n"] is True
+    assert repair["prompt_facts"]["requires_lifecycle"] is True
+    operation = repair["structured_edits"]["operations"][0]
+    assert operation == {
+        "id": "rename-current-ui-text",
+        "op": "replace_text",
+        "path": "scenarios/kanban/webui.json",
+        "old": "Запланировано",
+        "new": "Очередь",
+        "expected_count": 4,
+    }
 
 
 def test_local_qualification_closes_public_tool_graph_before_model_use(
