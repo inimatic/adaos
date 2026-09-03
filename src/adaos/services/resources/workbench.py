@@ -469,7 +469,7 @@ def _development_feedback_definition() -> dict[str, Any]:
         "record_schema_ref": "abi:development_feedback.v1",
         "query": {
             "default": "observed",
-            "filters": ["status", "category", "source", "blocking", "target_ref", "rejection_class", "updated_since", "search", "role"],
+            "filters": ["status", "category", "source", "blocking", "target_ref", "rejection_class", "contract_ref", "operation_id", "updated_since", "search", "role"],
             "sort": ["updated_at", "category", "impact"],
             "cursor": True,
             "include": ["evidence", "relations", "comments", "history", "promotion"],
@@ -960,6 +960,8 @@ class ResourceWorkbenchService:
                 target_ref=_text(filters.get("target_ref")) or None,
                 search=search or None,
                 rejection_class=_text(filters.get("rejection_class")) or None,
+                contract_ref=_text(filters.get("contract_ref")) or None,
+                operation_id=_text(filters.get("operation_id")) or None,
                 updated_since=_text(filters.get("updated_since")) or None,
                 limit=max_items or 200,
             )

@@ -274,6 +274,8 @@ class DevelopmentFeedbackService:
         target_ref: str | None = None,
         search: str | None = None,
         rejection_class: str | None = None,
+        contract_ref: str | None = None,
+        operation_id: str | None = None,
         updated_since: str | None = None,
         limit: int = 200,
         import_legacy: bool = True,
@@ -283,6 +285,8 @@ class DevelopmentFeedbackService:
         values = [dict(item) for item in self._read()["records"].values()]
         token = _text(search).casefold()
         rejection_token = _text(rejection_class).lower()
+        contract_token = _text(contract_ref)
+        operation_token = _text(operation_id)
         if rejection_token and rejection_token not in REJECTION_CLASSES:
             raise ValueError(
                 f"unsupported development feedback rejection class: {rejection_token}"
@@ -290,6 +294,16 @@ class DevelopmentFeedbackService:
         values = [
             item
             for item in values
+            for classification in [
+                dict(item.get("classification"))
+                if isinstance(item.get("classification"), Mapping)
+                else {}
+            ]
+            for application_trace in [
+                dict(classification.get("application_trace"))
+                if isinstance(classification.get("application_trace"), Mapping)
+                else {}
+            ]
             if (not status or item.get("status") == status)
             and (not category or item.get("category") == category)
             and (not source or item.get("source") == source)
@@ -303,6 +317,21 @@ class DevelopmentFeedbackService:
                     else ""
                 ).lower()
                 == rejection_token
+            )
+            and (
+                not contract_token
+                or _text(application_trace.get("contract_ref")) == contract_token
+                or _text(classification.get("public_contract_ref")) == contract_token
+            )
+            and (
+                not operation_token
+                or _text(application_trace.get("operation_id")) == operation_token
+                or operation_token
+                in {
+                    _text(value)
+                    for value in classification.get("operation_ids") or []
+                    if _text(value)
+                }
             )
             and (not updated_since or _text(item.get("updated_at")) >= updated_since)
             and (

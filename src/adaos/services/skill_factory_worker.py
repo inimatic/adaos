@@ -4379,6 +4379,7 @@ class LocalSkillFactoryWorker:
 
         request = dict(assignment.get("realize_request") or {})
         artifacts = dict(request.get("artifacts") or {})
+        links = dict(request.get("links") or {})
         target = dict(assignment.get("target") or {})
         target_type = str(target.get("type") or "skill").strip().lower()
         target_id = str(target.get("id") or "").strip()
@@ -4387,13 +4388,24 @@ class LocalSkillFactoryWorker:
             if isinstance(artifacts.get("repair_hints"), Mapping)
             else {}
         )
-        ticket_id = ""
+        ticket_ids = list(
+            dict.fromkeys(
+                str(value).strip()
+                for value in (
+                    links.get("development_ticket_id"),
+                    *(links.get("development_ticket_ids") or []),
+                )
+                if str(value or "").strip()
+            )
+        )
         brief = str(artifacts.get("implementation_brief") or "").strip()
         if brief:
             try:
                 parsed_brief = json.loads(brief)
                 if isinstance(parsed_brief, Mapping):
-                    ticket_id = str(parsed_brief.get("ticket_id") or "").strip()
+                    brief_ticket_id = str(parsed_brief.get("ticket_id") or "").strip()
+                    if brief_ticket_id and brief_ticket_id not in ticket_ids:
+                        ticket_ids.append(brief_ticket_id)
             except (TypeError, ValueError):
                 pass
         base_target_refs = list(
@@ -4401,6 +4413,8 @@ class LocalSkillFactoryWorker:
                 value
                 for value in (
                     f"{target_type}:{target_id}" if target_id else "",
+                    str(links.get("development_ticket_project_ref") or "").strip(),
+                    str(links.get("development_ticket_component_ref") or "").strip(),
                     *[
                         str(ref).strip()
                         for ref in repair_hints.get("target_refs") or []
@@ -4416,14 +4430,54 @@ class LocalSkillFactoryWorker:
                 "id": str(assignment.get("task_id") or "").strip(),
             },
             *(
-                [{"type": "dev_ticket", "id": ticket_id}]
-                if ticket_id
+                [
+                    {"type": "development_ticket", "id": ticket_id}
+                    for ticket_id in ticket_ids
+                ]
+            ),
+            *(
+                [
+                    {
+                        "type": "builder_session",
+                        "id": str(links.get("automation_session_id") or "").strip(),
+                    }
+                ]
+                if str(links.get("automation_session_id") or "").strip()
+                else []
+            ),
+            *(
+                [
+                    {
+                        "type": "builder_repair",
+                        "id": str(links.get("builder_repair_id") or "").strip(),
+                    }
+                ]
+                if str(links.get("builder_repair_id") or "").strip()
                 else []
             ),
         ]
         service = DevelopmentFeedbackService(state_dir=self.state_dir)
         records: list[dict[str, Any]] = []
         for item in items[:8]:
+            application_trace = (
+                dict(item.get("application_trace"))
+                if isinstance(item.get("application_trace"), Mapping)
+                else {}
+            )
+            trace_refs = [
+                dict(ref)
+                for ref in application_trace.get("trace_refs") or []
+                if isinstance(ref, Mapping)
+            ]
+            item_target_refs = [
+                *base_target_refs,
+                *(item.get("target_refs") or []),
+                *(
+                    [str(application_trace.get("contract_ref") or "").strip()]
+                    if str(application_trace.get("contract_ref") or "").strip()
+                    else []
+                ),
+            ]
             result = service.capture(
                 source="codex",
                 category=str(item.get("category") or "").strip(),
@@ -4431,11 +4485,12 @@ class LocalSkillFactoryWorker:
                 blocking=bool(item.get("blocking")),
                 confidence=float(item.get("confidence", 1.0)),
                 impact=item.get("impact") or [],
-                target_refs=[*base_target_refs, *(item.get("target_refs") or [])],
+                target_refs=item_target_refs,
                 details=str(item.get("details") or "").strip(),
                 recommendation=str(item.get("recommendation") or "").strip(),
                 evidence_refs=[
                     *(item.get("evidence_refs") or []),
+                    *trace_refs,
                     {
                         "type": "skill_factory_task",
                         "id": str(assignment.get("task_id") or "").strip(),
@@ -4447,15 +4502,32 @@ class LocalSkillFactoryWorker:
                     "stage": "codex_final_response",
                     "target_type": target_type,
                     "target_id": target_id,
+                    **(
+                        {"application_trace": application_trace}
+                        if application_trace
+                        else {}
+                    ),
                 },
                 dedup_key=(
                     "codex-feedback:"
                     + hashlib.sha256(
                         json.dumps(
                             {
-                                "task_id": assignment.get("task_id"),
                                 "category": item.get("category"),
-                                "summary": item.get("summary"),
+                                "summary": str(item.get("summary") or "")
+                                .strip()
+                                .casefold(),
+                                "target_refs": sorted(
+                                    str(ref).strip()
+                                    for ref in item_target_refs
+                                    if str(ref).strip()
+                                ),
+                                "contract_ref": application_trace.get(
+                                    "contract_ref"
+                                ),
+                                "operation_id": application_trace.get(
+                                    "operation_id"
+                                ),
                             },
                             ensure_ascii=False,
                             sort_keys=True,
@@ -5086,6 +5158,13 @@ If implementation reveals a missing or ambiguous public contract, conflicting gu
 ```adaos-development-feedback
 {"schema":"adaos.development_feedback_output.v1","items":[{"category":"ambiguous_contract","summary":"...","blocking":false,"confidence":0.9,"impact":["comprehension"],"target_refs":["sdk:area.method"],"details":"...","recommendation":"...","evidence_refs":[{"type":"file","ref":"path"}]}]}
 ```
+
+Only after an actual public method/resource attempt, the item may add
+`application_trace` with schema `adaos.development.application_trace.v1` and
+exact `contract_ref`, `operation_id`, redacted `input_summary`,
+`expected_behavior`, `observed_behavior`, `validation_result`, optional
+`user_response`, and bounded `trace_refs`. Never invent this trace from docs
+inspection and never include secrets or raw payloads.
 
 Omit the envelope when there is no substantive development feedback. It is advisory evidence only: do not use it to broaden scope, modify core, or invent a capability. Do not combine it with `adaos-development-escalation`; an unresolved blocking core/API/SDK capability gap uses the escalation contract instead.
 """

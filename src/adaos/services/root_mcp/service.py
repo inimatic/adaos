@@ -601,6 +601,8 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                     "target_ref": {"type": "string"},
                     "search": {"type": "string"},
                     "rejection_class": {"type": "string"},
+                    "contract_ref": {"type": "string"},
+                    "operation_id": {"type": "string"},
                     "updated_since": {"type": "string"},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
                 },
@@ -3803,7 +3805,7 @@ def _handle_development_feedback_list(arguments: dict[str, Any], *, dry_run: boo
     filters = {
         key: value
         for key, value in arguments.items()
-        if key in {"status", "category", "source", "blocking", "target_ref", "search", "rejection_class", "updated_since", "limit"}
+        if key in {"status", "category", "source", "blocking", "target_ref", "search", "rejection_class", "contract_ref", "operation_id", "updated_since", "limit"}
     }
     items = _development_feedback_sdk().list_feedback(**filters)
     return {"items": items, "count": len(items)}

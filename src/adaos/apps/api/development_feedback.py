@@ -74,6 +74,8 @@ def list_feedback(
     target_ref: str | None = None,
     search: str | None = None,
     rejection_class: str | None = None,
+    contract_ref: str | None = None,
+    operation_id: str | None = None,
     updated_since: str | None = None,
     limit: int = Query(default=200, ge=0, le=1000),
     service: DevelopmentFeedbackService = Depends(_get_service),
@@ -86,6 +88,8 @@ def list_feedback(
         target_ref=target_ref,
         search=search,
         rejection_class=rejection_class,
+        contract_ref=contract_ref,
+        operation_id=operation_id,
         updated_since=updated_since,
         limit=limit,
     )

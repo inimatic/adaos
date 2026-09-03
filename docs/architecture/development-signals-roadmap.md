@@ -645,7 +645,7 @@ SDK docs/examples, SDK/API implementation, policy decision, or Core Dev Ticket.
   `sdk_unclear_definition`, `sdk_application_failure`,
   `sdk_observability_gap`, `sdk_example_gap`, `sdk_policy_boundary`,
   `sdk_generalization_pressure`, and `builder_rejection_learning`.
-- [ ] `[must]` `DS9-02` Capture Builder method/resource application traces:
+- [x] `[must]` `DS9-02` Capture Builder method/resource application traces:
   public contract ref, operation id, input summary, expected behavior,
   observed behavior, validation result, user response, and trace/test refs.
 - [x] `[must]` `DS9-03` Add rejection qualification classes:
@@ -709,8 +709,12 @@ operation. Trial revise/rollback now emits a deduplicated `result_rejected`
 observation linked to the candidate, Builder execution, originating user
 tickets, rollback evidence, and exact user note. The six rejection classes are
 filterable through API/MCP/Resource Workbench/Builder; unclassified outcomes
-remain `needs_qualification` and cannot be promoted. Runtime method-application
-traces, bounded LLM rejection qualification, owner routing, replay/eval
+remain `needs_qualification` and cannot be promoted. Codex can now attach a
+strict, redacted application trace only after an actual public method/resource
+attempt; exact contract/operation filters are available through API, MCP, and
+Resource Workbench, and recurrence aggregates across Builder tasks while all
+relations remain inspectable. Automatic runtime method-application producers,
+bounded LLM rejection qualification, owner routing, replay/eval
 creation, docs/example routing, saved
 review filters, direct artifact opening, promotion preview, and qualification
 metrics remain open.

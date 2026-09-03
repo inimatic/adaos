@@ -1971,6 +1971,13 @@ def test_worker_records_codex_development_feedback_as_workspace_resource(
         "task_id": "task.feedback",
         "target": {"type": "skill", "id": "demo"},
         "realize_request": {
+            "links": {
+                "automation_session_id": "automation.skill.demo",
+                "builder_repair_id": "repair.demo",
+                "development_ticket_id": "dticket.demo",
+                "development_ticket_project_ref": "project:demo_project",
+                "development_ticket_component_ref": "modal:demo",
+            },
             "artifacts": {
                 "implementation_brief": json.dumps(
                     {
@@ -1983,47 +1990,62 @@ def test_worker_records_codex_development_feedback_as_workspace_resource(
         },
     }
 
-    records = worker._record_codex_development_feedback(
-        assignment,
-        [
-            {
-                "category": "inefficient_contract",
-                "summary": "The SDK requires a full snapshot for a narrow refresh.",
-                "blocking": False,
-                "confidence": 0.9,
-                "impact": ["efficiency"],
-                "target_refs": ["sdk:resources.query"],
-                "details": "The bounded filter cannot be expressed.",
-                "recommendation": "Add a typed projection filter.",
-                "evidence_refs": [{"type": "file", "ref": "skills/demo/webui.json"}],
-            }
-        ],
+    feedback_item = {
+        "category": "inefficient_contract",
+        "summary": "The SDK requires a full snapshot for a narrow refresh.",
+        "blocking": False,
+        "confidence": 0.9,
+        "impact": ["efficiency"],
+        "target_refs": ["sdk:resources.query"],
+        "details": "The bounded filter cannot be expressed.",
+        "recommendation": "Add a typed projection filter.",
+        "evidence_refs": [{"type": "file", "ref": "skills/demo/webui.json"}],
+        "application_trace": {
+            "schema": "adaos.development.application_trace.v1",
+            "contract_ref": "sdk:resources.query",
+            "operation_id": "resources.query",
+            "input_summary": "One redacted metric filter.",
+            "expected_behavior": "Return one bounded metric projection.",
+            "observed_behavior": "Returned the full snapshot.",
+            "validation_result": "failed",
+            "user_response": "",
+            "trace_refs": [
+                {"type": "trace", "ref": "trace:resources.query.demo"}
+            ],
+        },
+    }
+    records = worker._record_codex_development_feedback(assignment, [feedback_item])
+    repeated = worker._record_codex_development_feedback(assignment, [feedback_item])
+    second_assignment = copy.deepcopy(assignment)
+    second_assignment["task_id"] = "task.feedback.second"
+    recurring = worker._record_codex_development_feedback(
+        second_assignment,
+        [feedback_item],
     )
-    repeated = worker._record_codex_development_feedback(assignment, [
-        {
-            "category": "inefficient_contract",
-            "summary": "The SDK requires a full snapshot for a narrow refresh.",
-            "blocking": False,
-            "confidence": 0.9,
-            "impact": ["efficiency"],
-            "target_refs": ["sdk:resources.query"],
-            "details": "The bounded filter cannot be expressed.",
-            "recommendation": "Add a typed projection filter.",
-            "evidence_refs": [{"type": "file", "ref": "skills/demo/webui.json"}],
-        }
-    ])
 
     assert repeated[0]["feedback_id"] == records[0]["feedback_id"]
     assert repeated[0]["occurrence_count"] == 1
+    assert recurring[0]["feedback_id"] == records[0]["feedback_id"]
+    assert recurring[0]["occurrence_count"] == 2
     assert set(records[0]["target_refs"]) == {
         "skill:demo",
         "modal:demo",
+        "project:demo_project",
         "sdk:resources.query",
     }
     assert {item["type"] for item in records[0]["relation_refs"]} == {
         "skill_factory_task",
-        "dev_ticket",
+        "development_ticket",
+        "builder_session",
+        "builder_repair",
     }
+    trace = records[0]["classification"]["application_trace"]
+    assert trace["contract_ref"] == "sdk:resources.query"
+    assert trace["operation_id"] == "resources.query"
+    assert any(
+        item.get("ref") == "trace:resources.query.demo"
+        for item in records[0]["evidence_refs"]
+    )
 
 
 def test_worker_records_exhausted_public_contract_validation_feedback(

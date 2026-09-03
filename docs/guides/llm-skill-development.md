@@ -2028,6 +2028,13 @@ observability or validation gap, or policy boundary. Include confidence,
 impact, stable target refs, evidence, and the smallest useful recommendation.
 Omit it on routine successful work.
 
+When the observation follows an actual public method or resource application,
+add one `adaos.development.application_trace.v1` object with the exact contract
+and operation refs, a redacted bounded input summary, expected and observed
+behavior, deterministic validation result, optional user response, and
+trace/test refs. Do not synthesize an application trace from documentation
+review, and do not include credentials, raw payloads, or hidden model state.
+
 The worker parses this output deterministically and stores
 `adaos.development_feedback.v1` in the workspace review registry. It is
 advisory evidence: Codex cannot use it to broaden source scope, mutate core,

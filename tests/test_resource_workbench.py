@@ -69,6 +69,18 @@ def test_resource_workbench_exposes_development_feedback_triage(tmp_path: Path) 
                 "summary": "The SDK contract requires repeated full snapshots for a narrow query.",
                 "impact": ["efficiency", "generalization"],
                 "target_refs": ["sdk:resources.query"],
+                "classification": {
+                    "application_trace": {
+                        "schema": "adaos.development.application_trace.v1",
+                        "contract_ref": "sdk:resources.query",
+                        "operation_id": "resources.query",
+                        "input_summary": "One redacted metric filter.",
+                        "expected_behavior": "Return one metric projection.",
+                        "observed_behavior": "Returned the full snapshot.",
+                        "validation_result": "failed",
+                        "trace_refs": [],
+                    }
+                },
             },
             "actor": {"id": "codex:test", "role": "builder"},
         }
@@ -78,7 +90,11 @@ def test_resource_workbench_exposes_development_feedback_triage(tmp_path: Path) 
         {
             "schema": "adaos.resource.query.v1",
             "resource_type": "adaos.development.feedback",
-            "filters": {"category": "inefficient_contract"},
+            "filters": {
+                "category": "inefficient_contract",
+                "contract_ref": "sdk:resources.query",
+                "operation_id": "resources.query",
+            },
             "search": "full snapshots",
             "actor": {"id": "human:test", "role": "owner"},
         }

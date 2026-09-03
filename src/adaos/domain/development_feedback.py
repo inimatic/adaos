@@ -43,7 +43,121 @@ _ITEM_FIELDS = {
     "details",
     "recommendation",
     "evidence_refs",
+    "application_trace",
 }
+_APPLICATION_TRACE_FIELDS = {
+    "schema",
+    "contract_ref",
+    "operation_id",
+    "input_summary",
+    "expected_behavior",
+    "observed_behavior",
+    "validation_result",
+    "user_response",
+    "trace_refs",
+}
+
+
+def _application_trace(value: Any) -> dict[str, Any] | None:
+    if value in (None, {}):
+        return None
+    if not isinstance(value, Mapping):
+        raise TypeError("development feedback application_trace must be an object")
+    trace = dict(value)
+    if set(trace) - _APPLICATION_TRACE_FIELDS:
+        raise ValueError(
+            "development feedback application_trace contains unsupported fields"
+        )
+    if trace.get("schema") != "adaos.development.application_trace.v1":
+        raise ValueError(
+            "development feedback application_trace schema is invalid"
+        )
+    contract_ref = _text(
+        trace.get("contract_ref"),
+        field="application_trace.contract_ref",
+        limit=500,
+        required=True,
+    )
+    if ":" not in contract_ref:
+        raise ValueError(
+            "development feedback application_trace contract_ref is invalid"
+        )
+    validation_result = _text(
+        trace.get("validation_result"),
+        field="application_trace.validation_result",
+        limit=40,
+        required=True,
+    ).lower()
+    if validation_result not in {"passed", "failed", "unknown", "not_run"}:
+        raise ValueError(
+            "development feedback application_trace validation_result is invalid"
+        )
+    trace_refs: list[dict[str, str]] = []
+    for raw_ref in trace.get("trace_refs") or []:
+        if not isinstance(raw_ref, Mapping):
+            raise TypeError(
+                "development feedback application_trace trace_refs must be objects"
+            )
+        ref = dict(raw_ref)
+        if set(ref) - {"type", "ref"}:
+            raise ValueError(
+                "development feedback application_trace trace_ref contains unsupported fields"
+            )
+        trace_refs.append(
+            {
+                "type": _text(
+                    ref.get("type"),
+                    field="application_trace.trace_ref.type",
+                    limit=80,
+                    required=True,
+                ),
+                "ref": _text(
+                    ref.get("ref"),
+                    field="application_trace.trace_ref.ref",
+                    limit=1000,
+                    required=True,
+                ),
+            }
+        )
+    if len(trace_refs) > 12:
+        raise ValueError(
+            "development feedback application_trace has too many trace_refs"
+        )
+    return {
+        "schema": "adaos.development.application_trace.v1",
+        "contract_ref": contract_ref,
+        "operation_id": _text(
+            trace.get("operation_id"),
+            field="application_trace.operation_id",
+            limit=240,
+            required=True,
+        ),
+        "input_summary": _text(
+            trace.get("input_summary"),
+            field="application_trace.input_summary",
+            limit=1200,
+            required=True,
+        ),
+        "expected_behavior": _text(
+            trace.get("expected_behavior"),
+            field="application_trace.expected_behavior",
+            limit=2000,
+            required=True,
+        ),
+        "observed_behavior": _text(
+            trace.get("observed_behavior"),
+            field="application_trace.observed_behavior",
+            limit=3000,
+            required=True,
+        ),
+        "validation_result": validation_result,
+        "user_response": _text(
+            trace.get("user_response"),
+            field="application_trace.user_response",
+            limit=1000,
+        ),
+        "trace_refs": trace_refs,
+    }
 
 
 def _strict_json_object(pairs: Sequence[tuple[str, Any]]) -> dict[str, Any]:
@@ -123,6 +237,7 @@ def normalize_development_feedback(value: Any) -> list[dict[str, Any]]:
             )
         if len(evidence_refs) > 20:
             raise ValueError("development feedback has too many evidence refs")
+        application_trace = _application_trace(item.get("application_trace"))
         normalized.append(
             {
                 "category": category,
@@ -134,6 +249,11 @@ def normalize_development_feedback(value: Any) -> list[dict[str, Any]]:
                 "details": _text(item.get("details"), field="details", limit=3000),
                 "recommendation": _text(item.get("recommendation"), field="recommendation", limit=2000),
                 "evidence_refs": evidence_refs,
+                **(
+                    {"application_trace": application_trace}
+                    if application_trace
+                    else {}
+                ),
             }
         )
     return normalized

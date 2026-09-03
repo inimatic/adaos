@@ -2046,7 +2046,8 @@ documentation anchors, and Context capsule refs are retained in
 `packet.json.prompt_rule_capsules`. Root MCP descriptor search remains an
 optional bounded evidence adapter rather than the owner of initial
 mini-representation formation. Prompt profile
-`adaos-skill-realization/0.18.0` records this projection boundary.
+`adaos-skill-realization/0.18.1` records this projection boundary and the
+bounded public method/resource application-trace output contract.
 
 Development-feedback verification, 2026-09-03: pre-Codex qualification and
 Codex final output can emit schema-validated observations into

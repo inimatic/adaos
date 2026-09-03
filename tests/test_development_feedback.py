@@ -202,6 +202,39 @@ def test_idempotent_feedback_replay_aggregates_distinct_task_observations(
     }
 
 
+def test_development_feedback_filters_exact_application_trace(
+    tmp_path: Path,
+) -> None:
+    service = DevelopmentFeedbackService(state_dir=tmp_path)
+    feedback = service.capture(
+        source="codex",
+        category="inefficient_contract",
+        summary="The bounded query returned a full snapshot.",
+        target_refs=["project:demo", "sdk:resources.query"],
+        classification={
+            "application_trace": {
+                "schema": "adaos.development.application_trace.v1",
+                "contract_ref": "sdk:resources.query",
+                "operation_id": "resources.query",
+                "input_summary": "One redacted metric filter.",
+                "expected_behavior": "Return one metric projection.",
+                "observed_behavior": "Returned the full snapshot.",
+                "validation_result": "failed",
+                "user_response": "The result is too broad.",
+                "trace_refs": [
+                    {"type": "trace", "ref": "trace:resources.query.demo"}
+                ],
+            }
+        },
+        actor="codex:test",
+    )["feedback"]
+
+    assert service.list(contract_ref="sdk:resources.query") == [feedback]
+    assert service.list(operation_id="resources.query") == [feedback]
+    assert service.list(contract_ref="sdk:resources.mutate") == []
+    assert service.list(operation_id="resources.mutate") == []
+
+
 def test_legacy_builder_feedback_import_is_idempotent(tmp_path: Path) -> None:
     feedback_dir = tmp_path / "builder" / "development_sessions" / "session.demo" / "feedback"
     feedback_dir.mkdir(parents=True)
@@ -268,6 +301,43 @@ def test_development_feedback_api_exposes_filter_and_lifecycle(tmp_path: Path) -
     )
     assert listed.status_code == 200
     assert listed.json()["count"] == 1
+
+    traced = client.post(
+        "/api/development-feedback",
+        headers=headers,
+        json={
+            "source": "codex",
+            "category": "validation_gap",
+            "summary": "The typed query returned an invalid projection.",
+            "target_refs": ["project:demo", "sdk:resources.query"],
+            "classification": {
+                "application_trace": {
+                    "schema": "adaos.development.application_trace.v1",
+                    "contract_ref": "sdk:resources.query",
+                    "operation_id": "resources.query",
+                    "input_summary": "One redacted metric filter.",
+                    "expected_behavior": "Return one valid metric projection.",
+                    "observed_behavior": "Returned an invalid projection.",
+                    "validation_result": "failed",
+                    "trace_refs": [],
+                }
+            },
+        },
+    )
+    assert traced.status_code == 200
+    exact = client.get(
+        "/api/development-feedback",
+        headers=headers,
+        params={
+            "source": "codex",
+            "contract_ref": "sdk:resources.query",
+            "operation_id": "resources.query",
+        },
+    )
+    assert exact.status_code == 200
+    assert [item["feedback_id"] for item in exact.json()["items"]] == [
+        traced.json()["feedback"]["feedback_id"]
+    ]
 
     accepted = client.post(
         f"/api/development-feedback/{feedback['feedback_id']}/transition",

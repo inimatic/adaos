@@ -162,7 +162,12 @@ def test_root_mcp_development_feedback_tools(monkeypatch) -> None:
 
     listed = _invoke(
         "development_feedback.list",
-        {"category": "ambiguous_contract", "search": "SDK"},
+        {
+            "category": "ambiguous_contract",
+            "search": "SDK",
+            "contract_ref": "sdk:resources.query",
+            "operation_id": "resources.query",
+        },
         "development.read.feedback",
     )
     shown = _invoke(
@@ -192,6 +197,12 @@ def test_root_mcp_development_feedback_tools(monkeypatch) -> None:
     contracts = {item.id: item for item in root_mcp_service.list_tool_contracts()}
 
     assert listed.result["items"][0]["filters"]["search"] == "SDK"
+    assert listed.result["items"][0]["filters"]["contract_ref"] == (
+        "sdk:resources.query"
+    )
+    assert listed.result["items"][0]["filters"]["operation_id"] == (
+        "resources.query"
+    )
     assert shown.result["feedback"]["feedback_id"] == "devfeedback.test"
     assert captured.result["feedback"]["category"] == "ambiguous_contract"
     assert accepted.result["feedback"]["status"] == "accepted"

@@ -1,7 +1,7 @@
 {
   "schema": "adaos.builder.prompt_rule_registry.v1",
-  "version": "0.4.0",
-  "published_at": "2026-09-03T14:30:00+00:00",
+  "version": "0.4.1",
+  "published_at": "2026-09-03T15:30:00+00:00",
   "authority_ref": "core:adaos.prompt-rule-registry",
   "items": [
     {
@@ -23,6 +23,7 @@
       "rules": [
         "Skill source may use public `adaos.sdk` contracts only; never import `adaos.services`, edit core, imitate a missing core contract locally, or depend on worker internals.",
         "If the admitted SDK/API cannot express the requested behavior, stop that branch and return typed development feedback with the missing or unclear contract, impact, evidence, and the smallest useful capability request.",
+        "After an actual public method or resource application fails, include one bounded application trace with the exact contract and operation refs, redacted input summary, expected and observed behavior, validation result, and trace/test refs; never infer an execution trace from documentation review alone.",
         "A model-proposed capability, path, permission, or owner is evidence for orchestration, not execution authority; the trusted worker resolves and admits it."
       ]
     },

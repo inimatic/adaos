@@ -258,9 +258,20 @@ resource operations with role checks.
 
 Builder also exposes that projection as a project-scoped Development Feedback
 review view with text, stage, category, and producer-source filters. It is a
-view over the same workspace authority, not a Builder-private store. Saved review filters,
-artifact opening, and promotion preview may extend the view without moving
-lifecycle authority into Builder.
+view over the same workspace authority, not a Builder-private store. Exact
+`contract_ref` and `operation_id` filters let a developer inspect repeated SDK
+or resource application failures across separate tasks without scanning raw
+Builder transcripts. Saved review filters, artifact opening, and promotion
+preview may extend the view without moving lifecycle authority into Builder.
+
+After an actual public method or resource attempt, Codex may attach one bounded
+`adaos.development.application_trace.v1` object. It retains the exact contract
+and operation, a redacted input summary, expected and observed behavior,
+validation result, optional user response, and typed trace/test refs. Prompt or
+documentation inspection alone is not sufficient evidence for this object.
+The dedup identity omits the individual Builder task, so recurrence in another
+task increments the same active observation while preserving every task,
+repair, project, component, and originating Dev Ticket relation.
 
 The trusted Skill Factory validator is a producer after the bounded repair
 budget is exhausted. It captures only recognized public-contract failures,
