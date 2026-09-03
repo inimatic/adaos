@@ -271,7 +271,7 @@ def test_root_mcp_accepts_bounded_builder_task_lease(monkeypatch) -> None:
             "lease_id": "lease.builder-mcp",
             "task_id": "task.builder-mcp",
             "node_id": "devnode.builder",
-            "scopes": ["read_capability_snapshot"],
+            "scopes": ["read_capability_snapshot", "read_requirements"],
             "credential_refs": [],
             "allowed_target_ids": ["hub:sn_builder"],
             "subnet_id": "sn_builder",
@@ -285,6 +285,7 @@ def test_root_mcp_accepts_bounded_builder_task_lease(monkeypatch) -> None:
     assert task_auth is not None
     assert task_auth["allowed_target_ids"] == ["hub:sn_builder"]
     assert task_auth["subnet_id"] == "sn_builder"
+    assert "development.read.descriptors" in task_auth["capabilities"]
     client = _make_client()
     headers = {"Authorization": "Bearer sf_task_test-secret"}
 
@@ -333,8 +334,24 @@ def test_root_mcp_accepts_bounded_builder_task_lease(monkeypatch) -> None:
     assert tools.status_code == 200
     assert {item["name"] for item in tools.json()["result"]["tools"]} == {
         "foundation",
+        "get_architecture_catalog",
         "get_builder_context",
+        "get_sdk_metadata",
+        "get_template_catalog",
     }
+
+    sdk_metadata = client.post(
+        f"/v1/root/mcp/task/{task_id}",
+        headers=headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": "sdk-metadata",
+            "method": "tools/call",
+            "params": {"name": "get_sdk_metadata", "arguments": {}},
+        },
+    )
+    assert sdk_metadata.status_code == 200
+    assert "forbidden" not in json.dumps(sdk_metadata.json()).lower()
 
     forbidden = client.post(
         f"/v1/root/mcp/task/{task_id}",

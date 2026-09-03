@@ -205,6 +205,7 @@ _TASK_MCP_SCOPE_CAPABILITIES: dict[str, tuple[str, ...]] = {
     ),
     "read_requirements": (
         "development.read.contracts",
+        "development.read.descriptors",
         "development.read.system_model",
         "development.read.skill_contracts",
         "development.read.scenario_contracts",
