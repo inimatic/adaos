@@ -19,6 +19,7 @@ __all__ = [
     "memory",
     "research",
     "status",
+    "subscriptions",
     "web",
     "workflow",
     "validate_self",
@@ -41,6 +42,7 @@ def __getattr__(name: str):
         "memory",
         "research",
         "status",
+        "subscriptions",
         "web",
         "workflow",
     ):
