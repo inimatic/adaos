@@ -90,19 +90,23 @@ _CONCEPT_PREFIXES = {
         "data",
         "load",
         "metric",
+        "quota",
         "refresh",
         "resource",
         "subscription",
         "summary",
+        "token",
         "usage",
         "данн",
         "загруз",
+        "квот",
         "метрик",
         "обнов",
         "подпис",
         "расход",
         "ресурс",
         "саммари",
+        "токен",
     },
     "crud": {
         "create",
@@ -122,12 +126,16 @@ _CONCEPT_PREFIXES = {
         "mcp",
         "network",
         "node",
+        "public",
         "root",
+        "sdk",
         "subnet",
         "источник",
         "нод",
         "подсет",
+        "публичн",
         "сервер",
+        "ядр",
     },
     "validation": {
         "accept",
@@ -373,10 +381,10 @@ def _rank_entries(
 
 
 def _profile_for(concepts: set[str]) -> str:
-    if "crud" in concepts:
-        return "resource_crud"
     if "subnet" in concepts and "data" in concepts:
         return "subnet_data_integration"
+    if "crud" in concepts:
+        return "resource_crud"
     if "ui" in concepts:
         return "surgical_ui"
     if "data" in concepts:
