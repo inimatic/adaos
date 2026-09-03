@@ -215,6 +215,31 @@ Project manifest does not record a transient current editing task. Publication
 turns the Project definition plus exact component packages into an immutable
 ProjectRelease.
 
+### DEV Project lifecycle
+
+Project ownership is a first-class developer boundary, not metadata inferred
+again from whichever skill or scenario happens to be open. The local CLI
+therefore exposes `adaos dev project list|show|status|materialize|push`:
+
+- `materialize` copies the complete Workspace-owned project slice into DEV,
+  including every owned skill and scenario, and stops for explicit recovery
+  decisions when source generations diverge;
+- `status` compares content-addressed DEV and Workspace source closures rather
+  than assuming that a dirty checkout still represents Git `HEAD`;
+- `push` applies an explicit semantic Project version bump, builds the exact
+  dependency closure, and emits an immutable ProjectRelease; `--local-only`
+  keeps experimental projects out of the remote registry until a trial is
+  ready for review;
+- the source revision is derived from the canonical Project definition and the
+  same normalized component bytes used by package construction. Unrelated DEV
+  projects do not perturb it.
+
+The ProjectRelease is the runtime-recoverable checkpoint. Developer-only
+component source can additionally use the existing skill/scenario Forge draft
+checkpoint before publication. A future project-native Forge source archive
+may optimize that operation, but it must not introduce a second release or
+activation identity.
+
 ### Definition, release, installation, and live-state boundary
 
 The four identities must remain separate:

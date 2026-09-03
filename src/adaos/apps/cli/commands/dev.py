@@ -15,6 +15,7 @@ import typer
 import yaml
 
 from adaos.apps.cli.i18n import _
+from adaos.apps.cli.commands.dev_project import app as project_app
 from adaos.apps.cli.commands.skill import _mgr
 from adaos.services.yjs.webspace import default_webspace_id
 from adaos.services.agent_context import get_ctx
@@ -68,6 +69,7 @@ app.add_typer(root_app, name="root")
 root_app.add_typer(mcp_app, name="mcp")
 app.add_typer(skill_app, name="skill")
 app.add_typer(scenario_app, name="scenario")
+app.add_typer(project_app, name="project")
 app.add_typer(ticket_app, name="ticket")
 ticket_app.add_typer(ticket_artifact_app, name="artifact")
 

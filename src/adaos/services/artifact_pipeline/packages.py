@@ -385,6 +385,41 @@ def _canonical_package_bytes(data: bytes) -> bytes:
     return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 
 
+def artifact_source_snapshot(
+    artifact_dir: Path,
+    *,
+    limits: PackageLimits | None = None,
+) -> dict[str, Any]:
+    """Return the canonical source identity used by the package builder.
+
+    The snapshot applies the same exclusions, path validation, text
+    normalization, and secret checks as ``build_artifact_package``.  It lets a
+    mutable DEV Project name an immutable source revision before package and
+    ProjectRelease construction without depending on a dirty Git checkout.
+    """
+
+    root = Path(artifact_dir).expanduser().resolve()
+    if not root.is_dir():
+        raise PackageBuildError(f"artifact directory does not exist: {root}")
+    files = _collect_package_files(root, limits or PackageLimits())
+    records = [
+        {"path": name, "size": len(data), "digest": sha256_digest(data)}
+        for name, data in files
+    ]
+    identity = {
+        "schema": "adaos.artifact.source_snapshot.v1",
+        "build_policy_digest": PACKAGE_BUILD_POLICY_DIGEST,
+        "files": records,
+    }
+    return {
+        **identity,
+        "root": str(root),
+        "file_count": len(records),
+        "size_bytes": sum(int(item["size"]) for item in records),
+        "digest": canonical_payload_digest(identity),
+    }
+
+
 def build_artifact_package(
     artifact_dir: Path,
     *,
@@ -1176,6 +1211,7 @@ __all__ = [
     "PackageLimits",
     "PackageVerificationError",
     "VerifiedArtifactPackage",
+    "artifact_source_snapshot",
     "build_artifact_package",
     "verify_artifact_package",
 ]

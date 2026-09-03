@@ -378,6 +378,13 @@ Ticket and signals, and closes only with evidence.
   one validated alpha Project when no owner exists. Bind every package ticket
   and source signal to that Project before creating the repair so publication,
   trial, acceptance, and rollback share one ProjectRelease lineage.
+- [x] `[must]` `DS5-35` Add the operator/Codex `adaos dev project` lifecycle.
+  List and diagnose all DEV Projects without one malformed legacy manifest
+  hiding the rest; show exact source status; materialize the whole owning
+  Project slice; and build or publish a semantically versioned ProjectRelease
+  from a canonical content-addressed source closure. Keep experimental runs
+  local with `--local-only` and reject same-version/different-digest release
+  mutation.
 
 Implementation note, 2026-09-03: `DS5-32` is deterministic-first. The
 `builder-qualification/language` endpoint calls the Root LLM only after the
@@ -508,6 +515,17 @@ evidence, and history event are written back to every user ticket and linked
 signal before the package repair is materialized. This closes the missing
 ProjectRelease identity exposed by the Subscription E2E while preserving the
 explicit materialize/fork/overlay/defer choice for sources that are not in DEV.
+
+DEV Project CLI update, 2026-09-03: `adaos dev project
+list|show|status|materialize|push` now exposes the same project ownership unit
+to Codex and human operators. Source identity is computed from the normalized
+Project definition and canonical package inputs, including transitive local
+skill/scenario requirements but excluding unrelated DEV projects. Push performs
+a transactional semantic version bump, builds a normal ProjectRelease, and can
+remain local for experimental work. The first real probe rejected an attempted
+mutation of the existing `semantic_ui_demo@0.10.7` digest, then successfully
+built local `semantic_ui_demo@0.10.8` after a patch bump. Project listing also
+isolates invalid manifests instead of losing the whole catalog.
 
 ## DS6. Analytics, Campaigns, And Policy Hardening
 

@@ -13,11 +13,17 @@ from adaos.domain.artifact_release import (
     ArtifactPackageRef,
     ArtifactSourceRef,
     WorkspaceLock,
+    canonical_payload_digest,
 )
 from adaos.sdk.developer.compositions import normalized_definition
 
 from .channels import ReleaseRepository
-from .packages import BuiltArtifactPackage, ContentAddressedPackageStore, build_artifact_package
+from .packages import (
+    BuiltArtifactPackage,
+    ContentAddressedPackageStore,
+    artifact_source_snapshot,
+    build_artifact_package,
+)
 from .releases import (
     DependencyRequirement,
     PackageCatalog,
@@ -166,6 +172,73 @@ def _resolve_project_dependency_locks(
             }
         )
     return tuple(sorted(locks, key=lambda item: item["project_ref"]))
+
+
+def project_source_snapshot(
+    *,
+    project_dir: Path,
+    workspace_root: Path,
+) -> dict[str, Any]:
+    """Identify the exact mutable Project source closure before release build."""
+
+    workspace = Path(workspace_root).expanduser().resolve()
+    project_root = Path(project_dir).expanduser().resolve()
+    if workspace not in project_root.parents or not project_root.is_dir():
+        raise ProjectReleaseBuildError(
+            "Project source must be inside the selected Workspace"
+        )
+    definition = normalized_definition(_read_yaml(project_root / "project.yaml"))
+    owned_refs = tuple(
+        str(item["ref"]) for item in definition["components"]["owned"]
+    )
+    pending: list[tuple[str, bool]] = [(item, False) for item in owned_refs]
+    for item in definition["components"]["dependencies"]:
+        ref = str(item.get("ref") or "")
+        if ref.startswith(("skill:", "scenario:")):
+            pending.append((ref, False))
+
+    components: dict[str, dict[str, Any]] = {}
+    while pending:
+        ref, optional = pending.pop(0)
+        if ref in components:
+            continue
+        try:
+            root = _component_root(workspace, ref)
+        except ProjectReleaseBuildError:
+            if optional:
+                continue
+            raise
+        kind, _artifact_id = _component_ref(ref)
+        snapshot = artifact_source_snapshot(root)
+        components[ref] = {
+            "ref": ref,
+            "path": root.relative_to(workspace).as_posix() + "/",
+            "digest": snapshot["digest"],
+            "file_count": snapshot["file_count"],
+            "size_bytes": snapshot["size_bytes"],
+        }
+        requirements = parse_artifact_requirements(
+            _read_yaml(root / _component_manifest_name(kind)),
+            kind=kind,  # type: ignore[arg-type]
+        )
+        pending.extend((item.key, item.optional) for item in requirements)
+
+    project_snapshot = artifact_source_snapshot(project_root)
+    identity = {
+        "schema": "adaos.artifact.project_source_snapshot.v1",
+        "project_id": definition["id"],
+        "project_definition": definition,
+        "project_source_digest": project_snapshot["digest"],
+        "components": [components[key] for key in sorted(components)],
+    }
+    return {
+        **identity,
+        "source_revision": canonical_payload_digest(identity),
+        "file_count": int(project_snapshot["file_count"])
+        + sum(int(item["file_count"]) for item in components.values()),
+        "size_bytes": int(project_snapshot["size_bytes"])
+        + sum(int(item["size_bytes"]) for item in components.values()),
+    }
 
 
 def build_workspace_project_release(
@@ -335,4 +408,5 @@ __all__ = [
     "ProjectReleaseBuildError",
     "ProjectReleaseBuildResult",
     "build_workspace_project_release",
+    "project_source_snapshot",
 ]

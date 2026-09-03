@@ -13,6 +13,7 @@ from adaos.services.artifact_pipeline.packages import (
 from adaos.services.artifact_pipeline.project_build import (
     ProjectReleaseBuildError,
     build_workspace_project_release,
+    project_source_snapshot,
 )
 
 
@@ -235,6 +236,76 @@ def test_workspace_project_build_rejects_empty_builder_draft(tmp_path: Path) -> 
         assert "primary owned component" in str(exc)
     else:
         raise AssertionError("empty Builder draft must not produce a release")
+
+
+def test_project_source_snapshot_is_scoped_and_content_addressed(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    skill_root = workspace / "skills" / "kanban_skill"
+    _write_yaml(
+        skill_root / "skill.yaml",
+        {"name": "kanban_skill", "version": "0.1.0", "tools": []},
+    )
+    handler = skill_root / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text("def list_cards():\n    return []\n", encoding="utf-8")
+    unrelated = workspace / "skills" / "unrelated" / "skill.yaml"
+    _write_yaml(
+        unrelated,
+        {"name": "unrelated", "version": "9.9.9", "tools": []},
+    )
+    project_root = workspace / "projects" / "kanban"
+    _write_yaml(
+        project_root / "project.yaml",
+        {
+            "schema": "adaos.project.v1",
+            "kind": "project",
+            "id": "kanban",
+            "version": "0.1.0",
+            "profiles": [],
+            "components": {
+                "owned": [{"ref": "skill:kanban_skill", "role": "primary"}],
+                "dependencies": [],
+            },
+            "entrypoints": [],
+            "catalog": {
+                "title": "Kanban",
+                "description": "",
+                "categories": [],
+                "tags": [],
+            },
+            "lifecycle": {
+                "uninstall": {
+                    "components": "retain",
+                    "runtime_data": "retain",
+                    "source_artifacts": "retain",
+                }
+            },
+        },
+    )
+
+    first = project_source_snapshot(
+        project_dir=project_root,
+        workspace_root=workspace,
+    )
+    unrelated.write_text(unrelated.read_text(encoding="utf-8") + "# drift\n", encoding="utf-8")
+    unchanged = project_source_snapshot(
+        project_dir=project_root,
+        workspace_root=workspace,
+    )
+    handler.write_text("def list_cards():\n    return ['changed']\n", encoding="utf-8")
+    changed = project_source_snapshot(
+        project_dir=project_root,
+        workspace_root=workspace,
+    )
+
+    assert first["source_revision"].startswith("sha256:")
+    assert first["source_revision"] == unchanged["source_revision"]
+    assert changed["source_revision"] != first["source_revision"]
+    assert [item["ref"] for item in first["components"]] == [
+        "skill:kanban_skill"
+    ]
 
 
 def test_workspace_project_build_locks_local_project_dependencies(tmp_path: Path) -> None:
