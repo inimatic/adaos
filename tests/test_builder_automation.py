@@ -2036,6 +2036,90 @@ def test_validation_failure_reuses_original_budget_candidate_after_requalificati
     assert checkpoint["continuation_contract"] == continuation_contract
 
 
+def test_project_validation_failure_preserves_candidate_for_structured_repair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    task_id = "task.validation-candidate"
+    run_root = service.runs_root / task_id
+    (run_root / "workspace" / ".git").mkdir(parents=True)
+    (run_root / "input").mkdir(parents=True)
+    continuation_contract = automation_module._continuation_contract()
+    (run_root / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {"continuation_contract": continuation_contract}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    service.factory = SimpleNamespace(
+        read_task=lambda _task_id: {
+            "task_id": task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.validation",
+                    "message": (
+                        "RuntimeError: Generated project validation failed: "
+                        "skills/demo/skill.yaml: data_routes.budget_missing"
+                    ),
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda _run_root: True,
+    )
+
+    checkpoint = service._budget_continuation_checkpoint(
+        {"current_task_id": task_id}
+    )
+
+    assert checkpoint is not None
+    assert checkpoint["source_task_id"] == task_id
+    assert checkpoint["failure_id"] == "failure.validation"
+    assert checkpoint["reason"] == "deterministic_validation_failure"
+
+
+def test_structured_repair_can_reuse_project_validation_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    checkpoint = {
+        "mode": "validate_preserved_candidate",
+        "reason": "deterministic_validation_failure",
+    }
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_budget_continuation_checkpoint",
+        lambda self, session: dict(checkpoint),
+    )
+
+    selected = service._qualified_continuation_checkpoint(
+        {
+            "implementation_brief": json.dumps(
+                {
+                    "repair_hints": {
+                        "structured_edits": {
+                            "schema": "adaos.builder.structured_edits.v1",
+                            "operations": [{"op": "replace_text"}],
+                        }
+                    }
+                }
+            )
+        }
+    )
+
+    assert selected == checkpoint
+
+
 def test_budget_continuation_skips_unchanged_candidate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -6072,13 +6156,19 @@ def test_failed_worker_synchronizes_linked_dev_ticket(
 ) -> None:
     service = _service(tmp_path)
     synced: list[dict] = []
+    gate_reports: list[dict] = []
     failed = {
         "session_id": "automation.skill.demo_metrics_skill",
         "object_type": "skill",
         "object_id": "demo_metrics_skill",
         "status": "failed",
         "current_task_id": "task.failed",
-        "last_failure": {"message": "Codex execution failed"},
+        "last_failure": {
+            "message": (
+                "Generated project validation failed: "
+                "skills/demo_metrics_skill/skill.yaml: data_routes.budget_missing"
+            )
+        },
         "links": {
             "development_ticket_id": "dticket.failed",
             "builder_repair_id": "repair.failed",
@@ -6111,12 +6201,29 @@ def test_failed_worker_synchronizes_linked_dev_ticket(
         "_sync_linked_development_ticket_tasks",
         lambda self, value: synced.append(dict(value)) or dict(value),
     )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_report_publication_gate_failure",
+        lambda self, session, **kwargs: (
+            gate_reports.append(dict(kwargs))
+            or {
+                "ticket": {"ticket_id": "dticket.validation"},
+                "ticket_duplicate": False,
+            }
+        ),
+    )
 
     service._run_worker(failed["session_id"])
 
     assert len(synced) == 1
     assert synced[0]["status"] == "failed"
     assert synced[0]["current_task_id"] == "task.failed"
+    assert synced[0]["completion_readiness"]["publication_gate_failure"] == {
+        "ticket_id": "dticket.validation",
+        "duplicate": False,
+        "gate": "validation",
+    }
+    assert gate_reports[0]["gate"] == "validation"
 
 
 def test_worker_crash_fails_factory_task_and_synchronizes_ticket(

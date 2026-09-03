@@ -3363,14 +3363,34 @@ class LocalSkillFactoryWorker:
                 else None
             )
             if continuation:
-                self._progress(task_id, "tests_running", "Validating preserved Codex candidate")
+                self._progress(
+                    task_id,
+                    "in_progress" if structured_edits else "tests_running",
+                    (
+                        "Applying qualified edits to the preserved Codex candidate"
+                        if structured_edits
+                        else "Validating preserved Codex candidate"
+                    ),
+                )
                 root_mcp_evidence = (
                     dict(continuation.get("root_mcp_evidence") or {}) or None
                 )
+                if structured_edits:
+                    structured_edit_receipt = self._apply_structured_edits(
+                        assignment,
+                        workspace,
+                    )
+                    _write_json(
+                        runtime_dir / "structured-edit-receipt.json",
+                        structured_edit_receipt,
+                    )
                 codex_result = CodexRunResult(
                     returncode=0,
                     final_message=(
-                        "Validated and finalized the preserved candidate from "
+                        "Applied qualified deterministic edits and finalized the preserved "
+                        f"candidate from {continuation['source_task_id']} without repeating model work."
+                        if structured_edits
+                        else "Validated and finalized the preserved candidate from "
                         f"{continuation['source_task_id']} without repeating model work."
                     ),
                 )
@@ -4135,8 +4155,17 @@ class LocalSkillFactoryWorker:
             if isinstance(item, Mapping)
         ]
         failure = failures[-1] if failures else {}
-        if "Codex token budget exceeded:" not in str(failure.get("message") or ""):
-            raise ValueError("continuation source task did not stop at the token budget boundary")
+        failure_message = str(failure.get("message") or "")
+        continuation_reason = str(checkpoint.get("reason") or "").strip()
+        token_boundary = "Codex token budget exceeded:" in failure_message
+        deterministic_validation = (
+            continuation_reason == "deterministic_validation_failure"
+            and "Generated project validation failed:" in failure_message
+        )
+        if not token_boundary and not deterministic_validation:
+            raise ValueError(
+                "continuation source task did not stop at an eligible preservation boundary"
+            )
         expected_failure_id = str(checkpoint.get("failure_id") or "").strip()
         if expected_failure_id and expected_failure_id != str(failure.get("failure_id") or "").strip():
             raise ValueError("continuation checkpoint failure identity does not match")

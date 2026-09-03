@@ -2810,9 +2810,17 @@ class BuilderAutomationService:
         self,
         session: Mapping[str, Any],
     ) -> dict[str, Any] | None:
-        if _brief_deterministic_strategy(session.get("implementation_brief")):
-            return None
-        return self._budget_continuation_checkpoint(session)
+        checkpoint = self._budget_continuation_checkpoint(session)
+        strategy = _brief_deterministic_strategy(session.get("implementation_brief"))
+        if not strategy:
+            return checkpoint
+        if (
+            strategy == "structured_edits"
+            and checkpoint
+            and checkpoint.get("reason") == "deterministic_validation_failure"
+        ):
+            return checkpoint
+        return None
 
     def submit_turn(
         self,
@@ -3159,7 +3167,9 @@ class BuilderAutomationService:
         trigger_failure_id: str | None = None
         if "Codex token budget exceeded:" not in failure_message:
             retry_reason = None
-            if "changed paths outside the exact repair files:" in failure_message:
+            if "Generated project validation failed:" in failure_message:
+                retry_reason = "deterministic_validation_failure"
+            elif "changed paths outside the exact repair files:" in failure_message:
                 retry_reason = "repair_envelope_requalified_after_path_guard"
             elif any(
                 marker in failure_message
@@ -3172,50 +3182,53 @@ class BuilderAutomationService:
                 retry_reason = "trusted_root_mcp_validation_retry"
             if retry_reason is None:
                 return None
-            failed_run_root = Path(self.runs_root) / _safe_token(task_id)
-            assignment_path = failed_run_root / "input" / "assignment.json"
-            try:
-                assignment = json.loads(assignment_path.read_text(encoding="utf-8"))
-            except (FileNotFoundError, OSError, json.JSONDecodeError):
-                return None
-            request = (
-                dict(assignment.get("realize_request") or {})
-                if isinstance(assignment, Mapping)
-                else {}
-            )
-            artifacts = (
-                dict(request.get("artifacts") or {})
-                if isinstance(request.get("artifacts"), Mapping)
-                else {}
-            )
-            checkpoint = (
-                dict(artifacts.get("continuation_checkpoint") or {})
-                if isinstance(artifacts.get("continuation_checkpoint"), Mapping)
-                else {}
-            )
-            if checkpoint.get("mode") != "validate_preserved_candidate":
-                return None
-            source_task_id = str(checkpoint.get("source_task_id") or "").strip()
-            if not source_task_id or source_task_id == task_id:
-                return None
-            try:
-                source_task = self.factory.read_task(source_task_id)
-            except (KeyError, RuntimeError):
-                return None
-            source_failures = [
-                dict(item)
-                for item in source_task.get("failure_history") or []
-                if isinstance(item, Mapping)
-            ]
-            source_failure = source_failures[-1] if source_failures else {}
-            if (
-                str(source_task.get("status") or "").strip() != "failed"
-                or "Codex token budget exceeded:"
-                not in str(source_failure.get("message") or "")
-            ):
-                return None
-            trigger_failure_id = str(failure.get("failure_id") or "").strip() or None
-            reason = retry_reason
+            if retry_reason == "deterministic_validation_failure":
+                reason = retry_reason
+            else:
+                failed_run_root = Path(self.runs_root) / _safe_token(task_id)
+                assignment_path = failed_run_root / "input" / "assignment.json"
+                try:
+                    assignment = json.loads(assignment_path.read_text(encoding="utf-8"))
+                except (FileNotFoundError, OSError, json.JSONDecodeError):
+                    return None
+                request = (
+                    dict(assignment.get("realize_request") or {})
+                    if isinstance(assignment, Mapping)
+                    else {}
+                )
+                artifacts = (
+                    dict(request.get("artifacts") or {})
+                    if isinstance(request.get("artifacts"), Mapping)
+                    else {}
+                )
+                checkpoint = (
+                    dict(artifacts.get("continuation_checkpoint") or {})
+                    if isinstance(artifacts.get("continuation_checkpoint"), Mapping)
+                    else {}
+                )
+                if checkpoint.get("mode") != "validate_preserved_candidate":
+                    return None
+                source_task_id = str(checkpoint.get("source_task_id") or "").strip()
+                if not source_task_id or source_task_id == task_id:
+                    return None
+                try:
+                    source_task = self.factory.read_task(source_task_id)
+                except (KeyError, RuntimeError):
+                    return None
+                source_failures = [
+                    dict(item)
+                    for item in source_task.get("failure_history") or []
+                    if isinstance(item, Mapping)
+                ]
+                source_failure = source_failures[-1] if source_failures else {}
+                if (
+                    str(source_task.get("status") or "").strip() != "failed"
+                    or "Codex token budget exceeded:"
+                    not in str(source_failure.get("message") or "")
+                ):
+                    return None
+                trigger_failure_id = str(failure.get("failure_id") or "").strip() or None
+                reason = retry_reason
         run_root = Path(self.runs_root) / _safe_token(source_task_id)
         if not (run_root / "workspace" / ".git").is_dir():
             return None
@@ -6346,6 +6359,9 @@ class BuilderAutomationService:
                         self._save_session(session)
                         finalizing_projection = self.project_session(session)
             if failed_session is not None:
+                failed_session = self._capture_worker_publication_gate_failure(
+                    failed_session
+                )
                 failed_session = self._sync_linked_development_ticket_tasks(failed_session)
                 if self.event_sink:
                     self.event_sink(self.project_session(failed_session))
@@ -7942,6 +7958,90 @@ class BuilderAutomationService:
             session_id=str(session.get("session_id") or "").strip() or None,
             webspace_id=str(session.get("webspace_id") or "desktop").strip() or "desktop",
         )
+
+    def _capture_worker_publication_gate_failure(
+        self,
+        session: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Project deterministic worker gates into the project ticket stream."""
+
+        current = dict(session)
+        failure = (
+            dict(current.get("last_failure"))
+            if isinstance(current.get("last_failure"), Mapping)
+            else {}
+        )
+        error = str(failure.get("message") or "").strip()
+        lowered = error.lower()
+        if "generated project validation failed:" in lowered:
+            gate = "validation"
+        elif "tests failed" in lowered or "pytest" in lowered:
+            gate = "tests"
+        else:
+            return current
+        task_id = str(current.get("current_task_id") or "").strip()
+        report_path = (
+            Path(self.runs_root) / _safe_token(task_id) / "output" / "test_report.json"
+            if task_id
+            else None
+        )
+        evidence_refs: list[dict[str, Any]] = [
+            {
+                "type": "test",
+                "id": task_id or str(current.get("session_id") or "builder.worker"),
+                "status": "failed",
+                "gate": gate,
+                "task_id": task_id or None,
+                "error": error,
+            }
+        ]
+        if report_path is not None and report_path.is_file():
+            evidence_refs.append(
+                {
+                    "type": "file",
+                    "id": str(report_path),
+                    "path": str(report_path),
+                    "status": "failed",
+                    "source": "builder.worker",
+                }
+            )
+        try:
+            result = self._report_publication_gate_failure(
+                current,
+                gate=gate,
+                error=error,
+                evidence_refs=evidence_refs,
+            )
+        except Exception:
+            _log.exception(
+                "failed to capture Builder worker gate project=%s:%s stage=%s",
+                current.get("object_type"),
+                current.get("object_id"),
+                gate,
+            )
+            return current
+        if not result:
+            return current
+        ticket = (
+            dict(result.get("ticket"))
+            if isinstance(result.get("ticket"), Mapping)
+            else {}
+        )
+        readiness = (
+            dict(current.get("completion_readiness"))
+            if isinstance(current.get("completion_readiness"), Mapping)
+            else {}
+        )
+        readiness["publication_gate_failure"] = {
+            "ticket_id": ticket.get("ticket_id"),
+            "duplicate": bool(result.get("ticket_duplicate")),
+            "gate": gate,
+        }
+        current["completion_readiness"] = readiness
+        current["updated_at"] = _now_iso()
+        with _LOCK:
+            self._save_session(current)
+        return current
 
     def _record_component_update(
         self,
