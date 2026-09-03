@@ -106,6 +106,10 @@ def test_ensure_owning_dev_project_adopts_standalone_component_once(tmp_path: Pa
     service = _service(tmp_path)
     _write_dev_skill(service, "subscription_status_skill")
 
+    unresolved = service.resolve_owning_dev_project(
+        kind="skill",
+        artifact_id="subscription_status_skill",
+    )
     created = service.ensure_owning_dev_project(
         kind="skill",
         artifact_id="subscription_status_skill",
@@ -117,6 +121,7 @@ def test_ensure_owning_dev_project_adopts_standalone_component_once(tmp_path: Pa
         actor="builder:test",
     )
 
+    assert unresolved["status"] == "unowned"
     assert created["status"] == "created"
     assert created["project_id"] == "subscription_status"
     assert created["project_ref"] == "project:subscription_status"

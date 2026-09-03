@@ -326,9 +326,13 @@ def _dev_owner_project_scope(component_ref: str) -> dict[str, str]:
     if not token.startswith(("skill:", "scenario:")):
         return {}
     try:
-        from adaos.sdk.developer import compositions
+        from adaos.services.builder.workspace import BuilderWorkspaceService
 
-        project = compositions.project_for_component(token)
+        kind, artifact_id = token.split(":", 1)
+        project = BuilderWorkspaceService.from_context().resolve_owning_dev_project(
+            kind=kind,
+            artifact_id=artifact_id,
+        )
     except Exception:
         return {}
     if not isinstance(project, Mapping):

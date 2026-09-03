@@ -579,15 +579,13 @@ class BuilderWorkspaceService:
             token = token[: -len(suffix)]
         return token
 
-    def ensure_owning_dev_project(
+    def resolve_owning_dev_project(
         self,
         *,
         kind: str,
         artifact_id: str,
-        project_id: str | None = None,
-        actor: str = "builder.qualifier",
     ) -> dict[str, Any]:
-        """Ensure a standalone DEV component has one authoritative owning Project."""
+        """Resolve Project ownership without materializing or creating source."""
 
         normalized_kind = str(kind or "").strip().lower().rstrip("s")
         artifact_token = _slug(artifact_id)
@@ -631,14 +629,40 @@ class BuilderWorkspaceService:
                 ),
             }
         component_root = self._dev_artifact_root(normalized_kind, artifact_token)
-        if not component_root.is_dir():
-            return {
-                "schema": "adaos.builder.owning_project_resolution.v1",
-                "status": "needs_source",
-                "created": False,
-                "component_ref": component_ref,
-                "reason": "component DEV source is unavailable",
-            }
+        return {
+            "schema": "adaos.builder.owning_project_resolution.v1",
+            "status": "unowned" if component_root.is_dir() else "needs_source",
+            "created": False,
+            "component_ref": component_ref,
+            "reason": (
+                "component has no owning DEV Project"
+                if component_root.is_dir()
+                else "component DEV source is unavailable"
+            ),
+        }
+
+    def ensure_owning_dev_project(
+        self,
+        *,
+        kind: str,
+        artifact_id: str,
+        project_id: str | None = None,
+        actor: str = "builder.qualifier",
+    ) -> dict[str, Any]:
+        """Ensure a standalone DEV component has one authoritative owning Project."""
+
+        normalized_kind = str(kind or "").strip().lower().rstrip("s")
+        artifact_token = _slug(artifact_id)
+        if normalized_kind not in {"skill", "scenario"}:
+            raise ValueError("kind must be skill or scenario")
+        component_ref = f"{normalized_kind}:{artifact_token}"
+        resolution = self.resolve_owning_dev_project(
+            kind=normalized_kind,
+            artifact_id=artifact_token,
+        )
+        if resolution["status"] != "unowned":
+            return resolution
+        component_root = self._dev_artifact_root(normalized_kind, artifact_token)
 
         requested_id = _slug(
             project_id
