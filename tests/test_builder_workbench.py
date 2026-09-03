@@ -513,7 +513,7 @@ def test_selected_project_is_persisted_without_changing_runtime_scenario(tmp_pat
     assert service.get_workspace_binding("desktop")["selection"] == binding["selection"]
 
 
-def test_workspace_binding_migrates_legacy_project_selection_to_v2(tmp_path: Path) -> None:
+def test_workspace_binding_rejects_legacy_project_selection(tmp_path: Path) -> None:
     service = BuilderWorkbenchService(state_dir=tmp_path / "state")
     binding_path = service.binding_path("desktop")
     binding_path.parent.mkdir(parents=True, exist_ok=True)
@@ -536,20 +536,8 @@ def test_workspace_binding_migrates_legacy_project_selection_to_v2(tmp_path: Pat
         encoding="utf-8",
     )
 
-    binding = service.get_workspace_binding("desktop")
-
-    assert binding["selection"] == {
-        "schema": "adaos.builder.project_selection.v2",
-        "object_type": "project",
-        "object_id": "kanban",
-        "ref": "project:kanban",
-        "title": "Kanban",
-        "description": "Builder test project",
-        "context_topic_id": "prompt-project:project:kanban",
-        "context_thread_id": "prompt-project:project:kanban",
-    }
-    persisted = json.loads(binding_path.read_text(encoding="utf-8"))
-    assert persisted["selection"] == binding["selection"]
+    with pytest.raises(ValueError, match="reselect the Project"):
+        service.get_workspace_binding("desktop")
 
 
 def test_changing_runtime_project_clears_an_explicit_preview_from_the_previous_project(tmp_path: Path) -> None:

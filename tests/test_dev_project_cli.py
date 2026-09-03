@@ -79,6 +79,99 @@ def test_dev_project_create_can_adopt_existing_primary_component(monkeypatch) ->
     assert '"created_component": false' in result.output
 
 
+def test_dev_project_attach_uses_project_composition_authority(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def ensure_owned_component(project_id, component_ref, **kwargs):
+        calls.append(
+            {
+                "project_id": project_id,
+                "component_ref": component_ref,
+                **kwargs,
+            }
+        )
+        return {
+            "ok": True,
+            "idempotent": False,
+            "project": {"id": project_id},
+        }
+
+    monkeypatch.setattr(
+        dev_project.compositions,
+        "ensure_owned_component",
+        ensure_owned_component,
+    )
+
+    result = CliRunner().invoke(
+        dev_project.app,
+        [
+            "attach",
+            "builder",
+            "skill:builder_skill",
+            "--role",
+            "implementation",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        {
+            "project_id": "builder",
+            "component_ref": "skill:builder_skill",
+            "role": "implementation",
+            "exposure": "project_only",
+            "lifecycle": "bound",
+        }
+    ]
+    assert '"idempotent": false' in result.output
+
+
+def test_dev_project_depend_declares_shared_dependency(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def ensure_dependency(project_id, dependency_ref, **kwargs):
+        calls.append(
+            {
+                "project_id": project_id,
+                "dependency_ref": dependency_ref,
+                **kwargs,
+            }
+        )
+        return {
+            "ok": True,
+            "idempotent": False,
+            "project": {"id": project_id},
+        }
+
+    monkeypatch.setattr(
+        dev_project.compositions,
+        "ensure_dependency",
+        ensure_dependency,
+    )
+
+    result = CliRunner().invoke(
+        dev_project.app,
+        [
+            "depend",
+            "builder",
+            "skill:voice_chat_skill",
+            "--version",
+            "^0.1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        {
+            "project_id": "builder",
+            "dependency_ref": "skill:voice_chat_skill",
+            "version": "^0.1",
+        }
+    ]
+
+
 def test_dev_project_push_uses_content_revision_and_can_stay_local(
     monkeypatch,
     tmp_path,

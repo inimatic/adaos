@@ -566,14 +566,24 @@ def _project_selection(
     }
 
 
-def _normalize_project_selection(
+def _require_project_selection_v2(
     value: Mapping[str, Any] | None,
     *,
     fallback_object_type: str = "scenario",
     fallback_object_id: str = "builder",
     fallback_title: str | None = None,
 ) -> dict[str, Any]:
+    if value is not None and not isinstance(value, Mapping):
+        raise ValueError(
+            "Builder project selection must be an object using "
+            "adaos.builder.project_selection.v2"
+        )
     previous = dict(value) if isinstance(value, Mapping) else {}
+    if previous and previous.get("schema") != "adaos.builder.project_selection.v2":
+        raise ValueError(
+            "Unsupported Builder project selection format; reselect the Project "
+            "to create adaos.builder.project_selection.v2"
+        )
     return _project_selection(
         previous.get("object_type") or fallback_object_type,
         previous.get("object_id") or fallback_object_id,
@@ -1071,7 +1081,7 @@ class BuilderWorkbenchService:
             normalized = dict(existing)
             active_draft_id = str(normalized.get("active_draft_id") or "").strip() or None
             runtime_scenario_id = str(normalized.get("runtime_scenario_id") or "").strip() or None
-            selection = _normalize_project_selection(
+            selection = _require_project_selection_v2(
                 normalized.get("selection") if isinstance(normalized.get("selection"), Mapping) else None,
                 fallback_object_id=runtime_scenario_id or "builder",
                 fallback_title="Builder" if not runtime_scenario_id else None,
@@ -1159,7 +1169,7 @@ class BuilderWorkbenchService:
         scenario_token = str(scenario_id or existing.get("scenario_id") or BUILDER_WORKBENCH_SCENARIO_ID).strip()
         active_draft_token = str(active_draft_id or "").strip() or None
         previous_selection = (
-            _normalize_project_selection(existing.get("selection"))
+            _require_project_selection_v2(existing.get("selection"))
             if isinstance(existing.get("selection"), Mapping)
             else None
         )
@@ -1921,7 +1931,7 @@ class BuilderWorkbenchService:
     ) -> dict[str, Any]:
         source_id = self.resolve_source_webspace_id(source_webspace_id)
         binding = self.get_workspace_binding(source_id)
-        selection = _normalize_project_selection(
+        selection = _require_project_selection_v2(
             binding.get("selection") if isinstance(binding.get("selection"), Mapping) else None
         )
         dialog = binding.get("dialog") if isinstance(binding.get("dialog"), Mapping) else {}

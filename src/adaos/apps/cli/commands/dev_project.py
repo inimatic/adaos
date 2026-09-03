@@ -181,6 +181,50 @@ def create_project(
     _echo(result, json_output=json_output)
 
 
+@app.command("attach")
+def attach_component(
+    project_id: str,
+    component_ref: str,
+    role: str = typer.Option("implementation", "--role"),
+    exposure: str = typer.Option("project_only", "--exposure"),
+    lifecycle: str = typer.Option("bound", "--lifecycle"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Attach an existing DEV skill or scenario to one Project authority."""
+
+    try:
+        result = compositions.ensure_owned_component(
+            project_id,
+            component_ref,
+            role=role,
+            exposure=exposure,
+            lifecycle=lifecycle,
+        )
+    except Exception as exc:
+        raise typer.BadParameter(str(exc), param_hint="component_ref") from exc
+    _echo(result, json_output=json_output)
+
+
+@app.command("depend")
+def add_dependency(
+    project_id: str,
+    dependency_ref: str,
+    version: str | None = typer.Option(None, "--version"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Declare an existing shared Project, skill, or scenario dependency."""
+
+    try:
+        result = compositions.ensure_dependency(
+            project_id,
+            dependency_ref,
+            version=version,
+        )
+    except Exception as exc:
+        raise typer.BadParameter(str(exc), param_hint="dependency_ref") from exc
+    _echo(result, json_output=json_output)
+
+
 @app.command("show")
 def show(
     project_id: str,

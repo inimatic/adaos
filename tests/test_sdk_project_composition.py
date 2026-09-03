@@ -226,6 +226,38 @@ def test_project_can_idempotently_attach_a_created_companion_skill(project_space
     ] == ["scenario:kanban_demo", "skill:kanban_demo_skill"]
 
 
+def test_project_can_idempotently_declare_a_shared_dependency(project_space) -> None:
+    _scenario(project_space["scenarios"], "kanban_demo")
+    _skill(project_space["skills"], "shared_search")
+    compositions.create_for_existing_component(
+        "kanban_demo",
+        kind="scenario",
+        component_id="kanban_demo",
+    )
+
+    first = compositions.ensure_dependency(
+        "kanban_demo",
+        "skill:shared_search",
+        version="^1.0",
+    )
+    second = compositions.ensure_dependency(
+        "kanban_demo",
+        "skill:shared_search",
+        version="^1.0",
+    )
+
+    assert first["idempotent"] is False
+    assert second["idempotent"] is True
+    assert second["project"]["components"]["dependencies"] == [
+        {
+            "ref": "skill:shared_search",
+            "version": "^1.0",
+            "lifecycle": "shared",
+            "relations": ["uses"],
+        }
+    ]
+
+
 def test_project_composition_expands_release_defaults_without_rewriting_source(project_space) -> None:
     _skill(project_space["skills"], "candidate_skill")
     value = _project("candidate_project", "candidate_skill")

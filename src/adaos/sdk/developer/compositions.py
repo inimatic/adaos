@@ -594,6 +594,59 @@ def ensure_owned_component(
     return {"ok": True, "idempotent": False, "project": updated}
 
 
+def ensure_dependency(
+    project_id: str,
+    dependency_ref: str,
+    *,
+    version: str | None = None,
+    relations: Sequence[str] = ("uses",),
+) -> dict[str, Any]:
+    """Idempotently declare an existing shared Project or component dependency."""
+
+    project = get(project_id)
+    ref = str(dependency_ref or "").strip()
+    kind, separator, dependency_id = ref.partition(":")
+    if separator != ":" or kind not in {"project", "skill", "scenario"}:
+        raise ProjectCompositionError(
+            "dependency_ref must identify a project, skill, or scenario"
+        )
+    if kind == "project":
+        get(dependency_id)
+    else:
+        component_projects.describe(kind, _project_id(dependency_id))
+    owned_refs = {
+        str(item.get("ref") or "") for item in project["components"]["owned"]
+    }
+    if ref in owned_refs:
+        raise ProjectCompositionError(f"{ref} is already owned by project:{project_id}")
+    dependencies = [dict(item) for item in project["components"]["dependencies"]]
+    if any(str(item.get("ref") or "") == ref for item in dependencies):
+        return {"ok": True, "idempotent": True, "project": project}
+    replacement = {
+        key: item
+        for key, item in project.items()
+        if key not in {"ref", "manifest_digest", "source_path"}
+    }
+    replacement["components"] = {
+        **dict(replacement["components"]),
+        "dependencies": [
+            *dependencies,
+            {
+                "ref": ref,
+                "version": str(version).strip() if version else None,
+                "lifecycle": "shared",
+                "relations": [str(item) for item in relations],
+            },
+        ],
+    }
+    updated = replace(
+        str(project["id"]),
+        replacement,
+        expected_manifest_digest=str(project["manifest_digest"]),
+    )
+    return {"ok": True, "idempotent": False, "project": updated}
+
+
 def create_research_direction(
     project_id: str,
     *,
