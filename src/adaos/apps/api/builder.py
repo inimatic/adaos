@@ -102,6 +102,13 @@ class BuilderAutomationStartRequest(BaseModel):
     webspace_id: str = "desktop"
     conversation_id: str | None = None
     brief_path: str | None = None
+    change_set_id: str | None = None
+    prototype_handoff: dict[str, Any] | None = None
+    development_session_id: str | None = None
+    links: dict[str, Any] | None = None
+    execution_budget: dict[str, Any] | None = None
+    agent_profile: dict[str, Any] | None = None
+    mcp: dict[str, Any] | None = None
 
 
 class BuilderAutomationTurnRequest(BaseModel):
@@ -398,6 +405,13 @@ def start_automation(
             webspace_id=body.webspace_id,
             conversation_id=body.conversation_id,
             brief_path=body.brief_path,
+            change_set_id=body.change_set_id,
+            prototype_handoff=body.prototype_handoff,
+            development_session_id=body.development_session_id,
+            links=body.links,
+            execution_budget=body.execution_budget,
+            agent_profile=body.agent_profile,
+            mcp=body.mcp,
         )
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

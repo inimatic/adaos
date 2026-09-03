@@ -1052,6 +1052,45 @@ def test_builder_api_recovers_validated_result_in_node_context() -> None:
     ]
 
 
+def test_builder_api_forwards_automation_budget_and_mcp_profile() -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _Automation:
+        def start_from_execute(self, **kwargs):
+            calls.append(dict(kwargs))
+            return {"ok": True, "status": "queued"}
+
+    app = FastAPI()
+    app.include_router(builder_api.router, prefix="/api/builder")
+    app.dependency_overrides[require_token] = lambda: None
+    app.dependency_overrides[builder_api._get_automation_service] = lambda: _Automation()
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/builder/automation/start",
+        json={
+            "object_type": "scenario",
+            "object_id": "kanban_demo",
+            "implementation_brief": "Implement the accepted Kanban prototype.",
+            "webspace_id": "builder-kanban",
+            "execution_budget": {
+                "max_model_tokens": 120000,
+                "max_billable_tokens": 32000,
+                "token_budget_metric": "fresh_plus_output",
+            },
+            "agent_profile": {"profile": "bounded_project_implementation"},
+            "mcp": {"root_mcp": {"enabled": True}, "subnet_id": "sn_test"},
+            "links": {"project_ref": "project:kanban_demo"},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert calls[0]["execution_budget"]["max_billable_tokens"] == 32000
+    assert calls[0]["agent_profile"]["profile"] == "bounded_project_implementation"
+    assert calls[0]["mcp"]["root_mcp"]["enabled"] is True
+    assert calls[0]["links"]["project_ref"] == "project:kanban_demo"
+
+
 def test_builder_api_reconciles_checkpoint_without_codex() -> None:
     calls: list[dict[str, Any]] = []
 

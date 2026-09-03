@@ -41,6 +41,44 @@ def test_dev_project_list_uses_project_composition_registry(monkeypatch) -> None
     assert '"id": "kanban"' in result.output
 
 
+def test_dev_project_create_can_adopt_existing_primary_component(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def create_for_existing_component(project_id, **kwargs):
+        calls.append({"project_id": project_id, **kwargs})
+        return {
+            "ok": True,
+            "project": {"id": project_id, "version": "0.1.0"},
+            "created_component": False,
+        }
+
+    monkeypatch.setattr(
+        dev_project.compositions,
+        "create_for_existing_component",
+        create_for_existing_component,
+    )
+
+    result = CliRunner().invoke(
+        dev_project.app,
+        [
+            "create",
+            "kanban",
+            "--primary-kind",
+            "scenario",
+            "--primary-id",
+            "kanban_ui",
+            "--existing",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["project_id"] == "kanban"
+    assert calls[0]["component_id"] == "kanban_ui"
+    assert calls[0]["entrypoints"][0]["presentation"] == "scenario:kanban_ui"
+    assert '"created_component": false' in result.output
+
+
 def test_dev_project_push_uses_content_revision_and_can_stay_local(
     monkeypatch,
     tmp_path,

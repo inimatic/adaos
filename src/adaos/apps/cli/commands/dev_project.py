@@ -33,9 +33,14 @@ def _echo(payload: Any, *, json_output: bool) -> None:
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
         return
     if isinstance(payload, Mapping):
-        project_id = str(payload.get("project_id") or payload.get("id") or "")
-        status = str(payload.get("status") or "")
-        version = str(payload.get("version") or "")
+        record = (
+            payload.get("project")
+            if isinstance(payload.get("project"), Mapping)
+            else payload
+        )
+        project_id = str(record.get("project_id") or record.get("id") or "")
+        status = str(record.get("status") or payload.get("status") or "")
+        version = str(record.get("version") or "")
         suffix = " ".join(item for item in (version, status) if item)
         typer.echo(f"{project_id}{' ' + suffix if suffix else ''}")
         return
@@ -105,6 +110,75 @@ def list_projects(
         limit=limit,
     )
     _echo(projects, json_output=json_output)
+
+
+@app.command("create")
+def create_project(
+    project_id: str,
+    primary_kind: str = typer.Option(
+        "scenario",
+        "--primary-kind",
+        help="Primary component kind: scenario or skill.",
+    ),
+    primary_id: str | None = typer.Option(
+        None,
+        "--primary-id",
+        help="Primary component id. Defaults to the Project id.",
+    ),
+    title: str | None = typer.Option(None, "--title"),
+    description: str = typer.Option("", "--description"),
+    template: str | None = typer.Option(None, "--template"),
+    existing: bool = typer.Option(
+        False,
+        "--existing",
+        help="Create Project authority around an existing unowned DEV component.",
+    ),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    kind = str(primary_kind or "").strip().lower().rstrip("s")
+    if kind not in {"scenario", "skill"}:
+        raise typer.BadParameter(
+            "primary kind must be scenario or skill",
+            param_hint="--primary-kind",
+        )
+    component_id = str(primary_id or project_id).strip()
+    entrypoints = (
+        [
+            {
+                "id": "main",
+                "presentation": f"scenario:{component_id}",
+                "default": True,
+                "bindings": {},
+            }
+        ]
+        if kind == "scenario"
+        else []
+    )
+    try:
+        if existing:
+            result = compositions.create_for_existing_component(
+                project_id,
+                kind=kind,
+                component_id=component_id,
+                title=title,
+                description=description or None,
+                entrypoints=entrypoints,
+                actor="adaos.dev.project.create",
+            )
+        else:
+            result = compositions.create_with_primary_component(
+                project_id,
+                kind=kind,
+                component_id=component_id,
+                template=template,
+                title=title or project_id,
+                description=description,
+                entrypoints=entrypoints,
+                actor="adaos.dev.project.create",
+            )
+    except Exception as exc:
+        raise typer.BadParameter(str(exc), param_hint="project_id") from exc
+    _echo(result, json_output=json_output)
 
 
 @app.command("show")

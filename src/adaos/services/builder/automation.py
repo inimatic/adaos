@@ -1555,6 +1555,14 @@ class BuilderAutomationService:
         materialized_project_id = str(materialization.get("project_id") or "").strip()
         if materialized_project_id and ":" not in materialized_project_id:
             return f"project:{materialized_project_id}"
+        try:
+            from adaos.sdk.developer import compositions
+
+            owner = compositions.project_for_component(component_ref)
+        except Exception:
+            owner = None
+        if owner is not None:
+            return str(owner["ref"])
         return f"project:{fallback_project_id}"
 
     def _load_development_session(
@@ -1846,12 +1854,30 @@ class BuilderAutomationService:
         agent_profile: Mapping[str, Any] | None = None,
         mcp: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        requested_object_type = str(object_type or "").strip().lower().rstrip("s")
         kind, project_id = self._project_ref(object_type, object_id)
         brief = str(implementation_brief or "").strip()
         if not brief:
             raise ValueError("implementation_brief is required after Prompt IDE Execute")
         _reject_transport_corruption(brief, field="implementation_brief")
         external_links = dict(links) if isinstance(links, Mapping) else {}
+        if requested_object_type == "project":
+            external_links.setdefault("project_ref", f"project:{str(object_id).strip()}")
+            external_links.setdefault("project_id", str(object_id).strip())
+        if not str(
+            external_links.get("development_ticket_project_ref")
+            or external_links.get("project_ref")
+            or ""
+        ).startswith("project:"):
+            try:
+                from adaos.sdk.developer import compositions
+
+                owner = compositions.project_for_component(f"{kind}:{project_id}")
+            except Exception:
+                owner = None
+            if owner is not None:
+                external_links["project_ref"] = str(owner["ref"])
+                external_links["project_id"] = str(owner["id"])
         external_ticket_ids = list(
             dict.fromkeys(
                 [
@@ -2171,6 +2197,13 @@ class BuilderAutomationService:
                 companion_skill_ids=companion_skill_ids,
                 implementation_brief=brief,
             )
+            project_ownership = self._ensure_project_component_ownership(
+                links=external_links,
+                component_refs=[
+                    f"{kind}:{project_id}",
+                    *[f"skill:{skill_id}" for skill_id in companion_skill_ids],
+                ],
+            )
             if created_artifacts:
                 refreshed_companion_skill_ids = self._resolve_companion_skill_ids(kind, project_id)
                 if refreshed_companion_skill_ids != companion_skill_ids:
@@ -2197,6 +2230,13 @@ class BuilderAutomationService:
                 "agent_profile": admitted_agent_profile,
                 "mcp": admitted_mcp,
                 "links": external_links,
+                "project_ref": str(
+                    external_links.get("development_ticket_project_ref")
+                    or external_links.get("project_ref")
+                    or ""
+                )
+                or None,
+                "project_ownership": project_ownership,
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
                 "status": "starting",
                 "iteration": 0,
@@ -2668,6 +2708,53 @@ class BuilderAutomationService:
                 }
             )
         return created
+
+    @staticmethod
+    def _ensure_project_component_ownership(
+        *,
+        links: Mapping[str, Any],
+        component_refs: Sequence[str],
+    ) -> list[dict[str, Any]]:
+        project_ref = str(
+            links.get("development_ticket_project_ref")
+            or links.get("project_ref")
+            or ""
+        ).strip()
+        if not project_ref.startswith("project:"):
+            return []
+        project_id = project_ref.split(":", 1)[1].strip()
+        if not project_id:
+            return []
+        from adaos.sdk.developer import compositions
+
+        try:
+            compositions.get(project_id)
+        except (
+            compositions.ProjectCompositionNotFound,
+            AttributeError,
+            RuntimeError,
+        ):
+            # Legacy ticket links may name a future Project before its source
+            # has been materialized. Publication retains the strict closure gate.
+            return []
+        receipts: list[dict[str, Any]] = []
+        for component_ref in dict.fromkeys(
+            str(item).strip() for item in component_refs if str(item).strip()
+        ):
+            result = compositions.ensure_owned_component(project_id, component_ref)
+            project = (
+                result.get("project")
+                if isinstance(result.get("project"), Mapping)
+                else {}
+            )
+            receipts.append(
+                {
+                    "component_ref": component_ref,
+                    "idempotent": bool(result.get("idempotent")),
+                    "manifest_digest": str(project.get("manifest_digest") or "") or None,
+                }
+            )
+        return receipts
 
     def _workspace_skills_root(self) -> Path:
         if self.workspace_service is not None and self.workspace_service.skills_root is not None:
@@ -9831,11 +9918,38 @@ class BuilderAutomationService:
 
     def _project_ref(self, object_type: str, object_id: str) -> tuple[str, str]:
         kind = str(object_type or "").strip().lower()
-        if kind not in {"skill", "scenario"}:
-            raise ValueError("object_type must be skill or scenario")
         project_id = _safe_token(object_id, fallback="")
         if not project_id:
             raise ValueError("object_id is required")
+        if kind == "project":
+            from adaos.sdk.developer import compositions
+
+            project = compositions.get(project_id)
+            owned = (
+                project.get("components", {}).get("owned", [])
+                if isinstance(project.get("components"), Mapping)
+                else []
+            )
+            primary = next(
+                (
+                    item
+                    for item in owned
+                    if isinstance(item, Mapping)
+                    and str(item.get("role") or "") == "primary"
+                ),
+                None,
+            )
+            primary_ref = str((primary or {}).get("ref") or "").strip()
+            primary_kind, separator, primary_id = primary_ref.partition(":")
+            if (
+                separator != ":"
+                or primary_kind not in {"skill", "scenario"}
+                or not primary_id
+            ):
+                raise ValueError(f"project:{project_id} has no usable primary component")
+            return primary_kind, _safe_token(primary_id, fallback="")
+        if kind not in {"skill", "scenario"}:
+            raise ValueError("object_type must be project, skill or scenario")
         return kind, project_id
 
     def _project_version(self, object_type: str, object_id: str) -> str | None:

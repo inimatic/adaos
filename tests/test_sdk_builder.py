@@ -69,6 +69,10 @@ def test_automation_facade_returns_projection_without_exposing_service(monkeypat
         object_id="builder",
         implementation_brief="Implement the approved brief",
         webspace_id="desktop-dev",
+        execution_budget={"max_billable_tokens": 32000},
+        agent_profile={"profile": "bounded_project_implementation"},
+        mcp={"root_mcp": {"enabled": True}},
+        links={"project_ref": "project:builder"},
     )
     submitted = automation.submit(
         "Add tests",
@@ -87,6 +91,10 @@ def test_automation_facade_returns_projection_without_exposing_service(monkeypat
     assert state["automation"]["status"] == "running"
     assert state["session_present"] is True
     assert [name for name, _kwargs in service.calls] == ["start", "submit", "projection", "projection"]
+    assert service.calls[0][1]["execution_budget"]["max_billable_tokens"] == 32000
+    assert service.calls[0][1]["agent_profile"]["profile"] == "bounded_project_implementation"
+    assert service.calls[0][1]["mcp"]["root_mcp"]["enabled"] is True
+    assert service.calls[0][1]["links"]["project_ref"] == "project:builder"
     assert service.calls[1][1]["conversation_id"] == "conv.builder"
     assert service.calls[-1][1]["conversation_id"] == "conv.builder"
 

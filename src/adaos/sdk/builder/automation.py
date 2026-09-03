@@ -67,6 +67,10 @@ def start(
     change_set_id: str | None = None,
     prototype_handoff: Mapping[str, Any] | None = None,
     development_session_id: str | None = None,
+    links: Mapping[str, Any] | None = None,
+    execution_budget: Mapping[str, Any] | None = None,
+    agent_profile: Mapping[str, Any] | None = None,
+    mcp: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Start or resume implementation from an approved brief."""
 
@@ -81,6 +85,10 @@ def start(
         change_set_id=change_set_id,
         prototype_handoff=prototype_handoff,
         development_session_id=development_session_id,
+        links=links,
+        execution_budget=execution_budget,
+        agent_profile=agent_profile,
+        mcp=mcp,
     ) or {}
     return _foreground_result(
         service,

@@ -92,6 +92,60 @@ def _service(tmp_path: Path) -> BuilderAutomationService:
     )
 
 
+def test_automation_resolves_project_to_its_primary_component(tmp_path, monkeypatch) -> None:
+    from adaos.sdk.developer import compositions
+
+    service = _service(tmp_path)
+    monkeypatch.setattr(
+        compositions,
+        "get",
+        lambda project_id: {
+            "id": project_id,
+            "components": {
+                "owned": [
+                    {"ref": "scenario:recipes", "role": "primary"},
+                    {"ref": "skill:recipes_skill", "role": "implementation"},
+                ]
+            },
+        },
+    )
+
+    assert service._project_ref("project", "recipes_app") == ("scenario", "recipes")
+
+
+def test_automation_attaches_created_components_to_project_authority(monkeypatch) -> None:
+    from adaos.sdk.developer import compositions
+
+    calls: list[tuple[str, str]] = []
+
+    def ensure_owned_component(project_id, component_ref):
+        calls.append((project_id, component_ref))
+        return {
+            "ok": True,
+            "idempotent": component_ref == "scenario:recipes",
+            "project": {"manifest_digest": "sha256:" + "1" * 64},
+        }
+
+    monkeypatch.setattr(
+        compositions,
+        "get",
+        lambda project_id: {"id": project_id, "ref": f"project:{project_id}"},
+    )
+    monkeypatch.setattr(compositions, "ensure_owned_component", ensure_owned_component)
+
+    result = BuilderAutomationService._ensure_project_component_ownership(
+        links={"project_ref": "project:recipes_app"},
+        component_refs=["scenario:recipes", "skill:recipes_skill", "skill:recipes_skill"],
+    )
+
+    assert calls == [
+        ("recipes_app", "scenario:recipes"),
+        ("recipes_app", "skill:recipes_skill"),
+    ]
+    assert result[0]["idempotent"] is True
+    assert result[1]["idempotent"] is False
+
+
 def _realize_content_artifact(
     service: BuilderAutomationService,
     task: dict,

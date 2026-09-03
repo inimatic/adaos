@@ -322,6 +322,62 @@ def replace(
     return get(token)
 
 
+def _new_project_definition(
+    project_id: str,
+    *,
+    primary_ref: str,
+    title: str,
+    description: str = "",
+    profiles: Sequence[str] = (),
+    dependencies: Sequence[Mapping[str, Any]] = (),
+    entrypoints: Sequence[Mapping[str, Any]] = (),
+    categories: Sequence[str] = (),
+    tags: Sequence[str] = (),
+    member: Mapping[str, Any] | None = None,
+    compatibility: Mapping[str, Any] | None = None,
+    actor: str = "user:local",
+) -> dict[str, Any]:
+    token = _project_id(project_id)
+    member_value = {
+        "ref": primary_ref,
+        "role": "primary",
+        "exposure": "application",
+        "lifecycle": "bound",
+        "relations": ["uses"],
+        **dict(member or {}),
+    }
+    return {
+        "schema": _SCHEMA,
+        "kind": "project",
+        "id": token,
+        "version": "0.1.0",
+        "profiles": [str(item).strip() for item in profiles if str(item).strip()],
+        "components": {
+            "owned": [member_value],
+            "dependencies": [dict(item) for item in dependencies],
+        },
+        "entrypoints": [dict(item) for item in entrypoints],
+        "catalog": {
+            "title": str(title or token).strip(),
+            "description": str(description or "").strip(),
+            "categories": [str(item).strip() for item in categories if str(item).strip()],
+            "tags": [str(item).strip() for item in tags if str(item).strip()],
+        },
+        "publication": dict(_PUBLICATION_DEFAULTS),
+        "install": {"default": False, "features": []},
+        **({"compatibility": dict(compatibility)} if compatibility is not None else {}),
+        "lifecycle": {
+            "uninstall": {
+                "components": "remove_if_unreferenced",
+                "runtime_data": "retain",
+                "source_artifacts": "retain",
+            }
+        },
+        "created_at": _now(),
+        "created_by": str(actor or "user:local"),
+    }
+
+
 def create_with_primary_component(
     project_id: str,
     *,
@@ -376,42 +432,20 @@ def create_with_primary_component(
             title=str(title or token).strip(),
             description=str(description or "").strip(),
         )
-        member_value = {
-            "ref": f"{component_kind}:{target_component}",
-            "role": "primary",
-            "exposure": "application",
-            "lifecycle": "bound",
-            "relations": ["uses"],
-            **dict(member or {}),
-        }
-        payload = {
-            "schema": _SCHEMA,
-            "kind": "project",
-            "id": token,
-            "version": "0.1.0",
-            "profiles": [str(item).strip() for item in profiles if str(item).strip()],
-            "components": {
-                "owned": [member_value],
-                "dependencies": [dict(item) for item in dependencies],
-            },
-            "entrypoints": [dict(item) for item in entrypoints],
-            "catalog": {
-                "title": str(title or token).strip(),
-                "description": str(description or "").strip(),
-                "categories": [str(item).strip() for item in categories if str(item).strip()],
-                "tags": [str(item).strip() for item in tags if str(item).strip()],
-            },
-            **({"compatibility": dict(compatibility)} if compatibility is not None else {}),
-            "lifecycle": {
-                "uninstall": {
-                    "components": "remove_if_unreferenced",
-                    "runtime_data": "retain",
-                    "source_artifacts": "retain",
-                }
-            },
-            "created_at": _now(),
-            "created_by": str(actor or "user:local"),
-        }
+        payload = _new_project_definition(
+            token,
+            primary_ref=f"{component_kind}:{target_component}",
+            title=title,
+            description=description,
+            profiles=profiles,
+            dependencies=dependencies,
+            entrypoints=entrypoints,
+            categories=categories,
+            tags=tags,
+            member=member,
+            compatibility=compatibility,
+            actor=actor,
+        )
         result = create(payload)
         created_project = True
         return {
@@ -430,6 +464,134 @@ def create_with_primary_component(
         if created_component and component_root.parent == expected_parent and component_root.is_dir():
             shutil.rmtree(component_root)
         raise
+
+
+def create_for_existing_component(
+    project_id: str,
+    *,
+    kind: str,
+    component_id: str,
+    title: str | None = None,
+    description: str | None = None,
+    profiles: Sequence[str] = (),
+    dependencies: Sequence[Mapping[str, Any]] = (),
+    entrypoints: Sequence[Mapping[str, Any]] | None = None,
+    categories: Sequence[str] = (),
+    tags: Sequence[str] = (),
+    member: Mapping[str, Any] | None = None,
+    compatibility: Mapping[str, Any] | None = None,
+    actor: str = "user:local",
+) -> dict[str, Any]:
+    """Create a Project authority around one existing unowned DEV component."""
+
+    token = _project_id(project_id)
+    component_kind = str(kind or "").strip().lower().rstrip("s")
+    if component_kind not in {"skill", "scenario"}:
+        raise ProjectCompositionError("component kind must be skill or scenario")
+    target_component = _project_id(component_id)
+    component_ref = f"{component_kind}:{target_component}"
+    if resolve_root(token, required=False).exists():
+        raise ProjectCompositionError(f"project:{token} already exists")
+    try:
+        described = component_projects.describe(component_kind, target_component)
+    except Exception as exc:
+        raise ProjectCompositionError(
+            f"{component_ref} was not found in DEV space"
+        ) from exc
+    owner = project_for_component(component_ref)
+    if owner is not None:
+        raise ProjectCompositionError(
+            f"{component_ref} is already owned by {owner['ref']}"
+        )
+    resolved_title = str(title or described.get("title") or described.get("name") or token).strip()
+    resolved_description = str(
+        description
+        if description is not None
+        else described.get("description") or ""
+    ).strip()
+    resolved_entrypoints = (
+        [
+            {
+                "id": "main",
+                "presentation": component_ref,
+                "default": True,
+                "bindings": {},
+            }
+        ]
+        if entrypoints is None and component_kind == "scenario"
+        else [dict(item) for item in (entrypoints or ())]
+    )
+    result = create(
+        _new_project_definition(
+            token,
+            primary_ref=component_ref,
+            title=resolved_title,
+            description=resolved_description,
+            profiles=profiles,
+            dependencies=dependencies,
+            entrypoints=resolved_entrypoints,
+            categories=categories,
+            tags=tags,
+            member=member,
+            compatibility=compatibility,
+            actor=actor,
+        )
+    )
+    return {
+        "ok": True,
+        "project": result,
+        "primary_component": described,
+        "created_component": False,
+    }
+
+
+def ensure_owned_component(
+    project_id: str,
+    component_ref: str,
+    *,
+    role: str = "implementation",
+    exposure: str = "project_only",
+    lifecycle: str = "bound",
+    relations: Sequence[str] = ("realizes", "uses"),
+) -> dict[str, Any]:
+    """Idempotently attach an existing component to one mutable DEV Project."""
+
+    project = get(project_id)
+    ref = str(component_ref or "").strip()
+    kind, separator, component_id = ref.partition(":")
+    if separator != ":" or kind not in {"skill", "scenario"}:
+        raise ProjectCompositionError("component_ref must identify a skill or scenario")
+    component_projects.describe(kind, _project_id(component_id))
+    owned = [dict(item) for item in project["components"]["owned"]]
+    if any(str(item.get("ref") or "") == ref for item in owned):
+        return {"ok": True, "idempotent": True, "project": project}
+    owner = project_for_component(ref)
+    if owner is not None and str(owner.get("id") or "") != str(project["id"]):
+        raise ProjectCompositionError(f"{ref} is already owned by {owner['ref']}")
+    replacement = {
+        key: item
+        for key, item in project.items()
+        if key not in {"ref", "manifest_digest", "source_path"}
+    }
+    replacement["components"] = {
+        **dict(replacement["components"]),
+        "owned": [
+            *owned,
+            {
+                "ref": ref,
+                "role": str(role or "implementation"),
+                "exposure": str(exposure or "project_only"),
+                "lifecycle": str(lifecycle or "bound"),
+                "relations": [str(item) for item in relations],
+            },
+        ],
+    }
+    updated = replace(
+        str(project["id"]),
+        replacement,
+        expected_manifest_digest=str(project["manifest_digest"]),
+    )
+    return {"ok": True, "idempotent": False, "project": updated}
 
 
 def create_research_direction(
@@ -580,6 +742,8 @@ __all__ = [
     "create",
     "replace",
     "create_with_primary_component",
+    "create_for_existing_component",
+    "ensure_owned_component",
     "create_research_direction",
     "get",
     "list_projects",

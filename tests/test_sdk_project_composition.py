@@ -52,6 +52,25 @@ def _skill(root: Path, skill_id: str, *, presentation: bool = True) -> Path:
     return skill_root
 
 
+def _scenario(root: Path, scenario_id: str) -> Path:
+    scenario_root = root / scenario_id
+    scenario_root.mkdir()
+    (scenario_root / "scenario.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "id": scenario_id,
+                "name": scenario_id,
+                "title": "Kanban board",
+                "description": "Builder prototype",
+                "version": "0.1.0",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return scenario_root
+
+
 def _project(project_id: str, skill_id: str) -> dict:
     return {
         "schema": "adaos.project.v1",
@@ -130,6 +149,81 @@ def test_project_source_can_start_as_empty_builder_draft(project_space) -> None:
 
     assert created["components"]["owned"] == []
     assert listed[0]["primary_ref"] is None
+
+
+def test_project_can_adopt_an_existing_unowned_builder_component(project_space) -> None:
+    _scenario(project_space["scenarios"], "kanban_demo")
+
+    result = compositions.create_for_existing_component(
+        "kanban_demo",
+        kind="scenario",
+        component_id="kanban_demo",
+        actor="builder.chat",
+    )
+
+    project = result["project"]
+    assert result["created_component"] is False
+    assert project["ref"] == "project:kanban_demo"
+    assert project["components"]["owned"] == [
+        {
+            "ref": "scenario:kanban_demo",
+            "role": "primary",
+            "exposure": "application",
+            "lifecycle": "bound",
+            "relations": ["uses"],
+        }
+    ]
+    assert project["entrypoints"] == [
+        {
+            "id": "main",
+            "presentation": "scenario:kanban_demo",
+            "default": True,
+            "bindings": {},
+        }
+    ]
+    assert project["publication"]["stage"] == "alpha"
+    assert compositions.project_for_component("scenario:kanban_demo")["ref"] == project["ref"]
+
+
+def test_project_adoption_rejects_a_component_owned_by_another_project(project_space) -> None:
+    _scenario(project_space["scenarios"], "kanban_demo")
+    compositions.create_for_existing_component(
+        "kanban_one",
+        kind="scenario",
+        component_id="kanban_demo",
+    )
+
+    with pytest.raises(compositions.ProjectCompositionError, match="already owned"):
+        compositions.create_for_existing_component(
+            "kanban_two",
+            kind="scenario",
+            component_id="kanban_demo",
+        )
+
+
+def test_project_can_idempotently_attach_a_created_companion_skill(project_space) -> None:
+    _scenario(project_space["scenarios"], "kanban_demo")
+    _skill(project_space["skills"], "kanban_demo_skill")
+    compositions.create_for_existing_component(
+        "kanban_demo",
+        kind="scenario",
+        component_id="kanban_demo",
+    )
+
+    first = compositions.ensure_owned_component(
+        "kanban_demo",
+        "skill:kanban_demo_skill",
+    )
+    second = compositions.ensure_owned_component(
+        "kanban_demo",
+        "skill:kanban_demo_skill",
+    )
+
+    assert first["idempotent"] is False
+    assert second["idempotent"] is True
+    assert [
+        item["ref"] for item in second["project"]["components"]["owned"]
+    ] == ["scenario:kanban_demo", "skill:kanban_demo_skill"]
 
 
 def test_project_composition_expands_release_defaults_without_rewriting_source(project_space) -> None:
