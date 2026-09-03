@@ -34,7 +34,6 @@
       "properties": {
         "type": { "type": "string", "enum": ["skill", "scenario"] },
         "id": { "type": "string", "minLength": 1 },
-        "companion_skill_id": { "type": ["string", "null"] },
         "companion_skill_ids": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },

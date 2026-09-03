@@ -157,6 +157,16 @@ into the Project or granted source ownership. A Project may contain any
 non-empty combination of skills and scenarios, including one standalone
 headless skill.
 
+`components.owned` is also the sole authority for Builder's mutable source
+envelope. Builder does not infer writable companion skills from
+`scenario.yaml.runtime.skills`, `depends`, an installed Workspace edition, a
+previous Automation snapshot, or a `<scenario>_skill` naming convention.
+Those declarations may describe runtime requirements or immutable baselines,
+but they cannot grant source ownership. Automation sessions and worker packets
+carry the canonical plural `companion_skill_ids` field only; projects that
+need an implementation skill must declare `skill:<id>` as an owned member
+before Automation starts.
+
 Owned members have orthogonal metadata:
 
 - `role` states composition responsibility (`primary`, `implementation`, or

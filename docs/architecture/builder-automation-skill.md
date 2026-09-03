@@ -64,7 +64,7 @@ route a message using an unrelated stale Automation session.
 Worker completion is not the terminal Automation state. The session remains
 `commit_ready` while it:
 
-1. checkpoints the companion skill and scenario in Forge;
+1. checkpoints the target and every project-owned changed component in Forge;
 2. verifies current commit/task metadata;
 3. prepares and activates the DEV skill;
 4. rematerializes the paired DEV scenario.
@@ -74,6 +74,11 @@ terminal `forge_checkpoint` failure before activation. A follow-up turn moves
 the preceding readiness into bounded history and clears summary, failure,
 task, and progress fields so navigation/reconnect cannot resurrect the old
 terminal projection.
+
+The editable component set is read from the owning `adaos.project.v1`
+manifest. Runtime skill requirements and retained publications do not expand
+that set, and Automation/worker contracts use `companion_skill_ids` without a
+singular compatibility alias.
 
 ## First-Revision Limits
 

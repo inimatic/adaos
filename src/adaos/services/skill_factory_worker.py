@@ -4986,10 +4986,6 @@ class LocalSkillFactoryWorker:
             "restored_at": _now_iso(),
         }
 
-    def _companion_skill_id(self, assignment: Mapping[str, Any]) -> str:
-        companions = self._companion_skill_ids(assignment)
-        return companions[0] if companions else ""
-
     def _companion_skill_ids(self, assignment: Mapping[str, Any]) -> list[str]:
         request = dict(assignment.get("realize_request") or {})
         artifacts = dict(request.get("artifacts") or {})
@@ -5016,7 +5012,7 @@ class LocalSkillFactoryWorker:
         target_type = str(target.get("type") or "skill")
         target_id = _safe_token(target.get("id"), fallback="generated_skill")
         companions = self._companion_skill_ids(assignment) if target_type == "scenario" else [target_id]
-        companion = companions[0] if companions else None
+        companion = companions[0] if companions else ""
         source = dict(request.get("source") or {})
         artifacts = dict(request.get("artifacts") or {})
         brief = str(artifacts.get("implementation_brief") or source.get("text") or "").strip()
@@ -5093,7 +5089,6 @@ class LocalSkillFactoryWorker:
             "schema": PACKET_SCHEMA,
             "task_id": assignment.get("task_id"),
             "target": target,
-            "companion_skill_id": companion,
             "companion_skill_ids": companions,
             "allowed_paths": allowed,
             "acceptance": dict(assignment.get("acceptance") or {}),

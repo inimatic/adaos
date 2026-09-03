@@ -2189,8 +2189,15 @@ class BuilderAutomationService:
                 raise ValueError(
                     "Automation is already the active process; submit a new Automation iteration instead"
                 )
-            companion_skill_ids = self._resolve_companion_skill_ids(kind, project_id)
-            companion_skill_id = companion_skill_ids[0] if companion_skill_ids else None
+            companion_skill_ids = self._resolve_companion_skill_ids(
+                kind,
+                project_id,
+                project_ref=str(
+                    external_links.get("development_ticket_project_ref")
+                    or external_links.get("project_ref")
+                    or ""
+                ),
+            )
             created_artifacts = self._ensure_automation_artifacts_created(
                 kind=kind,
                 project_id=project_id,
@@ -2205,16 +2212,22 @@ class BuilderAutomationService:
                 ],
             )
             if created_artifacts:
-                refreshed_companion_skill_ids = self._resolve_companion_skill_ids(kind, project_id)
+                refreshed_companion_skill_ids = self._resolve_companion_skill_ids(
+                    kind,
+                    project_id,
+                    project_ref=str(
+                        external_links.get("development_ticket_project_ref")
+                        or external_links.get("project_ref")
+                        or ""
+                    ),
+                )
                 if refreshed_companion_skill_ids != companion_skill_ids:
                     companion_skill_ids = refreshed_companion_skill_ids
-                    companion_skill_id = companion_skill_ids[0] if companion_skill_ids else None
             session = {
                 "schema": AUTOMATION_SESSION_SCHEMA,
                 "session_id": f"automation.{kind}.{project_id}",
                 "object_type": kind,
                 "object_id": project_id,
-                "companion_skill_id": companion_skill_id,
                 "companion_skill_ids": companion_skill_ids,
                 "webspace_id": str(webspace_id or "desktop"),
                 "conversation_id": str(conversation_id or "").strip() or None,
@@ -2774,90 +2787,62 @@ class BuilderAutomationService:
         # scaffold merely because a scenario declares it as required at runtime.
         return not (self._workspace_skills_root() / token).is_dir()
 
-    def _resolve_companion_skill_ids(self, kind: str, project_id: str) -> list[str]:
-        """Resolve every declared scenario skill, retaining the conventional primary.
-
-        The current Prototype is allowed to have fewer bindings than the last
-        functional result.  Preserve dependencies from both the retained
-        Automation snapshot and the installed Workspace publication so a new
-        Automation cycle cannot silently drop a functional companion skill.
-        """
+    def _resolve_companion_skill_ids(
+        self,
+        kind: str,
+        project_id: str,
+        *,
+        project_ref: str | None = None,
+    ) -> list[str]:
+        """Resolve mutable skills from the owning ``adaos.project.v1`` manifest."""
         if kind != "scenario":
             return [project_id]
+        from adaos.sdk.developer.compositions import ProjectCompositionError, validate
 
-        scenario_root = self.dev_scenarios_root / project_id
-        manifests: list[Mapping[str, Any]] = []
-        paths = [scenario_root / "scenario.yaml"]
-        previous_manifest = (
-            self.state_dir
-            / "builder"
-            / "workflow_snapshots"
-            / "scenario"
-            / project_id
-            / "automation"
-            / "scenario.yaml"
+        owner: Mapping[str, Any] | None = None
+        owner_ref = str(project_ref or "").strip()
+        projects_root = self.dev_scenarios_root.parent / "projects"
+        candidates = (
+            [projects_root / owner_ref.split(":", 1)[1] / "project.yaml"]
+            if owner_ref.startswith("project:")
+            else sorted(projects_root.glob("*/project.yaml"))
         )
-        if previous_manifest.is_file():
-            paths.append(previous_manifest)
-        workspace_scenarios_root = (
-            Path(self.workspace_service.scenarios_root)
-            if self.workspace_service is not None
-            and self.workspace_service.scenarios_root is not None
-            else self.repo_root / ".adaos" / "workspace" / "scenarios"
-        )
-        published_manifest = workspace_scenarios_root / project_id / "scenario.yaml"
-        if published_manifest.is_file():
-            paths.append(published_manifest)
-        for path in paths:
-            if not path.is_file():
+        for manifest_path in candidates:
+            if not manifest_path.is_file():
                 continue
             try:
-                value = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
-            except (OSError, ValueError, yaml.YAMLError):
-                value = {}
-            if isinstance(value, Mapping):
-                manifests.append(value)
-
-        candidates: list[str] = []
-
-        def add(values: Any) -> None:
-            if isinstance(values, str):
-                values = [values]
-            if not isinstance(values, (list, tuple)):
-                return
-            for value in values:
-                token = _safe_token(value, fallback="")
-                if token and token not in candidates:
-                    candidates.append(token)
-
-        for manifest in manifests:
-            runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), Mapping) else {}
-            runtime_skills = runtime.get("skills") if isinstance(runtime.get("skills"), Mapping) else {}
-            skills = manifest.get("skills") if isinstance(manifest.get("skills"), Mapping) else {}
-            add(runtime_skills.get("required"))
-            add(skills.get("required"))
-            add(manifest.get("depends"))
-
-        conventional = f"{project_id}_skill"
-        if conventional in candidates:
-            candidates.remove(conventional)
-            candidates.insert(0, conventional)
+                value = yaml.safe_load(manifest_path.read_text(encoding="utf-8-sig")) or {}
+                manifest = validate(value)
+            except (OSError, ValueError, yaml.YAMLError, ProjectCompositionError):
+                continue
+            owned = manifest["components"]["owned"]
+            if owner_ref.startswith("project:") or any(
+                str(item.get("ref") or "") == f"scenario:{project_id}"
+                for item in owned
+            ):
+                owner = manifest
+                break
+        if owner is None:
+            return []
+        components = owner.get("components")
+        owned = components.get("owned") if isinstance(components, Mapping) else []
+        skill_ids = [
+            _safe_token(str(item.get("ref") or "").split(":", 1)[1], fallback="")
+            for item in owned or []
+            if isinstance(item, Mapping)
+            and str(item.get("ref") or "").startswith("skill:")
+        ]
         return [
             skill_id
-            for skill_id in candidates
-            if self._is_mutable_companion_skill(skill_id)
+            for skill_id in skill_ids
+            if skill_id and self._is_mutable_companion_skill(skill_id)
         ]
-
-    def _resolve_companion_skill_id(self, kind: str, project_id: str) -> str:
-        """Return the first explicitly declared mutable companion skill."""
-        companions = self._resolve_companion_skill_ids(kind, project_id)
-        return companions[0] if companions else ""
 
     @staticmethod
     def _session_companion_skill_ids(session: Mapping[str, Any]) -> list[str]:
         values = session.get("companion_skill_ids")
         if not isinstance(values, (list, tuple)):
-            values = [session.get("companion_skill_id")]
+            return []
         result: list[str] = []
         for value in values:
             token = _safe_token(value, fallback="")
@@ -2950,6 +2935,7 @@ class BuilderAutomationService:
         resolved = self._resolve_companion_skill_ids(
             str(session.get("object_type") or ""),
             str(session.get("object_id") or ""),
+            project_ref=str(session.get("project_ref") or ""),
         )
         companions: list[str] = []
         # ``resolved`` contains only DEV-owned or not-yet-created sources;
@@ -2959,7 +2945,6 @@ class BuilderAutomationService:
             if token and token not in companions:
                 companions.append(token)
         session["companion_skill_ids"] = companions
-        session["companion_skill_id"] = companions[0] if companions else None
         return companions
 
     def _qualified_continuation_checkpoint(
@@ -4911,7 +4896,6 @@ class BuilderAutomationService:
             "project": {
                 "type": str(session.get("object_type") or ""),
                 "id": str(session.get("object_id") or ""),
-                "companion_skill_id": str(session.get("companion_skill_id") or "") or None,
                 "companion_skill_ids": BuilderAutomationService._session_companion_skill_ids(session),
             },
             "source_prototype_version": str(session.get("source_prototype_version") or "").strip() or None,
@@ -6189,7 +6173,11 @@ class BuilderAutomationService:
     def _submit(self, session: Mapping[str, Any], *, iteration_instruction: str) -> dict[str, Any]:
         kind = str(session["object_type"])
         project_id = str(session["object_id"])
-        companions = self._resolve_companion_skill_ids(kind, project_id)
+        companions = self._resolve_companion_skill_ids(
+            kind,
+            project_id,
+            project_ref=str(session.get("project_ref") or ""),
+        )
         existing = [
             skill_id
             for skill_id in self._session_companion_skill_ids(session)
@@ -6198,7 +6186,6 @@ class BuilderAutomationService:
         for skill_id in existing:
             if skill_id not in companions:
                 companions.append(skill_id)
-        companion = companions[0] if companions else ""
         sparse_paths = [f"{kind}s/{project_id}/" if kind == "scenario" else f"skills/{project_id}/"]
         source_artifacts: list[tuple[str, str, Path]] = [
             (
@@ -6481,7 +6468,6 @@ class BuilderAutomationService:
             "artifacts": {
                 "implementation_brief": session.get("implementation_brief"),
                 "implementation_brief_path": session.get("brief_path"),
-                "companion_skill_id": companion,
                 "companion_skill_ids": companions,
                 "iteration_instruction": iteration_instruction,
                 "workflow_transition": session.get("pending_workflow_transition"),
@@ -10246,6 +10232,7 @@ class BuilderAutomationService:
 
     def _persistence_projection(self, session: Mapping[str, Any]) -> dict[str, Any]:
         payload = copy.deepcopy(dict(session))
+        payload.pop("companion_skill_id", None)
         if isinstance(payload.get("task"), Mapping):
             payload["task"] = self._compact_task_checkpoint(payload["task"])
         last_result = (
@@ -10298,6 +10285,7 @@ class BuilderAutomationService:
 
     def _hydrate_session_compatibility(self, session: Mapping[str, Any]) -> dict[str, Any]:
         payload = copy.deepcopy(dict(session))
+        payload.pop("companion_skill_id", None)
         if isinstance(payload.get("task"), Mapping):
             payload["task"] = self._hydrate_task_checkpoint(payload["task"])
         if not isinstance(payload.get("last_result"), Mapping):

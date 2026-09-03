@@ -26,6 +26,78 @@ from adaos.services.root.service import _rewrite_skill_template_identity
 from adaos.services.skill_factory_worker import CodexRunResult, LocalSkillFactoryWorker
 
 
+def _write_project_manifest(
+    dev_root: Path,
+    *,
+    project_id: str = "recipes",
+    scenario_id: str = "recipes",
+    skill_ids: tuple[str, ...] = (),
+    dependency_skill_ids: tuple[str, ...] = (),
+) -> None:
+    root = dev_root / "projects" / project_id
+    root.mkdir(parents=True, exist_ok=True)
+    owned = [
+        {
+            "ref": f"scenario:{scenario_id}",
+            "role": "primary",
+            "exposure": "application",
+            "lifecycle": "bound",
+            "relations": ["presents"],
+        },
+        *[
+            {
+                "ref": f"skill:{skill_id}",
+                "role": "implementation",
+                "exposure": "project_only",
+                "lifecycle": "bound",
+                "relations": ["realizes", "uses"],
+            }
+            for skill_id in skill_ids
+        ],
+    ]
+    (root / "project.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema": "adaos.project.v1",
+                "kind": "project",
+                "id": project_id,
+                "version": "0.1.0",
+                "profiles": [],
+                "components": {
+                    "owned": owned,
+                    "dependencies": [
+                        {"ref": f"skill:{skill_id}"}
+                        for skill_id in dependency_skill_ids
+                    ],
+                },
+                "entrypoints": [
+                    {
+                        "id": "main",
+                        "presentation": f"scenario:{scenario_id}",
+                        "default": True,
+                        "bindings": {},
+                    }
+                ],
+                "catalog": {
+                    "title": project_id,
+                    "description": "Builder automation test project.",
+                    "categories": [],
+                    "tags": [],
+                },
+                "lifecycle": {
+                    "uninstall": {
+                        "components": "remove_if_unreferenced",
+                        "runtime_data": "retain",
+                        "source_artifacts": "retain",
+                    }
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+
 def _service(tmp_path: Path) -> BuilderAutomationService:
     repo_root = Path(__file__).resolve().parents[1]
     dev_skills = tmp_path / "dev" / "skills"
@@ -38,6 +110,7 @@ def _service(tmp_path: Path) -> BuilderAutomationService:
         encoding="utf-8",
     )
     (scenario / "webui.json").write_text(json.dumps({"schema": "adaos.webui.v1"}), encoding="utf-8")
+    _write_project_manifest(tmp_path / "dev")
 
     class _DeveloperService:
         def create_skill(self, name: str, template: str | None = None):
@@ -3337,25 +3410,16 @@ def test_reopened_dev_ticket_adds_a_revision_to_active_trial_batch(tmp_path: Pat
     assert started["session"]["current_task_id"] != "task.first"
 
 
-def test_scenario_automation_uses_declared_runtime_skill_as_companion(tmp_path: Path) -> None:
+def test_scenario_automation_uses_project_owned_skill_as_companion(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    scenario = service.dev_scenarios_root / "recipes" / "scenario.yaml"
-    scenario.write_text(
-        yaml.safe_dump(
-            {
-                "id": "recipes",
-                "version": "0.1.0",
-                "depends": ["recipes_control_skill"],
-                "runtime": {"skills": {"required": ["recipes_control_skill"]}},
-            },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+    _write_project_manifest(
+        service.dev_scenarios_root.parent,
+        skill_ids=("recipes_control_skill",),
     )
 
-    companion = service._resolve_companion_skill_id("scenario", "recipes")
+    companions = service._resolve_companion_skill_ids("scenario", "recipes")
 
-    assert companion == "recipes_control_skill"
+    assert companions == ["recipes_control_skill"]
 
 
 def test_ui_only_scenario_does_not_invent_conventional_companion_skill(
@@ -3375,13 +3439,33 @@ def test_ui_only_scenario_does_not_invent_conventional_companion_skill(
         if item["task_id"] == started["session"]["current_task_id"]
     )
 
-    assert started["session"]["companion_skill_id"] is None
+    assert "companion_skill_id" not in started["session"]
     assert started["session"]["companion_skill_ids"] == []
     assert task["realize_request"]["artifacts"]["companion_skill_ids"] == []
     assert not (service.dev_skills_root / "recipes_skill").exists()
 
 
-def test_scenario_automation_retains_all_previous_automation_companions(tmp_path: Path) -> None:
+def test_persisted_automation_state_drops_singular_companion_alias(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.scenario.recipes",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "companion_skill_id": "legacy_skill",
+        "companion_skill_ids": [],
+        "status": "completed",
+    }
+
+    persisted = service._persistence_projection(session)
+    hydrated = service._hydrate_session_compatibility(session)
+
+    assert "companion_skill_id" not in persisted
+    assert "companion_skill_id" not in hydrated
+    assert persisted["companion_skill_ids"] == []
+
+
+def test_scenario_automation_ignores_unowned_snapshot_companions(tmp_path: Path) -> None:
     service = _service(tmp_path)
     snapshot = (
         service.state_dir
@@ -3411,10 +3495,10 @@ def test_scenario_automation_retains_all_previous_automation_companions(tmp_path
 
     companions = service._resolve_companion_skill_ids("scenario", "recipes")
 
-    assert companions == ["recipes_skill", "recipes_control_skill"]
+    assert companions == []
 
 
-def test_scenario_automation_retains_published_companions_as_immutable_baseline(
+def test_scenario_automation_keeps_published_companions_outside_project_envelope(
     tmp_path: Path,
 ) -> None:
     service = _service(tmp_path)
@@ -3456,7 +3540,7 @@ def test_scenario_automation_retains_published_companions_as_immutable_baseline(
         if item["task_id"] == started["session"]["current_task_id"]
     )
 
-    assert companions == ["recipes_skill", "recipes_control_skill"]
+    assert companions == []
     assert task["realize_request"]["artifacts"]["companion_skill_ids"] == companions
     attachment = next(
         item
@@ -3489,18 +3573,10 @@ def test_scenario_automation_keeps_installed_only_skill_outside_mutable_envelope
         yaml.safe_dump({"name": "voice_chat_skill", "version": "1.0.0"}, sort_keys=False),
         encoding="utf-8",
     )
-    scenario = service.dev_scenarios_root / "recipes" / "scenario.yaml"
-    scenario.write_text(
-        yaml.safe_dump(
-            {
-                "id": "recipes",
-                "version": "0.1.0",
-                "depends": ["recipes_skill", "voice_chat_skill"],
-                "runtime": {"skills": {"required": ["recipes_skill", "voice_chat_skill"]}},
-            },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+    _write_project_manifest(
+        service.dev_scenarios_root.parent,
+        skill_ids=("recipes_skill",),
+        dependency_skill_ids=("voice_chat_skill",),
     )
 
     started = service.start_from_execute(
@@ -3521,7 +3597,7 @@ def test_scenario_automation_keeps_installed_only_skill_outside_mutable_envelope
     assert not (service.dev_skills_root / "voice_chat_skill").exists()
 
 
-def test_followup_refreshes_companions_from_current_publication(tmp_path: Path) -> None:
+def test_followup_refreshes_companions_from_project_manifest(tmp_path: Path) -> None:
     service = _service(tmp_path)
     service.start_from_execute(
         object_type="scenario",
@@ -3531,25 +3607,16 @@ def test_followup_refreshes_companions_from_current_publication(tmp_path: Path) 
     )
     assert service.workspace_service is not None
     assert service.workspace_service.scenarios_root is not None
-    publication = Path(service.workspace_service.scenarios_root) / "recipes"
-    publication.mkdir(parents=True)
-    (publication / "scenario.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "id": "recipes",
-                "version": "0.4.0",
-                "depends": ["recipes_skill", "recipes_control_skill"],
-            },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
     assert service.workspace_service is not None
     service.workspace_service.create_draft(
         kind="skill",
         artifact_id="recipes_skill",
         source_idea="Existing published recipe dependency.",
         template_id="skill_default",
+    )
+    _write_project_manifest(
+        service.dev_scenarios_root.parent,
+        skill_ids=("recipes_skill", "recipes_control_skill"),
     )
     assert service.workspace_service is not None
     service.workspace_service.create_draft(
@@ -3876,7 +3943,7 @@ def test_duplicate_queued_start_relaunches_orphaned_worker(tmp_path: Path, monke
         "session_id": "automation.scenario.recipes",
         "object_type": "scenario",
         "object_id": "recipes",
-        "companion_skill_id": "recipes_skill",
+        "companion_skill_ids": ["recipes_skill"],
         "webspace_id": "prompt-dev",
         "status": "queued",
         "current_task_id": "task.queued",
@@ -3981,7 +4048,6 @@ def test_automation_projection_is_render_safe_and_abi_valid(tmp_path: Path) -> N
     assert projection["project"] == {
         "type": "scenario",
         "id": "recipes",
-        "companion_skill_id": None,
         "companion_skill_ids": [],
     }
     assert projection["result_branch"] == result["session"]["last_result"]["branch"]
@@ -4083,7 +4149,7 @@ def test_refresh_recovers_terminal_orphan_once_and_finalizes_without_rerunning_c
         "session_id": "automation.scenario.recipes",
         "object_type": "scenario",
         "object_id": "recipes",
-        "companion_skill_id": "recipes_skill",
+        "companion_skill_ids": ["recipes_skill"],
         "webspace_id": "prompt-dev",
         "current_task_id": task_id,
         "status": "in_progress",
@@ -4718,7 +4784,7 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
             "session_id": "automation.scenario.recipes",
             "object_type": "scenario",
             "object_id": "recipes",
-            "companion_skill_id": "recipes_skill",
+            "companion_skill_ids": ["recipes_skill"],
             "webspace_id": "desktop",
             "current_task_id": "task.1",
             "change_id": "change-1",
@@ -4820,7 +4886,7 @@ def test_finalize_activates_dev_ticket_aprobation_overlay_after_checkpoint(
             "session_id": "automation.scenario.recipes",
             "object_type": "scenario",
             "object_id": "recipes",
-            "companion_skill_id": "recipes_skill",
+            "companion_skill_ids": ["recipes_skill"],
             "webspace_id": "desktop",
             "current_task_id": "task.1",
             "change_id": "change-1",
@@ -5041,7 +5107,7 @@ def test_finalize_scenario_only_repair_does_not_activate_unchanged_companion_ski
             "session_id": "automation.scenario.recipes",
             "object_type": "scenario",
             "object_id": "recipes",
-            "companion_skill_id": "recipes_skill",
+            "companion_skill_ids": ["recipes_skill"],
             "webspace_id": "desktop",
             "current_task_id": "task.1",
             "change_id": "change-1",
@@ -6231,7 +6297,7 @@ def test_completed_workflow_reconciliation_backfills_aprobation_overlay(
         {
             "object_type": "skill",
             "object_id": "subscription_status_skill",
-            "companion_skill_id": "subscription_status_skill",
+            "companion_skill_ids": ["subscription_status_skill"],
             "current_task_id": "task.1",
             "change_id": "change.1",
             "webspace_id": "desktop",
@@ -6346,7 +6412,7 @@ def test_completed_trial_reconciliation_recovers_only_missing_runtime_overlay(
         {
             "object_type": "skill",
             "object_id": "subscription_status_skill",
-            "companion_skill_id": "subscription_status_skill",
+            "companion_skill_ids": ["subscription_status_skill"],
             "current_task_id": "task.1",
             "change_id": "change.session",
             "webspace_id": "desktop",
@@ -6853,7 +6919,7 @@ def test_finalize_reenters_failed_workflow_for_checkpoint_reconciliation(
             "session_id": "automation.skill.research_skill",
             "object_type": "skill",
             "object_id": "research_skill",
-            "companion_skill_id": "research_skill",
+            "companion_skill_ids": ["research_skill"],
             "webspace_id": "desktop-dev",
             "current_task_id": "task.1",
             "change_id": "change-reconciled",
@@ -7010,7 +7076,7 @@ def test_finalize_records_live_readiness_failure_without_success_chat(
             "session_id": "automation.scenario.recipes",
             "object_type": "scenario",
             "object_id": "recipes",
-            "companion_skill_id": "recipes_skill",
+            "companion_skill_ids": ["recipes_skill"],
             "status": "completed",
         }
     )
@@ -7128,7 +7194,7 @@ def test_finalize_stops_before_checkpoint_when_consumer_acceptance_fails(
             "development_session_id": "dev_research_skill",
             "object_type": "skill",
             "object_id": "research_skill",
-            "companion_skill_id": "research_skill",
+            "companion_skill_ids": ["research_skill"],
             "webspace_id": "research-dev",
             "current_task_id": "task.1",
             "change_id": "change-1",
@@ -7317,7 +7383,7 @@ def test_finalize_fails_when_forge_checkpoint_is_not_confirmed(tmp_path: Path, m
         {
             "object_type": "scenario",
             "object_id": "recipes",
-            "companion_skill_id": "recipes_skill",
+            "companion_skill_ids": ["recipes_skill"],
             "webspace_id": "prompt-dev",
             "current_task_id": "task.1",
             "iteration": 1,
@@ -7889,7 +7955,7 @@ def test_automation_checkpoints_scenario_and_companion_skill_with_result_summary
         {
             "object_type": "scenario",
             "object_id": "recipes",
-            "companion_skill_id": "recipes_skill",
+            "companion_skill_ids": ["recipes_skill"],
             "last_result": {
                 "summary": "Implemented recipe filters and details.",
                 "changed_paths": [
@@ -7936,7 +8002,7 @@ def test_automation_does_not_checkpoint_unchanged_companion_skill(tmp_path: Path
         {
             "object_type": "scenario",
             "object_id": "recipes",
-            "companion_skill_id": "recipes_skill",
+            "companion_skill_ids": ["recipes_skill"],
             "last_result": {
                 "summary": "Aligned derived scenario projections.",
                 "changed_paths": [
@@ -8065,7 +8131,7 @@ def test_automation_checkpoints_primary_scenario_when_only_companion_skill_chang
         {
             "object_type": "scenario",
             "object_id": "recipes",
-            "companion_skill_id": "recipes_skill",
+            "companion_skill_ids": ["recipes_skill"],
             "last_result": {
                 "summary": "Implemented the scenario dependency in its companion skill.",
                 "changed_paths": ["skills/recipes_skill/handlers/main.py"],

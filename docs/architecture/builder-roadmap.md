@@ -2250,6 +2250,12 @@ observed projection matches the latest desired generation.
   turns and provide the installed Workspace Publication as an immutable
   implementation baseline. The worker rejects changes to that baseline and
   removes it before DEV activation or release-package construction.
+- [x] `[must]` Supersede dependency-inferred companion preservation with
+  canonical Project ownership. Only skills in
+  `adaos.project.v1.components.owned` enter the mutable Automation envelope;
+  scenario runtime requirements, prior snapshots, installed publications, and
+  `<scenario>_skill` naming no longer grant write authority. Session, worker,
+  and projection contracts use `companion_skill_ids` only.
 - [x] `[must]` Treat installed-only dependencies as immutable release inputs,
   not mutable DEV companions. A missing legacy stable identity is migrated
   into a deterministic package with an explicit `workspace-migration` source
