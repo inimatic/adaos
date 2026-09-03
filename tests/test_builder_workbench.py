@@ -804,6 +804,7 @@ def test_builder_context_inspector_uses_ticket_project_not_component_id(tmp_path
 
 def test_builder_context_inspector_projects_scoped_development_feedback(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     state_dir = tmp_path / "state"
     service = BuilderWorkbenchService(state_dir=state_dir)
@@ -812,13 +813,21 @@ def test_builder_context_inspector_projects_scoped_development_feedback(
         object_type="skill",
         object_id="demo_metrics_skill",
     )
+    monkeypatch.setattr(
+        "adaos.services.builder.workbench._dev_owner_project_scope",
+        lambda ref: (
+            {"project_id": "demo_metrics", "project_ref": "project:demo_metrics"}
+            if ref == "skill:demo_metrics_skill"
+            else {}
+        ),
+    )
     feedback = DevelopmentFeedbackService(state_dir=state_dir)
     relevant = feedback.capture(
         source="codex",
         category="inefficient_contract",
         summary="The resource query requires a full snapshot for one metric.",
         impact=["efficiency"],
-        target_refs=["project:demo_metrics_skill", "skill:demo_metrics_skill"],
+        target_refs=["project:demo_metrics", "skill:demo_metrics_skill"],
         actor="codex:test",
     )["feedback"]
     feedback.capture(
@@ -832,6 +841,7 @@ def test_builder_context_inspector_projects_scoped_development_feedback(
     inspector = service.context_inspector("desktop")
 
     projection = inspector["development_feedback"]
+    assert inspector["scope"]["project_ref"] == "project:demo_metrics"
     assert projection["authority"] == "adaos.development_feedback"
     assert projection["read_only"] is True
     assert projection["summary"] == {
@@ -846,9 +856,20 @@ def test_builder_context_inspector_projects_scoped_development_feedback(
     assert projection["actions"]["promote"].endswith("/{feedback_id}/promote")
 
 
-def test_builder_workbench_open_selects_development_ticket_context(tmp_path: Path) -> None:
+def test_builder_workbench_open_selects_development_ticket_context(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     state_dir = tmp_path / "state"
     service = BuilderWorkbenchService(state_dir=state_dir)
+    monkeypatch.setattr(
+        "adaos.services.builder.workbench._dev_owner_project_scope",
+        lambda ref: (
+            {"project_id": "legacy_app", "project_ref": "project:legacy_app"}
+            if ref == "skill:legacy_skill"
+            else {}
+        ),
+    )
     tickets = DevelopmentTicketService(state_dir=state_dir)
     signal = tickets.capture_signal(
         kind="compatibility_finding",
@@ -877,6 +898,9 @@ def test_builder_workbench_open_selects_development_ticket_context(tmp_path: Pat
     assert binding["selection"]["object_type"] == "skill"
     assert binding["selection"]["object_id"] == "legacy_skill"
     assert binding["development_ticket"]["ticket_id"] == ticket["ticket_id"]
+    assert binding["development_ticket"]["target_scope"]["project_ref"] == (
+        "project:legacy_app"
+    )
     assert binding["development_ticket"]["development_source"]["status"] == "needs_materialization"
     assert "materialize_dev_source" in binding["development_ticket"]["development_source"]["options"]
     assert binding["development_ticket"]["owner_area"] == "skill"

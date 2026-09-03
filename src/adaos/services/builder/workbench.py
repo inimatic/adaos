@@ -321,6 +321,24 @@ def _ticket_component_ref(ticket: Mapping[str, Any], target: Mapping[str, Any]) 
     return f"{target_type}:{target_id}" if target_type and target_id else ""
 
 
+def _dev_owner_project_scope(component_ref: str) -> dict[str, str]:
+    token = str(component_ref or "").strip()
+    if not token.startswith(("skill:", "scenario:")):
+        return {}
+    try:
+        from adaos.sdk.developer import compositions
+
+        project = compositions.project_for_component(token)
+    except Exception:
+        return {}
+    if not isinstance(project, Mapping):
+        return {}
+    project_id = str(project.get("id") or "").strip()
+    if not project_id:
+        return {}
+    return {"project_id": project_id, "project_ref": f"project:{project_id}"}
+
+
 def _ticket_relation_refs(ticket: Mapping[str, Any]) -> list[dict[str, Any]]:
     refs = _ticket_mapping_list(ticket.get("relation_refs"))
     legacy = _ticket_mapping_list(ticket.get("related_refs"))
@@ -1231,11 +1249,18 @@ class BuilderWorkbenchService:
         ticket = ticket_service.get_ticket(ticket_token)
         if not ticket:
             raise ValueError(f"development ticket not found: {ticket_token}")
-        target = ticket.get("target_scope") if isinstance(ticket.get("target_scope"), Mapping) else {}
+        target = (
+            dict(ticket.get("target_scope"))
+            if isinstance(ticket.get("target_scope"), Mapping)
+            else {}
+        )
         target_type = str(object_type or target.get("type") or "").strip().lower().rstrip("s") or "scenario"
         target_id = str(object_id or target.get("id") or target.get("name") or "").strip()
         if not target_id:
             raise ValueError(f"development ticket target is missing id: {ticket_token}")
+        component_ref = _ticket_component_ref(ticket, target) or f"{target_type}:{target_id}"
+        if not str(target.get("project_ref") or target.get("project_id") or "").strip():
+            target.update(_dev_owner_project_scope(component_ref))
         binding = self.set_selected_project(
             source_webspace_id=source_webspace_id,
             object_type=target_type,
@@ -1307,7 +1332,7 @@ class BuilderWorkbenchService:
             "status_group": ticket.get("status_group"),
             "summary": ticket.get("summary"),
             "owner_area": _ticket_owner_area(ticket, target),
-            "component_ref": _ticket_component_ref(ticket, target) or None,
+            "component_ref": component_ref or None,
             "target_scope": dict(target),
             "development_source": development_source,
             "qualification": qualification,
@@ -1645,11 +1670,19 @@ class BuilderWorkbenchService:
         ticket_project_id = str(ticket_target.get("project_id") or "").strip()
         if ticket_project_ref and not ticket_project_ref.startswith("project:"):
             ticket_project_ref = ""
+        owner_project_ref = str(
+            _dev_owner_project_scope(
+                f"{object_type}:{object_id}" if object_type and object_id else ""
+            ).get("project_ref")
+            or ""
+        ).strip()
         project_ref = (
             ticket_project_ref
             if ticket_matches_selection and ticket_project_ref
             else f"project:{ticket_project_id}"
             if ticket_matches_selection and ticket_project_id
+            else owner_project_ref
+            if owner_project_ref
             else f"project:{object_id}"
             if object_id
             else None
