@@ -506,7 +506,7 @@ def test_dev_ticket_repair_projects_minimal_diff_constraints(tmp_path: Path) -> 
     assert "Governed Development Session inputs" not in prompt
 
 
-def test_dev_ticket_repair_with_root_mcp_uses_only_bound_target_validation(
+def test_dev_ticket_repair_with_root_mcp_admits_sdk_metadata_and_bound_validation(
     tmp_path: Path,
 ) -> None:
     service = _service(tmp_path)
@@ -546,7 +546,7 @@ def test_dev_ticket_repair_with_root_mcp_uses_only_bound_target_validation(
 
     assert task["realize_request"]["mcp"] == {
         "enabled": True,
-        "requested_scope": ["staging_validation"],
+        "requested_scope": ["requirement_spec", "staging_validation"],
         "subnet_id": "sn_demo",
         "bound_target_id": "hub:sn_demo",
     }
@@ -5956,6 +5956,73 @@ def test_failed_worker_synchronizes_linked_dev_ticket(
     assert len(synced) == 1
     assert synced[0]["status"] == "failed"
     assert synced[0]["current_task_id"] == "task.failed"
+
+
+def test_worker_crash_fails_factory_task_and_synchronizes_ticket(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    failed_reports: list[dict] = []
+    synced: list[dict] = []
+    session = {
+        "session_id": "automation.skill.demo_metrics_skill",
+        "object_type": "skill",
+        "object_id": "demo_metrics_skill",
+        "status": "failed",
+        "current_task_id": "task.crashed",
+        "last_failure": {"message": "worker crashed"},
+        "links": {
+            "development_ticket_id": "dticket.crashed",
+            "builder_repair_id": "repair.crashed",
+        },
+    }
+
+    class CrashingWorker:
+        node_id = "devnode.crashed"
+
+        def run_once(self, *, task_id=None):  # noqa: ARG002
+            raise ValueError("invalid task MCP profile")
+
+    class FakeWorkflow:
+        def transition(self, *args, **kwargs):  # noqa: ARG002
+            return {"ok": True}
+
+    service.worker_factory = CrashingWorker
+    monkeypatch.setattr(
+        type(service.factory),
+        "fail_task",
+        lambda self, report: failed_reports.append(report),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_find_session_by_id",
+        lambda self, session_id: dict(session),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "refresh_session",
+        lambda self, value: dict(session),
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: None)
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: FakeWorkflow())
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_sync_linked_development_ticket_tasks",
+        lambda self, value: synced.append(dict(value)) or dict(value),
+    )
+
+    service._run_worker(session["session_id"])
+
+    assert failed_reports == [
+        {
+            "task_id": "task.crashed",
+            "node_id": "devnode.crashed",
+            "message": "ValueError: invalid task MCP profile",
+            "retryable": True,
+        }
+    ]
+    assert [item["status"] for item in synced] == ["failed"]
 
 
 def test_finalize_reconciles_exact_canonical_checkpoint_without_replay(

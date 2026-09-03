@@ -5777,7 +5777,10 @@ class BuilderAutomationService:
             else:
                 request_mcp = _sanitized_mcp_profile(session.get("mcp")) or {}
                 request_mcp["enabled"] = True
-                request_mcp["requested_scope"] = ["staging_validation"]
+                request_mcp["requested_scope"] = [
+                    "requirement_spec",
+                    "staging_validation",
+                ]
         else:
             request_mcp = _sanitized_mcp_profile(session.get("mcp")) or {
                 "requested_scope": [
@@ -6133,7 +6136,38 @@ class BuilderAutomationService:
                     status,
                     message,
                 )
-            worker_result = worker.run_once(task_id=expected_task_id or None)
+            try:
+                worker_result = worker.run_once(task_id=expected_task_id or None)
+            except Exception as exc:
+                _log.exception(
+                    "Builder worker crashed before returning a task result session=%s task=%s",
+                    session_id,
+                    expected_task_id,
+                )
+                if expected_task_id:
+                    try:
+                        self.factory.fail_task(
+                            {
+                                "task_id": expected_task_id,
+                                "node_id": str(
+                                    getattr(worker, "node_id", None)
+                                    or "devnode.local-codex"
+                                ),
+                                "message": f"{type(exc).__name__}: {exc}",
+                                "retryable": True,
+                            }
+                        )
+                    except Exception:
+                        _log.exception(
+                            "Failed to persist Builder worker crash session=%s task=%s",
+                            session_id,
+                            expected_task_id,
+                        )
+                worker_result = {
+                    "ok": False,
+                    "status": "failed",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
             should_finalize = False
             failed_session: dict[str, Any] | None = None
             finalizing_projection: dict[str, Any] | None = None

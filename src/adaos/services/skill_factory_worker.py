@@ -2907,7 +2907,7 @@ class LocalSkillFactoryWorker:
         output_dir = run_root / "output"
         runtime_dir = run_root / "runtime"
         agent_profile = dict((assignment.get("codex") or {}).get("agent_profile") or {})
-        root_mcp = _root_mcp_profile_from_assignment(assignment, include_private_token=True)
+        root_mcp: dict[str, Any] | None = None
         for path in (input_dir, output_dir, runtime_dir):
             path.mkdir(parents=True, exist_ok=True)
         process_owner = self._current_process_owner()
@@ -2922,6 +2922,10 @@ class LocalSkillFactoryWorker:
         )
 
         try:
+            root_mcp = _root_mcp_profile_from_assignment(
+                assignment,
+                include_private_token=True,
+            )
             self._progress(task_id, "workspace_preparing", "Preparing isolated local workspace")
             if workspace.exists():
                 shutil.rmtree(workspace)

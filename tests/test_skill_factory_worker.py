@@ -68,6 +68,47 @@ def test_codex_jsonl_usage_accepts_reasoning_output_tokens(tmp_path: Path) -> No
     }
 
 
+def test_run_assignment_persists_preflight_mcp_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path / "repo",
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    failed: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        type(worker.factory),
+        "fail_task",
+        lambda self, report: failed.append(report),
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "_root_mcp_profile_from_assignment",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            ValueError("task-scoped Root MCP lease admits no supported tools")
+        ),
+    )
+
+    result = worker.run_assignment({"task_id": "task.invalid-mcp"})
+
+    assert result["ok"] is False
+    assert result["status"] == "failed"
+    assert result["error"] == (
+        "ValueError: task-scoped Root MCP lease admits no supported tools"
+    )
+    assert failed == [
+        {
+            "task_id": "task.invalid-mcp",
+            "node_id": worker.node_id,
+            "message": result["error"],
+            "retryable": True,
+        }
+    ]
+
+
 def test_codex_jsonl_root_mcp_evidence_is_bounded_and_target_scoped(tmp_path: Path) -> None:
     journal = tmp_path / "codex.jsonl"
     journal.write_text(
