@@ -1122,3 +1122,43 @@ def test_skill_publication_reload_follows_workspace_scenario_dependencies(monkey
 
     assert result["reloaded_webspaces"] == ["workspace-builder"]
     assert calls == [("workspace-builder", "builder")]
+
+
+def test_promoted_candidate_refreshes_workspace_and_preview_consumers(monkeypatch) -> None:
+    import asyncio
+
+    calls: list[tuple[str, str, str]] = []
+
+    async def _reload_workspace(object_type: str, object_id: str):
+        calls.append(("workspace", object_type, object_id))
+        return {"ok": True}
+
+    async def _reload_preview(object_type: str, object_id: str, *, reason=None):
+        calls.append(("preview", object_type, object_id))
+        return {"ok": True, "reason": reason}
+
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "reload_workspace_webspaces_for_publication",
+        _reload_workspace,
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "reload_preview_webspaces_for_project",
+        _reload_preview,
+    )
+
+    asyncio.run(
+        webspace_runtime_module._on_project_content_changed(
+            {
+                "project_kind": "scenario",
+                "project_id": "builder",
+                "reason": "candidate_promoted",
+            }
+        )
+    )
+
+    assert calls == [
+        ("workspace", "scenario", "builder"),
+        ("preview", "scenario", "builder"),
+    ]

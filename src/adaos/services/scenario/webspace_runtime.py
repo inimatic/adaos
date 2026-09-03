@@ -8262,6 +8262,15 @@ async def _on_project_content_changed(evt: Dict[str, Any]) -> None:
             reason,
         )
         return
+    if identity.kind in {"scenario", "skill"} and reason in {
+        "candidate_promoted",
+        "project_published",
+        "subscription_activated",
+    }:
+        await reload_workspace_webspaces_for_publication(
+            identity.kind,
+            identity.project_id,
+        )
     await reload_preview_webspaces_for_project(
         identity.kind,
         identity.project_id,
