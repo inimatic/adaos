@@ -36,6 +36,9 @@ _VALIDATION_FINDING_RE = re.compile(
     r"(?P<path>(?:skills|scenarios)/[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)"
     r":\s+(?P<code>[A-Za-z0-9_.-]+):"
 )
+_PYTEST_SOURCE_PATH_RE = re.compile(
+    r"(?P<path>(?:skills|scenarios)/[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+\.py):\d+:"
+)
 _DATA_ROUTE_LOCATION_RE = re.compile(r"data_routes\[(?P<index>\d+)]\.budget")
 _WEBUI_TOOL_REFERENCE_RE = re.compile(
     r"(?:callSkill|skill dataSource) references undeclared tool ['\"](?P<target>[^'\"]+)['\"]"
@@ -372,10 +375,19 @@ def _validation_findings(ticket: Mapping[str, Any]) -> list[dict[str, Any]]:
                 messages.append(text)
     findings: list[dict[str, Any]] = []
     for message in messages:
-        for match in _VALIDATION_FINDING_RE.finditer(message.replace("\\", "/")):
+        normalized = message.replace("\\", "/")
+        for match in _VALIDATION_FINDING_RE.finditer(normalized):
             finding = {
                 "path": match.group("path").strip("/"),
                 "code": match.group("code"),
+                "message": message,
+            }
+            if finding not in findings:
+                findings.append(finding)
+        for match in _PYTEST_SOURCE_PATH_RE.finditer(normalized):
+            finding = {
+                "path": match.group("path").strip("/"),
+                "code": "pytest.failed",
                 "message": message,
             }
             if finding not in findings:
@@ -471,6 +483,122 @@ def _bounded_route_budget_edit(
     }
 
 
+def _pytest_extra_left_items(message: str) -> list[str]:
+    collecting = False
+    items: list[str] = []
+    for line in message.splitlines():
+        if "Extra items in the left set:" in line:
+            collecting = True
+            continue
+        if not collecting:
+            continue
+        match = re.match(r"\s*E\s+['\"](?P<item>[A-Za-z0-9_.-]+)['\"]\s*$", line)
+        if match is not None:
+            items.append(match.group("item"))
+            continue
+        if items or (line.strip() and not line.lstrip().startswith("E")):
+            break
+    return list(dict.fromkeys(items))
+
+
+def _pytest_manifest_tool_set_edit(
+    *,
+    source_root: Path,
+    entry: Mapping[str, Any],
+    finding: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Repair only an explicit expected manifest-tools set mismatch."""
+
+    if _text(finding.get("code")) != "pytest.failed":
+        return None
+    missing = _pytest_extra_left_items(_text(finding.get("message")))
+    if not missing:
+        return None
+    try:
+        manifest = yaml.safe_load((source_root / "skill.yaml").read_text(encoding="utf-8")) or {}
+        skill_id = _text(manifest.get("name")) if isinstance(manifest, Mapping) else ""
+        webui_source = (source_root / "webui.json").read_text(encoding="utf-8")
+        handler_source = (source_root / "handlers" / "main.py").read_text(encoding="utf-8")
+        handler_tree = ast.parse(handler_source)
+    except (OSError, UnicodeDecodeError, ValueError, SyntaxError, yaml.YAMLError):
+        return None
+    exported_handlers = {
+        decorator.args[0].value
+        for node in ast.walk(handler_tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for decorator in node.decorator_list
+        if isinstance(decorator, ast.Call)
+        and isinstance(decorator.func, ast.Name)
+        and decorator.func.id == "tool"
+        and decorator.args
+        and isinstance(decorator.args[0], ast.Constant)
+        and isinstance(decorator.args[0].value, str)
+    }
+    if not skill_id or any(
+        item not in exported_handlers
+        or not any(
+            f'"{skill_id}{separator}{item}"' in webui_source
+            for separator in (".", ":")
+        )
+        for item in missing
+    ):
+        return None
+    relative_path = _text(entry.get("relative_path"))
+    source_path = (source_root / relative_path).resolve()
+    try:
+        source_path.relative_to(source_root.resolve())
+        original = source_path.read_text(encoding="utf-8")
+        tree = ast.parse(original)
+    except (OSError, UnicodeDecodeError, ValueError, SyntaxError):
+        return None
+
+    candidate: ast.Set | None = None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare) or not any(
+            isinstance(operation, ast.Eq) for operation in node.ops
+        ):
+            continue
+        comparison_source = ast.get_source_segment(original, node) or ""
+        if "manifest" not in comparison_source or "tools" not in comparison_source:
+            continue
+        sets = [value for value in [node.left, *node.comparators] if isinstance(value, ast.Set)]
+        for value in sets:
+            expected = {
+                item.value
+                for item in value.elts
+                if isinstance(item, ast.Constant) and isinstance(item.value, str)
+            }
+            if expected and not any(item in expected for item in missing):
+                candidate = value
+                break
+        if candidate is not None:
+            break
+    if candidate is None or candidate.end_lineno is None or not candidate.elts:
+        return None
+
+    lines = original.splitlines(keepends=True)
+    start = candidate.lineno - 1
+    end = candidate.end_lineno
+    if start < 0 or end > len(lines) or start >= end:
+        return None
+    block = "".join(lines[start:end])
+    if not block or original.count(block) != 1:
+        return None
+    first_item_line = lines[candidate.elts[0].lineno - 1]
+    indent = first_item_line[: len(first_item_line) - len(first_item_line.lstrip())]
+    newline = "\r\n" if "\r\n" in original else "\n"
+    insertion = "".join(f'{indent}"{item}",{newline}' for item in missing)
+    replacement = "".join([*lines[start : end - 1], insertion, lines[end - 1]])
+    return {
+        "id": "sync-manifest-tool-set-" + "-".join(missing)[:100],
+        "op": "replace_text",
+        "path": _text(entry.get("workspace_path")),
+        "old": block,
+        "new": replacement,
+        "expected_count": 1,
+    }
+
+
 def _validation_gate_qualification(
     ticket: Mapping[str, Any],
     *,
@@ -519,6 +647,11 @@ def _validation_gate_qualification(
         for finding, entry in matched
         for operation in [
             _bounded_route_budget_edit(
+                source_root=source_root,
+                entry=entry,
+                finding=finding,
+            )
+            or _pytest_manifest_tool_set_edit(
                 source_root=source_root,
                 entry=entry,
                 finding=finding,

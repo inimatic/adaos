@@ -249,6 +249,82 @@ def refresh_usage(webspace_id: str = "desktop"):
     )
 
 
+def test_pytest_manifest_tool_set_failure_qualifies_as_structured_edit(
+    tmp_path: Path,
+) -> None:
+    source = _manifest_source_tree(tmp_path / "demo_skill")
+    (source / "handlers").mkdir()
+    (source / "handlers" / "main.py").write_text(
+        """from adaos.sdk.core.decorators import tool
+
+@tool("refresh_codex_usage")
+def refresh_codex_usage():
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+    (source / "webui.json").write_text(
+        json.dumps(
+            {
+                "actions": [
+                    {
+                        "type": "callSkill",
+                        "target": "demo_skill.refresh_codex_usage",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (source / "tests").mkdir()
+    test_path = source / "tests" / "test_manifest.py"
+    test_path.write_text(
+        """def test_manifest_tools(manifest):
+    assert {tool["name"] for tool in manifest["tools"]} == {
+        "ping",
+        "refresh",
+    }
+""",
+        encoding="utf-8",
+    )
+    ticket = {
+        "ticket_id": "dticket.pytest-manifest-tools",
+        "summary": "Skill demo_skill failed the validation publication gate",
+        "component_ref": "skill:demo_skill",
+        "target_scope": {"type": "skill", "id": "demo_skill"},
+        "metadata": {
+            "error": (
+                "skills/demo_skill/tests: packaged pytest failed:\n"
+                "Extra items in the left set:\n"
+                "E       'refresh_codex_usage'\n"
+                "skills\\demo_skill\\tests\\test_manifest.py:2: AssertionError"
+            )
+        },
+        "evidence_refs": [],
+    }
+
+    result = prepare_repair_qualification(
+        ticket,
+        development_source={"status": "source_available", "dev_source_path": str(source)},
+        object_type="skill",
+        object_id="demo_skill",
+    )
+
+    assert result["ready"] is True
+    assert result["model_call_expected"] is False
+    assert result["validation_findings"] == [
+        {
+            "path": "skills/demo_skill/tests/test_manifest.py",
+            "code": "pytest.failed",
+        }
+    ]
+    repair = result["builder_repair"]
+    assert repair["target_files"] == ["skills/demo_skill/tests/test_manifest.py"]
+    operation = repair["structured_edits"]["operations"][0]
+    assert '"refresh_codex_usage",' in operation["new"]
+    assert '"refresh_codex_usage",' not in operation["old"]
+
+
 def test_service_can_apply_high_confidence_local_qualification(
     tmp_path: Path,
     monkeypatch,
