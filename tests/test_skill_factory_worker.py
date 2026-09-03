@@ -1878,6 +1878,8 @@ def test_bounded_repair_prompt_requires_targeted_reads(
     worker._build_packet(assignment, workspace, input_dir)
     prompt = (input_dir / "task.md").read_text(encoding="utf-8")
 
+    packet = json.loads((input_dir / "packet.json").read_text(encoding="utf-8"))
+
     assert "not Codex skill authoring" in prompt
     assert "Do not load generic skill-creator instructions" in prompt
     assert "`rg -n --max-count 12`" in prompt
@@ -1887,6 +1889,15 @@ def test_bounded_repair_prompt_requires_targeted_reads(
     assert "Do not run tests or validation commands in the Codex turn" in prompt
     assert "same-skill WebUI `callSkill`" in prompt
     assert "matching `skill.yaml` tool declaration" in prompt
+    assert "every textual `Get-Content`" in prompt
+    assert "`-Encoding UTF8`" in prompt
+    capsule_ids = [item["id"] for item in packet["prompt_rule_capsules"]]
+    assert capsule_ids[:2] == [
+        "adaos.builder.execution_boundary.v1",
+        "adaos.skill.webui_tool_contract.v1",
+    ]
+    if repair_profile == "resource_crud":
+        assert "adaos.skill.resource_storage.v1" in capsule_ids
     assert "Task-scoped Root MCP route" in prompt
     assert "hub:sn_demo" in prompt
     assert "Never substitute a skill, scenario, project, or component ID" in prompt
@@ -1898,6 +1909,27 @@ def test_bounded_repair_prompt_requires_targeted_reads(
         else "AdaOS bounded Dev Ticket repair"
     )
     assert expected_title in prompt
+
+
+def test_prompt_rule_capsules_are_selected_from_task_facets() -> None:
+    capsules = worker_module._selected_prompt_rule_capsules(
+        target_type="skill",
+        repair_hints={
+            "profile": "resource_crud",
+            "target_files": ["skills/demo/handlers/main.py"],
+            "target_refs": ["receiver:subscription.changed"],
+            "acceptance_checks": ["Localized voice Pending Action is observable."],
+        },
+        context_packet={},
+    )
+
+    assert [item["id"] for item in capsules] == [
+        "adaos.builder.execution_boundary.v1",
+        "adaos.skill.webui_tool_contract.v1",
+        "adaos.skill.data_route_receiver.v1",
+        "adaos.skill.resource_storage.v1",
+        "adaos.skill.conversation_i18n.v1",
+    ]
 
 
 def test_unqualified_dev_ticket_uses_bounded_repair_prompt(tmp_path: Path) -> None:
@@ -1930,7 +1962,6 @@ def test_unqualified_dev_ticket_uses_bounded_repair_prompt(tmp_path: Path) -> No
 
     worker._build_packet(assignment, workspace, input_dir)
     prompt = (input_dir / "task.md").read_text(encoding="utf-8")
-
     assert "AdaOS bounded Dev Ticket repair" in prompt
     assert "`rg -n --max-count 12`" in prompt
     assert "Inspect the complete targeted skill or scenario" not in prompt

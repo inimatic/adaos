@@ -2018,6 +2018,14 @@ and verifies source digests immediately before work creation at zero model
 cost. Exact semantic slices and the Root-accounted residual-language qualifier
 remain open.
 
+Prompt-projection verification, 2026-09-03: Skill Factory now compiles a
+permanent execution boundary plus conditional WebUI/tool, data-route/receiver,
+resource/storage, runtime-lifecycle, and conversational/i18n rule capsules.
+The selected IDs and documentation anchors are retained in
+`packet.json.prompt_rule_capsules`; only selected executable invariants enter
+the model prompt. Root MCP descriptor search remains an optional evidence
+adapter rather than the owner of initial mini-representation formation.
+
 Source recovery verification, 2026-09-02: the local Builder lock at release
 `builder@0.2.55` resolves `scenario:builder` as Project-owned and the three
 companion skills as dependencies. The deterministic preflight blocks automatic

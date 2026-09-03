@@ -275,6 +275,15 @@ Root MCP is one agent-facing adapter over this control plane, not the authority
 or persistence model. API and SDK consumers use the same typed services without
 shelling out to MCP or CLI.
 
+The first executable prompt projection uses
+`packet.json.prompt_rule_capsules`. It deterministically selects a permanent
+execution-boundary capsule and conditional skill capsules from target type,
+repair profile, authorized files/refs, acceptance checks, and context facets.
+The same selection is retained for zero-model structured repairs. This is the
+seed of the generic Context Compiler, not an MCP-only mini representation:
+Root MCP search and exact drill-down may provide descriptor evidence, while
+prompt formation remains provider-neutral and auditable without an MCP call.
+
 The target operations are equivalent to:
 
 ```text
@@ -527,6 +536,9 @@ Research Workbench.
   model-specific prompt packing, and comparative context evaluation.
 - Root MCP owns one agent-facing retrieval adapter and audit surface; it is not
   capsule storage or workflow authority.
+- `packet.json.prompt_rule_capsules` is the current deterministic compiler
+  projection. Its rule text is compact execution policy; the full development
+  guides remain retrievable documentation rather than permanent model input.
 - Development Signals and Dev Tickets provide change intent and lifecycle, not
   project memory storage.
 - Research Fabric owns Direction/Task/Compilation/ImplementationTrack

@@ -1313,6 +1313,173 @@ def _bounded_repair_iteration_prompt(value: str, *, approved_brief: str) -> str:
     return json.dumps(projected, ensure_ascii=False, indent=2, sort_keys=True)
 
 
+def _selected_prompt_rule_capsules(
+    *,
+    target_type: str,
+    repair_hints: Mapping[str, Any],
+    context_packet: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Compile small task-relevant rules instead of injecting whole guides."""
+
+    evidence = json.dumps(
+        {
+            "target_type": target_type,
+            "profile": repair_hints.get("profile"),
+            "target_files": repair_hints.get("target_files"),
+            "target_refs": repair_hints.get("target_refs"),
+            "acceptance_checks": repair_hints.get("acceptance_checks"),
+            "facets": context_packet.get("facets"),
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+    ).lower()
+    capsules = [
+        {
+            "id": "adaos.builder.execution_boundary.v1",
+            "source": "docs/guides/llm-skill-development.md#golden-rule",
+            "rules": [
+                "Read and edit only the admitted isolated checkout and task-owned context.",
+                "On Windows PowerShell 5.1, every textual `Get-Content` read must use `-Encoding UTF8`; never rewrite source from mojibake console text.",
+                "Do not publish, install, activate, or mutate canonical workspace source; the trusted worker owns validation and Trial delivery.",
+            ],
+        }
+    ]
+    ui_contract = target_type == "skill" and any(
+        marker in evidence
+        for marker in (
+            "webui.json",
+            "skill.yaml",
+            "handlers/",
+            "modal:",
+            "widget:",
+            "callskill",
+            "data_source",
+        )
+    )
+    if ui_contract:
+        capsules.append(
+            {
+                "id": "adaos.skill.webui_tool_contract.v1",
+                "source": (
+                    "docs/guides/llm-skill-development.md"
+                    "#machine-checkable-route-contract"
+                ),
+                "rules": [
+                    "Treat every same-skill WebUI `callSkill` or skill `dataSource` target as a public manifest contract.",
+                    "Keep webui.json, the matching `skill.yaml` tool declaration with complete input/output schemas, and the matching `@tool` handler consistent in one patch.",
+                    "Browser-read tools require a bounded declared data_route; action acknowledgements stay compact and do not duplicate projected data.",
+                ],
+            }
+        )
+    if any(
+        marker in evidence
+        for marker in (
+            "data_route",
+            "data-route",
+            "projection",
+            "receiver",
+            "stream",
+            "subscription",
+        )
+    ):
+        capsules.append(
+            {
+                "id": "adaos.skill.data_route_receiver.v1",
+                "source": "docs/guides/llm-skill-development.md#required-data-route-plan",
+                "rules": [
+                    "Declare receiver ownership, route budget, causal read policy, and projection target explicitly.",
+                    "Do not use Yjs as an unconstrained database or publish duplicate state through action responses and projections.",
+                    "A route or projection mismatch is a validation failure, not a reason to add an undeclared fallback.",
+                ],
+            }
+        )
+    if any(
+        marker in evidence
+        for marker in (
+            "resource_crud",
+            "resource",
+            "storage",
+            "contentref",
+            "provider",
+            "data root",
+        )
+    ):
+        capsules.append(
+            {
+                "id": "adaos.skill.resource_storage.v1",
+                "source": "docs/guides/llm-skill-development.md#memory-and-reload-safety",
+                "rules": [
+                    "Use typed AdaOS resource/provider contracts and owner-scoped SDK storage roots.",
+                    "Do not let callers choose arbitrary filesystem roots or persist synthetic provider data as authoritative state.",
+                    "CRUD and reload behavior must preserve revision, authorization, and deterministic empty/unavailable states.",
+                ],
+            }
+        )
+    if any(
+        marker in evidence
+        for marker in (
+            "rehydrate",
+            "activation",
+            "lifecycle",
+            "runtime_guard",
+            "observability",
+        )
+    ):
+        capsules.append(
+            {
+                "id": "adaos.skill.runtime_lifecycle.v1",
+                "source": "docs/guides/llm-skill-development.md#guarding-and-quarantine",
+                "rules": [
+                    "Keep activation, rehydrate, drain, and failure paths bounded, idempotent, and observable.",
+                    "Validation and runtime failures must produce evidence; do not hide them behind synthetic success defaults.",
+                ],
+            }
+        )
+    if any(
+        marker in evidence
+        for marker in (
+            "nlu",
+            "conversation",
+            "voice",
+            "telegram",
+            "i18n",
+            "locale",
+            "pending_action",
+        )
+    ):
+        capsules.append(
+            {
+                "id": "adaos.skill.conversation_i18n.v1",
+                "source": (
+                    "docs/guides/llm-skill-development.md"
+                    "#names-aliases-and-localization"
+                ),
+                "rules": [
+                    "Keep user-visible text in declared localization contracts and preserve UTF-8 input exactly.",
+                    "Conversational ambiguity requires bounded clarification; it must not silently change the requested action or enter Builder planning.",
+                    "Use governed Pending Actions for consequential confirmation and preserve channel-neutral semantics across UI, voice, and Telegram.",
+                ],
+            }
+        )
+    return capsules
+
+
+def _prompt_rule_capsules_markdown(capsules: Sequence[Mapping[str, Any]]) -> str:
+    lines = ["## Selected AdaOS rule capsules", ""]
+    for capsule in capsules:
+        lines.append(
+            f"### {str(capsule.get('id') or '').strip()} "
+            f"({str(capsule.get('source') or '').strip()})"
+        )
+        lines.extend(
+            f"- {str(rule).strip()}"
+            for rule in capsule.get("rules") or []
+            if str(rule).strip()
+        )
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
 _JSON_TARGET_SEGMENT_RE = re.compile(
     r"^(?P<key>[^\[\]]+)(?:\[(?:(?P<index>\d+)|id=(?P<id>[^\]]+))\])?$"
 )
@@ -4462,6 +4629,16 @@ class LocalSkillFactoryWorker:
             or constraints.get("minimal_diff") is True
             or "adaos.dev_ticket.autonomous_repair_brief.v1" in brief
         )
+        capsule_repair_hints = dict(repair_hints)
+        capsule_repair_hints.setdefault(
+            "profile",
+            str(constraints.get("repair_profile") or "").strip() or None,
+        )
+        prompt_rule_capsules = _selected_prompt_rule_capsules(
+            target_type=target_type,
+            repair_hints=capsule_repair_hints,
+            context_packet=context_packet,
+        )
         packet = {
             "schema": PACKET_SCHEMA,
             "task_id": assignment.get("task_id"),
@@ -4491,6 +4668,7 @@ class LocalSkillFactoryWorker:
             "descriptor_working_set": dict(descriptor_working_set or {}) or None,
             "repair_hints": repair_hints or None,
             "repair_target_context": repair_target_context or None,
+            "prompt_rule_capsules": prompt_rule_capsules,
         }
         _write_json(input_dir / "packet.json", packet)
         (input_dir / "allowed_files.txt").write_text("\n".join(allowed) + "\n", encoding="utf-8")
@@ -4513,8 +4691,6 @@ When `scenarios/{target_id}/.builder_current_publication` exists, treat it as th
 This is a bounded Dev Ticket repair, not a full project implementation pass. Treat the ticket summary, target_scope, evidence_refs and governed Issue acceptance as the complete repair scope. Prefer the smallest code or data change that satisfies the ticket and proves it with focused validation. Leave unrelated UX, manifests, versions, generated descriptors, and source layout unchanged.
 
 Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.json`, `webui.json`, `scenario.yaml`, or `skill.yaml` unless the ticket explicitly requires that manifest change. It is acceptable for a Dev Ticket repair to leave manifests untouched when the fix is in handlers, tests, resource data, comments, or scoped UI text. If the requested result needs core/API/SDK support that is unavailable to this project, do not edit source and do not patch around the limitation. Return exactly one machine-readable proposal in the final response so the trusted orchestrator can create and link the governed Core Dev Ticket. Use this bounded form (one envelope can contain several independently actionable core tasks):
-
-Treat every same-skill WebUI `callSkill` or skill `dataSource` target as a public manifest contract. When a repair adds, renames, or removes its `@tool` handler, update the matching `skill.yaml` tool declaration in the same patch, including its `entry`, `input_schema`, and `output_schema`. Browser-read tools also require a matching bounded `data_route`; never leave a UI target available only through Python discovery.
 
 ```adaos-development-escalation
 {"schema":"adaos.development_escalations.v1","items":[{"kind":"core_capability_request","summary":"...","component_ref":"core:sdk.<area>","desired_contract":"...","impact":"blocker","motivation":"...","observed_limitation":"...","rejected_workarounds":[{"approach":"...","reason":"..."}]}]}
@@ -4693,6 +4869,9 @@ single selected contract with `get_descriptor_item`. The search result is the
 authoritative mini representation; do not repeat discovery with broad SDK reads.
 Do not read, print, or inspect bearer-token environment values.
 """
+        prompt_rule_capsules_section = _prompt_rule_capsules_markdown(
+            prompt_rule_capsules
+        )
         if bounded_repair:
             bounded_prompt_title = (
                 "AdaOS bounded surgical UI repair"
@@ -4753,6 +4932,8 @@ change, edit directly and do not rediscover the same structures.
 {dev_ticket_repair_requirements}
 
 {root_mcp_section if root_mcp else ''}
+
+{prompt_rule_capsules_section}
 
 ## Required result
 
@@ -4828,6 +5009,8 @@ contract, not this convenience projection.
 {dev_ticket_repair_requirements}
 
 {transition_requirements}
+
+{prompt_rule_capsules_section}
 
 ## Required result
 

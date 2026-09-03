@@ -1955,6 +1955,32 @@ Do not:
 
 ## LLM implementation workflow
 
+### Prompt projection contract
+
+This guide is the complete human-readable authority; it is not a prompt
+template. Builder must not copy the whole guide into every model turn. The
+Context Compiler selects small versioned rule capsules, records their IDs and
+source anchors in `packet.json.prompt_rule_capsules`, and renders only those
+rules that are relevant to the admitted task facets.
+
+The permanent execution capsule contains only the boundaries that apply to
+every run: isolated source authority, explicit UTF-8 reads, and worker-owned
+validation, publication, activation, and Trial delivery. Conditional capsules
+cover:
+
+- `webui.json` / `skill.yaml` / `@tool` consistency and bounded browser reads;
+- data-route, receiver, projection, and causal-read ownership;
+- typed resource/provider storage and governed CRUD behavior;
+- activation, rehydrate, guarding, and observability;
+- localization, NLU, voice/Telegram semantics, and Pending Actions.
+
+Detailed UI recipes, examples, migration notes, rationale, and reference
+tables remain retrievable documentation. They enter a task only through an
+explicit detail request or a selected descriptor/source slice. Root MCP is one
+retrieval adapter over this representation; it is not the owner of prompt
+formation. A structured or validation-only repair still records the selected
+capsules even when no model call occurs.
+
 Before coding:
 
 - read `skill.yaml`
