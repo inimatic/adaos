@@ -4761,6 +4761,7 @@ def test_finalize_activates_dev_ticket_aprobation_overlay_after_checkpoint(
         "notify",
     ]
     assert saved[-1]["completion_readiness"]["aprobation"]["ok"] is True
+    assert saved[-1]["completion_readiness"]["resolved_publication_gate_failures"] == []
     assert (
         saved[-1]["completion_readiness"]["aprobation"]["mode"]
         == "devspace_to_workspace_runtime_overlay"
@@ -5865,6 +5866,28 @@ def test_revising_aprobation_rolls_back_and_reopens_ticket(
         evidence_refs=[{"type": "test", "id": "demo-focused", "status": "passed"}],
         resolved_by_overlay="candidate.demo",
     )
+    gate_failure = tickets.report_publication_gate_failure(
+        component_type="skill",
+        component_id="demo_metrics_skill",
+        gate="validation",
+        error="candidate failed before the revised Trial",
+        related_ticket_ids=[ticket["ticket_id"]],
+        candidate_id="candidate.old",
+    )["ticket"]
+    tickets.resolve_publication_gate_failures(
+        component_type="skill",
+        component_id="demo_metrics_skill",
+        actor="builder.automation",
+        evidence_refs=[
+            {"type": "test", "id": "demo-focused", "status": "passed"},
+            {
+                "type": "builder_trial",
+                "id": "candidate.demo",
+                "status": "trial",
+            },
+        ],
+        resolved_by_overlay="candidate.demo",
+    )
     session = {
         "schema": "adaos.builder.automation_session.v1",
         "session_id": "automation.skill.demo_metrics_skill",
@@ -5923,6 +5946,10 @@ def test_revising_aprobation_rolls_back_and_reopens_ticket(
     assert result["tickets"][0]["comments"][-1]["body"] == (
         "Refresh must stay visible on a narrow screen."
     )
+    assert result["reopened_publication_gate_failures"][0]["ticket_id"] == (
+        gate_failure["ticket_id"]
+    )
+    assert tickets.get_ticket(gate_failure["ticket_id"])["status"] == "accepted"
 
 
 def test_aprobation_overlay_requires_ready_webspace_materialization() -> None:

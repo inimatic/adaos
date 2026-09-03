@@ -710,6 +710,22 @@ def test_publication_gate_failure_creates_linked_deduplicated_project_ticket(
         ref.get("ticket_id") == duplicate["ticket"]["ticket_id"]
         for ref in service.get_ticket(original["ticket_id"])["relation_refs"]
     )
+    resolved = service.resolve_publication_gate_failures(
+        component_type="skill",
+        component_id="demo_metrics_skill",
+        actor="builder.automation",
+        evidence_refs=[
+            {
+                "type": "builder_trial",
+                "id": "candidate.second",
+                "status": "trial",
+            },
+            {"type": "test", "id": "task.second", "status": "passed"},
+        ],
+        resolved_by_version="0.2.0",
+        resolved_by_overlay="candidate.second",
+    )
+    assert [item["status"] for item in resolved] == ["resolved"]
     closed = service.close_publication_gate_failures(
         component_type="skill",
         component_id="demo_metrics_skill",

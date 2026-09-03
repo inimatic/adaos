@@ -4337,6 +4337,19 @@ class BuilderAutomationService:
             if accepted
             else []
         )
+        reopened_gate_failures = (
+            []
+            if accepted
+            else ticket_service.reopen_publication_gate_failures(
+                component_type=kind,
+                component_id=project_id,
+                actor=actor_token,
+                reason=str(reason or "").strip()
+                or "The validated Trial candidate was rejected.",
+                evidence_refs=evidence_refs,
+                exclude_ticket_ids=ticket_ids,
+            )
+        )
 
         # Tickets become verified/closed only after the accepted release and
         # its user-visible notice are both projected into the target runtime.
@@ -4398,6 +4411,7 @@ class BuilderAutomationService:
             "component_update": component_update,
             "component_update_projection": component_update_projection,
             "closed_publication_gate_failures": closed_gate_failures,
+            "reopened_publication_gate_failures": reopened_gate_failures,
         }
 
     def projection(
@@ -4491,6 +4505,28 @@ class BuilderAutomationService:
                 reconciled_aprobation["component_update_projection"] = projection
             reconciled_readiness = dict(readiness)
             reconciled_readiness["aprobation"] = reconciled_aprobation
+            current["completion_readiness"] = reconciled_readiness
+            current["updated_at"] = _now_iso()
+            self._save_session(current)
+            readiness = reconciled_readiness
+        if (
+            str(current.get("status") or "").strip() == "completed"
+            and bool(readiness.get("ok"))
+            and self._session_requires_aprobation_overlay(current)
+            and self._aprobation_overlay_ready(
+                readiness.get("aprobation")
+                if isinstance(readiness.get("aprobation"), Mapping)
+                else {}
+            )
+            and "resolved_publication_gate_failures" not in readiness
+        ):
+            reconciled_readiness = dict(readiness)
+            reconciled_readiness["resolved_publication_gate_failures"] = (
+                self._resolve_publication_gate_findings_for_trial(
+                    current,
+                    reconciled_readiness,
+                )
+            )
             current["completion_readiness"] = reconciled_readiness
             current["updated_at"] = _now_iso()
             self._save_session(current)
@@ -6894,6 +6930,77 @@ class BuilderAutomationService:
             stopped.set()
             heartbeat_thread.join(timeout=1.0)
 
+    def _resolve_publication_gate_findings_for_trial(
+        self,
+        session: Mapping[str, Any],
+        readiness: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        aprobation = (
+            dict(readiness.get("aprobation") or {})
+            if isinstance(readiness.get("aprobation"), Mapping)
+            else {}
+        )
+        trial = (
+            dict(aprobation.get("trial") or {})
+            if isinstance(aprobation.get("trial"), Mapping)
+            else {}
+        )
+        candidate_id = str(trial.get("candidate_id") or "").strip()
+        object_type = str(session.get("object_type") or "").strip()
+        object_id = str(session.get("object_id") or "").strip()
+        if not bool(aprobation.get("ok")) or not candidate_id:
+            return []
+        primary_checkpoint = next(
+            (
+                dict(item)
+                for item in readiness.get("vcs_checkpoints") or []
+                if isinstance(item, Mapping)
+                and str(item.get("kind") or "").strip().lower().rstrip("s")
+                == object_type
+                and str(item.get("name") or "").strip() == object_id
+            ),
+            {},
+        )
+        evidence_refs = [
+            {
+                "type": "test",
+                "id": str(session.get("current_task_id") or ""),
+                "status": "passed",
+                "gate": "validation",
+            },
+            {
+                "type": "builder_trial",
+                "id": candidate_id,
+                "digest": trial.get("candidate_digest"),
+                "status": "trial",
+            },
+        ]
+        commit_id = str(primary_checkpoint.get("commit") or "").strip()
+        if commit_id:
+            evidence_refs.append(
+                {
+                    "type": "commit",
+                    "id": commit_id,
+                    "digest": primary_checkpoint.get("package_digest"),
+                    "status": "completed",
+                }
+            )
+        from adaos.services.development_tickets import DevelopmentTicketService
+
+        return DevelopmentTicketService(
+            state_dir=self.state_dir
+        ).resolve_publication_gate_failures(
+            component_type=object_type,
+            component_id=object_id,
+            actor="builder.automation",
+            evidence_refs=evidence_refs,
+            resolved_by_version=str(
+                trial.get("version") or primary_checkpoint.get("version") or ""
+            ).strip()
+            or None,
+            resolved_by_overlay=candidate_id,
+        )
+
     def _finalize_completed_session(self, session: Mapping[str, Any]) -> None:
         """Prepare the DEV runtime, refresh the paired UI, then notify chat."""
         reconciled = self._reconcile_completed_workflow(session)
@@ -7373,6 +7480,12 @@ class BuilderAutomationService:
                     readiness["aprobation"] = self._ensure_governed_aprobation_trial(
                         current,
                         {**dict(trial_receipt), **dict(overlay_receipt)},
+                    )
+                    readiness["resolved_publication_gate_failures"] = (
+                        self._resolve_publication_gate_findings_for_trial(
+                            current,
+                            readiness,
+                        )
                     )
                     if object_type == "scenario" and bool(overlay_receipt.get("ok")):
                         scenario_overlay = (

@@ -3610,6 +3610,88 @@ class DevelopmentTicketService:
             closed.append(ticket)
         return closed
 
+    def resolve_publication_gate_failures(
+        self,
+        *,
+        component_type: str,
+        component_id: str,
+        actor: str,
+        evidence_refs: Sequence[Mapping[str, Any]],
+        resolved_by_version: str | None = None,
+        resolved_by_overlay: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Resolve every component gate finding after a validated Trial starts."""
+
+        kind = _text(component_type).lower().rstrip("s")
+        identifier = _text(component_id)
+        refs = _sequence_of_mappings(evidence_refs)
+        if kind not in {"skill", "scenario"} or not identifier:
+            return []
+        if not refs:
+            raise ValueError("publication gate resolution requires evidence_refs")
+        resolved: list[dict[str, Any]] = []
+        for ticket in self.list_tickets(
+            status_group="open",
+            component_ref=f"{kind}:{identifier}",
+            kind="runtime_failure",
+            source="builder_publication_gate",
+        ):
+            ticket_id = _text(ticket.get("ticket_id"))
+            if not ticket_id:
+                continue
+            if _text(ticket.get("status")) not in {"resolved", "verified"}:
+                ticket = self.record_resolution(
+                    ticket_id,
+                    actor=_text(actor) or "builder.automation",
+                    evidence_refs=refs,
+                    resolved_by_version=resolved_by_version,
+                    resolved_by_overlay=resolved_by_overlay,
+                )["ticket"]
+            resolved.append(ticket)
+        return resolved
+
+    def reopen_publication_gate_failures(
+        self,
+        *,
+        component_type: str,
+        component_id: str,
+        actor: str,
+        reason: str,
+        evidence_refs: Sequence[Mapping[str, Any]],
+        exclude_ticket_ids: Sequence[str] = (),
+    ) -> list[dict[str, Any]]:
+        """Return Trial-resolved gate findings when their candidate is rejected."""
+
+        kind = _text(component_type).lower().rstrip("s")
+        identifier = _text(component_id)
+        refs = _sequence_of_mappings(evidence_refs)
+        excluded = {_text(item) for item in exclude_ticket_ids if _text(item)}
+        if kind not in {"skill", "scenario"} or not identifier:
+            return []
+        reopened: list[dict[str, Any]] = []
+        for ticket in self.list_tickets(
+            status_group="open",
+            component_ref=f"{kind}:{identifier}",
+            kind="runtime_failure",
+            source="builder_publication_gate",
+        ):
+            ticket_id = _text(ticket.get("ticket_id"))
+            if (
+                not ticket_id
+                or ticket_id in excluded
+                or _text(ticket.get("status")) not in {"resolved", "verified"}
+            ):
+                continue
+            reopened.append(
+                self.reopen_ticket(
+                    ticket_id,
+                    actor=_text(actor) or "builder.automation",
+                    reason=_text(reason) or "The validated Trial candidate was rejected.",
+                    evidence_refs=refs,
+                )
+            )
+        return reopened
+
     def report_runtime_activation_observation(
         self,
         observation: Mapping[str, Any],
