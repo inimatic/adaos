@@ -121,7 +121,7 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["status"] == "completed"
     assert status["session"]["source_prototype_version"] == "0.1.0"
     assert status["automation"]["source_prototype_version"] == "0.1.0"
-    assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.12.0"
+    assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.13.0"
     assert status["session"]["created_artifacts"][0]["kind"] == "skill"
     assert status["session"]["created_artifacts"][0]["name"] == "recipes_skill"
     task = next(
@@ -1966,7 +1966,17 @@ def test_validation_failure_reuses_original_budget_candidate_after_requalificati
     source_run = service.runs_root / source_task_id
     (source_run / "workspace" / ".git").mkdir(parents=True)
     (source_run / "input").mkdir(parents=True)
-    (source_run / "input" / "assignment.json").write_text("{}", encoding="utf-8")
+    continuation_contract = automation_module._continuation_contract()
+    (source_run / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {"continuation_contract": continuation_contract}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     finalizer_run = service.runs_root / finalizer_task_id
     (finalizer_run / "input").mkdir(parents=True)
     (finalizer_run / "input" / "assignment.json").write_text(
@@ -2023,6 +2033,7 @@ def test_validation_failure_reuses_original_budget_candidate_after_requalificati
     assert checkpoint["failure_id"] == "failure.source-budget"
     assert checkpoint["trigger_failure_id"] == "failure.path-guard"
     assert checkpoint["reason"] == expected_reason
+    assert checkpoint["continuation_contract"] == continuation_contract
 
 
 def test_budget_continuation_skips_unchanged_candidate(
@@ -2048,6 +2059,48 @@ def test_budget_continuation_skips_unchanged_candidate(
         automation_module,
         "_preserved_candidate_has_changes",
         lambda _run_root: False,
+    )
+
+    assert service._budget_continuation_checkpoint({"current_task_id": task_id}) is None
+
+
+def test_budget_continuation_rejects_stale_prompt_and_sdk_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    task_id = "task.stale-contract-candidate"
+    run_root = service.runs_root / task_id
+    (run_root / "workspace" / ".git").mkdir(parents=True)
+    (run_root / "input").mkdir(parents=True)
+    (run_root / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {
+                        "continuation_contract": {
+                            **automation_module._continuation_contract(),
+                            "standard_prompt_version": "stale/1",
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    service.factory = SimpleNamespace(
+        read_task=lambda _task_id: {
+            "task_id": task_id,
+            "status": "failed",
+            "failure_history": [
+                {"message": "Codex token budget exceeded: observed 11 of 10 tokens."}
+            ],
+        }
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda _run_root: True,
     )
 
     assert service._budget_continuation_checkpoint({"current_task_id": task_id}) is None

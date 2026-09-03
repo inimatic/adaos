@@ -3869,6 +3869,18 @@ class LocalSkillFactoryWorker:
         )
         if checkpoint.get("mode") != "validate_preserved_candidate":
             return None
+        current_contract = (
+            dict(artifacts.get("continuation_contract"))
+            if isinstance(artifacts.get("continuation_contract"), Mapping)
+            else {}
+        )
+        checkpoint_contract = (
+            dict(checkpoint.get("continuation_contract"))
+            if isinstance(checkpoint.get("continuation_contract"), Mapping)
+            else {}
+        )
+        if not current_contract or checkpoint_contract != current_contract:
+            return None
         source_task_id = str(checkpoint.get("source_task_id") or "").strip()
         if not source_task_id or source_task_id == str(assignment.get("task_id") or "").strip():
             raise ValueError("continuation checkpoint source_task_id is invalid")
@@ -3896,6 +3908,18 @@ class LocalSkillFactoryWorker:
         if not previous_assignment_path.is_file():
             raise ValueError("continuation candidate assignment is unavailable")
         previous_assignment = json.loads(previous_assignment_path.read_text(encoding="utf-8"))
+        previous_request = (
+            dict(previous_assignment.get("realize_request"))
+            if isinstance(previous_assignment.get("realize_request"), Mapping)
+            else {}
+        )
+        previous_artifacts = (
+            dict(previous_request.get("artifacts"))
+            if isinstance(previous_request.get("artifacts"), Mapping)
+            else {}
+        )
+        if previous_artifacts.get("continuation_contract") != current_contract:
+            return None
         if dict(previous_assignment.get("target") or {}) != dict(assignment.get("target") or {}):
             raise ValueError("continuation candidate targets another project")
         previous_snapshot = dict((previous_assignment.get("forge") or {}).get("source_snapshot") or {})

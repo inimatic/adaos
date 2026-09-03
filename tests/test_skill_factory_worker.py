@@ -5071,12 +5071,21 @@ def test_worker_restores_budget_stopped_candidate_for_validation(
     previous_file.write_text('{"value":"baseline"}', encoding="utf-8")
     worker._init_git_workspace(previous_workspace, "realize/source")
     previous_file.write_text('{"value":"candidate"}', encoding="utf-8")
+    continuation_contract = {
+        "schema": "adaos.builder.continuation_contract.v1",
+        "standard_prompt_version": "test/1",
+        "descriptor_discovery_profile": "test/1",
+        "sdk_contract_digest": "sha256:test",
+    }
     previous_assignment = {
         "task_id": source_task_id,
         "target": {"type": "skill", "id": "demo"},
         "forge": {
             "sparse_paths": ["skills/demo/"],
             "source_snapshot": {"digest": "sha256:same"},
+        },
+        "realize_request": {
+            "artifacts": {"continuation_contract": continuation_contract}
         },
     }
     (source_run / "input").mkdir(parents=True)
@@ -5114,10 +5123,12 @@ def test_worker_restores_budget_stopped_candidate_for_validation(
         },
         "realize_request": {
             "artifacts": {
+                "continuation_contract": continuation_contract,
                 "continuation_checkpoint": {
                     "mode": "validate_preserved_candidate",
                     "source_task_id": source_task_id,
                     "failure_id": failure_id,
+                    "continuation_contract": continuation_contract,
                 }
             }
         },

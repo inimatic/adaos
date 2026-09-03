@@ -15,6 +15,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -39,7 +40,8 @@ from adaos.services.skill_factory_worker import LocalSkillFactoryWorker, context
 
 
 AUTOMATION_SESSION_SCHEMA = "adaos.builder.automation_session.v1"
-STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.12.0"
+STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.13.0"
+DESCRIPTOR_DISCOVERY_PROFILE_VERSION = "adaos-descriptor-search/1.0"
 FINALIZATION_HEARTBEAT_SECONDS = 10.0
 TRIAL_PREPARATION_RECOVERY_GRACE_SECONDS = 300.0
 COMPONENT_UPDATE_PROJECTION_MAX_ATTEMPTS = 3
@@ -889,6 +891,29 @@ def _canonical_digest(value: Mapping[str, Any]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+@lru_cache(maxsize=1)
+def _continuation_contract() -> dict[str, Any]:
+    """Fingerprint only the public context that can change a preserved repair."""
+
+    from adaos.sdk.core.exporter import export as export_sdk_metadata
+
+    sdk_projection = dict(export_sdk_metadata(level="mini"))
+    sdk_meta = (
+        dict(sdk_projection.get("meta"))
+        if isinstance(sdk_projection.get("meta"), Mapping)
+        else {}
+    )
+    for volatile_key in ("generated_at", "git_sha", "py"):
+        sdk_meta.pop(volatile_key, None)
+    sdk_projection["meta"] = sdk_meta
+    return {
+        "schema": "adaos.builder.continuation_contract.v1",
+        "standard_prompt_version": STANDARD_PROMPT_VERSION,
+        "descriptor_discovery_profile": DESCRIPTOR_DISCOVERY_PROFILE_VERSION,
+        "sdk_contract_digest": _canonical_digest(sdk_projection),
+    }
 
 
 def _publish_automation_changed(projection: Mapping[str, Any]) -> None:
@@ -3130,7 +3155,28 @@ class BuilderAutomationService:
         run_root = Path(self.runs_root) / _safe_token(source_task_id)
         if not (run_root / "workspace" / ".git").is_dir():
             return None
-        if not (run_root / "input" / "assignment.json").is_file():
+        source_assignment_path = run_root / "input" / "assignment.json"
+        if not source_assignment_path.is_file():
+            return None
+        try:
+            source_assignment = json.loads(
+                source_assignment_path.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError):
+            return None
+        source_request = (
+            dict(source_assignment.get("realize_request"))
+            if isinstance(source_assignment, Mapping)
+            and isinstance(source_assignment.get("realize_request"), Mapping)
+            else {}
+        )
+        source_artifacts = (
+            dict(source_request.get("artifacts"))
+            if isinstance(source_request.get("artifacts"), Mapping)
+            else {}
+        )
+        continuation_contract = _continuation_contract()
+        if source_artifacts.get("continuation_contract") != continuation_contract:
             return None
         if not _preserved_candidate_has_changes(run_root):
             return None
@@ -3141,6 +3187,7 @@ class BuilderAutomationService:
             "failure_id": str(source_failure.get("failure_id") or "").strip() or None,
             "trigger_failure_id": trigger_failure_id,
             "reason": reason,
+            "continuation_contract": continuation_contract,
             "created_at": _now_iso(),
         }
 
@@ -5824,6 +5871,7 @@ class BuilderAutomationService:
                 "iteration_instruction": iteration_instruction,
                 "workflow_transition": session.get("pending_workflow_transition"),
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
+                "continuation_contract": _continuation_contract(),
                 "change_set": execution_change or None,
                 "context_packet": context_packet,
                 "context_packet_ref": context_control["context_packet_ref"],
