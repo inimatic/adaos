@@ -5387,9 +5387,17 @@ def test_worker_restores_budget_stopped_candidate_for_validation(
     assert json.loads(current_file.read_text(encoding="utf-8"))["value"] == "candidate"
 
 
+@pytest.mark.parametrize(
+    "continuation_reason",
+    [
+        "deterministic_validation_failure",
+        "publication_gate_validation_failure",
+    ],
+)
 def test_worker_restores_candidate_after_deterministic_project_validation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    continuation_reason: str,
 ) -> None:
     worker = LocalSkillFactoryWorker(
         state_dir=tmp_path / "state",
@@ -5465,7 +5473,7 @@ def test_worker_restores_candidate_after_deterministic_project_validation(
                     "mode": "validate_preserved_candidate",
                     "source_task_id": source_task_id,
                     "failure_id": failure_id,
-                    "reason": "deterministic_validation_failure",
+                    "reason": continuation_reason,
                     "continuation_contract": continuation_contract,
                 },
             }

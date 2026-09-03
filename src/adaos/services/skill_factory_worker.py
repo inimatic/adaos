@@ -4244,7 +4244,11 @@ class LocalSkillFactoryWorker:
         continuation_reason = str(checkpoint.get("reason") or "").strip()
         token_boundary = "Codex token budget exceeded:" in failure_message
         deterministic_validation = (
-            continuation_reason == "deterministic_validation_failure"
+            continuation_reason
+            in {
+                "deterministic_validation_failure",
+                "publication_gate_validation_failure",
+            }
             and "Generated project validation failed:" in failure_message
         )
         if not token_boundary and not deterministic_validation:
