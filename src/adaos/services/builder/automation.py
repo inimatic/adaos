@@ -3177,6 +3177,8 @@ class BuilderAutomationService:
                     "requires successful Root MCP evidence",
                     "task-scoped Root MCP validation call failed",
                     "requires an authenticated task-scoped Root MCP route",
+                    "task-scoped Root MCP policy admits no deterministic validation tool",
+                    "structured edits cannot satisfy a required Root MCP check without trusted evidence",
                 )
             ):
                 retry_reason = "trusted_root_mcp_validation_retry"
@@ -3206,6 +3208,50 @@ class BuilderAutomationService:
                     if isinstance(artifacts.get("continuation_checkpoint"), Mapping)
                     else {}
                 )
+                if checkpoint.get("mode") != "validate_preserved_candidate":
+                    for prior_task_id in reversed(
+                        [
+                            str(item).strip()
+                            for item in session.get("task_history") or []
+                            if str(item).strip() and str(item).strip() != task_id
+                        ]
+                    ):
+                        prior_assignment_path = (
+                            Path(self.runs_root)
+                            / _safe_token(prior_task_id)
+                            / "input"
+                            / "assignment.json"
+                        )
+                        try:
+                            prior_assignment = json.loads(
+                                prior_assignment_path.read_text(encoding="utf-8")
+                            )
+                        except (FileNotFoundError, OSError, json.JSONDecodeError):
+                            continue
+                        prior_request = (
+                            dict(prior_assignment.get("realize_request") or {})
+                            if isinstance(prior_assignment, Mapping)
+                            else {}
+                        )
+                        prior_artifacts = (
+                            dict(prior_request.get("artifacts") or {})
+                            if isinstance(prior_request.get("artifacts"), Mapping)
+                            else {}
+                        )
+                        prior_checkpoint = (
+                            dict(prior_artifacts.get("continuation_checkpoint") or {})
+                            if isinstance(
+                                prior_artifacts.get("continuation_checkpoint"),
+                                Mapping,
+                            )
+                            else {}
+                        )
+                        if (
+                            prior_checkpoint.get("mode")
+                            == "validate_preserved_candidate"
+                        ):
+                            checkpoint = prior_checkpoint
+                            break
                 if checkpoint.get("mode") != "validate_preserved_candidate":
                     return None
                 source_task_id = str(checkpoint.get("source_task_id") or "").strip()
