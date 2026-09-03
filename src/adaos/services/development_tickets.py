@@ -908,6 +908,31 @@ def _normalize_structured_edits(
         return {}
 
 
+def _normalize_contract_closure(
+    value: Any,
+    *,
+    target_files: Sequence[str],
+) -> dict[str, Any]:
+    raw = _mapping(value)
+    if _text(raw.get("kind")) != "skill_public_tool_graph":
+        return {}
+    allowed = set(target_files)
+    required_paths: list[str] = []
+    for value in raw.get("required_paths") or []:
+        path = _text(value).replace("\\", "/").strip("/")
+        if not path or path not in allowed or path in required_paths:
+            continue
+        required_paths.append(path)
+    if not required_paths:
+        return {}
+    return {
+        "kind": "skill_public_tool_graph",
+        "required_paths": required_paths,
+        "reason": _text(raw.get("reason"))[:500]
+        or "qualified repair crosses the public skill tool graph",
+    }
+
+
 def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
     raw = _mapping(_mapping(ticket.get("metadata")).get("builder_repair"))
     if not raw:
@@ -969,6 +994,12 @@ def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
         source_preconditions.append({"path": path, "sha256": digest, "size": size})
     if source_preconditions:
         hints["source_preconditions"] = source_preconditions[:12]
+    contract_closure = _normalize_contract_closure(
+        raw.get("contract_closure"),
+        target_files=target_files,
+    )
+    if contract_closure:
+        hints["contract_closure"] = contract_closure
     structured_edits = _normalize_structured_edits(
         raw.get("structured_edits"),
         target_files=target_files,
@@ -984,6 +1015,7 @@ def _autonomous_repair_qualification(ticket: Mapping[str, Any]) -> dict[str, Any
     hints = _bounded_repair_hints(ticket)
     structured = _mapping(hints.get("structured_edits"))
     validation_only = hints.get("validation_only") is True
+    contract_closure = _mapping(hints.get("contract_closure"))
     missing: list[str] = []
     if not _text(hints.get("profile")):
         missing.append("profile")
@@ -1004,6 +1036,18 @@ def _autonomous_repair_qualification(ticket: Mapping[str, Any]) -> dict[str, Any
             missing.append("validation_source_preconditions")
         if hints.get("requires_root_mcp") is True:
             missing.append("validation_only_root_mcp")
+    if contract_closure:
+        required_paths = set(contract_closure.get("required_paths") or [])
+        target_files = set(hints.get("target_files") or [])
+        precondition_files = {
+            _text(item.get("path"))
+            for item in hints.get("source_preconditions") or []
+            if isinstance(item, Mapping)
+        }
+        if not required_paths or not required_paths.issubset(target_files):
+            missing.append("contract_closure_paths")
+        if not required_paths.issubset(precondition_files):
+            missing.append("contract_closure_source_preconditions")
     route = (
         "validation_only"
         if validation_only and not missing
@@ -1030,6 +1074,7 @@ def _autonomous_repair_qualification(ticket: Mapping[str, Any]) -> dict[str, Any
         "requires_root_mcp": hints.get("requires_root_mcp") is True,
         "validation_only": validation_only,
         "structured_operation_count": len(structured.get("operations") or []),
+        "contract_closure": contract_closure or None,
         "reason": (
             "qualified exact repair envelope is ready"
             if ready
@@ -2575,6 +2620,17 @@ class DevelopmentTicketService:
                 if _text(item.get("path"))
             }.values()
         )
+        contract_paths = list(
+            dict.fromkeys(
+                path
+                for qualification in qualifications
+                for path in _mapping(qualification.get("contract_closure")).get(
+                    "required_paths"
+                )
+                or []
+                if _text(path)
+            )
+        )
         package_id = f"bpackage.{new_id()}"
         budget = dict(execution_budget) if isinstance(execution_budget, Mapping) else {
             "schema": "adaos.builder.execution_budget.v1",
@@ -2605,6 +2661,12 @@ class DevelopmentTicketService:
             "requires_root_mcp": requires_root_mcp,
             "source_preconditions": source_preconditions,
         }
+        if contract_paths:
+            repair_hints["contract_closure"] = {
+                "kind": "skill_public_tool_graph",
+                "required_paths": contract_paths,
+                "reason": "one or more packaged repairs cross the public skill tool graph",
+            }
         if package_structured_edits:
             repair_hints["structured_edits"] = package_structured_edits
         source_refs = [
@@ -4389,6 +4451,13 @@ class DevelopmentTicketService:
             )
             if structured_edits != normalized.get("structured_edits"):
                 raise ValueError("structured_edits changed during qualification normalization")
+        if raw.get("contract_closure") is not None:
+            contract_closure = _normalize_contract_closure(
+                raw.get("contract_closure"),
+                target_files=target_files,
+            )
+            if contract_closure != normalized.get("contract_closure"):
+                raise ValueError("contract_closure contains invalid or out-of-scope paths")
         requested_preconditions = [
             dict(value)
             for value in raw.get("source_preconditions") or []

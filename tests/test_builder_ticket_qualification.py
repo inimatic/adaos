@@ -99,6 +99,39 @@ def test_local_qualification_maps_plain_language_to_bounded_source(tmp_path: Pat
     assert all(item["sha256"].startswith("sha256:") for item in repair["source_preconditions"])
 
 
+def test_local_qualification_closes_public_tool_graph_before_model_use(
+    tmp_path: Path,
+) -> None:
+    source = _source_tree(tmp_path / "subscription_status_skill")
+    (source / "skill.yaml").write_text(
+        "name: subscription_status_skill\ntools: []\nexports:\n  tools: []\n",
+        encoding="utf-8",
+    )
+
+    result = prepare_repair_qualification(
+        _ticket("The Refresh button must update subscription usage data."),
+        development_source={"status": "source_available", "dev_source_path": str(source)},
+        object_type="skill",
+        object_id="subscription_status_skill",
+    )
+
+    assert result["ready"] is True
+    repair = result["builder_repair"]
+    assert repair["contract_closure"]["kind"] == "skill_public_tool_graph"
+    assert repair["contract_closure"]["required_paths"] == [
+        "skills/subscription_status_skill/skill.yaml",
+        "skills/subscription_status_skill/handlers/main.py",
+        "skills/subscription_status_skill/webui.json",
+    ]
+    assert set(repair["contract_closure"]["required_paths"]).issubset(
+        repair["target_files"]
+    )
+    assert {
+        item["path"] for item in repair["source_preconditions"]
+    }.issuperset(repair["contract_closure"]["required_paths"])
+    assert "contract:skill_public_tool_graph" in repair["target_refs"]
+
+
 def test_local_qualification_stops_when_language_does_not_resolve_source(tmp_path: Path) -> None:
     source = _source_tree(tmp_path / "subscription_status_skill")
 

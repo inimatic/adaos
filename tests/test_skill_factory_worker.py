@@ -1961,6 +1961,42 @@ def test_prompt_rule_capsules_select_async_llm_and_member_contracts() -> None:
     assert "adaos.skill.member_subnet.v1" in ids
 
 
+def test_repair_contract_closure_rejects_partial_exact_scope_before_prompt() -> None:
+    closure = {
+        "kind": "skill_public_tool_graph",
+        "required_paths": [
+            "skills/demo/skill.yaml",
+            "skills/demo/handlers/main.py",
+            "skills/demo/webui.json",
+        ],
+    }
+
+    with pytest.raises(ValueError, match="do not close the public skill tool graph"):
+        worker_module._validate_repair_contract_closure(
+            {
+                "target_files": [
+                    "skills/demo/handlers/main.py",
+                    "skills/demo/webui.json",
+                ],
+                "contract_closure": closure,
+            },
+            {
+                "exact_changed_paths": [
+                    "skills/demo/handlers/main.py",
+                    "skills/demo/webui.json",
+                ]
+            },
+        )
+
+    worker_module._validate_repair_contract_closure(
+        {
+            "target_files": closure["required_paths"],
+            "contract_closure": closure,
+        },
+        {"exact_changed_paths": closure["required_paths"]},
+    )
+
+
 def test_unqualified_dev_ticket_uses_bounded_repair_prompt(tmp_path: Path) -> None:
     worker = LocalSkillFactoryWorker(
         state_dir=tmp_path / "state",

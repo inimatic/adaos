@@ -1563,6 +1563,59 @@ def test_builder_package_starts_successor_after_published_workflow(tmp_path: Pat
     assert automation.calls[0]["links"]["development_ticket_id"] == ticket["ticket_id"]
 
 
+def test_builder_package_preserves_public_tool_contract_closure(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    paths = [
+        "skills/demo_metrics_skill/skill.yaml",
+        "skills/demo_metrics_skill/handlers/main.py",
+        "skills/demo_metrics_skill/webui.json",
+    ]
+    ticket = _bounded_demo_ticket(
+        service,
+        summary="Add a public refresh action",
+        target_files=paths,
+        acceptance="The declared Refresh action invokes the exported handler.",
+    )
+    service.requalify_builder_repair(
+        ticket["ticket_id"],
+        builder_repair={
+            "profile": "project_batch",
+            "change_summary": "Add a public refresh action",
+            "target_files": paths,
+            "target_refs": ["contract:skill_public_tool_graph"],
+            "acceptance_checks": [
+                "The declared Refresh action invokes the exported handler."
+            ],
+            "max_changed_files": len(paths),
+            "requires_root_mcp": False,
+            "source_preconditions": [
+                {"path": path, "sha256": "sha256:" + str(index + 1) * 64, "size": 10}
+                for index, path in enumerate(paths)
+            ],
+            "contract_closure": {
+                "kind": "skill_public_tool_graph",
+                "required_paths": paths,
+                "reason": "the repair adds a public WebUI action and handler",
+            },
+        },
+        actor="builder:qualifier",
+        reason="test exact public contract closure",
+    )
+
+    qualification = service.autonomous_repair_qualification(ticket["ticket_id"])
+    assert qualification["ready"] is True
+    assert qualification["contract_closure"]["required_paths"] == paths
+
+    planned = service.plan_builder_package(
+        [ticket["ticket_id"]],
+        actor="builder:qualifier",
+        repair_service=repair_service,
+    )
+
+    assert planned["repair_hints"]["contract_closure"]["required_paths"] == paths
+
+
 def test_builder_package_launch_failure_releases_every_ticket(tmp_path: Path) -> None:
     service = DevelopmentTicketService(state_dir=tmp_path)
     repair_service = BuilderRepairService(state_dir=tmp_path)

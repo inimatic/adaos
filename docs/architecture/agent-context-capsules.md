@@ -415,6 +415,10 @@ Context optimization starts before prompt construction:
 
 Steps 1-3 require an admitted repair envelope: profile, exact writable files,
 semantic target refs or exact structured operations, and acceptance checks.
+If a task crosses a public skill contract, the envelope also carries a typed
+closure whose required manifest, WebUI, and handler paths must all be present
+with source preconditions. Package planning preserves this closure and the
+worker rejects partial `exact_changed_paths` before prompt construction.
 An incomplete envelope produces a typed `qualification_required` result before
 any Builder repair, Skill Factory task, or model budget is created. A
 qualification model may propose intent and target candidates, but core resolves

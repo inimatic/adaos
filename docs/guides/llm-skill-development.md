@@ -1970,6 +1970,9 @@ Capsule selection is driven first by structured facts such as target type,
 authorized target paths, component refs, repair profile, and Context Packet
 facets. Text matching is a compatibility fallback, not the primary classifier;
 otherwise a localized or unusually worded ticket can omit a required contract.
+For a repair that crosses WebUI and handler boundaries, qualification must add
+the skill manifest and bind all three source preconditions as one public-tool
+contract closure before a model can run.
 
 The permanent execution capsule contains only the boundaries that apply to
 every run: isolated source authority, explicit UTF-8 reads, and worker-owned

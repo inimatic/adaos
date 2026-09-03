@@ -357,6 +357,11 @@ Ticket and signals, and closes only with evidence.
   preconditions, expose a dry-run/apply API and Builder read model, and stop for
   clarification below high confidence. An explicit Autonomous action may apply
   a high-confidence zero-model candidate; source drift blocks work creation.
+- [x] `[must]` `DS5-34` Close public skill-tool contracts during qualification.
+  When one repair crosses `webui.json` and a handler, include `skill.yaml`,
+  retain manifest/WebUI/handler source preconditions and a typed
+  `skill_public_tool_graph` closure through package planning, and reject an
+  incomplete exact change scope before the first model token.
 - [ ] `[must]` `DS5-32` Add the residual bounded-language qualifier for cases
   that deterministic extraction cannot resolve. Use a small Root-accounted LLM
   only to propose intent and candidate refs, resolve every ref and precondition

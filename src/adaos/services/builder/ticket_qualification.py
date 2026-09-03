@@ -632,6 +632,8 @@ def _validation_gate_qualification(
     )
     if webui_tool_targets:
         supporting_paths = {
+            "skill.yaml",
+            "skill.yml",
             "webui.json",
             "handlers/main.py",
         }
@@ -642,6 +644,12 @@ def _validation_gate_qualification(
             and _text(entry.get("workspace_path")) not in selected
         )
     selected_entries = [by_path[path] for path in selected]
+    selected_entries, contract_closure = _close_skill_public_tool_scope(
+        selected_entries,
+        entries=entries,
+        object_type=object_type,
+    )
+    selected = [_text(entry.get("workspace_path")) for entry in selected_entries]
     operations = [
         operation
         for finding, entry in matched
@@ -666,7 +674,10 @@ def _validation_gate_qualification(
         "profile": "project_batch",
         "change_summary": summary[:1000],
         "target_files": selected,
-        "target_refs": [f"file:{path}" for path in selected],
+        "target_refs": [
+            *(["contract:skill_public_tool_graph"] if contract_closure else []),
+            *[f"file:{path}" for path in selected],
+        ],
         "acceptance_checks": [
             *[f"Clear validation finding: {code}" for code in codes],
             *[
@@ -688,6 +699,8 @@ def _validation_gate_qualification(
             for entry in selected_entries
         ],
     }
+    if contract_closure:
+        repair["contract_closure"] = contract_closure
     if fully_structured:
         repair["structured_edits"] = {
             "schema": "adaos.builder.structured_edit_set.v1",
@@ -777,6 +790,42 @@ def _compact_source_index(
             }
             for entry in entries[: max(1, min(limit, 24))]
         ],
+    }
+
+
+def _close_skill_public_tool_scope(
+    selected: list[Mapping[str, Any]],
+    *,
+    entries: list[Mapping[str, Any]],
+    object_type: str,
+) -> tuple[list[Mapping[str, Any]], dict[str, Any] | None]:
+    """Include the manifest when one repair crosses WebUI and handler boundaries."""
+
+    if object_type != "skill":
+        return selected, None
+    selected_relatives = {_text(item.get("relative_path")) for item in selected}
+    handler_relatives = sorted(
+        relative
+        for relative in selected_relatives
+        if relative.startswith("handlers/") and relative.endswith(".py")
+    )
+    if "webui.json" not in selected_relatives or not handler_relatives:
+        return selected, None
+    by_relative = {_text(item.get("relative_path")): item for item in entries}
+    manifest = by_relative.get("skill.yaml") or by_relative.get("skill.yml")
+    webui = by_relative.get("webui.json")
+    handlers = [by_relative[path] for path in handler_relatives if path in by_relative]
+    if manifest is None or webui is None or len(handlers) != len(handler_relatives):
+        return selected, None
+    expanded = [manifest, *selected] if manifest not in selected else list(selected)
+    required_entries = [manifest, *handlers, webui]
+    required_paths = list(
+        dict.fromkeys(_text(item.get("workspace_path")) for item in required_entries)
+    )
+    return expanded, {
+        "kind": "skill_public_tool_graph",
+        "required_paths": required_paths,
+        "reason": "the qualified repair crosses WebUI and handler public-contract boundaries",
     }
 
 
@@ -895,6 +944,11 @@ def prepare_repair_qualification(
             ),
         }
 
+    selected, contract_closure = _close_skill_public_tool_scope(
+        selected,
+        entries=entries,
+        object_type=object_type,
+    )
     target_files = [_text(item.get("workspace_path")) for item in selected]
     component_ref = _text(
         ticket.get("component_ref") or target_scope.get("component_ref")
@@ -906,6 +960,7 @@ def prepare_repair_qualification(
             in {"component", "modal", "panel", "view", "widget"}
             else []
         ),
+        *(["contract:skill_public_tool_graph"] if contract_closure else []),
         *[f"file:{path}" for path in target_files],
     ]
     acceptance_checks = [f"User-visible acceptance: {summary[:420]}"]
@@ -916,6 +971,10 @@ def prepare_repair_qualification(
     ]
     acceptance_checks.extend(f"Run focused test file: {path}" for path in test_paths[:2])
     acceptance_checks.append(f"Validate {object_type}:{object_id} after the bounded change.")
+    if contract_closure:
+        acceptance_checks.append(
+            "Reconcile every changed public tool across webui.json, skill.yaml tools/exports, handler entry, and schemas."
+        )
     repair = {
         "profile": _profile_for(concepts),
         "change_summary": summary[:1000],
@@ -935,6 +994,8 @@ def prepare_repair_qualification(
             for item in selected
         ],
     }
+    if contract_closure:
+        repair["contract_closure"] = contract_closure
     return {
         "schema": QUALIFICATION_CANDIDATE_SCHEMA,
         "status": "ready",

@@ -1388,6 +1388,44 @@ def _prompt_rule_capsules_markdown(capsules: Sequence[Mapping[str, Any]]) -> str
     return "\n".join(lines).strip()
 
 
+def _validate_repair_contract_closure(
+    repair_hints: Mapping[str, Any],
+    constraints: Mapping[str, Any],
+) -> None:
+    closure = repair_hints.get("contract_closure")
+    if not isinstance(closure, Mapping):
+        return
+    if str(closure.get("kind") or "").strip() != "skill_public_tool_graph":
+        raise ValueError("unsupported repair contract_closure kind")
+    required = {
+        str(value).replace("\\", "/").strip("/")
+        for value in closure.get("required_paths") or []
+        if str(value).strip()
+    }
+    has_manifest = any(path.endswith(("/skill.yaml", "/skill.yml")) for path in required)
+    has_webui = any(path.endswith("/webui.json") for path in required)
+    has_handler = any("/handlers/" in path and path.endswith(".py") for path in required)
+    if not required or not (has_manifest and has_webui and has_handler):
+        raise ValueError(
+            "skill_public_tool_graph closure requires manifest, WebUI, and handler paths"
+        )
+    admitted = {
+        str(value).replace("\\", "/").strip("/")
+        for value in (
+            constraints.get("exact_changed_paths")
+            or repair_hints.get("target_files")
+            or []
+        )
+        if str(value).strip()
+    }
+    missing = sorted(required - admitted)
+    if missing:
+        raise ValueError(
+            "repair exact_changed_paths do not close the public skill tool graph: "
+            + ", ".join(missing)
+        )
+
+
 _JSON_TARGET_SEGMENT_RE = re.compile(
     r"^(?P<key>[^\[\]]+)(?:\[(?:(?P<index>\d+)|id=(?P<id>[^\]]+))\])?$"
 )
@@ -4527,6 +4565,7 @@ class LocalSkillFactoryWorker:
             if isinstance(artifacts.get("repair_hints"), Mapping)
             else {}
         )
+        _validate_repair_contract_closure(repair_hints, constraints)
         repair_target_context = _bounded_repair_target_context(
             workspace,
             repair_hints,
