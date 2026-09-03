@@ -1309,6 +1309,45 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert ("get_subnet_info", "", {}) in fake_client.calls
 
 
+def test_task_scoped_sdk_metadata_defaults_to_mini(monkeypatch) -> None:
+    profile = bridge_mod.CodexBridgeProfile(
+        root_url="https://root.example.test",
+        target_id="hub:test-subnet",
+        task_id="task.sdk-metadata",
+        task_scopes=["read_requirements"],
+        capabilities=["development.read.descriptors"],
+        enabled_tools=["get_sdk_metadata"],
+        access_token="task-access",
+    )
+    bridge = bridge_mod.CodexRootMcpBridge(profile)
+    fake_client = _FakeRootMcpClient()
+    monkeypatch.setattr(bridge, "_client", lambda: fake_client)
+
+    listed = bridge.handle_request(
+        {"jsonrpc": "2.0", "id": "tools", "method": "tools/list", "params": {}}
+    )
+
+    result = bridge.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": "sdk-metadata",
+            "method": "tools/call",
+            "params": {"name": "get_sdk_metadata", "arguments": {}},
+        }
+    )
+
+    assert listed is not None
+    definition = next(
+        item
+        for item in listed["result"]["tools"]
+        if item["name"] == "get_sdk_metadata"
+    )
+    assert definition["inputSchema"]["properties"]["level"]["default"] == "mini"
+    assert result is not None
+    assert result["result"].get("isError") is not True
+    assert ("get_adaos_dev_sdk_metadata", "mini", {}) in fake_client.calls
+
+
 def test_build_codex_stdio_command_uses_profile_and_server_name(tmp_path: Path) -> None:
     profile_path = tmp_path / "adaos-test-hub.profile.json"
     command = bridge_mod.build_codex_stdio_command(

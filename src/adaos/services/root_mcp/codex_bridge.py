@@ -661,7 +661,11 @@ class CodexRootMcpBridge:
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "level": {"type": "string", "enum": ["mini", "std", "rich"], "default": "std"},
+                        "level": {
+                            "type": "string",
+                            "enum": ["mini", "std", "rich"],
+                            "default": "mini" if self.profile.task_id else "std",
+                        },
                     },
                     "additionalProperties": False,
                 },
@@ -1421,7 +1425,12 @@ class CodexRootMcpBridge:
             )
         if tool == "get_sdk_metadata":
             return _tool_text(
-                client.get_adaos_dev_sdk_metadata(level=str(args.get("level") or "std")),
+                client.get_adaos_dev_sdk_metadata(
+                    level=str(
+                        args.get("level")
+                        or ("mini" if self.profile.task_id else "std")
+                    )
+                ),
                 model_text_format=model_text_format,
             )
         if tool == "get_template_catalog":
