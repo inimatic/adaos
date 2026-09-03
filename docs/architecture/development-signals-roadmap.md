@@ -648,7 +648,7 @@ SDK docs/examples, SDK/API implementation, policy decision, or Core Dev Ticket.
 - [ ] `[must]` `DS9-02` Capture Builder method/resource application traces:
   public contract ref, operation id, input summary, expected behavior,
   observed behavior, validation result, user response, and trace/test refs.
-- [ ] `[must]` `DS9-03` Add rejection qualification classes:
+- [x] `[must]` `DS9-03` Add rejection qualification classes:
   `requirement_ambiguity`, `builder_misread_user`, `sdk_doc_ambiguity`,
   `sdk_capability_gap`, `weak_patch`, and `insufficient_validation`.
 - [ ] `[must]` `DS9-04` Route qualified signals to the right owner:
@@ -705,8 +705,13 @@ SDK-only, and admitted
 operation ABI failures with exact task, report, contract, operation, expected,
 and observed refs. Replay of one task remains idempotent while recurrence in a
 different task aggregates evidence. Promotion remains an explicit human/policy
-operation. Runtime method-application traces, user rejection linkage,
-replay/eval creation, richer rejection taxonomy, docs/example routing, saved
+operation. Trial revise/rollback now emits a deduplicated `result_rejected`
+observation linked to the candidate, Builder execution, originating user
+tickets, rollback evidence, and exact user note. The six rejection classes are
+filterable through API/MCP/Resource Workbench/Builder; unclassified outcomes
+remain `needs_qualification` and cannot be promoted. Runtime method-application
+traces, bounded LLM rejection qualification, owner routing, replay/eval
+creation, docs/example routing, saved
 review filters, direct artifact opening, promotion preview, and qualification
 metrics remain open.
 

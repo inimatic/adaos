@@ -133,6 +133,10 @@ class BuilderTrialDecisionRequest(BaseModel):
     decision: str = Field(..., pattern="^(accept|revise|rollback)$")
     actor: str = Field(default="user:owner", min_length=1)
     reason: str = ""
+    rejection_class: str | None = Field(
+        default=None,
+        pattern="^(requirement_ambiguity|builder_misread_user|sdk_doc_ambiguity|sdk_capability_gap|weak_patch|insufficient_validation)$",
+    )
     expected_candidate_id: str = Field(..., min_length=1)
     expected_candidate_digest: str = Field(..., pattern="^sha256:[0-9a-f]{64}$")
 
@@ -474,6 +478,7 @@ def decide_trial(
             decision=body.decision,
             actor=body.actor,
             reason=body.reason,
+            rejection_class=body.rejection_class,
             expected_candidate_id=body.expected_candidate_id,
             expected_candidate_digest=body.expected_candidate_digest,
         )

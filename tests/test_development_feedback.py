@@ -85,6 +85,79 @@ def test_development_feedback_requires_acceptance_and_optimistic_revision(tmp_pa
         )
 
 
+def test_rejected_result_requires_qualification_and_supports_class_filter(
+    tmp_path: Path,
+) -> None:
+    service = DevelopmentFeedbackService(state_dir=tmp_path)
+    feedback = service.capture(
+        source="human_review",
+        category="result_rejected",
+        summary="Builder Trial result rejected for skill:demo_metrics_skill",
+        target_refs=["project:demo_metrics", "skill:demo_metrics_skill"],
+        details="The control still disappears on a narrow screen.",
+        classification={
+            "schema": "adaos.builder.rejection_qualification.v1",
+            "status": "needs_qualification",
+            "rejection_class": None,
+        },
+        actor="user:owner",
+    )["feedback"]
+    accepted_without_diagnosis = service.transition(
+        feedback["feedback_id"],
+        status="accepted",
+        actor="human:reviewer",
+        expected_revision=feedback["revision"],
+    )
+
+    with pytest.raises(ValueError, match="qualified"):
+        service.promote(
+            feedback["feedback_id"],
+            route="project",
+            actor="human:reviewer",
+            expected_revision=accepted_without_diagnosis["revision"],
+        )
+
+    rejected = service.transition(
+        feedback["feedback_id"],
+        status="rejected",
+        actor="human:reviewer",
+        expected_revision=accepted_without_diagnosis["revision"],
+    )
+    triaged = service.transition(
+        feedback["feedback_id"],
+        status="triaged",
+        actor="human:reviewer",
+        classification={
+            "status": "qualified",
+            "rejection_class": "weak_patch",
+            "route_hint": "builder_retry",
+        },
+        expected_revision=rejected["revision"],
+    )
+
+    assert service.list(rejection_class="weak_patch")[0]["feedback_id"] == (
+        feedback["feedback_id"]
+    )
+    assert service.list(rejection_class="sdk_doc_ambiguity") == []
+    with pytest.raises(ValueError, match="rejection class"):
+        service.list(rejection_class="unknown")
+
+    accepted = service.transition(
+        feedback["feedback_id"],
+        status="accepted",
+        actor="human:reviewer",
+        expected_revision=triaged["revision"],
+    )
+    promoted = service.promote(
+        feedback["feedback_id"],
+        route="project",
+        actor="human:reviewer",
+        expected_revision=accepted["revision"],
+    )
+    assert promoted["feedback"]["status"] == "promoted"
+    assert promoted["ticket"]["kind"] == "review_debt"
+
+
 def test_idempotent_feedback_replay_aggregates_distinct_task_observations(
     tmp_path: Path,
 ) -> None:

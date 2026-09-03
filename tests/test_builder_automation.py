@@ -5833,6 +5833,7 @@ def test_revising_aprobation_rolls_back_and_reopens_ticket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from adaos.sdk.builder import lifecycle
+    from adaos.services.development_feedback import DevelopmentFeedbackService
     from adaos.services.development_tickets import DevelopmentTicketService
 
     service = _service(tmp_path)
@@ -5950,6 +5951,34 @@ def test_revising_aprobation_rolls_back_and_reopens_ticket(
         gate_failure["ticket_id"]
     )
     assert tickets.get_ticket(gate_failure["ticket_id"])["status"] == "accepted"
+    feedback = DevelopmentFeedbackService(state_dir=service.state_dir).list(
+        category="result_rejected",
+        target_ref="project:demo_metrics_skill",
+    )
+    assert len(feedback) == 1
+    assert result["development_feedback"]["feedback_id"] == feedback[0]["feedback_id"]
+    assert feedback[0]["classification"] == {
+        "schema": "adaos.builder.rejection_qualification.v1",
+        "status": "needs_qualification",
+        "rejection_class": None,
+        "diagnosis_confidence": 0.0,
+        "route_hint": "bounded_qualification",
+        "decision": "revise",
+    }
+    assert {item["id"] for item in feedback[0]["relation_refs"]} >= {
+        "automation.skill.demo_metrics_skill",
+        "candidate.demo",
+        ticket["ticket_id"],
+    }
+    assert any(
+        item.get("type") == "development_feedback"
+        and item.get("id") == feedback[0]["feedback_id"]
+        for item in result["tickets"][0]["evidence_refs"]
+    )
+    persisted = service.get_session("skill", "demo_metrics_skill")
+    assert persisted["completion_readiness"]["aprobation"][
+        "development_feedback_ref"
+    ] == feedback[0]["feedback_id"]
 
 
 def test_aprobation_overlay_requires_ready_webspace_materialization() -> None:

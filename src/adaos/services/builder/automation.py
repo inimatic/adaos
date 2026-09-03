@@ -3989,6 +3989,7 @@ class BuilderAutomationService:
         decision: str,
         actor: str,
         reason: str = "",
+        rejection_class: str | None = None,
         expected_candidate_id: str | None = None,
         expected_candidate_digest: str | None = None,
     ) -> dict[str, Any]:
@@ -4000,6 +4001,13 @@ class BuilderAutomationService:
         actor_token = str(actor or "").strip()
         if not actor_token:
             raise ValueError("Trial decision requires actor")
+        rejection_token = str(rejection_class or "").strip().lower()
+        from adaos.services.development_feedback import REJECTION_CLASSES
+
+        if rejection_token and rejection_token not in REJECTION_CLASSES:
+            raise ValueError(f"unsupported Builder rejection class: {rejection_token}")
+        if decision_token == "accept" and rejection_token:
+            raise ValueError("an accepted Builder Trial cannot have a rejection class")
         kind, project_id = self._project_ref(object_type, object_id)
         with _LOCK:
             session = self.get_session(kind, project_id)
@@ -4305,6 +4313,39 @@ class BuilderAutomationService:
                 ]
             )
         )
+        development_feedback: dict[str, Any] | None = None
+        development_feedback_error: str | None = None
+        if not accepted:
+            try:
+                development_feedback = self._record_trial_rejection_feedback(
+                    current,
+                    object_type=kind,
+                    object_id=project_id,
+                    decision=decision_token,
+                    actor=actor_token,
+                    reason=str(reason or "").strip(),
+                    rejection_class=rejection_token or None,
+                    candidate_id=candidate_id,
+                    candidate_digest=candidate_digest,
+                    ticket_ids=ticket_ids,
+                    evidence_refs=evidence_refs,
+                )
+                evidence_refs.append(
+                    {
+                        "type": "development_feedback",
+                        "id": development_feedback["feedback_id"],
+                        "category": development_feedback["category"],
+                        "status": development_feedback["status"],
+                    }
+                )
+            except Exception as exc:
+                development_feedback_error = f"{type(exc).__name__}: {exc}"
+                _log.exception(
+                    "failed to capture Builder Trial rejection feedback project=%s:%s candidate=%s",
+                    kind,
+                    project_id,
+                    candidate_id,
+                )
         persisted, persisted_aprobation = self._persist_aprobation_trial_state(
             persisted,
             persisted_aprobation,
@@ -4313,6 +4354,10 @@ class BuilderAutomationService:
             decision=decision_token,
             actor=actor_token,
         )
+        if development_feedback:
+            persisted_aprobation["development_feedback_ref"] = development_feedback[
+                "feedback_id"
+            ]
         if rollback is not None:
             persisted_aprobation["rollback"] = rollback
         persisted, persisted_aprobation, component_update_projection = (
@@ -4412,7 +4457,126 @@ class BuilderAutomationService:
             "component_update_projection": component_update_projection,
             "closed_publication_gate_failures": closed_gate_failures,
             "reopened_publication_gate_failures": reopened_gate_failures,
+            "development_feedback": development_feedback,
+            "development_feedback_error": development_feedback_error,
         }
+
+    def _record_trial_rejection_feedback(
+        self,
+        session: Mapping[str, Any],
+        *,
+        object_type: str,
+        object_id: str,
+        decision: str,
+        actor: str,
+        reason: str,
+        rejection_class: str | None,
+        candidate_id: str,
+        candidate_digest: str,
+        ticket_ids: Sequence[str],
+        evidence_refs: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Record a rejected Trial as evidence without guessing its diagnosis."""
+
+        from adaos.services.development_feedback import DevelopmentFeedbackService
+
+        route_by_class = {
+            "requirement_ambiguity": "user_clarification",
+            "builder_misread_user": "builder_retry",
+            "sdk_doc_ambiguity": "sdk_documentation",
+            "sdk_capability_gap": "sdk_api_implementation",
+            "weak_patch": "builder_retry",
+            "insufficient_validation": "validation_expansion",
+        }
+        links = session.get("links") if isinstance(session.get("links"), Mapping) else {}
+        relation_refs = [
+            {
+                "type": "builder_session",
+                "id": str(session.get("session_id") or "").strip(),
+            },
+            {"type": "builder_trial", "id": candidate_id},
+        ]
+        current_task_id = str(session.get("current_task_id") or "").strip()
+        if current_task_id:
+            relation_refs.append({"type": "builder_task", "id": current_task_id})
+        for repair_id in dict.fromkeys(
+            str(value).strip()
+            for value in (
+                links.get("builder_repair_id"),
+                links.get("repair_id"),
+                *(links.get("builder_repair_ids") or []),
+            )
+            if str(value or "").strip()
+        ):
+            relation_refs.append({"type": "builder_repair", "id": repair_id})
+        for ticket_id in dict.fromkeys(str(value).strip() for value in ticket_ids if str(value).strip()):
+            relation_refs.append({"type": "development_ticket", "id": ticket_id})
+        relation_refs = [item for item in relation_refs if item.get("id")]
+        component_ref = f"{object_type}:{object_id}"
+        try:
+            project_ref = self._context_project_ref(
+                session=session,
+                component_ref=component_ref,
+                fallback_project_id=object_id,
+            )
+        except (OSError, ValueError):
+            project_ref = f"project:{object_id}"
+        ticket_component_ref = str(
+            links.get("development_ticket_component_ref") or ""
+        ).strip()
+        target_refs = list(
+            dict.fromkeys(
+                value
+                for value in (project_ref, component_ref, ticket_component_ref)
+                if value
+            )
+        )
+        qualification_status = "qualified" if rejection_class else "needs_qualification"
+        route_hint = route_by_class.get(rejection_class or "", "bounded_qualification")
+        recommendation = (
+            f"Route the rejection to {route_hint.replace('_', ' ')}."
+            if rejection_class
+            else (
+                "Qualify the rejection before choosing user clarification, Builder retry, "
+                "SDK/API work, or validation expansion."
+            )
+        )
+        observed_reason = reason or "The user rejected the current Builder Trial without a note."
+        result = DevelopmentFeedbackService(state_dir=self.state_dir).capture(
+            source="human_review",
+            category="result_rejected",
+            summary=f"Builder Trial result rejected for {component_ref}",
+            blocking=True,
+            confidence=1.0,
+            impact=["correctness", "comprehension"],
+            target_refs=target_refs,
+            details=observed_reason,
+            recommendation=recommendation,
+            evidence_refs=[
+                *evidence_refs,
+                {
+                    "type": "user_response",
+                    "actor": actor,
+                    "decision": decision,
+                    "reason": reason or None,
+                    "candidate_id": candidate_id,
+                    "candidate_digest": candidate_digest,
+                },
+            ],
+            relation_refs=relation_refs,
+            classification={
+                "schema": "adaos.builder.rejection_qualification.v1",
+                "status": qualification_status,
+                "rejection_class": rejection_class,
+                "diagnosis_confidence": 1.0 if rejection_class else 0.0,
+                "route_hint": route_hint,
+                "decision": decision,
+            },
+            dedup_key=f"builder-trial-rejection:{candidate_digest or candidate_id}:{decision}",
+            actor=actor,
+            idempotent_replay=True,
+        )
+        return dict(result["feedback"])
 
     def projection(
         self,

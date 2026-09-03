@@ -2061,7 +2061,12 @@ scenario now presents that projection in a dedicated read-only review tab with
 project-scoped text/status/category/source filtering. The trusted worker captures
 recognized public-contract validation failures only after repair attempts are
 exhausted and links the aggregate observation back to its task, test report,
-and originating Dev Ticket.
+and originating Dev Ticket. Trial rejection is also observable as a distinct
+`result_rejected` record: the candidate, session/task/repair, originating user
+tickets, rollback evidence, and exact review note remain linked, while the six
+possible diagnoses stay explicit or `needs_qualification`. Builder can filter
+these records by outcome, producer, and rejection class without treating its
+review projection as a second ticket authority.
 
 Economic preflight calibration, 2026-09-03: a real local Codex repair measured
 185,106 input tokens with 173,824 cached input across two tool rounds. Builder

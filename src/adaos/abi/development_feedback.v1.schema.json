@@ -21,7 +21,7 @@
       "enum": [
         "missing_capability", "ambiguous_contract", "conflicting_contract",
         "inefficient_contract", "insufficient_context", "observability_gap",
-        "validation_gap", "policy_block"
+        "validation_gap", "policy_block", "result_rejected"
       ]
     },
     "status": {"enum": ["observed", "triaged", "accepted", "rejected", "promoted"]},

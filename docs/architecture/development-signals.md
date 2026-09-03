@@ -224,7 +224,9 @@ not silently inflate the Dev Ticket backlog. AdaOS stores them first as
 
 The registry covers `missing_capability`, `ambiguous_contract`,
 `conflicting_contract`, `inefficient_contract`, `insufficient_context`,
-`observability_gap`, `validation_gap`, and `policy_block`. Each record retains
+`observability_gap`, `validation_gap`, `policy_block`, and `result_rejected`.
+The last category records a rejected Builder Trial as an outcome, not as an
+SDK diagnosis. Each record retains
 source, confidence, impact, blocking state, project/component/SDK refs,
 evidence, related Builder task and Dev Ticket refs, comments, dedup count,
 optimistic revision, and a hash-chained event history.
@@ -370,6 +372,16 @@ separate at least these causes:
   valid.
 - `insufficient_validation`: Builder lacked replay, test, preview, or human
   acceptance evidence.
+
+Every `revise` or `rollback` Trial decision therefore creates or deduplicates
+a project-scoped `result_rejected` Development Feedback record. It links the
+candidate, Builder session/task/repair, originating Dev Tickets, rollback, and
+the user's exact note. An explicit `rejection_class` records a qualified route;
+otherwise the record remains `needs_qualification` with zero diagnostic
+confidence while retaining full confidence that the rejection occurred. An
+unqualified rejection cannot be promoted. API, MCP, Resource
+Workbench, and Builder review filters can select both the broad outcome and an
+exact rejection class without creating a second private ticket store.
 
 When a project ticket requires platform evolution, Builder creates or links a
 Core Dev Ticket instead of attempting a hidden core change. A Core Dev Ticket

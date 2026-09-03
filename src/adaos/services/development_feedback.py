@@ -38,6 +38,15 @@ CATEGORIES = {
     "observability_gap",
     "validation_gap",
     "policy_block",
+    "result_rejected",
+}
+REJECTION_CLASSES = {
+    "requirement_ambiguity",
+    "builder_misread_user",
+    "sdk_doc_ambiguity",
+    "sdk_capability_gap",
+    "weak_patch",
+    "insufficient_validation",
 }
 IMPACTS = {
     "blocker",
@@ -72,6 +81,7 @@ _SDK_KINDS = {
     "validation_gap": "sdk_application_failure",
     "policy_block": "sdk_policy_boundary",
     "missing_capability": "sdk_application_failure",
+    "result_rejected": "builder_rejection_learning",
 }
 _LOCK = threading.RLock()
 
@@ -263,6 +273,7 @@ class DevelopmentFeedbackService:
         blocking: bool | None = None,
         target_ref: str | None = None,
         search: str | None = None,
+        rejection_class: str | None = None,
         updated_since: str | None = None,
         limit: int = 200,
         import_legacy: bool = True,
@@ -271,6 +282,11 @@ class DevelopmentFeedbackService:
             self.import_legacy_builder_feedback()
         values = [dict(item) for item in self._read()["records"].values()]
         token = _text(search).casefold()
+        rejection_token = _text(rejection_class).lower()
+        if rejection_token and rejection_token not in REJECTION_CLASSES:
+            raise ValueError(
+                f"unsupported development feedback rejection class: {rejection_token}"
+            )
         values = [
             item
             for item in values
@@ -279,6 +295,15 @@ class DevelopmentFeedbackService:
             and (not source or item.get("source") == source)
             and (blocking is None or item.get("blocking") is blocking)
             and (not target_ref or target_ref in (item.get("target_refs") or []))
+            and (
+                not rejection_token
+                or _text(
+                    (item.get("classification") or {}).get("rejection_class")
+                    if isinstance(item.get("classification"), Mapping)
+                    else ""
+                ).lower()
+                == rejection_token
+            )
             and (not updated_since or _text(item.get("updated_at")) >= updated_since)
             and (
                 not token
@@ -377,6 +402,15 @@ class DevelopmentFeedbackService:
             return {"ok": True, "idempotent": True, "feedback": record, "ticket_refs": record.get("ticket_refs") or []}
         if record.get("status") != "accepted":
             raise ValueError("development feedback must be accepted before promotion")
+        rejection_class = _text(
+            (record.get("classification") or {}).get("rejection_class")
+            if isinstance(record.get("classification"), Mapping)
+            else ""
+        ).lower()
+        if record.get("category") == "result_rejected" and rejection_class not in REJECTION_CLASSES:
+            raise ValueError(
+                "rejected Builder result must be qualified before promotion"
+            )
         route_token = _text(route).lower()
         body = dict(payload or {})
         target_scope, owner_area, component_ref = _target_scope(record.get("target_refs") or [])
@@ -629,5 +663,6 @@ __all__ = [
     "DEVELOPMENT_FEEDBACK_SCHEMA",
     "DevelopmentFeedbackService",
     "IMPACTS",
+    "REJECTION_CLASSES",
     "SOURCES",
 ]
