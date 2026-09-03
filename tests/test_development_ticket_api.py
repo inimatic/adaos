@@ -347,6 +347,18 @@ def test_development_ticket_api_applies_root_accounted_language_qualification(
                 {
                     "schema": "adaos.builder.language_qualification_proposal.v1",
                     "concepts": ["ui"],
+                    "prompt_facts": {
+                        "schema": "adaos.builder.prompt_facts.v1",
+                        "concepts": ["ui"],
+                        "surface_kinds": ["modal"],
+                        "operation_kinds": ["update"],
+                        "data_planes": [],
+                        "effects": ["local_write"],
+                        "requires_i18n": False,
+                        "requires_access": False,
+                        "requires_conversation": False,
+                        "requires_lifecycle": False
+                    },
                     "candidate_paths": [
                         "skills/demo_metrics_skill/webui.json",
                     ],

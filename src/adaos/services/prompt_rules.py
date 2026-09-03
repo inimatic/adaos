@@ -70,6 +70,33 @@ def select_prompt_rules(
         for value in normalized_facts.get("facet_keys") or []
         if str(value).strip()
     }
+    fact_sets = {
+        key: {
+            str(value).strip().lower()
+            for value in normalized_facts.get(key) or []
+            if str(value).strip()
+        }
+        for key in (
+            "concepts",
+            "surface_kinds",
+            "operation_kinds",
+            "data_planes",
+            "effects",
+        )
+    }
+    requirements = {
+        key.removeprefix("requires_")
+        for key, value in normalized_facts.items()
+        if key.startswith("requires_") and value is True
+    }
+    has_structured_routing = bool(
+        profile
+        or target_paths
+        or target_refs
+        or facet_keys
+        or requirements
+        or any(fact_sets.values())
+    )
     for raw_item in registry["items"]:
         item = deepcopy(dict(raw_item))
         applicability = dict(item.get("applicability") or {})
@@ -105,12 +132,31 @@ def select_prompt_rules(
             for value in applicability.get("facet_keys") or []
             if str(value).strip()
         }
+        structured_matches = [
+            bool(
+                fact_sets[key]
+                & {
+                    str(value).strip().lower()
+                    for value in applicability.get(key) or []
+                    if str(value).strip()
+                }
+            )
+            for key in fact_sets
+        ]
+        required_capabilities = {
+            str(value).strip().lower()
+            for value in applicability.get("requires") or []
+            if str(value).strip()
+        }
         matches = [
-            any(marker in normalized_evidence for marker in markers),
+            not has_structured_routing
+            and any(marker in normalized_evidence for marker in markers),
             bool(profile and profile in profiles),
             any(fnmatch(path, pattern) for path in target_paths for pattern in path_globs),
             any(ref.startswith(prefix) for ref in target_refs for prefix in ref_prefixes),
             bool(facet_keys & required_facets),
+            bool(requirements & required_capabilities),
+            *structured_matches,
         ]
         if applicability.get("always") is not True and not any(matches):
             continue

@@ -1,7 +1,7 @@
 {
   "schema": "adaos.builder.prompt_rule_registry.v1",
-  "version": "0.2.0",
-  "published_at": "2026-09-03T09:45:00+00:00",
+  "version": "0.3.0",
+  "published_at": "2026-09-03T14:30:00+00:00",
   "authority_ref": "core:adaos.prompt-rule-registry",
   "items": [
     {
@@ -16,11 +16,24 @@
       ]
     },
     {
+      "id": "adaos.skill.sdk_boundary.v1",
+      "title": "Skill public SDK boundary and feedback",
+      "source": "docs/guides/llm-skill-development.md#golden-rule",
+      "applicability": {"always": true, "target_types": ["skill"]},
+      "rules": [
+        "Skill source may use public `adaos.sdk` contracts only; never import `adaos.services`, edit core, imitate a missing core contract locally, or depend on worker internals.",
+        "If the admitted SDK/API cannot express the requested behavior, stop that branch and return typed development feedback with the missing or unclear contract, impact, evidence, and the smallest useful capability request.",
+        "A model-proposed capability, path, permission, or owner is evidence for orchestration, not execution authority; the trusted worker resolves and admits it."
+      ]
+    },
+    {
       "id": "adaos.skill.webui_tool_contract.v2",
       "title": "Skill WebUI and public tool contract",
       "source": "docs/guides/llm-skill-development.md#machine-checkable-route-contract",
       "applicability": {
         "target_types": ["skill"],
+        "concepts": ["ui"],
+        "surface_kinds": ["ui", "page", "modal", "widget", "panel", "view"],
         "target_path_globs": ["**/webui.json", "**/skill.yaml", "**/handlers/*.py"],
         "match_any": ["webui.json", "skill.yaml", "handlers/", "modal:", "widget:", "callskill", "data_source"]
       },
@@ -36,6 +49,8 @@
       "source": "docs/guides/llm-skill-development.md#page-state-and-full-surface-layout-rules",
       "applicability": {
         "target_types": ["skill", "scenario"],
+        "concepts": ["ui"],
+        "surface_kinds": ["ui", "page", "modal", "widget", "panel", "view", "scenario"],
         "target_path_globs": ["**/webui.json", "**/scenario.json"],
         "match_any": ["layout", "widget", "modal", "view state", "initialstate"]
       },
@@ -43,6 +58,21 @@
         "Use stable unique IDs and canonical language-neutral refs for areas, widgets, actions, and domain targets; localized labels are presentation, never routing or storage identity.",
         "Represent materially different page modes with `layout.variants`, and update the view mode plus selected identity atomically; do not stack competing main areas behind incidental visibility checks.",
         "Preserve established interaction state and unrelated behavior. Dynamic IDs, renderer-private assumptions, and hidden client-only state are contract defects."
+      ]
+    },
+    {
+      "id": "adaos.ui.interaction_resources.v1",
+      "title": "UI interaction and delivery states",
+      "source": "docs/guides/llm-skill-development.md#declarative-ui-authoring-guidelines",
+      "applicability": {
+        "target_types": ["skill", "scenario"],
+        "concepts": ["ui"],
+        "surface_kinds": ["ui", "page", "modal", "widget", "panel", "view", "scenario"]
+      },
+      "rules": [
+        "Declare initial focus, default action, stable action feedback, loading, empty, stale, permission-denied, unavailable, and retry behavior where the surface can encounter them.",
+        "Use stable typed resources and core delivery mechanisms for icons and media; do not embed machine-local paths or make decorative state carry domain meaning.",
+        "Preserve keyboard, focus, readable labels, and bounded responsive layout across modal and page surfaces."
       ]
     },
     {
@@ -64,6 +94,8 @@
       "title": "Data route and receiver ownership",
       "source": "docs/guides/llm-skill-development.md#required-data-route-plan",
       "applicability": {
+        "operation_kinds": ["subscribe"],
+        "data_planes": ["stream", "yjs"],
         "target_ref_prefixes": ["receiver:", "projection:", "data_route:"],
         "match_any": ["data_route", "data-route", "projection", "receiver", "stream", "subscription"]
       },
@@ -74,10 +106,27 @@
       ]
     },
     {
+      "id": "adaos.skill.receiver_snapshot.v1",
+      "title": "Receiver snapshot and stream pressure",
+      "source": "docs/guides/llm-skill-development.md#receiver-and-stream-handler-design",
+      "applicability": {
+        "target_types": ["skill"],
+        "operation_kinds": ["subscribe"],
+        "data_planes": ["stream", "yjs"]
+      },
+      "rules": [
+        "Declare one receiver owner, initial snapshot behavior, replay and reconnect semantics; subscription alone must not leave the first browser state unknowable.",
+        "Bound payload size, fanout, update rate, queue depth, and retained state, and coalesce high-frequency updates before projection.",
+        "Keep receiver callbacks idempotent and side-effect bounded; observable pressure may create non-blocking debt but must not silently corrupt state."
+      ]
+    },
+    {
       "id": "adaos.skill.causal_read.v1",
       "title": "Causal tool-backed reads",
       "source": "docs/guides/llm-skill-development.md#causal-read-policy-for-tool-backed-surfaces",
       "applicability": {
+        "operation_kinds": ["read", "command"],
+        "data_planes": ["tool_details"],
         "target_ref_prefixes": ["data_source:", "tool_read:"],
         "match_any": ["datasource", "data source", "tool/details", "read_policy", "read policy", "invalidation", "refresh", "retry"]
       },
@@ -93,13 +142,15 @@
       "source": "docs/guides/llm-skill-development.md#memory-and-reload-safety",
       "applicability": {
         "profiles": ["resource_crud"],
+        "concepts": ["crud"],
+        "data_planes": ["resource_provider", "skill_local"],
         "target_ref_prefixes": ["resource:"],
         "match_any": ["resource_crud", "resource", "storage", "contentref", "provider", "data root"]
       },
       "rules": [
-        "Use typed AdaOS resource/provider contracts and owner-scoped SDK storage roots.",
-        "Do not let callers choose arbitrary filesystem roots or persist synthetic provider data as authoritative state.",
-        "CRUD and reload behavior must preserve revision, authorization, and deterministic empty/unavailable states."
+        "Use typed AdaOS resource/provider contracts and owner-scoped SDK storage roots; declare typed query filters, sort/page limits, views, and allowed operations.",
+        "Do not let callers choose arbitrary filesystem roots or persist synthetic provider data as authoritative state. Unsupported filters and unavailable providers must be explicit, not silently ignored.",
+        "Create/update/delete and reload behavior must preserve optimistic revision, idempotency, authorization, event emission, and deterministic empty/unavailable/validation states."
       ]
     },
     {
@@ -107,6 +158,9 @@
       "title": "Runtime lifecycle and failure evidence",
       "source": "docs/guides/llm-skill-development.md#guarding-and-quarantine",
       "applicability": {
+        "operation_kinds": ["validate"],
+        "effects": ["publication"],
+        "requires": ["lifecycle"],
         "match_any": ["rehydrate", "activation", "lifecycle", "runtime_guard", "observability"]
       },
       "rules": [
@@ -121,6 +175,7 @@
       "source": "docs/guides/llm-skill-development.md#memory-and-reload-safety",
       "applicability": {
         "target_types": ["skill"],
+        "requires": ["lifecycle"],
         "match_any": ["@subscribe", "thread", "cache", "background", "runtime.kind", "service runtime", "dependency", "import-time", "rehydrate", "dispose"]
       },
       "rules": [
@@ -130,10 +185,29 @@
       ]
     },
     {
+      "id": "adaos.skill.event_loop_isolation.v1",
+      "title": "Event loop and blocking isolation",
+      "source": "docs/guides/llm-skill-development.md#event-loop-isolation-and-blocking-io",
+      "applicability": {
+        "target_types": ["skill"],
+        "surface_kinds": ["background"],
+        "effects": ["external_io", "device_control", "llm"],
+        "match_any": ["event loop", "blocking io", "background worker", "subprocess"]
+      },
+      "rules": [
+        "`async` does not make blocking SDK, filesystem, subprocess, model, or device work safe; isolate blocking work in a bounded worker or the declared asynchronous job path.",
+        "Use bounded single-flight or queues, deadlines, cancellation, and one lifecycle owner for every background execution resource.",
+        "Do not perform admission, external IO, or durable writes from EventBus subscription callbacks without the explicit governed operation boundary."
+      ]
+    },
+    {
       "id": "adaos.skill.conversation_i18n.v1",
       "title": "Conversation, localization, and Pending Actions",
       "source": "docs/guides/llm-skill-development.md#names-aliases-and-localization",
       "applicability": {
+        "data_planes": ["conversation"],
+        "surface_kinds": ["conversation"],
+        "requires": ["i18n", "conversation"],
         "match_any": ["nlu", "conversation", "voice", "telegram", "i18n", "locale", "pending_action"]
       },
       "rules": [
@@ -147,6 +221,7 @@
       "title": "Root-accounted asynchronous LLM work",
       "source": "docs/guides/llm-skill-development.md#structured-llm-candidate-boundary",
       "applicability": {
+        "effects": ["llm"],
         "match_any": ["llm", "model call", "prompt", "response_job", "codex", "research"]
       },
       "rules": [
@@ -161,12 +236,27 @@
       "source": "docs/guides/llm-skill-development.md#member-aware-skills",
       "applicability": {
         "profiles": ["subnet_data_integration"],
+        "concepts": ["subnet"],
         "match_any": ["member-aware", "member_id", "member status", "subnet member", "node identity", "device identity", "fanout"]
       },
       "rules": [
         "Derive member and device identity from trusted event or routing metadata; never accept caller-selected ownership or hardcode the local node.",
         "Bound per-receiver payload and subnet fanout, and represent dormant, disconnected, partial, and stale member data explicitly.",
         "Coalesce high-frequency membership updates and keep handlers idempotent across reconnect and replay."
+      ]
+    },
+    {
+      "id": "adaos.resource.access_privacy.v1",
+      "title": "Resource access and privacy boundary",
+      "source": "docs/guides/llm-skill-development.md#access-and-identity",
+      "applicability": {
+        "target_types": ["skill", "scenario"],
+        "requires": ["access"]
+      },
+      "rules": [
+        "Enforce authorization in the provider or public API, not only by hiding UI actions; derive actor, subject, delegation, and ownership from trusted context.",
+        "Declare redaction, retention, and audit behavior for sensitive fields and artifacts, and do not expose secrets in model context or evidence.",
+        "Return explicit permission-denied and unsupported-operation states without converting them into empty data or broadening access."
       ]
     },
     {

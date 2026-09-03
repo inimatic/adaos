@@ -134,6 +134,72 @@ def test_root_mcp_dev_ticket_capabilities_are_explicit() -> None:
     assert contracts["dev_ticket.operate"].side_effects == "write"
 
 
+def test_root_mcp_development_feedback_tools(monkeypatch) -> None:
+    from adaos.sdk import development_feedback as sdk
+
+    feedback = {
+        "feedback_id": "devfeedback.test",
+        "category": "ambiguous_contract",
+        "status": "observed",
+    }
+    calls: list[tuple[str, dict]] = []
+    monkeypatch.setattr(sdk, "list_feedback", lambda **filters: [{**feedback, "filters": filters}])
+    monkeypatch.setattr(sdk, "get_feedback", lambda feedback_id: feedback if feedback_id == "devfeedback.test" else None)
+    monkeypatch.setattr(
+        sdk,
+        "capture_feedback",
+        lambda summary, **request: calls.append(("capture", {"summary": summary, **request}))
+        or {"ok": True, "feedback": feedback},
+    )
+    monkeypatch.setattr(
+        sdk,
+        "transition_feedback",
+        lambda feedback_id, status, **request: calls.append(
+            ("transition", {"feedback_id": feedback_id, "status": status, **request})
+        )
+        or {**feedback, "status": status},
+    )
+
+    listed = _invoke(
+        "development_feedback.list",
+        {"category": "ambiguous_contract", "search": "SDK"},
+        "development.read.feedback",
+    )
+    shown = _invoke(
+        "development_feedback.show",
+        {"feedback_id": "devfeedback.test"},
+        "development.read.feedback",
+    )
+    captured = _invoke(
+        "development_feedback.capture",
+        {
+            "summary": "SDK behavior is ambiguous",
+            "source": "codex",
+            "category": "ambiguous_contract",
+            "target_refs": ["sdk:resources.query"],
+        },
+        "development.write.feedback",
+    )
+    accepted = _invoke(
+        "development_feedback.operate",
+        {
+            "feedback_id": "devfeedback.test",
+            "operation": "accept",
+            "expected_revision": 2,
+        },
+        "development.write.feedback",
+    )
+    contracts = {item.id: item for item in root_mcp_service.list_tool_contracts()}
+
+    assert listed.result["items"][0]["filters"]["search"] == "SDK"
+    assert shown.result["feedback"]["feedback_id"] == "devfeedback.test"
+    assert captured.result["feedback"]["category"] == "ambiguous_contract"
+    assert accepted.result["feedback"]["status"] == "accepted"
+    assert calls[1][1]["expected_revision"] == 2
+    assert contracts["development_feedback.list"].required_capability == "development.read.feedback"
+    assert contracts["development_feedback.operate"].required_capability == "development.write.feedback"
+
+
 def test_root_mcp_builder_source_recovery_is_typed_and_governed(monkeypatch) -> None:
     from adaos.sdk.builder import source_recovery as sdk
     from adaos.services.root_mcp.policy import list_capability_classes

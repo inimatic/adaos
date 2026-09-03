@@ -24,11 +24,13 @@ DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
         "context.memory.propose",
         "development.read.ticket_artifacts",
         "development.write.tickets",
+        "development.write.feedback",
     ],
     "BuilderDeveloper": [
         *DEFAULT_BEARER_CAPABILITIES,
         "development.read.ticket_artifacts",
         "development.write.tickets",
+        "development.write.feedback",
         "development.write.source_recovery",
         "context.read",
         "context.receipt.write",
@@ -59,6 +61,7 @@ DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
         "skill_factory.submit.realize_request",
         "development.read.ticket_artifacts",
         "development.write.tickets",
+        "development.write.feedback",
     ],
     "SkillFactoryDevNode": [
         *DEFAULT_BEARER_CAPABILITIES,

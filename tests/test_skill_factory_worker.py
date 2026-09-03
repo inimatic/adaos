@@ -1893,8 +1893,9 @@ def test_bounded_repair_prompt_requires_targeted_reads(
     assert "every textual `Get-Content`" in prompt
     assert "`-Encoding UTF8`" in prompt
     capsule_ids = [item["id"] for item in packet["prompt_rule_capsules"]]
-    assert capsule_ids[:2] == [
+    assert capsule_ids[:3] == [
         "adaos.builder.execution_boundary.v1",
+        "adaos.skill.sdk_boundary.v1",
         "adaos.skill.webui_tool_contract.v2",
     ]
     if repair_profile == "resource_crud":
@@ -1909,7 +1910,7 @@ def test_bounded_repair_prompt_requires_targeted_reads(
     assert contexts.list_capsules(
         subject_ref="prompt-rule:adaos.skill.webui_tool_contract.v2",
         limit=1,
-    )[0]["capsule_id"] == packet["prompt_rule_capsules"][1]["context_ref"]
+    )[0]["capsule_id"] == packet["prompt_rule_capsules"][2]["context_ref"]
     assert "Task-scoped Root MCP route" in prompt
     assert "hub:sn_demo" in prompt
     assert "Never substitute a skill, scenario, project, or component ID" in prompt
@@ -1931,17 +1932,98 @@ def test_prompt_rule_capsules_are_selected_from_task_facets() -> None:
             "target_files": ["skills/demo/handlers/main.py"],
             "target_refs": ["receiver:subscription.changed"],
             "acceptance_checks": ["Localized voice Pending Action is observable."],
+            "prompt_facts": {
+                "concepts": ["crud", "ui"],
+                "surface_kinds": ["conversation"],
+                "operation_kinds": ["subscribe"],
+                "data_planes": ["conversation", "resource_provider"],
+                "effects": [],
+                "requires_i18n": True,
+                "requires_conversation": True,
+            },
         },
         context_packet={},
     )
 
     assert [item["id"] for item in capsules] == [
         "adaos.builder.execution_boundary.v1",
+        "adaos.skill.sdk_boundary.v1",
         "adaos.skill.webui_tool_contract.v2",
+        "adaos.ui.declarative_state.v1",
+        "adaos.ui.interaction_resources.v1",
         "adaos.skill.data_route_receiver.v1",
+        "adaos.skill.receiver_snapshot.v1",
         "adaos.skill.resource_storage.v1",
         "adaos.skill.conversation_i18n.v1",
     ]
+
+
+def test_worker_records_codex_development_feedback_as_workspace_resource(
+    tmp_path: Path,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    assignment = {
+        "task_id": "task.feedback",
+        "target": {"type": "skill", "id": "demo"},
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": json.dumps(
+                    {
+                        "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+                        "ticket_id": "dticket.demo",
+                    }
+                ),
+                "repair_hints": {"target_refs": ["modal:demo"]},
+            }
+        },
+    }
+
+    records = worker._record_codex_development_feedback(
+        assignment,
+        [
+            {
+                "category": "inefficient_contract",
+                "summary": "The SDK requires a full snapshot for a narrow refresh.",
+                "blocking": False,
+                "confidence": 0.9,
+                "impact": ["efficiency"],
+                "target_refs": ["sdk:resources.query"],
+                "details": "The bounded filter cannot be expressed.",
+                "recommendation": "Add a typed projection filter.",
+                "evidence_refs": [{"type": "file", "ref": "skills/demo/webui.json"}],
+            }
+        ],
+    )
+    repeated = worker._record_codex_development_feedback(assignment, [
+        {
+            "category": "inefficient_contract",
+            "summary": "The SDK requires a full snapshot for a narrow refresh.",
+            "blocking": False,
+            "confidence": 0.9,
+            "impact": ["efficiency"],
+            "target_refs": ["sdk:resources.query"],
+            "details": "The bounded filter cannot be expressed.",
+            "recommendation": "Add a typed projection filter.",
+            "evidence_refs": [{"type": "file", "ref": "skills/demo/webui.json"}],
+        }
+    ])
+
+    assert repeated[0]["feedback_id"] == records[0]["feedback_id"]
+    assert repeated[0]["occurrence_count"] == 1
+    assert set(records[0]["target_refs"]) == {
+        "skill:demo",
+        "modal:demo",
+        "sdk:resources.query",
+    }
+    assert {item["type"] for item in records[0]["relation_refs"]} == {
+        "skill_factory_task",
+        "dev_ticket",
+    }
 
 
 def test_prompt_rule_capsules_select_async_llm_and_member_contracts() -> None:
@@ -1952,6 +2034,13 @@ def test_prompt_rule_capsules_select_async_llm_and_member_contracts() -> None:
             "target_files": ["skills/demo/handlers/main.py"],
             "target_refs": ["subnet member status", "response_job"],
             "acceptance_checks": ["Root accounts model call tokens"],
+            "prompt_facts": {
+                "concepts": ["subnet"],
+                "surface_kinds": ["background"],
+                "operation_kinds": ["command"],
+                "data_planes": ["subnet"],
+                "effects": ["llm"],
+            },
         },
         context_packet={},
     )

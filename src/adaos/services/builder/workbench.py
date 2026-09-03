@@ -1617,6 +1617,7 @@ class BuilderWorkbenchService:
         limit: int = 20,
     ) -> dict[str, Any]:
         from adaos.services.context_control import ContextControlService
+        from adaos.services.development_feedback import DevelopmentFeedbackService
 
         source_id = self.resolve_source_webspace_id(source_webspace_id)
         binding = self.get_workspace_binding(source_id)
@@ -1700,6 +1701,40 @@ class BuilderWorkbenchService:
             if not plan_refs or str(item.get("plan_ref") or "") in plan_refs
         ]
 
+        selected_ticket_id = str(ticket_context.get("ticket_id") or "").strip()
+        feedback_scope_refs = {
+            value for value in (project_ref, component_ref) if value
+        }
+        feedback_candidates = DevelopmentFeedbackService(
+            state_dir=self.state_dir
+        ).list(limit=max(100, min(int(limit) * 10, 1000)))
+
+        def feedback_applies(item: Mapping[str, Any]) -> bool:
+            if feedback_scope_refs & {
+                str(value) for value in item.get("target_refs") or []
+            }:
+                return True
+            if not selected_ticket_id:
+                return False
+            return any(
+                str(relation.get("id") or "").strip() == selected_ticket_id
+                for relation in item.get("relation_refs") or []
+                if isinstance(relation, Mapping)
+            )
+
+        feedback_rows = [
+            dict(item)
+            for item in feedback_candidates
+            if feedback_applies(item)
+        ][: max(1, min(int(limit), 100))]
+        feedback_by_status: dict[str, int] = {}
+        feedback_by_category: dict[str, int] = {}
+        for item in feedback_rows:
+            status = str(item.get("status") or "unknown").strip() or "unknown"
+            category = str(item.get("category") or "unknown").strip() or "unknown"
+            feedback_by_status[status] = feedback_by_status.get(status, 0) + 1
+            feedback_by_category[category] = feedback_by_category.get(category, 0) + 1
+
         usage_by_route: dict[str, dict[str, int]] = {}
         for receipt in receipts:
             route = str(receipt.get("execution_route") or "unknown").strip() or "unknown"
@@ -1760,6 +1795,25 @@ class BuilderWorkbenchService:
             "usage_by_route": usage_by_route,
             "plans": plan_rows,
             "receipts": receipts,
+            "development_feedback": {
+                "schema": "adaos.builder.development_feedback_projection.v1",
+                "authority": "adaos.development_feedback",
+                "read_only": True,
+                "scope_refs": sorted(feedback_scope_refs),
+                "ticket_id": selected_ticket_id or None,
+                "summary": {
+                    "count": len(feedback_rows),
+                    "blocking": sum(bool(item.get("blocking")) for item in feedback_rows),
+                    "by_status": feedback_by_status,
+                    "by_category": feedback_by_category,
+                },
+                "items": feedback_rows,
+                "actions": {
+                    "capture": "/api/development-feedback",
+                    "triage": "/api/development-feedback/{feedback_id}/transition",
+                    "promote": "/api/development-feedback/{feedback_id}/promote",
+                },
+            },
             "privacy": {
                 "sealed_content_disclosed": False,
                 "denied_units_are_metadata_only": True,

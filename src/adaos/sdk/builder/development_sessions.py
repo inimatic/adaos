@@ -544,9 +544,18 @@ def record_feedback(
     with mutation_lock(path.parent / ".mutation.lock"):
         if path.is_file():
             restored = json.loads(path.read_text(encoding="utf-8-sig"))
-            return {"ok": True, "idempotent": True, "feedback": validate_feedback(restored), "state_path": str(path)}
-        atomic_write_json(path, payload)
-    return {"ok": True, "idempotent": False, "feedback": payload, "state_path": str(path)}
+            payload = validate_feedback(restored)
+            idempotent = True
+        else:
+            atomic_write_json(path, payload)
+            idempotent = False
+    try:
+        from adaos.services.development_feedback import DevelopmentFeedbackService
+
+        DevelopmentFeedbackService().import_legacy_builder_feedback()
+    except Exception:
+        pass
+    return {"ok": True, "idempotent": idempotent, "feedback": payload, "state_path": str(path)}
 
 
 def list_feedback(

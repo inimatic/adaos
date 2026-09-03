@@ -820,6 +820,30 @@ _REPAIR_HINT_PROFILES = {
     "subnet_data_integration",
 }
 _REPAIR_HINT_CONCEPTS = {"ui", "data", "crud", "subnet", "validation"}
+_PROMPT_FACT_ENUMS = {
+    "surface_kinds": {
+        "ui", "page", "modal", "widget", "panel", "view", "scenario",
+        "background", "conversation", "resource",
+    },
+    "operation_kinds": {
+        "read", "create", "update", "delete", "command", "transition",
+        "subscribe", "handoff", "validate",
+    },
+    "data_planes": {
+        "yjs", "stream", "tool_details", "skill_local", "resource_provider",
+        "conversation",
+    },
+    "effects": {
+        "read_only", "local_write", "external_io", "device_control",
+        "destructive", "publication", "llm",
+    },
+}
+_PROMPT_FACT_FLAGS = {
+    "requires_i18n",
+    "requires_access",
+    "requires_conversation",
+    "requires_lifecycle",
+}
 _STRUCTURED_EDIT_SCHEMA = "adaos.builder.structured_edit_set.v1"
 _STRUCTURED_EDIT_OPS = {
     "replace_text",
@@ -1052,8 +1076,15 @@ def _language_qualification_messages(
                 "Classify one AdaOS Dev Ticket without designing or implementing a solution. "
                 "Select at most four exact workspace_path values only from candidate_source_refs. "
                 "Use one or more concepts from ui,data,crud,subnet,validation. "
-                "Return one JSON object with schema, concepts, candidate_paths, confidence from 0 to 1, "
-                "clarification_question, and a short rationale. If the target is ambiguous, use low confidence "
+                "Return one JSON object with schema, concepts, prompt_facts, candidate_paths, confidence "
+                "from 0 to 1, clarification_question, and a short rationale. prompt_facts must use only "
+                "the enums defined by adaos.builder.prompt_facts.v1 and must describe the requested surface, "
+                "operations, data planes, effects, and i18n/access/conversation/lifecycle requirements. "
+                "When the admitted source or public contract is insufficient, ambiguous, conflicting, or "
+                "needlessly expensive, add up to four development_feedback observations. Omit that optional "
+                "array for a routine qualification with no product feedback. Feedback is advisory and cannot "
+                "expand source or execution authority. "
+                "If the target is ambiguous, use low confidence "
                 "and ask one bounded clarification question. Never invent a path or SDK capability."
             ),
         },
@@ -1121,6 +1152,27 @@ def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
             if _text(value).lower() in _REPAIR_HINT_CONCEPTS
         )
     )
+    raw_prompt_facts = _mapping(raw.get("prompt_facts"))
+    prompt_facts: dict[str, Any] = {
+        "schema": "adaos.builder.prompt_facts.v1",
+        "concepts": list(
+            dict.fromkeys(
+                _text(value).lower()[:80]
+                for value in raw_prompt_facts.get("concepts") or concepts
+                if _text(value)
+            )
+        )[:12],
+    }
+    for key, allowed in _PROMPT_FACT_ENUMS.items():
+        prompt_facts[key] = list(
+            dict.fromkeys(
+                _text(value).lower()
+                for value in raw_prompt_facts.get(key) or []
+                if _text(value).lower() in allowed
+            )
+        )
+    for key in _PROMPT_FACT_FLAGS:
+        prompt_facts[key] = raw_prompt_facts.get(key) is True
     target_files: list[str] = []
     for value in raw.get("target_files") or []:
         path = _text(value).replace("\\", "/").strip("/")
@@ -1149,6 +1201,7 @@ def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
     hints: dict[str, Any] = {
         "profile": profile or None,
         "concepts": concepts,
+        "prompt_facts": prompt_facts,
         "change_summary": _text(raw.get("change_summary"))[:1000] or None,
         "target_files": target_files,
         "target_refs": target_refs,
@@ -1250,6 +1303,7 @@ def _autonomous_repair_qualification(ticket: Mapping[str, Any]) -> dict[str, Any
         "missing_fields": missing,
         "profile": hints.get("profile"),
         "concepts": list(hints.get("concepts") or []),
+        "prompt_facts": _mapping(hints.get("prompt_facts")),
         "target_files": list(hints.get("target_files") or []),
         "target_refs": list(hints.get("target_refs") or []),
         "acceptance_checks": list(hints.get("acceptance_checks") or []),
@@ -6285,8 +6339,16 @@ class DevelopmentTicketService:
                 object_type=target["object_type"],
                 object_id=target["object_id"],
             )
+            feedback_records = self._record_language_development_feedback(
+                ticket,
+                proposal=proposal,
+                usage=usage,
+                request_id=request_id,
+                actor=actor,
+            )
         except ValueError as exc:
             proposal = {}
+            feedback_records = []
             resolved = {
                 "schema": "adaos.builder.repair_qualification_candidate.v1",
                 "status": "needs_clarification",
@@ -6329,6 +6391,9 @@ class DevelopmentTicketService:
                 resolved
             ),
             "usage": usage,
+            "development_feedback_refs": [
+                item["feedback_id"] for item in feedback_records
+            ],
             "base_ticket_revision": ticket.get("revision"),
             "recorded_at": _now(),
         }
@@ -6351,7 +6416,84 @@ class DevelopmentTicketService:
             "qualification_mode": "bounded_language_llm",
             "language_model_called": True,
             "language_qualification_usage": usage,
+            "development_feedback": feedback_records,
         }
+
+    def _record_language_development_feedback(
+        self,
+        ticket: Mapping[str, Any],
+        *,
+        proposal: Mapping[str, Any],
+        usage: Mapping[str, Any],
+        request_id: str,
+        actor: str,
+    ) -> list[dict[str, Any]]:
+        raw_items = proposal.get("development_feedback")
+        if not isinstance(raw_items, list):
+            return []
+        from adaos.services.development_feedback import DevelopmentFeedbackService
+
+        feedback = DevelopmentFeedbackService(state_dir=self.state_dir)
+        ticket_id = _text(ticket.get("ticket_id"))
+        component_ref = _text(ticket.get("component_ref"))
+        target_scope = _mapping(ticket.get("target_scope"))
+        target_refs = list(
+            dict.fromkeys(
+                value
+                for value in (
+                    component_ref,
+                    *[
+                        f"{kind}:{target_scope.get(key)}"
+                        for kind, key in (
+                            ("project", "project_id"),
+                            ("scenario", "scenario_id"),
+                            ("skill", "skill_id"),
+                            ("modal", "modal_id"),
+                        )
+                        if _text(target_scope.get(key))
+                    ],
+                )
+                if _text(value)
+            )
+        )
+        records: list[dict[str, Any]] = []
+        for item in raw_items[:4]:
+            if not isinstance(item, Mapping):
+                continue
+            result = feedback.capture(
+                source="pre_codex_llm",
+                category=_text(item.get("category")),
+                summary=_text(item.get("summary")),
+                blocking=bool(item.get("blocking")),
+                confidence=float(item.get("confidence", 0.5)),
+                impact=item.get("impact") or [],
+                target_refs=[*target_refs, *(item.get("target_refs") or [])],
+                details=_text(item.get("details")),
+                recommendation=_text(item.get("recommendation")),
+                evidence_refs=[
+                    {
+                        "type": "llm_usage",
+                        "request_id": request_id,
+                        "total_tokens": usage.get("total_tokens"),
+                        "accuracy": usage.get("accuracy"),
+                    }
+                ],
+                relation_refs=[{"type": "dev_ticket", "id": ticket_id}],
+                classification={
+                    "stage": "builder_language_qualification",
+                    "proposal_confidence": proposal.get("confidence"),
+                },
+                dedup_key=_fingerprint(
+                    "pre-codex-feedback",
+                    ticket_id,
+                    item.get("category"),
+                    _text(item.get("summary")).casefold(),
+                ),
+                actor=_text(actor) or "builder.language_qualifier",
+                idempotent_replay=True,
+            )
+            records.append(result["feedback"])
+        return records
 
     def _record_builder_language_qualification(
         self,

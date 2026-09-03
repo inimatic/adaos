@@ -13,6 +13,7 @@ from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation
 from adaos.services.builder.repair import BuilderRepairService
 from adaos.services.context_control import ContextAccessDenied, ContextConflict, ContextControlService
 from adaos.services.development_tickets import DevelopmentTicketService
+from adaos.services.development_feedback import DevelopmentFeedbackService
 from adaos.services.id_gen import new_id
 from adaos.services.runtime_paths import current_state_dir
 
@@ -451,6 +452,82 @@ def _demo_metric_event_definition() -> dict[str, Any]:
     return definition
 
 
+def _development_feedback_definition() -> dict[str, Any]:
+    definition = {
+        "schema": RESOURCE_DEFINITION_SCHEMA,
+        "resource_type": "adaos.development.feedback",
+        "version": "1.0.0",
+        "title": "Development Feedback",
+        "description": "Model and developer observations awaiting human or deterministic triage and optional Dev Ticket promotion.",
+        "scope": {"owner": "workspace", "target_refs": ["project", "scenario", "skill", "sdk", "api", "core", "run"]},
+        "authority": {
+            "provider": "api",
+            "binding": "development_feedback",
+            "writes": "governed",
+            "source_of_truth": "workspace_feedback_registry",
+        },
+        "record_schema_ref": "abi:development_feedback.v1",
+        "query": {
+            "default": "observed",
+            "filters": ["status", "category", "source", "blocking", "target_ref", "updated_since", "search", "role"],
+            "sort": ["updated_at", "category", "impact"],
+            "cursor": True,
+            "include": ["evidence", "relations", "comments", "history", "promotion"],
+        },
+        "operations": [
+            {"id": "show", "kind": "show", "risk": "read", "required_capabilities": ["development_feedback.read"]},
+            {"id": "capture", "kind": "create", "risk": "low", "required_capabilities": ["development_feedback.create"]},
+            {"id": "triage", "kind": "transition", "risk": "low", "required_capabilities": ["development_feedback.triage"]},
+            {"id": "accept", "kind": "transition", "risk": "medium", "required_capabilities": ["development_feedback.triage"]},
+            {"id": "reject", "kind": "transition", "risk": "low", "required_capabilities": ["development_feedback.triage"]},
+            {"id": "comment", "kind": "comment", "risk": "low", "required_capabilities": ["development_feedback.comment"]},
+            {"id": "promote", "kind": "handoff", "risk": "high", "requires": ["route"], "required_capabilities": ["development_feedback.promote"]},
+        ],
+        "views": [
+            {"id": "list", "kind": "list", "title": "Feedback"},
+            {"id": "detail", "kind": "detail", "title": "Feedback detail"},
+            {"id": "discussion", "kind": "event_log", "title": "Discussion"},
+            {"id": "evidence", "kind": "evidence", "title": "Evidence"},
+            {"id": "trace", "kind": "trace", "title": "Trace"},
+        ],
+        "events": {
+            "emits": ["development.feedback.observed", "development.feedback.triaged", "development.feedback.accepted", "development.feedback.rejected", "development.feedback.promoted"],
+            "semantic_types": ["development.feedback.changed"],
+        },
+        "i18n": {
+            "default_locale": "en",
+            "locales": ["en", "ru"],
+            "title_i18n": {"en": "Development Feedback", "ru": "Обратная связь разработки"},
+            "status_i18n": {
+                "observed": {"en": "Observed", "ru": "Зафиксировано"},
+                "triaged": {"en": "Triaged", "ru": "Квалифицировано"},
+                "accepted": {"en": "Accepted", "ru": "Принято"},
+                "rejected": {"en": "Rejected", "ru": "Отклонено"},
+                "promoted": {"en": "Promoted", "ru": "Передано в Dev Tickets"},
+            },
+        },
+        "access": {
+            "read": {"required_capabilities": ["development_feedback.read"]},
+            "role_fixtures": {
+                "owner": "allowed",
+                "admin": "allowed",
+                "builder": "allowed",
+                "member": {"show": "allowed", "capture": "allowed", "triage": "denied", "accept": "denied", "reject": "denied", "comment": "allowed", "promote": "denied"},
+                "guest": "denied",
+            },
+        },
+        "privacy": {
+            "sensitivity": "internal_development",
+            "retention": "workspace_lifecycle",
+            "external_export": "denied_by_default",
+        },
+        "readiness": {"states": ["ready", "empty", "permission_denied", "provider_unavailable"]},
+        "workflow_links": {"builder_session": True, "dev_ticket": True, "core_ticket": True},
+    }
+    _validate("resource.definition.v1", definition)
+    return definition
+
+
 def _context_resource_definition(
     *,
     resource_type: str,
@@ -587,6 +664,7 @@ def _context_resource_definitions() -> list[dict[str, Any]]:
 class ResourceWorkbenchService:
     state_dir: Path | None = None
     ticket_service: DevelopmentTicketService | None = None
+    feedback_service: DevelopmentFeedbackService | None = None
     context_service: ContextControlService | None = None
 
     @property
@@ -615,6 +693,7 @@ class ResourceWorkbenchService:
         return sorted(
             [
                 _dev_ticket_definition(),
+                _development_feedback_definition(),
                 _demo_metric_definition(),
                 _demo_metric_note_definition(),
                 _demo_metric_event_definition(),
@@ -840,6 +919,9 @@ class ResourceWorkbenchService:
     def _tickets(self) -> DevelopmentTicketService:
         return self.ticket_service or DevelopmentTicketService(state_dir=self.state_dir)
 
+    def _feedback(self) -> DevelopmentFeedbackService:
+        return self.feedback_service or DevelopmentFeedbackService(state_dir=self.state_dir)
+
     def _contexts(self) -> ContextControlService:
         return self.context_service or ContextControlService(state_dir=self.state_dir)
 
@@ -868,6 +950,17 @@ class ResourceWorkbenchService:
                 updated_since=_text(filters.get("updated_since")) or None,
                 search=search or None,
                 limit=max_items,
+            )
+        if resource_type == "adaos.development.feedback":
+            return self._feedback().list(
+                status=_text(filters.get("status")) or None,
+                category=_text(filters.get("category")) or None,
+                source=_text(filters.get("source")) or None,
+                blocking=filters.get("blocking") if isinstance(filters.get("blocking"), bool) else None,
+                target_ref=_text(filters.get("target_ref")) or None,
+                search=search or None,
+                updated_since=_text(filters.get("updated_since")) or None,
+                limit=max_items or 200,
             )
         if resource_type == "demo.metric":
             if _text(filters.get("fixture")) == "unavailable_provider":
@@ -931,11 +1024,74 @@ class ResourceWorkbenchService:
     def _operate(self, resource_type: str, operation_id: str, request: Mapping[str, Any]) -> dict[str, Any]:
         if resource_type == "adaos.dev.ticket":
             return self._operate_dev_ticket(operation_id, request)
+        if resource_type == "adaos.development.feedback":
+            return self._operate_development_feedback(operation_id, request)
         if resource_type == "demo.metric_note":
             return self._operate_demo_note(operation_id, request)
         if resource_type.startswith("adaos.context.") or resource_type == "adaos.agent.context_receipt":
             return self._operate_context_resource(resource_type, operation_id, request)
         raise ValueError(f"resource operation is read-only: {resource_type}.{operation_id}")
+
+    def _operate_development_feedback(self, operation_id: str, request: Mapping[str, Any]) -> dict[str, Any]:
+        service = self._feedback()
+        payload = _mapping(request.get("payload"))
+        feedback_id = _text(request.get("record_id") or payload.get("feedback_id"))
+        actor = _actor_id(_mapping(request.get("actor")))
+        expected = request.get("expected_revision")
+        expected_revision = int(expected) if expected is not None else None
+        if operation_id == "show":
+            record = service.get(feedback_id)
+            if not record:
+                raise KeyError(feedback_id)
+            return {"record": record, "record_id": feedback_id}
+        if operation_id == "capture":
+            result = service.capture(
+                source=_text(payload.get("source")) or "builder",
+                category=_text(payload.get("category")),
+                summary=_text(payload.get("summary")),
+                blocking=bool(payload.get("blocking")),
+                confidence=float(payload.get("confidence", 1.0)),
+                impact=payload.get("impact") or [],
+                target_refs=payload.get("target_refs") or [],
+                details=_text(payload.get("details")),
+                recommendation=_text(payload.get("recommendation")),
+                evidence_refs=_sequence_of_mappings(payload.get("evidence_refs") or []),
+                relation_refs=_sequence_of_mappings(payload.get("relation_refs") or []),
+                classification=_mapping(payload.get("classification")),
+                dedup_key=_text(payload.get("dedup_key")) or None,
+                actor=actor,
+            )
+            record = result["feedback"]
+            return {"record": record, "record_id": record["feedback_id"], "duplicate": result["duplicate"]}
+        if operation_id in {"triage", "accept", "reject"}:
+            status_by_operation = {"triage": "triaged", "accept": "accepted", "reject": "rejected"}
+            record = service.transition(
+                feedback_id,
+                status=status_by_operation[operation_id],
+                actor=actor,
+                reason=_text(payload.get("reason")),
+                classification=_mapping(payload.get("classification")),
+                expected_revision=expected_revision,
+            )
+            return {"record": record, "record_id": feedback_id}
+        if operation_id == "comment":
+            record = service.comment(
+                feedback_id,
+                body=_text(payload.get("body")),
+                actor=actor,
+                expected_revision=expected_revision,
+            )
+            return {"record": record, "record_id": feedback_id}
+        if operation_id == "promote":
+            result = service.promote(
+                feedback_id,
+                route=_text(payload.get("route")),
+                actor=actor,
+                payload=_mapping(payload.get("promotion")),
+                expected_revision=expected_revision,
+            )
+            return {"record": result["feedback"], "record_id": feedback_id, "ticket": result.get("ticket")}
+        raise ValueError(f"unsupported development feedback operation: {operation_id}")
 
     def _operate_context_resource(self, resource_type: str, operation_id: str, request: Mapping[str, Any]) -> dict[str, Any]:
         service = self._contexts()

@@ -29,7 +29,7 @@ def test_prompt_rule_registry_is_versioned_and_selects_by_facets() -> None:
         {key: value for key, value in registry.items() if key != "digest"}
     )
     assert registry["schema"] == "adaos.builder.prompt_rule_registry.v1"
-    assert registry["version"] == "0.2.0"
+    assert registry["version"] == "0.3.0"
     assert registry["digest"].startswith("sha256:")
     assert len({item["id"] for item in registry["items"]}) == len(registry["items"])
     assert [
@@ -40,6 +40,7 @@ def test_prompt_rule_registry_is_versioned_and_selects_by_facets() -> None:
         )
     ] == [
         "adaos.builder.execution_boundary.v1",
+        "adaos.skill.sdk_boundary.v1",
         "adaos.skill.webui_tool_contract.v2",
         "adaos.skill.async_llm_job.v1",
         "adaos.skill.member_subnet.v1",
@@ -60,8 +61,9 @@ def test_prompt_rule_registry_uses_structured_task_facts() -> None:
         )
     ]
 
-    assert ids[:3] == [
+    assert ids[:4] == [
         "adaos.builder.execution_boundary.v1",
+        "adaos.skill.sdk_boundary.v1",
         "adaos.skill.webui_tool_contract.v2",
         "adaos.ui.declarative_state.v1",
     ]
@@ -83,14 +85,40 @@ def test_scenario_always_gets_composition_boundary() -> None:
     ]
 
 
+def test_structured_facts_select_rules_without_english_text_markers() -> None:
+    ids = [
+        item["id"]
+        for item in select_prompt_rules(
+            target_type="skill",
+            evidence="Нужно корректно переживать повторный запуск после обновления.",
+            facts={
+                "concepts": ["validation"],
+                "surface_kinds": ["background"],
+                "operation_kinds": ["validate"],
+                "data_planes": [],
+                "effects": ["publication"],
+                "requires_lifecycle": True,
+            },
+        )
+    ]
+
+    assert "adaos.skill.runtime_lifecycle.v1" in ids
+    assert "adaos.skill.python_lifecycle.v1" in ids
+    assert "adaos.ui.declarative_state.v1" not in ids
+
+
 def test_prompt_rule_capsule_registration_is_idempotent_and_searchable(
     tmp_path,
 ) -> None:
     contexts = ContextControlService(tmp_path)
-    rule = select_prompt_rules(
-        target_type="skill",
-        evidence="webui.json",
-    )[1]
+    rule = next(
+        item
+        for item in select_prompt_rules(
+            target_type="skill",
+            evidence="webui.json",
+        )
+        if item["id"] == "adaos.skill.webui_tool_contract.v2"
+    )
 
     first = contexts.register_capsule(context_capsule_request(rule))
     second = contexts.register_capsule(context_capsule_request(rule))

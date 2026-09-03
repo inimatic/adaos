@@ -16,6 +16,7 @@ DEFAULT_BEARER_CAPABILITIES: list[str] = [
     "development.read.skill_contracts",
     "development.read.scenario_contracts",
     "development.read.tickets",
+    "development.read.feedback",
     "context.read",
     "skill_factory.read.status",
     "operations.read.contracts",
@@ -143,6 +144,20 @@ def list_capability_classes() -> list[dict[str, Any]]:
             risk="low",
             summary="Read scoped Dev Tickets, linked Builder work, and lifecycle change feeds.",
             default_grants=["owner_token", "bearer"],
+        ),
+        _capability_entry(
+            "development.read.feedback",
+            surface="development",
+            risk="low",
+            summary="Read typed model and developer feedback before Dev Ticket promotion.",
+            default_grants=["owner_token", "bearer"],
+        ),
+        _capability_entry(
+            "development.write.feedback",
+            surface="development",
+            risk="medium",
+            summary="Capture, discuss, triage, and promote governed development feedback.",
+            default_grants=["owner_token"],
         ),
         _capability_entry(
             "development.read.ticket_artifacts",

@@ -29,6 +29,7 @@ from adaos.domain.development_validation import (
     normalize_validation_budget,
 )
 from adaos.domain.development_escalations import parse_development_escalations
+from adaos.domain.development_feedback import parse_development_feedback
 from adaos.domain.development_budget import (
     execution_billable_token_limit,
     execution_prompt_token_limit,
@@ -1330,6 +1331,11 @@ def _selected_prompt_rule_capsules(
 ) -> list[dict[str, Any]]:
     """Compile small task-relevant rules instead of injecting whole guides."""
 
+    prompt_facts = (
+        dict(repair_hints.get("prompt_facts"))
+        if isinstance(repair_hints.get("prompt_facts"), Mapping)
+        else {}
+    )
     evidence = json.dumps(
         {
             "target_type": target_type,
@@ -1337,6 +1343,7 @@ def _selected_prompt_rule_capsules(
             "target_files": repair_hints.get("target_files"),
             "target_refs": repair_hints.get("target_refs"),
             "acceptance_checks": repair_hints.get("acceptance_checks"),
+            "prompt_facts": prompt_facts,
             "facets": context_packet.get("facets"),
         },
         ensure_ascii=True,
@@ -1350,6 +1357,20 @@ def _selected_prompt_rule_capsules(
             "target_files": repair_hints.get("target_files"),
             "target_refs": repair_hints.get("target_refs"),
             "facet_keys": list(dict(context_packet.get("facets") or {})),
+            **{
+                key: prompt_facts.get(key)
+                for key in (
+                    "concepts",
+                    "surface_kinds",
+                    "operation_kinds",
+                    "data_planes",
+                    "effects",
+                    "requires_i18n",
+                    "requires_access",
+                    "requires_conversation",
+                    "requires_lifecycle",
+                )
+            },
         },
     )
     projected: list[dict[str, Any]] = []
@@ -3116,6 +3137,10 @@ class LocalSkillFactoryWorker:
                 raise ValueError("pre-commit recovery requires a completed Codex result")
             final_message = final_message_path.read_text(encoding="utf-8").strip()
             development_escalations = parse_development_escalations(final_message)
+            development_feedback = self._record_codex_development_feedback(
+                assignment,
+                parse_development_feedback(final_message),
+            )
             recovery_packet = _read_json(input_dir / "packet.json")
             recovery_constraints = (
                 dict(recovery_packet.get("constraints"))
@@ -3217,6 +3242,9 @@ class LocalSkillFactoryWorker:
                 "status": "completed",
                 "summary": final_message,
                 "development_escalations": development_escalations,
+                "development_feedback_refs": [
+                    item["feedback_id"] for item in development_feedback
+                ],
                 "tests": test_report,
                 "packet": recovery_packet,
             }
@@ -3261,6 +3289,9 @@ class LocalSkillFactoryWorker:
             "summary": str(result_manifest.get("summary") or "").strip(),
             "development_escalations": list(
                 result_manifest.get("development_escalations") or []
+            ),
+            "development_feedback_refs": list(
+                result_manifest.get("development_feedback_refs") or []
             ),
             "local_run_dir": str(run_root),
         }
@@ -3667,6 +3698,10 @@ class LocalSkillFactoryWorker:
             development_escalations = parse_development_escalations(
                 codex_result.final_message
             )
+            development_feedback = self._record_codex_development_feedback(
+                assignment,
+                parse_development_feedback(codex_result.final_message),
+            )
             packet_constraints = (
                 dict(packet.get("constraints"))
                 if isinstance(packet.get("constraints"), Mapping)
@@ -3884,6 +3919,9 @@ class LocalSkillFactoryWorker:
                 "status": "completed",
                 "summary": codex_result.final_message.strip(),
                 "development_escalations": development_escalations,
+                "development_feedback_refs": [
+                    item["feedback_id"] for item in development_feedback
+                ],
                 "tests": test_report,
                 "packet": packet,
             }
@@ -3914,6 +3952,9 @@ class LocalSkillFactoryWorker:
                 "evidence": self._evidence_manifest(evidence_root, evidence_paths),
                 "summary": codex_result.final_message.strip(),
                 "development_escalations": development_escalations,
+                "development_feedback_refs": [
+                    item["feedback_id"] for item in development_feedback
+                ],
                 "local_run_dir": str(run_root),
                 "execution_strategy": provenance["execution_strategy"],
             }
@@ -4250,6 +4291,106 @@ class LocalSkillFactoryWorker:
                 self.progress_callback(task_id, status, message)
             except Exception:
                 _log.warning("local worker progress callback failed task=%s status=%s", task_id, status, exc_info=True)
+
+    def _record_codex_development_feedback(
+        self,
+        assignment: Mapping[str, Any],
+        items: Sequence[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not items:
+            return []
+        from adaos.services.development_feedback import DevelopmentFeedbackService
+
+        request = dict(assignment.get("realize_request") or {})
+        artifacts = dict(request.get("artifacts") or {})
+        target = dict(assignment.get("target") or {})
+        target_type = str(target.get("type") or "skill").strip().lower()
+        target_id = str(target.get("id") or "").strip()
+        repair_hints = (
+            dict(artifacts.get("repair_hints"))
+            if isinstance(artifacts.get("repair_hints"), Mapping)
+            else {}
+        )
+        ticket_id = ""
+        brief = str(artifacts.get("implementation_brief") or "").strip()
+        if brief:
+            try:
+                parsed_brief = json.loads(brief)
+                if isinstance(parsed_brief, Mapping):
+                    ticket_id = str(parsed_brief.get("ticket_id") or "").strip()
+            except (TypeError, ValueError):
+                pass
+        base_target_refs = list(
+            dict.fromkeys(
+                value
+                for value in (
+                    f"{target_type}:{target_id}" if target_id else "",
+                    *[
+                        str(ref).strip()
+                        for ref in repair_hints.get("target_refs") or []
+                        if str(ref).strip()
+                    ],
+                )
+                if value and ":" in value
+            )
+        )
+        relations = [
+            {
+                "type": "skill_factory_task",
+                "id": str(assignment.get("task_id") or "").strip(),
+            },
+            *(
+                [{"type": "dev_ticket", "id": ticket_id}]
+                if ticket_id
+                else []
+            ),
+        ]
+        service = DevelopmentFeedbackService(state_dir=self.state_dir)
+        records: list[dict[str, Any]] = []
+        for item in items[:8]:
+            result = service.capture(
+                source="codex",
+                category=str(item.get("category") or "").strip(),
+                summary=str(item.get("summary") or "").strip(),
+                blocking=bool(item.get("blocking")),
+                confidence=float(item.get("confidence", 1.0)),
+                impact=item.get("impact") or [],
+                target_refs=[*base_target_refs, *(item.get("target_refs") or [])],
+                details=str(item.get("details") or "").strip(),
+                recommendation=str(item.get("recommendation") or "").strip(),
+                evidence_refs=[
+                    *(item.get("evidence_refs") or []),
+                    {
+                        "type": "skill_factory_task",
+                        "id": str(assignment.get("task_id") or "").strip(),
+                        "node_id": self.node_id,
+                    },
+                ],
+                relation_refs=relations,
+                classification={
+                    "stage": "codex_final_response",
+                    "target_type": target_type,
+                    "target_id": target_id,
+                },
+                dedup_key=(
+                    "codex-feedback:"
+                    + hashlib.sha256(
+                        json.dumps(
+                            {
+                                "task_id": assignment.get("task_id"),
+                                "category": item.get("category"),
+                                "summary": item.get("summary"),
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ).encode("utf-8")
+                    ).hexdigest()
+                ),
+                actor=f"codex:{self.node_id}",
+                idempotent_replay=True,
+            )
+            records.append(result["feedback"])
+        return records
 
     def _materialize_sources(self, assignment: Mapping[str, Any], workspace: Path) -> dict[str, Any] | None:
         forge = dict(assignment.get("forge") or {})
@@ -4646,6 +4787,17 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
 
 Allowed impact values are `blocker`, `speed`, `generalization`, `contract_gap`, `observability_gap`, `lifecycle_gap`, `policy_boundary`, `compatibility_debt`, and `security_governance`. Do not create a documentation, issue, TODO, or placeholder implementation file. The orchestrator, not this task, owns ticket mutation.
 """ if is_dev_ticket_repair else ""
+        development_feedback_contract = """
+## Development feedback channel
+
+If implementation reveals a missing or ambiguous public contract, conflicting guidance, avoidable SDK cost, insufficient admitted context, an observability/validation gap, or a policy boundary, retain that observation even when the requested patch succeeds. Append at most one fenced envelope after the concise result summary:
+
+```adaos-development-feedback
+{"schema":"adaos.development_feedback_output.v1","items":[{"category":"ambiguous_contract","summary":"...","blocking":false,"confidence":0.9,"impact":["comprehension"],"target_refs":["sdk:area.method"],"details":"...","recommendation":"...","evidence_refs":[{"type":"file","ref":"path"}]}]}
+```
+
+Omit the envelope when there is no substantive development feedback. It is advisory evidence only: do not use it to broaden scope, modify core, or invent a capability. Do not combine it with `adaos-development-escalation`; an unresolved blocking core/API/SDK capability gap uses the escalation contract instead.
+"""
         repair_profile = str(constraints.get("repair_profile") or "").strip()
         surgical_ui = is_dev_ticket_repair and repair_profile == "surgical_ui"
         bounded_repair = is_dev_ticket_repair and (
@@ -4883,6 +5035,8 @@ change, edit directly and do not rediscover the same structures.
 
 {prompt_rule_capsules_section}
 
+{development_feedback_contract}
+
 ## Required result
 
 {required_result}
@@ -4959,6 +5113,8 @@ contract, not this convenience projection.
 {transition_requirements}
 
 {prompt_rule_capsules_section}
+
+{development_feedback_contract}
 
 ## Required result
 

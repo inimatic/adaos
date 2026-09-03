@@ -34,6 +34,7 @@ def test_resource_definitions_validate_and_include_dev_tickets_and_demo_metrics(
 
     assert {
         "adaos.dev.ticket",
+        "adaos.development.feedback",
         "demo.metric",
         "demo.metric_note",
         "demo.metric_event",
@@ -53,6 +54,49 @@ def test_resource_definitions_validate_and_include_dev_tickets_and_demo_metrics(
         assert definition["i18n"]["default_locale"] == "en"
         assert "access" in definition
         assert "privacy" in definition
+
+
+def test_resource_workbench_exposes_development_feedback_triage(tmp_path: Path) -> None:
+    workbench = ResourceWorkbenchService(state_dir=tmp_path)
+    created = workbench.operate(
+        {
+            "schema": "adaos.resource.operation.v1",
+            "resource_type": "adaos.development.feedback",
+            "operation_id": "capture",
+            "payload": {
+                "source": "codex",
+                "category": "inefficient_contract",
+                "summary": "The SDK contract requires repeated full snapshots for a narrow query.",
+                "impact": ["efficiency", "generalization"],
+                "target_refs": ["sdk:resources.query"],
+            },
+            "actor": {"id": "codex:test", "role": "builder"},
+        }
+    )
+    feedback = created["result"]["record"]
+    queried = workbench.query(
+        {
+            "schema": "adaos.resource.query.v1",
+            "resource_type": "adaos.development.feedback",
+            "filters": {"category": "inefficient_contract"},
+            "search": "full snapshots",
+            "actor": {"id": "human:test", "role": "owner"},
+        }
+    )
+    assert [item["feedback_id"] for item in queried["items"]] == [feedback["feedback_id"]]
+
+    accepted = workbench.operate(
+        {
+            "schema": "adaos.resource.operation.v1",
+            "resource_type": "adaos.development.feedback",
+            "operation_id": "accept",
+            "record_id": feedback["feedback_id"],
+            "expected_revision": feedback["revision"],
+            "payload": {"reason": "Useful SDK product feedback"},
+            "actor": {"id": "human:test", "role": "owner"},
+        }
+    )
+    assert accepted["result"]["record"]["status"] == "accepted"
 
 
 def test_resource_workbench_queries_and_operates_dev_ticket_lifecycle(tmp_path: Path) -> None:

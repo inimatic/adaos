@@ -163,6 +163,46 @@ _CONCEPT_PREFIXES = {
         "тест",
     },
 }
+_PROMPT_SURFACE_KINDS = {
+    "ui",
+    "page",
+    "modal",
+    "widget",
+    "panel",
+    "view",
+    "scenario",
+    "background",
+    "conversation",
+    "resource",
+}
+_PROMPT_OPERATION_KINDS = {
+    "read",
+    "create",
+    "update",
+    "delete",
+    "command",
+    "transition",
+    "subscribe",
+    "handoff",
+    "validate",
+}
+_PROMPT_DATA_PLANES = {
+    "yjs",
+    "stream",
+    "tool_details",
+    "skill_local",
+    "resource_provider",
+    "conversation",
+}
+_PROMPT_EFFECTS = {
+    "read_only",
+    "local_write",
+    "external_io",
+    "device_control",
+    "destructive",
+    "publication",
+    "llm",
+}
 
 
 @dataclass(frozen=True)
@@ -194,6 +234,151 @@ def _concepts(tokens: set[str]) -> set[str]:
         concept
         for concept, prefixes in _CONCEPT_PREFIXES.items()
         if any(any(token.startswith(prefix) for prefix in prefixes) for token in tokens)
+    }
+
+
+def _prompt_facts(
+    ticket: Mapping[str, Any],
+    *,
+    concepts: set[str],
+    selected: list[Mapping[str, Any]],
+    proposed: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compile semantic routing hints without granting execution authority."""
+
+    proposal = dict(proposed or {})
+    target_scope = (
+        dict(ticket.get("target_scope"))
+        if isinstance(ticket.get("target_scope"), Mapping)
+        else {}
+    )
+    evidence = " ".join(
+        [
+            _text(ticket.get("summary")),
+            _text(ticket.get("component_ref")),
+            json.dumps(target_scope, ensure_ascii=False, default=str),
+            *[
+                " ".join(
+                    [
+                        _text(item.get("workspace_path")),
+                        *[
+                            _text(value)
+                            for value in item.get("semantic_refs") or []
+                            if _text(value)
+                        ],
+                    ]
+                )
+                for item in selected
+            ],
+        ]
+    ).casefold()
+    tokens = _tokens(evidence)
+
+    def proposed_values(key: str, allowed: set[str]) -> set[str]:
+        raw = proposal.get(key)
+        return {
+            _text(value).lower()
+            for value in raw
+            if _text(value).lower() in allowed
+        } if isinstance(raw, list) else set()
+
+    def has_prefix(*prefixes: str) -> bool:
+        return any(
+            token.startswith(prefix)
+            for token in tokens
+            for prefix in prefixes
+        )
+
+    surfaces = proposed_values("surface_kinds", _PROMPT_SURFACE_KINDS)
+    component_kind = _text(ticket.get("component_ref")).partition(":")[0].lower()
+    if component_kind in _PROMPT_SURFACE_KINDS:
+        surfaces.add(component_kind)
+    target_surface = _text(target_scope.get("surface")).lower()
+    if target_surface in _PROMPT_SURFACE_KINDS:
+        surfaces.add(target_surface)
+    if any(_text(item.get("role")) == "ui" for item in selected):
+        surfaces.add("ui")
+    if _text(target_scope.get("type")).lower() == "scenario":
+        surfaces.add("scenario")
+
+    operations = proposed_values("operation_kinds", _PROMPT_OPERATION_KINDS)
+    operation_prefixes = {
+        "read": ("read", "show", "list", "search", "inspect", "view"),
+        "create": ("create", "add", "new"),
+        "update": ("update", "edit", "rename", "change", "refresh"),
+        "delete": ("delete", "remove", "unlink"),
+        "command": ("run", "retry", "refresh", "start", "stop"),
+        "transition": ("accept", "resolve", "verify", "close", "reopen"),
+        "subscribe": ("subscribe", "receiver", "projection", "stream"),
+        "handoff": ("builder", "handoff", "autonomous"),
+        "validate": ("validate", "validation", "test", "verify"),
+    }
+    operations.update(
+        kind
+        for kind, prefixes in operation_prefixes.items()
+        if has_prefix(*prefixes)
+    )
+    if "crud" in concepts and not operations.intersection(
+        {"create", "update", "delete"}
+    ):
+        operations.add("update")
+    if "validation" in concepts:
+        operations.add("validate")
+
+    data_planes = proposed_values("data_planes", _PROMPT_DATA_PLANES)
+    if has_prefix("stream", "receiver", "subscription"):
+        data_planes.add("stream")
+    if has_prefix("yjs", "projection"):
+        data_planes.add("yjs")
+    if has_prefix("datasource", "tool", "detail", "refresh"):
+        data_planes.add("tool_details")
+    if has_prefix("resource", "provider", "crud"):
+        data_planes.add("resource_provider")
+    if has_prefix("storage", "cache", "skill-local"):
+        data_planes.add("skill_local")
+    if has_prefix("conversation", "chat", "voice", "telegram", "nlu"):
+        data_planes.add("conversation")
+
+    effects = proposed_values("effects", _PROMPT_EFFECTS)
+    if operations and operations <= {"read", "validate"}:
+        effects.add("read_only")
+    if operations.intersection({"create", "update", "delete", "transition"}):
+        effects.add("local_write")
+    if "delete" in operations or has_prefix("destructive"):
+        effects.add("destructive")
+    if has_prefix("external", "network", "remote", "root", "api"):
+        effects.add("external_io")
+    if has_prefix("device", "endpoint", "playback"):
+        effects.add("device_control")
+    if has_prefix("publish", "release", "activate", "install"):
+        effects.add("publication")
+    if has_prefix("llm", "model", "codex", "prompt"):
+        effects.add("llm")
+
+    return {
+        "schema": "adaos.builder.prompt_facts.v1",
+        "concepts": sorted(concepts),
+        "surface_kinds": sorted(surfaces),
+        "operation_kinds": sorted(operations),
+        "data_planes": sorted(data_planes),
+        "effects": sorted(effects),
+        "requires_i18n": bool(proposal.get("requires_i18n"))
+        or has_prefix("i18n", "locale", "localiz", "translat"),
+        "requires_access": bool(proposal.get("requires_access"))
+        or has_prefix("access", "permission", "capability", "role", "auth"),
+        "requires_conversation": bool(proposal.get("requires_conversation"))
+        or bool(data_planes & {"conversation"}),
+        "requires_lifecycle": bool(proposal.get("requires_lifecycle"))
+        or has_prefix(
+            "activation",
+            "activate",
+            "reload",
+            "rehydrate",
+            "drain",
+            "dispose",
+            "runtime",
+            "install",
+        ),
     }
 
 
@@ -675,6 +860,12 @@ def _validation_gate_qualification(
     codes = list(dict.fromkeys(_text(finding.get("code")) for finding, _ in matched))
     repair: dict[str, Any] = {
         "profile": "project_batch",
+        "concepts": ["validation"],
+        "prompt_facts": _prompt_facts(
+            ticket,
+            concepts={"validation"},
+            selected=selected_entries,
+        ),
         "change_summary": summary[:1000],
         "target_files": selected,
         "target_refs": [
@@ -994,6 +1185,11 @@ def prepare_repair_qualification(
     repair = {
         "profile": _profile_for(concepts),
         "concepts": sorted(concepts),
+        "prompt_facts": _prompt_facts(
+            ticket,
+            concepts=concepts,
+            selected=selected,
+        ),
         "change_summary": summary[:1000],
         "target_files": target_files,
         "target_refs": target_refs,
@@ -1178,6 +1374,16 @@ def resolve_language_qualification_proposal(
     repair: dict[str, Any] = {
         "profile": _profile_for(concepts),
         "concepts": sorted(concepts),
+        "prompt_facts": _prompt_facts(
+            ticket,
+            concepts=concepts,
+            selected=selected,
+            proposed=(
+                proposal.get("prompt_facts")
+                if isinstance(proposal.get("prompt_facts"), Mapping)
+                else None
+            ),
+        ),
         "change_summary": summary[:1000],
         "target_files": target_files,
         "target_refs": target_refs,

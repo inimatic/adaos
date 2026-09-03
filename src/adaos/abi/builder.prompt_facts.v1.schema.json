@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/builder.prompt_facts.v1.schema.json",
+  "title": "AdaOS Builder Prompt Facts v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "concepts",
+    "surface_kinds",
+    "operation_kinds",
+    "data_planes",
+    "effects",
+    "requires_i18n",
+    "requires_access",
+    "requires_conversation",
+    "requires_lifecycle"
+  ],
+  "properties": {
+    "schema": {
+      "const": "adaos.builder.prompt_facts.v1"
+    },
+    "concepts": {
+      "type": "array",
+      "maxItems": 12,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 80
+      }
+    },
+    "surface_kinds": {
+      "type": "array",
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["ui", "page", "modal", "widget", "panel", "view", "scenario", "background", "conversation", "resource"]
+      }
+    },
+    "operation_kinds": {
+      "type": "array",
+      "maxItems": 9,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["read", "create", "update", "delete", "command", "transition", "subscribe", "handoff", "validate"]
+      }
+    },
+    "data_planes": {
+      "type": "array",
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["yjs", "stream", "tool_details", "skill_local", "resource_provider", "conversation"]
+      }
+    },
+    "effects": {
+      "type": "array",
+      "maxItems": 7,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["read_only", "local_write", "external_io", "device_control", "destructive", "publication", "llm"]
+      }
+    },
+    "requires_i18n": {"type": "boolean"},
+    "requires_access": {"type": "boolean"},
+    "requires_conversation": {"type": "boolean"},
+    "requires_lifecycle": {"type": "boolean"}
+  }
+}

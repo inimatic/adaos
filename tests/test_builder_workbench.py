@@ -19,6 +19,7 @@ from adaos.services.builder.workbench import (
 )
 from adaos.services.builder.repair import BuilderRepairService
 from adaos.services.context_control import ContextControlService
+from adaos.services.development_feedback import DevelopmentFeedbackService
 from adaos.services.development_tickets import DevelopmentTicketService
 
 
@@ -799,6 +800,50 @@ def test_builder_context_inspector_uses_ticket_project_not_component_id(tmp_path
     assert inspector["scope"]["component_ref"] == "scenario:demo_metrics_scenario.header"
     assert inspector["summary"]["plan_count"] == 1
     assert inspector["plans"][0]["plan_id"] == plan["plan_id"]
+
+
+def test_builder_context_inspector_projects_scoped_development_feedback(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    service = BuilderWorkbenchService(state_dir=state_dir)
+    service.set_selected_project(
+        source_webspace_id="desktop",
+        object_type="skill",
+        object_id="demo_metrics_skill",
+    )
+    feedback = DevelopmentFeedbackService(state_dir=state_dir)
+    relevant = feedback.capture(
+        source="codex",
+        category="inefficient_contract",
+        summary="The resource query requires a full snapshot for one metric.",
+        impact=["efficiency"],
+        target_refs=["project:demo_metrics_skill", "skill:demo_metrics_skill"],
+        actor="codex:test",
+    )["feedback"]
+    feedback.capture(
+        source="codex",
+        category="ambiguous_contract",
+        summary="An unrelated media contract is unclear.",
+        target_refs=["project:media_center"],
+        actor="codex:test",
+    )
+
+    inspector = service.context_inspector("desktop")
+
+    projection = inspector["development_feedback"]
+    assert projection["authority"] == "adaos.development_feedback"
+    assert projection["read_only"] is True
+    assert projection["summary"] == {
+        "count": 1,
+        "blocking": 0,
+        "by_status": {"observed": 1},
+        "by_category": {"inefficient_contract": 1},
+    }
+    assert [item["feedback_id"] for item in projection["items"]] == [
+        relevant["feedback_id"]
+    ]
+    assert projection["actions"]["promote"].endswith("/{feedback_id}/promote")
 
 
 def test_builder_workbench_open_selects_development_ticket_context(tmp_path: Path) -> None:

@@ -199,6 +199,8 @@ def _contract_plane_id(contract: RootMcpToolContract) -> str:
         return "adaos_dev"
     if contract.id.startswith("dev_ticket."):
         return "adaos_dev"
+    if contract.id.startswith("development_feedback."):
+        return "adaos_dev"
     if contract.id.startswith("skill_factory."):
         return "skill_factory_task"
     if contract.id.startswith("hub.memory."):
@@ -584,6 +586,93 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                 "published_by": "plane:adaos_dev",
                 "handler": "builder_source_recovery_apply",
             },
+        ),
+        RootMcpToolContract(
+            id="development_feedback.list",
+            title="List development feedback",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Filter model and developer observations by lifecycle, category, source, target, blocker state, and text.",
+            input_schema=schema_object(
+                properties={
+                    "status": {"type": "string"},
+                    "category": {"type": "string"},
+                    "source": {"type": "string"},
+                    "blocking": {"type": "boolean"},
+                    "target_ref": {"type": "string"},
+                    "search": {"type": "string"},
+                    "updated_since": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
+                },
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.feedback",
+            metadata={"published_by": "plane:adaos_dev", "handler": "development_feedback_list"},
+        ),
+        RootMcpToolContract(
+            id="development_feedback.show",
+            title="Show development feedback",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Read one development feedback record with discussion, evidence, relations, and promoted ticket refs.",
+            input_schema=schema_object(
+                properties={"feedback_id": {"type": "string"}},
+                required=["feedback_id"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.feedback",
+            metadata={"published_by": "plane:adaos_dev", "handler": "development_feedback_show"},
+        ),
+        RootMcpToolContract(
+            id="development_feedback.capture",
+            title="Capture development feedback",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Record or deduplicate a typed model/developer observation without creating a Dev Ticket.",
+            input_schema=schema_object(
+                properties={
+                    "summary": {"type": "string"},
+                    "source": {"type": "string"},
+                    "category": {"type": "string"},
+                    "blocking": {"type": "boolean"},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                    "impact": {"type": "array", "items": {"type": "string"}},
+                    "target_refs": {"type": "array", "items": {"type": "string"}},
+                    "details": {"type": "string"},
+                    "recommendation": {"type": "string"},
+                    "evidence_refs": {"type": "array", "items": {"type": "object"}},
+                    "relation_refs": {"type": "array", "items": {"type": "object"}},
+                    "classification": {"type": "object"},
+                    "dedup_key": {"type": "string"},
+                    "actor": {"type": "string"},
+                },
+                required=["summary", "source", "category"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.write.feedback",
+            side_effects="write",
+            metadata={"published_by": "plane:adaos_dev", "handler": "development_feedback_capture"},
+        ),
+        RootMcpToolContract(
+            id="development_feedback.operate",
+            title="Operate development feedback",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Triage, accept, reject, discuss, or promote accepted feedback to an owned Dev Ticket route.",
+            input_schema=schema_object(
+                properties={
+                    "feedback_id": {"type": "string"},
+                    "operation": {"type": "string", "enum": ["triage", "accept", "reject", "comment", "promote"]},
+                    "actor": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "body": {"type": "string"},
+                    "classification": {"type": "object"},
+                    "route": {"type": "string", "enum": ["project", "sdk_understanding", "core"]},
+                    "payload": {"type": "object"},
+                    "expected_revision": {"type": "integer", "minimum": 1},
+                },
+                required=["feedback_id", "operation"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.write.feedback",
+            side_effects="write",
+            metadata={"published_by": "plane:adaos_dev", "handler": "development_feedback_operate"},
         ),
         RootMcpToolContract(
             id="dev_ticket.list",
@@ -3703,6 +3792,85 @@ def _development_ticket_sdk():
     return development_tickets
 
 
+def _development_feedback_sdk():
+    from adaos.sdk import development_feedback
+
+    return development_feedback
+
+
+def _handle_development_feedback_list(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    filters = {
+        key: value
+        for key, value in arguments.items()
+        if key in {"status", "category", "source", "blocking", "target_ref", "search", "updated_since", "limit"}
+    }
+    items = _development_feedback_sdk().list_feedback(**filters)
+    return {"items": items, "count": len(items)}
+
+
+def _handle_development_feedback_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    feedback_id = str(arguments.get("feedback_id") or "").strip()
+    if not feedback_id:
+        raise ValueError("feedback_id is required")
+    item = _development_feedback_sdk().get_feedback(feedback_id)
+    if item is None:
+        raise KeyError(feedback_id)
+    return {"feedback": item}
+
+
+def _handle_development_feedback_capture(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    summary = str(request.pop("summary", "") or "").strip()
+    if not summary:
+        raise ValueError("summary is required")
+    request.setdefault("actor", "codex:mcp")
+    if dry_run:
+        return {"would_capture": True, "summary": summary, "request": request}
+    return _development_feedback_sdk().capture_feedback(summary, **request)
+
+
+def _handle_development_feedback_operate(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    feedback_id = str(request.pop("feedback_id", "") or "").strip()
+    operation = str(request.pop("operation", "") or "").strip().lower()
+    if not feedback_id or not operation:
+        raise ValueError("feedback_id and operation are required")
+    request.setdefault("actor", "codex:mcp")
+    if dry_run:
+        return {"would_operate": True, "feedback_id": feedback_id, "operation": operation, "request": request}
+    expected_revision = request.pop("expected_revision", None)
+    if operation == "comment":
+        return {
+            "feedback": _development_feedback_sdk().comment_feedback(
+                feedback_id,
+                str(request.get("body") or ""),
+                actor=request["actor"],
+                expected_revision=expected_revision,
+            )
+        }
+    if operation == "promote":
+        return _development_feedback_sdk().promote_feedback(
+            feedback_id,
+            str(request.get("route") or ""),
+            actor=request["actor"],
+            payload=request.get("payload") if isinstance(request.get("payload"), dict) else {},
+            expected_revision=expected_revision,
+        )
+    statuses = {"triage": "triaged", "accept": "accepted", "reject": "rejected"}
+    if operation not in statuses:
+        raise ValueError(f"unsupported development feedback operation: {operation}")
+    return {
+        "feedback": _development_feedback_sdk().transition_feedback(
+            feedback_id,
+            statuses[operation],
+            actor=request["actor"],
+            reason=str(request.get("reason") or ""),
+            classification=request.get("classification") if isinstance(request.get("classification"), dict) else {},
+            expected_revision=expected_revision,
+        )
+    }
+
+
 def _builder_source_recovery_sdk():
     from adaos.sdk.builder import source_recovery
 
@@ -3929,6 +4097,10 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "builder.get_context": lambda arguments, dry_run=False: _handle_builder_context(arguments, dry_run=dry_run),
     "builder.source_recovery.plan": lambda arguments, dry_run=False: _handle_builder_source_recovery_plan(arguments, dry_run=dry_run),
     "builder.source_recovery.apply": lambda arguments, dry_run=False: _handle_builder_source_recovery_apply(arguments, dry_run=dry_run),
+    "development_feedback.list": lambda arguments, dry_run=False: _handle_development_feedback_list(arguments, dry_run=dry_run),
+    "development_feedback.show": lambda arguments, dry_run=False: _handle_development_feedback_show(arguments, dry_run=dry_run),
+    "development_feedback.capture": lambda arguments, dry_run=False: _handle_development_feedback_capture(arguments, dry_run=dry_run),
+    "development_feedback.operate": lambda arguments, dry_run=False: _handle_development_feedback_operate(arguments, dry_run=dry_run),
     "dev_ticket.list": lambda arguments, dry_run=False: _handle_dev_ticket_list(arguments, dry_run=dry_run),
     "dev_ticket.show": lambda arguments, dry_run=False: _handle_dev_ticket_show(arguments, dry_run=dry_run),
     "dev_ticket.core_backlog": lambda arguments, dry_run=False: _handle_dev_ticket_core_backlog(arguments, dry_run=dry_run),
@@ -4191,6 +4363,8 @@ def _execution_adapter_for_tool(tool_id: str) -> str:
         return "adaos_dev.builder_source_recovery"
     if token.startswith("dev_ticket."):
         return "adaos_dev.dev_ticket_store"
+    if token.startswith("development_feedback."):
+        return "adaos_dev.development_feedback_store"
     if token.startswith("development."):
         return "root.descriptor_registry"
     if token.startswith("operations."):

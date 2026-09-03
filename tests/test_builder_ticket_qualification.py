@@ -75,6 +75,23 @@ def _ticket(summary: str) -> dict:
     }
 
 
+def _prompt_facts(**overrides) -> dict:
+    facts = {
+        "schema": "adaos.builder.prompt_facts.v1",
+        "concepts": ["ui", "data"],
+        "surface_kinds": ["modal"],
+        "operation_kinds": ["read", "command"],
+        "data_planes": ["tool_details"],
+        "effects": ["read_only"],
+        "requires_i18n": False,
+        "requires_access": False,
+        "requires_conversation": False,
+        "requires_lifecycle": False,
+    }
+    facts.update(overrides)
+    return facts
+
+
 def test_local_qualification_maps_plain_language_to_bounded_source(tmp_path: Path) -> None:
     source = _source_tree(tmp_path / "subscription_status_skill")
 
@@ -162,6 +179,7 @@ def test_language_proposal_is_resolved_only_through_authoritative_source_index(
         {
             "schema": LANGUAGE_QUALIFICATION_PROPOSAL_SCHEMA,
             "concepts": ["ui", "data"],
+            "prompt_facts": _prompt_facts(),
             "candidate_paths": [
                 "skills/subscription_status_skill/webui.json",
                 "skills/subscription_status_skill/handlers/main.py",
@@ -194,6 +212,7 @@ def test_language_proposal_rejects_invented_source_path(tmp_path: Path) -> None:
         {
             "schema": LANGUAGE_QUALIFICATION_PROPOSAL_SCHEMA,
             "concepts": ["ui"],
+            "prompt_facts": _prompt_facts(concepts=["ui"]),
             "candidate_paths": [
                 "skills/subscription_status_skill/handlers/invented.py"
             ],
@@ -526,6 +545,7 @@ def test_service_uses_root_accounted_language_qualification_only_after_local_mis
                 {
                     "schema": LANGUAGE_QUALIFICATION_PROPOSAL_SCHEMA,
                     "concepts": ["ui", "data"],
+                    "prompt_facts": _prompt_facts(),
                     "candidate_paths": [
                         "skills/subscription_status_skill/webui.json",
                         "skills/subscription_status_skill/handlers/main.py",
@@ -533,6 +553,18 @@ def test_service_uses_root_accounted_language_qualification_only_after_local_mis
                     "confidence": 0.93,
                     "clarification_question": None,
                     "rationale": "The visible modal and refresh handler are the bounded target.",
+                    "development_feedback": [
+                        {
+                            "category": "ambiguous_contract",
+                            "summary": "The refresh contract does not define stale-value behavior.",
+                            "blocking": False,
+                            "confidence": 0.88,
+                            "impact": ["comprehension"],
+                            "target_refs": ["sdk:subscription.refresh"],
+                            "details": "Two public behaviors are plausible.",
+                            "recommendation": "Declare the last-value policy."
+                        }
+                    ],
                 }
             ),
             "usage": {
@@ -560,6 +592,11 @@ def test_service_uses_root_accounted_language_qualification_only_after_local_mis
     assert calls[0]["request_id"].startswith("builder.language_qualification.")
     updated = result["ticket"]
     assert updated["metadata"]["builder_repair"]["concepts"] == ["data", "ui"]
+    prompt_facts = updated["metadata"]["builder_repair"]["prompt_facts"]
+    assert prompt_facts["concepts"] == ["data", "ui"]
+    assert set(prompt_facts["surface_kinds"]) == {"modal", "ui"}
+    assert {"read", "command"}.issubset(prompt_facts["operation_kinds"])
+    assert "tool_details" in prompt_facts["data_planes"]
     assert updated["metadata"]["builder_language_qualification"]["status"] == "applied"
     assert updated["history"][-1]["kind"] == "builder_language_qualification"
     usage_ref = next(
@@ -569,6 +606,11 @@ def test_service_uses_root_accounted_language_qualification_only_after_local_mis
     )
     assert usage_ref["total_tokens"] == 402
     assert result["autonomous_repair_qualification"]["ready"] is True
+    assert len(result["development_feedback"]) == 1
+    assert result["development_feedback"][0]["source"] == "pre_codex_llm"
+    assert result["development_feedback"][0]["relation_refs"] == [
+        {"type": "dev_ticket", "id": ticket["ticket_id"]}
+    ]
 
 
 def test_service_skips_language_model_when_deterministic_qualification_is_ready(

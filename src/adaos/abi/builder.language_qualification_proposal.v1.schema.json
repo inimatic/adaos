@@ -4,9 +4,65 @@
   "title": "AdaOS Builder Language Qualification Proposal v1",
   "type": "object",
   "additionalProperties": false,
+  "$defs": {
+    "promptFacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "concepts",
+        "surface_kinds",
+        "operation_kinds",
+        "data_planes",
+        "effects",
+        "requires_i18n",
+        "requires_access",
+        "requires_conversation",
+        "requires_lifecycle"
+      ],
+      "properties": {
+        "schema": {"const": "adaos.builder.prompt_facts.v1"},
+        "concepts": {
+          "type": "array",
+          "maxItems": 12,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 80}
+        },
+        "surface_kinds": {
+          "type": "array",
+          "maxItems": 10,
+          "uniqueItems": true,
+          "items": {"enum": ["ui", "page", "modal", "widget", "panel", "view", "scenario", "background", "conversation", "resource"]}
+        },
+        "operation_kinds": {
+          "type": "array",
+          "maxItems": 9,
+          "uniqueItems": true,
+          "items": {"enum": ["read", "create", "update", "delete", "command", "transition", "subscribe", "handoff", "validate"]}
+        },
+        "data_planes": {
+          "type": "array",
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": {"enum": ["yjs", "stream", "tool_details", "skill_local", "resource_provider", "conversation"]}
+        },
+        "effects": {
+          "type": "array",
+          "maxItems": 7,
+          "uniqueItems": true,
+          "items": {"enum": ["read_only", "local_write", "external_io", "device_control", "destructive", "publication", "llm"]}
+        },
+        "requires_i18n": {"type": "boolean"},
+        "requires_access": {"type": "boolean"},
+        "requires_conversation": {"type": "boolean"},
+        "requires_lifecycle": {"type": "boolean"}
+      }
+    }
+  },
   "required": [
     "schema",
     "concepts",
+    "prompt_facts",
     "candidate_paths",
     "confidence",
     "clarification_question",
@@ -24,6 +80,9 @@
       "items": {
         "enum": ["ui", "data", "crud", "subnet", "validation"]
       }
+    },
+    "prompt_facts": {
+      "$ref": "#/$defs/promptFacts"
     },
     "candidate_paths": {
       "type": "array",
@@ -49,6 +108,31 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 500
+    },
+    "development_feedback": {
+      "type": "array",
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["category", "summary", "blocking", "confidence", "impact", "target_refs", "details", "recommendation"],
+        "properties": {
+          "category": {"enum": ["missing_capability", "ambiguous_contract", "conflicting_contract", "inefficient_contract", "insufficient_context", "observability_gap", "validation_gap", "policy_block"]},
+          "summary": {"type": "string", "minLength": 3, "maxLength": 1000},
+          "blocking": {"type": "boolean"},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "impact": {
+            "type": "array", "maxItems": 8, "uniqueItems": true,
+            "items": {"enum": ["blocker", "correctness", "reliability", "efficiency", "generalization", "comprehension", "observability", "policy"]}
+          },
+          "target_refs": {
+            "type": "array", "maxItems": 20, "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]*:.+$", "maxLength": 500}
+          },
+          "details": {"type": "string", "maxLength": 3000},
+          "recommendation": {"type": "string", "maxLength": 2000}
+        }
+      }
     }
   }
 }
