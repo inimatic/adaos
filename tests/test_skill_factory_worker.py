@@ -5110,6 +5110,82 @@ def test_worker_ignores_budget_stopped_continuation_without_source_changes(
     assert json.loads(current_file.read_text(encoding="utf-8"))["value"] == "baseline"
 
 
+def test_worker_discards_budget_candidate_outside_exact_repair_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    source_task_id = "task.outside-envelope"
+    source_run = worker.runs_root / source_task_id
+    previous_workspace = source_run / "workspace"
+    allowed = previous_workspace / "skills" / "demo" / "webui.json"
+    allowed.parent.mkdir(parents=True)
+    allowed.write_text('{"value":"baseline"}', encoding="utf-8")
+    worker._init_git_workspace(previous_workspace, "realize/source")
+    proposal = previous_workspace / "docs" / "requirements" / "core_request.md"
+    proposal.parent.mkdir(parents=True)
+    proposal.write_text("SDK proposal", encoding="utf-8")
+    previous_assignment = {
+        "task_id": source_task_id,
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {"source_snapshot": {"digest": "sha256:same"}},
+    }
+    (source_run / "input").mkdir(parents=True)
+    (source_run / "input" / "assignment.json").write_text(
+        json.dumps(previous_assignment),
+        encoding="utf-8",
+    )
+    failure_id = "failure.outside-envelope"
+    monkeypatch.setattr(
+        SkillFactoryService,
+        "read_task",
+        lambda _self, task_id: {
+            "task_id": task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": failure_id,
+                    "message": "Codex token budget exceeded: observed 20 of 10 tokens.",
+                }
+            ],
+        },
+    )
+    workspace = tmp_path / "current"
+    current_file = workspace / "skills" / "demo" / "webui.json"
+    current_file.parent.mkdir(parents=True)
+    current_file.write_text('{"value":"baseline"}', encoding="utf-8")
+    worker._init_git_workspace(workspace, "realize/current")
+    assignment = {
+        "task_id": "task.current",
+        "target": {"type": "skill", "id": "demo"},
+        "constraints": {
+            "mode": "dev_ticket_repair",
+            "exact_changed_paths": ["skills/demo/webui.json"],
+        },
+        "forge": {"source_snapshot": {"digest": "sha256:same"}},
+        "realize_request": {
+            "artifacts": {
+                "continuation_checkpoint": {
+                    "mode": "validate_preserved_candidate",
+                    "source_task_id": source_task_id,
+                    "failure_id": failure_id,
+                }
+            }
+        },
+    }
+
+    restored = worker._restore_continuation_candidate(assignment, workspace)
+
+    assert restored is None
+    assert not (workspace / "docs").exists()
+
+
 def test_codex_executor_discovers_vscode_bundled_cli(
     monkeypatch, tmp_path: Path
 ) -> None:

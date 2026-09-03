@@ -3704,11 +3704,22 @@ class LocalSkillFactoryWorker:
             # continue with the newly submitted bounded turn instead of
             # converting a recoverable budget stop into another failed task.
             return None
-        self._validate_changed_paths(
-            assignment,
-            changed_paths,
-            workspace=previous_workspace,
-        )
+        try:
+            self._validate_changed_paths(
+                assignment,
+                changed_paths,
+                workspace=previous_workspace,
+            )
+        except ValueError as exc:
+            if any(
+                marker in str(exc)
+                for marker in (
+                    "changed paths outside the exact repair files:",
+                    "changed paths outside the task scope:",
+                )
+            ):
+                return None
+            raise
         workspace_root = workspace.resolve()
         for changed_path in changed_paths:
             parts = [part for part in changed_path.replace("\\", "/").split("/") if part]
@@ -3889,7 +3900,7 @@ When `scenarios/{target_id}/.builder_current_publication` exists, treat it as th
 
 This is a bounded Dev Ticket repair, not a full project implementation pass. Treat the ticket summary, target_scope, evidence_refs and governed Issue acceptance as the complete repair scope. Prefer the smallest code or data change that satisfies the ticket and proves it with focused validation. Leave unrelated UX, manifests, versions, generated descriptors, and source layout unchanged.
 
-Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.json`, `webui.json`, `scenario.yaml`, or `skill.yaml` unless the ticket explicitly requires that manifest change. It is acceptable for a Dev Ticket repair to leave manifests untouched when the fix is in handlers, tests, resource data, comments, or scoped UI text. If the requested result needs core/API/SDK support that is unavailable to this project, stop with a blocker explanation and propose the required core/API/SDK Dev Ticket instead of patching around the limitation.
+Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.json`, `webui.json`, `scenario.yaml`, or `skill.yaml` unless the ticket explicitly requires that manifest change. It is acceptable for a Dev Ticket repair to leave manifests untouched when the fix is in handlers, tests, resource data, comments, or scoped UI text. If the requested result needs core/API/SDK support that is unavailable to this project, stop with a blocker explanation and propose the required core/API/SDK Dev Ticket instead of patching around the limitation. Do not represent that proposal by creating a documentation, issue, or TODO file; return it only in the final response so the trusted orchestrator can create and link the governed Core Dev Ticket.
 """ if is_dev_ticket_repair else ""
         repair_profile = str(constraints.get("repair_profile") or "").strip()
         surgical_ui = is_dev_ticket_repair and repair_profile == "surgical_ui"
