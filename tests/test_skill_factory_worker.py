@@ -3466,11 +3466,11 @@ def test_codex_prompt_budget_blocks_known_provider_floors_before_launch() -> Non
     assert check["prompt_token_estimate"] == 1_207
     assert check["estimated_first_turn"] == {
         "primary_tokens": 5_508,
-        "billable_tokens": 40_000,
+        "billable_tokens": 176_000,
         "fresh_input_tokens": 5_508,
-        "provider_input_tokens": 40_000,
+        "provider_input_tokens": 176_000,
         "required_primary_tokens": 6_532,
-        "required_billable_tokens": 41_024,
+        "required_billable_tokens": 177_024,
     }
     assert check["blocked_reasons"] == [
         "primary_budget_below_estimated_first_turn",
@@ -3485,7 +3485,7 @@ def test_codex_prompt_budget_admits_bounded_cached_turn() -> None:
                 "execution_budget": {
                     "source": "test",
                     "max_model_tokens": 8_000,
-                    "max_billable_tokens": 64_000,
+                    "max_billable_tokens": 200_000,
                     "token_budget_metric": "fresh_plus_output",
                 }
             }
@@ -3497,7 +3497,7 @@ def test_codex_prompt_budget_admits_bounded_cached_turn() -> None:
     assert check["status"] == "ok"
     assert check["blocked_reasons"] == []
     assert check["estimated_first_turn"]["required_primary_tokens"] == 6_532
-    assert check["estimated_first_turn"]["required_billable_tokens"] == 41_024
+    assert check["estimated_first_turn"]["required_billable_tokens"] == 177_024
 
 
 def test_codex_live_budget_estimate_counts_growing_tool_context(tmp_path: Path) -> None:
@@ -3530,7 +3530,7 @@ def test_codex_live_budget_estimate_counts_growing_tool_context(tmp_path: Path) 
     assert usage["tool_rounds"] == 4
     assert usage["model_tokens"] > 12_000
     assert usage["cached_input_tokens"] > 0
-    assert usage["provider_context_floor_tokens"] == 112_000
+    assert usage["provider_context_floor_tokens"] == 208_000
     assert usage["fresh_context_floor_tokens"] == 12_000
     assert usage["estimated_fresh_input_tokens"] == (
         usage["input_tokens"] - usage["cached_input_tokens"]
@@ -3580,11 +3580,11 @@ def test_codex_live_budget_groups_parallel_tools_into_model_rounds(
         live_estimate=usage,
         metric="fresh_plus_output",
         max_tokens=12_000,
-        max_billable_tokens=96_000,
+        max_billable_tokens=200_000,
     )
 
     assert usage["tool_rounds"] == 2
-    assert usage["provider_context_floor_tokens"] == 76_000
+    assert usage["provider_context_floor_tokens"] == 192_000
     assert usage["fresh_context_floor_tokens"] == 8_000
     assert receipt is None
 
@@ -3621,12 +3621,12 @@ def test_codex_live_budget_enforces_primary_and_billable_limits(
         live_estimate=estimate,
         metric="fresh_plus_output",
         max_tokens=12_000,
-        max_billable_tokens=96_000,
+        max_billable_tokens=200_000,
     )
 
     assert receipt is not None
     assert receipt["trigger_metric"] == "fresh_plus_output"
-    assert receipt["observed_billable_tokens"] >= 112_000
+    assert receipt["observed_billable_tokens"] >= 208_000
     assert receipt["exceeded_limits"] == [
         "fresh_plus_output",
         "billable_tokens",

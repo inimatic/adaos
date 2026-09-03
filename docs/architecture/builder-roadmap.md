@@ -2026,6 +2026,14 @@ The selected IDs and documentation anchors are retained in
 the model prompt. Root MCP descriptor search remains an optional evidence
 adapter rather than the owner of initial mini-representation formation.
 
+Economic preflight calibration, 2026-09-03: a real local Codex repair measured
+185,106 input tokens with 173,824 cached input across two tool rounds. Builder
+now keeps the marginal `fresh_plus_output` ceiling independent while deriving
+at least a 200,000-token provider-billable ceiling when none was explicitly
+declared. The worker estimates a 176,000-token provider baseline plus bounded
+round growth; an explicit lower billable ceiling remains a strict preflight
+gate rather than being silently raised.
+
 Source recovery verification, 2026-09-02: the local Builder lock at release
 `builder@0.2.55` resolves `scenario:builder` as Project-owned and the three
 companion skills as dependencies. The deterministic preflight blocks automatic

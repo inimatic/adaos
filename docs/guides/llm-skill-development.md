@@ -555,11 +555,14 @@ settings to initial and repair turns. Keep two token limits when the primary
 metric is `fresh_plus_output`: `max_model_tokens` bounds marginal context and
 output, while `max_billable_tokens` bounds the total provider tokens metered by
 Root, including cached input. If the latter is omitted, Builder derives a
-conservative cap from the primary limit. The worker actively terminates a turn
-when a conservative JSONL/tool-round estimate crosses either limit, preserves
-the candidate, and replaces the estimate with provider-reported usage when a
-terminal usage event is available. The live estimate is a safety boundary, not
-an exact billing counter; Root receipts remain authoritative for Subscription.
+conservative cap from the primary limit and a calibrated provider-context
+floor. An explicit lower billable cap remains authoritative and fails
+preflight when it cannot admit the estimated first turn. The worker actively
+terminates a turn when a conservative JSONL/tool-round estimate crosses either
+limit, preserves the candidate, and replaces the estimate with
+provider-reported usage when a terminal usage event is available. The live
+estimate is a safety boundary, not an exact billing counter; Root receipts
+remain authoritative for Subscription.
 
 Keep developer validation independent of the generated skill. The
 `builder.project_validation` capability can validate the exact DEV target,

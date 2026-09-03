@@ -4,6 +4,7 @@ from typing import Any, Mapping
 
 
 DEFAULT_BILLABLE_TOKEN_MULTIPLIER = 8
+DEFAULT_BILLABLE_TOKEN_FLOOR = 200_000
 DEFAULT_PROMPT_TOKEN_MIN_RESERVE = 1_024
 DEFAULT_PROMPT_TOKEN_MAX_RESERVE = 8_192
 
@@ -45,7 +46,10 @@ def execution_billable_token_limit(value: Mapping[str, Any] | None) -> int:
     if model_limit <= 0:
         return 0
     if execution_token_metric(budget) == "fresh_plus_output":
-        return model_limit * DEFAULT_BILLABLE_TOKEN_MULTIPLIER
+        return max(
+            DEFAULT_BILLABLE_TOKEN_FLOOR,
+            model_limit * DEFAULT_BILLABLE_TOKEN_MULTIPLIER,
+        )
     return model_limit
 
 
@@ -74,6 +78,7 @@ def with_effective_billable_token_limit(
 
 __all__ = [
     "DEFAULT_BILLABLE_TOKEN_MULTIPLIER",
+    "DEFAULT_BILLABLE_TOKEN_FLOOR",
     "DEFAULT_PROMPT_TOKEN_MAX_RESERVE",
     "DEFAULT_PROMPT_TOKEN_MIN_RESERVE",
     "execution_billable_token_limit",

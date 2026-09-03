@@ -121,7 +121,7 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["status"] == "completed"
     assert status["session"]["source_prototype_version"] == "0.1.0"
     assert status["automation"]["source_prototype_version"] == "0.1.0"
-    assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.14.0"
+    assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.15.0"
     assert status["session"]["created_artifacts"][0]["kind"] == "skill"
     assert status["session"]["created_artifacts"][0]["name"] == "recipes_skill"
     task = next(
@@ -1359,7 +1359,7 @@ def test_automation_budget_projection_uses_fresh_plus_output_metric(tmp_path: Pa
     assert observed["budget_tokens"] == 6_835
     assert projected["budget_usage"]["status"] == "within_budget"
     assert projected["budget_usage"]["overrun_tokens"] == 0
-    assert projected["budget_usage"]["billable_limit_tokens"] == 96_000
+    assert projected["budget_usage"]["billable_limit_tokens"] == 200_000
     assert projected["budget_usage"]["billable_status"] == "within_budget"
 
 

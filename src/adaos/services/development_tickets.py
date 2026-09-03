@@ -12,6 +12,7 @@ from typing import Any, Mapping, Sequence
 
 from jsonschema import Draft202012Validator
 
+from adaos.domain.development_budget import execution_billable_token_limit
 from adaos.sdk.core.decorators import subscribe
 from adaos.domain.development_escalations import (
     CORE_IMPACT_CLASSES,
@@ -1068,7 +1069,12 @@ def _autonomous_repair_budget(
         "source": source,
         "max_tokens": max_tokens,
         "token_budget_metric": "fresh_plus_output",
-        "max_billable_tokens": max_tokens * 8,
+        "max_billable_tokens": execution_billable_token_limit(
+            {
+                "max_tokens": max_tokens,
+                "token_budget_metric": "fresh_plus_output",
+            }
+        ),
         "max_wall_seconds": max_wall_seconds,
     }
 
@@ -2582,7 +2588,10 @@ class DevelopmentTicketService:
             "token_budget_metric": "fresh_plus_output",
             "max_wall_seconds": min(1800, 720 + 180 * len(tickets)),
         }
-        budget.setdefault("max_billable_tokens", int(budget.get("max_tokens") or 0) * 8)
+        budget.setdefault(
+            "max_billable_tokens",
+            execution_billable_token_limit(budget),
+        )
         repair_hints = {
             "profile": "project_batch",
             "change_summary": "\n".join(
