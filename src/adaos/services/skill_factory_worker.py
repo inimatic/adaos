@@ -1453,9 +1453,13 @@ def _root_mcp_profile_from_assignment(
     task_scoped = bool(task_token and task_endpoint)
     task_url = task_endpoint
     if task_scoped and task_endpoint.startswith("/"):
-        parsed_root = urlparse(root_url)
-        if parsed_root.scheme in {"http", "https"} and parsed_root.netloc:
-            task_url = f"{parsed_root.scheme}://{parsed_root.netloc}{task_endpoint}"
+        local_base = _local_runtime_base_url()
+        if local_base:
+            task_url = f"{local_base}{task_endpoint}"
+        else:
+            parsed_root = urlparse(root_url)
+            if parsed_root.scheme in {"http", "https"} and parsed_root.netloc:
+                task_url = f"{parsed_root.scheme}://{parsed_root.netloc}{task_endpoint}"
     url = _resolve_mcp_http_url(
         task_url if task_scoped else root_url
     )

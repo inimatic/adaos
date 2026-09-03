@@ -2971,6 +2971,11 @@ def test_task_lease_overrides_generic_root_mcp_credential(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("ADAOS_ROOT_MCP_AUTH", "generic-root-secret")
+    monkeypatch.setattr(
+        worker_module,
+        "load_config",
+        lambda: SimpleNamespace(local_api_url="http://127.0.0.1:8777"),
+    )
     assignment = {
         "task_id": "task.scoped-lease",
         "mcp": {
@@ -2994,7 +2999,9 @@ def test_task_lease_overrides_generic_root_mcp_credential(
     )
 
     assert profile is not None
-    assert profile["url"].endswith("/v1/root/mcp/task/task.scoped-lease")
+    assert profile["url"] == (
+        "http://127.0.0.1:8777/v1/root/mcp/task/task.scoped-lease"
+    )
     assert profile["server_name"] == "adaos_task_root"
     assert profile["bearer_token_env_var"] == "ADAOS_TASK_MCP_AUTH_TASK_SCOPED_LEASE"
     assert profile["_bearer_token_value"] == "task-lease-secret"
