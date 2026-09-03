@@ -37,6 +37,7 @@ from adaos.services.skill_factory_worker import (
     _codex_prompt_budget_check,
     _context_packet_prompt_projection,
     _loads_strict_json,
+    _persisted_descriptor_working_set_evidence,
     _root_mcp_profile_from_assignment,
     _task_mcp_descriptor_working_set,
     _task_mcp_validation_evidence,
@@ -466,6 +467,91 @@ def test_task_mcp_descriptor_working_set_prefetches_search_and_exact_items(
         "get_descriptor_item",
     ]
     assert calls[0]["params"]["arguments"]["limit"] == 4
+
+
+def test_persisted_descriptor_working_set_evidence_is_reusable(
+    tmp_path: Path,
+) -> None:
+    task_id = "task.prefetched"
+    evidence = {
+        "schema": "adaos.skill_factory.root_mcp_evidence.v1",
+        "status": "passed",
+        "source": "worker_descriptor_prefetch",
+        "server": "adaos_task_root",
+        "task_id": task_id,
+        "lease_id": "lease.test",
+        "bound_target_id": "hub:test",
+        "calls": [
+            {
+                "tool": "search_descriptors",
+                "result_digest": "sha256:" + "1" * 64,
+            },
+            {
+                "tool": "get_descriptor_item",
+                "result_digest": "sha256:" + "2" * 64,
+            },
+        ],
+    }
+    working_set = {
+        "schema": "adaos.builder.descriptor_working_set.v1",
+        "query_digest": "sha256:" + "3" * 64,
+        "headers": [],
+        "details": [],
+        "evidence": evidence,
+    }
+    encoded = json.dumps(
+        working_set,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    working_set["digest"] = "sha256:" + hashlib.sha256(
+        encoded.encode("utf-8")
+    ).hexdigest()
+    path = tmp_path / "descriptor-working-set.json"
+    path.write_text(json.dumps(working_set), encoding="utf-8")
+
+    restored = _persisted_descriptor_working_set_evidence(
+        path,
+        source_task_id=task_id,
+        root_mcp={
+            "enabled": True,
+            "server_name": "adaos_task_root",
+            "bound_target_id": "hub:test",
+            "enabled_tools": ["search_descriptors", "get_descriptor_item"],
+        },
+    )
+
+    assert restored is not None
+    assert restored["source_task_id"] == task_id
+    assert restored["working_set_digest"] == working_set["digest"]
+
+
+def test_persisted_descriptor_working_set_rejects_tampering(tmp_path: Path) -> None:
+    path = tmp_path / "descriptor-working-set.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.builder.descriptor_working_set.v1",
+                "headers": [{"item_id": "tampered"}],
+                "evidence": {
+                    "schema": "adaos.skill_factory.root_mcp_evidence.v1",
+                    "status": "passed",
+                },
+                "digest": "sha256:" + "0" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        _persisted_descriptor_working_set_evidence(
+            path,
+            source_task_id="task.prefetched",
+            root_mcp={"enabled": True, "server_name": "adaos_task_root"},
+        )
+        is None
+    )
 
 
 def test_codex_failure_detail_prefers_structured_jsonl_errors() -> None:

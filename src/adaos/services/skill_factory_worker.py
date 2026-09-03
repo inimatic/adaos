@@ -564,6 +564,91 @@ def _task_mcp_descriptor_working_set(
     return working_set
 
 
+def _persisted_descriptor_working_set_evidence(
+    path: Path,
+    *,
+    source_task_id: str,
+    root_mcp: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Validate and reuse trusted descriptor prefetch evidence across a continuation."""
+
+    profile = dict(root_mcp or {})
+    if not path.is_file() or not profile or profile.get("enabled") is False:
+        return None
+    try:
+        if path.stat().st_size > DESCRIPTOR_WORKING_SET_MAX_BYTES * 2:
+            return None
+        working_set = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(working_set, Mapping):
+        return None
+    payload = dict(working_set)
+    observed_digest = str(payload.pop("digest", "")).strip()
+    expected_digest = "sha256:" + hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if (
+        working_set.get("schema") != "adaos.builder.descriptor_working_set.v1"
+        or observed_digest != expected_digest
+    ):
+        return None
+    evidence = (
+        dict(working_set.get("evidence"))
+        if isinstance(working_set.get("evidence"), Mapping)
+        else {}
+    )
+    expected_server = str(profile.get("server_name") or "adaos_task_root").strip()
+    expected_target = str(
+        profile.get("bound_target_id") or profile.get("target_id") or ""
+    ).strip()
+    allowed_tools = {
+        str(item).strip()
+        for item in profile.get("enabled_tools") or []
+        if str(item).strip()
+    }
+    calls = [
+        dict(item)
+        for item in evidence.get("calls") or []
+        if isinstance(item, Mapping)
+    ]
+    if (
+        evidence.get("schema") != "adaos.skill_factory.root_mcp_evidence.v1"
+        or evidence.get("status") != "passed"
+        or evidence.get("source") != "worker_descriptor_prefetch"
+        or str(evidence.get("server") or "").strip() != expected_server
+        or str(evidence.get("task_id") or "").strip() != source_task_id
+        or (
+            expected_target
+            and str(evidence.get("bound_target_id") or "").strip()
+            != expected_target
+        )
+        or not calls
+    ):
+        return None
+    for call in calls:
+        tool = str(call.get("tool") or "").strip()
+        digest = str(call.get("result_digest") or "").strip()
+        if (
+            not tool
+            or (allowed_tools and tool not in allowed_tools)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
+        ):
+            return None
+    return {
+        **evidence,
+        "source_task_id": source_task_id,
+        "working_set_digest": observed_digest,
+        "working_set_path": str(path),
+        "restored_at": _now_iso(),
+    }
+
+
 def _codex_jsonl_root_mcp_evidence(
     path: Path,
     *,
@@ -4254,20 +4339,26 @@ class LocalSkillFactoryWorker:
                 previous_assignment,
                 include_private_token=True,
             )
-            try:
-                root_mcp_evidence = _codex_jsonl_root_mcp_evidence(
-                    source_run / "output" / "codex-live.jsonl",
-                    assignment=assignment,
-                    root_mcp=previous_root_mcp,
-                )
-            except ValueError:
-                root_mcp_evidence = _task_mcp_validation_evidence(
-                    assignment=assignment,
-                    root_mcp=_root_mcp_profile_from_assignment(
-                        assignment,
-                        include_private_token=True,
-                    ),
-                )
+            root_mcp_evidence = _persisted_descriptor_working_set_evidence(
+                source_run / "input" / "descriptor-working-set.json",
+                source_task_id=source_task_id,
+                root_mcp=previous_root_mcp,
+            )
+            if root_mcp_evidence is None:
+                try:
+                    root_mcp_evidence = _codex_jsonl_root_mcp_evidence(
+                        source_run / "output" / "codex-live.jsonl",
+                        assignment=assignment,
+                        root_mcp=previous_root_mcp,
+                    )
+                except ValueError:
+                    root_mcp_evidence = _task_mcp_validation_evidence(
+                        assignment=assignment,
+                        root_mcp=_root_mcp_profile_from_assignment(
+                            assignment,
+                            include_private_token=True,
+                        ),
+                    )
         return {
             "schema": "adaos.skill_factory.continuation_restore.v1",
             "mode": "validate_preserved_candidate",
