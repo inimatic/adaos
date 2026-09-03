@@ -32,6 +32,12 @@ _IGNORED_FILES = {"prompt_state.json"}
 _MAX_SOURCE_BYTES = 512 * 1024
 _MAX_INDEXED_FILES = 160
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u0400-\u04ff]+")
+_VALIDATION_FINDING_RE = re.compile(
+    r"(?P<path>(?:skills|scenarios)/[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)"
+    r":\s+(?P<code>[A-Za-z0-9_.-]+):"
+)
+_DATA_ROUTE_LOCATION_RE = re.compile(r"data_routes\[(?P<index>\d+)]\.budget")
+_DEFAULT_BOUNDED_ROUTE_PAYLOAD_BYTES = 65_536
 _STOP_WORDS = {
     "and",
     "for",
@@ -347,6 +353,200 @@ def _evidence_file_paths(ticket: Mapping[str, Any]) -> set[str]:
     return paths
 
 
+def _validation_findings(ticket: Mapping[str, Any]) -> list[dict[str, Any]]:
+    messages: list[str] = []
+    metadata = ticket.get("metadata") if isinstance(ticket.get("metadata"), Mapping) else {}
+    for value in (metadata.get("error"), ticket.get("summary")):
+        text = _text(value)
+        if text and text not in messages:
+            messages.append(text)
+    for raw in ticket.get("evidence_refs") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        for value in (raw.get("error"), raw.get("message")):
+            text = _text(value)
+            if text and text not in messages:
+                messages.append(text)
+    findings: list[dict[str, Any]] = []
+    for message in messages:
+        for match in _VALIDATION_FINDING_RE.finditer(message.replace("\\", "/")):
+            finding = {
+                "path": match.group("path").strip("/"),
+                "code": match.group("code"),
+                "message": message,
+            }
+            if finding not in findings:
+                findings.append(finding)
+    return findings
+
+
+def _bounded_route_budget_edit(
+    *,
+    source_root: Path,
+    entry: Mapping[str, Any],
+    finding: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    if _text(finding.get("code")) != "data_routes.budget_missing":
+        return None
+    location = _DATA_ROUTE_LOCATION_RE.search(_text(finding.get("message")))
+    if location is None:
+        return None
+    route_index = int(location.group("index"))
+    relative_path = _text(entry.get("relative_path"))
+    source_path = (source_root / relative_path).resolve()
+    try:
+        source_path.relative_to(source_root.resolve())
+        original = source_path.read_text(encoding="utf-8")
+        document = yaml.safe_load(original)
+    except (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError):
+        return None
+    routes = document.get("data_routes") if isinstance(document, Mapping) else None
+    if (
+        not isinstance(routes, list)
+        or route_index >= len(routes)
+        or not isinstance(routes[route_index], Mapping)
+        or isinstance(routes[route_index].get("budget"), Mapping)
+    ):
+        return None
+
+    lines = original.splitlines(keepends=True)
+    data_line = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if re.match(r"^(?P<indent>\s*)data_routes:\s*(?:#.*)?(?:\r?\n)?$", line)
+        ),
+        None,
+    )
+    if data_line is None:
+        return None
+    data_indent = len(lines[data_line]) - len(lines[data_line].lstrip())
+    item_starts = [
+        index
+        for index in range(data_line + 1, len(lines))
+        if re.match(rf"^\s{{{data_indent}}}-\s", lines[index])
+    ]
+    if route_index >= len(item_starts):
+        return None
+    start = item_starts[route_index]
+    next_item = item_starts[route_index + 1] if route_index + 1 < len(item_starts) else len(lines)
+    for index in range(start + 1, next_item):
+        line = lines[index]
+        stripped = line.lstrip()
+        indent = len(line) - len(stripped)
+        if stripped.strip() and indent <= data_indent and not stripped.startswith("-"):
+            next_item = index
+            break
+    block = "".join(lines[start:next_item])
+    if not block or original.count(block) != 1:
+        return None
+    newline = "\r\n" if "\r\n" in original else "\n"
+    child_indent = " " * (data_indent + 2)
+    insertion = (
+        f"{child_indent}budget:{newline}"
+        f"{child_indent}  max_payload_bytes: {_DEFAULT_BOUNDED_ROUTE_PAYLOAD_BYTES}{newline}"
+    )
+    block_lines = lines[start:next_item]
+    guard_offset = next(
+        (
+            index
+            for index, line in enumerate(block_lines)
+            if re.match(rf"^\s{{{data_indent + 2}}}guard_visibility:\s*", line)
+        ),
+        len(block_lines),
+    )
+    replacement = "".join(
+        [*block_lines[:guard_offset], insertion, *block_lines[guard_offset:]]
+    )
+    return {
+        "id": f"add-bounded-budget-route-{route_index}",
+        "op": "replace_text",
+        "path": _text(entry.get("workspace_path")),
+        "old": block,
+        "new": replacement,
+        "expected_count": 1,
+    }
+
+
+def _validation_gate_qualification(
+    ticket: Mapping[str, Any],
+    *,
+    source_root: Path,
+    source_index: Mapping[str, Any],
+    entries: list[Mapping[str, Any]],
+    object_type: str,
+    object_id: str,
+) -> dict[str, Any] | None:
+    findings = _validation_findings(ticket)
+    if not findings:
+        return None
+    by_path = {_text(entry.get("workspace_path")): entry for entry in entries}
+    matched = [(finding, by_path.get(_text(finding.get("path")))) for finding in findings]
+    matched = [(finding, entry) for finding, entry in matched if entry is not None]
+    if not matched:
+        return None
+    selected = list(dict.fromkeys(_text(entry.get("workspace_path")) for _, entry in matched))
+    selected_entries = [by_path[path] for path in selected]
+    operations = [
+        operation
+        for finding, entry in matched
+        for operation in [
+            _bounded_route_budget_edit(
+                source_root=source_root,
+                entry=entry,
+                finding=finding,
+            )
+        ]
+        if operation is not None
+    ]
+    summary = _text(ticket.get("summary"))
+    codes = list(dict.fromkeys(_text(finding.get("code")) for finding, _ in matched))
+    repair: dict[str, Any] = {
+        "profile": "project_batch",
+        "change_summary": summary[:1000],
+        "target_files": selected,
+        "target_refs": [f"file:{path}" for path in selected],
+        "acceptance_checks": [
+            *[f"Clear validation finding: {code}" for code in codes],
+            f"Validate {object_type}:{object_id} after the bounded change.",
+        ],
+        "max_changed_files": len(selected),
+        "requires_root_mcp": False,
+        "target_object_type": object_type,
+        "target_object_id": object_id,
+        "source_preconditions": [
+            {
+                "path": _text(entry.get("workspace_path")),
+                "sha256": _text(entry.get("sha256")),
+                "size": int(entry.get("size") or 0),
+            }
+            for entry in selected_entries
+        ],
+    }
+    if len(operations) == len(matched):
+        repair["structured_edits"] = {
+            "schema": "adaos.builder.structured_edit_set.v1",
+            "operations": operations,
+        }
+    return {
+        "schema": QUALIFICATION_CANDIDATE_SCHEMA,
+        "status": "ready",
+        "ready": True,
+        "confidence": "high",
+        "model_call_expected": False,
+        "estimated_model_tokens": 0 if operations else None,
+        "recommended_next": "apply_local_qualification",
+        "reason": "exact validation findings were mapped to authoritative DEV source",
+        "concepts": ["validation"],
+        "validation_findings": [
+            {"path": _text(finding.get("path")), "code": _text(finding.get("code"))}
+            for finding, _ in matched
+        ],
+        "builder_repair": repair,
+        "source_index": _compact_source_index(source_index, selected_entries),
+    }
+
+
 def _rank_entries(
     entries: list[Mapping[str, Any]],
     *,
@@ -452,6 +652,17 @@ def prepare_repair_qualification(
             "reason": source_index.get("reason") or "development source index is empty",
             "source_index": source_index,
         }
+
+    validation_qualification = _validation_gate_qualification(
+        ticket,
+        source_root=Path(source_root_text).expanduser().resolve(),
+        source_index=source_index,
+        entries=entries,
+        object_type=object_type,
+        object_id=object_id,
+    )
+    if validation_qualification is not None:
+        return validation_qualification
 
     summary = _text(ticket.get("summary"))
     summary_tokens = _tokens(summary)

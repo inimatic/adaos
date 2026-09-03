@@ -40,6 +40,23 @@ def _source_tree(root: Path) -> Path:
     return root
 
 
+def _manifest_source_tree(root: Path) -> Path:
+    root.mkdir(parents=True)
+    (root / "skill.yaml").write_text(
+        """name: demo_skill
+data_routes:
+- surface: tool:dataset_export
+  route: skill-local
+  first_paint: explicit tool response only
+  recovery: rerun export
+  guard_visibility:
+    degraded_state: export reports failure
+""",
+        encoding="utf-8",
+    )
+    return root
+
+
 def _ticket(summary: str) -> dict:
     return {
         "ticket_id": "dticket.test",
@@ -120,6 +137,50 @@ def test_local_qualification_routes_public_sdk_usage_to_subnet_data(tmp_path: Pa
     assert result["builder_repair"]["target_refs"][0] == (
         "modal:subscription_status_modal"
     )
+
+
+def test_validation_gate_qualification_targets_exact_manifest_with_structured_edit(
+    tmp_path: Path,
+) -> None:
+    source = _manifest_source_tree(tmp_path / "demo_skill")
+    ticket = {
+        "ticket_id": "dticket.validation",
+        "summary": "Skill demo_skill failed the validation publication gate",
+        "component_ref": "skill:demo_skill",
+        "target_scope": {"type": "skill", "id": "demo_skill"},
+        "metadata": {
+            "error": (
+                "RuntimeError: Generated project validation failed: "
+                "skills/demo_skill/skill.yaml: data_routes.budget_missing: "
+                "browser data route must declare a bounded budget "
+                "(skill.yaml:data_routes[0].budget)"
+            )
+        },
+        "evidence_refs": [],
+    }
+
+    result = prepare_repair_qualification(
+        ticket,
+        development_source={"status": "source_available", "dev_source_path": str(source)},
+        object_type="skill",
+        object_id="demo_skill",
+    )
+
+    assert result["ready"] is True
+    assert result["confidence"] == "high"
+    assert result["validation_findings"] == [
+        {
+            "path": "skills/demo_skill/skill.yaml",
+            "code": "data_routes.budget_missing",
+        }
+    ]
+    repair = result["builder_repair"]
+    assert repair["target_files"] == ["skills/demo_skill/skill.yaml"]
+    assert repair["requires_root_mcp"] is False
+    operation = repair["structured_edits"]["operations"][0]
+    assert operation["path"] == "skills/demo_skill/skill.yaml"
+    assert "max_payload_bytes: 65536" in operation["new"]
+    assert "max_payload_bytes" not in operation["old"]
 
 
 def test_service_can_apply_high_confidence_local_qualification(
