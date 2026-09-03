@@ -60,6 +60,11 @@ from adaos.services.artifact_pipeline import (
     compose_artifact_trust_runtime,
 )
 from adaos.services.artifact_pipeline.storage import atomic_write_bytes, atomic_write_json
+from adaos.services.artifact_pipeline.project_build import (
+    DEV_PROJECT_RELEASE_BUILDER,
+    project_release_build_evidence,
+    project_source_snapshot,
+)
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -2441,11 +2446,33 @@ class RootDeveloperService:
             raise RootServiceError(
                 "Project candidate source revision differs from the confirmed component checkpoint"
             )
+        component_root = source_workspace / (
+            "skills" if source_kind == "skill" else "scenarios"
+        ) / source_name
+        publication.verify_pushed_source(pushed, component_root)
         evidence = dict(validation_evidence or {})
         evidence.setdefault("status", "passed")
         evidence.setdefault("validator", "adaos.project.preflight")
         evidence.setdefault("checkpoint_source_revision", checkpoint_revision)
         evidence.setdefault("checkpoint_component_ref", f"{source_kind}:{source_name}")
+        source_snapshot = project_source_snapshot(
+            project_dir=project_dir,
+            workspace_root=source_workspace,
+        )
+        project_source_revision = str(source_snapshot["source_revision"])
+        node_settings = getattr(cfg, "node_settings", None)
+        subnet_id = str(getattr(cfg, "subnet_id", "") or "local").strip()
+        node_id = str(
+            getattr(node_settings, "id", "")
+            or getattr(cfg, "node_id", "")
+            or "local"
+        ).strip()
+        release_source_ref = ArtifactSourceRef(
+            forge="content-addressed-dev",
+            repository=f"adaos-dev:{subnet_id}:{node_id}",
+            revision=project_source_revision,
+            path_scope=(f"projects/{project_id}/",),
+        )
         prepared = publication.prepare_project_candidate(
             project_id=project_id,
             project_dir=project_dir,
@@ -2454,6 +2481,13 @@ class RootDeveloperService:
             # in the project builder. Promotion must retain the exact pushed
             # component ref so Root can verify the immutable node source tree.
             source_ref=pushed.source_ref,
+            release_source_ref=release_source_ref,
+            release_validation_evidence=(
+                project_release_build_evidence(
+                    project_source_revision,
+                    builder=DEV_PROJECT_RELEASE_BUILDER,
+                ),
+            ),
             source_tree=pushed.source_tree,
             change_ids=change_ids,
             validation_evidence=evidence,

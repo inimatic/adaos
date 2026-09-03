@@ -110,6 +110,10 @@ def test_project_candidate_keeps_exact_pushed_component_source_ref(
             assert (kind, name) == ("skill", "media_skill")
             return SimpleNamespace(source_ref=exact_ref, source_tree="b" * 40)
 
+        def verify_pushed_source(self, pushed, source: Path) -> None:
+            assert pushed.source_ref == exact_ref
+            assert source == workspace / "skills" / "media_skill"
+
         def prepare_project_candidate(self, **kwargs):
             captured.update(kwargs)
             return SimpleNamespace(
@@ -125,6 +129,10 @@ def test_project_candidate_keeps_exact_pushed_component_source_ref(
     monkeypatch.setattr(service, "_load_config", lambda: object())
     monkeypatch.setattr(service, "_workspace_root", lambda _cfg: workspace)
     monkeypatch.setattr(service, "_artifact_publication_service", lambda _cfg: _Publication())
+    monkeypatch.setattr(
+        "adaos.services.root.service.project_source_snapshot",
+        lambda **_kwargs: {"source_revision": "sha256:" + "c" * 64},
+    )
 
     result = service.prepare_project_candidate(
         "media",
@@ -139,6 +147,9 @@ def test_project_candidate_keeps_exact_pushed_component_source_ref(
     assert captured["source_ref"].path_scope == (
         "subnets/sn_test/nodes/node_test/skills/media_skill/",
     )
+    assert captured["release_source_ref"].forge == "content-addressed-dev"
+    assert captured["release_source_ref"].path_scope == ("projects/media/",)
+    assert captured["release_validation_evidence"][0]["builder"] == "adaos.dev.project.push"
 
 
 def test_root_init_reports_zone_aware_handshake_timeout(

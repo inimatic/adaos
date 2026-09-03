@@ -39,6 +39,19 @@ class ProjectReleaseBuildError(RuntimeError):
 
 
 _COMPONENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
+DEV_PROJECT_RELEASE_BUILDER = "adaos.dev.project.push"
+
+
+def project_release_build_evidence(
+    source_revision: str,
+    *,
+    builder: str = DEV_PROJECT_RELEASE_BUILDER,
+) -> dict[str, str]:
+    return {
+        "schema": "adaos.artifact.project_release_build_evidence.v1",
+        "source_revision": str(source_revision),
+        "builder": str(builder),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -405,8 +418,10 @@ def build_workspace_project_release(
 
 
 __all__ = [
+    "DEV_PROJECT_RELEASE_BUILDER",
     "ProjectReleaseBuildError",
     "ProjectReleaseBuildResult",
     "build_workspace_project_release",
+    "project_release_build_evidence",
     "project_source_snapshot",
 ]

@@ -12,6 +12,7 @@ from adaos.services.artifact_pipeline.channels import ReleaseRepository
 from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
 from adaos.services.artifact_pipeline.project_build import (
     build_workspace_project_release,
+    project_release_build_evidence,
 )
 
 
@@ -82,11 +83,7 @@ def _build_project_release(
             artifact_root / "release-cache"
         ),
         validation_evidence=(
-            {
-                "schema": "adaos.artifact.project_release_build_evidence.v1",
-                "source_revision": revision,
-                "builder": builder,
-            },
+            project_release_build_evidence(revision, builder=builder),
         ),
     )
     return result.to_dict()

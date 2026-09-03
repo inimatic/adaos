@@ -48,9 +48,7 @@ from adaos.services.artifact_pipeline.channels import (
 from adaos.services.artifact_pipeline.packages import (
     BuiltArtifactPackage,
     ContentAddressedPackageStore,
-    PackageVerificationError,
     build_artifact_package,
-    verify_artifact_package,
 )
 from adaos.services.artifact_pipeline.project_build import (
     build_workspace_project_release,
@@ -370,71 +368,34 @@ class ArtifactPublicationService:
         candidate: CandidateRecord,
         plan: ReleasePlan,
     ) -> ArtifactSourceRef:
+        del plan
         verification_source_ref = candidate.verification_source_ref
-        verification_scope = (
-            verification_source_ref.path_scope
-            if verification_source_ref is not None
-            else ()
-        )
+        if verification_source_ref is None:
+            source_scope = candidate.source_ref.path_scope
+            aggregate_source = bool(
+                len(source_scope) == 1
+                and source_scope[0]
+                .replace("\\", "/")
+                .strip("/")
+                .startswith("projects/")
+            )
+            if aggregate_source:
+                raise PublicationError(
+                    "Project candidate requires an explicit component verification source ref"
+                )
+            return candidate.source_ref
+        verification_scope = verification_source_ref.path_scope
         aggregate_project_ref = bool(
             len(verification_scope) == 1
             and verification_scope[0].replace("\\", "/").strip("/").startswith(
                 "projects/"
             )
         )
-        if verification_source_ref is not None and not aggregate_project_ref:
-            return candidate.verification_source_ref
-
-        for evidence in reversed(candidate.validation_evidence):
-            digest = str(evidence.get("checkpoint_package_digest") or "").strip()
-            if not digest:
-                continue
-            try:
-                checkpoint = verify_artifact_package(
-                    self.package_store.read(digest),
-                    expected_digest=digest,
-                )
-            except (FileNotFoundError, PackageVerificationError, ValueError) as exc:
-                raise PublicationError(
-                    "candidate checkpoint package cannot provide source verification"
-                ) from exc
-            component_ref = str(evidence.get("checkpoint_component_ref") or "").strip()
-            if component_ref and checkpoint.ref.key != component_ref:
-                raise PublicationError(
-                    "candidate checkpoint evidence identifies another component"
-                )
-            release_package = next(
-                (item for item in plan.packages if item.key == checkpoint.ref.key),
-                None,
+        if aggregate_project_ref:
+            raise PublicationError(
+                "Project candidate verification source ref must identify one component"
             )
-            if release_package is None:
-                raise PublicationError(
-                    "candidate checkpoint component is outside the Project release closure"
-                )
-            try:
-                released = verify_artifact_package(
-                    self.package_store.read(release_package.digest),
-                    expected_digest=release_package.digest,
-                )
-            except (FileNotFoundError, PackageVerificationError, ValueError) as exc:
-                raise PublicationError(
-                    "Project release package cannot be matched to checkpoint evidence"
-                ) from exc
-            checkpoint_payload = dict(checkpoint.package_manifest)
-            released_payload = dict(released.package_manifest)
-            checkpoint_payload.pop("source_ref", None)
-            released_payload.pop("source_ref", None)
-            if checkpoint_payload != released_payload:
-                raise PublicationError(
-                    "Project release component differs from its verified checkpoint package"
-                )
-            if checkpoint.ref.source_ref.revision != candidate.source_ref.revision:
-                raise PublicationError(
-                    "candidate checkpoint and Project release revisions differ"
-                )
-            return checkpoint.ref.source_ref
-
-        return verification_source_ref or candidate.source_ref
+        return verification_source_ref
 
     @staticmethod
     def _development_source_manifest(root: Path) -> dict[str, Any]:
@@ -1769,6 +1730,8 @@ class ArtifactPublicationService:
         project_dir: Path,
         source_workspace_root: Path,
         source_ref: ArtifactSourceRef,
+        release_source_ref: ArtifactSourceRef | None = None,
+        release_validation_evidence: tuple[Mapping[str, Any], ...] | None = None,
         change_ids: tuple[str, ...],
         validation_evidence: Mapping[str, Any],
         source_tree: str | None = None,
@@ -1794,11 +1757,15 @@ class ArtifactPublicationService:
         built = build_workspace_project_release(
             project_dir=project_dir,
             workspace_root=source_workspace_root,
-            source_ref=source_ref,
+            source_ref=release_source_ref or source_ref,
             package_store=self.package_store,
             release_repository=self.release_cache,
-            validation_evidence=(dict(validation_evidence),),
-            active_workspace_lock=active_lock,
+            validation_evidence=(
+                tuple(dict(item) for item in release_validation_evidence)
+                if release_validation_evidence is not None
+                else (dict(validation_evidence),)
+            ),
+            active_workspace_lock=None,
         )
         plan = built.plan
         if plan.release.project_id != str(project_id or "").strip():

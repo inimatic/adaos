@@ -24,6 +24,11 @@ from adaos.services.artifact_pipeline import (
     WorkspaceActivationManager,
 )
 from adaos.services.artifact_pipeline import packages as package_module
+from adaos.services.artifact_pipeline.project_build import (
+    build_workspace_project_release,
+    project_release_build_evidence,
+    project_source_snapshot,
+)
 from adaos.services import workflow_authoring
 from adaos.services.builder.governed import builder_change_definition
 
@@ -261,12 +266,35 @@ lifecycle:
         checkpoint.archive_bytes,
         expected_digest=checkpoint.ref.digest,
     )
+    snapshot = project_source_snapshot(
+        project_dir=project_dir,
+        workspace_root=source_workspace,
+    )
+    release_source_ref = ArtifactSourceRef(
+        forge="content-addressed-dev",
+        repository="adaos-dev:sn_test:node_test",
+        revision=str(snapshot["source_revision"]),
+        path_scope=("projects/recipes_project/",),
+    )
+    release_evidence = (
+        project_release_build_evidence(str(snapshot["source_revision"])),
+    )
+    pushed_release = build_workspace_project_release(
+        project_dir=project_dir,
+        workspace_root=source_workspace,
+        source_ref=release_source_ref,
+        package_store=service.package_store,
+        release_repository=service.release_cache,
+        validation_evidence=release_evidence,
+    )
 
     prepared = service.prepare_project_candidate(
         project_id="recipes_project",
         project_dir=project_dir,
         source_workspace_root=source_workspace,
         source_ref=verification_source_ref,
+        release_source_ref=release_source_ref,
+        release_validation_evidence=release_evidence,
         change_ids=("change-project-1",),
         validation_evidence={
             "status": "passed",
@@ -276,6 +304,8 @@ lifecycle:
     )
 
     assert prepared.candidate.project_id == "recipes_project"
+    assert prepared.plan.release.release_digest == pushed_release.plan.release.release_digest
+    assert prepared.candidate.source_ref.forge == "content-addressed-dev"
     assert prepared.candidate.source_ref.path_scope == ("projects/recipes_project/",)
     assert prepared.candidate.verification_source_ref == verification_source_ref
     assert {item.key for item in prepared.plan.release.components} == {
@@ -296,6 +326,8 @@ lifecycle:
         project_dir=project_dir,
         source_workspace_root=source_workspace,
         source_ref=verification_source_ref,
+        release_source_ref=release_source_ref,
+        release_validation_evidence=release_evidence,
         change_ids=("change-project-1",),
         validation_evidence={
             "status": "passed",
@@ -312,20 +344,22 @@ lifecycle:
         verification_source_ref=None,
         trials=(),
     )
-    assert service._candidate_verification_source_ref(
-        legacy_candidate,
-        prepared.plan,
-    ) == verification_source_ref
+    with pytest.raises(PublicationError, match="explicit component verification"):
+        service._candidate_verification_source_ref(
+            legacy_candidate,
+            prepared.plan,
+        )
 
     malformed_project_ref_candidate = replace(
         prepared.candidate,
         verification_source_ref=prepared.candidate.source_ref,
         trials=(),
     )
-    assert service._candidate_verification_source_ref(
-        malformed_project_ref_candidate,
-        prepared.plan,
-    ) == verification_source_ref
+    with pytest.raises(PublicationError, match="must identify one component"):
+        service._candidate_verification_source_ref(
+            malformed_project_ref_candidate,
+            prepared.plan,
+        )
 
     service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
     _promote(service, prepared.candidate.candidate_id)
