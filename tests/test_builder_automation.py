@@ -2036,6 +2036,83 @@ def test_validation_failure_reuses_original_budget_candidate_after_requalificati
     assert checkpoint["continuation_contract"] == continuation_contract
 
 
+def test_mcp_retry_preserves_underlying_validation_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    source_task_id = "task.validation-source"
+    retry_task_id = "task.mcp-retry"
+    source_run = service.runs_root / source_task_id
+    (source_run / "workspace" / ".git").mkdir(parents=True)
+    (source_run / "input").mkdir(parents=True)
+    continuation_contract = automation_module._continuation_contract()
+    (source_run / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {"continuation_contract": continuation_contract}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    retry_run = service.runs_root / retry_task_id
+    (retry_run / "input").mkdir(parents=True)
+    (retry_run / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {
+                        "continuation_checkpoint": {
+                            "mode": "validate_preserved_candidate",
+                            "source_task_id": source_task_id,
+                            "reason": "deterministic_validation_failure",
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    tasks = {
+        source_task_id: {
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.validation",
+                    "message": "Generated project validation failed: data_routes.budget_missing",
+                }
+            ],
+        },
+        retry_task_id: {
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.mcp",
+                    "message": "task-scoped Root MCP validation call failed",
+                }
+            ],
+        },
+    }
+    service.factory = SimpleNamespace(read_task=lambda task_id: tasks[task_id])
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda _run_root: True,
+    )
+
+    checkpoint = service._budget_continuation_checkpoint(
+        {"current_task_id": retry_task_id}
+    )
+
+    assert checkpoint is not None
+    assert checkpoint["source_task_id"] == source_task_id
+    assert checkpoint["failure_id"] == "failure.validation"
+    assert checkpoint["trigger_failure_id"] == "failure.mcp"
+    assert checkpoint["reason"] == "deterministic_validation_failure"
+
+
 def test_project_validation_failure_preserves_candidate_for_structured_repair(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

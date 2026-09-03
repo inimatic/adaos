@@ -3221,14 +3221,30 @@ class BuilderAutomationService:
                     if isinstance(item, Mapping)
                 ]
                 source_failure = source_failures[-1] if source_failures else {}
+                source_failure_message = str(source_failure.get("message") or "")
+                source_reason = str(checkpoint.get("reason") or "").strip()
+                source_is_budget_boundary = (
+                    "Codex token budget exceeded:" in source_failure_message
+                )
+                source_is_validation_boundary = (
+                    source_reason == "deterministic_validation_failure"
+                    and "Generated project validation failed:"
+                    in source_failure_message
+                )
                 if (
                     str(source_task.get("status") or "").strip() != "failed"
-                    or "Codex token budget exceeded:"
-                    not in str(source_failure.get("message") or "")
+                    or not (
+                        source_is_budget_boundary
+                        or source_is_validation_boundary
+                    )
                 ):
                     return None
                 trigger_failure_id = str(failure.get("failure_id") or "").strip() or None
-                reason = retry_reason
+                reason = (
+                    "deterministic_validation_failure"
+                    if source_is_validation_boundary
+                    else retry_reason
+                )
         run_root = Path(self.runs_root) / _safe_token(source_task_id)
         if not (run_root / "workspace" / ".git").is_dir():
             return None
