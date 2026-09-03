@@ -2055,7 +2055,7 @@ findings related to its selected project/component/ticket. Promotion is
 human/policy-gated and creates linked project review debt, SDK Understanding,
 or Core capability work; model output never grants write scope. The Builder
 scenario now presents that projection in a dedicated read-only review tab with
-project-scoped text/status/category filtering. The trusted worker captures
+project-scoped text/status/category/source filtering. The trusted worker captures
 recognized public-contract validation failures only after repair attempts are
 exhausted and links the aggregate observation back to its task, test report,
 and originating Dev Ticket.

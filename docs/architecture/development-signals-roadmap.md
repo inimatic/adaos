@@ -699,8 +699,9 @@ Pre-Codex LLM and Codex observations now enter a separate workspace review
 registry and are visible through Resource Workbench, Root MCP, and the scoped
 Builder Context Inspector. Legacy Builder session feedback imports
 idempotently. Builder now has a project-scoped review tab over that same
-authority, with text, status, and category filters. Exhausted trusted-worker
-validation captures recognized WebUI/tool, data-route, SDK-only, and admitted
+authority, with text, status, category, and producer-source filters. Exhausted
+trusted-worker validation captures recognized WebUI/tool, data-route,
+SDK-only, and admitted
 operation ABI failures with exact task, report, contract, operation, expected,
 and observed refs. Replay of one task remains idempotent while recurrence in a
 different task aggregates evidence. Promotion remains an explicit human/policy

@@ -255,8 +255,8 @@ triage, comments, acceptance, rejection, and promotion remain explicit
 resource operations with role checks.
 
 Builder also exposes that projection as a project-scoped Development Feedback
-review view with text, stage, and category filters. It is a view over the same
-workspace authority, not a Builder-private store. Saved review filters,
+review view with text, stage, category, and producer-source filters. It is a
+view over the same workspace authority, not a Builder-private store. Saved review filters,
 artifact opening, and promotion preview may extend the view without moving
 lifecycle authority into Builder.
 
