@@ -4395,6 +4395,55 @@ def test_reload_preview_webspaces_for_skill_dependency(monkeypatch) -> None:
     assert result["reloaded_webspaces"] == [preview]
 
 
+def test_reload_preview_webspace_discovery_runs_off_event_loop(monkeypatch) -> None:
+    import threading
+
+    preview = "dev-threaded-preview"
+    scenario_id = "threaded_preview_scenario"
+    ensure_workspace(preview)
+    set_workspace_manifest(
+        preview,
+        display_name="DEV: threaded",
+        kind="dev",
+        source_mode="dev",
+        home_scenario=scenario_id,
+    )
+    from adaos.services.builder.workbench import BuilderWorkbenchService
+    from adaos.services.workspaces.relations import BUILDER_PROJECT_PREVIEW, WebspaceRelationshipRegistry
+
+    WebspaceRelationshipRegistry.from_context().ensure(
+        "builder-source-threaded",
+        purpose=BUILDER_PROJECT_PREVIEW,
+        scenario_id=scenario_id,
+        legacy_target_webspace_id=preview,
+    )
+    main_thread_id = threading.get_ident()
+    discovery_threads: list[int] = []
+    original = BuilderWorkbenchService.list_workspace_bindings
+
+    def _tracked_bindings(self):
+        discovery_threads.append(threading.get_ident())
+        return original(self)
+
+    async def _fake_reload(webspace_id: str, *, scenario_id: str | None = None, action: str = "reload"):
+        return {"ok": True, "webspace_id": webspace_id, "scenario_id": scenario_id, "action": action}
+
+    monkeypatch.setattr(BuilderWorkbenchService, "list_workspace_bindings", _tracked_bindings)
+    monkeypatch.setattr(webspace_runtime_module, "reload_webspace_from_scenario", _fake_reload)
+
+    result = asyncio.run(
+        webspace_runtime_module.reload_preview_webspaces_for_project(
+            "scenario",
+            scenario_id,
+            reason="project_created",
+        )
+    )
+
+    assert result["reloaded_webspaces"] == [preview]
+    assert discovery_threads
+    assert all(thread_id != main_thread_id for thread_id in discovery_threads)
+
+
 def test_materialization_source_prewarm_returns_mode_summary(monkeypatch) -> None:
     class _Runtime:
         _last_skill_decls_fingerprint = ""

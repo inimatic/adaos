@@ -253,3 +253,91 @@ async def test_builder_prompt_project_change_skips_superseded_target(monkeypatch
     )
 
     assert refreshed == []
+
+
+@pytest.mark.anyio
+async def test_project_content_change_skips_object_not_selected_in_prompt_ide(monkeypatch) -> None:
+    refreshed: list[tuple[str, str, str]] = []
+
+    class _Runtime:
+        def __init__(self, ctx):
+            self.ctx = ctx
+
+        def _load_prompt_selection(self, webspace_id):
+            assert webspace_id == "desktop-dev"
+            return {"object_type": "scenario", "object_id": "prompt_target"}
+
+        async def refresh_prompt_project_snapshots(self, webspace_id, *, object_type, object_id):
+            refreshed.append((webspace_id, object_type, object_id))
+
+    monkeypatch.setattr(workflow_runtime_module, "ScenarioWorkflowRuntime", _Runtime)
+    monkeypatch.setattr(workflow_runtime_module, "get_ctx", lambda: object())
+
+    await workflow_runtime_module._on_prompt_project_changed_refresh_workflow(
+        {
+            "webspace_id": "desktop-dev",
+            "object_type": "scenario",
+            "object_id": "builder_created_project",
+            "reason": "project_created",
+        }
+    )
+
+    assert refreshed == []
+
+
+@pytest.mark.anyio
+async def test_project_content_change_refreshes_selected_prompt_project(monkeypatch) -> None:
+    refreshed: list[tuple[str, str, str]] = []
+
+    class _Runtime:
+        def __init__(self, ctx):
+            self.ctx = ctx
+
+        def _load_prompt_selection(self, webspace_id):
+            return {"object_type": "scenario", "object_id": "prompt_target"}
+
+        async def refresh_prompt_project_snapshots(self, webspace_id, *, object_type, object_id):
+            refreshed.append((webspace_id, object_type, object_id))
+
+    monkeypatch.setattr(workflow_runtime_module, "ScenarioWorkflowRuntime", _Runtime)
+    monkeypatch.setattr(workflow_runtime_module, "get_ctx", lambda: object())
+
+    await workflow_runtime_module._on_prompt_project_changed_refresh_workflow(
+        {
+            "webspace_id": "desktop-dev",
+            "object_type": "scenario",
+            "object_id": "prompt_target",
+            "reason": "base_tz_saved",
+        }
+    )
+
+    assert refreshed == [("desktop-dev", "scenario", "prompt_target")]
+
+
+@pytest.mark.anyio
+async def test_explicit_prompt_project_selection_can_replace_saved_selection(monkeypatch) -> None:
+    refreshed: list[tuple[str, str, str]] = []
+
+    class _Runtime:
+        def __init__(self, ctx):
+            self.ctx = ctx
+
+        def _load_prompt_selection(self, webspace_id):
+            return {"object_type": "scenario", "object_id": "previous_target"}
+
+        async def refresh_prompt_project_snapshots(self, webspace_id, *, object_type, object_id):
+            refreshed.append((webspace_id, object_type, object_id))
+
+    monkeypatch.setattr(workflow_runtime_module, "ScenarioWorkflowRuntime", _Runtime)
+    monkeypatch.setattr(workflow_runtime_module, "get_ctx", lambda: object())
+
+    await workflow_runtime_module._on_prompt_project_changed_refresh_workflow(
+        {
+            "webspace_id": "desktop-dev",
+            "object_type": "scenario",
+            "object_id": "next_target",
+            "reason": "project_selected",
+        }
+    )
+
+    assert refreshed == [("desktop-dev", "scenario", "next_target")]

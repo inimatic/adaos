@@ -501,15 +501,55 @@ def test_selected_project_is_persisted_without_changing_runtime_scenario(tmp_pat
 
     assert binding["runtime_scenario_id"] == "shopping"
     assert binding["selection"] == {
+        "schema": "adaos.builder.project_selection.v2",
         "object_type": "skill",
         "object_id": "builder_skill",
         "ref": "skill:builder_skill",
         "title": "Builder Skill",
         "description": "Builder tools",
-        "topic_id": "prompt-project:skill:builder_skill",
-        "thread_id": "prompt-project:skill:builder_skill",
+        "context_topic_id": "prompt-project:skill:builder_skill",
+        "context_thread_id": "prompt-project:skill:builder_skill",
     }
     assert service.get_workspace_binding("desktop")["selection"] == binding["selection"]
+
+
+def test_workspace_binding_migrates_legacy_project_selection_to_v2(tmp_path: Path) -> None:
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state")
+    binding_path = service.binding_path("desktop")
+    binding_path.parent.mkdir(parents=True, exist_ok=True)
+    binding_path.write_text(
+        json.dumps(
+            {
+                "source_webspace_id": "desktop",
+                "runtime_scenario_id": "kanban_primary",
+                "selection": {
+                    "object_type": "project",
+                    "object_id": "kanban",
+                    "ref": "project:kanban",
+                    "title": "Kanban",
+                    "description": "Builder test project",
+                    "topic_id": "prompt-project:project:kanban",
+                    "thread_id": "prompt-project:project:kanban",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    binding = service.get_workspace_binding("desktop")
+
+    assert binding["selection"] == {
+        "schema": "adaos.builder.project_selection.v2",
+        "object_type": "project",
+        "object_id": "kanban",
+        "ref": "project:kanban",
+        "title": "Kanban",
+        "description": "Builder test project",
+        "context_topic_id": "prompt-project:project:kanban",
+        "context_thread_id": "prompt-project:project:kanban",
+    }
+    persisted = json.loads(binding_path.read_text(encoding="utf-8"))
+    assert persisted["selection"] == binding["selection"]
 
 
 def test_changing_runtime_project_clears_an_explicit_preview_from_the_previous_project(tmp_path: Path) -> None:
@@ -612,6 +652,8 @@ async def test_builder_runtime_projection_is_compact_and_host_only(monkeypatch, 
     assert [item[0] for item in published] == ["desktop"]
     projection = published[0][2]
     assert projection["selection"]["object_id"] == "shopping"
+    assert projection["selection"]["context_topic_id"] == "prompt-project:scenario:shopping"
+    assert projection["selection"]["conversation_topic_id"] == "prompt-project:scenario:shopping"
     assert projection["binding"]["preview_webspace_id"] == binding["preview_webspace_id"]
     assert projection["preview_runtime"]["status"] == "ready"
     assert "result" not in projection["preview_runtime"]
@@ -619,6 +661,33 @@ async def test_builder_runtime_projection_is_compact_and_host_only(monkeypatch, 
     assert len(json.dumps(projection)) < 4_096
     assert "development_skills" not in projection
     assert "dialog" not in projection
+
+
+def test_project_projection_keeps_project_context_and_primary_conversation(tmp_path: Path) -> None:
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state")
+    service.set_active_draft(
+        source_webspace_id="desktop",
+        active_draft_id=None,
+        runtime_scenario_id="kanban_primary",
+        persist_projection=False,
+    )
+    service.set_selected_project(
+        source_webspace_id="desktop",
+        object_type="project",
+        object_id="kanban",
+        title="Kanban",
+        persist_projection=False,
+    )
+
+    projection = service.runtime_projection("desktop")
+
+    assert projection["selection"]["object_type"] == "project"
+    assert projection["selection"]["context_topic_id"] == "prompt-project:project:kanban"
+    assert projection["selection"]["context_thread_id"] == "prompt-project:project:kanban"
+    assert projection["selection"]["conversation_topic_id"] == "prompt-project:scenario:kanban_primary"
+    assert projection["selection"]["conversation_thread_id"] == "prompt-project:scenario:kanban_primary"
+    assert "topic_id" not in projection["selection"]
+    assert "thread_id" not in projection["selection"]
 
 
 def test_builder_api_exposes_workbench_endpoints(tmp_path: Path) -> None:

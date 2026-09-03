@@ -225,6 +225,9 @@ def test_watchdog_reliability_preserves_stall_stack_transitions() -> None:
     assert completed["skill_candidates"] == candidate
     assert len(completed["samples"]) == 3
     assert snapshot["recent_stalls"][-1]["sample_total"] == 3
+    recent = snapshot["recent_stalls"][-1]
+    assert recent["initial_stack_signature"][-1]["function"] == "write_env"
+    assert recent["last_stack_signature"][-1]["function"] == "durable_state_write"
 
 
 def test_stall_incident_completion_updates_duration_without_double_count(monkeypatch) -> None:

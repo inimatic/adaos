@@ -124,11 +124,16 @@ class WebspaceRebuildService:
         ):
             stage_started = time.perf_counter()
             try:
-                source_mode_for_identity = operations.resolve_projection_refresh_space(webspace_id)
-                effective_materialization_identity = operations.scenario_switch_materialization_identity(
-                    webspace_id=webspace_id,
-                    scenario_id=target_scenario,
-                    source_mode=source_mode_for_identity,
+                def _resolve_materialization_identity() -> Any:
+                    source_mode_for_identity = operations.resolve_projection_refresh_space(webspace_id)
+                    return operations.scenario_switch_materialization_identity(
+                        webspace_id=webspace_id,
+                        scenario_id=target_scenario,
+                        source_mode=source_mode_for_identity,
+                    )
+
+                effective_materialization_identity = await asyncio.to_thread(
+                    _resolve_materialization_identity
                 )
             except Exception:
                 effective_materialization_identity = None

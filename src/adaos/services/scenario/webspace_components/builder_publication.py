@@ -522,64 +522,70 @@ class WebspaceBuilderPublicationService:
         if object_type not in {"scenario", "skill"} or not object_id:
             return {"ok": False, "accepted": False, "error": "project_identity_required"}
 
-        try:
-            from adaos.services.builder.workbench import BuilderWorkbenchService
-
-            workbench = BuilderWorkbenchService.from_context()
-            workbench.list_workspace_bindings()
-            relations = workbench.relationships.list()
-        except Exception:
-            relations = []
-
-        targets: list[tuple[str, str]] = []
-        seen_targets: set[str] = set()
-        for relation in relations:
-            webspace_id = str(relation.target_webspace_id or "").strip()
-            if not webspace_id or webspace_id in seen_targets:
-                continue
-            row = operations.workspace_index.get_workspace(webspace_id)
-            if row is None:
-                operations.logger.info(
-                    "ignoring stale preview relation target=%s project=%s:%s",
-                    webspace_id,
-                    object_type,
-                    object_id,
-                )
-                continue
-            home_scenario = str(
-                getattr(row, "effective_home_scenario", "")
-                or relation.metadata.get("scenario_id")
-                or ""
-            ).strip()
-            if not home_scenario:
-                continue
-            if object_type == "scenario":
-                if home_scenario == object_id:
-                    targets.append((webspace_id, home_scenario))
-                    seen_targets.add(webspace_id)
-                continue
+        def _discover_targets() -> list[tuple[str, str]]:
             try:
-                source_mode = str(
-                    getattr(row, "effective_source_mode", "dev") or "dev"
-                )
-                manifest = operations.scenarios_loader.read_manifest(
-                    home_scenario, space=source_mode
-                )
-                depends = {
-                    str(item).strip()
-                    for item in (manifest.get("depends") or [])
-                    if str(item).strip()
-                }
-                if object_id in depends:
-                    targets.append((webspace_id, home_scenario))
-                    seen_targets.add(webspace_id)
+                from adaos.services.builder.workbench import BuilderWorkbenchService
+
+                workbench = BuilderWorkbenchService.from_context()
+                # Preserve legacy binding migration before reading the
+                # authoritative relationship registry.
+                workbench.list_workspace_bindings()
+                relations = workbench.relationships.list()
             except Exception:
-                operations.logger.debug(
-                    "failed to resolve scenario depends for preview webspace=%s home=%s",
-                    webspace_id,
-                    home_scenario,
-                    exc_info=True,
-                )
+                relations = []
+
+            targets: list[tuple[str, str]] = []
+            seen_targets: set[str] = set()
+            for relation in relations:
+                webspace_id = str(relation.target_webspace_id or "").strip()
+                if not webspace_id or webspace_id in seen_targets:
+                    continue
+                row = operations.workspace_index.get_workspace(webspace_id)
+                if row is None:
+                    operations.logger.info(
+                        "ignoring stale preview relation target=%s project=%s:%s",
+                        webspace_id,
+                        object_type,
+                        object_id,
+                    )
+                    continue
+                home_scenario = str(
+                    getattr(row, "effective_home_scenario", "")
+                    or relation.metadata.get("scenario_id")
+                    or ""
+                ).strip()
+                if not home_scenario:
+                    continue
+                if object_type == "scenario":
+                    if home_scenario == object_id:
+                        targets.append((webspace_id, home_scenario))
+                        seen_targets.add(webspace_id)
+                    continue
+                try:
+                    source_mode = str(
+                        getattr(row, "effective_source_mode", "dev") or "dev"
+                    )
+                    manifest = operations.scenarios_loader.read_manifest(
+                        home_scenario, space=source_mode
+                    )
+                    depends = {
+                        str(item).strip()
+                        for item in (manifest.get("depends") or [])
+                        if str(item).strip()
+                    }
+                    if object_id in depends:
+                        targets.append((webspace_id, home_scenario))
+                        seen_targets.add(webspace_id)
+                except Exception:
+                    operations.logger.debug(
+                        "failed to resolve scenario depends for preview webspace=%s home=%s",
+                        webspace_id,
+                        home_scenario,
+                        exc_info=True,
+                    )
+            return targets
+
+        targets = await asyncio.to_thread(_discover_targets)
 
         reloaded: list[str] = []
         failed: list[str] = []

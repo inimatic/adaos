@@ -1655,6 +1655,15 @@ def record_runtime_event_loop_watchdog_stall_evidence(
                         else {}
                     ),
                     "last_top_frame": top_frame,
+                    # Preserve a bounded application-only call path. A top
+                    # frame such as sqlite3.execute identifies the symptom,
+                    # but not the AdaOS caller that must leave the event loop.
+                    "initial_stack_signature": _event_loop_stack_signature(
+                        current.get("initial_stack")
+                    ),
+                    "last_stack_signature": _event_loop_stack_signature(
+                        current.get("last_stack")
+                    ),
                     "skill_candidates": list(current.get("skill_candidates") or []),
                     "sample_total": len(samples),
                 }
@@ -1664,6 +1673,24 @@ def record_runtime_event_loop_watchdog_stall_evidence(
         else:
             state["current_stall"] = current
         return dict(state)
+
+
+def _event_loop_stack_signature(value: Any, *, limit: int = 16) -> list[dict[str, Any]]:
+    frames = [dict(item) for item in (value or []) if isinstance(item, dict)]
+    application_frames = [
+        frame
+        for frame in frames
+        if "/src/adaos/" in str(frame.get("filename") or "").replace("\\", "/").lower()
+    ]
+    selected = application_frames or frames[-4:]
+    return [
+        {
+            "filename": str(frame.get("filename") or ""),
+            "lineno": int(frame.get("lineno") or 0),
+            "function": str(frame.get("function") or ""),
+        }
+        for frame in selected[-max(1, int(limit)) :]
+    ]
 
 
 def runtime_event_loop_watchdog_snapshot() -> dict[str, Any]:

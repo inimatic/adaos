@@ -188,6 +188,27 @@ class WebspaceScenarioSwitchingService:
             pass
         return True
 
+    @staticmethod
+    async def _workspace_row(operations: ScenarioSwitchOperations, webspace_id: str) -> Any:
+        def _read_or_create() -> Any:
+            return operations.workspace_index.get_workspace(webspace_id) or operations.workspace_index.ensure_workspace(
+                webspace_id
+            )
+
+        return await asyncio.to_thread(_read_or_create)
+
+    @staticmethod
+    async def _set_home_scenario(
+        operations: ScenarioSwitchOperations,
+        webspace_id: str,
+        scenario_id: str,
+    ) -> Any:
+        return await asyncio.to_thread(
+            operations.workspace_index.set_workspace_manifest,
+            webspace_id,
+            home_scenario=scenario_id,
+        )
+
 
     async def switch(
         self,
@@ -219,13 +240,13 @@ class WebspaceScenarioSwitchingService:
         overlay_persistence: dict[str, Any] = {"state": "ready", "pending": False}
 
         switch_started = time.perf_counter()
-        timings_ms: Dict[str, float] = {}
+        timings_ms: dict[str, float] = {}
         stage_started = time.perf_counter()
         state_before = await operations.describe_operational_state(webspace_id)
         operations.record_timing(timings_ms, "describe_state_before", stage_started)
 
         stage_started = time.perf_counter()
-        row = operations.workspace_index.get_workspace(webspace_id) or operations.workspace_index.ensure_workspace(webspace_id)
+        row = await self._workspace_row(operations, webspace_id)
         resolved_set_home = request.set_home
         operations.record_timing(timings_ms, "resolve_manifest_policy", stage_started)
         stage_started = time.perf_counter()
@@ -266,8 +287,6 @@ class WebspaceScenarioSwitchingService:
         atomic_selector_commit = True
         selector_commit_mode = "materialization_transaction"
         loader_space = self.loader_space(row)
-        switch_content: Dict[str, Any] | None = None
-
         def _build_switch_skip_result(*, skip_reason: str, rebuild_state: Mapping[str, Any], background_rebuild: bool) -> dict[str, Any]:
             phase_timings = operations.copy_timing_map(rebuild_state.get("phase_timings_ms"))
             if not phase_timings:
@@ -314,7 +333,7 @@ class WebspaceScenarioSwitchingService:
         if switch_decision.action == "skip":
             if resolved_set_home and row.effective_home_scenario != scenario_id:
                 stage_started = time.perf_counter()
-                row = operations.workspace_index.set_workspace_manifest(webspace_id, home_scenario=scenario_id)
+                row = await self._set_home_scenario(operations, webspace_id, scenario_id)
                 operations.record_timing(timings_ms, "persist_home_scenario", stage_started)
 
                 stage_started = time.perf_counter()
@@ -338,7 +357,7 @@ class WebspaceScenarioSwitchingService:
         if switch_decision.action == "join":
             if resolved_set_home and row.effective_home_scenario != scenario_id:
                 stage_started = time.perf_counter()
-                row = operations.workspace_index.set_workspace_manifest(webspace_id, home_scenario=scenario_id)
+                row = await self._set_home_scenario(operations, webspace_id, scenario_id)
                 operations.record_timing(timings_ms, "persist_home_scenario", stage_started)
 
                 stage_started = time.perf_counter()
@@ -367,7 +386,11 @@ class WebspaceScenarioSwitchingService:
             )
 
         stage_started = time.perf_counter()
-        scenario_exists = operations.scenario_exists_for_switch(scenario_id, space=loader_space)
+        scenario_exists = await asyncio.to_thread(
+            operations.scenario_exists_for_switch,
+            scenario_id,
+            space=loader_space,
+        )
         operations.record_timing(timings_ms, "validate_scenario", stage_started)
         if not scenario_exists:
             finalized_timings = operations.finalize_timing_map(timings_ms, started_at=switch_started)
@@ -453,7 +476,8 @@ class WebspaceScenarioSwitchingService:
             except sqlite3.OperationalError as exc:
                 if "locked" not in str(exc).lower():
                     raise
-                overlay_persistence = operations.workspace_index.defer_workspace_current_scenario_overlay(
+                overlay_persistence = await asyncio.to_thread(
+                    operations.workspace_index.defer_workspace_current_scenario_overlay,
                     webspace_id,
                     scenario_id,
                     reason="scenario_switch.sqlite_locked",
@@ -527,11 +551,11 @@ class WebspaceScenarioSwitchingService:
             operations.log.debug("failed to publish authoritative current_scenario lease", exc_info=True)
 
         stage_started = time.perf_counter()
-        row = operations.workspace_index.get_workspace(webspace_id) or operations.workspace_index.ensure_workspace(webspace_id)
+        row = await self._workspace_row(operations, webspace_id)
         operations.record_timing(timings_ms, "refresh_manifest_row", stage_started)
         if resolved_set_home:
             stage_started = time.perf_counter()
-            row = operations.workspace_index.set_workspace_manifest(webspace_id, home_scenario=scenario_id)
+            row = await self._set_home_scenario(operations, webspace_id, scenario_id)
             operations.record_timing(timings_ms, "persist_home_scenario", stage_started)
 
             stage_started = time.perf_counter()

@@ -553,16 +553,34 @@ def _project_selection(
     resolved_description = str(
         description if description is not None else (old.get("description") if same_project else "")
     ).strip()
-    topic_id = f"prompt-project:{kind}:{project_id}"
+    context_topic_id = f"prompt-project:{kind}:{project_id}"
     return {
+        "schema": "adaos.builder.project_selection.v2",
         "object_type": kind,
         "object_id": project_id,
         "ref": f"{kind}:{project_id}",
         "title": resolved_title,
         "description": resolved_description,
-        "topic_id": topic_id,
-        "thread_id": topic_id,
+        "context_topic_id": context_topic_id,
+        "context_thread_id": context_topic_id,
     }
+
+
+def _normalize_project_selection(
+    value: Mapping[str, Any] | None,
+    *,
+    fallback_object_type: str = "scenario",
+    fallback_object_id: str = "builder",
+    fallback_title: str | None = None,
+) -> dict[str, Any]:
+    previous = dict(value) if isinstance(value, Mapping) else {}
+    return _project_selection(
+        previous.get("object_type") or fallback_object_type,
+        previous.get("object_id") or fallback_object_id,
+        title=previous.get("title") or fallback_title,
+        description=previous.get("description"),
+        previous=previous,
+    )
 
 
 def _preview_runtime_projection(value: Any) -> dict[str, Any]:
@@ -886,7 +904,10 @@ class BuilderWorkbenchService:
         preview_state: Mapping[str, Any] | None = None,
         wait_for_rebuild: bool = True,
     ) -> dict[str, Any]:
-        source_id = self.resolve_source_webspace_id(source_webspace_id)
+        # Relationship and binding persistence use the process-wide SQLite
+        # write gate. Keep those synchronous calls off the API event loop so a
+        # busy gate cannot stall the tool response that scheduled this preview.
+        source_id = await asyncio.to_thread(self.resolve_source_webspace_id, source_webspace_id)
         workbench_scenario = str(scenario_id or "").strip() or BUILDER_WORKBENCH_SCENARIO_ID
         runtime_scenario = (
             str(runtime_scenario_id or "").strip()
@@ -897,7 +918,8 @@ class BuilderWorkbenchService:
         legacy_target = str(
             legacy_binding.get("preview_webspace_id") or legacy_binding.get("dev_webspace_id") or ""
         ).strip() or None
-        relation, relation_created = self._ensure_preview_relation(
+        relation, relation_created = await asyncio.to_thread(
+            self._ensure_preview_relation,
             source_id,
             scenario_id=runtime_scenario,
             legacy_target_webspace_id=legacy_target,
@@ -913,7 +935,8 @@ class BuilderWorkbenchService:
 
                 svc = WebspaceService()
             existing = None
-            for item in svc.list(mode="mixed"):
+            webspaces = await asyncio.to_thread(lambda: list(svc.list(mode="mixed")))
+            for item in webspaces:
                 if str(getattr(item, "id", "") or getattr(item, "webspace_id", "") or "").strip() == dev_id:
                     existing = item
                     break
@@ -1024,7 +1047,8 @@ class BuilderWorkbenchService:
         except Exception as exc:
             info_payload = {"ok": False, "error": "dev_webspace_unavailable", "detail": f"{type(exc).__name__}: {exc}"}
 
-        binding = self.set_active_draft(
+        binding = await asyncio.to_thread(
+            self.set_active_draft,
             source_webspace_id=source_id,
             active_draft_id=active_draft_id,
             scenario_id=workbench_scenario,
@@ -1047,14 +1071,10 @@ class BuilderWorkbenchService:
             normalized = dict(existing)
             active_draft_id = str(normalized.get("active_draft_id") or "").strip() or None
             runtime_scenario_id = str(normalized.get("runtime_scenario_id") or "").strip() or None
-            selection = (
-                dict(normalized.get("selection"))
-                if isinstance(normalized.get("selection"), Mapping)
-                else _project_selection(
-                    "scenario",
-                    runtime_scenario_id or "builder",
-                    title="Builder" if not runtime_scenario_id else None,
-                )
+            selection = _normalize_project_selection(
+                normalized.get("selection") if isinstance(normalized.get("selection"), Mapping) else None,
+                fallback_object_id=runtime_scenario_id or "builder",
+                fallback_title="Builder" if not runtime_scenario_id else None,
             )
             relation, _created = self._ensure_preview_relation(
                 source_id,
@@ -1138,7 +1158,11 @@ class BuilderWorkbenchService:
         dev_id = relation.target_webspace_id
         scenario_token = str(scenario_id or existing.get("scenario_id") or BUILDER_WORKBENCH_SCENARIO_ID).strip()
         active_draft_token = str(active_draft_id or "").strip() or None
-        previous_selection = existing.get("selection") if isinstance(existing.get("selection"), Mapping) else None
+        previous_selection = (
+            _normalize_project_selection(existing.get("selection"))
+            if isinstance(existing.get("selection"), Mapping)
+            else None
+        )
         explicit_runtime_id = str(runtime_scenario_id or "").strip()
         if explicit_runtime_id and (
             not previous_selection
@@ -1897,10 +1921,26 @@ class BuilderWorkbenchService:
     ) -> dict[str, Any]:
         source_id = self.resolve_source_webspace_id(source_webspace_id)
         binding = self.get_workspace_binding(source_id)
+        selection = _normalize_project_selection(
+            binding.get("selection") if isinstance(binding.get("selection"), Mapping) else None
+        )
+        dialog = binding.get("dialog") if isinstance(binding.get("dialog"), Mapping) else {}
+        context_topic_id = str(selection.get("context_topic_id") or "").strip()
+        context_thread_id = str(selection.get("context_thread_id") or context_topic_id).strip()
+        conversation_topic_id = str(dialog.get("topic_id") or context_topic_id).strip()
+        conversation_thread_id = str(dialog.get("thread_id") or conversation_topic_id).strip()
+        selection.update(
+            {
+                "context_topic_id": context_topic_id,
+                "context_thread_id": context_thread_id,
+                "conversation_topic_id": conversation_topic_id,
+                "conversation_thread_id": conversation_thread_id,
+            }
+        )
         return {
             "schema": "adaos.builder.runtime_projection.v1",
             "source_webspace_id": source_id,
-            "selection": dict(binding.get("selection") or {}),
+            "selection": selection,
             "binding": {
                 key: binding.get(key)
                 for key in (

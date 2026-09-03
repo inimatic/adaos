@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from types import SimpleNamespace
 
 from adaos.services.scenario.webspace_components import WebspaceProjectionService
@@ -89,3 +90,32 @@ def test_projection_service_resolves_missing_rebuild_target() -> None:
     assert result["scenario_resolution"] == "manifest_home"
     assert result["rules_loaded"] == 4
     assert calls == [("home", "dev")]
+
+
+def test_projection_service_offloads_source_and_rule_loading() -> None:
+    main_thread_id = threading.get_ident()
+    calls: list[tuple[str, int]] = []
+
+    class Registry:
+        def load_from_scenario(self, _scenario_id: str, *, space: str) -> int:
+            calls.append((f"rules:{space}", threading.get_ident()))
+            return 1
+
+    def resolve_space(_webspace_id: str) -> str:
+        calls.append(("space", threading.get_ident()))
+        return "dev"
+
+    result = asyncio.run(
+        WebspaceProjectionService().refresh_for_rebuild(
+            registry=Registry(),
+            webspace_id="desktop-dev",
+            scenario_id="demo",
+            scenario_resolution="explicit",
+            resolve_target=lambda *_args: None,
+            resolve_space=resolve_space,
+        )
+    )
+
+    assert result["rules_loaded"] == 1
+    assert [name for name, _thread_id in calls] == ["space", "rules:dev"]
+    assert all(thread_id != main_thread_id for _name, thread_id in calls)

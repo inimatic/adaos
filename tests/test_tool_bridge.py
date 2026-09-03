@@ -675,6 +675,38 @@ def test_webspace_runtime_resolution_uses_registered_kind(monkeypatch) -> None:
     assert tool_bridge_module._webspace_uses_dev_runtime({"webspace_id": "desktop"}) is False
 
 
+def test_webspace_runtime_resolution_uses_http_context(monkeypatch) -> None:
+    from adaos.services.workspaces import index as workspace_index
+
+    requested: list[str] = []
+
+    def _get_workspace(webspace_id: str):
+        requested.append(webspace_id)
+        return SimpleNamespace(is_dev=webspace_id == "builder-sdk-control-dev")
+
+    monkeypatch.setattr(workspace_index, "get_workspace", _get_workspace)
+
+    assert tool_bridge_module._webspace_uses_dev_runtime(
+        {},
+        {"webspace_id": "builder-sdk-control-dev"},
+    ) is True
+    assert requested == ["builder-sdk-control-dev"]
+
+
+def test_builder_control_runtime_resolution_is_limited_to_builder_host() -> None:
+    payload = {"webspace_id": "desktop", "_meta": {"current_scenario": "builder"}}
+
+    assert tool_bridge_module._builder_host_uses_dev_runtime(
+        "builder_sdk_control_skill",
+        payload,
+    ) is True
+    assert tool_bridge_module._builder_host_uses_dev_runtime("notebook_skill", payload) is False
+    assert tool_bridge_module._builder_host_uses_dev_runtime(
+        "builder_sdk_control_skill",
+        {"webspace_id": "desktop", "_meta": {"current_scenario": "web_desktop"}},
+    ) is False
+
+
 def test_call_tool_infers_dev_runtime_from_registered_webspace(monkeypatch) -> None:
     calls: list[str] = []
     owner_thread_id = threading.get_ident()
@@ -698,7 +730,7 @@ def test_call_tool_infers_dev_runtime_from_registered_webspace(monkeypatch) -> N
     async def _fake_run_sync(func, *args, **kwargs):
         return func(*args, **kwargs)
 
-    def _webspace_uses_dev_runtime(_payload) -> bool:
+    def _webspace_uses_dev_runtime(_payload, _context=None) -> bool:
         preflight_thread_ids.append(threading.get_ident())
         return True
 
@@ -725,6 +757,56 @@ def test_call_tool_infers_dev_runtime_from_registered_webspace(monkeypatch) -> N
     assert calls == ["recipe_skill:list_recipes"]
     assert len(preflight_thread_ids) == 2
     assert all(thread_id != owner_thread_id for thread_id in preflight_thread_ids)
+
+
+def test_call_tool_infers_dev_runtime_from_http_context(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict[str, object]]] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def dev_runtime_status(self, _name: str) -> dict[str, object]:
+            return {"ready": True}
+
+        def run_dev_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout=None):
+            calls.append((skill_name, tool_name, payload))
+            return {"ok": True}
+
+        def run_tool(self, *_args, **_kwargs):
+            raise AssertionError("registered DEV webspace must not use the installed runtime")
+
+    async def _fake_run_sync(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(
+        tool_bridge_module,
+        "_webspace_uses_dev_runtime",
+        lambda payload: payload.get("webspace_id") == "builder-sdk-control-dev",
+    )
+    monkeypatch.setattr(tool_bridge_module, "_maybe_sync_dev_runtime", lambda *_args: None)
+    monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
+
+    result = asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(
+                tool="builder_sdk_control_skill:list_projects",
+                arguments={},
+                context={"webspace_id": "builder-sdk-control-dev"},
+            ),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=_fake_ctx(),
+        )
+    )
+
+    assert result["ok"] is True
+    assert calls[0][:2] == ("builder_sdk_control_skill", "list_projects")
+    assert calls[0][2]["_meta"]["webspace_id"] == "builder-sdk-control-dev"
 
 
 def test_call_tool_syncs_dev_runtime_before_read_contract_preflight(monkeypatch, tmp_path) -> None:

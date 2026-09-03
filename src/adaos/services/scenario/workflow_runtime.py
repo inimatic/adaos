@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Iterable
+from typing import Any, Dict, List, Optional, Tuple
 
 import anyio
 import yaml
@@ -26,6 +26,8 @@ from adaos.services.scenario.workflow_translation import (
 )
 
 _log = logging.getLogger("adaos.scenario.workflow")
+
+_PROMPT_PROJECT_SELECTION_REASONS = {"project_selected", "project_loaded"}
 
 
 class GovernedScenarioWorkflowRequired(RuntimeError):
@@ -1284,6 +1286,21 @@ async def _on_prompt_project_changed_refresh_workflow(evt: Dict[str, Any]) -> No
             return
     ctx = get_ctx()
     runtime = ScenarioWorkflowRuntime(ctx)
+    selection = runtime._load_prompt_selection(webspace_id)
+    selects_project = reason in _PROMPT_PROJECT_SELECTION_REASONS
+    selection_matches = (
+        selection.get("object_type") == object_type and selection.get("object_id") == object_id
+    )
+    if not selects_project and not selection_matches:
+        _log.debug(
+            "prompt project content change ignored for unselected object "
+            "webspace=%s object_type=%s object_id=%s reason=%s",
+            webspace_id,
+            object_type,
+            object_id,
+            reason or "-",
+        )
+        return
     try:
         await runtime.refresh_prompt_project_snapshots(
             webspace_id,
