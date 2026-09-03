@@ -1968,6 +1968,18 @@ envelopes. Architecture and generic sequencing remain in
 - [x] `[should]` Batch related Dev Tickets or ImplementationTracks against one
   stable Project capsule while preserving independent Change, budget,
   acceptance, and rollback lifecycles.
+- [x] `[must]` Compile language-neutral `prompt_facts` during deterministic or
+  bounded LLM qualification and route versioned rule capsules by concepts,
+  surface, operation, data plane, effects, lifecycle, access, conversation,
+  and i18n before falling back to task text.
+- [x] `[must]` Give pre-Codex LLM and isolated Codex a bounded Development
+  Feedback output contract for missing, ambiguous, conflicting, inefficient,
+  insufficient-context, observability, validation, and policy findings.
+  Persist observations in a separate governed registry and require explicit
+  acceptance before project/SDK/core promotion.
+- [x] `[should]` Project Development Feedback related to the selected project,
+  component, or Dev Ticket into Context Inspector with status/category counts,
+  while keeping mutation in role-aware Resource Workbench/API/MCP operations.
 - [ ] `[should]` Enable warm role/focus caches only after cold-replay equivalence
   and matched-budget evidence show a net benefit.
 - [ ] `[could]` Add model-assisted context ranking after deterministic identity,
@@ -2019,12 +2031,29 @@ cost. Exact semantic slices and the Root-accounted residual-language qualifier
 remain open.
 
 Prompt-projection verification, 2026-09-03: Skill Factory now compiles a
-permanent execution boundary plus conditional WebUI/tool, data-route/receiver,
-resource/storage, runtime-lifecycle, and conversational/i18n rule capsules.
-The selected IDs and documentation anchors are retained in
-`packet.json.prompt_rule_capsules`; only selected executable invariants enter
-the model prompt. Root MCP descriptor search remains an optional evidence
-adapter rather than the owner of initial mini-representation formation.
+permanent execution boundary plus conditional SDK, WebUI/tool, declarative UI,
+data-route/receiver, resource/storage, runtime-lifecycle,
+conversational/i18n, workflow, consumer ABI, and typed research rule capsules.
+Structured `prompt_facts` are produced by deterministic qualification and the
+bounded Root-accounted language fallback; localized ticket text is no longer
+the primary routing contract. Provider/research requirements and exact ABI
+bundles are absent from ordinary skill prompts and enter only when admitted
+machine facets/contracts select them. The selected IDs, registry digests,
+documentation anchors, and Context capsule refs are retained in
+`packet.json.prompt_rule_capsules`. Root MCP descriptor search remains an
+optional bounded evidence adapter rather than the owner of initial
+mini-representation formation. Prompt profile
+`adaos-skill-realization/0.18.0` records this projection boundary.
+
+Development-feedback verification, 2026-09-03: pre-Codex qualification and
+Codex final output can emit schema-validated observations into
+`adaos.development_feedback.v1`. The workspace registry deduplicates repeated
+findings, maintains optimistic revisions and lifecycle events, and exposes
+query/triage/comment/accept/reject/promote through SDK, API, Root MCP, and
+Declarative Resource Workbench. Builder Context Inspector projects only
+findings related to its selected project/component/ticket. Promotion is
+human/policy-gated and creates linked project review debt, SDK Understanding,
+or Core capability work; model output never grants write scope.
 
 Economic preflight calibration, 2026-09-03: a real local Codex repair measured
 185,106 input tokens with 173,824 cached input across two tool rounds. Builder

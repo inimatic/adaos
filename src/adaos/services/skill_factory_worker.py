@@ -1349,6 +1349,12 @@ def _selected_prompt_rule_capsules(
         ensure_ascii=True,
         sort_keys=True,
     ).lower()
+    facet_keys = list(dict(context_packet.get("facets") or {}))
+    facet_keys.extend(
+        str(value).strip()
+        for value in repair_hints.get("facet_keys") or []
+        if str(value).strip()
+    )
     selected = select_prompt_rules(
         target_type=target_type,
         evidence=evidence,
@@ -1356,7 +1362,7 @@ def _selected_prompt_rule_capsules(
             "profile": repair_hints.get("profile"),
             "target_files": repair_hints.get("target_files"),
             "target_refs": repair_hints.get("target_refs"),
-            "facet_keys": list(dict(context_packet.get("facets") or {})),
+            "facet_keys": list(dict.fromkeys(facet_keys)),
             **{
                 key: prompt_facts.get(key)
                 for key in (
@@ -1391,6 +1397,44 @@ def _selected_prompt_rule_capsules(
             item["context_digest"] = capsule["digest"]
         projected.append(item)
     return projected
+
+
+def _contract_prompt_facet_keys(
+    checklist: Mapping[str, Any],
+) -> list[str]:
+    """Derive specialist prompt routing only from admitted machine contracts."""
+
+    contracts = [
+        dict(item)
+        for item in checklist.get("contracts") or []
+        if isinstance(item, Mapping)
+    ]
+    if not contracts:
+        return []
+    facets = {"provider_operation_set"}
+    for contract in contracts:
+        contract_id = str(contract.get("contract") or "").strip().lower()
+        domain = (
+            dict(contract.get("domain_conformance"))
+            if isinstance(contract.get("domain_conformance"), Mapping)
+            else {}
+        )
+        if contract_id == "adaos.research.runner.v1":
+            facets.update({"research_runner", "scientific_handoff"})
+        if any(
+            key in domain
+            for key in (
+                "experiment_plan",
+                "system",
+                "system_specification",
+                "scientific_subject",
+            )
+        ):
+            facets.add("scientific_handoff")
+        equivalence = domain.get("initial_equivalence")
+        if isinstance(equivalence, Mapping) and equivalence.get("required") is True:
+            facets.add("initial_equivalence")
+    return sorted(facets)
 
 
 def _prompt_rule_capsules_markdown(capsules: Sequence[Mapping[str, Any]]) -> str:
@@ -4722,6 +4766,18 @@ class LocalSkillFactoryWorker:
             "profile",
             str(constraints.get("repair_profile") or "").strip() or None,
         )
+        capsule_repair_hints["facet_keys"] = list(
+            dict.fromkeys(
+                [
+                    *(
+                        capsule_repair_hints.get("facet_keys")
+                        if isinstance(capsule_repair_hints.get("facet_keys"), list)
+                        else []
+                    ),
+                    *_contract_prompt_facet_keys(contract_checklist),
+                ]
+            )
+        )
         prompt_rule_capsules = _selected_prompt_rule_capsules(
             target_type=target_type,
             repair_hints=capsule_repair_hints,
@@ -4773,7 +4829,7 @@ When `scenarios/{target_id}/.builder_previous_automation` exists, treat it as th
 ## Current Publication
 
 When `scenarios/{target_id}/.builder_current_publication` exists, treat it as the immutable currently installed functional edition. Use it as the implementation baseline when the current Prototype or previous Automation is non-functional or omits established bindings. Merge the approved Prototype requirements into that baseline; never edit the retained publication directory itself.
-"""
+""" if target_type == "scenario" else ""
         dev_ticket_repair_requirements = """
 ## Dev Ticket repair constraints
 
@@ -4868,40 +4924,15 @@ Omit the envelope when there is no substantive development feedback. It is advis
 5. Keep `scenario.yaml` and `webui.json` valid and do not publish or activate a release.
 6. Run relevant bounded checks and fix failures caused by your changes.
 7. Do not edit anything outside these task paths: {allowed_paths}.
-8. Do not edit `.builder_previous_automation`; it is immutable input.""" if workflow_transition == "return_to_prototype" else """1. Inspect all existing files under the target paths before editing.
-2. Implement or correct the AdaOS skill, including `skill.yaml`, handler tools, input/output schemas and useful tests or fixtures.
-3. For a scenario prototype, connect `scenarios/{target_id}` to every required companion skill ({companions_label}) through `depends`, declarative actions and data routes as appropriate.
-4. Create or correct `webui.json` when the project has a UI. Preserve useful prototype behavior and make actions use real skill tools instead of mocks where possible. Scenario runtime UI must remain renderable: declare metadata in `scenario.yaml`, and either keep `ui.application` there or reference the adjacent complete descriptor as `ui.manifest: webui.json`.
-5. Keep the result compatible with the repository's existing AdaOS schemas and conventions. Do not add dependencies unless essential.
-6. Run relevant bounded checks. Fix failures caused by your changes. Use the Python exposed by `ADAOS_PYTHON` with the authoritative SDK snapshot, commit-bound and exposed by `ADAOS_REPO_ROOT`/`PYTHONPATH`; do not validate against an unrelated globally installed AdaOS version.
-7. Do not edit anything outside these task paths: {allowed_paths}.
-8. Do not access secrets, production data, other AdaOS runtime state, or external APIs.
-8a. Read only this isolated checkout, its admitted `.adaos_context` inputs, task-owned runtime paths, and the filtered SDK snapshot at `ADAOS_REPO_ROOT`. Do not inspect the SDK snapshot's parent, the canonical AdaOS checkout, sibling projects, installed skills, evaluations, or domain reference implementations. Such access invalidates Development evidence even when the filesystem technically permits it.
-9. Preserve manifest `version` and `updated_at`; the transactional Forge checkpoint owns both fields. Tests must validate their shape or semantics and must not assert an exact value for either field, because checkpointing changes them after your checks.
-10. Keep UTF-8 source and payload text intact. Prefer `apply_patch` for source edits; do not route non-ASCII source text through a PowerShell string pipeline. On Windows PowerShell 5.1, every textual `Get-Content` read of source, JSON, YAML, Markdown, or instruction files MUST include `-Encoding UTF8`; never rely on its ANSI default. Treat console mojibake as a display defect and verify file content as UTF-8 before rewriting it.
-11. Do not edit `.builder_current_publication`; it is immutable implementation input.
-12. When a manifest references `workflow.json`, treat that file as the only workflow-definition authority. Preserve the complete TransitionDescriptor contract, validate the definition structurally, and do not recreate workflow transitions as an independent Python or UI table.
-13. Treat every governed acceptance criterion as an implementation obligation. Do not mark a criterion complete merely because a self-authored fixture or schema-shaped record exists; exercise the real requested code path and retain machine-checkable evidence, unless that criterion explicitly asks for a mock or fixture.
-14. Never substitute fabricated metrics, synthetic success defaults, placeholder digests, or caller-asserted invariants for requested execution. Fixtures may make tests bounded, but they must drive the same model, data, storage, tracker, recovery, and analysis components used by the real path.
-15. Resolve skill-owned runtime storage through AdaOS SDK/capability bindings. Do not let ordinary tool callers choose arbitrary filesystem roots. Use typed platform contracts such as ContentRef and tracker providers when the brief requires them instead of look-alike dictionaries local to the skill.
-16. Audit the final implementation against every Issue and acceptance criterion in the governed context. If any item is not implemented, state it as an open item; do not describe the project as complete. The prohibition on running a scientific workload during code generation does not permit omitting the executable scientific path.
-17. Tests must be capable of failing for a stubbed implementation: cover real operator/model behavior, real manifest verification, storage isolation, provider calls, retry/idempotency boundaries, and event completeness where those concerns are required. The exact trusted package-shaped pytest lifecycle allowance for this task is {generated_test_timeout_seconds} seconds, derived from the admitted immutable execution budget and recorded in `packet.json.validation_budget`. Keep the suite within that allowance by bounding fixtures or splitting suites, never by replacing the production path with a faster look-alike. Do not execute a scientific smoke or confirmatory workload from packaged tests; test the production path with bounded fixtures and let the admitted consumer own real workflow-smoke execution.
-18. Treat typed provider operation names and schemas as ABI, not suggestions. Implement every required operation under its exact declared name, export it as a tool, and run any admitted consumer/conformance fixture against the production handler path; a semantically similar alias does not satisfy the contract.
-19. Before adding or importing a third-party Python package, inspect the authoritative manifest schema at `${{ADAOS_REPO_ROOT}}/src/adaos/services/skill/skill_schema.json` and the dependency-isolation policy in `${{ADAOS_REPO_ROOT}}/docs/skill_runtime.md`. Declare every imported dependency. Heavy/native dependencies require a service boundary or the explicit documented transitional `allow_heavy_dependencies` allowance. Run install-strict `SkillValidationService.validate_path(...)` so manifest schema, imports, exported tools, and dependency isolation fail in one bounded pass before concluding.
-20. This checkout is an isolated candidate, not the canonical AdaOS workspace. Run source-tree validation and bounded tests here, but do not copy into or mutate the canonical workspace/runtime and do not publish, install, or activate the candidate yourself. The trusted worker finalizer owns package, install, activation, and rollback receipts after your turn."""
-        if not is_dev_ticket_repair:
-            required_result += """
-21. Keep every mutable test/runtime file outside the candidate source tree. Use `ADAOS_BASE_DIR` for the default task-owned AdaOS runtime. If a test needs multiple isolated bases, create child directories below `ADAOS_TASK_RUNTIME_DIR` (or an OS temporary directory outside this checkout), and clean them normally; never create repository-relative `.adaos*` runtime directories.
-22. Packaged tests must be hermetic. They cannot read `.adaos_context`, Builder Development-session instruction/artifact paths, session IDs, or other authoring-only files that Forge omits. Copy only a bounded non-secret fixture that remains necessary into the skill's own tests/fixtures, or leave admitted-context verification to consumer acceptance.
-23. Never reconstruct a skill's `.runtime`/slot path from `ADAOS_BASE_DIR`. Resolve mutable owner-scoped files with `adaos.sdk.skill_env.skill_data_root()` (or the equivalent typed SDK capability). Core supplies the exact DEV or installed data root through current skill context and execution bindings."""
-            required_result += """
-24. Treat every admitted `adaos.contract.operation_set.v1` instruction as executable consumer authority. Copy its exact operation input and output schemas into the manifest operation declarations; compare their canonical JSON before concluding instead of rewriting the schemas from memory. Honor every `required`, `const`, enum, and `additionalProperties` boundary. An operation set with `candidate_role: provider` requires the target skill to declare every exact `required_provider_declaration`; keep independent contracts (for example a generic runner and a domain probe) as independent provider declarations rather than merging their operations. Execute every admitted required conformance fixture against the production provider, including document-set and operation-sequence fixtures rather than only a helper that resembles them, so the trusted worker can validate the newest complete document set. If the SDK normally resolves provider output through `skill_data_root()`, bind `ADAOS_SKILL_INTERNAL_DATA_ROOT` to a dedicated child of `ADAOS_TASK_RUNTIME_DIR` in the local conformance process environment only; an OS-temporary or other owner-data root is not visible to trusted task validation. Never copy that binding into the returned ExecutionSpec. `prepare_attempt.environment` must not return any platform-protected key: `ADAOS_CURRENT_SKILL`, `ADAOS_SKILL_ENV_PATH`, `ADAOS_SKILL_INTERNAL_DATA_ROOT`, `ADAOS_SKILL_NAME`, `ADAOS_SKILL_ROOT`, `ADAOS_TASK_RUNTIME_DIR`, `PYTHONHOME`, or `PYTHONPATH`; the trusted executor supplies them. When a provider returns `working_directory` and `expected_outputs`, execute its returned command in that exact directory and require every output at the exact relative path `Path(working_directory) / expected_outputs[i]`; an undeclared implicit subdirectory is a missing output. Exercise collection through the returned `output_ref` and verification through the provider's declared operation. Do not replace consumer schemas with a permissive local look-alike."""
-            required_result += """
-25. For a governed scientific handoff, treat the accepted `experiment_plan.system` object and its digest as executable subject authority. Realize the declared system, component settings, arm semantics, intervention boundary, and locked invariants on the production runner path. A bounded fixture may reduce sample counts or runtime only where the accepted execution profile permits it; it must not substitute another model family, operator, input geometry, output space, or scientific subject. Emit the required implementation-observation document from that same path so an independent consumer can detect semantic substitution."""
-            required_result += """
-26. In `adaos.research.runner.v1`, branch input acquisition only on the admitted `request.profile_conditions.input_policy.source`. `deterministic_contract_fixture` must run the bounded production conformance path without opening the accepted scientific dataset; `accepted_dataset` selects the admitted dataset path. Never invent or require a duplicate private selector under `request.conditions`."""
-            required_result += """
-27. When accepted authority requires a neutral/shared initialization or initial-equivalence invariant, test it directly on the production operators before training: use the same admitted input and shared initialization state for both arms and enforce the admitted tolerance. A declaration, parameter default, or post-training comparison is not evidence of initial equivalence."""
+8. Do not edit `.builder_previous_automation`; it is immutable input.""" if workflow_transition == "return_to_prototype" else """1. Inspect the admitted target source and machine contracts before editing; do not rediscover context already present in the packet.
+2. Implement the approved behavior through public AdaOS SDK/API contracts and the repository's existing manifest, handler, UI, and test conventions.
+3. Edit only these authorized paths: {allowed_paths}. Preserve unrelated behavior, UTF-8 text, immutable Builder inputs, and manifest `version`/`updated_at`; Forge owns release metadata.
+4. Use `ADAOS_PYTHON` with the commit-bound SDK snapshot exposed by `ADAOS_REPO_ROOT`/`PYTHONPATH`. Do not inspect its parent, the canonical checkout, sibling projects, installed skills, production data, secrets, or undeclared services.
+5. Resolve mutable owner-scoped state through public SDK bindings such as `skill_data_root()` and ContentRef. Keep test/runtime files under `ADAOS_BASE_DIR` or `ADAOS_TASK_RUNTIME_DIR`, never in candidate source.
+6. Keep packaged tests hermetic and capable of failing for a stub. Exercise the real requested boundary with bounded fixtures; the trusted package-shaped test allowance is {generated_test_timeout_seconds} seconds.
+7. Declare every imported dependency and validate the package through the authoritative manifest schema and install-strict validation. Do not add a dependency unless the task requires it.
+8. Run only relevant bounded checks and fix failures caused by this change. Do not publish, install, activate, or copy the candidate into workspace/runtime; the trusted worker owns finalization and rollback evidence.
+9. Conclude against every governed acceptance point and report any unmet point explicitly."""
         required_result = required_result.format(
             target_id=target_id,
             companion=companion,
@@ -4933,7 +4964,21 @@ Omit the envelope when there is no substantive development feedback. It is advis
         contract_execution_checklist = (
             json.dumps(contract_checklist, ensure_ascii=False, indent=2, sort_keys=True)
             if contract_checklist
-            else "No typed provider operation sequence was admitted."
+            else ""
+        )
+        contract_execution_section = (
+            f"""## Exact executable provider contract bundle
+
+This is the exact machine projection of admitted consumer authority. Implement
+and validate it with the selected consumer-contract capsules; the retained
+authoritative files and trusted worker checks remain decisive.
+
+```json
+{contract_execution_checklist}
+```
+"""
+            if contract_execution_checklist
+            else ""
         )
         root_mcp_context = (
             json.dumps(root_mcp, ensure_ascii=False, indent=2, sort_keys=True)
@@ -4951,7 +4996,7 @@ The trusted worker already performed the task-scoped MCP search and exact
 drill-downs above. Treat this bounded working set as authoritative evidence.
 No MCP server is exposed to this model turn; do not repeat descriptor discovery.
 """
-        else:
+        elif root_mcp:
             root_mcp_section = f"""## Task-scoped Root MCP route
 
 ```json
@@ -4969,6 +5014,8 @@ single selected contract with `get_descriptor_item`. The search result is the
 authoritative mini representation; do not repeat discovery with broad SDK reads.
 Do not read, print, or inspect bearer-token environment values.
 """
+        else:
+            root_mcp_section = ""
         prompt_rule_capsules_section = _prompt_rule_capsules_markdown(
             prompt_rule_capsules
         )
@@ -5093,18 +5140,7 @@ part of the submitted source snapshot.
 {development_inputs}
 ```
 
-## Exact executable provider contract bundle
-
-This bundle repeats the exact operation schemas, provider declarations,
-semantic extensions, and conformance fixtures from every admitted typed
-provider contract. Every listed constraint and assertion is mandatory and
-conjunctive. Use it as an executable working contract and verify it against
-each `authoritative_path`. The trusted worker evaluates the authoritative
-contract, not this convenience projection.
-
-```json
-{contract_execution_checklist}
-```
+{contract_execution_section}
 
 {root_mcp_section}
 

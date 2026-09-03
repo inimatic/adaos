@@ -40,7 +40,7 @@ from adaos.services.skill_factory_worker import LocalSkillFactoryWorker, context
 
 
 AUTOMATION_SESSION_SCHEMA = "adaos.builder.automation_session.v1"
-STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.17.0"
+STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.18.0"
 DESCRIPTOR_DISCOVERY_PROFILE_VERSION = "adaos-descriptor-search/1.1"
 FINALIZATION_HEARTBEAT_SECONDS = 10.0
 TRIAL_PREPARATION_RECOVERY_GRACE_SECONDS = 300.0

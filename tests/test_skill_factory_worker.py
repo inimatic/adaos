@@ -3965,7 +3965,7 @@ def test_worker_applies_frozen_agent_profile_to_codex_executor(
     }
 
 
-def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(
+def test_worker_prompt_compiles_only_relevant_sdk_workflow_and_utf8_rules(
     tmp_path: Path,
 ) -> None:
     repo_root = Path(__file__).resolve().parents[1]
@@ -4039,41 +4039,34 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(
     packet = json.loads((input_dir / "packet.json").read_text(encoding="utf-8"))
 
     assert "ADAOS_PYTHON" in prompt
-    assert "authoritative SDK" in prompt
-    assert "PowerShell string pipeline" in prompt
+    assert "public `adaos.sdk` contracts only" in prompt
     assert "every textual `Get-Content`" in prompt
     assert "`-Encoding UTF8`" in prompt
     assert "UTF-8" in prompt
     assert "Governed Change context" in prompt
-    assert "Exact executable provider contract bundle" in prompt
+    assert "Exact executable provider contract bundle" not in prompt
     assert "change.demo" in prompt
     assert "workflow.json validates" in prompt
     assert "complete TransitionDescriptor contract" in prompt
-    assert "fabricated metrics" in prompt
-    assert "Resolve skill-owned runtime storage through AdaOS SDK" in prompt
-    assert "does not permit omitting the executable scientific path" in prompt
-    assert "lifecycle allowance for this task is 180 seconds" in prompt
-    assert (
-        "Do not execute a scientific smoke or confirmatory workload from packaged tests"
-        in prompt
-    )
-    assert "exact declared name" in prompt
-    assert "skill_schema.json" in prompt
-    assert "allow_heavy_dependencies" in prompt
-    assert "experiment_plan.system" in prompt
-    assert "must not substitute another model family" in prompt
+    assert "skill_data_root()" in prompt
+    assert "test allowance is 180 seconds" in prompt
     assert "install-strict" in prompt
-    assert "trusted worker finalizer owns package" in prompt
+    assert "trusted worker owns finalization" in prompt
     assert "ADAOS_TASK_RUNTIME_DIR" in prompt
-    assert "bind `ADAOS_SKILL_INTERNAL_DATA_ROOT` to a dedicated child" in prompt
-    assert "Never copy that binding into the returned ExecutionSpec" in prompt
-    assert "`PYTHONHOME`, or `PYTHONPATH`" in prompt
-    assert "Path(working_directory) / expected_outputs[i]" in prompt
-    assert "collection through the returned `output_ref`" in prompt
-    assert "never create repository-relative `.adaos*` runtime directories" in prompt
-    assert "do not copy into or mutate the canonical workspace/runtime" in prompt
+    assert "provider_operation_set" not in prompt
+    assert "experiment system specification" not in prompt
+    assert "adaos.research.runner.v1" not in prompt
+    assert "initial equivalence" not in prompt
+    assert "Task-scoped Root MCP route" not in prompt
+    assert "Previous Automation" not in prompt
     assert "workflow.json" in prompt
     assert "irrelevant.full.catalog" not in prompt
+    assert len(prompt.encode("utf-8")) < 8_000
+    assert [item["id"] for item in packet["prompt_rule_capsules"]] == [
+        "adaos.builder.execution_boundary.v1",
+        "adaos.skill.sdk_boundary.v1",
+        "adaos.builder.workflow_definition.v1",
+    ]
     assert packet["context_packet_digest"] == "sha256:" + "a" * 64
     assert packet["validation_budget"] == {
         "schema": "adaos.builder.validation_budget.v1",
@@ -4084,6 +4077,108 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(
     assert packet["context_packet"]["change"]["change_id"] == "change.demo"
     assert packet["context_packet"]["facets"]["workflow_definition"]["authoring"][
         "adapter_catalog"
+    ]
+
+
+def test_worker_prompt_adds_provider_contract_capsule_only_for_admitted_contract(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = tmp_path / "workspace"
+    contract_path = workspace / ".adaos_context" / "session" / "contract.json"
+    contract_path.parent.mkdir(parents=True)
+    contract_path.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.contract.operation_set.v1",
+                "contract": "demo.metrics.v1",
+                "capability": "demo.metrics",
+                "candidate_role": "provider",
+                "operations": {
+                    "query": {
+                        "input_schema": {"type": "object"},
+                        "output_schema": {"type": "object"},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (workspace / "skills" / "demo").mkdir(parents=True)
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo_root,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    input_dir = tmp_path / "input"
+    assignment = {
+        "task_id": "task.provider-prompt",
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {"sparse_paths": ["skills/demo/"]},
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": "Implement the admitted query provider.",
+                "development_context": {
+                    "instruction_inputs": [
+                        {
+                            "path": ".adaos_context/session/contract.json",
+                            "media_type": "application/json",
+                            "content_digest": "sha256:" + "a" * 64,
+                        }
+                    ]
+                },
+            }
+        },
+    }
+
+    worker._build_packet(assignment, workspace, input_dir)
+    prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+    packet = json.loads((input_dir / "packet.json").read_text(encoding="utf-8"))
+
+    assert "Exact executable provider contract bundle" in prompt
+    assert '"contract": "demo.metrics.v1"' in prompt
+    assert "adaos.builder.consumer_contract.v1" in {
+        item["id"] for item in packet["prompt_rule_capsules"]
+    }
+    assert "adaos.research.scientific_handoff.v1" not in {
+        item["id"] for item in packet["prompt_rule_capsules"]
+    }
+
+
+def test_contract_prompt_facets_select_research_rules_structurally() -> None:
+    facets = worker_module._contract_prompt_facet_keys(
+        {
+            "contracts": [
+                {
+                    "contract": "adaos.research.runner.v1",
+                    "domain_conformance": {
+                        "system_specification": {"required": True},
+                        "initial_equivalence": {"required": True},
+                    },
+                }
+            ]
+        }
+    )
+    capsules = worker_module._selected_prompt_rule_capsules(
+        target_type="skill",
+        repair_hints={"facet_keys": facets},
+        context_packet={},
+    )
+
+    assert facets == [
+        "initial_equivalence",
+        "provider_operation_set",
+        "research_runner",
+        "scientific_handoff",
+    ]
+    assert [item["id"] for item in capsules] == [
+        "adaos.builder.execution_boundary.v1",
+        "adaos.skill.sdk_boundary.v1",
+        "adaos.builder.consumer_contract.v1",
+        "adaos.research.scientific_handoff.v1",
+        "adaos.research.runner_input_policy.v1",
+        "adaos.research.initial_equivalence.v1",
     ]
 
 

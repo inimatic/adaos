@@ -2,7 +2,7 @@
 
 Status: target architecture.
 
-Last reviewed: 2026-08-31.
+Last reviewed: 2026-09-03.
 
 This document defines the AdaOS boundary for user, runtime, review, and
 conversation feedback that may drive software evolution. It sits between raw
@@ -213,6 +213,51 @@ insufficiency evidence and returns the ticket to `accepted`, `claimed`, or
 `deferred`, `waiting_for_user`, and `waiting_for_core` are pause states. They
 remain active backlog states, not terminal closure, and they must preserve the
 reason, owner, wake-up condition, and related ticket refs.
+
+## Development Feedback Review Registry
+
+Pre-Codex qualification, Codex implementation, validators, Builder, and human
+review can discover defects in the development interface itself while working
+on a project. These observations are not automatically user requests and must
+not silently inflate the Dev Ticket backlog. AdaOS stores them first as
+`adaos.development_feedback.v1` resources in the workspace review registry.
+
+The registry covers `missing_capability`, `ambiguous_contract`,
+`conflicting_contract`, `inefficient_contract`, `insufficient_context`,
+`observability_gap`, `validation_gap`, and `policy_block`. Each record retains
+source, confidence, impact, blocking state, project/component/SDK refs,
+evidence, related Builder task and Dev Ticket refs, comments, dedup count,
+optimistic revision, and a hash-chained event history.
+
+Its lifecycle is deliberately smaller than the user ticket lifecycle:
+
+```text
+observed -> triaged -> accepted -> promoted
+     \---------> rejected -> triaged
+```
+
+`promoted` means a human or policy owner has converted the accepted
+observation into one of three governed routes:
+
+- a project `review_debt` Dev Ticket;
+- an SDK Understanding Signal/Ticket;
+- a Core capability request.
+
+Models may capture observations but cannot grant scope, choose a core owner,
+or promote their own proposal. A blocking missing capability uses the existing
+Core escalation envelope instead of also emitting Development Feedback.
+
+The registry is exposed through service/SDK, authenticated API, Root MCP, and
+Declarative Resource Workbench operations. Builder Context Inspector projects
+only records related to the selected project, component, or Dev Ticket and
+shows status/category counts before full details. The projection is read-only;
+triage, comments, acceptance, rejection, and promotion remain explicit
+resource operations with role checks.
+
+This is an agent/developer review queue, not a second end-user ticket system.
+Its purpose is to preserve multi-sided evidence about AdaOS as a product for
+builders while keeping user-authored request state and Builder execution state
+independent.
 
 ## Codex Producer Boundary
 

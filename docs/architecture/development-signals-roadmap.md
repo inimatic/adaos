@@ -2,7 +2,7 @@
 
 Status: proposed cross-domain roadmap.
 
-Last reviewed: 2026-08-31.
+Last reviewed: 2026-09-03.
 
 This roadmap sequences the work needed to make evolution feedback a governed,
 natural AdaOS interface for both people and Codex. It is subordinate to
@@ -81,6 +81,10 @@ signal becomes a Dev Ticket visible to a person and consumable by Codex.
 - [x] `[should]` `DS0-15` Add open/read-model filters for `status_group`,
   `owner_area`, `component_ref`, `scenario_id`, `skill_id`, `modal_id`,
   `severity`, `blocking`, `owner`, `updated_since`, and full-text search.
+- [x] `[should]` `DS0-16` Import legacy
+  `builder.development_feedback.v1` records idempotently into the typed
+  Development Feedback review registry; repair-task, review-anchor, and NLU
+  candidate migration remain under `DS0-08`.
 
 Implementation note, 2026-08-31: the first store lives in runtime state under
 `development_tickets/state.json` and is intentionally local/private. It stores
@@ -667,13 +671,37 @@ SDK docs/examples, SDK/API implementation, policy decision, or Core Dev Ticket.
   replacing deterministic validation.
 - [ ] `[could]` `DS9-10` Add model-specific guidance packs only after the
   language-neutral SDK/resource contracts and eval cases are stable.
+- [x] `[must]` `DS9-11` Add workspace-authoritative
+  `adaos.development_feedback.v1` with typed source/category/impact,
+  project/component/SDK refs, evidence, dedup, optimistic revision, comments,
+  and `observed -> triaged -> accepted/rejected -> promoted` lifecycle.
+- [x] `[must]` `DS9-12` Capture bounded Development Feedback from the
+  Root-accounted pre-Codex qualifier and the isolated Codex final response;
+  keep it advisory and mutually exclusive with blocking core escalation.
+- [x] `[must]` `DS9-13` Expose Development Feedback through SDK, authenticated
+  API, Root MCP, role-aware Declarative Resource Workbench operations, and a
+  project/component/ticket-scoped Builder Context Inspector projection.
+- [x] `[must]` `DS9-14` Require explicit acceptance before promotion and route
+  accepted observations to project review debt, SDK Understanding, or Core
+  capability requests without allowing a model to grant its own authority.
+- [ ] `[must]` `DS9-15` Add validator and runtime producers for public method
+  application failures, including expected/observed result, exact operation,
+  validation receipt, task/run ref, and user acceptance or rejection.
+- [ ] `[should]` `DS9-16` Add a dedicated Builder review view over the generic
+  resource projection with saved filters, related evidence/artifact opening,
+  and promotion preview; do not create a second private ticket store.
 
-Implementation note, 2026-08-31: the first SDK Understanding Signal path is
+Implementation note, 2026-09-03: the first SDK Understanding Signal path is
 available through service, API, CLI, and Builder-facing classification. It
 records method/resource refs, signal kind, diagnosis, observed behavior,
 expected behavior, trace evidence, and optional links back to project tickets.
-The replay/eval pipeline, richer rejection taxonomy, docs/example routing,
-agent product surface, and qualification metrics remain open.
+Pre-Codex LLM and Codex observations now enter a separate workspace review
+registry and are visible through Resource Workbench, Root MCP, and the scoped
+Builder Context Inspector. Legacy Builder session feedback imports
+idempotently. Promotion remains an explicit human/policy operation. Validator
+application traces, replay/eval creation, richer rejection taxonomy,
+docs/example routing, the dedicated review view, and qualification metrics
+remain open.
 
 ## Recommended First Slice
 

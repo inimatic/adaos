@@ -1974,6 +1974,14 @@ For a repair that crosses WebUI and handler boundaries, qualification must add
 the skill manifest and bind all three source preconditions as one public-tool
 contract closure before a model can run.
 
+The current machine projection is `adaos.builder.prompt_facts.v1`. It carries
+language-neutral `concepts`, `surface_kinds`, `operation_kinds`, `data_planes`,
+and `effects`, plus explicit i18n, access, conversation, and lifecycle flags.
+These values are qualification evidence, not write authority. The trusted
+worker still resolves exact source paths, verifies their digests, closes public
+tool graphs, and rejects model-proposed paths or capabilities outside the
+admitted assignment.
+
 The permanent execution capsule contains only the boundaries that apply to
 every run: isolated source authority, explicit UTF-8 reads, and worker-owned
 validation, publication, activation, and Trial delivery. Conditional capsules
@@ -1989,7 +1997,10 @@ cover:
 - localization, NLU, voice/Telegram semantics, and Pending Actions;
 - Root-accounted asynchronous LLM jobs and schema-validated application;
 - member/subnet identity, bounded fanout, and reconnect-safe handling;
-- exact consumer/provider ABI and governed core-capability escalation.
+- exact consumer/provider ABI and governed core-capability escalation;
+- workflow-definition authority selected by the Context Packet facet;
+- scientific handoff, research-runner input policy, and initial-equivalence
+  rules selected only from admitted typed consumer contracts.
 
 Detailed UI recipes, examples, migration notes, rationale, and reference
 tables remain retrievable documentation. They enter a task only through an
@@ -1997,6 +2008,33 @@ explicit detail request or a selected descriptor/source slice. Root MCP is one
 retrieval adapter over this representation; it is not the owner of prompt
 formation. A structured or validation-only repair still records the selected
 capsules even when no model call occurs.
+
+The permanent full-realization checklist must stay domain-neutral. Exact
+operation schemas and conformance fixtures enter the prompt only when an
+admitted `adaos.contract.operation_set.v1` exists. Provider, research,
+deployment, migration, and Supervisor guidance must not be included in an
+ordinary skill task merely because it appears in this guide. Exact schemas,
+source digests, allowed paths, validation budgets, and contract closure are
+machine data checked by the worker; detailed documentation is retrieved by a
+bounded context or MCP search when selected facts require it.
+
+### Development feedback output
+
+Pre-Codex qualification and isolated Codex may report a defect in the public
+development interface without turning it into an implementation workaround.
+Use one bounded `adaos-development-feedback` envelope only for a substantive
+missing/ambiguous/conflicting/inefficient contract, insufficient context,
+observability or validation gap, or policy boundary. Include confidence,
+impact, stable target refs, evidence, and the smallest useful recommendation.
+Omit it on routine successful work.
+
+The worker parses this output deterministically and stores
+`adaos.development_feedback.v1` in the workspace review registry. It is
+advisory evidence: Codex cannot use it to broaden source scope, mutate core,
+or promote itself into a project/SDK/core Dev Ticket. An unresolved blocking
+core capability uses the dedicated escalation contract instead, never both
+envelopes. Human/policy triage decides whether an observation is rejected,
+retained for analysis, or promoted into governed work.
 
 Before coding:
 

@@ -1,6 +1,6 @@
 {
   "schema": "adaos.builder.prompt_rule_registry.v1",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "published_at": "2026-09-03T14:30:00+00:00",
   "authority_ref": "core:adaos.prompt-rule-registry",
   "items": [
@@ -87,6 +87,20 @@
         "A scenario orchestrates skills, surfaces, NLU affordances, and bindings; do not hide reusable capability, external IO, long-running work, heavy state, or new permissions inside scenario data.",
         "Declare required and optional skill dependencies and bind actions to real exported tools. Missing required capability blocks apply; missing optional capability needs an explicit degraded or guided-install state.",
         "Keep scenario-owned state separate from skill-owned domain state, and do not let Prototype or Preview install, activate, or mutate live runtime."
+      ]
+    },
+    {
+      "id": "adaos.builder.workflow_definition.v1",
+      "title": "Declarative workflow authority",
+      "source": "docs/guides/llm-skill-development.md#workflow-engine-authoring",
+      "applicability": {
+        "target_types": ["skill", "scenario"],
+        "facet_keys": ["workflow_definition"]
+      },
+      "rules": [
+        "When a manifest references `workflow.json`, treat that admitted file as the workflow-definition authority; do not recreate transitions as independent Python or UI tables.",
+        "Preserve the complete TransitionDescriptor contract and validate the definition structurally through the public workflow boundary.",
+        "Keep runtime state, transition effects, and presentation projections separate from the immutable workflow definition."
       ]
     },
     {
@@ -264,12 +278,53 @@
       "title": "Exact consumer and SDK contract realization",
       "source": "docs/guides/llm-skill-development.md#consumer-driven-contract-realization",
       "applicability": {
+        "facet_keys": ["provider_operation_set"],
         "match_any": ["provider_contract", "operation_set", "conformance", "sdk contract", "api contract", "required operation"]
       },
       "rules": [
         "Treat admitted operation names and request/response schemas as ABI: implement and export every exact required operation, including required/const/enum/additionalProperties boundaries.",
         "Prove compatibility through the real published consumer normalizer, validator, or conformance path; a self-authored look-alike fixture is not consumer evidence.",
+        "Run every required admitted conformance fixture against the production provider path. Keep independent contracts independent, use worker-supplied task runtime roots, and never return platform-protected environment keys.",
+        "Resolve declared working directories and expected outputs exactly, then collect and verify through the admitted operations; do not substitute an implicit path or permissive local schema.",
         "When the public SDK/API cannot express the requirement, do not patch around core or imitate the contract locally; return the governed core-capability escalation."
+      ]
+    },
+    {
+      "id": "adaos.research.scientific_handoff.v1",
+      "title": "Governed scientific handoff",
+      "source": "docs/architecture/research-fabric.md",
+      "applicability": {
+        "facet_keys": ["scientific_handoff"]
+      },
+      "rules": [
+        "Treat the accepted experiment system specification and digest as executable subject authority: preserve component settings, arm semantics, intervention boundaries, and locked invariants on the production runner path.",
+        "A bounded fixture may reduce cost only where the admitted execution profile permits; it must not substitute another model family, operator, input geometry, output space, or scientific subject.",
+        "Emit the required implementation observation from that same path so an independent consumer can detect semantic substitution."
+      ]
+    },
+    {
+      "id": "adaos.research.runner_input_policy.v1",
+      "title": "Research runner input policy",
+      "source": "docs/architecture/research-fabric.md",
+      "applicability": {
+        "facet_keys": ["research_runner"]
+      },
+      "rules": [
+        "For `adaos.research.runner.v1`, select input only from the admitted `request.profile_conditions.input_policy.source`.",
+        "`deterministic_contract_fixture` runs bounded production conformance without opening the accepted dataset; `accepted_dataset` selects the admitted dataset path.",
+        "Do not add a duplicate private selector under `request.conditions` or infer dataset authority from ambient files."
+      ]
+    },
+    {
+      "id": "adaos.research.initial_equivalence.v1",
+      "title": "Initial equivalence evidence",
+      "source": "docs/architecture/research-fabric.md",
+      "applicability": {
+        "facet_keys": ["initial_equivalence"]
+      },
+      "rules": [
+        "When initial equivalence is required, test it on production operators before training with the same admitted input and shared initialization state for both arms.",
+        "Enforce the admitted tolerance directly; a declaration, parameter default, or post-training comparison is not equivalence evidence."
       ]
     }
   ]
