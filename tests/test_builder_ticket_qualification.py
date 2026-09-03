@@ -183,6 +183,72 @@ def test_validation_gate_qualification_targets_exact_manifest_with_structured_ed
     assert "max_payload_bytes" not in operation["old"]
 
 
+def test_webui_tool_validation_qualification_includes_manifest_ui_and_handler(
+    tmp_path: Path,
+) -> None:
+    source = _manifest_source_tree(tmp_path / "demo_skill")
+    (source / "handlers").mkdir()
+    (source / "handlers" / "main.py").write_text(
+        """from adaos.sdk.core.decorators import tool
+
+@tool(summary="Refresh usage")
+def refresh_usage(webspace_id: str = "desktop"):
+    return {"ok": True, "used": 10, "remaining": 90}
+""",
+        encoding="utf-8",
+    )
+    (source / "webui.json").write_text(
+        json.dumps(
+            {
+                "actions": [
+                    {
+                        "type": "callSkill",
+                        "target": "demo_skill.refresh_usage",
+                        "params": {"webspace_id": "$runtime.webspace_id"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    ticket = {
+        "ticket_id": "dticket.webui-tool-validation",
+        "summary": "Skill demo_skill failed the validation publication gate",
+        "component_ref": "skill:demo_skill",
+        "target_scope": {"type": "skill", "id": "demo_skill"},
+        "metadata": {
+            "error": (
+                "RuntimeError: Generated project validation failed: "
+                "skills/demo_skill/skill.yaml: webui.action.skill_tool_unknown: "
+                "callSkill references undeclared tool 'demo_skill.refresh_usage'. "
+                "(webui.json:$.actions[0])"
+            )
+        },
+        "evidence_refs": [],
+    }
+
+    result = prepare_repair_qualification(
+        ticket,
+        development_source={"status": "source_available", "dev_source_path": str(source)},
+        object_type="skill",
+        object_id="demo_skill",
+    )
+
+    assert result["ready"] is True
+    assert result["model_call_expected"] is True
+    repair = result["builder_repair"]
+    assert repair["target_files"] == [
+        "skills/demo_skill/skill.yaml",
+        "skills/demo_skill/handlers/main.py",
+        "skills/demo_skill/webui.json",
+    ]
+    assert "structured_edits" not in repair
+    assert any(
+        "demo_skill.refresh_usage" in check and "input/output schemas" in check
+        for check in repair["acceptance_checks"]
+    )
+
+
 def test_service_can_apply_high_confidence_local_qualification(
     tmp_path: Path,
     monkeypatch,

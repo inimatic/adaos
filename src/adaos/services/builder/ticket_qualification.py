@@ -37,6 +37,9 @@ _VALIDATION_FINDING_RE = re.compile(
     r":\s+(?P<code>[A-Za-z0-9_.-]+):"
 )
 _DATA_ROUTE_LOCATION_RE = re.compile(r"data_routes\[(?P<index>\d+)]\.budget")
+_WEBUI_TOOL_REFERENCE_RE = re.compile(
+    r"(?:callSkill|skill dataSource) references undeclared tool ['\"](?P<target>[^'\"]+)['\"]"
+)
 _DEFAULT_BOUNDED_ROUTE_PAYLOAD_BYTES = 65_536
 _STOP_WORDS = {
     "and",
@@ -486,6 +489,30 @@ def _validation_gate_qualification(
     if not matched:
         return None
     selected = list(dict.fromkeys(_text(entry.get("workspace_path")) for _, entry in matched))
+    webui_tool_targets = list(
+        dict.fromkeys(
+            match.group("target")
+            for finding, _entry in matched
+            if _text(finding.get("code"))
+            in {
+                "webui.action.skill_tool_unknown",
+                "webui.data_source.skill_tool_unknown",
+            }
+            for match in [_WEBUI_TOOL_REFERENCE_RE.search(_text(finding.get("message")))]
+            if match is not None
+        )
+    )
+    if webui_tool_targets:
+        supporting_paths = {
+            "webui.json",
+            "handlers/main.py",
+        }
+        selected.extend(
+            _text(entry.get("workspace_path"))
+            for entry in entries
+            if _text(entry.get("relative_path")) in supporting_paths
+            and _text(entry.get("workspace_path")) not in selected
+        )
     selected_entries = [by_path[path] for path in selected]
     operations = [
         operation
@@ -499,6 +526,7 @@ def _validation_gate_qualification(
         ]
         if operation is not None
     ]
+    fully_structured = len(operations) == len(matched)
     summary = _text(ticket.get("summary"))
     codes = list(dict.fromkeys(_text(finding.get("code")) for finding, _ in matched))
     repair: dict[str, Any] = {
@@ -508,6 +536,10 @@ def _validation_gate_qualification(
         "target_refs": [f"file:{path}" for path in selected],
         "acceptance_checks": [
             *[f"Clear validation finding: {code}" for code in codes],
+            *[
+                f"Declare {target} in skill.yaml with the exact @tool entry and complete input/output schemas."
+                for target in webui_tool_targets
+            ],
             f"Validate {object_type}:{object_id} after the bounded change.",
         ],
         "max_changed_files": len(selected),
@@ -523,7 +555,7 @@ def _validation_gate_qualification(
             for entry in selected_entries
         ],
     }
-    if len(operations) == len(matched):
+    if fully_structured:
         repair["structured_edits"] = {
             "schema": "adaos.builder.structured_edit_set.v1",
             "operations": operations,
@@ -533,7 +565,7 @@ def _validation_gate_qualification(
         "status": "ready",
         "ready": True,
         "confidence": "high",
-        "model_call_expected": False,
+        "model_call_expected": not fully_structured,
         "estimated_model_tokens": 0 if operations else None,
         "recommended_next": "apply_local_qualification",
         "reason": "exact validation findings were mapped to authoritative DEV source",
