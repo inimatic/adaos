@@ -48,9 +48,18 @@ class DevelopmentFeedbackCommentRequest(BaseModel):
 
 
 class DevelopmentFeedbackPromoteRequest(BaseModel):
-    route: str = Field(..., pattern="^(project|sdk_understanding|core)$")
+    route: str = Field(..., pattern="^(project|sdk_understanding|core|qualified)$")
     actor: str = "api"
     payload: dict[str, Any] = Field(default_factory=dict)
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
+class DevelopmentFeedbackQualifyRequest(BaseModel):
+    owner_route: str
+    promotion_route: str
+    owner_ref: str = ""
+    rationale: str = Field(..., min_length=3, max_length=4000)
+    actor: str
     expected_revision: int | None = Field(default=None, ge=1)
 
 
@@ -76,6 +85,8 @@ def list_feedback(
     rejection_class: str | None = None,
     contract_ref: str | None = None,
     operation_id: str | None = None,
+    owner_route: str | None = None,
+    qualification_status: str | None = None,
     updated_since: str | None = None,
     limit: int = Query(default=200, ge=0, le=1000),
     service: DevelopmentFeedbackService = Depends(_get_service),
@@ -90,6 +101,8 @@ def list_feedback(
         rejection_class=rejection_class,
         contract_ref=contract_ref,
         operation_id=operation_id,
+        owner_route=owner_route,
+        qualification_status=qualification_status,
         updated_since=updated_since,
         limit=limit,
     )
@@ -105,6 +118,35 @@ def get_feedback(
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="development feedback not found")
     return {"ok": True, "feedback": item}
+
+
+@router.get("/{feedback_id}/qualification")
+def get_feedback_qualification(
+    feedback_id: str,
+    service: DevelopmentFeedbackService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "preview": service.qualification_preview(feedback_id)}
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="development feedback not found",
+        ) from exc
+
+
+@router.post("/{feedback_id}/qualify")
+def qualify_feedback(
+    feedback_id: str,
+    body: DevelopmentFeedbackQualifyRequest,
+    service: DevelopmentFeedbackService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "feedback": service.qualify(feedback_id, **body.model_dump())}
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        code = status.HTTP_409_CONFLICT if "revision" in str(exc) else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
 
 
 @router.post("/{feedback_id}/transition")

@@ -48,6 +48,28 @@ REJECTION_CLASSES = {
     "weak_patch",
     "insufficient_validation",
 }
+OWNER_ROUTES = {
+    "user_clarification",
+    "nlu_teacher",
+    "builder_retry",
+    "sdk_documentation",
+    "sdk_examples",
+    "sdk_implementation",
+    "policy_review",
+    "core_ticket",
+}
+PROMOTION_ROUTES = {"project", "sdk_understanding", "core"}
+OWNER_ROUTE_PROMOTIONS = {
+    "user_clarification": {"project"},
+    "nlu_teacher": {"project"},
+    "builder_retry": {"project"},
+    "sdk_documentation": {"sdk_understanding"},
+    "sdk_examples": {"sdk_understanding"},
+    "sdk_implementation": {"core"},
+    "policy_review": {"core"},
+    "core_ticket": {"core"},
+}
+QUALIFICATION_ACTOR_PREFIXES = ("human:", "user:", "owner:", "policy:", "admin:")
 IMPACTS = {
     "blocker",
     "correctness",
@@ -134,6 +156,198 @@ def _target_scope(target_refs: Sequence[str]) -> tuple[dict[str, Any], str, str]
     )
 
 
+def _first_ref(target_refs: Sequence[str], prefixes: Sequence[str]) -> str:
+    return next(
+        (
+            ref
+            for ref in (_text(value) for value in target_refs)
+            if any(ref.startswith(f"{prefix}:") for prefix in prefixes)
+        ),
+        "",
+    )
+
+
+def _routing_choice(record: Mapping[str, Any]) -> tuple[str, str, float, str]:
+    category = _text(record.get("category"))
+    classification = (
+        dict(record.get("classification"))
+        if isinstance(record.get("classification"), Mapping)
+        else {}
+    )
+    rejection_class = _text(classification.get("rejection_class"))
+    rejection_routes = {
+        "requirement_ambiguity": (
+            "user_clarification",
+            "project",
+            0.95,
+            "The rejection is classified as an ambiguous user requirement.",
+        ),
+        "builder_misread_user": (
+            "builder_retry",
+            "project",
+            0.95,
+            "The Builder interpretation, rather than the platform contract, was rejected.",
+        ),
+        "sdk_doc_ambiguity": (
+            "sdk_documentation",
+            "sdk_understanding",
+            0.95,
+            "The rejection is qualified as ambiguous SDK documentation.",
+        ),
+        "sdk_capability_gap": (
+            "sdk_implementation",
+            "core",
+            0.95,
+            "The rejection is qualified as a missing SDK or API capability.",
+        ),
+        "weak_patch": (
+            "builder_retry",
+            "project",
+            0.95,
+            "The requested capability exists but the implementation was inadequate.",
+        ),
+        "insufficient_validation": (
+            "builder_retry",
+            "project",
+            0.95,
+            "The implementation requires stronger project validation before acceptance.",
+        ),
+    }
+    if category == "result_rejected" and rejection_class in rejection_routes:
+        return rejection_routes[rejection_class]
+    routes = {
+        "missing_capability": (
+            "sdk_implementation",
+            "core",
+            0.85,
+            "A missing public capability requires an SDK or API owner.",
+        ),
+        "ambiguous_contract": (
+            "sdk_documentation",
+            "sdk_understanding",
+            0.85,
+            "An ambiguous public contract should first be clarified by its documentation owner.",
+        ),
+        "conflicting_contract": (
+            "sdk_implementation",
+            "core",
+            0.85,
+            "Conflicting public behavior requires the owning SDK or API implementation boundary.",
+        ),
+        "inefficient_contract": (
+            "sdk_implementation",
+            "core",
+            0.75,
+            "A recurring contract cost requires an SDK or API design decision.",
+        ),
+        "insufficient_context": (
+            "user_clarification",
+            "project",
+            0.75,
+            "The project cannot proceed safely without bounded clarification.",
+        ),
+        "observability_gap": (
+            "sdk_implementation",
+            "core",
+            0.8,
+            "Missing public diagnostics require an SDK or API implementation owner.",
+        ),
+        "validation_gap": (
+            "builder_retry",
+            "project",
+            0.75,
+            "The current project result needs another bounded implementation or validation pass.",
+        ),
+        "policy_block": (
+            "policy_review",
+            "core",
+            0.9,
+            "A policy boundary must be decided by the core policy owner.",
+        ),
+        "result_rejected": (
+            "user_clarification",
+            "project",
+            0.4,
+            "The rejected result has not yet been diagnostically classified.",
+        ),
+    }
+    return routes[category]
+
+
+def _owner_ref_for(record: Mapping[str, Any], promotion_route: str) -> str:
+    prefixes = {
+        "project": ("project", "scenario", "skill", "modal", "component"),
+        "sdk_understanding": ("sdk", "api", "resource"),
+        "core": ("core",),
+    }[promotion_route]
+    return _first_ref(record.get("target_refs") or [], prefixes)
+
+
+def _qualification_preview(record: Mapping[str, Any]) -> dict[str, Any]:
+    owner_route, promotion_route, confidence, reason = _routing_choice(record)
+    owner_ref = _owner_ref_for(record, promotion_route)
+    classification = (
+        dict(record.get("classification"))
+        if isinstance(record.get("classification"), Mapping)
+        else {}
+    )
+    missing_requirements: list[str] = []
+    if record.get("category") == "result_rejected" and _text(
+        classification.get("rejection_class")
+    ) not in REJECTION_CLASSES:
+        missing_requirements.append("rejection_class")
+    if not owner_ref:
+        missing_requirements.append("owner_ref")
+    current = (
+        dict(classification.get("qualification"))
+        if isinstance(classification.get("qualification"), Mapping)
+        else None
+    )
+    result = {
+        "schema": "adaos.development_feedback.routing_preview.v1",
+        "feedback_id": record.get("feedback_id"),
+        "feedback_revision": int(record.get("revision") or 0),
+        "authoritative": False,
+        "recommended": {
+            "owner_route": owner_route,
+            "promotion_route": promotion_route,
+            "owner_ref": owner_ref or None,
+            "confidence": confidence,
+            "reason": reason,
+        },
+        "missing_requirements": missing_requirements,
+        "ready_to_qualify": not missing_requirements,
+        "current_qualification": current,
+    }
+    result["digest"] = "sha256:" + hashlib.sha256(
+        json.dumps(
+            result,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    return result
+
+
+def _validate_qualification(qualification: Mapping[str, Any]) -> None:
+    schema_path = (
+        Path(__file__).resolve().parents[1]
+        / "abi"
+        / "development_feedback.qualification.v1.schema.json"
+    )
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    errors = sorted(
+        Draft202012Validator(schema).iter_errors(qualification),
+        key=lambda item: list(item.path),
+    )
+    if errors:
+        raise ValueError(
+            f"invalid development feedback qualification: {errors[0].message}"
+        )
+
+
 @dataclass(slots=True)
 class DevelopmentFeedbackService:
     """Workspace index for model/developer observations before ticket promotion."""
@@ -182,6 +396,10 @@ class DevelopmentFeedbackService:
             raise ValueError(f"unsupported development feedback category: {category_token}")
         if len(text) < 3:
             raise ValueError("development feedback summary is required")
+        if isinstance(classification, Mapping) and "qualification" in classification:
+            raise ValueError(
+                "development feedback qualification requires the governed qualify operation"
+            )
         refs = list(dict.fromkeys(_text(value) for value in target_refs if ":" in _text(value)))[:50]
         impacts = list(
             dict.fromkeys(_text(value).lower() for value in impact if _text(value).lower() in IMPACTS)
@@ -264,6 +482,14 @@ class DevelopmentFeedbackService:
         value = self._read()["records"].get(_text(feedback_id))
         return _clone(value) if isinstance(value, Mapping) else None
 
+    def qualification_preview(
+        self, feedback: str | Mapping[str, Any]
+    ) -> dict[str, Any]:
+        record = dict(feedback) if isinstance(feedback, Mapping) else self.get(feedback)
+        if not record:
+            raise KeyError(feedback)
+        return _clone(_qualification_preview(record))
+
     def list(
         self,
         *,
@@ -276,6 +502,8 @@ class DevelopmentFeedbackService:
         rejection_class: str | None = None,
         contract_ref: str | None = None,
         operation_id: str | None = None,
+        owner_route: str | None = None,
+        qualification_status: str | None = None,
         updated_since: str | None = None,
         limit: int = 200,
         import_legacy: bool = True,
@@ -287,6 +515,8 @@ class DevelopmentFeedbackService:
         rejection_token = _text(rejection_class).lower()
         contract_token = _text(contract_ref)
         operation_token = _text(operation_id)
+        owner_route_token = _text(owner_route)
+        qualification_status_token = _text(qualification_status)
         if rejection_token and rejection_token not in REJECTION_CLASSES:
             raise ValueError(
                 f"unsupported development feedback rejection class: {rejection_token}"
@@ -302,6 +532,11 @@ class DevelopmentFeedbackService:
             for application_trace in [
                 dict(classification.get("application_trace"))
                 if isinstance(classification.get("application_trace"), Mapping)
+                else {}
+            ]
+            for qualification in [
+                dict(classification.get("qualification"))
+                if isinstance(classification.get("qualification"), Mapping)
                 else {}
             ]
             if (not status or item.get("status") == status)
@@ -333,6 +568,15 @@ class DevelopmentFeedbackService:
                     if _text(value)
                 }
             )
+            and (
+                not owner_route_token
+                or _text(qualification.get("owner_route")) == owner_route_token
+            )
+            and (
+                not qualification_status_token
+                or _text(qualification.get("status"))
+                == qualification_status_token
+            )
             and (not updated_since or _text(item.get("updated_at")) >= updated_since)
             and (
                 not token
@@ -342,6 +586,111 @@ class DevelopmentFeedbackService:
         ]
         values.sort(key=lambda item: (_text(item.get("updated_at")), _text(item.get("feedback_id"))), reverse=True)
         return _clone(values[: max(0, min(int(limit), 1000))])
+
+    def qualify(
+        self,
+        feedback_id: str,
+        *,
+        owner_route: str,
+        promotion_route: str,
+        actor: str,
+        rationale: str,
+        owner_ref: str = "",
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        owner_route_token = _text(owner_route).lower()
+        promotion_route_token = _text(promotion_route).lower()
+        actor_token = _text(actor)
+        rationale_token = _text(rationale)
+        if owner_route_token not in OWNER_ROUTES:
+            raise ValueError(
+                f"unsupported development feedback owner route: {owner_route_token}"
+            )
+        if promotion_route_token not in PROMOTION_ROUTES:
+            raise ValueError(
+                "development feedback promotion route must be project, "
+                "sdk_understanding, or core"
+            )
+        if promotion_route_token not in OWNER_ROUTE_PROMOTIONS[owner_route_token]:
+            raise ValueError(
+                "development feedback owner route is incompatible with promotion route"
+            )
+        if not actor_token:
+            raise ValueError("development feedback qualification actor is required")
+        if not actor_token.lower().startswith(QUALIFICATION_ACTOR_PREFIXES):
+            raise ValueError(
+                "development feedback qualification requires a human or policy actor"
+            )
+        if len(rationale_token) < 3:
+            raise ValueError("development feedback qualification rationale is required")
+
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            record = state["records"].get(_text(feedback_id))
+            if not isinstance(record, Mapping):
+                raise KeyError(feedback_id)
+            record = dict(record)
+            if expected_revision is not None and int(record.get("revision") or 0) != expected_revision:
+                raise ValueError("development feedback revision conflict")
+            if record.get("status") == "promoted":
+                raise ValueError("promoted development feedback cannot be requalified")
+            classification = (
+                dict(record.get("classification"))
+                if isinstance(record.get("classification"), Mapping)
+                else {}
+            )
+            if record.get("category") == "result_rejected" and _text(
+                classification.get("rejection_class")
+            ) not in REJECTION_CLASSES:
+                raise ValueError(
+                    "rejected Builder result must be diagnostically classified before qualification"
+                )
+            resolved_owner_ref = _text(owner_ref) or _owner_ref_for(
+                record, promotion_route_token
+            )
+            required_prefixes = {
+                "project": ("project:", "scenario:", "skill:", "modal:", "component:"),
+                "sdk_understanding": ("sdk:", "api:", "resource:"),
+                "core": ("core:",),
+            }[promotion_route_token]
+            if not resolved_owner_ref.startswith(required_prefixes):
+                raise ValueError(
+                    f"development feedback {promotion_route_token} qualification "
+                    "requires a compatible owner_ref"
+                )
+            preview = _qualification_preview(record)
+            qualification = {
+                "schema": "adaos.development_feedback.qualification.v1",
+                "status": "qualified",
+                "owner_route": owner_route_token,
+                "promotion_route": promotion_route_token,
+                "owner_ref": resolved_owner_ref,
+                "rationale": rationale_token[:4000],
+                "qualified_by": actor_token[:200],
+                "qualified_at": _now(),
+                "routing_preview_digest": preview["digest"],
+            }
+            _validate_qualification(qualification)
+            record["classification"] = {
+                **classification,
+                "qualification": qualification,
+            }
+            if record.get("status") in {"observed", "rejected"}:
+                record["status"] = "triaged"
+            self._advance(
+                record,
+                actor=actor_token,
+                kind="qualified",
+                owner_route=owner_route_token,
+                promotion_route=promotion_route_token,
+                owner_ref=resolved_owner_ref,
+            )
+            self._validate(record)
+            state["records"][record["feedback_id"]] = record
+            event = self._event(state, record, "qualified", actor_token)
+            self._write(state)
+        self._publish(event)
+        return _clone(record)
 
     def transition(
         self,
@@ -366,6 +715,10 @@ class DevelopmentFeedbackService:
             if target not in TRANSITIONS.get(current, set()):
                 raise ValueError(f"invalid development feedback transition: {current}->{target}")
             if classification:
+                if "qualification" in classification:
+                    raise ValueError(
+                        "development feedback qualification requires the governed qualify operation"
+                    )
                 record["classification"] = {
                     **dict(record.get("classification") or {}),
                     **dict(classification),
@@ -431,16 +784,37 @@ class DevelopmentFeedbackService:
             return {"ok": True, "idempotent": True, "feedback": record, "ticket_refs": record.get("ticket_refs") or []}
         if record.get("status") != "accepted":
             raise ValueError("development feedback must be accepted before promotion")
-        rejection_class = _text(
-            (record.get("classification") or {}).get("rejection_class")
+        classification = (
+            dict(record.get("classification"))
             if isinstance(record.get("classification"), Mapping)
-            else ""
+            else {}
+        )
+        qualification = (
+            dict(classification.get("qualification"))
+            if isinstance(classification.get("qualification"), Mapping)
+            else {}
+        )
+        rejection_class = _text(
+            classification.get("rejection_class")
         ).lower()
         if record.get("category") == "result_rejected" and rejection_class not in REJECTION_CLASSES:
             raise ValueError(
                 "rejected Builder result must be qualified before promotion"
             )
-        route_token = _text(route).lower()
+        requested_route = _text(route).lower()
+        qualified_route = _text(qualification.get("promotion_route")).lower()
+        if requested_route == "qualified":
+            if qualification.get("status") != "qualified" or not qualified_route:
+                raise ValueError(
+                    "development feedback requires an explicit qualification before qualified promotion"
+                )
+            route_token = qualified_route
+        else:
+            route_token = requested_route
+        if qualified_route and route_token != qualified_route:
+            raise ValueError(
+                "development feedback promotion route conflicts with its qualification"
+            )
         body = dict(payload or {})
         target_scope, owner_area, component_ref = _target_scope(record.get("target_refs") or [])
         evidence_refs = [
@@ -456,7 +830,9 @@ class DevelopmentFeedbackService:
 
         tickets = DevelopmentTicketService(state_dir=self.state_dir)
         if route_token == "core":
-            core_ref = _text(body.get("component_ref")) or next(
+            core_ref = _text(body.get("component_ref")) or _text(
+                qualification.get("owner_ref")
+            ) or next(
                 (ref for ref in record.get("target_refs") or [] if ref.startswith("core:")),
                 "",
             )
@@ -475,11 +851,22 @@ class DevelopmentFeedbackService:
                 observed_limitation=_text(body.get("observed_limitation") or record.get("details") or record.get("summary")),
                 blocked_ticket_ids=body.get("blocked_ticket_ids") or [],
                 evidence_refs=evidence_refs,
-                metadata={"development_feedback_id": record["feedback_id"]},
+                metadata={
+                    "development_feedback_id": record["feedback_id"],
+                    "development_feedback_owner_route": qualification.get(
+                        "owner_route"
+                    ),
+                    "development_feedback_qualification": qualification or None,
+                },
                 source="development_feedback",
             )
         elif route_token == "sdk_understanding":
-            method_ref = _text(body.get("method_ref")) or next(
+            qualified_owner_ref = _text(qualification.get("owner_ref"))
+            method_ref = _text(body.get("method_ref")) or (
+                qualified_owner_ref.split(":", 1)[1]
+                if qualified_owner_ref.startswith(("sdk:", "api:", "resource:"))
+                else ""
+            ) or next(
                 (
                     ref.split(":", 1)[1]
                     for ref in record.get("target_refs") or []
@@ -499,7 +886,13 @@ class DevelopmentFeedbackService:
                 diagnosis=record["category"],
                 project_ticket_id=_text(body.get("project_ticket_id")) or None,
                 evidence_refs=evidence_refs,
-                metadata={"development_feedback_id": record["feedback_id"]},
+                metadata={
+                    "development_feedback_id": record["feedback_id"],
+                    "development_feedback_owner_route": qualification.get(
+                        "owner_route"
+                    ),
+                    "development_feedback_qualification": qualification or None,
+                },
             )
         elif route_token == "project":
             signal = tickets.capture_signal(
@@ -513,7 +906,13 @@ class DevelopmentFeedbackService:
                 source="development_feedback",
                 dedup_key=f"{record['dedup_key']}:project",
                 evidence_refs=evidence_refs,
-                metadata={"development_feedback_id": record["feedback_id"]},
+                metadata={
+                    "development_feedback_id": record["feedback_id"],
+                    "development_feedback_owner_route": qualification.get(
+                        "owner_route"
+                    ),
+                    "development_feedback_qualification": qualification or None,
+                },
                 owner_area=owner_area,
                 component_ref=component_ref,
             )
@@ -523,12 +922,20 @@ class DevelopmentFeedbackService:
                 status="proposed",
                 source="development_feedback",
                 dedup_key=f"{record['dedup_key']}:project",
-                metadata={"development_feedback_id": record["feedback_id"]},
+                metadata={
+                    "development_feedback_id": record["feedback_id"],
+                    "development_feedback_owner_route": qualification.get(
+                        "owner_route"
+                    ),
+                    "development_feedback_qualification": qualification or None,
+                },
                 owner_area=owner_area,
                 component_ref=component_ref,
             )
         else:
-            raise ValueError("development feedback route must be project, sdk_understanding, or core")
+            raise ValueError(
+                "development feedback route must be project, sdk_understanding, core, or qualified"
+            )
         ticket = dict(ticket_result["ticket"])
         promoted = self._mark_promoted(
             feedback_id,
@@ -669,6 +1076,11 @@ class DevelopmentFeedbackService:
         errors = sorted(Draft202012Validator(schema).iter_errors(record), key=lambda item: list(item.path))
         if errors:
             raise ValueError(f"invalid development feedback: {errors[0].message}")
+        classification = record.get("classification")
+        if isinstance(classification, Mapping) and isinstance(
+            classification.get("qualification"), Mapping
+        ):
+            _validate_qualification(classification["qualification"])
 
     def _read(self) -> dict[str, Any]:
         if not self.state_path.is_file():

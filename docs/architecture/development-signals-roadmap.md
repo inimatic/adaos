@@ -651,7 +651,7 @@ SDK docs/examples, SDK/API implementation, policy decision, or Core Dev Ticket.
 - [x] `[must]` `DS9-03` Add rejection qualification classes:
   `requirement_ambiguity`, `builder_misread_user`, `sdk_doc_ambiguity`,
   `sdk_capability_gap`, `weak_patch`, and `insufficient_validation`.
-- [ ] `[must]` `DS9-04` Route qualified signals to the right owner:
+- [x] `[must]` `DS9-04` Route qualified signals to the right owner:
   NLU/User clarification, Builder retry, SDK documentation/example update,
   SDK/API implementation, policy review, or Core Dev Ticket.
 - [ ] `[must]` `DS9-05` Add replayable eval-candidate creation from accepted
@@ -713,9 +713,15 @@ remain `needs_qualification` and cannot be promoted. Codex can now attach a
 strict, redacted application trace only after an actual public method/resource
 attempt; exact contract/operation filters are available through API, MCP, and
 Resource Workbench, and recurrence aggregates across Builder tasks while all
-relations remain inspectable. Automatic runtime method-application producers,
-bounded LLM rejection qualification, owner routing, replay/eval
-creation, docs/example routing, saved
+relations remain inspectable. A deterministic advisory routing preview now
+recommends one of eight typed owners and one existing promotion authority;
+only a human/policy `qualify` operation can persist the route. Qualification
+is optimistic-revision guarded, queryable by exact owner/status through
+API/MCP/Resource Workbench, visible in Builder Context Inspector, and locks
+later promotion to that authority. Capture and generic transitions cannot
+inject qualification, and Codex/Builder cannot self-assign ownership.
+Automatic runtime method-application producers, bounded LLM rejection
+qualification, replay/eval creation, richer docs/example work queues, saved
 review filters, direct artifact opening, promotion preview, and qualification
 metrics remain open.
 

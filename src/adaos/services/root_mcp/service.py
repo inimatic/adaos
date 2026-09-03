@@ -603,6 +603,8 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                     "rejection_class": {"type": "string"},
                     "contract_ref": {"type": "string"},
                     "operation_id": {"type": "string"},
+                    "owner_route": {"type": "string"},
+                    "qualification_status": {"type": "string"},
                     "updated_since": {"type": "string"},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
                 },
@@ -623,6 +625,54 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.feedback",
             metadata={"published_by": "plane:adaos_dev", "handler": "development_feedback_show"},
+        ),
+        RootMcpToolContract(
+            id="development_feedback.qualification_preview",
+            title="Preview development feedback routing",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Read a deterministic, advisory owner and promotion route without changing feedback authority.",
+            input_schema=schema_object(
+                properties={"feedback_id": {"type": "string"}},
+                required=["feedback_id"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.feedback",
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "development_feedback_qualification_preview",
+            },
+        ),
+        RootMcpToolContract(
+            id="development_feedback.qualify",
+            title="Qualify development feedback owner",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Persist a reviewed owner route using the authenticated human or policy actor.",
+            input_schema=schema_object(
+                properties={
+                    "feedback_id": {"type": "string"},
+                    "owner_route": {"type": "string"},
+                    "promotion_route": {
+                        "type": "string",
+                        "enum": ["project", "sdk_understanding", "core"],
+                    },
+                    "owner_ref": {"type": "string"},
+                    "rationale": {"type": "string"},
+                    "expected_revision": {"type": "integer", "minimum": 1},
+                },
+                required=[
+                    "feedback_id",
+                    "owner_route",
+                    "promotion_route",
+                    "rationale",
+                ],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.qualify.feedback",
+            side_effects="write",
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "development_feedback_qualify",
+            },
         ),
         RootMcpToolContract(
             id="development_feedback.capture",
@@ -661,12 +711,18 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             input_schema=schema_object(
                 properties={
                     "feedback_id": {"type": "string"},
-                    "operation": {"type": "string", "enum": ["triage", "accept", "reject", "comment", "promote"]},
+                    "operation": {
+                        "type": "string",
+                        "enum": ["triage", "accept", "reject", "comment", "promote"],
+                    },
                     "actor": {"type": "string"},
                     "reason": {"type": "string"},
                     "body": {"type": "string"},
                     "classification": {"type": "object"},
-                    "route": {"type": "string", "enum": ["project", "sdk_understanding", "core"]},
+                    "route": {
+                        "type": "string",
+                        "enum": ["project", "sdk_understanding", "core", "qualified"],
+                    },
                     "payload": {"type": "object"},
                     "expected_revision": {"type": "integer", "minimum": 1},
                 },
@@ -3805,7 +3861,22 @@ def _handle_development_feedback_list(arguments: dict[str, Any], *, dry_run: boo
     filters = {
         key: value
         for key, value in arguments.items()
-        if key in {"status", "category", "source", "blocking", "target_ref", "search", "rejection_class", "contract_ref", "operation_id", "updated_since", "limit"}
+        if key
+        in {
+            "status",
+            "category",
+            "source",
+            "blocking",
+            "target_ref",
+            "search",
+            "rejection_class",
+            "contract_ref",
+            "operation_id",
+            "owner_route",
+            "qualification_status",
+            "updated_since",
+            "limit",
+        }
     }
     items = _development_feedback_sdk().list_feedback(**filters)
     return {"items": items, "count": len(items)}
@@ -3819,6 +3890,40 @@ def _handle_development_feedback_show(arguments: dict[str, Any], *, dry_run: boo
     if item is None:
         raise KeyError(feedback_id)
     return {"feedback": item}
+
+
+def _handle_development_feedback_qualification_preview(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    feedback_id = str(arguments.get("feedback_id") or "").strip()
+    if not feedback_id:
+        raise ValueError("feedback_id is required")
+    return {
+        "preview": _development_feedback_sdk().qualification_preview(feedback_id)
+    }
+
+
+def _handle_development_feedback_qualify(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    feedback_id = str(request.get("feedback_id") or "").strip()
+    if not feedback_id:
+        raise ValueError("feedback_id is required")
+    actor = str(_mcp_context(arguments).get("actor") or "").strip()
+    if dry_run:
+        return {"would_qualify": True, "feedback_id": feedback_id, "actor": actor}
+    return {
+        "feedback": _development_feedback_sdk().qualify_feedback(
+            feedback_id,
+            owner_route=str(request.get("owner_route") or ""),
+            promotion_route=str(request.get("promotion_route") or ""),
+            owner_ref=str(request.get("owner_ref") or ""),
+            rationale=str(request.get("rationale") or ""),
+            actor=actor,
+            expected_revision=request.get("expected_revision"),
+        )
+    }
 
 
 def _handle_development_feedback_capture(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -4102,6 +4207,8 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "builder.source_recovery.apply": lambda arguments, dry_run=False: _handle_builder_source_recovery_apply(arguments, dry_run=dry_run),
     "development_feedback.list": lambda arguments, dry_run=False: _handle_development_feedback_list(arguments, dry_run=dry_run),
     "development_feedback.show": lambda arguments, dry_run=False: _handle_development_feedback_show(arguments, dry_run=dry_run),
+    "development_feedback.qualification_preview": lambda arguments, dry_run=False: _handle_development_feedback_qualification_preview(arguments, dry_run=dry_run),
+    "development_feedback.qualify": lambda arguments, dry_run=False: _handle_development_feedback_qualify(arguments, dry_run=dry_run),
     "development_feedback.capture": lambda arguments, dry_run=False: _handle_development_feedback_capture(arguments, dry_run=dry_run),
     "development_feedback.operate": lambda arguments, dry_run=False: _handle_development_feedback_operate(arguments, dry_run=dry_run),
     "dev_ticket.list": lambda arguments, dry_run=False: _handle_dev_ticket_list(arguments, dry_run=dry_run),

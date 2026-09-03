@@ -1745,9 +1745,10 @@ class BuilderWorkbenchService:
         feedback_scope_refs = {
             value for value in (project_ref, component_ref) if value
         }
-        feedback_candidates = DevelopmentFeedbackService(
-            state_dir=self.state_dir
-        ).list(limit=max(100, min(int(limit) * 10, 1000)))
+        feedback_service = DevelopmentFeedbackService(state_dir=self.state_dir)
+        feedback_candidates = feedback_service.list(
+            limit=max(100, min(int(limit) * 10, 1000))
+        )
 
         def feedback_applies(item: Mapping[str, Any]) -> bool:
             if feedback_scope_refs & {
@@ -1763,7 +1764,10 @@ class BuilderWorkbenchService:
             )
 
         feedback_rows = [
-            dict(item)
+            {
+                **dict(item),
+                "routing_preview": feedback_service.qualification_preview(item),
+            }
             for item in feedback_candidates
             if feedback_applies(item)
         ][: max(1, min(int(limit), 100))]
@@ -1851,6 +1855,8 @@ class BuilderWorkbenchService:
                 "actions": {
                     "capture": "/api/development-feedback",
                     "triage": "/api/development-feedback/{feedback_id}/transition",
+                    "qualification_preview": "/api/development-feedback/{feedback_id}/qualification",
+                    "qualify": "/api/development-feedback/{feedback_id}/qualify",
                     "promote": "/api/development-feedback/{feedback_id}/promote",
                 },
             },

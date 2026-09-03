@@ -469,15 +469,31 @@ def _development_feedback_definition() -> dict[str, Any]:
         "record_schema_ref": "abi:development_feedback.v1",
         "query": {
             "default": "observed",
-            "filters": ["status", "category", "source", "blocking", "target_ref", "rejection_class", "contract_ref", "operation_id", "updated_since", "search", "role"],
+            "filters": [
+                "status",
+                "category",
+                "source",
+                "blocking",
+                "target_ref",
+                "rejection_class",
+                "contract_ref",
+                "operation_id",
+                "owner_route",
+                "qualification_status",
+                "updated_since",
+                "search",
+                "role",
+            ],
             "sort": ["updated_at", "category", "impact"],
             "cursor": True,
             "include": ["evidence", "relations", "comments", "history", "promotion"],
         },
         "operations": [
             {"id": "show", "kind": "show", "risk": "read", "required_capabilities": ["development_feedback.read"]},
+            {"id": "qualification_preview", "kind": "show", "risk": "read", "required_capabilities": ["development_feedback.read"]},
             {"id": "capture", "kind": "create", "risk": "low", "required_capabilities": ["development_feedback.create"]},
             {"id": "triage", "kind": "transition", "risk": "low", "required_capabilities": ["development_feedback.triage"]},
+            {"id": "qualify", "kind": "qualification", "risk": "medium", "required_capabilities": ["development_feedback.triage"]},
             {"id": "accept", "kind": "transition", "risk": "medium", "required_capabilities": ["development_feedback.triage"]},
             {"id": "reject", "kind": "transition", "risk": "low", "required_capabilities": ["development_feedback.triage"]},
             {"id": "comment", "kind": "comment", "risk": "low", "required_capabilities": ["development_feedback.comment"]},
@@ -491,7 +507,7 @@ def _development_feedback_definition() -> dict[str, Any]:
             {"id": "trace", "kind": "trace", "title": "Trace"},
         ],
         "events": {
-            "emits": ["development.feedback.observed", "development.feedback.triaged", "development.feedback.accepted", "development.feedback.rejected", "development.feedback.promoted"],
+            "emits": ["development.feedback.observed", "development.feedback.triaged", "development.feedback.qualified", "development.feedback.accepted", "development.feedback.rejected", "development.feedback.promoted"],
             "semantic_types": ["development.feedback.changed"],
         },
         "i18n": {
@@ -511,7 +527,17 @@ def _development_feedback_definition() -> dict[str, Any]:
             "role_fixtures": {
                 "owner": "allowed",
                 "admin": "allowed",
-                "builder": "allowed",
+                "builder": {
+                    "show": "allowed",
+                    "qualification_preview": "allowed",
+                    "capture": "allowed",
+                    "triage": "denied",
+                    "qualify": "denied",
+                    "accept": "denied",
+                    "reject": "denied",
+                    "comment": "allowed",
+                    "promote": "denied"
+                },
                 "member": {"show": "allowed", "capture": "allowed", "triage": "denied", "accept": "denied", "reject": "denied", "comment": "allowed", "promote": "denied"},
                 "guest": "denied",
             },
@@ -962,6 +988,8 @@ class ResourceWorkbenchService:
                 rejection_class=_text(filters.get("rejection_class")) or None,
                 contract_ref=_text(filters.get("contract_ref")) or None,
                 operation_id=_text(filters.get("operation_id")) or None,
+                owner_route=_text(filters.get("owner_route")) or None,
+                qualification_status=_text(filters.get("qualification_status")) or None,
                 updated_since=_text(filters.get("updated_since")) or None,
                 limit=max_items or 200,
             )
@@ -1047,6 +1075,11 @@ class ResourceWorkbenchService:
             if not record:
                 raise KeyError(feedback_id)
             return {"record": record, "record_id": feedback_id}
+        if operation_id == "qualification_preview":
+            return {
+                "record": service.qualification_preview(feedback_id),
+                "record_id": feedback_id,
+            }
         if operation_id == "capture":
             result = service.capture(
                 source=_text(payload.get("source")) or "builder",
@@ -1074,6 +1107,17 @@ class ResourceWorkbenchService:
                 actor=actor,
                 reason=_text(payload.get("reason")),
                 classification=_mapping(payload.get("classification")),
+                expected_revision=expected_revision,
+            )
+            return {"record": record, "record_id": feedback_id}
+        if operation_id == "qualify":
+            record = service.qualify(
+                feedback_id,
+                owner_route=_text(payload.get("owner_route")),
+                promotion_route=_text(payload.get("promotion_route")),
+                owner_ref=_text(payload.get("owner_ref")),
+                rationale=_text(payload.get("rationale")),
+                actor=actor,
                 expected_revision=expected_revision,
             )
             return {"record": record, "record_id": feedback_id}

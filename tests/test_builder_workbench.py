@@ -865,6 +865,12 @@ def test_builder_context_inspector_projects_scoped_development_feedback(
     assert [item["feedback_id"] for item in projection["items"]] == [
         relevant["feedback_id"]
     ]
+    assert projection["items"][0]["routing_preview"]["recommended"][
+        "owner_route"
+    ] == "sdk_implementation"
+    assert projection["actions"]["qualification_preview"].endswith(
+        "/{feedback_id}/qualification"
+    )
     assert projection["actions"]["promote"].endswith("/{feedback_id}/promote")
 
 

@@ -68,7 +68,7 @@ def test_resource_workbench_exposes_development_feedback_triage(tmp_path: Path) 
                 "category": "inefficient_contract",
                 "summary": "The SDK contract requires repeated full snapshots for a narrow query.",
                 "impact": ["efficiency", "generalization"],
-                "target_refs": ["sdk:resources.query"],
+                "target_refs": ["sdk:resources.query", "core:resource_query"],
                 "classification": {
                     "application_trace": {
                         "schema": "adaos.development.application_trace.v1",
@@ -100,6 +100,36 @@ def test_resource_workbench_exposes_development_feedback_triage(tmp_path: Path) 
         }
     )
     assert [item["feedback_id"] for item in queried["items"]] == [feedback["feedback_id"]]
+
+    preview = workbench.operate(
+        {
+            "schema": "adaos.resource.operation.v1",
+            "resource_type": "adaos.development.feedback",
+            "operation_id": "qualification_preview",
+            "record_id": feedback["feedback_id"],
+            "actor": {"id": "codex:test", "role": "builder"},
+        }
+    )
+    assert preview["result"]["record"]["recommended"]["owner_route"] == (
+        "sdk_implementation"
+    )
+    qualified = workbench.operate(
+        {
+            "schema": "adaos.resource.operation.v1",
+            "resource_type": "adaos.development.feedback",
+            "operation_id": "qualify",
+            "record_id": feedback["feedback_id"],
+            "expected_revision": feedback["revision"],
+            "payload": {
+                "owner_route": "sdk_implementation",
+                "promotion_route": "core",
+                "owner_ref": "core:resource_query",
+                "rationale": "The query contract needs a bounded core capability.",
+            },
+            "actor": {"id": "human:test", "role": "owner"},
+        }
+    )
+    feedback = qualified["result"]["record"]
 
     accepted = workbench.operate(
         {

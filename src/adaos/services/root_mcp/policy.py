@@ -160,6 +160,13 @@ def list_capability_classes() -> list[dict[str, Any]]:
             default_grants=["owner_token"],
         ),
         _capability_entry(
+            "development.qualify.feedback",
+            surface="development",
+            risk="high",
+            summary="Assign the authoritative owner and promotion route for development feedback.",
+            default_grants=["owner_token"],
+        ),
+        _capability_entry(
             "development.read.ticket_artifacts",
             surface="development",
             risk="medium",

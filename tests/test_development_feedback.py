@@ -235,6 +235,98 @@ def test_development_feedback_filters_exact_application_trace(
     assert service.list(operation_id="resources.mutate") == []
 
 
+def test_feedback_routing_preview_requires_governed_owner_qualification(
+    tmp_path: Path,
+) -> None:
+    service = DevelopmentFeedbackService(state_dir=tmp_path)
+    feedback = service.capture(
+        source="codex",
+        category="ambiguous_contract",
+        summary="The SDK query contract does not define stale-data behavior.",
+        target_refs=["project:demo", "sdk:resources.query"],
+        actor="codex:test",
+    )["feedback"]
+
+    preview = service.qualification_preview(feedback["feedback_id"])
+
+    assert preview["authoritative"] is False
+    assert preview["recommended"]["owner_route"] == "sdk_documentation"
+    assert preview["recommended"]["promotion_route"] == "sdk_understanding"
+    assert preview["recommended"]["owner_ref"] == "sdk:resources.query"
+    assert preview["ready_to_qualify"] is True
+    with pytest.raises(ValueError, match="human or policy actor"):
+        service.qualify(
+            feedback["feedback_id"],
+            owner_route="sdk_documentation",
+            promotion_route="sdk_understanding",
+            actor="codex:test",
+            rationale="The agent must not assign its own owner.",
+            expected_revision=feedback["revision"],
+        )
+    with pytest.raises(ValueError, match="governed qualify operation"):
+        service.transition(
+            feedback["feedback_id"],
+            status="triaged",
+            actor="codex:test",
+            classification={"qualification": {"status": "qualified"}},
+            expected_revision=feedback["revision"],
+        )
+
+
+def test_qualified_feedback_filters_and_promotes_only_to_qualified_route(
+    tmp_path: Path,
+) -> None:
+    service = DevelopmentFeedbackService(state_dir=tmp_path)
+    feedback = service.capture(
+        source="codex",
+        category="missing_capability",
+        summary="The public SDK lacks a bounded workspace publication handoff.",
+        target_refs=["project:demo", "core:workspace_release_guard"],
+        recommendation="Add an immutable Candidate and Trial publication handoff.",
+        actor="codex:test",
+    )["feedback"]
+    qualified = service.qualify(
+        feedback["feedback_id"],
+        owner_route="sdk_implementation",
+        promotion_route="core",
+        actor="policy:test",
+        rationale="The project cannot implement this public capability.",
+        expected_revision=feedback["revision"],
+    )
+
+    assert qualified["status"] == "triaged"
+    assert service.list(
+        owner_route="sdk_implementation", qualification_status="qualified"
+    ) == [qualified]
+    assert service.list(owner_route="builder_retry") == []
+    accepted = service.transition(
+        feedback["feedback_id"],
+        status="accepted",
+        actor="human:test",
+        expected_revision=qualified["revision"],
+    )
+    with pytest.raises(ValueError, match="conflicts"):
+        service.promote(
+            feedback["feedback_id"],
+            route="project",
+            actor="human:test",
+            expected_revision=accepted["revision"],
+        )
+
+    promoted = service.promote(
+        feedback["feedback_id"],
+        route="qualified",
+        actor="human:test",
+        expected_revision=accepted["revision"],
+    )
+
+    assert promoted["ticket"]["kind"] == "core_capability_request"
+    assert promoted["ticket"]["component_ref"] == "core:workspace_release_guard"
+    assert promoted["ticket"]["metadata"]["development_feedback_owner_route"] == (
+        "sdk_implementation"
+    )
+
+
 def test_legacy_builder_feedback_import_is_idempotent(tmp_path: Path) -> None:
     feedback_dir = tmp_path / "builder" / "development_sessions" / "session.demo" / "feedback"
     feedback_dir.mkdir(parents=True)
@@ -301,6 +393,40 @@ def test_development_feedback_api_exposes_filter_and_lifecycle(tmp_path: Path) -
     )
     assert listed.status_code == 200
     assert listed.json()["count"] == 1
+
+    preview = client.get(
+        f"/api/development-feedback/{feedback['feedback_id']}/qualification",
+        headers=headers,
+    )
+    assert preview.status_code == 200
+    assert preview.json()["preview"]["recommended"]["owner_route"] == (
+        "user_clarification"
+    )
+    qualified = client.post(
+        f"/api/development-feedback/{feedback['feedback_id']}/qualify",
+        headers=headers,
+        json={
+            "owner_route": "user_clarification",
+            "promotion_route": "project",
+            "rationale": "The project requirement needs bounded clarification.",
+            "actor": "human:test",
+            "expected_revision": feedback["revision"],
+        },
+    )
+    assert qualified.status_code == 200
+    feedback = qualified.json()["feedback"]
+    routed = client.get(
+        "/api/development-feedback",
+        headers=headers,
+        params={
+            "owner_route": "user_clarification",
+            "qualification_status": "qualified",
+        },
+    )
+    assert routed.status_code == 200
+    assert [item["feedback_id"] for item in routed.json()["items"]] == [
+        feedback["feedback_id"]
+    ]
 
     traced = client.post(
         "/api/development-feedback",

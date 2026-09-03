@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/development_feedback.qualification.v1.schema.json",
+  "title": "AdaOS Development Feedback Qualification v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "status",
+    "owner_route",
+    "promotion_route",
+    "owner_ref",
+    "rationale",
+    "qualified_by",
+    "qualified_at",
+    "routing_preview_digest"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.development_feedback.qualification.v1"},
+    "status": {"const": "qualified"},
+    "owner_route": {
+      "enum": [
+        "user_clarification",
+        "nlu_teacher",
+        "builder_retry",
+        "sdk_documentation",
+        "sdk_examples",
+        "sdk_implementation",
+        "policy_review",
+        "core_ticket"
+      ]
+    },
+    "promotion_route": {"enum": ["project", "sdk_understanding", "core"]},
+    "owner_ref": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_.-]*:.+$",
+      "maxLength": 500
+    },
+    "rationale": {"type": "string", "minLength": 3, "maxLength": 4000},
+    "qualified_by": {"type": "string", "minLength": 1, "maxLength": 200},
+    "qualified_at": {"type": "string", "format": "date-time"},
+    "routing_preview_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

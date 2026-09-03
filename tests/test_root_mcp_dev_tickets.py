@@ -147,6 +147,14 @@ def test_root_mcp_development_feedback_tools(monkeypatch) -> None:
     monkeypatch.setattr(sdk, "get_feedback", lambda feedback_id: feedback if feedback_id == "devfeedback.test" else None)
     monkeypatch.setattr(
         sdk,
+        "qualification_preview",
+        lambda feedback_id: {
+            "feedback_id": feedback_id,
+            "recommended": {"owner_route": "sdk_documentation"},
+        },
+    )
+    monkeypatch.setattr(
+        sdk,
         "capture_feedback",
         lambda summary, **request: calls.append(("capture", {"summary": summary, **request}))
         or {"ok": True, "feedback": feedback},
@@ -159,6 +167,14 @@ def test_root_mcp_development_feedback_tools(monkeypatch) -> None:
         )
         or {**feedback, "status": status},
     )
+    monkeypatch.setattr(
+        sdk,
+        "qualify_feedback",
+        lambda feedback_id, **request: calls.append(
+            ("qualify", {"feedback_id": feedback_id, **request})
+        )
+        or {**feedback, "status": "triaged"},
+    )
 
     listed = _invoke(
         "development_feedback.list",
@@ -167,11 +183,18 @@ def test_root_mcp_development_feedback_tools(monkeypatch) -> None:
             "search": "SDK",
             "contract_ref": "sdk:resources.query",
             "operation_id": "resources.query",
+            "owner_route": "sdk_documentation",
+            "qualification_status": "qualified",
         },
         "development.read.feedback",
     )
     shown = _invoke(
         "development_feedback.show",
+        {"feedback_id": "devfeedback.test"},
+        "development.read.feedback",
+    )
+    previewed = _invoke(
+        "development_feedback.qualification_preview",
         {"feedback_id": "devfeedback.test"},
         "development.read.feedback",
     )
@@ -194,6 +217,20 @@ def test_root_mcp_development_feedback_tools(monkeypatch) -> None:
         },
         "development.write.feedback",
     )
+    qualified = root_mcp_service.invoke_tool(
+        "development_feedback.qualify",
+        actor="human:test",
+        auth_method="mcp_session",
+        auth_context={"capabilities": ["development.qualify.feedback"]},
+        arguments={
+            "feedback_id": "devfeedback.test",
+            "owner_route": "sdk_documentation",
+            "promotion_route": "sdk_understanding",
+            "owner_ref": "sdk:resources.query",
+            "rationale": "The public contract needs a clearer definition.",
+            "expected_revision": 3,
+        },
+    )
     contracts = {item.id: item for item in root_mcp_service.list_tool_contracts()}
 
     assert listed.result["items"][0]["filters"]["search"] == "SDK"
@@ -203,12 +240,37 @@ def test_root_mcp_development_feedback_tools(monkeypatch) -> None:
     assert listed.result["items"][0]["filters"]["operation_id"] == (
         "resources.query"
     )
+    assert listed.result["items"][0]["filters"]["owner_route"] == (
+        "sdk_documentation"
+    )
     assert shown.result["feedback"]["feedback_id"] == "devfeedback.test"
+    assert previewed.result["preview"]["recommended"]["owner_route"] == (
+        "sdk_documentation"
+    )
     assert captured.result["feedback"]["category"] == "ambiguous_contract"
     assert accepted.result["feedback"]["status"] == "accepted"
+    assert qualified.result["feedback"]["status"] == "triaged"
     assert calls[1][1]["expected_revision"] == 2
+    assert calls[2][1]["expected_revision"] == 3
     assert contracts["development_feedback.list"].required_capability == "development.read.feedback"
     assert contracts["development_feedback.operate"].required_capability == "development.write.feedback"
+    assert (
+        contracts["development_feedback.qualification_preview"].required_capability
+        == "development.read.feedback"
+    )
+    assert contracts["development_feedback.qualify"].required_capability == (
+        "development.qualify.feedback"
+    )
+
+
+def test_builder_mcp_profile_cannot_qualify_development_feedback() -> None:
+    from adaos.services.root_mcp.codex_bridge import DEFAULT_CODEX_TARGET_CAPABILITIES
+    from adaos.services.root_mcp.sessions import DEFAULT_CAPABILITY_PROFILES
+
+    assert "development.qualify.feedback" not in DEFAULT_CODEX_TARGET_CAPABILITIES
+    assert "development.qualify.feedback" not in DEFAULT_CAPABILITY_PROFILES[
+        "BuilderDeveloper"
+    ]
 
 
 def test_root_mcp_builder_source_recovery_is_typed_and_governed(monkeypatch) -> None:

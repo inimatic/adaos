@@ -249,12 +249,28 @@ Models may capture observations but cannot grant scope, choose a core owner,
 or promote their own proposal. A blocking missing capability uses the existing
 Core escalation envelope instead of also emitting Development Feedback.
 
+Owner routing is a two-step boundary. AdaOS may compute a deterministic,
+non-authoritative `routing_preview` from the typed category, rejection class,
+and target refs. Only a separate optimistic-revision `qualify` operation by a
+human or policy actor may persist `owner_route`, `promotion_route`,
+`owner_ref`, rationale, and the preview digest. Capture and generic lifecycle
+transitions cannot write that object. Once qualified, promotion is route-locked
+and cannot silently transfer the observation to another owner.
+
+The initial owner routes are `user_clarification`, `nlu_teacher`,
+`builder_retry`, `sdk_documentation`, `sdk_examples`, `sdk_implementation`,
+`policy_review`, and `core_ticket`. They map to the existing project,
+SDK-understanding, or core promotion authorities; they do not create another
+ticket registry. Codex and Builder can inspect the preview and add evidence,
+but cannot qualify their own observations.
+
 The registry is exposed through service/SDK, authenticated API, Root MCP, and
 Declarative Resource Workbench operations. Builder Context Inspector projects
-only records related to the selected project, component, or Dev Ticket and
-shows status/category counts before full details. The projection is read-only;
-triage, comments, acceptance, rejection, and promotion remain explicit
-resource operations with role checks.
+only records related to the selected project, component, or Dev Ticket,
+includes the advisory routing preview, and shows status/category counts before
+full details. The projection is read-only; triage, qualification, comments,
+acceptance, rejection, and promotion remain explicit resource operations with
+role checks.
 
 Builder also exposes that projection as a project-scoped Development Feedback
 review view with text, stage, category, and producer-source filters. It is a

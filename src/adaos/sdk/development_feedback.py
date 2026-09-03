@@ -57,6 +57,31 @@ def get_feedback(feedback_id: str) -> dict[str, Any] | None:
     return _service().get(feedback_id)
 
 
+def qualification_preview(feedback_id: str) -> dict[str, Any]:
+    return _service().qualification_preview(feedback_id)
+
+
+def qualify_feedback(
+    feedback_id: str,
+    *,
+    owner_route: str,
+    promotion_route: str,
+    actor: str,
+    rationale: str,
+    owner_ref: str = "",
+    expected_revision: int | None = None,
+) -> dict[str, Any]:
+    return _service().qualify(
+        feedback_id,
+        owner_route=owner_route,
+        promotion_route=promotion_route,
+        actor=actor,
+        rationale=rationale,
+        owner_ref=owner_ref,
+        expected_revision=expected_revision,
+    )
+
+
 def transition_feedback(
     feedback_id: str,
     status: str,
@@ -114,5 +139,7 @@ __all__ = [
     "get_feedback",
     "list_feedback",
     "promote_feedback",
+    "qualification_preview",
+    "qualify_feedback",
     "transition_feedback",
 ]
