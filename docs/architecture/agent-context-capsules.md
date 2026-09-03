@@ -279,6 +279,9 @@ The first executable prompt projection uses
 `packet.json.prompt_rule_capsules`. It deterministically selects a permanent
 execution-boundary capsule and conditional skill capsules from target type,
 repair profile, authorized files/refs, acceptance checks, and context facets.
+Structured target paths, refs, profiles, and facet keys take precedence over
+bounded textual markers, so localized or unusually worded tickets do not drop
+manifest, UI, lifecycle, or provider ABI constraints.
 The same selection is retained for zero-model structured repairs. This is the
 seed of the generic Context Compiler, not an MCP-only mini representation:
 Root MCP search and exact drill-down may provide descriptor evidence, while
@@ -537,8 +540,12 @@ Research Workbench.
 - Root MCP owns one agent-facing retrieval adapter and audit surface; it is not
   capsule storage or workflow authority.
 - `packet.json.prompt_rule_capsules` is the current deterministic compiler
-  projection. Its rule text is compact execution policy; the full development
-  guides remain retrievable documentation rather than permanent model input.
+  projection. Definitions come from the versioned
+  `adaos.builder.prompt_rule_registry.v1` declaration; selected definitions
+  are registered as immutable procedural capsules and retained by
+  `context_ref` and digest. Their rule text is compact execution policy; the
+  full development guides remain retrievable documentation rather than
+  permanent model input.
   Long-running LLM and member/subnet work receive separate conditional
   capsules; ordinary component repairs do not pay for those rules.
 - Development Signals and Dev Tickets provide change intent and lifecycle, not

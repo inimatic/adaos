@@ -16,6 +16,10 @@ TASK_SCOPE_TOOL_ALLOWLIST: dict[str, tuple[str, ...]] = {
         "get_template_catalog",
     ),
     "read_mock_data": ("get_builder_context",),
+    "read_context_capsules": (
+        "search_context",
+        "get_context_capsule",
+    ),
     "run_staging_validation": (
         "list_managed_targets",
         "get_managed_target",

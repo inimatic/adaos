@@ -1966,18 +1966,27 @@ Context Compiler selects small versioned rule capsules, records their IDs and
 source anchors in `packet.json.prompt_rule_capsules`, and renders only those
 rules that are relevant to the admitted task facets.
 
+Capsule selection is driven first by structured facts such as target type,
+authorized target paths, component refs, repair profile, and Context Packet
+facets. Text matching is a compatibility fallback, not the primary classifier;
+otherwise a localized or unusually worded ticket can omit a required contract.
+
 The permanent execution capsule contains only the boundaries that apply to
 every run: isolated source authority, explicit UTF-8 reads, and worker-owned
 validation, publication, activation, and Trial delivery. Conditional capsules
 cover:
 
 - `webui.json` / `skill.yaml` / `@tool` consistency and bounded browser reads;
+- stable declarative UI state, canonical refs, and layout identity;
+- scenario composition, dependency, and skill-ownership boundaries;
 - data-route, receiver, projection, and causal-read ownership;
 - typed resource/provider storage and governed CRUD behavior;
+- passive imports, dependency isolation, bounded memory, and cleanup;
 - activation, rehydrate, guarding, and observability;
 - localization, NLU, voice/Telegram semantics, and Pending Actions;
 - Root-accounted asynchronous LLM jobs and schema-validated application;
-- member/subnet identity, bounded fanout, and reconnect-safe handling.
+- member/subnet identity, bounded fanout, and reconnect-safe handling;
+- exact consumer/provider ABI and governed core-capability escalation.
 
 Detailed UI recipes, examples, migration notes, rationale, and reference
 tables remain retrievable documentation. They enter a task only through an

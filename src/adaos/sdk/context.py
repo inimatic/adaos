@@ -24,6 +24,25 @@ def get_capsule(capsule_id: str, *, include_content: bool = False) -> dict[str, 
     return _service().get_capsule(capsule_id, include_content=include_content)
 
 
+def search_capsules(
+    *,
+    search: str | None = None,
+    subject_ref: str | None = None,
+    kind: str | None = None,
+    trust_class: str | None = None,
+    include_revoked: bool = False,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    return _service().list_capsules(
+        search=search,
+        subject_ref=subject_ref,
+        kind=kind,
+        trust_class=trust_class,
+        include_revoked=include_revoked,
+        limit=limit,
+    )
+
+
 def add_relationship(value: Mapping[str, Any]) -> dict[str, Any]:
     return _service().add_relationship(value)
 
@@ -207,4 +226,5 @@ __all__ = [
     "record_receipt",
     "register_capsule",
     "resolve",
+    "search_capsules",
 ]

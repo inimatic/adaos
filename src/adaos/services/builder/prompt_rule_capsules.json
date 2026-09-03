@@ -1,0 +1,186 @@
+{
+  "schema": "adaos.builder.prompt_rule_registry.v1",
+  "version": "0.2.0",
+  "published_at": "2026-09-03T09:45:00+00:00",
+  "authority_ref": "core:adaos.prompt-rule-registry",
+  "items": [
+    {
+      "id": "adaos.builder.execution_boundary.v1",
+      "title": "Builder execution boundary",
+      "source": "docs/guides/llm-skill-development.md#golden-rule",
+      "applicability": {"always": true},
+      "rules": [
+        "Read and edit only the admitted isolated checkout and task-owned context.",
+        "On Windows PowerShell 5.1, every textual `Get-Content` read must use `-Encoding UTF8`; never rewrite source from mojibake console text.",
+        "Do not publish, install, activate, or mutate canonical workspace source; the trusted worker owns validation and Trial delivery."
+      ]
+    },
+    {
+      "id": "adaos.skill.webui_tool_contract.v2",
+      "title": "Skill WebUI and public tool contract",
+      "source": "docs/guides/llm-skill-development.md#machine-checkable-route-contract",
+      "applicability": {
+        "target_types": ["skill"],
+        "target_path_globs": ["**/webui.json", "**/skill.yaml", "**/handlers/*.py"],
+        "match_any": ["webui.json", "skill.yaml", "handlers/", "modal:", "widget:", "callskill", "data_source"]
+      },
+      "rules": [
+        "For every added or changed same-skill WebUI `callSkill`, skill `dataSource`, or handler callable, reconcile the exact name across `webui.json`, `skill.yaml` `tools`, `exports.tools`, the entry/`@tool` handler, and complete input/output schemas in the same patch.",
+        "Do not conclude while a callable exists in code or UI but is absent from the public manifest graph. If a required counterpart is outside the authorized paths, stop and report that scope blocker instead of leaving a partial contract.",
+        "Browser-read tools require a bounded declared `data_route`; action acknowledgements stay compact and do not duplicate projected data. Keep duplicated skill/scenario UI contracts in parity."
+      ]
+    },
+    {
+      "id": "adaos.ui.declarative_state.v1",
+      "title": "Declarative UI state and identity",
+      "source": "docs/guides/llm-skill-development.md#page-state-and-full-surface-layout-rules",
+      "applicability": {
+        "target_types": ["skill", "scenario"],
+        "target_path_globs": ["**/webui.json", "**/scenario.json"],
+        "match_any": ["layout", "widget", "modal", "view state", "initialstate"]
+      },
+      "rules": [
+        "Use stable unique IDs and canonical language-neutral refs for areas, widgets, actions, and domain targets; localized labels are presentation, never routing or storage identity.",
+        "Represent materially different page modes with `layout.variants`, and update the view mode plus selected identity atomically; do not stack competing main areas behind incidental visibility checks.",
+        "Preserve established interaction state and unrelated behavior. Dynamic IDs, renderer-private assumptions, and hidden client-only state are contract defects."
+      ]
+    },
+    {
+      "id": "adaos.scenario.composition_boundary.v1",
+      "title": "Scenario composition boundary",
+      "source": "docs/guides/builder-scenario-development.md#golden-rule",
+      "applicability": {
+        "always": true,
+        "target_types": ["scenario"]
+      },
+      "rules": [
+        "A scenario orchestrates skills, surfaces, NLU affordances, and bindings; do not hide reusable capability, external IO, long-running work, heavy state, or new permissions inside scenario data.",
+        "Declare required and optional skill dependencies and bind actions to real exported tools. Missing required capability blocks apply; missing optional capability needs an explicit degraded or guided-install state.",
+        "Keep scenario-owned state separate from skill-owned domain state, and do not let Prototype or Preview install, activate, or mutate live runtime."
+      ]
+    },
+    {
+      "id": "adaos.skill.data_route_receiver.v1",
+      "title": "Data route and receiver ownership",
+      "source": "docs/guides/llm-skill-development.md#required-data-route-plan",
+      "applicability": {
+        "target_ref_prefixes": ["receiver:", "projection:", "data_route:"],
+        "match_any": ["data_route", "data-route", "projection", "receiver", "stream", "subscription"]
+      },
+      "rules": [
+        "Declare receiver ownership, route budget, causal read policy, and projection target explicitly.",
+        "Do not use Yjs as an unconstrained database or publish duplicate state through action responses and projections.",
+        "A route or projection mismatch is a validation failure, not a reason to add an undeclared fallback."
+      ]
+    },
+    {
+      "id": "adaos.skill.causal_read.v1",
+      "title": "Causal tool-backed reads",
+      "source": "docs/guides/llm-skill-development.md#causal-read-policy-for-tool-backed-surfaces",
+      "applicability": {
+        "target_ref_prefixes": ["data_source:", "tool_read:"],
+        "match_any": ["datasource", "data source", "tool/details", "read_policy", "read policy", "invalidation", "refresh", "retry"]
+      },
+      "rules": [
+        "A tool-backed browser surface names the exact tool and a finite causal `read_policy`: semantic read key, allowed triggers, invalidation tags, rate budget, and last-value behavior.",
+        "Do not turn rerenders, unrelated actions, focus, generic state updates, or timers into reads. Explicit Retry reloads only the selected semantic read identity.",
+        "Keep the last valid value only when declared, and distinguish loading, stale, unavailable, permission-denied, and domain-empty states."
+      ]
+    },
+    {
+      "id": "adaos.skill.resource_storage.v1",
+      "title": "Typed resource and storage boundary",
+      "source": "docs/guides/llm-skill-development.md#memory-and-reload-safety",
+      "applicability": {
+        "profiles": ["resource_crud"],
+        "target_ref_prefixes": ["resource:"],
+        "match_any": ["resource_crud", "resource", "storage", "contentref", "provider", "data root"]
+      },
+      "rules": [
+        "Use typed AdaOS resource/provider contracts and owner-scoped SDK storage roots.",
+        "Do not let callers choose arbitrary filesystem roots or persist synthetic provider data as authoritative state.",
+        "CRUD and reload behavior must preserve revision, authorization, and deterministic empty/unavailable states."
+      ]
+    },
+    {
+      "id": "adaos.skill.runtime_lifecycle.v1",
+      "title": "Runtime lifecycle and failure evidence",
+      "source": "docs/guides/llm-skill-development.md#guarding-and-quarantine",
+      "applicability": {
+        "match_any": ["rehydrate", "activation", "lifecycle", "runtime_guard", "observability"]
+      },
+      "rules": [
+        "Keep activation, rehydrate, drain, and failure paths bounded, idempotent, and observable.",
+        "Validation and runtime failures must produce stable error codes, trace/retryability metadata, and bounded evidence; do not hide them behind synthetic success defaults or domain-empty UI.",
+        "A command acknowledgement is not proof that browser-visible state was delivered or that the selected runtime slot loaded the new handler."
+      ]
+    },
+    {
+      "id": "adaos.skill.python_lifecycle.v1",
+      "title": "Python import, dependency, and resource lifecycle",
+      "source": "docs/guides/llm-skill-development.md#memory-and-reload-safety",
+      "applicability": {
+        "target_types": ["skill"],
+        "match_any": ["@subscribe", "thread", "cache", "background", "runtime.kind", "service runtime", "dependency", "import-time", "rehydrate", "dispose"]
+      },
+      "rules": [
+        "Keep imports passive: no threads, model loads, sockets, subscriptions, external callbacks, publishes, or persistent writes at module import time.",
+        "Bound every cache and worker by items/bytes/time, give every thread, task, executor, subprocess, model, and callback one lifecycle owner plus drain/dispose cleanup, and keep reload idempotent.",
+        "Declare every imported dependency and its supported isolation boundary in `skill.yaml`; validate against the authoritative manifest schema instead of relying on Builder's environment."
+      ]
+    },
+    {
+      "id": "adaos.skill.conversation_i18n.v1",
+      "title": "Conversation, localization, and Pending Actions",
+      "source": "docs/guides/llm-skill-development.md#names-aliases-and-localization",
+      "applicability": {
+        "match_any": ["nlu", "conversation", "voice", "telegram", "i18n", "locale", "pending_action"]
+      },
+      "rules": [
+        "Keep user-visible text in declared localization contracts and preserve UTF-8 input exactly.",
+        "Conversational ambiguity requires bounded clarification; it must not silently change the requested action or enter Builder planning.",
+        "Use governed Pending Actions for consequential confirmation and preserve channel-neutral semantics across UI, voice, and Telegram."
+      ]
+    },
+    {
+      "id": "adaos.skill.async_llm_job.v1",
+      "title": "Root-accounted asynchronous LLM work",
+      "source": "docs/guides/llm-skill-development.md#structured-llm-candidate-boundary",
+      "applicability": {
+        "match_any": ["llm", "model call", "prompt", "response_job", "codex", "research"]
+      },
+      "rules": [
+        "Submit long or Builder-like model work through the Root-accounted async LLM job SDK, persist its job_id, and resume by polling; use synchronous calls only for bounded short work.",
+        "Validate model output against the admitted schema before applying it, and retain provider usage and failure evidence for Subscription accounting.",
+        "Do not call model providers directly or introduce an unmetered fallback path."
+      ]
+    },
+    {
+      "id": "adaos.skill.member_subnet.v1",
+      "title": "Member and subnet-aware handling",
+      "source": "docs/guides/llm-skill-development.md#member-aware-skills",
+      "applicability": {
+        "profiles": ["subnet_data_integration"],
+        "match_any": ["member-aware", "member_id", "member status", "subnet member", "node identity", "device identity", "fanout"]
+      },
+      "rules": [
+        "Derive member and device identity from trusted event or routing metadata; never accept caller-selected ownership or hardcode the local node.",
+        "Bound per-receiver payload and subnet fanout, and represent dormant, disconnected, partial, and stale member data explicitly.",
+        "Coalesce high-frequency membership updates and keep handlers idempotent across reconnect and replay."
+      ]
+    },
+    {
+      "id": "adaos.builder.consumer_contract.v1",
+      "title": "Exact consumer and SDK contract realization",
+      "source": "docs/guides/llm-skill-development.md#consumer-driven-contract-realization",
+      "applicability": {
+        "match_any": ["provider_contract", "operation_set", "conformance", "sdk contract", "api contract", "required operation"]
+      },
+      "rules": [
+        "Treat admitted operation names and request/response schemas as ABI: implement and export every exact required operation, including required/const/enum/additionalProperties boundaries.",
+        "Prove compatibility through the real published consumer normalizer, validator, or conformance path; a self-authored look-alike fixture is not consumer evidence.",
+        "When the public SDK/API cannot express the requirement, do not patch around core or imitate the contract locally; return the governed core-capability escalation."
+      ]
+    }
+  ]
+}

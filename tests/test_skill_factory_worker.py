@@ -1888,16 +1888,28 @@ def test_bounded_repair_prompt_requires_targeted_reads(
     assert "at most 400 source lines before the first edit" in prompt
     assert "Do not run tests or validation commands in the Codex turn" in prompt
     assert "same-skill WebUI `callSkill`" in prompt
-    assert "matching `skill.yaml` tool declaration" in prompt
+    assert "reconcile the exact name across `webui.json`, `skill.yaml` `tools`" in prompt
+    assert "`exports.tools`" in prompt
     assert "every textual `Get-Content`" in prompt
     assert "`-Encoding UTF8`" in prompt
     capsule_ids = [item["id"] for item in packet["prompt_rule_capsules"]]
     assert capsule_ids[:2] == [
         "adaos.builder.execution_boundary.v1",
-        "adaos.skill.webui_tool_contract.v1",
+        "adaos.skill.webui_tool_contract.v2",
     ]
     if repair_profile == "resource_crud":
         assert "adaos.skill.resource_storage.v1" in capsule_ids
+    assert all(
+        str(item["registry_digest"]).startswith("sha256:")
+        and str(item["context_ref"]).startswith("ctxcap.")
+        and str(item["context_digest"]).startswith("sha256:")
+        for item in packet["prompt_rule_capsules"]
+    )
+    contexts = worker_module.ContextControlService(state_dir=tmp_path / "state")
+    assert contexts.list_capsules(
+        subject_ref="prompt-rule:adaos.skill.webui_tool_contract.v2",
+        limit=1,
+    )[0]["capsule_id"] == packet["prompt_rule_capsules"][1]["context_ref"]
     assert "Task-scoped Root MCP route" in prompt
     assert "hub:sn_demo" in prompt
     assert "Never substitute a skill, scenario, project, or component ID" in prompt
@@ -1925,7 +1937,7 @@ def test_prompt_rule_capsules_are_selected_from_task_facets() -> None:
 
     assert [item["id"] for item in capsules] == [
         "adaos.builder.execution_boundary.v1",
-        "adaos.skill.webui_tool_contract.v1",
+        "adaos.skill.webui_tool_contract.v2",
         "adaos.skill.data_route_receiver.v1",
         "adaos.skill.resource_storage.v1",
         "adaos.skill.conversation_i18n.v1",
@@ -3349,6 +3361,10 @@ def test_bound_staging_scope_omits_managed_target_discovery() -> None:
         "get_builder_context",
         "search_descriptors",
         "get_descriptor_item",
+    ]
+    assert task_scope_enabled_tools(["read_context_capsules"]) == [
+        "search_context",
+        "get_context_capsule",
     ]
     assert task_scope_enabled_tools(
         ["run_staging_validation"],

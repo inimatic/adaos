@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import types
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -71,7 +72,16 @@ def test_root_mcp_foundation_and_contracts(monkeypatch) -> None:
     assert "adaos_dev.get_sdk_metadata" in contract_ids
     assert "adaos_dev.get_public_skill_registry" in contract_ids
     assert "builder.get_context" in contract_ids
-    assert {"context.resolve", "context.plan", "context.compile", "context.inspect", "context.record_receipt", "context.propose_memory"} <= contract_ids
+    assert {
+        "context.search",
+        "context.get_capsule",
+        "context.resolve",
+        "context.plan",
+        "context.compile",
+        "context.inspect",
+        "context.record_receipt",
+        "context.propose_memory",
+    } <= contract_ids
     assert "hub.memory.get_status" in contract_ids
     assert "hub.memory.list_sessions" in contract_ids
     assert "hub.memory.get_artifact" in contract_ids
@@ -341,7 +351,6 @@ def test_root_mcp_accepts_bounded_builder_task_lease(monkeypatch) -> None:
         "get_architecture_catalog",
         "get_builder_context",
         "get_descriptor_item",
-        "get_sdk_metadata",
         "get_template_catalog",
         "search_descriptors",
     }
@@ -482,6 +491,95 @@ def test_root_mcp_searches_compact_headers_then_reads_one_item(monkeypatch) -> N
     descriptor_item = detail["response"]["result"]["descriptor_item"]
     assert descriptor_item["item_id"] == selected["item_id"]
     assert descriptor_item["item"]["name"] == selected["item_id"]
+
+
+def test_root_mcp_searches_context_headers_then_reads_one_capsule(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("ADAOS_ROOT_OWNER_TOKEN", "owner-secret")
+    from adaos.services.context_control import ContextControlService
+    from adaos.services.root_mcp import service as root_mcp_service
+
+    contexts = ContextControlService(tmp_path)
+    target = contexts.register_capsule(
+        {
+            "kind": "procedural",
+            "subject_refs": ["prompt-rule:manifest-contract"],
+            "authority_ref": "docs:llm-skill-development",
+            "trust_class": "validated",
+            "summary": "Public skill tool contract",
+            "content": {"rules": ["Keep skill.yaml and webui.json consistent."]},
+        }
+    )
+    contexts.register_capsule(
+        {
+            "kind": "project",
+            "subject_refs": ["project:newer"],
+            "authority_ref": "project:newer",
+            "summary": "unrelated newest record",
+        }
+    )
+    monkeypatch.setattr(root_mcp_service, "_context_service", lambda: contexts)
+    client = _make_client()
+    headers = {"X-Owner-Token": "owner-secret"}
+
+    searched = client.post(
+        "/v1/root/mcp/call",
+        headers=headers,
+        json={
+            "tool_id": "context.search",
+            "arguments": {"query": "skill.yaml consistent", "limit": 1},
+        },
+    ).json()
+
+    search = searched["response"]["result"]["search"]
+    from jsonschema import Draft202012Validator
+
+    schema_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "adaos"
+        / "abi"
+        / "context.search.v1.schema.json"
+    )
+    Draft202012Validator(
+        json.loads(schema_path.read_text(encoding="utf-8"))
+    ).validate(search)
+    assert searched["ok"] is True
+    assert search["schema"] == "adaos.context.search.v1"
+    assert len(search["items"]) == 1
+    selected = search["items"][0]
+    assert selected == {
+        "schema": "adaos.context.search_item.v1",
+        "capsule_id": target["capsule_id"],
+        "digest": target["digest"],
+        "kind": "procedural",
+        "subject_refs": ["prompt-rule:manifest-contract"],
+        "authority_ref": "docs:llm-skill-development",
+        "trust_class": "validated",
+        "tainted": False,
+        "sensitivity": "workspace",
+        "locale": "und",
+        "recorded_at": target["recorded_at"],
+        "drill_down": {"capsule_id": target["capsule_id"]},
+    }
+
+    detail = client.post(
+        "/v1/root/mcp/call",
+        headers=headers,
+        json={
+            "tool_id": "context.get_capsule",
+            "arguments": {"capsule_id": target["capsule_id"]},
+        },
+    ).json()
+
+    assert detail["ok"] is True
+    capsule = detail["response"]["result"]["capsule"]
+    assert capsule["capsule_id"] == target["capsule_id"]
+    assert capsule["artifact"]["content"]["rules"] == [
+        "Keep skill.yaml and webui.json consistent."
+    ]
 
 
 def test_root_mcp_reads_yjs_load_mark_history(monkeypatch) -> None:

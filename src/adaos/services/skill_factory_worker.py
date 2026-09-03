@@ -37,6 +37,11 @@ from adaos.domain.development_budget import (
 from adaos.services.node_config import load_config
 from adaos.services.node_runtime_state import load_node_runtime_state
 from adaos.services.artifact_pipeline.storage import replace_with_retry
+from adaos.services.prompt_rules import (
+    context_capsule_request,
+    select_prompt_rules,
+)
+from adaos.services.context_control import ContextControlService
 from adaos.services.skill_factory import SkillFactoryService
 from adaos.services.skill_factory_mcp import task_scope_enabled_tools
 from adaos.services.skill_factory_sources import (
@@ -1321,6 +1326,7 @@ def _selected_prompt_rule_capsules(
     target_type: str,
     repair_hints: Mapping[str, Any],
     context_packet: Mapping[str, Any],
+    context_service: ContextControlService | None = None,
 ) -> list[dict[str, Any]]:
     """Compile small task-relevant rules instead of injecting whole guides."""
 
@@ -1336,183 +1342,34 @@ def _selected_prompt_rule_capsules(
         ensure_ascii=True,
         sort_keys=True,
     ).lower()
-    capsules = [
-        {
-            "id": "adaos.builder.execution_boundary.v1",
-            "source": "docs/guides/llm-skill-development.md#golden-rule",
-            "rules": [
-                "Read and edit only the admitted isolated checkout and task-owned context.",
-                "On Windows PowerShell 5.1, every textual `Get-Content` read must use `-Encoding UTF8`; never rewrite source from mojibake console text.",
-                "Do not publish, install, activate, or mutate canonical workspace source; the trusted worker owns validation and Trial delivery.",
-            ],
-        }
-    ]
-    ui_contract = target_type == "skill" and any(
-        marker in evidence
-        for marker in (
-            "webui.json",
-            "skill.yaml",
-            "handlers/",
-            "modal:",
-            "widget:",
-            "callskill",
-            "data_source",
-        )
+    selected = select_prompt_rules(
+        target_type=target_type,
+        evidence=evidence,
+        facts={
+            "profile": repair_hints.get("profile"),
+            "target_files": repair_hints.get("target_files"),
+            "target_refs": repair_hints.get("target_refs"),
+            "facet_keys": list(dict(context_packet.get("facets") or {})),
+        },
     )
-    if ui_contract:
-        capsules.append(
-            {
-                "id": "adaos.skill.webui_tool_contract.v1",
-                "source": (
-                    "docs/guides/llm-skill-development.md"
-                    "#machine-checkable-route-contract"
-                ),
-                "rules": [
-                    "Treat every same-skill WebUI `callSkill` or skill `dataSource` target as a public manifest contract.",
-                    "Keep webui.json, the matching `skill.yaml` tool declaration with complete input/output schemas, and the matching `@tool` handler consistent in one patch.",
-                    "Browser-read tools require a bounded declared data_route; action acknowledgements stay compact and do not duplicate projected data.",
-                ],
-            }
-        )
-    if any(
-        marker in evidence
-        for marker in (
-            "data_route",
-            "data-route",
-            "projection",
-            "receiver",
-            "stream",
-            "subscription",
-        )
-    ):
-        capsules.append(
-            {
-                "id": "adaos.skill.data_route_receiver.v1",
-                "source": "docs/guides/llm-skill-development.md#required-data-route-plan",
-                "rules": [
-                    "Declare receiver ownership, route budget, causal read policy, and projection target explicitly.",
-                    "Do not use Yjs as an unconstrained database or publish duplicate state through action responses and projections.",
-                    "A route or projection mismatch is a validation failure, not a reason to add an undeclared fallback.",
-                ],
-            }
-        )
-    if any(
-        marker in evidence
-        for marker in (
-            "resource_crud",
-            "resource",
-            "storage",
-            "contentref",
-            "provider",
-            "data root",
-        )
-    ):
-        capsules.append(
-            {
-                "id": "adaos.skill.resource_storage.v1",
-                "source": "docs/guides/llm-skill-development.md#memory-and-reload-safety",
-                "rules": [
-                    "Use typed AdaOS resource/provider contracts and owner-scoped SDK storage roots.",
-                    "Do not let callers choose arbitrary filesystem roots or persist synthetic provider data as authoritative state.",
-                    "CRUD and reload behavior must preserve revision, authorization, and deterministic empty/unavailable states.",
-                ],
-            }
-        )
-    if any(
-        marker in evidence
-        for marker in (
-            "rehydrate",
-            "activation",
-            "lifecycle",
-            "runtime_guard",
-            "observability",
-        )
-    ):
-        capsules.append(
-            {
-                "id": "adaos.skill.runtime_lifecycle.v1",
-                "source": "docs/guides/llm-skill-development.md#guarding-and-quarantine",
-                "rules": [
-                    "Keep activation, rehydrate, drain, and failure paths bounded, idempotent, and observable.",
-                    "Validation and runtime failures must produce evidence; do not hide them behind synthetic success defaults.",
-                ],
-            }
-        )
-    if any(
-        marker in evidence
-        for marker in (
-            "nlu",
-            "conversation",
-            "voice",
-            "telegram",
-            "i18n",
-            "locale",
-            "pending_action",
-        )
-    ):
-        capsules.append(
-            {
-                "id": "adaos.skill.conversation_i18n.v1",
-                "source": (
-                    "docs/guides/llm-skill-development.md"
-                    "#names-aliases-and-localization"
-                ),
-                "rules": [
-                    "Keep user-visible text in declared localization contracts and preserve UTF-8 input exactly.",
-                    "Conversational ambiguity requires bounded clarification; it must not silently change the requested action or enter Builder planning.",
-                    "Use governed Pending Actions for consequential confirmation and preserve channel-neutral semantics across UI, voice, and Telegram.",
-                ],
-            }
-        )
-    if any(
-        marker in evidence
-        for marker in (
-            "llm",
-            "model call",
-            "prompt",
-            "response_job",
-            "codex",
-            "research",
-        )
-    ):
-        capsules.append(
-            {
-                "id": "adaos.skill.async_llm_job.v1",
-                "source": (
-                    "docs/guides/llm-skill-development.md"
-                    "#structured-llm-candidate-boundary"
-                ),
-                "rules": [
-                    "Submit long or Builder-like model work through the Root-accounted async LLM job SDK, persist its job_id, and resume by polling; use synchronous calls only for bounded short work.",
-                    "Validate model output against the admitted schema before applying it, and retain provider usage and failure evidence for Subscription accounting.",
-                    "Do not call model providers directly or introduce an unmetered fallback path.",
-                ],
-            }
-        )
-    if any(
-        marker in evidence
-        for marker in (
-            "member-aware",
-            "member_id",
-            "member status",
-            "subnet member",
-            "node identity",
-            "device identity",
-            "fanout",
-        )
-    ):
-        capsules.append(
-            {
-                "id": "adaos.skill.member_subnet.v1",
-                "source": "docs/guides/llm-skill-development.md#member-aware-skills",
-                "rules": [
-                    "Derive member and device identity from trusted event or routing metadata; never accept caller-selected ownership or hardcode the local node.",
-                    "Bound per-receiver payload and subnet fanout, and represent dormant, disconnected, partial, and stale member data explicitly.",
-                    "Coalesce high-frequency membership updates and keep handlers idempotent across reconnect and replay.",
-                ],
-            }
-        )
-    return capsules
+    projected: list[dict[str, Any]] = []
+    for rule in selected:
+        item = {
+            key: copy.deepcopy(rule.get(key))
+            for key in (
+                "id",
+                "source",
+                "rules",
+                "registry_version",
+                "registry_digest",
+            )
+        }
+        if context_service is not None:
+            capsule = context_service.register_capsule(context_capsule_request(rule))
+            item["context_ref"] = capsule["capsule_id"]
+            item["context_digest"] = capsule["digest"]
+        projected.append(item)
+    return projected
 
 
 def _prompt_rule_capsules_markdown(capsules: Sequence[Mapping[str, Any]]) -> str:
@@ -4689,6 +4546,7 @@ class LocalSkillFactoryWorker:
             target_type=target_type,
             repair_hints=capsule_repair_hints,
             context_packet=context_packet,
+            context_service=ContextControlService(state_dir=self.state_dir),
         )
         packet = {
             "schema": PACKET_SCHEMA,

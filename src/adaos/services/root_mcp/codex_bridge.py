@@ -67,6 +67,8 @@ _COMPACT_MODEL_TEXT_TOOLS = {
     "get_sdk_metadata",
     "search_descriptors",
     "get_descriptor_item",
+    "search_context",
+    "get_context_capsule",
     "get_named_entity_registry",
     "get_nlu_authoring_context",
     "context_resolve",
@@ -748,6 +750,39 @@ class CodexRootMcpBridge:
                         },
                     },
                     "required": ["descriptor_id", "item_id"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "search_context",
+                "description": "Search compact governed context capsule headers. Use this before reading one capsule.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Context query. A task-scoped server defaults it from the bounded task request.",
+                        },
+                        "subject_ref": {"type": "string"},
+                        "kind": {"type": "string"},
+                        "trust_class": {"type": "string"},
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 6 if self.profile.task_id else 64,
+                            "default": 4 if self.profile.task_id else 12,
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "get_context_capsule",
+                "description": "Read one exact governed context capsule selected by search_context.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"capsule_id": {"type": "string"}},
+                    "required": ["capsule_id"],
                     "additionalProperties": False,
                 },
             },
@@ -1580,6 +1615,38 @@ class CodexRootMcpBridge:
                     if task_scoped
                     else None
                 ),
+            )
+        if tool == "search_context":
+            task_scoped = bool(self.profile.task_id)
+            query = _normalize_text(args.get("query")) or _normalize_text(
+                self.profile.context_query
+            )
+            if not query:
+                raise ValueError("context search query is required")
+            payload = client.search_context_capsules(
+                query,
+                subject_ref=_normalize_text(args.get("subject_ref")),
+                kind=_normalize_text(args.get("kind")),
+                trust_class=_normalize_text(args.get("trust_class")),
+                limit=max(
+                    1,
+                    min(
+                        int(args.get("limit") or (4 if task_scoped else 12)),
+                        6 if task_scoped else 64,
+                    ),
+                ),
+            )
+            return _tool_text(
+                payload,
+                model_text_format="min_json" if task_scoped else model_text_format,
+            )
+        if tool == "get_context_capsule":
+            payload = client.get_context_capsule(
+                str(args.get("capsule_id") or "")
+            )
+            return _tool_text(
+                payload,
+                model_text_format="min_json" if self.profile.task_id else model_text_format,
             )
         if tool == "get_template_catalog":
             return _tool_text(client.get_adaos_dev_template_catalog())

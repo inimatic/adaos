@@ -103,6 +103,38 @@ class _FakeRootMcpClient:
             }
         }
 
+    def search_context_capsules(
+        self,
+        query: str,
+        *,
+        subject_ref: str | None = None,
+        kind: str | None = None,
+        trust_class: str | None = None,
+        limit: int = 12,
+    ) -> dict:
+        self.calls.append(
+            (
+                "search_context_capsules",
+                query,
+                {
+                    "subject_ref": subject_ref,
+                    "kind": kind,
+                    "trust_class": trust_class,
+                    "limit": limit,
+                },
+            )
+        )
+        return {
+            "search": {
+                "schema": "adaos.context.search.v1",
+                "items": [{"capsule_id": "ctxcap.rule"}],
+            }
+        }
+
+    def get_context_capsule(self, capsule_id: str) -> dict:
+        self.calls.append(("get_context_capsule", capsule_id, {}))
+        return {"capsule": {"capsule_id": capsule_id, "artifact": {"content": {}}}}
+
     def get_adaos_dev_template_catalog(self) -> dict:
         self.calls.append(("get_adaos_dev_template_catalog", "", {}))
         return {"descriptor": {"payload": {"skills": ["skill_default"], "scenarios": ["scenario_default"]}}}
@@ -1482,6 +1514,40 @@ def test_task_scoped_descriptor_search_defaults_query_and_bounds_drilldown(monke
         "sdk_metadata",
         {"item_id": "adaos.sdk.control_plane.list_quota_objects", "level": "std"},
     ) in fake_client.calls
+
+
+def test_task_scoped_context_search_is_explicit_and_bounded(monkeypatch) -> None:
+    profile = bridge_mod.CodexBridgeProfile(
+        root_url="https://root.example.test",
+        target_id="hub:test-subnet",
+        task_id="task.context-search",
+        task_scopes=["read_context_capsules"],
+        context_query="manifest contract",
+        capabilities=["context.read"],
+        enabled_tools=["search_context", "get_context_capsule"],
+        access_token="task-access",
+    )
+    bridge = bridge_mod.CodexRootMcpBridge(profile)
+    fake_client = _FakeRootMcpClient()
+    monkeypatch.setattr(bridge, "_client", lambda: fake_client)
+
+    definitions = {item["name"]: item for item in bridge.tool_definitions()}
+    search = bridge.call_tool("search_context", {"limit": 99})
+    detail = bridge.call_tool(
+        "get_context_capsule",
+        {"capsule_id": "ctxcap.rule"},
+    )
+
+    assert set(definitions) == {"search_context", "get_context_capsule"}
+    assert definitions["search_context"]["inputSchema"]["properties"]["limit"]["maximum"] == 6
+    assert search["_meta"]["adaos/modelProjection"]["model_text_format"] == "min_json"
+    assert detail["_meta"]["adaos/modelProjection"]["model_text_format"] == "min_json"
+    assert (
+        "search_context_capsules",
+        "manifest contract",
+        {"subject_ref": None, "kind": None, "trust_class": None, "limit": 6},
+    ) in fake_client.calls
+    assert ("get_context_capsule", "ctxcap.rule", {}) in fake_client.calls
 
 
 def test_general_sdk_metadata_preserves_explicit_detail(monkeypatch) -> None:

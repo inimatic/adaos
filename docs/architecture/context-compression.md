@@ -658,6 +658,14 @@ single implementation unit rather than separately deployable Registry,
 Resolver, Compiler, and Curator services; source indexing, follow-up deltas,
 cold replay, and measured quality/cost evaluations remain open.
 
+Search and prompt-registry verification, 2026-09-03: capsule text, metadata,
+subject, kind, and trust filters now execute in SQLite before result limits;
+legacy rows receive an idempotent search-document backfill. SDK/API and Root
+MCP expose the same read model through compact `context.search` headers and an
+exact `context.get_capsule` drill-down. Builder prompt rules moved from worker
+branches into a versioned declarative registry; each selected rule is recorded
+as an immutable procedural capsule and referenced by the Skill Factory packet.
+
 Execution-preflight verification, 2026-09-02: singleton Dev Ticket repair now
 uses the same fail-closed qualification principle as package planning. An
 incomplete envelope returns `qualification_required` without creating Builder

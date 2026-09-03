@@ -106,6 +106,34 @@ class RootMcpClient:
             },
         )
 
+    def search_context_capsules(
+        self,
+        query: str,
+        *,
+        subject_ref: str | None = None,
+        kind: str | None = None,
+        trust_class: str | None = None,
+        limit: int = 12,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "query": str(query),
+            "limit": max(1, min(int(limit or 12), 64)),
+        }
+        for key, value in (
+            ("subject_ref", subject_ref),
+            ("kind", kind),
+            ("trust_class", trust_class),
+        ):
+            if value:
+                arguments[key] = str(value)
+        return self.call("context.search", arguments=arguments)
+
+    def get_context_capsule(self, capsule_id: str) -> dict[str, Any]:
+        return self.call(
+            "context.get_capsule",
+            arguments={"capsule_id": str(capsule_id)},
+        )
+
     def get_adaos_dev_architecture_catalog(
         self,
         *,

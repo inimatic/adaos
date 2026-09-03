@@ -745,6 +745,38 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             metadata={"published_by": "plane:adaos_dev", "handler": "dev_ticket_get_artifact"},
         ),
         RootMcpToolContract(
+            id="context.search",
+            title="Search governed context capsules",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Search compact context capsule headers by text and exact scope before selecting one detail record.",
+            input_schema=schema_object(
+                properties={
+                    "query": {"type": "string"},
+                    "subject_ref": {"type": "string"},
+                    "kind": {"type": "string"},
+                    "trust_class": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 64},
+                },
+                required=["query"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="context.read",
+            metadata={"published_by": "plane:context_control", "handler": "context_search"},
+        ),
+        RootMcpToolContract(
+            id="context.get_capsule",
+            title="Get governed context capsule",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Read one exact context capsule and its content after context.search selection.",
+            input_schema=schema_object(
+                properties={"capsule_id": {"type": "string"}},
+                required=["capsule_id"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="context.read",
+            metadata={"published_by": "plane:context_control", "handler": "context_get_capsule"},
+        ),
+        RootMcpToolContract(
             id="context.resolve",
             title="Resolve governed context",
             surface=RootMcpSurface.DEVELOPMENT,
@@ -3610,6 +3642,61 @@ def _context_service():
     return ContextControlService()
 
 
+def _handle_context_search(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    query = str(arguments.get("query") or "").strip()
+    if not query:
+        raise ValueError("context search query is required")
+    items = _context_service().list_capsules(
+        search=query,
+        subject_ref=_text_or_none(arguments.get("subject_ref")),
+        kind=_text_or_none(arguments.get("kind")),
+        trust_class=_text_or_none(arguments.get("trust_class")),
+        limit=max(1, min(int(arguments.get("limit") or 12), 64)),
+    )
+    compact = [
+        {
+            "schema": "adaos.context.search_item.v1",
+            "capsule_id": item["capsule_id"],
+            "digest": item["digest"],
+            "kind": item["kind"],
+            "subject_refs": item["subject_refs"],
+            "authority_ref": item["authority_ref"],
+            "trust_class": item["trust_class"],
+            "tainted": item["tainted"],
+            "sensitivity": item["sensitivity"],
+            "locale": item["locale"],
+            "recorded_at": item["recorded_at"],
+            **({"metadata": item["metadata"]} if item["metadata"] else {}),
+            "drill_down": {"capsule_id": item["capsule_id"]},
+        }
+        for item in items
+    ]
+    return {
+        "search": {
+            "schema": "adaos.context.search.v1",
+            "query": query,
+            "count": len(compact),
+            "items": compact,
+        }
+    }
+
+
+def _handle_context_get_capsule(
+    arguments: dict[str, Any],
+    *,
+    dry_run: bool,
+) -> dict[str, Any]:
+    capsule_id = str(arguments.get("capsule_id") or "").strip()
+    if not capsule_id:
+        raise ValueError("capsule_id is required")
+    return {
+        "capsule": _context_service().get_capsule(
+            capsule_id,
+            include_content=True,
+        )
+    }
+
+
 def _development_ticket_sdk():
     from adaos.sdk import development_tickets
 
@@ -3850,6 +3937,8 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "dev_ticket.operate": lambda arguments, dry_run=False: _handle_dev_ticket_operate(arguments, dry_run=dry_run),
     "dev_ticket.artifacts": lambda arguments, dry_run=False: _handle_dev_ticket_artifacts(arguments, dry_run=dry_run),
     "dev_ticket.get_artifact": lambda arguments, dry_run=False: _handle_dev_ticket_get_artifact(arguments, dry_run=dry_run),
+    "context.search": lambda arguments, dry_run=False: _handle_context_search(arguments, dry_run=dry_run),
+    "context.get_capsule": lambda arguments, dry_run=False: _handle_context_get_capsule(arguments, dry_run=dry_run),
     "context.resolve": lambda arguments, dry_run=False: _handle_context_resolve(arguments, dry_run=dry_run),
     "context.plan": lambda arguments, dry_run=False: _handle_context_plan(arguments, dry_run=dry_run),
     "context.compile": lambda arguments, dry_run=False: _handle_context_compile(arguments, dry_run=dry_run),

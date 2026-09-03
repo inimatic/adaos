@@ -93,6 +93,14 @@ def _json(value: Any) -> str:
     return _canonical_bytes(value).decode("utf-8")
 
 
+def _search_text(*values: Any) -> str:
+    return "\n".join(_json(value).lower() for value in values if value is not None)
+
+
+def _like_token(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _loads(value: Any, fallback: Any) -> Any:
     if value is None or value == "":
         return fallback
@@ -196,6 +204,10 @@ class ContextControlService:
                 );
                 CREATE INDEX IF NOT EXISTS idx_capsules_kind ON capsules(kind);
                 CREATE INDEX IF NOT EXISTS idx_capsules_recorded ON capsules(recorded_at);
+                CREATE TABLE IF NOT EXISTS capsule_search (
+                    capsule_id TEXT PRIMARY KEY REFERENCES capsules(capsule_id) ON DELETE CASCADE,
+                    search_text TEXT NOT NULL
+                );
 
                 CREATE TABLE IF NOT EXISTS relationships (
                     relationship_id TEXT PRIMARY KEY,
@@ -290,6 +302,21 @@ class ContextControlService:
                 );
                 """
             )
+            missing_search = connection.execute(
+                """SELECT capsules.* FROM capsules
+                   LEFT JOIN capsule_search USING (capsule_id)
+                   WHERE capsule_search.capsule_id IS NULL"""
+            ).fetchall()
+            for row in missing_search:
+                capsule = self._capsule_row(row)
+                try:
+                    artifact = self.get_artifact(capsule["artifact_ref"])
+                except (KeyError, OSError, ValueError, json.JSONDecodeError):
+                    artifact = None
+                connection.execute(
+                    "INSERT OR REPLACE INTO capsule_search VALUES (?, ?)",
+                    (capsule["capsule_id"], _search_text(capsule, artifact)),
+                )
 
     def put_artifact(self, value: Any) -> dict[str, Any]:
         payload = _canonical_bytes(value)
@@ -382,6 +409,10 @@ class ContextControlService:
                     (capsule_id,),
                 ).fetchone()
                 result = self._capsule_row(row)
+            connection.execute(
+                "INSERT OR REPLACE INTO capsule_search VALUES (?, ?)",
+                (result["capsule_id"], _search_text(result, artifact_value)),
+            )
         if bind:
             bindings = []
             for subject_ref in subject_refs:
@@ -446,25 +477,31 @@ class ContextControlService:
         include_revoked: bool = False,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
-        clauses = [] if include_revoked else ["revoked_at IS NULL"]
+        clauses = [] if include_revoked else ["c.revoked_at IS NULL"]
         params: list[Any] = []
         if kind:
-            clauses.append("kind = ?")
+            clauses.append("c.kind = ?")
             params.append(_text(kind))
         if trust_class:
-            clauses.append("trust_class = ?")
+            clauses.append("c.trust_class = ?")
             params.append(_text(trust_class))
-        query = "SELECT * FROM capsules" + (" WHERE " + " AND ".join(clauses) if clauses else "")
-        query += " ORDER BY recorded_at DESC LIMIT ?"
+        token = _text(subject_ref)
+        if token:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM json_each(c.subject_refs_json) subjects WHERE subjects.value = ?)"
+            )
+            params.append(token)
+        search_terms = [item for item in _text(search).lower().split() if item]
+        for term in search_terms:
+            clauses.append("LOWER(s.search_text) LIKE ? ESCAPE '\\'")
+            params.append(f"%{_like_token(term)}%")
+        join = " JOIN capsule_search s ON s.capsule_id = c.capsule_id" if search_terms else ""
+        query = "SELECT c.* FROM capsules c" + join
+        query += " WHERE " + " AND ".join(clauses) if clauses else ""
+        query += " ORDER BY c.recorded_at DESC LIMIT ?"
         params.append(max(1, min(int(limit), 2000)))
         with self._connect() as connection:
             items = [self._capsule_row(row) for row in connection.execute(query, params).fetchall()]
-        token = _text(subject_ref)
-        if token:
-            items = [item for item in items if token in item["subject_refs"]]
-        text_search = _text(search).lower()
-        if text_search:
-            items = [item for item in items if text_search in _json(item).lower()]
         return items
 
     def add_relationship(self, relationship: Mapping[str, Any]) -> dict[str, Any]:

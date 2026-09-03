@@ -45,6 +45,52 @@ def _schema(name: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def test_capsule_search_filters_before_limit_and_indexes_content(tmp_path: Path) -> None:
+    service = ContextControlService(tmp_path)
+    target = service.register_capsule(
+        {
+            "kind": "procedural",
+            "subject_refs": ["prompt-rule:manifest-contract"],
+            "authority_ref": "docs:llm-skill-development",
+            "trust_class": "validated",
+            "summary": "Public tool contract",
+            "content": {"rules": ["Keep skill.yaml and webui.json consistent."]},
+        }
+    )
+    service.register_capsule(
+        {
+            "kind": "project",
+            "subject_refs": ["project:newer"],
+            "authority_ref": "project:newer",
+            "summary": "Unrelated newest capsule",
+        }
+    )
+
+    assert service.list_capsules(search="skill.yaml consistent", limit=1) == [target]
+    assert service.list_capsules(
+        subject_ref="prompt-rule:manifest-contract",
+        limit=1,
+    ) == [target]
+
+
+def test_capsule_search_backfills_existing_registry(tmp_path: Path) -> None:
+    service = ContextControlService(tmp_path)
+    target = service.register_capsule(
+        {
+            "kind": "procedural",
+            "subject_refs": ["prompt-rule:reload-safety"],
+            "authority_ref": "docs:llm-skill-development",
+            "content": {"rules": ["Keep reload cleanup idempotent."]},
+        }
+    )
+    with service._connect() as connection:
+        connection.execute("DELETE FROM capsule_search")
+
+    restored = ContextControlService(tmp_path)
+
+    assert restored.list_capsules(search="reload cleanup", limit=1) == [target]
+
+
 def test_capsule_graph_plan_compile_and_receipt(tmp_path: Path) -> None:
     service = ContextControlService(tmp_path)
     platform = _capsule(service, subject_ref="platform:adaos", kind="platform", summary="SDK surface")

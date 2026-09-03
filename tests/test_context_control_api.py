@@ -88,6 +88,36 @@ def test_context_api_resolve_plan_compile_and_inspect(tmp_path: Path) -> None:
     assert inspection.json()["inspection"]["usage"]["fresh_plus_output"] == 6
 
 
+def test_context_api_searches_capsule_content_before_limit(tmp_path: Path) -> None:
+    service = ContextControlService(tmp_path)
+    client = _client(service)
+    target = service.register_capsule(
+        {
+            "kind": "procedural",
+            "subject_refs": ["prompt-rule:route-contract"],
+            "authority_ref": "docs:llm-skill-development",
+            "content": {"rules": ["Declare a bounded data route receiver."]},
+        }
+    )
+    service.register_capsule(
+        {
+            "kind": "project",
+            "subject_refs": ["project:newer"],
+            "authority_ref": "project:newer",
+            "summary": "newest unrelated record",
+        }
+    )
+
+    response = client.get(
+        "/api/context/capsules",
+        headers=_headers(),
+        params={"search": "bounded receiver", "limit": 1},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"] == [target]
+
+
 def test_context_api_reports_binding_conflict(tmp_path: Path) -> None:
     service = ContextControlService(tmp_path)
     client = _client(service)

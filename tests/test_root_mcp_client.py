@@ -69,6 +69,40 @@ def test_root_mcp_client_exposes_descriptor_search_and_exact_item() -> None:
     )
 
 
+def test_root_mcp_client_exposes_context_search_and_exact_capsule() -> None:
+    stub = _StubRootHttpClient()
+    client = RootMcpClient(
+        config=RootMcpClientConfig(root_url="https://root.example.test"),
+        http=stub,  # type: ignore[arg-type]
+    )
+
+    client.search_context_capsules(
+        "manifest contract",
+        subject_ref="prompt-rule:manifest",
+        kind="procedural",
+        trust_class="validated",
+        limit=8,
+    )
+    client.get_context_capsule("ctxcap.rule")
+
+    assert stub.calls[0][2]["json"] == {
+        "tool_id": "context.search",
+        "arguments": {
+            "query": "manifest contract",
+            "subject_ref": "prompt-rule:manifest",
+            "kind": "procedural",
+            "trust_class": "validated",
+            "limit": 8,
+        },
+        "dry_run": False,
+    }
+    assert stub.calls[1][2]["json"] == {
+        "tool_id": "context.get_capsule",
+        "arguments": {"capsule_id": "ctxcap.rule"},
+        "dry_run": False,
+    }
+
+
 def test_root_mcp_client_uses_root_url_scope_and_bearer_headers() -> None:
     stub = _StubRootHttpClient()
     config = RootMcpClientConfig(
