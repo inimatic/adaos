@@ -261,6 +261,13 @@ class ContextControlService:
                     artifact_ref TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS context_plan_subjects (
+                    plan_id TEXT NOT NULL REFERENCES context_plans(plan_id) ON DELETE CASCADE,
+                    subject_ref TEXT NOT NULL,
+                    PRIMARY KEY(plan_id, subject_ref)
+                );
+                CREATE INDEX IF NOT EXISTS idx_context_plan_subjects_lookup
+                    ON context_plan_subjects(subject_ref, plan_id);
                 CREATE TABLE IF NOT EXISTS context_receipts (
                     receipt_id TEXT PRIMARY KEY,
                     run_ref TEXT NOT NULL,
@@ -317,6 +324,17 @@ class ContextControlService:
                     "INSERT OR REPLACE INTO capsule_search VALUES (?, ?)",
                     (capsule["capsule_id"], _search_text(capsule, artifact)),
                 )
+            missing_plan_subjects = connection.execute(
+                """SELECT context_plans.* FROM context_plans
+                   LEFT JOIN context_plan_subjects USING (plan_id)
+                   WHERE context_plan_subjects.plan_id IS NULL"""
+            ).fetchall()
+            for row in missing_plan_subjects:
+                try:
+                    plan = self.get_artifact(row["artifact_ref"])
+                except (KeyError, OSError, ValueError, json.JSONDecodeError):
+                    continue
+                self._index_plan_subjects(connection, str(row["plan_id"]), plan)
 
     def put_artifact(self, value: Any) -> dict[str, Any]:
         payload = _canonical_bytes(value)
@@ -1163,7 +1181,22 @@ class ContextControlService:
                     "INSERT INTO context_plans VALUES (?, ?, ?, ?, ?)",
                     (plan_id, artifact["digest"], canonical["resolution_ref"], artifact_ref, canonical["created_at"]),
                 )
+            self._index_plan_subjects(connection, plan_id, canonical)
         return {**canonical, "plan_id": plan_id, "plan_ref": artifact_ref, "digest": artifact["digest"]}
+
+    @staticmethod
+    def _index_plan_subjects(
+        connection: sqlite3.Connection,
+        plan_id: str,
+        plan: Mapping[str, Any],
+    ) -> None:
+        refs = set(_strings(plan.get("subject_refs")))
+        for item in _mappings(plan.get("selected")):
+            refs.update(_strings(item.get("subject_refs")))
+        connection.executemany(
+            "INSERT OR IGNORE INTO context_plan_subjects VALUES (?, ?)",
+            [(plan_id, ref) for ref in sorted(refs)],
+        )
 
     def get_plan(self, plan_id: str) -> dict[str, Any]:
         with self._connect() as connection:
@@ -1173,17 +1206,29 @@ class ContextControlService:
         return {**self.get_artifact(row["artifact_ref"]), "plan_id": row["plan_id"], "plan_ref": row["artifact_ref"], "digest": row["digest"]}
 
     def list_plans(self, *, subject_ref: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        token = _text(subject_ref)
         with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT * FROM context_plans ORDER BY created_at DESC LIMIT ?",
-                (max(1, min(int(limit), 2000)),),
-            ).fetchall()
+            bounded_limit = max(1, min(int(limit), 2000))
+            if token:
+                rows = connection.execute(
+                    """SELECT context_plans.* FROM context_plans
+                       JOIN context_plan_subjects USING (plan_id)
+                       WHERE context_plan_subjects.subject_ref = ?
+                       ORDER BY context_plans.created_at DESC, context_plans.plan_id DESC
+                       LIMIT ?""",
+                    (token, bounded_limit),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """SELECT * FROM context_plans
+                       ORDER BY created_at DESC, plan_id DESC LIMIT ?""",
+                    (bounded_limit,),
+                ).fetchall()
         items = [
             {**self.get_artifact(row["artifact_ref"]), "plan_id": row["plan_id"], "plan_ref": row["artifact_ref"], "digest": row["digest"]}
             for row in rows
         ]
-        token = _text(subject_ref)
-        return [item for item in items if token in item.get("subject_refs", [])] if token else items
+        return items
 
     def compile(self, request: Mapping[str, Any]) -> dict[str, Any]:
         query = dict(request)

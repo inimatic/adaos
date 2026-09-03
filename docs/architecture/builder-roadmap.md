@@ -2006,7 +2006,10 @@ and project projection digest remain unchanged. Related Dev Ticket runs
 therefore share stable project context without sharing their task overlays,
 budgets, acceptance, or rollback lifecycle. Context Attribution Receipts carry
 the run, DevelopmentSession, and Project refs, including deterministic
-zero-model execution routes. Builder and Skill Factory persistence now migrate
+zero-model execution routes. Context Plan lookup normalizes plan and selected
+unit subject refs, filters by exact project or run scope before applying query
+limits, and backfills legacy plans, so unrelated recent work cannot hide the
+selected project's history. Builder and Skill Factory persistence now migrate
 legacy inline request, snapshot, task, result, provenance, and workflow copies
 to immutable refs on the next mutation; compatibility hydration exists only at
 read and worker-assignment boundaries. A production-state copy measured Skill

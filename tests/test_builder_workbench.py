@@ -793,6 +793,18 @@ def test_builder_context_inspector_uses_ticket_project_not_component_id(tmp_path
         }
     )
     plan = contexts.plan({"resolution": resolution, "token_budget": 2_000})
+    for index in range(30):
+        contexts.plan(
+            {
+                "resolution": {
+                    "subject_refs": [f"project:unrelated-{index}"],
+                    "purpose": "builder.automation",
+                    "audience": "builder",
+                    "required": [],
+                },
+                "token_budget": 100,
+            }
+        )
 
     inspector = service.context_inspector("desktop")
 

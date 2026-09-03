@@ -1701,7 +1701,10 @@ class BuilderWorkbenchService:
         )
         context = ContextControlService(state_dir=self.state_dir)
         selected_run = str(run_ref or "").strip()
-        plans = context.list_plans(limit=max(20, min(int(limit) * 5, 500)))
+        plans = context.list_plans(
+            subject_ref=selected_run or project_ref or component_ref,
+            limit=max(20, min(int(limit) * 5, 500)),
+        )
 
         def applies(plan: Mapping[str, Any]) -> bool:
             if selected_run and selected_run in (plan.get("subject_refs") or []):

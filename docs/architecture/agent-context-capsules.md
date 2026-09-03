@@ -315,6 +315,13 @@ enforces subject scope, byte/token budget, freshness, trust, and RBAC. The
 canonical packet may retain rich evidence by reference; its model projection
 must not stringify and embed the same packet as provenance elsewhere.
 
+Context Plan lookup is scope-first rather than recency-first. Core maintains a
+normalized index of both the plan-level subject refs and the selected-unit
+subject refs, applies an exact subject predicate before ordering and limiting,
+and backfills that index from immutable plan artifacts on startup. This keeps a
+project or Builder run discoverable even when newer plans from unrelated
+projects exceed an Inspector query limit.
+
 ## Storage And Events
 
 Capsule metadata is relational/resource data; larger immutable projections are

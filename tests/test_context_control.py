@@ -91,6 +91,56 @@ def test_capsule_search_backfills_existing_registry(tmp_path: Path) -> None:
     assert restored.list_capsules(search="reload cleanup", limit=1) == [target]
 
 
+def test_plan_subject_query_filters_before_limit_and_backfills_index(
+    tmp_path: Path,
+) -> None:
+    service = ContextControlService(tmp_path)
+    target = service.plan(
+        {
+            "resolution": {
+                "subject_refs": ["builder-run:target"],
+                "purpose": "builder.repair",
+                "audience": "builder",
+                "required": [
+                    {
+                        "ref": "ctxcap.target",
+                        "kind": "project",
+                        "subject_refs": ["project:target"],
+                        "estimated_tokens": 10,
+                        "required": True,
+                        "path": [],
+                    }
+                ],
+            },
+            "token_budget": 100,
+        }
+    )
+    for index in range(30):
+        service.plan(
+            {
+                "resolution": {
+                    "subject_refs": [f"project:unrelated-{index}"],
+                    "purpose": "builder.repair",
+                    "audience": "builder",
+                    "required": [],
+                },
+                "token_budget": 100,
+            }
+        )
+
+    assert service.list_plans(subject_ref="project:target", limit=1)[0][
+        "plan_id"
+    ] == target["plan_id"]
+
+    with service._connect() as connection:
+        connection.execute("DELETE FROM context_plan_subjects")
+    restored = ContextControlService(tmp_path)
+
+    assert restored.list_plans(subject_ref="project:target", limit=1)[0][
+        "plan_id"
+    ] == target["plan_id"]
+
+
 def test_capsule_graph_plan_compile_and_receipt(tmp_path: Path) -> None:
     service = ContextControlService(tmp_path)
     platform = _capsule(service, subject_ref="platform:adaos", kind="platform", summary="SDK surface")
