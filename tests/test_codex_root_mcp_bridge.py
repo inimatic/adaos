@@ -55,6 +55,54 @@ class _FakeRootMcpClient:
         )
         return {"descriptor": {"payload": {"meta": {"generated_at": "2026-01-01T00:00:00+00:00"}, "level": level}}}
 
+    def search_descriptors(
+        self,
+        query: str,
+        *,
+        descriptor_ids: list[str] | None = None,
+        kinds: list[str] | None = None,
+        limit: int = 12,
+    ) -> dict:
+        self.calls.append(
+            (
+                "search_descriptors",
+                query,
+                {"descriptor_ids": descriptor_ids or [], "kinds": kinds or [], "limit": limit},
+            )
+        )
+        return {
+            "search": {
+                "items": [
+                    {
+                        "descriptor_id": "sdk_metadata",
+                        "item_id": "adaos.sdk.control_plane.list_quota_objects",
+                    }
+                ]
+            }
+        }
+
+    def get_descriptor_item(
+        self,
+        descriptor_id: str,
+        item_id: str,
+        *,
+        level: str = "std",
+    ) -> dict:
+        self.calls.append(
+            (
+                "get_descriptor_item",
+                descriptor_id,
+                {"item_id": item_id, "level": level},
+            )
+        )
+        return {
+            "descriptor_item": {
+                "descriptor_id": descriptor_id,
+                "item_id": item_id,
+                "level": level,
+            }
+        }
+
     def get_adaos_dev_template_catalog(self) -> dict:
         self.calls.append(("get_adaos_dev_template_catalog", "", {}))
         return {"descriptor": {"payload": {"skills": ["skill_default"], "scenarios": ["scenario_default"]}}}
@@ -1373,6 +1421,52 @@ def test_task_scoped_sdk_metadata_enforces_bounded_mini(monkeypatch) -> None:
         "get_adaos_dev_sdk_metadata",
         "mini",
         {"query": "Show token usage and remaining quota", "limit": 24},
+    ) in fake_client.calls
+
+
+def test_task_scoped_descriptor_search_defaults_query_and_bounds_drilldown(monkeypatch) -> None:
+    profile = bridge_mod.CodexBridgeProfile(
+        root_url="https://root.example.test",
+        target_id="hub:test-subnet",
+        task_id="task.descriptor-search",
+        task_scopes=["read_requirements"],
+        context_query="Show token usage and remaining quota",
+        capabilities=["development.read.descriptors"],
+        enabled_tools=["search_descriptors", "get_descriptor_item"],
+        access_token="task-access",
+    )
+    bridge = bridge_mod.CodexRootMcpBridge(profile)
+    fake_client = _FakeRootMcpClient()
+    monkeypatch.setattr(bridge, "_client", lambda: fake_client)
+
+    definitions = {item["name"]: item for item in bridge.tool_definitions()}
+    search = bridge.call_tool(
+        "search_descriptors",
+        {"limit": 50, "model_text_format": "json"},
+    )
+    detail = bridge.call_tool(
+        "get_descriptor_item",
+        {
+            "descriptor_id": "sdk_metadata",
+            "item_id": "adaos.sdk.control_plane.list_quota_objects",
+            "level": "rich",
+            "model_text_format": "json",
+        },
+    )
+
+    assert definitions["search_descriptors"]["inputSchema"]["properties"]["limit"]["maximum"] == 12
+    assert definitions["get_descriptor_item"]["inputSchema"]["properties"]["level"]["enum"] == ["std"]
+    assert search["_meta"]["adaos/modelProjection"]["model_text_format"] == "min_json"
+    assert detail["_meta"]["adaos/modelProjection"]["model_text_format"] == "min_json"
+    assert (
+        "search_descriptors",
+        "Show token usage and remaining quota",
+        {"descriptor_ids": [], "kinds": [], "limit": 12},
+    ) in fake_client.calls
+    assert (
+        "get_descriptor_item",
+        "sdk_metadata",
+        {"item_id": "adaos.sdk.control_plane.list_quota_objects", "level": "std"},
     ) in fake_client.calls
 
 

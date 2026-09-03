@@ -65,6 +65,8 @@ _COMPACT_MODEL_TEXT_TOOLS = {
     "get_builder_context",
     "get_architecture_catalog",
     "get_sdk_metadata",
+    "search_descriptors",
+    "get_descriptor_item",
     "get_named_entity_registry",
     "get_nlu_authoring_context",
     "context_resolve",
@@ -370,14 +372,15 @@ class CodexRootMcpBridge:
                 f"It is bound to {target} using a short-lived Builder lease. "
                 f"Use only the advertised tools ({allowed}); for target validation prefer "
                 "get_managed_target when it is available. Do not attempt tools outside "
-                "the task scope and do not inspect bearer credentials. SDK metadata is "
-                "pre-filtered by the task language unless an explicit query is supplied."
+                "the task scope and do not inspect bearer credentials. Use search_descriptors "
+                "for compact task-relevant discovery, then get_descriptor_item for one exact "
+                "contract. Do not request a full descriptor set when an item drill-down is available."
             )
         return (
             "This MCP server is a local stdio bridge from Codex to AdaOS Root MCP. "
             f"It is currently bound to {target} using {bootstrap}. "
             "For descriptive AdaOS programming context, prefer get_builder_context first, then drill into "
-            "get_architecture_catalog, get_sdk_metadata, get_template_catalog, NLU authoring context, named "
+            "search_descriptors and get_descriptor_item; use the specialized architecture, SDK, template, NLU, named "
             "entity registry, and public registry summaries from AdaOSDevPlane/NLUAuthoringPlane. "
             "For operational context, prefer get_status, get_runtime_summary, and get_operational_surface "
             "before requesting logs or healthchecks."
@@ -686,6 +689,54 @@ class CodexRootMcpBridge:
                             "default": 24,
                         },
                     },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "search_descriptors",
+                "description": "Search compact authoritative headers across AdaOS descriptor sets. Use this before reading a descriptor payload.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Concept query. A task-scoped server defaults it from the bounded task request.",
+                        },
+                        "descriptor_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "maxItems": 8 if self.profile.task_id else 16,
+                        },
+                        "kinds": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "maxItems": 8 if self.profile.task_id else 16,
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 12 if self.profile.task_id else 64,
+                            "default": 8 if self.profile.task_id else 12,
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "get_descriptor_item",
+                "description": "Read one exact descriptor item selected by search_descriptors.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "descriptor_id": {"type": "string"},
+                        "item_id": {"type": "string"},
+                        "level": {
+                            "type": "string",
+                            "enum": ["std"] if self.profile.task_id else ["mini", "std", "rich"],
+                            "default": "std",
+                        },
+                    },
+                    "required": ["descriptor_id", "item_id"],
                     "additionalProperties": False,
                 },
             },
@@ -1336,7 +1387,11 @@ class CodexRootMcpBridge:
         for definition in definitions:
             if definition.get("name") in _COMPACT_MODEL_TEXT_TOOLS:
                 tool_format_property = dict(format_property)
-                if self.profile.task_id and definition.get("name") == "get_sdk_metadata":
+                if self.profile.task_id and definition.get("name") in {
+                    "get_sdk_metadata",
+                    "search_descriptors",
+                    "get_descriptor_item",
+                }:
                     tool_format_property["enum"] = ["min_json"]
                     tool_format_property["default"] = "min_json"
                 definition["inputSchema"].setdefault("properties", {})["model_text_format"] = tool_format_property
@@ -1466,6 +1521,40 @@ class CodexRootMcpBridge:
                             24 if task_scoped else 64,
                         ),
                     ),
+                ),
+                model_text_format="min_json" if task_scoped else model_text_format,
+            )
+        if tool == "search_descriptors":
+            task_scoped = bool(self.profile.task_id)
+            query = _normalize_text(args.get("query")) or _normalize_text(self.profile.context_query)
+            if not query:
+                raise ValueError("descriptor search query is required")
+            raw_descriptor_ids = args.get("descriptor_ids")
+            raw_kinds = args.get("kinds")
+            return _tool_text(
+                client.search_descriptors(
+                    query,
+                    descriptor_ids=_normalize_unique(
+                        raw_descriptor_ids if isinstance(raw_descriptor_ids, list) else None
+                    ),
+                    kinds=_normalize_unique(raw_kinds if isinstance(raw_kinds, list) else None),
+                    limit=max(
+                        1,
+                        min(
+                            int(args.get("limit") or (8 if task_scoped else 12)),
+                            12 if task_scoped else 64,
+                        ),
+                    ),
+                ),
+                model_text_format="min_json" if task_scoped else model_text_format,
+            )
+        if tool == "get_descriptor_item":
+            task_scoped = bool(self.profile.task_id)
+            return _tool_text(
+                client.get_descriptor_item(
+                    str(args.get("descriptor_id") or ""),
+                    str(args.get("item_id") or ""),
+                    level="std" if task_scoped else str(args.get("level") or "std"),
                 ),
                 model_text_format="min_json" if task_scoped else model_text_format,
             )

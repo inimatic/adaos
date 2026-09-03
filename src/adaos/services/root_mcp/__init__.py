@@ -10,6 +10,8 @@ from .codex_bridge import (
     serve_codex_stdio_bridge,
     write_codex_bridge_profile,
 )
+from .descriptor_search import get_descriptor_item as get_registry_descriptor_item
+from .descriptor_search import search_descriptors as search_descriptor_registry
 from .infra_access_skill import build_operational_surface, resolve_skill_dir, skill_state
 from .model import (
     ROOT_MCP_ERROR_SCHEMA,
@@ -38,6 +40,7 @@ from .sessions import (
 from .service import (
     foundation_snapshot,
     get_descriptor,
+    get_descriptor_item,
     get_managed_target,
     get_target_operational_timeline,
     get_tool_contract,
@@ -46,6 +49,7 @@ from .service import (
     list_managed_targets,
     list_tool_contracts,
     recent_audit_events,
+    search_descriptors,
 )
 from .targets import managed_target_registry_summary, upsert_managed_target
 from .tokens import access_token_registry_summary, get_access_token_record, issue_access_token, list_access_tokens, revoke_access_token, validate_access_token
@@ -80,6 +84,8 @@ __all__ = [
     "foundation_snapshot",
     "get_access_token_record",
     "get_descriptor",
+    "get_descriptor_item",
+    "get_registry_descriptor_item",
     "get_descriptor_set",
     "get_managed_target",
     "get_target_operational_timeline",
@@ -93,6 +99,8 @@ __all__ = [
     "managed_target_registry_summary",
     "mcp_session_registry_summary",
     "recent_audit_events",
+    "search_descriptor_registry",
+    "search_descriptors",
     "record_descriptor_refresh",
     "schema_object",
     "DEFAULT_CODEX_TARGET_CAPABILITIES",

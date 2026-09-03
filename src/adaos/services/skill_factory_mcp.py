@@ -10,6 +10,8 @@ TASK_SCOPE_TOOL_ALLOWLIST: dict[str, tuple[str, ...]] = {
     ),
     "read_requirements": (
         "get_builder_context",
+        "search_descriptors",
+        "get_descriptor_item",
         "get_architecture_catalog",
         "get_sdk_metadata",
         "get_template_catalog",

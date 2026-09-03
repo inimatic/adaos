@@ -37,6 +37,38 @@ def test_root_mcp_client_exposes_builder_source_recovery() -> None:
     assert stub.calls[1][2]["json"]["dry_run"] is True
 
 
+def test_root_mcp_client_exposes_descriptor_search_and_exact_item() -> None:
+    stub = _StubRootHttpClient()
+    client = RootMcpClient(
+        config=RootMcpClientConfig(root_url="https://root.example.test"),
+        http=stub,  # type: ignore[arg-type]
+    )
+
+    client.search_descriptors(
+        "quota usage",
+        descriptor_ids=["sdk_metadata"],
+        kinds=["sdk_function"],
+        limit=8,
+    )
+    client.get_descriptor_item(
+        "sdk_metadata",
+        "adaos.sdk.control_plane.list_quota_objects",
+        level="std",
+    )
+
+    assert stub.calls[0][2]["json"]["tool_id"] == "development.search_descriptors"
+    assert stub.calls[0][2]["json"]["arguments"] == {
+        "query": "quota usage",
+        "descriptor_ids": ["sdk_metadata"],
+        "kinds": ["sdk_function"],
+        "limit": 8,
+    }
+    assert stub.calls[1][2]["json"]["tool_id"] == "development.get_descriptor_item"
+    assert stub.calls[1][2]["json"]["arguments"]["item_id"] == (
+        "adaos.sdk.control_plane.list_quota_objects"
+    )
+
+
 def test_root_mcp_client_uses_root_url_scope_and_bearer_headers() -> None:
     stub = _StubRootHttpClient()
     config = RootMcpClientConfig(

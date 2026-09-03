@@ -186,6 +186,19 @@ def _write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _loads_strict_json(raw: str) -> Any:
+    return json.loads(raw, object_pairs_hook=_reject_duplicate_json_keys)
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     raw = json.loads(path.read_text(encoding="utf-8"))
     return dict(raw) if isinstance(raw, Mapping) else {}
@@ -1397,8 +1410,6 @@ def _bounded_repair_target_context(
     source_slices: list[dict[str, Any]] = []
     for relative in target_files:
         is_json = relative.lower().endswith(".json")
-        if is_json and relative in resolved_files and not missing:
-            continue
         path = (workspace / relative).resolve(strict=False)
         if workspace.resolve() not in path.parents or not path.is_file():
             continue
@@ -1432,7 +1443,11 @@ def _bounded_repair_target_context(
                 used_ranges.add(range_key)
                 symbol_anchors.add(str(symbol_range["anchor"]))
                 source_slices.append(candidate)
-        file_anchors = literal_anchors if is_json else anchors
+        file_anchors = (
+            anchors
+            if not is_json or relative in resolved_files
+            else literal_anchors
+        )
         for anchor in file_anchors:
             if anchor in symbol_anchors:
                 continue
@@ -1597,6 +1612,10 @@ def _root_mcp_profile_from_assignment(
             admitted_tools = [
                 tool for tool in explicit_tools if tool in scoped_tool_set
             ]
+            if "get_sdk_metadata" in explicit_tools:
+                for replacement in ("search_descriptors", "get_descriptor_item"):
+                    if replacement in scoped_tool_set and replacement not in admitted_tools:
+                        admitted_tools.append(replacement)
         else:
             admitted_tools = scoped_tools
         if not admitted_tools:
@@ -4133,6 +4152,9 @@ this task. Never substitute a skill, scenario, project, or component ID. Omit
 Use a normal MCP tool call to one of the declared `enabled_tools`. Do not list
 MCP resources or resource templates, and do not invoke this route through a
 shell, HTTP client, or bearer-token environment expansion.
+For descriptive context, call `search_descriptors` once, then disclose only the
+single selected contract with `get_descriptor_item`. The search result is the
+authoritative mini representation; do not repeat discovery with broad SDK reads.
 Do not read, print, or inspect bearer-token environment values.
 """
         if bounded_repair:
@@ -4155,7 +4177,6 @@ Do not read, print, or inspect bearer-token environment values.
                     repair_target_context,
                     ensure_ascii=False,
                     indent=2,
-                    sort_keys=True,
                 )
                 if repair_target_context
                 else "No qualified target slices were resolved; use the bounded discovery rules below."
@@ -4185,8 +4206,9 @@ The hints are requirement evidence; file authority remains limited to:
 {qualified_targets}
 ```
 
-Use these source-exact slices before running discovery commands. When they cover
-the requested change, edit directly and do not rediscover the same structures.
+The `resolved` values are semantic projections. The `source_slices` values are
+source-exact and must be used as patch anchors. When they cover the requested
+change, edit directly and do not rediscover the same structures.
 
 ## Current repair instruction
 
@@ -4518,7 +4540,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             if ".git" in path.parts:
                 continue
             try:
-                json.loads(path.read_text(encoding="utf-8"))
+                _loads_strict_json(path.read_text(encoding="utf-8"))
                 checks.append({"kind": "json", "path": path.relative_to(workspace).as_posix(), "ok": True})
             except Exception as exc:
                 errors.append(f"{path.relative_to(workspace)}: {type(exc).__name__}: {exc}")

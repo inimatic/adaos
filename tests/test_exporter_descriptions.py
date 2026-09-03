@@ -5,6 +5,7 @@ import json
 
 from adaos.sdk.core.exporter import export as sdk_export
 from adaos.services.root_mcp.registry import get_descriptor_set
+from adaos.services.root_mcp.descriptor_search import get_descriptor_item
 
 
 def test_sdk_export_std():
@@ -60,3 +61,16 @@ def test_sdk_metadata_mini_is_a_bounded_nonduplicated_mcp_projection():
         for row in payload["overview_rows"]
     )
     assert len(json.dumps(descriptor, ensure_ascii=False).encode("utf-8")) < 12_000
+
+
+def test_sdk_descriptor_drilldown_states_quota_contract_boundary():
+    detail = get_descriptor_item(
+        "sdk_metadata",
+        "adaos.sdk.control_plane.list_quota_objects",
+        level="std",
+    )
+
+    item = detail["item"]
+    description = " ".join(item["description"].split())
+    assert "CanonicalObject.to_dict()" in description
+    assert "does not return subscription-plan LLM or Codex token usage" in description

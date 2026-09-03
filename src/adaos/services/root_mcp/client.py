@@ -59,11 +59,52 @@ class RootMcpClient:
     def list_descriptors(self) -> dict[str, Any]:
         return dict(self._request("GET", "/v1/root/mcp/descriptors"))
 
-    def get_descriptor(self, descriptor_id: str, *, level: str = "std") -> dict[str, Any]:
+    def get_descriptor(
+        self,
+        descriptor_id: str,
+        *,
+        level: str = "std",
+        query: str | None = None,
+        limit: int = 24,
+    ) -> dict[str, Any]:
         params: dict[str, Any] = {}
         if level:
             params["level"] = level
+        if query:
+            params["query"] = str(query)
+        params["limit"] = max(1, min(int(limit or 24), 64))
         return dict(self._request("GET", f"/v1/root/mcp/descriptors/{descriptor_id}", params=params))
+
+    def search_descriptors(
+        self,
+        query: str,
+        *,
+        descriptor_ids: list[str] | tuple[str, ...] | None = None,
+        kinds: list[str] | tuple[str, ...] | None = None,
+        limit: int = 12,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"query": str(query), "limit": max(1, min(int(limit or 12), 64))}
+        if descriptor_ids:
+            arguments["descriptor_ids"] = [str(item) for item in descriptor_ids]
+        if kinds:
+            arguments["kinds"] = [str(item) for item in kinds]
+        return self.call("development.search_descriptors", arguments=arguments)
+
+    def get_descriptor_item(
+        self,
+        descriptor_id: str,
+        item_id: str,
+        *,
+        level: str = "std",
+    ) -> dict[str, Any]:
+        return self.call(
+            "development.get_descriptor_item",
+            arguments={
+                "descriptor_id": str(descriptor_id),
+                "item_id": str(item_id),
+                "level": str(level or "std"),
+            },
+        )
 
     def get_adaos_dev_architecture_catalog(
         self,

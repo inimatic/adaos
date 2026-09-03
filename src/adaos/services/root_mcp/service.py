@@ -14,6 +14,8 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.id_gen import new_id
 
 from .audit import append_audit_event, list_audit_events, target_activity_feed, target_capability_usage_summary, target_operational_timeline
+from .descriptor_search import get_descriptor_item as get_registry_descriptor_item
+from .descriptor_search import search_descriptors as search_descriptor_registry
 from .infra_access import (
     deploy_local_ref,
     publish_local_memory_profile,
@@ -358,6 +360,41 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
             metadata={"published_by": "root", "handler": "get_descriptor_set"},
+        ),
+        RootMcpToolContract(
+            id="development.search_descriptors",
+            title="Search descriptors",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Search compact headers across root-curated descriptor sets without returning full payloads.",
+            input_schema=schema_object(
+                properties={
+                    "query": {"type": "string", "minLength": 1},
+                    "descriptor_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 16},
+                    "kinds": {"type": "array", "items": {"type": "string"}, "maxItems": 16},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 64},
+                },
+                required=["query"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.descriptors",
+            metadata={"published_by": "root", "handler": "search_descriptors"},
+        ),
+        RootMcpToolContract(
+            id="development.get_descriptor_item",
+            title="Get descriptor item",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Return one exact descriptor item selected from a descriptor search result.",
+            input_schema=schema_object(
+                properties={
+                    "descriptor_id": {"type": "string"},
+                    "item_id": {"type": "string"},
+                    "level": {"type": "string", "enum": ["mini", "std", "rich"]},
+                },
+                required=["descriptor_id", "item_id"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.descriptors",
+            metadata={"published_by": "root", "handler": "get_descriptor_item"},
         ),
         RootMcpToolContract(
             id="development.get_system_model_vocabulary",
@@ -1964,6 +2001,30 @@ def get_descriptor(
     )
 
 
+def search_descriptors(
+    query: str,
+    *,
+    descriptor_ids: list[str] | tuple[str, ...] | None = None,
+    kinds: list[str] | tuple[str, ...] | None = None,
+    limit: int = 12,
+) -> dict[str, Any]:
+    return search_descriptor_registry(
+        query,
+        descriptor_ids=descriptor_ids,
+        kinds=kinds,
+        limit=limit,
+    )
+
+
+def get_descriptor_item(
+    descriptor_id: str,
+    item_id: str,
+    *,
+    level: str = "std",
+) -> dict[str, Any]:
+    return get_registry_descriptor_item(descriptor_id, item_id, level=level)
+
+
 def list_managed_targets(
     *,
     environment: str | None = None,
@@ -2045,7 +2106,46 @@ def _handle_get_descriptor_set(arguments: dict[str, Any], *, dry_run: bool) -> d
     if not descriptor_id:
         raise ValueError("descriptor_id is required")
     level = str(arguments.get("level") or "std").strip().lower() or "std"
-    return {"descriptor": get_descriptor(descriptor_id, level=level)}
+    return {
+        "descriptor": get_descriptor(
+            descriptor_id,
+            level=level,
+            query=_text_or_none(arguments.get("query")),
+            limit=max(1, min(int(arguments.get("limit") or 24), 64)),
+        )
+    }
+
+
+def _handle_search_descriptors(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    query = str(arguments.get("query") or "").strip()
+    if not query:
+        raise ValueError("descriptor search query is required")
+    descriptor_ids = [str(item).strip() for item in arguments.get("descriptor_ids") or [] if str(item).strip()]
+    kinds = [str(item).strip() for item in arguments.get("kinds") or [] if str(item).strip()]
+    return {
+        "search": search_descriptors(
+            query,
+            descriptor_ids=descriptor_ids,
+            kinds=kinds,
+            limit=max(1, min(int(arguments.get("limit") or 12), 64)),
+        )
+    }
+
+
+def _handle_get_descriptor_item(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    descriptor_id = str(arguments.get("descriptor_id") or "").strip()
+    item_id = str(arguments.get("item_id") or "").strip()
+    if not descriptor_id:
+        raise ValueError("descriptor_id is required")
+    if not item_id:
+        raise ValueError("item_id is required")
+    return {
+        "descriptor_item": get_descriptor_item(
+            descriptor_id,
+            item_id,
+            level=str(arguments.get("level") or "std"),
+        )
+    }
 
 
 def _handle_system_model_vocabulary(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -3728,6 +3828,8 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "development.get_plane": lambda arguments, dry_run=False: _handle_get_plane(arguments, dry_run=dry_run),
     "development.list_descriptor_sets": lambda arguments, dry_run=False: _handle_list_descriptor_sets(arguments, dry_run=dry_run),
     "development.get_descriptor_set": lambda arguments, dry_run=False: _handle_get_descriptor_set(arguments, dry_run=dry_run),
+    "development.search_descriptors": lambda arguments, dry_run=False: _handle_search_descriptors(arguments, dry_run=dry_run),
+    "development.get_descriptor_item": lambda arguments, dry_run=False: _handle_get_descriptor_item(arguments, dry_run=dry_run),
     "development.get_system_model_vocabulary": lambda arguments, dry_run=False: _handle_system_model_vocabulary(arguments, dry_run=dry_run),
     "development.get_skill_manifest_schema": lambda arguments, dry_run=False: _handle_skill_manifest_schema(arguments, dry_run=dry_run),
     "development.get_scenario_manifest_schema": lambda arguments, dry_run=False: _handle_scenario_manifest_schema(arguments, dry_run=dry_run),

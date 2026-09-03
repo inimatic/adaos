@@ -54,6 +54,8 @@ def test_root_mcp_foundation_and_contracts(monkeypatch) -> None:
     contract_items = contracts.json()["contracts"]
     contract_ids = {item["id"] for item in contract_items}
     assert "development.get_descriptor_set" in contract_ids
+    assert "development.search_descriptors" in contract_ids
+    assert "development.get_descriptor_item" in contract_ids
     assert "operations.list_contracts" in contract_ids
     assert "operations.list_managed_targets" in contract_ids
     assert "development.export_sdk" not in contract_ids
@@ -338,8 +340,10 @@ def test_root_mcp_accepts_bounded_builder_task_lease(monkeypatch) -> None:
         "foundation",
         "get_architecture_catalog",
         "get_builder_context",
+        "get_descriptor_item",
         "get_sdk_metadata",
         "get_template_catalog",
+        "search_descriptors",
     }
 
     sdk_metadata = client.post(
@@ -426,6 +430,58 @@ def test_root_mcp_call_records_audit(monkeypatch) -> None:
     event = next(item for item in events if item["event_id"] == envelope["audit_event_id"])
     assert event["execution_adapter"] == "root.descriptor_registry"
     assert event["meta"]["trace"]["request"]["argument_keys"] == ["descriptor_id"]
+
+
+def test_root_mcp_searches_compact_headers_then_reads_one_item(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_ROOT_OWNER_TOKEN", "owner-secret")
+    client = _make_client()
+    headers = {"X-Owner-Token": "owner-secret"}
+
+    searched = client.post(
+        "/v1/root/mcp/call",
+        headers=headers,
+        json={
+            "tool_id": "development.search_descriptors",
+            "arguments": {
+                "query": "token quota usage remaining",
+                "descriptor_ids": ["sdk_metadata"],
+                "limit": 8,
+            },
+        },
+    ).json()
+
+    assert searched["ok"] is True
+    search = searched["response"]["result"]["search"]
+    assert search["schema"] == "adaos.descriptor.search.v1"
+    assert search["count"] <= 8
+    selected = next(
+        item
+        for item in search["items"]
+        if item["item_id"] == "adaos.sdk.control_plane.list_quota_objects"
+    )
+    assert "payload" not in selected
+    assert selected["drill_down"] == {
+        "descriptor_id": "sdk_metadata",
+        "item_id": selected["item_id"],
+    }
+
+    detail = client.post(
+        "/v1/root/mcp/call",
+        headers=headers,
+        json={
+            "tool_id": "development.get_descriptor_item",
+            "arguments": {
+                "descriptor_id": selected["descriptor_id"],
+                "item_id": selected["item_id"],
+                "level": "std",
+            },
+        },
+    ).json()
+
+    assert detail["ok"] is True
+    descriptor_item = detail["response"]["result"]["descriptor_item"]
+    assert descriptor_item["item_id"] == selected["item_id"]
+    assert descriptor_item["item"]["name"] == selected["item_id"]
 
 
 def test_root_mcp_reads_yjs_load_mark_history(monkeypatch) -> None:

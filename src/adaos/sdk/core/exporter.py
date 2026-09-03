@@ -78,10 +78,10 @@ _QUERY_TERM_EXPANSIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("использован", ("usage", "used", "quota")),
     ("остат", ("remaining", "quota", "limit")),
     ("квот", ("quota", "limit", "remaining")),
-    ("подпис", ("subscription", "quota", "plan")),
+    ("подпис", ("subscription", "quota")),
     ("лимит", ("limit", "quota", "remaining")),
     ("usage", ("usage", "quota", "metering")),
-    ("subscription", ("subscription", "quota", "plan")),
+    ("subscription", ("subscription", "quota")),
     ("token", ("token", "quota", "usage")),
 )
 
@@ -188,6 +188,7 @@ def _public_facade_symbols(level: str) -> list[dict[str, Any]]:
                 },
             }
             if level in {"std", "rich"}:
+                item["description"] = inspect.getdoc(value) or summary
                 try:
                     signature = inspect.signature(value)
                     item["signature_detail"] = {
@@ -349,7 +350,7 @@ def export(
         for tool in tools:
             items.append(
                 {
-                    "k": "tool",
+                    "k": tool.get("kind") or "tool",
                     "n": tool["name"],
                     "s": (tool.get("summary") or "")[:140],
                     "st": tool["meta"].get("stability"),

@@ -384,6 +384,31 @@ The key rule is:
 
 This is an architectural distinction, not only a performance optimization.
 
+### Descriptor Search And Drill-Down
+
+Descriptor retrieval uses a bounded two-stage contract:
+
+1. `development.search_descriptors` applies deterministic lexical and curated
+   semantic expansion over descriptor headers and returns only compact identity,
+   ownership, stability, argument, fingerprint, and drill-down fields.
+2. `development.get_descriptor_item` resolves one exact
+   `descriptor_id + item_id` and returns its typed contract at the requested
+   detail level.
+
+The search stage must not return full descriptor payloads and must not invoke an
+LLM. Optional model reranking is allowed only after deterministic retrieval and
+only when ambiguity remains. Task-scoped Builder leases impose smaller result
+limits and one-item drill-down.
+
+The mini header is not MCP-owned. It is an authoritative descriptor projection
+that MCP, SDK clients, Builder context compilation, and future Resource
+Workbench surfaces consume through adapters. The current search provider can
+derive headers from existing descriptor payloads for compatibility. The target
+build pipeline forms and validates the same headers when a descriptor is first
+built or published, stores them in the root descriptor index, and invalidates
+them by source fingerprint. This removes request-time representation drift and
+keeps initial formation independent of any particular MCP client.
+
 ## MCP-to-SDK Foundation
 
 The first development-facing responsibility of `Root MCP Foundation` is to expose a curated, typed, machine-readable view of AdaOS development surfaces.

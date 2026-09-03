@@ -36,9 +36,15 @@ from adaos.services.skill_factory_worker import (
     _codex_jsonl_root_mcp_evidence,
     _codex_prompt_budget_check,
     _context_packet_prompt_projection,
+    _loads_strict_json,
     _root_mcp_profile_from_assignment,
     _task_mcp_validation_evidence,
 )
+
+
+def test_strict_json_validation_rejects_duplicate_manifest_keys() -> None:
+    with pytest.raises(ValueError, match="duplicate JSON key: area"):
+        _loads_strict_json('{"area":"top","area":"bottom"}')
 
 
 def test_codex_jsonl_usage_accepts_reasoning_output_tokens(tmp_path: Path) -> None:
@@ -1889,6 +1895,7 @@ def test_bounded_repair_prompt_includes_only_qualified_json_target_slices(
     assert context["resolved"][1]["resolved_path"].endswith("views[id=grid]")
     assert context["missing"] == ["registry.modals.missing"]
     assert {item["file"] for item in context["source_slices"]} == {
+        "skills/demo/webui.json",
         "skills/demo/handlers/main.py",
         "skills/demo/tests/test_webui.py",
     }
@@ -2054,7 +2061,14 @@ def test_bounded_repair_resolves_semantic_refs_in_json_and_yaml(
     ]
     assert context["missing"] == []
     assert context["coverage"]["complete"] is True
-    assert context["source_slices"][0]["file"] == "scenarios/demo/scenario.yaml"
+    assert any(
+        item["file"] == "scenarios/demo/webui.json"
+        for item in context["source_slices"]
+    )
+    assert any(
+        item["file"] == "scenarios/demo/scenario.yaml"
+        for item in context["source_slices"]
+    )
     assert any(
         item["file"] == "scenarios/demo/handlers.py"
         for item in context["source_slices"]
@@ -3086,6 +3100,11 @@ def test_task_lease_overrides_generic_root_mcp_credential(
 
 
 def test_bound_staging_scope_omits_managed_target_discovery() -> None:
+    assert task_scope_enabled_tools(["read_requirements"])[:3] == [
+        "get_builder_context",
+        "search_descriptors",
+        "get_descriptor_item",
+    ]
     assert task_scope_enabled_tools(
         ["run_staging_validation"],
         bound_target_id="hub:sn_demo",

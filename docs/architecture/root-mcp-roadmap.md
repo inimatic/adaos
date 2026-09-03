@@ -111,6 +111,12 @@ Phase is complete when:
 - [x] keep descriptive responses root-curated and cache-backed by default
 - [x] publish Builder task and draft schemas as descriptor sets available to
   `builder.get_context`
+- [x] add bounded deterministic descriptor search plus exact one-item
+  drill-down for operator and task-scoped MCP clients
+- [ ] `[must]` move compatibility-time mini-header derivation into the
+  descriptor build/publish pipeline, persist the shared index by source
+  fingerprint, and make MCP, Builder context, SDK, and Resource Workbench read
+  the same authoritative projection
 
 Phase is complete when:
 

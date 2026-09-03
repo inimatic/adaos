@@ -198,13 +198,28 @@ def list_connection_objects(*, webspace_id: str | None = None) -> list[Mapping[s
 
 
 def list_quota_models(*, webspace_id: str | None = None):
-    """List canonical quota and subscription-usage models visible to the current node."""
+    """List canonical integration and protocol transport quota models.
+
+    These are ``CanonicalObject`` instances whose ``resources`` field carries
+    transport-specific counters and limits. This surface does not expose plan
+    level LLM or Codex subscription metering.
+    """
 
     return _data_control_plane.list_quota_models(webspace_id=webspace_id)
 
 
 def list_quota_objects(*, webspace_id: str | None = None) -> list[Mapping[str, Any]]:
-    """List serializable quota objects with authoritative usage, limits, and remaining capacity."""
+    """List serializable integration and protocol transport quota objects.
+
+    Each item is ``CanonicalObject.to_dict()`` with the stable top-level keys
+    ``id``, ``kind``, ``title``, ``summary``, ``status``, ``health``,
+    ``relations``, ``resources``, ``runtime``, ``versioning``,
+    ``desired_state``, ``actual_state``, ``incidents``, ``actions``,
+    ``governance``, ``representations``, and ``audit``. Quota counters are
+    provider-specific values under ``resources``. This method does not return
+    subscription-plan LLM or Codex token usage; use a dedicated public SDK
+    contract when one is available rather than inferring that data here.
+    """
 
     return [item.to_dict() for item in list_quota_models(webspace_id=webspace_id)]
 
