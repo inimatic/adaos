@@ -2347,6 +2347,48 @@ def test_structured_repair_can_reuse_project_validation_candidate(
     assert selected == checkpoint
 
 
+def test_structured_gate_repair_prefers_authoritative_parent_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    gate_checkpoint = {
+        "mode": "validate_preserved_candidate",
+        "reason": "publication_gate_validation_failure",
+        "source_task_id": "task.gate-parent",
+    }
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_trusted_publication_gate_continuation_checkpoint",
+        lambda self, session: dict(gate_checkpoint),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_budget_continuation_checkpoint",
+        lambda self, session: {
+            "mode": "validate_preserved_candidate",
+            "reason": "deterministic_validation_failure",
+            "source_task_id": "task.partial-child",
+        },
+    )
+
+    selected = service._qualified_continuation_checkpoint(
+        {
+            "implementation_brief": json.dumps(
+                {
+                    "repair_hints": {
+                        "structured_edits": {
+                            "operations": [{"op": "replace_text"}],
+                        }
+                    }
+                }
+            )
+        }
+    )
+
+    assert selected == gate_checkpoint
+
+
 def test_budget_continuation_skips_unchanged_candidate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

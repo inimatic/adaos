@@ -2815,6 +2815,11 @@ class BuilderAutomationService:
         self,
         session: Mapping[str, Any],
     ) -> dict[str, Any] | None:
+        gate_checkpoint = self._trusted_publication_gate_continuation_checkpoint(
+            session
+        )
+        if gate_checkpoint:
+            return gate_checkpoint
         checkpoint = self._budget_continuation_checkpoint(session)
         strategy = _brief_deterministic_strategy(session.get("implementation_brief"))
         if not strategy:
