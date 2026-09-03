@@ -139,6 +139,7 @@ class CodexBridgeProfile:
     session_id: str | None = None
     task_id: str | None = None
     task_scopes: list[str] = field(default_factory=list)
+    context_query: str | None = None
     capability_profile: str | None = None
     access_token: str | None = None
     access_token_file: str | None = None
@@ -184,6 +185,7 @@ class CodexBridgeProfile:
             "zone": self.zone,
             "bootstrap_mode": self.bootstrap_mode,
             "session_id": self.session_id,
+            "context_query": self.context_query,
             "capability_profile": self.capability_profile,
             "access_token_file": self.access_token_file,
             "audience": self.audience,
@@ -228,6 +230,7 @@ def load_codex_bridge_profile(
         zone=_normalize_text(payload.get("zone")) or _normalize_text(environment.get("ADAOS_MCP_ZONE")),
         bootstrap_mode=_normalize_text(payload.get("bootstrap_mode")) or "mcp_session_lease",
         session_id=_normalize_text(payload.get("session_id")) or _normalize_text(environment.get("ADAOS_MCP_SESSION_ID")),
+        context_query=_normalize_text(payload.get("context_query")) or _normalize_text(environment.get("ADAOS_MCP_CONTEXT_QUERY")),
         capability_profile=_normalize_text(payload.get("capability_profile")) or _normalize_text(environment.get("ADAOS_MCP_CAPABILITY_PROFILE")),
         access_token=_normalize_text(payload.get("access_token")) or _normalize_text(environment.get("ADAOS_MCP_ACCESS_TOKEN")),
         access_token_file=_normalize_text(payload.get("access_token_file")) or _normalize_text(environment.get("ADAOS_MCP_ACCESS_TOKEN_FILE")),
@@ -262,6 +265,7 @@ def write_codex_bridge_profile(
         zone=profile.zone,
         bootstrap_mode=profile.bootstrap_mode,
         session_id=profile.session_id,
+        context_query=profile.context_query,
         capability_profile=profile.capability_profile,
         access_token_file=str(token_file),
         server_name=profile.server_name,
@@ -366,7 +370,8 @@ class CodexRootMcpBridge:
                 f"It is bound to {target} using a short-lived Builder lease. "
                 f"Use only the advertised tools ({allowed}); for target validation prefer "
                 "get_managed_target when it is available. Do not attempt tools outside "
-                "the task scope and do not inspect bearer credentials."
+                "the task scope and do not inspect bearer credentials. SDK metadata is "
+                "pre-filtered by the task language unless an explicit query is supplied."
             )
         return (
             "This MCP server is a local stdio bridge from Codex to AdaOS Root MCP. "
@@ -665,6 +670,16 @@ class CodexRootMcpBridge:
                             "type": "string",
                             "enum": ["mini", "std", "rich"],
                             "default": "mini" if self.profile.task_id else "std",
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": "Optional SDK concept query. A task-scoped server defaults it from the bounded task request.",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 64,
+                            "default": 24,
                         },
                     },
                     "additionalProperties": False,
@@ -1429,7 +1444,12 @@ class CodexRootMcpBridge:
                     level=str(
                         args.get("level")
                         or ("mini" if self.profile.task_id else "std")
-                    )
+                    ),
+                    query=(
+                        _normalize_text(args.get("query"))
+                        or _normalize_text(self.profile.context_query)
+                    ),
+                    limit=max(1, min(int(args.get("limit") or 24), 64)),
                 ),
                 model_text_format=model_text_format,
             )

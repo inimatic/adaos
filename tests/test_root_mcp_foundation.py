@@ -272,6 +272,7 @@ def test_root_mcp_accepts_bounded_builder_task_lease(monkeypatch) -> None:
             "task_id": "task.builder-mcp",
             "node_id": "devnode.builder",
             "scopes": ["read_capability_snapshot", "read_requirements"],
+            "context_query": "Show token usage and remaining quota",
             "credential_refs": [],
             "allowed_target_ids": ["hub:sn_builder"],
             "subnet_id": "sn_builder",
@@ -285,6 +286,7 @@ def test_root_mcp_accepts_bounded_builder_task_lease(monkeypatch) -> None:
     assert task_auth is not None
     assert task_auth["allowed_target_ids"] == ["hub:sn_builder"]
     assert task_auth["subnet_id"] == "sn_builder"
+    assert task_auth["task_context_query"] == "Show token usage and remaining quota"
     assert "development.read.descriptors" in task_auth["capabilities"]
     client = _make_client()
     headers = {"Authorization": "Bearer sf_task_test-secret"}

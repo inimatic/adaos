@@ -9,7 +9,11 @@ import pytest
 
 from adaos.services.builder import BuilderWorkspaceService
 from adaos.services.context_control import ContextControlService
-from adaos.services.skill_factory import REALIZE_REQUEST_SCHEMA, SkillFactoryService
+from adaos.services.skill_factory import (
+    REALIZE_REQUEST_SCHEMA,
+    SkillFactoryService,
+    _task_mcp_context_query,
+)
 
 
 def _builder_service(tmp_path: Path) -> BuilderWorkspaceService:
@@ -760,6 +764,7 @@ def test_skill_factory_validates_task_bearer_and_rejects_cross_task_use(tmp_path
         {
             "target": {"type": "skill", "id": "lease_first"},
             "user_subnet_id": "sn_lease",
+            "source": {"type": "dev_ticket", "text": "Show token usage and remaining quota"},
         }
     )["task"]
     second = service.submit_realize_request(
@@ -780,6 +785,9 @@ def test_skill_factory_validates_task_bearer_and_rejects_cross_task_use(tmp_path
     assert "read_capability_snapshot" in validated["scopes"]
     assert validated["subnet_id"] == "sn_lease"
     assert validated["allowed_target_ids"] == ["hub:sn_lease"]
+    assert validated["context_query"] == (
+        "Show token usage and remaining quota lease_first"
+    )
     assert assignment["subnet_id"] == "sn_lease"
     assert assignment["mcp"]["bound_target_id"] == "hub:sn_lease"
     with pytest.raises(ValueError, match="another task"):
@@ -791,6 +799,32 @@ def test_skill_factory_validates_task_bearer_and_rejects_cross_task_use(tmp_path
             node_id="devnode.lease",
             scope="write_production",
         )
+
+
+def test_task_mcp_context_query_extracts_brief_without_evidence_noise() -> None:
+    query = _task_mcp_context_query(
+        {
+            "target": {"type": "skill", "id": "usage_skill"},
+            "source": {
+                "text": json.dumps(
+                    {
+                        "summary": "Show token usage and remaining quota",
+                        "component_ref": "modal:usage",
+                        "input_evidence_refs": [
+                            {"path": "trace/" + "x" * 3000}
+                        ],
+                    }
+                )
+            },
+            "acceptance": {"checks": ["Render authoritative quota data"]},
+        }
+    )
+
+    assert query == (
+        "Show token usage and remaining quota modal:usage usage_skill "
+        "Render authoritative quota data"
+    )
+    assert "trace/" not in query
 
 
 def test_root_mcp_exposes_skill_factory_plane_and_status(tmp_path: Path, monkeypatch) -> None:

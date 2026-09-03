@@ -39,8 +39,20 @@ class _FakeRootMcpClient:
         self.calls.append(("get_adaos_dev_architecture_catalog", "", {}))
         return {"descriptor": {"payload": {"available": True, "page_count": 3}}}
 
-    def get_adaos_dev_sdk_metadata(self, *, level: str = "std") -> dict:
-        self.calls.append(("get_adaos_dev_sdk_metadata", level, {}))
+    def get_adaos_dev_sdk_metadata(
+        self,
+        *,
+        level: str = "std",
+        query: str | None = None,
+        limit: int = 24,
+    ) -> dict:
+        self.calls.append(
+            (
+                "get_adaos_dev_sdk_metadata",
+                level,
+                {"query": query, "limit": limit},
+            )
+        )
         return {"descriptor": {"payload": {"meta": {"generated_at": "2026-01-01T00:00:00+00:00"}, "level": level}}}
 
     def get_adaos_dev_template_catalog(self) -> dict:
@@ -1315,6 +1327,7 @@ def test_task_scoped_sdk_metadata_defaults_to_mini(monkeypatch) -> None:
         target_id="hub:test-subnet",
         task_id="task.sdk-metadata",
         task_scopes=["read_requirements"],
+        context_query="Show token usage and remaining quota",
         capabilities=["development.read.descriptors"],
         enabled_tools=["get_sdk_metadata"],
         access_token="task-access",
@@ -1345,7 +1358,11 @@ def test_task_scoped_sdk_metadata_defaults_to_mini(monkeypatch) -> None:
     assert definition["inputSchema"]["properties"]["level"]["default"] == "mini"
     assert result is not None
     assert result["result"].get("isError") is not True
-    assert ("get_adaos_dev_sdk_metadata", "mini", {}) in fake_client.calls
+    assert (
+        "get_adaos_dev_sdk_metadata",
+        "mini",
+        {"query": "Show token usage and remaining quota", "limit": 24},
+    ) in fake_client.calls
 
 
 def test_build_codex_stdio_command_uses_profile_and_server_name(tmp_path: Path) -> None:

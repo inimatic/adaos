@@ -142,6 +142,7 @@ def test_root_mcp_client_uses_root_url_scope_and_bearer_headers() -> None:
     assert stub.calls[6][2]["json"]["tool_id"] == "adaos_dev.get_architecture_catalog"
     assert stub.calls[7][2]["json"]["tool_id"] == "adaos_dev.get_sdk_metadata"
     assert stub.calls[7][2]["json"]["arguments"]["level"] == "mini"
+    assert stub.calls[7][2]["json"]["arguments"]["limit"] == 24
     assert stub.calls[8][2]["json"]["tool_id"] == "adaos_dev.get_template_catalog"
     assert stub.calls[9][2]["json"]["tool_id"] == "adaos_dev.get_public_skill_registry"
     assert stub.calls[10][2]["json"]["tool_id"] == "adaos_dev.get_public_scenario_registry"

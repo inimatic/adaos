@@ -198,10 +198,14 @@ def list_connection_objects(*, webspace_id: str | None = None) -> list[Mapping[s
 
 
 def list_quota_models(*, webspace_id: str | None = None):
+    """List canonical quota and subscription-usage models visible to the current node."""
+
     return _data_control_plane.list_quota_models(webspace_id=webspace_id)
 
 
 def list_quota_objects(*, webspace_id: str | None = None) -> list[Mapping[str, Any]]:
+    """List serializable quota objects with authoritative usage, limits, and remaining capacity."""
+
     return [item.to_dict() for item in list_quota_models(webspace_id=webspace_id)]
 
 

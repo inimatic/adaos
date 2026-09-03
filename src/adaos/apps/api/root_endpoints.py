@@ -243,6 +243,7 @@ def _skill_factory_task_auth(access_token: str, *, task_id: str | None = None) -
         "task_id": lease.get("task_id"),
         "dev_node_id": lease.get("node_id"),
         "task_scopes": list(lease.get("scopes") or []),
+        "task_context_query": lease.get("context_query"),
         "task_access_lease_id": lease.get("lease_id"),
         "allowed_target_ids": list(lease.get("allowed_target_ids") or []),
         "subnet_id": lease.get("subnet_id"),
@@ -453,6 +454,7 @@ def _root_mcp_http_bridge(
         session_id=str(auth.get("mcp_session_id") or "").strip() or None,
         task_id=str(auth.get("task_id") or "").strip() or None,
         task_scopes=[str(item) for item in auth.get("task_scopes") or [] if str(item).strip()],
+        context_query=str(auth.get("task_context_query") or "").strip() or None,
         capability_profile=str(auth.get("capability_profile") or "").strip() or None,
         access_token=bearer,
         server_name="adaos-root",
@@ -2490,6 +2492,8 @@ async def root_mcp_descriptors(
 async def root_mcp_descriptor(
     descriptor_id: str,
     level: str = "std",
+    query: str | None = None,
+    limit: int = 24,
     authorization: str | None = Header(default=None),
     owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
     subnet_id: str | None = Header(default=None, alias="X-AdaOS-Subnet-Id"),
@@ -2499,7 +2503,12 @@ async def root_mcp_descriptor(
     scope = _effective_mcp_scope(auth=auth, subnet_id=subnet_id, zone=zone)
     _enforce_mcp_capability("development.read.descriptors", auth=auth)
     try:
-        descriptor = get_descriptor(descriptor_id, level=level)
+        descriptor = get_descriptor(
+            descriptor_id,
+            level=level,
+            query=query,
+            limit=max(1, min(int(limit or 24), 64)),
+        )
     except KeyError:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": f"Descriptor '{descriptor_id}' was not found."}) from None
     return {

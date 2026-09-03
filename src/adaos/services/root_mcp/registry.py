@@ -207,8 +207,13 @@ def _overview_row(
     }
 
 
-def _sdk_metadata(level: str) -> dict[str, Any]:
-    payload = dict(sdk_export(level=level))
+def _sdk_metadata(
+    level: str,
+    *,
+    query: str | None = None,
+    limit: int = 24,
+) -> dict[str, Any]:
+    payload = dict(sdk_export(level=level, query=query, limit=limit))
     raw_items = payload.get("items") if isinstance(payload.get("items"), list) else payload.get("tools")
     rows: list[dict[str, Any]] = []
     for item in raw_items or []:
@@ -219,25 +224,49 @@ def _sdk_metadata(level: str) -> dict[str, Any]:
             continue
         meta = dict(item.get("meta") or {}) if isinstance(item.get("meta"), dict) else {}
         input_schema = dict(item.get("input_schema") or {}) if isinstance(item.get("input_schema"), dict) else {}
-        rows.append(
-            _overview_row(
-                row_id=name,
-                kind="sdk_method",
-                title=name,
-                summary=str(item.get("s") or item.get("summary") or "").strip() or None,
-                stability=str(item.get("st") or meta.get("stability") or "experimental"),
-                descriptor_id="sdk_metadata",
-                version=str(meta.get("version") or "").strip() or None,
-                side_effects=str(meta.get("side_effects") or "").strip() or None,
-                owner=str(item.get("module") or "adaos.sdk").strip(),
-                schema_id=f"sdk:{name}:input",
-                required_args=input_schema.get("required") or [],
-                capabilities={"approval_scope": meta.get("approval_scope"), "idempotent": meta.get("idempotent")},
-                metadata={"module": item.get("module"), "qualname": item.get("qualname")},
-            )
+        row = _overview_row(
+            row_id=name,
+            kind=str(item.get("k") or item.get("kind") or "sdk_method"),
+            title=name,
+            summary=str(item.get("s") or item.get("summary") or "").strip() or None,
+            stability=str(item.get("st") or meta.get("stability") or "experimental"),
+            descriptor_id="sdk_metadata",
+            version=str(meta.get("version") or "").strip() or None,
+            side_effects=str(meta.get("side_effects") or "").strip() or None,
+            owner=str(item.get("m") or item.get("module") or "adaos.sdk").strip(),
+            schema_id=f"sdk:{name}:input",
+            required_args=input_schema.get("required") or item.get("a") or [],
+            capabilities={"approval_scope": meta.get("approval_scope"), "idempotent": meta.get("idempotent")},
+            metadata={"module": item.get("m") or item.get("module"), "qualname": item.get("qualname")},
         )
+        if level == "mini":
+            row = {
+                key: value
+                for key, value in row.items()
+                if key
+                in {
+                    "schema",
+                    "row_id",
+                    "kind",
+                    "title",
+                    "summary",
+                    "stability",
+                    "owner",
+                    "fingerprint",
+                    "drill_down",
+                }
+                and value not in (None, "", [], {})
+            }
+            drill_down = dict(row.get("drill_down") or {})
+            drill_down.pop("content_hash", None)
+            row["drill_down"] = drill_down
+        rows.append(row)
     payload["overview_schema"] = "adaos.descriptor.overview_row.v1"
     payload["overview_rows"] = rows
+    if level == "mini":
+        # Mini is the authoritative model discovery projection. Avoid sending
+        # the same rows twice as exporter items and descriptor overview rows.
+        payload.pop("items", None)
     return payload
 
 
@@ -617,13 +646,19 @@ def _descriptor_bundle_metadata(entry: dict[str, Any], payload: Any, *, level: s
     }
 
 
-def _descriptor_payload(descriptor_id: str, *, level: str = "std") -> Any:
+def _descriptor_payload(
+    descriptor_id: str,
+    *,
+    level: str = "std",
+    query: str | None = None,
+    limit: int = 24,
+) -> Any:
     token = str(descriptor_id or "").strip().lower()
     if token == "sdk_metadata":
         effective_level = str(level or "std").strip().lower() or "std"
         if effective_level not in {"mini", "std", "rich"}:
             effective_level = "std"
-        return _sdk_metadata(effective_level)
+        return _sdk_metadata(effective_level, query=query, limit=limit)
     if token == "system_model_vocabulary":
         return _system_model_vocabulary()
     if token == "skill_manifest_schema":
@@ -1027,7 +1062,13 @@ def descriptor_registry_summary() -> dict[str, Any]:
     }
 
 
-def get_descriptor_set(descriptor_id: str, *, level: str = "std") -> dict[str, Any]:
+def get_descriptor_set(
+    descriptor_id: str,
+    *,
+    level: str = "std",
+    query: str | None = None,
+    limit: int = 24,
+) -> dict[str, Any]:
     token = str(descriptor_id or "").strip().lower()
     effective_level = str(level or "std").strip().lower() or "std"
     if effective_level not in {"mini", "std", "rich"}:
@@ -1035,7 +1076,12 @@ def get_descriptor_set(descriptor_id: str, *, level: str = "std") -> dict[str, A
     entry = next((item for item in list_descriptor_sets() if item["descriptor_id"] == token), None)
     if entry is None:
         raise KeyError(token)
-    payload = _descriptor_payload(token, level=effective_level)
+    payload = _descriptor_payload(
+        token,
+        level=effective_level,
+        query=query,
+        limit=max(1, min(int(limit or 24), 64)),
+    )
     return {
         **entry,
         "level": effective_level,

@@ -455,6 +455,47 @@ def _dependency_delta(raw: Mapping[str, Any], changed_paths: list[str]) -> dict[
     }
 
 
+def _task_mcp_context_query(realize_request: Mapping[str, Any]) -> str | None:
+    source = _mapping(realize_request.get("source"))
+    source_text = _text(source.get("text"))
+    source_payload: dict[str, Any] = {}
+    if source_text.startswith("{"):
+        try:
+            parsed = json.loads(source_text)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, Mapping):
+            source_payload = dict(parsed)
+
+    repair_hints = _mapping(source_payload.get("repair_hints"))
+    acceptance = _mapping(realize_request.get("acceptance"))
+    target = _mapping(realize_request.get("target"))
+    parts = [
+        _text(source_payload.get("summary")),
+        _text(source_payload.get("title")),
+        _text(repair_hints.get("change_summary")),
+        _text(realize_request.get("requested_behavior")),
+        _text(realize_request.get("prompt")),
+        source_text if source_text and not source_payload else "",
+        _text(source_payload.get("component_ref")),
+        _text(target.get("id")),
+        " ".join(
+            _string_list(acceptance.get("criteria"))
+            + _string_list(acceptance.get("checks"))
+        ),
+    ]
+    unique_parts: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        normalized = " ".join(str(part or "").split())
+        key = normalized.casefold()
+        if normalized and key not in seen:
+            seen.add(key)
+            unique_parts.append(normalized)
+    query = " ".join(unique_parts)
+    return " ".join(query.split())[:1600] or None
+
+
 def _result_provenance(raw: Mapping[str, Any], task: Mapping[str, Any]) -> dict[str, Any]:
     explicit = _mapping(raw.get("provenance"))
     request = _mapping(task.get("realize_request"))
@@ -1761,6 +1802,7 @@ class SkillFactoryService:
                 "task_id": observed_task_id,
                 "node_id": observed_node_id,
                 "scopes": scopes,
+                "context_query": _text(lease.get("context_query")) or None,
                 "credential_refs": _string_list(lease.get("credential_refs")),
                 "allowed_target_ids": _string_list(lease.get("allowed_target_ids")),
                 "subnet_id": _text(lease.get("subnet_id")) or None,
@@ -1943,6 +1985,7 @@ class SkillFactoryService:
         ).isoformat()
         mcp = _mapping(task.get("mcp"))
         realize_request = self._realize_request(task)
+        context_query = _task_mcp_context_query(realize_request)
         subnet_id = _text(mcp.get("subnet_id") or realize_request.get("user_subnet_id")) or None
         bound_target_id = _mcp_bound_target_id(mcp)
         task["access_lease"] = {
@@ -1953,6 +1996,7 @@ class SkillFactoryService:
             "status": "active",
             "token_hash": hashlib.sha256(token.encode("utf-8")).hexdigest(),
             "scopes": _assignment_mcp_scope(mcp.get("requested_scope")),
+            "context_query": context_query,
             "credential_refs": _string_list(mcp.get("credential_refs")),
             "allowed_target_ids": [bound_target_id] if bound_target_id else [],
             "subnet_id": subnet_id,

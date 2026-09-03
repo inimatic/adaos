@@ -78,13 +78,21 @@ class RootMcpClient:
         self,
         *,
         level: str = "std",
+        query: str | None = None,
+        limit: int = 24,
         request_id: str | None = None,
         trace_id: str | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "level": str(level),
+            "limit": max(1, min(int(limit or 24), 64)),
+        }
+        if query:
+            arguments["query"] = str(query)
         return self.call(
             "adaos_dev.get_sdk_metadata",
-            arguments={"level": str(level)},
+            arguments=arguments,
             request_id=request_id,
             trace_id=trace_id,
             dry_run=dry_run,

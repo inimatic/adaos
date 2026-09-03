@@ -404,7 +404,16 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             title="Get AdaOS SDK metadata",
             surface=RootMcpSurface.DEVELOPMENT,
             summary="Return SDK export metadata through the AdaOSDevPlane typed descriptive surface.",
-            input_schema=schema_object(properties={"level": {"type": "string", "enum": ["mini", "std", "rich"]}}),
+            input_schema=schema_object(
+                properties={
+                    "level": {"type": "string", "enum": ["mini", "std", "rich"]},
+                    "query": {
+                        "type": "string",
+                        "description": "Task language used to select relevant public SDK symbols.",
+                    },
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 64},
+                }
+            ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
             metadata={"published_by": "plane:adaos_dev", "handler": "adaos_dev_get_sdk_metadata"},
@@ -1940,8 +1949,19 @@ def list_descriptor_registry() -> list[dict[str, Any]]:
     return list_descriptor_sets()
 
 
-def get_descriptor(descriptor_id: str, *, level: str = "std") -> dict[str, Any]:
-    return get_descriptor_set(descriptor_id, level=level)
+def get_descriptor(
+    descriptor_id: str,
+    *,
+    level: str = "std",
+    query: str | None = None,
+    limit: int = 24,
+) -> dict[str, Any]:
+    return get_descriptor_set(
+        descriptor_id,
+        level=level,
+        query=query,
+        limit=limit,
+    )
 
 
 def list_managed_targets(
@@ -2042,7 +2062,18 @@ def _handle_scenario_manifest_schema(arguments: dict[str, Any], *, dry_run: bool
 
 def _handle_adaos_dev_descriptor(arguments: dict[str, Any], *, descriptor_id: str) -> dict[str, Any]:
     level = str(arguments.get("level") or "std").strip().lower() or "std"
-    return {"descriptor": get_descriptor(descriptor_id, level=level)}
+    return {
+        "descriptor": get_descriptor(
+            descriptor_id,
+            level=level,
+            query=(
+                _text_or_none(arguments.get("query"))
+                if descriptor_id == "sdk_metadata"
+                else None
+            ),
+            limit=max(1, min(int(arguments.get("limit") or 24), 64)),
+        )
+    }
 
 
 def _handle_adaos_dev_named_entity_registry(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
