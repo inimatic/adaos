@@ -722,6 +722,9 @@ class SkillFactoryService:
             "commit_hash": full_result.get("commit_hash"),
             "tests": _text(_mapping(full_result.get("tests")).get("status")) or None,
             "changed_path_count": len(_string_list(full_result.get("changed_paths"))),
+            "development_escalation_count": len(
+                _list(full_result.get("development_escalations"))
+            ),
             "reported_at": full_result.get("reported_at"),
         }
         task["provenance_ref"] = provenance_artifact["ref"]

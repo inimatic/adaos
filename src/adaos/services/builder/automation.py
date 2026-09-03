@@ -67,6 +67,7 @@ _STATUS_RANK = {
     "in_progress": 2,
     "tests_running": 3,
     "commit_ready": 4,
+    "waiting_for_core": 5,
     "completed": 5,
     "failed": 5,
     "cancelled": 5,
@@ -4248,7 +4249,8 @@ class BuilderAutomationService:
             "phase": BuilderAutomationService._phase_for_status(status),
             "busy": status in _ACTIVE_STATUSES,
             "terminal": status in _TERMINAL_STATUSES,
-            "can_submit": status in {"completed", "failed", "cancelled", "expired"},
+            "can_submit": status
+            in {"waiting_for_core", "completed", "failed", "cancelled", "expired"},
             "webspace_id": str(session.get("webspace_id") or "desktop"),
             "project": {
                 "type": str(session.get("object_type") or ""),
@@ -4957,6 +4959,7 @@ class BuilderAutomationService:
             "in_progress": "implementation",
             "tests_running": "verification",
             "commit_ready": "result",
+            "waiting_for_core": "waiting_for_core",
             "completed": "completed",
             "failed": "error",
             "cancelled": "cancelled",
@@ -5306,6 +5309,16 @@ class BuilderAutomationService:
             current,
             task_status=str(task_status or ""),
         )
+        development_escalations = (
+            current.get("last_result", {}).get("development_escalations")
+            if isinstance(current.get("last_result"), Mapping)
+            else None
+        )
+        if task_status == "completed" and isinstance(development_escalations, list) and development_escalations:
+            return self._wait_for_core_capability(
+                current,
+                development_escalations=development_escalations,
+            )
         readiness = current.get("completion_readiness")
         finalizing = str(current.get("finalizing_task_id") or "").strip() == task_id
         if (
@@ -8780,6 +8793,57 @@ class BuilderAutomationService:
             _log.debug("failed to publish Builder completion task=%s", task_id, exc_info=True)
         return current
 
+    def _wait_for_core_capability(
+        self,
+        session: Mapping[str, Any],
+        *,
+        development_escalations: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Finish one project-owned turn without treating a core blocker as a repair."""
+
+        current = dict(session)
+        task_id = str(current.get("current_task_id") or "").strip()
+        current = self._sync_linked_development_ticket_tasks(current)
+        sync = (
+            dict(current.get("development_ticket_sync"))
+            if isinstance(current.get("development_ticket_sync"), Mapping)
+            else {}
+        )
+        core_ticket_ids = list(
+            dict.fromkeys(
+                str(ticket_id).strip()
+                for item in sync.get("tickets") or []
+                if isinstance(item, Mapping)
+                for ticket_id in item.get("core_ticket_ids") or []
+                if str(ticket_id).strip()
+            )
+        )
+        now = _now_iso()
+        current["completion_readiness"] = {
+            "schema": "adaos.builder.completion_readiness.v1",
+            "ok": False,
+            "task_id": task_id or None,
+            "outcome": "waiting_for_core",
+            "publishable": False,
+            "development_escalation_count": len(development_escalations),
+            "core_ticket_ids": core_ticket_ids,
+            "completed_at": now,
+        }
+        current["status"] = "waiting_for_core"
+        current["progress"] = {
+            "task_id": task_id or None,
+            "status": "waiting_for_core",
+            "message": "Project repair is waiting for a governed AdaOS core capability",
+            "updated_at": now,
+        }
+        current.pop("finalizing_task_id", None)
+        current.pop("last_failure", None)
+        current["updated_at"] = now
+        current = self._save_session(current)
+        if self.event_sink:
+            self.event_sink(self.project_session(current))
+        return current
+
     def _sync_linked_development_ticket_tasks(
         self,
         session: Mapping[str, Any],
@@ -8902,10 +8966,19 @@ class BuilderAutomationService:
                         if isinstance(latest_sync.get("ticket"), Mapping)
                         else {}
                     )
+                    core_ticket_ids = [
+                        str(request.get("ticket", {}).get("ticket_id") or "").strip()
+                        for request in latest_sync.get("core_requests") or []
+                        if isinstance(request, Mapping)
+                        and isinstance(request.get("ticket"), Mapping)
+                        and str(request["ticket"].get("ticket_id") or "").strip()
+                    ]
                     ticket_results.append(
                         {
                             "ticket_id": ticket_id,
                             "status": str(synced_ticket.get("status") or "").strip() or None,
+                            "escalated": bool(latest_sync.get("escalated")),
+                            "core_ticket_ids": core_ticket_ids,
                             "resolved": bool(
                                 latest_sync.get("resolved")
                                 or str(synced_ticket.get("status") or "").strip()
@@ -9158,6 +9231,13 @@ class BuilderAutomationService:
             "tests": tests.get("status"),
             "changed_path_count": len(
                 [item for item in result.get("changed_paths") or [] if str(item).strip()]
+            ),
+            "development_escalation_count": len(
+                [
+                    item
+                    for item in result.get("development_escalations") or []
+                    if isinstance(item, Mapping)
+                ]
             ),
             "reported_at": result.get("reported_at"),
         }

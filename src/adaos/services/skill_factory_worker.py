@@ -28,6 +28,7 @@ from adaos.domain.development_validation import (
     derive_validation_budget,
     normalize_validation_budget,
 )
+from adaos.domain.development_escalations import parse_development_escalations
 from adaos.domain.development_budget import (
     execution_billable_token_limit,
     execution_prompt_token_limit,
@@ -2710,17 +2711,59 @@ class LocalSkillFactoryWorker:
             final_message_path = runtime_dir / "codex-final.md"
             if not final_message_path.is_file():
                 raise ValueError("pre-commit recovery requires a completed Codex result")
+            final_message = final_message_path.read_text(encoding="utf-8").strip()
+            development_escalations = parse_development_escalations(final_message)
+            recovery_packet = _read_json(input_dir / "packet.json")
+            recovery_constraints = (
+                dict(recovery_packet.get("constraints"))
+                if isinstance(recovery_packet.get("constraints"), Mapping)
+                else {}
+            )
+            if development_escalations and not (
+                str(recovery_constraints.get("mode") or "").strip()
+                == "dev_ticket_repair"
+                or recovery_constraints.get("minimal_diff") is True
+                or "adaos.dev_ticket.autonomous_repair_brief.v1"
+                in str(recovery_packet.get("brief") or "")
+            ):
+                raise ValueError(
+                    "development escalation is allowed only for a governed Dev Ticket repair"
+                )
             self._cleanup_generated_files(workspace)
             # Codex is instructed not to commit, but a surviving child process
             # can still do so after its API parent has been restarted.  Diff
             # from the immutable materialization root so both committed and
             # uncommitted task changes receive the same bounded validation.
             changed_paths = self._changed_from_baseline(workspace)
-            self._validate_changed_paths(assignment, changed_paths, workspace=workspace)
-            test_report = self._validate_workspace(
-                assignment,
-                workspace,
-            )
+            if development_escalations:
+                if changed_paths:
+                    raise ValueError(
+                        "a recovered core capability escalation cannot include project source changes"
+                    )
+                test_report = {
+                    "schema": "adaos.skill_factory.test_report.v1",
+                    "status": "passed",
+                    "ok": True,
+                    "checks": [
+                        {
+                            "id": "development_escalation_contract",
+                            "status": "passed",
+                            "item_count": len(development_escalations),
+                        },
+                        {
+                            "id": "development_escalation_no_source_change",
+                            "status": "passed",
+                            "changed_paths": [],
+                        },
+                    ],
+                    "errors": [],
+                }
+            else:
+                self._validate_changed_paths(assignment, changed_paths, workspace=workspace)
+                test_report = self._validate_workspace(
+                    assignment,
+                    workspace,
+                )
             _write_json(output_dir / "test_report.json", test_report)
             if not bool(test_report.get("ok")) or str(test_report.get("status") or "") != "passed":
                 raise ValueError("preserved result does not pass deterministic validation")
@@ -2755,6 +2798,11 @@ class LocalSkillFactoryWorker:
                 else None,
                 "tool_versions": {"python": sys.version.split()[0]},
                 "sdk_snapshot": sdk_snapshot or None,
+                "execution_strategy": (
+                    "core_capability_escalation"
+                    if development_escalations
+                    else "recovered_candidate"
+                ),
                 "created_at": _now_iso(),
                 "recovery": {"mode": "pre_commit_deterministic_resume"},
             }
@@ -2764,9 +2812,10 @@ class LocalSkillFactoryWorker:
                 "task_id": task_id,
                 "node_id": self.node_id,
                 "status": "completed",
-                "summary": final_message_path.read_text(encoding="utf-8").strip(),
+                "summary": final_message,
+                "development_escalations": development_escalations,
                 "tests": test_report,
-                "packet": _read_json(input_dir / "packet.json"),
+                "packet": recovery_packet,
             }
             _write_json(evidence_root / "result.json", result_manifest)
             all_changed_paths = self._changed_from_baseline(workspace)
@@ -2807,6 +2856,9 @@ class LocalSkillFactoryWorker:
             "provenance": provenance,
             "evidence": self._evidence_manifest(evidence_root, evidence_paths),
             "summary": str(result_manifest.get("summary") or "").strip(),
+            "development_escalations": list(
+                result_manifest.get("development_escalations") or []
+            ),
             "local_run_dir": str(run_root),
         }
         _write_json(output_dir / "result.json", result)
@@ -3153,13 +3205,33 @@ class LocalSkillFactoryWorker:
                     root_mcp=root_mcp,
                 )
 
+            development_escalations = parse_development_escalations(
+                codex_result.final_message
+            )
+            packet_constraints = (
+                dict(packet.get("constraints"))
+                if isinstance(packet.get("constraints"), Mapping)
+                else {}
+            )
+            if development_escalations and not (
+                str(packet_constraints.get("mode") or "").strip()
+                == "dev_ticket_repair"
+                or packet_constraints.get("minimal_diff") is True
+                or "adaos.dev_ticket.autonomous_repair_brief.v1"
+                in str(packet.get("brief") or "")
+            ):
+                raise ValueError(
+                    "development escalation is allowed only for a governed Dev Ticket repair"
+                )
             model_attempt_limit = _execution_model_attempt_limit(
                 assignment,
                 default=self.max_repair_attempts + 1,
             )
             validation_repair_limit = (
                 0
-                if structured_edit_receipt is not None or validation_only
+                if structured_edit_receipt is not None
+                or validation_only
+                or development_escalations
                 else min(self.max_repair_attempts, max(0, model_attempt_limit - 1))
             )
             test_report: dict[str, Any] = {}
@@ -3168,52 +3240,88 @@ class LocalSkillFactoryWorker:
                 self._progress(task_id, "tests_running", "Validating generated manifests, Python and Web UI")
                 self._cleanup_generated_files(workspace)
                 changed_paths = self._changed_paths(workspace)
-                try:
-                    self._validate_changed_paths(assignment, changed_paths, workspace=workspace)
-                except ValueError as exc:
-                    # A scope violation is deterministic and often
-                    # repairable (for example, a test placed mutable runtime
-                    # state beside source).  Keep the boundary fail-closed,
-                    # but feed the exact violation through the same bounded
-                    # autonomous repair loop as manifest/test failures.
+                if development_escalations and changed_paths:
                     test_report = {
                         "schema": "adaos.skill_factory.test_report.v1",
                         "status": "failed",
                         "ok": False,
                         "checks": [
                             {
-                                "id": "source_boundary",
+                                "id": "development_escalation_source_boundary",
                                 "status": "failed",
                                 "changed_paths": list(changed_paths),
                             }
                         ],
-                        "errors": [str(exc)],
+                        "errors": [
+                            "A core capability escalation cannot include project source changes"
+                        ],
+                    }
+                elif development_escalations:
+                    test_report = {
+                        "schema": "adaos.skill_factory.test_report.v1",
+                        "status": "passed",
+                        "ok": True,
+                        "checks": [
+                            {
+                                "id": "development_escalation_contract",
+                                "status": "passed",
+                                "item_count": len(development_escalations),
+                            },
+                            {
+                                "id": "development_escalation_no_source_change",
+                                "status": "passed",
+                                "changed_paths": [],
+                            },
+                        ],
+                        "errors": [],
                     }
                 else:
-                    test_report = self._validate_workspace(
-                        assignment,
-                        workspace,
-                    )
-                    # Generated tests are untrusted code and may create files
-                    # after the pre-test scope check.  Re-establish the source
-                    # boundary before accepting the report so a side effect
-                    # cannot surface later as an opaque commit/finalization
-                    # failure.
-                    self._cleanup_generated_files(workspace)
-                    changed_paths = self._changed_paths(workspace)
                     try:
                         self._validate_changed_paths(assignment, changed_paths, workspace=workspace)
                     except ValueError as exc:
-                        test_report["ok"] = False
-                        test_report["status"] = "failed"
-                        test_report.setdefault("checks", []).append(
-                            {
-                                "id": "post_test_source_boundary",
-                                "status": "failed",
-                                "changed_paths": list(changed_paths),
-                            }
+                        # A scope violation is deterministic and often
+                        # repairable (for example, a test placed mutable runtime
+                        # state beside source).  Keep the boundary fail-closed,
+                        # but feed the exact violation through the same bounded
+                        # autonomous repair loop as manifest/test failures.
+                        test_report = {
+                            "schema": "adaos.skill_factory.test_report.v1",
+                            "status": "failed",
+                            "ok": False,
+                            "checks": [
+                                {
+                                    "id": "source_boundary",
+                                    "status": "failed",
+                                    "changed_paths": list(changed_paths),
+                                }
+                            ],
+                            "errors": [str(exc)],
+                        }
+                    else:
+                        test_report = self._validate_workspace(
+                            assignment,
+                            workspace,
                         )
-                        test_report.setdefault("errors", []).append(str(exc))
+                        # Generated tests are untrusted code and may create files
+                        # after the pre-test scope check.  Re-establish the source
+                        # boundary before accepting the report so a side effect
+                        # cannot surface later as an opaque commit/finalization
+                        # failure.
+                        self._cleanup_generated_files(workspace)
+                        changed_paths = self._changed_paths(workspace)
+                        try:
+                            self._validate_changed_paths(assignment, changed_paths, workspace=workspace)
+                        except ValueError as exc:
+                            test_report["ok"] = False
+                            test_report["status"] = "failed"
+                            test_report.setdefault("checks", []).append(
+                                {
+                                    "id": "post_test_source_boundary",
+                                    "status": "failed",
+                                    "changed_paths": list(changed_paths),
+                                }
+                            )
+                            test_report.setdefault("errors", []).append(str(exc))
                 _write_json(output_dir / "test_report.json", test_report)
                 if test_report["ok"]:
                     break
@@ -3295,7 +3403,9 @@ class LocalSkillFactoryWorker:
                 "root_mcp_evidence": root_mcp_evidence,
                 "continuation": continuation or None,
                 "execution_strategy": (
-                    "structured_edits"
+                    "core_capability_escalation"
+                    if development_escalations
+                    else "structured_edits"
                     if structured_edit_receipt is not None
                     else "validation_only"
                     if validation_only
@@ -3314,6 +3424,7 @@ class LocalSkillFactoryWorker:
                 "node_id": self.node_id,
                 "status": "completed",
                 "summary": codex_result.final_message.strip(),
+                "development_escalations": development_escalations,
                 "tests": test_report,
                 "packet": packet,
             }
@@ -3343,6 +3454,7 @@ class LocalSkillFactoryWorker:
                 "provenance": provenance,
                 "evidence": self._evidence_manifest(evidence_root, evidence_paths),
                 "summary": codex_result.final_message.strip(),
+                "development_escalations": development_escalations,
                 "local_run_dir": str(run_root),
                 "execution_strategy": provenance["execution_strategy"],
             }
@@ -3996,7 +4108,13 @@ When `scenarios/{target_id}/.builder_current_publication` exists, treat it as th
 
 This is a bounded Dev Ticket repair, not a full project implementation pass. Treat the ticket summary, target_scope, evidence_refs and governed Issue acceptance as the complete repair scope. Prefer the smallest code or data change that satisfies the ticket and proves it with focused validation. Leave unrelated UX, manifests, versions, generated descriptors, and source layout unchanged.
 
-Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.json`, `webui.json`, `scenario.yaml`, or `skill.yaml` unless the ticket explicitly requires that manifest change. It is acceptable for a Dev Ticket repair to leave manifests untouched when the fix is in handlers, tests, resource data, comments, or scoped UI text. If the requested result needs core/API/SDK support that is unavailable to this project, stop with a blocker explanation and propose the required core/API/SDK Dev Ticket instead of patching around the limitation. Do not represent that proposal by creating a documentation, issue, or TODO file; return it only in the final response so the trusted orchestrator can create and link the governed Core Dev Ticket.
+Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.json`, `webui.json`, `scenario.yaml`, or `skill.yaml` unless the ticket explicitly requires that manifest change. It is acceptable for a Dev Ticket repair to leave manifests untouched when the fix is in handlers, tests, resource data, comments, or scoped UI text. If the requested result needs core/API/SDK support that is unavailable to this project, do not edit source and do not patch around the limitation. Return exactly one machine-readable proposal in the final response so the trusted orchestrator can create and link the governed Core Dev Ticket. Use this bounded form (one envelope can contain several independently actionable core tasks):
+
+```adaos-development-escalation
+{"schema":"adaos.development_escalations.v1","items":[{"kind":"core_capability_request","summary":"...","component_ref":"core:sdk.<area>","desired_contract":"...","impact":"blocker","motivation":"...","observed_limitation":"...","rejected_workarounds":[{"approach":"...","reason":"..."}]}]}
+```
+
+Allowed impact values are `blocker`, `speed`, `generalization`, `contract_gap`, `observability_gap`, `lifecycle_gap`, `policy_boundary`, `compatibility_debt`, and `security_governance`. Do not create a documentation, issue, TODO, or placeholder implementation file. The orchestrator, not this task, owns ticket mutation.
 """ if is_dev_ticket_repair else ""
         repair_profile = str(constraints.get("repair_profile") or "").strip()
         surgical_ui = is_dev_ticket_repair and repair_profile == "surgical_ui"

@@ -2060,6 +2060,72 @@ def test_builder_sync_rejects_completed_result_from_another_ticket_repair(tmp_pa
     assert len(current["builder_refs"]) == 1
 
 
+def test_builder_sync_turns_validated_escalation_into_linked_core_ticket(
+    tmp_path: Path,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    ticket = _bounded_demo_ticket(
+        service,
+        summary="Show subscription token usage through the public SDK",
+        target_files=["skills/demo_metrics_skill/handlers/main.py"],
+        acceptance="The UI shows the current plan allowance.",
+    )
+    handoff = service.handoff_ticket(
+        ticket["ticket_id"],
+        mode="autonomous",
+        repair_service=repair_service,
+        actor="user:owner",
+    )
+    repair_id = handoff["repair"]["repair_id"]
+    links = {
+        "development_ticket_id": ticket["ticket_id"],
+        "development_ticket_ids": [ticket["ticket_id"]],
+        "builder_repair_id": repair_id,
+    }
+    automation_result = _FakeBuilderAutomation()._payload(
+        status="completed",
+        suffix="core-gap",
+        links=links,
+    )
+    automation_result["session"]["task"]["result"]["development_escalations"] = [
+        {
+            "schema": "adaos.development_escalation.v1",
+            "kind": "core_capability_request",
+            "summary": "Expose subscription token usage",
+            "component_ref": "core:sdk.subscription",
+            "desired_contract": "Read current plan token use and remaining allowance.",
+            "impact": "blocker",
+            "motivation": "Project code must use a public SDK contract.",
+            "observed_limitation": "The current quota API exposes transport quotas only.",
+            "rejected_workarounds": [
+                {
+                    "approach": "Read Root state directly",
+                    "reason": "Project code cannot access private core state.",
+                }
+            ],
+        }
+    ]
+
+    result = service.sync_builder_repair(
+        ticket["ticket_id"],
+        repair_id=repair_id,
+        actor="builder.automation",
+        repair_service=repair_service,
+        automation_result=automation_result,
+    )
+
+    assert result["escalated"] is True
+    assert result["resolved"] is False
+    assert result["ticket"]["status"] == "waiting_for_core"
+    assert result["repair"]["work_status"] == "blocked"
+    core_ticket = result["core_requests"][0]["ticket"]
+    assert core_ticket["owner_area"] == "core"
+    assert core_ticket["component_ref"] == "core:sdk.subscription"
+    assert core_ticket["metadata"]["source_task_id"] == "factory.task.core-gap"
+    assert result["ticket"]["relation_refs"][0]["ticket_id"] == core_ticket["ticket_id"]
+
+
 def test_failed_autonomous_repair_resumes_same_ticket_session(tmp_path: Path) -> None:
     service = DevelopmentTicketService(state_dir=tmp_path)
     repair_service = BuilderRepairService(state_dir=tmp_path)

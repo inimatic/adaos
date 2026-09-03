@@ -5376,6 +5376,58 @@ def test_worker_respects_model_attempt_budget_during_validation_repair(
         assert "required file missing" in calls[1]
 
 
+def test_worker_returns_core_escalation_without_validating_unchanged_project(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    state_dir = tmp_path / "state"
+    dev_skills = tmp_path / "dev" / "skills"
+    dev_scenarios = tmp_path / "dev" / "scenarios"
+    dev_skills.mkdir(parents=True)
+    _core_created_skill_fixture(repo_root, dev_skills, "boundary_skill")
+    factory = SkillFactoryService(state_dir=state_dir)
+    factory.submit_realize_request(
+        {
+            "target": {"type": "skill", "id": "boundary_skill"},
+            "constraints": {"mode": "dev_ticket_repair", "minimal_diff": True},
+            "repo": {"sparse_paths": ["skills/boundary_skill/"]},
+        }
+    )
+
+    def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:
+        return CodexRunResult(
+            returncode=0,
+            final_message="""The required subscription metering contract is not public.
+
+```adaos-development-escalation
+{"schema":"adaos.development_escalations.v1","items":[{"kind":"core_capability_request","summary":"Expose subscription token usage","component_ref":"core:sdk.subscription","desired_contract":"Read current plan token use and remaining allowance.","impact":"blocker","motivation":"Render real subscription usage through public SDK only.","observed_limitation":"The public quota API exposes transport quotas only.","rejected_workarounds":[{"approach":"Read Root state","reason":"Project code cannot use private core state."}]}]}
+```""",
+        )
+
+    worker = LocalSkillFactoryWorker(
+        state_dir=state_dir,
+        repo_root=repo_root,
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=dev_scenarios,
+        runs_root=tmp_path / "runs",
+        executor=fake_codex,
+    )
+
+    def fail_validation(*args, **kwargs):
+        raise AssertionError("unchanged project validation must be skipped")
+
+    worker._validate_workspace = fail_validation  # type: ignore[method-assign]
+
+    result = worker.run_once()
+
+    assert result["ok"] is True, result
+    assert result["result"]["no_source_change"] is True
+    assert result["result"]["execution_strategy"] == "core_capability_escalation"
+    assert result["result"]["development_escalations"][0]["component_ref"] == (
+        "core:sdk.subscription"
+    )
+
+
 def test_worker_reasks_codex_to_repair_source_boundary_violation(
     tmp_path: Path,
 ) -> None:

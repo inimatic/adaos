@@ -5905,6 +5905,63 @@ def test_completed_automation_synchronizes_every_ticket_in_package(
     assert saved[-1]["development_ticket_sync_revision"] == 3
 
 
+def test_core_escalation_stops_before_trial_and_waits_for_core(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    saved: list[dict] = []
+
+    def sync_tasks(self, session):  # noqa: ARG001
+        return {
+            **dict(session),
+            "development_ticket_sync": {
+                "tickets": [
+                    {
+                        "ticket_id": "dticket.project",
+                        "status": "waiting_for_core",
+                        "escalated": True,
+                        "core_ticket_ids": ["dticket.core"],
+                    }
+                ]
+            },
+        }
+
+    def save_session(self, value, **kwargs):  # noqa: ARG001
+        saved.append(dict(value))
+        return dict(value)
+
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_sync_linked_development_ticket_tasks",
+        sync_tasks,
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_save_session", save_session)
+
+    current = service._wait_for_core_capability(
+        {
+            "session_id": "automation.skill.demo_metrics_skill",
+            "object_type": "skill",
+            "object_id": "demo_metrics_skill",
+            "current_task_id": "task.core-gap",
+            "status": "commit_ready",
+            "finalizing_task_id": "task.core-gap",
+        },
+        development_escalations=[
+            {
+                "kind": "core_capability_request",
+                "component_ref": "core:sdk.subscription",
+            }
+        ],
+    )
+
+    assert current["status"] == "waiting_for_core"
+    assert current["completion_readiness"]["publishable"] is False
+    assert current["completion_readiness"]["core_ticket_ids"] == ["dticket.core"]
+    assert "finalizing_task_id" not in current
+    assert saved[-1]["status"] == "waiting_for_core"
+
+
 def test_failed_worker_synchronizes_linked_dev_ticket(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

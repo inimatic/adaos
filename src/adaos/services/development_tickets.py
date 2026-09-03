@@ -13,6 +13,10 @@ from typing import Any, Mapping, Sequence
 from jsonschema import Draft202012Validator
 
 from adaos.sdk.core.decorators import subscribe
+from adaos.domain.development_escalations import (
+    CORE_IMPACT_CLASSES,
+    normalize_development_escalations,
+)
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from adaos.services.builder.repair import BuilderRepairService
 from adaos.services.id_gen import new_id
@@ -72,17 +76,6 @@ SDK_UNDERSTANDING_SIGNAL_KINDS = {
     "sdk_policy_boundary",
     "sdk_generalization_pressure",
     "builder_rejection_learning",
-}
-CORE_IMPACT_CLASSES = {
-    "blocker",
-    "speed",
-    "generalization",
-    "contract_gap",
-    "observability_gap",
-    "lifecycle_gap",
-    "policy_boundary",
-    "compatibility_debt",
-    "security_governance",
 }
 TICKET_RELATION_KINDS = {
     "blocks",
@@ -578,6 +571,19 @@ def _automation_task(payload: Mapping[str, Any]) -> dict[str, Any]:
     session = _automation_session(payload)
     task = session.get("task") if isinstance(session.get("task"), Mapping) else payload.get("task")
     return dict(task) if isinstance(task, Mapping) else {}
+
+
+def _automation_development_escalations(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    session = _automation_session(payload)
+    task = _automation_task(payload)
+    result = task.get("result") if isinstance(task.get("result"), Mapping) else session.get("last_result")
+    result = dict(result) if isinstance(result, Mapping) else {}
+    items = result.get("development_escalations")
+    if not items:
+        return []
+    return normalize_development_escalations(
+        {"schema": "adaos.development_escalations.v1", "items": items}
+    )
 
 
 def _automation_correlation(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -2934,6 +2940,86 @@ class DevelopmentTicketService:
             repair_id=linked_repair_id,
             allowed_task_ids=repair_task_ids,
         )
+        escalations = _automation_development_escalations(status_result)
+        escalation_task = _automation_task(status_result)
+        if _text(escalation_task.get("status")) == "completed" and escalations:
+            task = escalation_task
+            session = _automation_session(status_result)
+            task_id = _text(task.get("task_id") or session.get("current_task_id"))
+            blocked_ticket_ids = [
+                _text(item)
+                for item in correlation.get("observed_ticket_ids") or []
+                if _text(item)
+            ] or [ticket["ticket_id"]]
+            core_requests: list[dict[str, Any]] = []
+            for index, escalation in enumerate(escalations):
+                escalation_ref = {
+                    "type": "builder_development_escalation",
+                    "id": f"{task_id or linked_repair_id}:{index}",
+                    "task_id": task_id or None,
+                    "repair_id": linked_repair_id,
+                    "kind": escalation["kind"],
+                    "status": "accepted",
+                }
+                core_requests.append(
+                    self.create_core_capability_request(
+                        summary=escalation["summary"],
+                        component_ref=escalation["component_ref"],
+                        desired_contract=escalation["desired_contract"],
+                        actor=_text(actor) or "builder.automation",
+                        impact=escalation["impact"],
+                        motivation=escalation.get("motivation") or "",
+                        observed_limitation=escalation["observed_limitation"],
+                        rejected_workarounds=escalation.get("rejected_workarounds") or [],
+                        blocked_ticket_ids=blocked_ticket_ids,
+                        evidence_refs=_merge_refs(refs, [escalation_ref]),
+                        metadata={
+                            "source_task_id": task_id or None,
+                            "builder_repair_id": linked_repair_id,
+                            "builder_session_id": _text(session.get("session_id")) or None,
+                        },
+                        source="builder_automation",
+                        origin_scope={
+                            "type": "builder",
+                            "surface": "automation",
+                            "id": _text(session.get("session_id"))
+                            or task_id
+                            or linked_repair_id,
+                        },
+                    )
+                )
+            repair_evidence = _merge_refs(
+                refs,
+                [
+                    {
+                        "type": "dev_ticket",
+                        "id": request["ticket"]["ticket_id"],
+                        "relation": "blocked_by",
+                        "status": request["ticket"].get("status"),
+                    }
+                    for request in core_requests
+                ],
+            )
+            repair = service.transition_work_item(
+                linked_repair_id,
+                status="blocked",
+                actor=_text(actor) or "builder.automation",
+                reason="waiting_for_core_capability",
+                evidence_refs=repair_evidence,
+            )
+            updated = self.get_ticket(ticket["ticket_id"]) or updated
+            return {
+                "ok": True,
+                "synchronized": True,
+                "resolved": False,
+                "escalated": True,
+                "reason": "waiting_for_core",
+                "ticket": updated,
+                "repair": repair,
+                "automation": status_result,
+                "evidence_refs": repair_evidence,
+                "core_requests": core_requests,
+            }
         if (
             status == "completed"
             and _automation_has_validation_evidence(status_result)
