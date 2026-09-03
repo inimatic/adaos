@@ -668,7 +668,11 @@ class CodexRootMcpBridge:
                     "properties": {
                         "level": {
                             "type": "string",
-                            "enum": ["mini", "std", "rich"],
+                            "enum": (
+                                ["mini"]
+                                if self.profile.task_id
+                                else ["mini", "std", "rich"]
+                            ),
                             "default": "mini" if self.profile.task_id else "std",
                         },
                         "query": {
@@ -678,7 +682,7 @@ class CodexRootMcpBridge:
                         "limit": {
                             "type": "integer",
                             "minimum": 1,
-                            "maximum": 64,
+                            "maximum": 24 if self.profile.task_id else 64,
                             "default": 24,
                         },
                     },
@@ -1331,7 +1335,11 @@ class CodexRootMcpBridge:
         }
         for definition in definitions:
             if definition.get("name") in _COMPACT_MODEL_TEXT_TOOLS:
-                definition["inputSchema"].setdefault("properties", {})["model_text_format"] = dict(format_property)
+                tool_format_property = dict(format_property)
+                if self.profile.task_id and definition.get("name") == "get_sdk_metadata":
+                    tool_format_property["enum"] = ["min_json"]
+                    tool_format_property["default"] = "min_json"
+                definition["inputSchema"].setdefault("properties", {})["model_text_format"] = tool_format_property
         if self.profile.enabled_tools is None:
             return definitions
         enabled = set(self.profile.enabled_tools)
@@ -1439,19 +1447,27 @@ class CodexRootMcpBridge:
                 model_text_format=model_text_format,
             )
         if tool == "get_sdk_metadata":
+            task_scoped = bool(self.profile.task_id)
             return _tool_text(
                 client.get_adaos_dev_sdk_metadata(
-                    level=str(
-                        args.get("level")
-                        or ("mini" if self.profile.task_id else "std")
+                    level=(
+                        "mini"
+                        if task_scoped
+                        else str(args.get("level") or "std")
                     ),
                     query=(
                         _normalize_text(args.get("query"))
                         or _normalize_text(self.profile.context_query)
                     ),
-                    limit=max(1, min(int(args.get("limit") or 24), 64)),
+                    limit=max(
+                        1,
+                        min(
+                            int(args.get("limit") or 24),
+                            24 if task_scoped else 64,
+                        ),
+                    ),
                 ),
-                model_text_format=model_text_format,
+                model_text_format="min_json" if task_scoped else model_text_format,
             )
         if tool == "get_template_catalog":
             return _tool_text(client.get_adaos_dev_template_catalog())

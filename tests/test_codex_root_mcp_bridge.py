@@ -1321,7 +1321,7 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert ("get_subnet_info", "", {}) in fake_client.calls
 
 
-def test_task_scoped_sdk_metadata_defaults_to_mini(monkeypatch) -> None:
+def test_task_scoped_sdk_metadata_enforces_bounded_mini(monkeypatch) -> None:
     profile = bridge_mod.CodexBridgeProfile(
         root_url="https://root.example.test",
         target_id="hub:test-subnet",
@@ -1345,7 +1345,14 @@ def test_task_scoped_sdk_metadata_defaults_to_mini(monkeypatch) -> None:
             "jsonrpc": "2.0",
             "id": "sdk-metadata",
             "method": "tools/call",
-            "params": {"name": "get_sdk_metadata", "arguments": {}},
+            "params": {
+                "name": "get_sdk_metadata",
+                "arguments": {
+                    "level": "rich",
+                    "limit": 50,
+                    "model_text_format": "json",
+                },
+            },
         }
     )
 
@@ -1356,12 +1363,53 @@ def test_task_scoped_sdk_metadata_defaults_to_mini(monkeypatch) -> None:
         if item["name"] == "get_sdk_metadata"
     )
     assert definition["inputSchema"]["properties"]["level"]["default"] == "mini"
+    assert definition["inputSchema"]["properties"]["level"]["enum"] == ["mini"]
+    assert definition["inputSchema"]["properties"]["limit"]["maximum"] == 24
+    assert definition["inputSchema"]["properties"]["model_text_format"]["enum"] == ["min_json"]
     assert result is not None
     assert result["result"].get("isError") is not True
+    assert result["result"]["_meta"]["adaos/modelProjection"]["model_text_format"] == "min_json"
     assert (
         "get_adaos_dev_sdk_metadata",
         "mini",
         {"query": "Show token usage and remaining quota", "limit": 24},
+    ) in fake_client.calls
+
+
+def test_general_sdk_metadata_preserves_explicit_detail(monkeypatch) -> None:
+    profile = bridge_mod.CodexBridgeProfile(
+        root_url="https://root.example.test",
+        target_id="hub:test-subnet",
+        capabilities=["development.read.descriptors"],
+        enabled_tools=["get_sdk_metadata"],
+        access_token="operator-access",
+    )
+    bridge = bridge_mod.CodexRootMcpBridge(profile)
+    fake_client = _FakeRootMcpClient()
+    monkeypatch.setattr(bridge, "_client", lambda: fake_client)
+
+    result = bridge.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": "sdk-metadata-rich",
+            "method": "tools/call",
+            "params": {
+                "name": "get_sdk_metadata",
+                "arguments": {
+                    "level": "rich",
+                    "limit": 50,
+                    "model_text_format": "json",
+                },
+            },
+        }
+    )
+
+    assert result is not None
+    assert result["result"]["_meta"]["adaos/modelProjection"]["model_text_format"] == "json"
+    assert (
+        "get_adaos_dev_sdk_metadata",
+        "rich",
+        {"query": None, "limit": 50},
     ) in fake_client.calls
 
 
