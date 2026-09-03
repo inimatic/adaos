@@ -17,6 +17,7 @@ class _Workbench:
         }
         self.selection = {"object_id": "recipes", "title": "Old title"}
         self.set_calls: list[dict[str, object]] = []
+        self.inspector_calls: list[dict[str, object]] = []
 
     def resolve_source_webspace_id(self, value):
         return value or "desktop"
@@ -26,6 +27,14 @@ class _Workbench:
             "preview_target": dict(self.target),
             "selection": dict(self.selection),
             "preview_webspace_id": "dev1-dev",
+        }
+
+    def context_inspector(self, source, *, run_ref=None, limit=20):
+        self.inspector_calls.append({"source": source, "run_ref": run_ref, "limit": limit})
+        return {
+            "schema": "adaos.builder.context_inspector.v1",
+            "source_webspace_id": source,
+            "development_feedback": {"items": [{"feedback_id": "devfeedback.1"}]},
         }
 
     def set_preview_target(self, *, source_webspace_id, target):
@@ -72,6 +81,18 @@ def test_refresh_follow_active_target_updates_metadata_without_materializing(mon
     assert result["binding"]["selection"]["title"] == "Кулинарные рецепты"
     assert result["selection"]["description"] == "Каталог рецептов"
     assert len(service.set_calls) == 1
+
+
+def test_context_inspector_is_a_bounded_public_sdk_projection(monkeypatch) -> None:
+    service = _Workbench()
+    monkeypatch.setattr(preview, "_service", lambda: service)
+
+    result = preview.context_inspector("desktop-dev", run_ref="run:1", limit=1000)
+
+    assert result["development_feedback"]["items"][0]["feedback_id"] == "devfeedback.1"
+    assert service.inspector_calls == [
+        {"source": "desktop-dev", "run_ref": "run:1", "limit": 100}
+    ]
 
 
 def test_refresh_follow_active_target_preserves_explicit_snapshot(monkeypatch) -> None:

@@ -82,6 +82,23 @@ def get_binding(source_webspace_id: str | None = None) -> dict[str, Any]:
     return _plain(_service().get_workspace_binding(canonical_source_webspace_id(source_webspace_id)))
 
 
+def context_inspector(
+    source_webspace_id: str | None = None,
+    *,
+    run_ref: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Read the bounded context and development-feedback projection for a Builder host."""
+
+    return _plain(
+        _service().context_inspector(
+            canonical_source_webspace_id(source_webspace_id),
+            run_ref=run_ref,
+            limit=max(1, min(int(limit), 100)),
+        )
+    )
+
+
 def list_builder_hosts() -> list[dict[str, Any]]:
     """List active Builder Webspaces without provisioning Preview topology."""
 
@@ -910,6 +927,7 @@ def invalidate_scenario_caches(scenario_id: str, *, reason: str = "sdk.builder.p
 
 
 __all__ = [
+    "context_inspector",
     "dev_webspace_id",
     "delete_development_skill",
     "dialog_widget_config",
