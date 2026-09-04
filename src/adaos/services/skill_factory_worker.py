@@ -5418,16 +5418,15 @@ Omit the envelope when there is no substantive development feedback. It is advis
 5. Keep `scenario.yaml` and `webui.json` valid and do not publish or activate a release.
 6. Run relevant bounded checks and fix failures caused by your changes.
 7. Do not edit anything outside these task paths: {allowed_paths}.
-8. Do not edit `.builder_previous_automation`; it is immutable input.""" if workflow_transition == "return_to_prototype" else """1. Inspect only admitted source needed for the change; do not rediscover packet context.{accepted_prototype_instruction}
-2. Implement the approved behavior through public AdaOS SDK/API contracts and the repository's existing manifest, handler, UI, and test conventions.
-3. Edit only these authorized paths: {allowed_paths}. Preserve unrelated behavior, UTF-8 text, immutable Builder inputs, and manifest `version`/`updated_at`; Forge owns release metadata.
-4. Use `ADAOS_PYTHON` with the commit-bound SDK snapshot exposed by `ADAOS_REPO_ROOT`/`PYTHONPATH`. Do not inspect its parent, the canonical checkout, sibling projects, installed skills, production data, secrets, or undeclared services.
-5. Resolve mutable owner-scoped state through public SDK bindings such as `skill_data_root()` and ContentRef. Keep test/runtime files under `ADAOS_BASE_DIR` or `ADAOS_TASK_RUNTIME_DIR`, never in candidate source.
-6. Keep packaged tests hermetic and capable of failing for a stub. Exercise the real requested boundary with bounded fixtures; the trusted package-shaped test allowance is {generated_test_timeout_seconds} seconds.
-7. Declare every imported dependency and validate the package through the authoritative manifest schema and install-strict validation. Do not add a dependency unless the task requires it.
-8. Do not run generic CLI help or broad discovery commands. Use only targeted source reads and exact validation commands; keep every command bounded. The trusted worker reruns authoritative checks after the turn.
-9. Do not publish, install, activate, or copy the candidate into workspace/runtime; the trusted worker owns finalization and rollback evidence.
-10. Conclude against every governed acceptance point and report any unmet point explicitly."""
+8. Do not edit `.builder_previous_automation`; it is immutable input.""" if workflow_transition == "return_to_prototype" else """1. This is AdaOS project source work, not Codex skill authoring. Do not load generic skill-creator instructions or personal/global skills.
+2. The packet, accepted prototype, companion scaffold, and rule capsules are authoritative; do not rediscover them.{accepted_prototype_instruction}
+3. Use public `adaos.sdk` contracts only. Edit only: {allowed_paths}. Preserve unrelated behavior, UTF-8, immutable inputs, and manifest `version`/`updated_at`; Forge owns release metadata.
+4. Read one exact file or SDK symbol at a time. Commands: at most {command_output_lines} lines and {command_output_bytes} bytes; at most {discovery_lines} source lines inspected before the first edit. Never scan the complete SDK, repository, or task tree; narrow the query.
+5. Use task-scoped MCP at most once for a missing public contract. If unavailable or absent, emit development feedback instead of broad discovery or internal-core imports.
+6. Use `ADAOS_PYTHON` with the commit-bound `ADAOS_REPO_ROOT`/`PYTHONPATH`. Resolve mutable state via admitted bindings such as `skill_data_root()` and ContentRef. Keep runtime files under `ADAOS_BASE_DIR` or `ADAOS_TASK_RUNTIME_DIR`; declare imports, tools, and data routes.
+7. Add focused hermetic regression coverage; test allowance is {generated_test_timeout_seconds} seconds. Do not run tests, validation, status, or diff commands; the trusted worker runs tests and install-strict validation.
+8. Do not publish, install, activate, access external services, or copy to workspace/runtime; the trusted worker owns finalization and rollback evidence. Stop after scoped edits.
+9. Report every acceptance point and any unmet point."""
         required_result = required_result.format(
             target_id=target_id,
             companion=companion,

@@ -4340,6 +4340,13 @@ def test_worker_prompt_compiles_only_relevant_sdk_workflow_and_utf8_rules(
 
     assert "ADAOS_PYTHON" in prompt
     assert "public `adaos.sdk` contracts only" in prompt
+    assert "not Codex skill authoring" in prompt
+    assert "Do not load generic skill-creator instructions" in prompt
+    assert "Never scan the complete SDK, repository, or task tree" in prompt
+    assert "at most 120 lines and 8192 bytes" in prompt
+    assert "at most 400 source lines inspected before the first edit" in prompt
+    assert "Use task-scoped MCP at most once" in prompt
+    assert "Do not run tests, validation, status, or diff commands" in prompt
     assert "every textual `Get-Content`" in prompt
     assert "`-Encoding UTF8`" in prompt
     assert "UTF-8" in prompt
