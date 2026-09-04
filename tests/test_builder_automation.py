@@ -194,6 +194,36 @@ def test_automation_resolves_project_to_its_primary_component(tmp_path, monkeypa
     assert service._project_ref("project", "recipes_app") == ("scenario", "recipes")
 
 
+def test_current_workflow_head_exposes_bounded_change_message_ownership(tmp_path) -> None:
+    service = _service(tmp_path)
+
+    class _Workflow:
+        def describe(self, kind: str, project_id: str):
+            assert (kind, project_id) == ("scenario", "recipes")
+            return {
+                "governed": {"state": "prototype_editing", "generation": 7},
+                "change_set": {
+                    "change_set_id": "builder_change.retry",
+                    "status": "planned",
+                    "source_message_ids": [
+                        "m.bpackage.retry.prototype.request",
+                        "",
+                        *[f"m.extra.{index}" for index in range(40)],
+                    ],
+                },
+            }
+
+    service.workflow_service = _Workflow()
+
+    head = service.current_workflow_head(
+        object_type="scenario",
+        object_id="recipes",
+    )
+
+    assert head["source_message_ids"][0] == "m.bpackage.retry.prototype.request"
+    assert len(head["source_message_ids"]) == 32
+
+
 def test_automation_attaches_created_components_to_project_authority(monkeypatch) -> None:
     from adaos.sdk.developer import compositions
 

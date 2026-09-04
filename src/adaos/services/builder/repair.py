@@ -685,6 +685,148 @@ class BuilderRepairService:
             self._write(state)
             return _clone(repair)
 
+    def link_prototype(
+        self,
+        repair_id: str,
+        *,
+        prototype: Mapping[str, Any],
+        actor: str,
+    ) -> dict[str, Any]:
+        """Attach the bounded Builder prototype stage without persisting its UI payload."""
+
+        actor_token = str(actor or "").strip()
+        if not actor_token:
+            raise ValueError("prototype link requires actor identity")
+        session = prototype.get("session") if isinstance(prototype.get("session"), Mapping) else {}
+        patch = prototype.get("patch") if isinstance(prototype.get("patch"), Mapping) else {}
+        revision = (
+            prototype.get("ui_revision")
+            if isinstance(prototype.get("ui_revision"), Mapping)
+            else {}
+        )
+        llm_job = prototype.get("llm_job") if isinstance(prototype.get("llm_job"), Mapping) else {}
+        pending_jobs = (
+            session.get("pending_llm_jobs")
+            if isinstance(session.get("pending_llm_jobs"), Mapping)
+            else {}
+        )
+        active_jobs = [
+            dict(item)
+            for item in pending_jobs.values()
+            if isinstance(item, Mapping)
+            and str(item.get("status") or "").strip().lower()
+            in {"queued", "submitted", "pending", "running", "in_progress"}
+        ]
+        if not llm_job and active_jobs:
+            llm_job = active_jobs[-1]
+        session_id = str(prototype.get("session_id") or session.get("id") or "").strip()
+        change_id = str(
+            patch.get("change_id")
+            or dict(prototype.get("message_meta") or {}).get("change_id")
+            or session.get("active_change_id")
+            or ""
+        ).strip()
+        revision_id = str(
+            revision.get("revision")
+            or session.get("ui_revision")
+            or patch.get("revision")
+            or ""
+        ).strip()
+        job_id = str(
+            llm_job.get("job_id")
+            or llm_job.get("root_job_id")
+            or llm_job.get("local_job_id")
+            or ""
+        ).strip()
+        status = str(prototype.get("status") or "").strip().lower()
+        if not status:
+            status = "llm_pending" if active_jobs else "prototype_review" if revision_id else "linked"
+        if not session_id and not change_id and not revision_id and not job_id:
+            raise ValueError("prototype link requires a session, Change, revision, or LLM job")
+        link = {
+            "schema": "adaos.builder.repair_prototype_link.v1",
+            "session_id": session_id or None,
+            "change_id": change_id or None,
+            "revision": revision_id or None,
+            "status": status,
+            "llm_job_id": job_id or None,
+            "model_call_expected": bool(job_id)
+            or status in {"llm_pending", "llm_submitting"},
+            "linked_by": actor_token,
+            "linked_at": _now(),
+        }
+        refs: list[dict[str, Any]] = []
+        if change_id:
+            refs.append({"type": "builder_change", "id": change_id})
+        if revision_id:
+            refs.append({"type": "builder_ui_revision", "id": revision_id})
+        if job_id:
+            refs.append({"type": "llm_job", "id": job_id})
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            repair = state["tasks"].get(str(repair_id))
+            if not repair:
+                raise KeyError(repair_id)
+            context = dict(repair.get("context") or {})
+            previous_prototype = (
+                context.get("prototype")
+                if isinstance(context.get("prototype"), Mapping)
+                else {}
+            )
+            if (
+                bool(previous_prototype.get("model_call_expected"))
+                or any(
+                    str(item.get("type") or "").strip() == "llm_job"
+                    for item in repair.get("source_refs") or []
+                    if isinstance(item, Mapping)
+                )
+            ):
+                link["model_call_expected"] = True
+            context["prototype"] = {
+                **dict(previous_prototype),
+                **{key: value for key, value in link.items() if value is not None},
+            }
+            repair["context"] = context
+            repair["source_refs"] = self._merge_refs(repair.get("source_refs") or [], refs)
+            repair["status"] = "in_progress"
+            current = str(
+                repair.get("work_status") or _work_status_for_legacy(repair.get("status"))
+            ).strip()
+            if current in {"planned", "blocked", "failed"}:
+                self._set_work_status_locked(
+                    repair,
+                    "claimed",
+                    actor=actor_token,
+                    reason=(
+                        "prototype_retry"
+                        if current in {"blocked", "failed"}
+                        else "prototype_submission"
+                    ),
+                )
+                current = "claimed"
+            if current == "claimed":
+                self._set_work_status_locked(
+                    repair,
+                    "in_progress",
+                    actor=actor_token,
+                    reason="prototype_review",
+                    evidence_refs=refs,
+                )
+            else:
+                repair["revision"] = int(repair.get("revision") or 1) + 1
+                repair["updated_at"] = _now()
+                self._append_work_timeline(
+                    repair,
+                    event="prototype_linked",
+                    actor=actor_token,
+                    details={"status": status},
+                    evidence_refs=refs,
+                    recorded_at=repair["updated_at"],
+                )
+            self._validate(repair)
+            self._write(state)
+            return _clone(repair)
+
     def list(
         self,
         *,

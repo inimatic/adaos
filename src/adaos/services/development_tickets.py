@@ -1324,6 +1324,188 @@ def _autonomous_repair_qualification(ticket: Mapping[str, Any]) -> dict[str, Any
     return qualification
 
 
+def _builder_package_execution_route(
+    *,
+    target: Mapping[str, Any],
+    target_files: Sequence[str],
+    qualifications: Sequence[Mapping[str, Any]],
+    repair_hints: Mapping[str, Any] | None = None,
+) -> str:
+    """Select the cheapest safe Builder stage for one qualified package."""
+
+    hints = _mapping(repair_hints)
+    declared = _text(hints.get("execution_route"))
+    if declared:
+        return declared
+    routes = {
+        _text(item.get("execution_route"))
+        for item in qualifications
+        if _text(item.get("execution_route"))
+    }
+    object_type = _text(target.get("object_type")).lower().rstrip("s")
+    object_id = _text(target.get("object_id"))
+    normalized_files = [
+        _text(path).replace("\\", "/").strip("/")
+        for path in target_files
+        if _text(path)
+    ]
+    scenario_webui = f"scenarios/{object_id}/webui.json" if object_id else ""
+    prototype_safe = bool(
+        object_type == "scenario"
+        and scenario_webui
+        and normalized_files
+        and set(normalized_files) == {scenario_webui}
+        and not hints.get("structured_edits")
+        and not hints.get("contract_closure")
+        and hints.get("requires_root_mcp") is not True
+        and all(item.get("requires_root_mcp") is not True for item in qualifications)
+    )
+    if prototype_safe:
+        return "prototype_first"
+    if routes == {"structured_edits"}:
+        return "structured_edits"
+    if routes == {"validation_only"}:
+        return "validation_only"
+    return "bounded_patch_agent"
+
+
+def _builder_skill_manager() -> Any:
+    from adaos.adapters.db import SqliteSkillRegistry
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.skill.manager import SkillManager
+
+    ctx = get_ctx()
+    return SkillManager(
+        repo=ctx.skills_repo,
+        registry=SqliteSkillRegistry(ctx.sql),
+        git=ctx.git,
+        paths=ctx.paths,
+        bus=getattr(ctx, "bus", None),
+        caps=ctx.caps,
+        settings=ctx.settings,
+    )
+
+
+def _builder_prototype_meta(
+    *,
+    object_id: str,
+    project_id: str,
+    package_id: str,
+    repair_id: str,
+    ticket_ids: Sequence[str],
+    webspace_id: str,
+    conversation_id: str,
+) -> dict[str, Any]:
+    topic_id = f"prompt-project:scenario:{object_id}"
+    return {
+        "action_source": "api_tool_call",
+        "request_origin_id": "development_tickets",
+        "request_origin_label": "Dev Tickets",
+        "message_id": f"m.{package_id}.prototype.request",
+        "conversation_id": conversation_id,
+        "webspace_id": webspace_id,
+        "source_webspace_id": webspace_id,
+        "thread_id": topic_id,
+        "topic_id": topic_id,
+        "force_builder_project_topic": True,
+        "builder_topic": {
+            "schema": "adaos.conversation.topic_ref.v1",
+            "thread_id": topic_id,
+            "topic_id": topic_id,
+            "topic_kind": "builder_scenario",
+            "scenario_id": object_id,
+            "project_id": project_id or object_id,
+            "webspace_id": webspace_id,
+            "source_webspace_id": webspace_id,
+        },
+        "development_ticket_ids": list(ticket_ids),
+        "builder_package_id": package_id,
+        "builder_repair_id": repair_id,
+    }
+
+
+def _default_builder_prototype_submitter(
+    *,
+    instruction: str,
+    object_id: str,
+    project_id: str,
+    package_id: str,
+    repair_id: str,
+    ticket_ids: Sequence[str],
+    webspace_id: str,
+    conversation_id: str,
+) -> Mapping[str, Any]:
+    meta = _builder_prototype_meta(
+        object_id=object_id,
+        project_id=project_id,
+        package_id=package_id,
+        repair_id=repair_id,
+        ticket_ids=ticket_ids,
+        webspace_id=webspace_id,
+        conversation_id=conversation_id,
+    )
+    return _builder_skill_manager().run_tool(
+        "builder_skill",
+        "update_current_scenario",
+        {
+            "instruction": instruction,
+            "scenario_id": object_id,
+            "webspace_id": webspace_id,
+            "auto_apply": True,
+            "conversation_context": {
+                "schema": "adaos.context.packet.v1",
+                "conversation_id": conversation_id,
+                "thread_id": meta["thread_id"],
+                "topic_id": meta["topic_id"],
+                "messages": [],
+                "segments": [],
+                "memory": [],
+                "diagnostics": {
+                    "fallbacks": [
+                        *(f"development_ticket:{ticket_id}" for ticket_id in ticket_ids),
+                        f"builder_package:{package_id}",
+                        f"builder_repair:{repair_id}",
+                    ]
+                },
+            },
+            "_meta": meta,
+        },
+        timeout=120,
+    )
+
+
+def _default_builder_prototype_status_reader(
+    *,
+    session_id: str,
+    object_id: str,
+    project_id: str,
+    package_id: str,
+    repair_id: str,
+    ticket_ids: Sequence[str],
+    webspace_id: str,
+    conversation_id: str,
+) -> Mapping[str, Any]:
+    meta = _builder_prototype_meta(
+        object_id=object_id,
+        project_id=project_id,
+        package_id=package_id,
+        repair_id=repair_id,
+        ticket_ids=ticket_ids,
+        webspace_id=webspace_id,
+        conversation_id=conversation_id,
+    )
+    return _builder_skill_manager().run_tool(
+        "builder_skill",
+        "get_session",
+        {
+            "session_id": session_id,
+            "webspace_id": webspace_id,
+            "_meta": meta,
+        },
+        timeout=30,
+    )
+
+
 def _autonomous_repair_budget(
     qualification: Mapping[str, Any],
     requested: Mapping[str, Any] | None,
@@ -2906,6 +3088,19 @@ class DevelopmentTicketService:
             }
         if package_structured_edits:
             repair_hints["structured_edits"] = package_structured_edits
+        execution_route = _builder_package_execution_route(
+            target=target,
+            target_files=target_files,
+            qualifications=qualifications,
+            repair_hints=repair_hints,
+        )
+        repair_hints["execution_route"] = execution_route
+        repair_hints["model_call_expected"] = execution_route not in {
+            "structured_edits",
+            "validation_only",
+        }
+        if execution_route == "prototype_first":
+            repair_hints["prototype_model_policy"] = "deterministic_first"
         source_refs = [
             {"type": "dev_ticket", "id": _text(ticket.get("ticket_id"))}
             for ticket in tickets
@@ -2978,6 +3173,8 @@ class DevelopmentTicketService:
         source_strategy: str | None = None,
         agent_profile: Mapping[str, Any] | None = None,
         mcp: Mapping[str, Any] | None = None,
+        prototype_submitter: Callable[..., Mapping[str, Any]] | None = None,
+        prototype_status_reader: Callable[..., Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
         service = repair_service or BuilderRepairService(state_dir=self.state_dir)
         matches = service.list(package_id=_text(package_id))
@@ -3065,13 +3262,146 @@ class DevelopmentTicketService:
         budget = _mapping(package.get("execution_budget")) or dict(DEFAULT_AUTONOMOUS_REPAIR_BUDGET)
         budget.setdefault("token_budget_metric", "fresh_plus_output")
         repair_hints = _mapping(package.get("repair_hints"))
+        qualifications = [_autonomous_repair_qualification(ticket) for ticket in ticket_list]
+        execution_route = _builder_package_execution_route(
+            target=target,
+            target_files=repair_hints.get("target_files") or [],
+            qualifications=qualifications,
+            repair_hints=repair_hints,
+        )
+        workflow_head_method = getattr(
+            automation_service,
+            "current_workflow_head",
+            None,
+        )
+        workflow_head = (
+            _mapping(
+                workflow_head_method(
+                    object_type=target["object_type"],
+                    object_id=target["object_id"],
+                )
+            )
+            if callable(workflow_head_method)
+            else {}
+        )
+        workflow_state = _text(workflow_head.get("state"))
+        repair_id = _text(repair.get("repair_id"))
+        prototype_link = _mapping(_mapping(repair.get("context")).get("prototype"))
+        prototype_message_id = f"m.{package_id}.prototype.request"
+        workflow_source_message_ids = {
+            _text(item)
+            for item in workflow_head.get("source_message_ids") or []
+            if _text(item)
+        }
+        resumable_package_prototype = bool(
+            execution_route == "prototype_first"
+            and workflow_state == "prototype_editing"
+            and not prototype_link
+            and prototype_message_id in workflow_source_message_ids
+        )
+        prototype_kwargs = {
+            "object_id": target["object_id"],
+            "project_id": _text(project_identity.get("project_id")) or target["object_id"],
+            "package_id": _text(package_id),
+            "repair_id": repair_id,
+            "ticket_ids": ticket_ids,
+            "webspace_id": _text(webspace_id) or "desktop",
+            "conversation_id": _text(conversation_id)
+            or f"dev-ticket-package:{package_id}",
+        }
+        if execution_route == "prototype_first" and workflow_state != "automation_ready":
+            if workflow_state == "prototype_editing" and prototype_link:
+                reader = prototype_status_reader or _default_builder_prototype_status_reader
+                prototype_session_id = _text(prototype_link.get("session_id"))
+                if prototype_session_id:
+                    try:
+                        observed = reader(
+                            session_id=prototype_session_id,
+                            **prototype_kwargs,
+                        )
+                        if isinstance(observed, Mapping) and observed.get("ok") is not False:
+                            repair = service.link_prototype(
+                                repair_id,
+                                prototype=observed,
+                                actor=_text(actor) or "builder.prototype",
+                            )
+                            prototype_link = _mapping(
+                                _mapping(repair.get("context")).get("prototype")
+                            )
+                            ticket_list = [
+                                self._link_builder_prototype(
+                                    ticket_id,
+                                    repair_id=repair_id,
+                                    prototype=prototype_link,
+                                    actor=_text(actor) or "builder.prototype",
+                                )
+                                for ticket_id in ticket_ids
+                            ]
+                    except Exception:
+                        _log.debug(
+                            "failed to refresh Builder prototype package=%s repair=%s",
+                            package_id,
+                            repair_id,
+                            exc_info=True,
+                        )
+                prototype_status = _text(prototype_link.get("status"))
+                pending = prototype_status in {
+                    "llm_pending",
+                    "llm_submitting",
+                    "queued",
+                    "running",
+                }
+                return {
+                    "ok": True,
+                    "started": False,
+                    "stage": "prototype",
+                    "status": (
+                        "prototype_pending" if pending else "prototype_acceptance_required"
+                    ),
+                    "package_id": _text(package_id),
+                    "repair": repair,
+                    "tickets": ticket_list,
+                    "prototype": prototype_link,
+                    "automation": None,
+                    "development_source": development_source,
+                    "materialization": materialization,
+                    "rollup": service.package_rollup(_text(package_id)),
+                }
+            if workflow_state and workflow_state not in {
+                "ready",
+                "published",
+                "cancelled",
+                "superseded",
+            } and not resumable_package_prototype:
+                return {
+                    "ok": True,
+                    "started": False,
+                    "stage": "prototype",
+                    "status": "builder_workflow_busy",
+                    "reason": f"prototype cannot start while Builder workflow is {workflow_state}",
+                    "package_id": _text(package_id),
+                    "repair": repair,
+                    "tickets": ticket_list,
+                    "prototype": prototype_link or None,
+                    "automation": None,
+                    "workflow_head": workflow_head,
+                    "development_source": development_source,
+                    "materialization": materialization,
+                    "rollup": service.package_rollup(_text(package_id)),
+                }
         source_preconditions = _validate_repair_source_preconditions(
             repair_hints,
             development_source=development_source,
             target=target,
         )
+        if execution_route == "prototype_first" and workflow_state == "automation_ready":
+            source_preconditions = {
+                "schema": "adaos.builder.source_precondition_validation.v1",
+                "status": "superseded_by_accepted_prototype",
+                "ok": True,
+                "checks": [],
+            }
         if source_preconditions.get("ok") is not True:
-            repair_id = _text(repair.get("repair_id"))
             service.transition_work_item(
                 repair_id,
                 status="blocked",
@@ -3109,6 +3439,83 @@ class DevelopmentTicketService:
                 "materialization": materialization,
                 "rollup": service.package_rollup(_text(package_id)),
             }
+        if execution_route == "prototype_first" and workflow_state != "automation_ready":
+            submit = prototype_submitter or _default_builder_prototype_submitter
+            try:
+                submitted = submit(
+                    instruction="\n".join(
+                        _text(ticket.get("summary")) for ticket in ticket_list
+                    ),
+                    **prototype_kwargs,
+                )
+                if not isinstance(submitted, Mapping) or submitted.get("ok") is not True:
+                    detail = (
+                        _text(submitted.get("detail") or submitted.get("error"))
+                        if isinstance(submitted, Mapping)
+                        else "prototype submitter returned a non-object result"
+                    )
+                    raise RuntimeError(detail or "Builder prototype submission failed")
+                linked_repair = service.link_prototype(
+                    repair_id,
+                    prototype=submitted,
+                    actor=_text(actor) or "builder.prototype",
+                )
+                prototype_link = _mapping(
+                    _mapping(linked_repair.get("context")).get("prototype")
+                )
+                ticket_list = [
+                    self._link_builder_prototype(
+                        ticket_id,
+                        repair_id=repair_id,
+                        prototype=prototype_link,
+                        actor=_text(actor) or "builder.prototype",
+                    )
+                    for ticket_id in ticket_ids
+                ]
+            except Exception as exc:
+                try:
+                    service.transition_work_item(
+                        repair_id,
+                        status="failed",
+                        actor=_text(actor) or "builder.prototype",
+                        reason=f"prototype_start:{type(exc).__name__}",
+                    )
+                except Exception:
+                    _log.exception(
+                        "failed to mark Builder prototype launch failed package=%s repair=%s",
+                        package_id,
+                        repair_id,
+                    )
+                for ticket_id in ticket_ids:
+                    self._release_builder_start_failure(
+                        ticket_id,
+                        repair_id=repair_id,
+                        actor=_text(actor) or "builder.prototype",
+                        error_type=type(exc).__name__,
+                    )
+                raise
+            prototype = _mapping(_mapping(linked_repair.get("context")).get("prototype"))
+            pending = _text(prototype.get("status")) in {
+                "llm_pending",
+                "llm_submitting",
+                "queued",
+                "running",
+            }
+            return {
+                "ok": True,
+                "started": True,
+                "stage": "prototype",
+                "status": "prototype_pending" if pending else "prototype_acceptance_required",
+                "package_id": _text(package_id),
+                "repair": linked_repair,
+                "tickets": ticket_list,
+                "prototype": prototype,
+                "automation": None,
+                "development_source": development_source,
+                "materialization": materialization,
+                "source_preconditions": source_preconditions,
+                "rollup": service.package_rollup(_text(package_id)),
+            }
         brief = _autonomous_package_brief(ticket_list, repair, target=target)
         links = {
             "development_ticket_id": ticket_ids[0],
@@ -3130,22 +3537,6 @@ class DevelopmentTicketService:
         )
         current_session = _automation_session(current)
         current_links = _mapping(current_session.get("links"))
-        workflow_head_method = getattr(
-            automation_service,
-            "current_workflow_head",
-            None,
-        )
-        workflow_head = (
-            _mapping(
-                workflow_head_method(
-                    object_type=target["object_type"],
-                    object_id=target["object_id"],
-                )
-            )
-            if callable(workflow_head_method)
-            else {}
-        )
-        workflow_state = _text(workflow_head.get("state"))
         followup_state_ready = not workflow_state or workflow_state in {
             "verification",
             "trial_ready",
@@ -6858,6 +7249,124 @@ class DevelopmentTicketService:
                     }
                     signal["updated_at"] = now
                     self._validate_signal(signal)
+            self._validate_ticket(ticket)
+            self._write(state)
+            return _normalized_ticket(ticket)
+
+    def _link_builder_prototype(
+        self,
+        ticket_id: str,
+        *,
+        repair_id: str,
+        prototype: Mapping[str, Any],
+        actor: str,
+    ) -> dict[str, Any]:
+        prototype_ref = {
+            key: value
+            for key, value in {
+                "schema": "adaos.dev_ticket.builder_prototype_ref.v1",
+                "session_id": _text(prototype.get("session_id")) or None,
+                "change_id": _text(prototype.get("change_id")) or None,
+                "revision": _text(prototype.get("revision")) or None,
+                "status": _text(prototype.get("status")) or "linked",
+                "llm_job_id": _text(prototype.get("llm_job_id")) or None,
+                "model_call_expected": bool(
+                    prototype.get("model_call_expected")
+                    or _text(prototype.get("llm_job_id"))
+                ),
+            }.items()
+            if value is not None
+        }
+        if not any(
+            prototype_ref.get(key)
+            for key in ("session_id", "change_id", "revision", "llm_job_id")
+        ):
+            raise ValueError("builder prototype link requires correlation identity")
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                raise KeyError(ticket_id)
+            now = _now()
+            refs = [
+                dict(ref)
+                for ref in ticket.get("builder_refs") or []
+                if isinstance(ref, Mapping)
+            ]
+            matched = False
+            changed = False
+            for index, ref in enumerate(refs):
+                if _text(ref.get("repair_id")) != _text(repair_id):
+                    continue
+                previous = _mapping(ref.get("prototype"))
+                updated = {
+                    **ref,
+                    "status": "in_progress",
+                    "work_status": "in_progress",
+                    "prototype_status": prototype_ref["status"],
+                    "prototype": prototype_ref,
+                    "updated_at": now,
+                }
+                updated.pop("error_type", None)
+                if _text(updated.get("automation_status")) == "start_failed":
+                    updated.pop("automation_status", None)
+                refs[index] = updated
+                changed = previous != prototype_ref or _text(ref.get("status")) != "in_progress"
+                matched = True
+                break
+            if not matched:
+                refs.append(
+                    {
+                        "type": "builder_repair_task",
+                        "repair_id": _text(repair_id),
+                        "mode": "prototype",
+                        "status": "in_progress",
+                        "work_status": "in_progress",
+                        "prototype_status": prototype_ref["status"],
+                        "prototype": prototype_ref,
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                )
+                changed = True
+            ticket["builder_refs"] = refs[-100:]
+            if _text(ticket.get("status")) not in {
+                "resolved",
+                "verified",
+                "closed",
+                *TERMINAL_TICKET_STATES,
+            }:
+                changed = changed or _text(ticket.get("status")) != "in_builder"
+                ticket["status"] = "in_builder"
+            if changed:
+                self._append_history(
+                    ticket,
+                    {
+                        "kind": "builder_prototype_linked",
+                        "repair_id": _text(repair_id),
+                        "prototype_status": prototype_ref["status"],
+                        "prototype_revision": prototype_ref.get("revision"),
+                        "llm_job_id": prototype_ref.get("llm_job_id"),
+                        "actor": _text(actor) or "builder.prototype",
+                        "recorded_at": now,
+                    },
+                )
+            ticket["updated_at"] = now
+            for signal_id in ticket.get("signal_ids") or []:
+                signal = state["signals"].get(signal_id)
+                if not signal:
+                    continue
+                signal["status"] = "repair_created"
+                signal["builder_ref"] = {
+                    **_mapping(signal.get("builder_ref")),
+                    "repair_id": _text(repair_id),
+                    "handoff_mode": "prototype",
+                    "prototype_status": prototype_ref["status"],
+                    "prototype_revision": prototype_ref.get("revision"),
+                    "llm_job_id": prototype_ref.get("llm_job_id"),
+                }
+                signal["updated_at"] = now
+                self._validate_signal(signal)
             self._validate_ticket(ticket)
             self._write(state)
             return _normalized_ticket(ticket)

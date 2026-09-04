@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -16,6 +17,55 @@ from adaos.services.development_tickets import (
     development_source_options,
 )
 from adaos.services.skill.activation import stream_receiver_event_admission
+
+
+def test_default_builder_prototype_submitter_uses_shared_conversation_packet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class _Manager:
+        def run_tool(self, skill_id, tool_name, params, *, timeout):
+            calls.append(
+                {
+                    "skill_id": skill_id,
+                    "tool_name": tool_name,
+                    "params": params,
+                    "timeout": timeout,
+                }
+            )
+            return {"ok": True, "status": "prototype_review"}
+
+    monkeypatch.setattr(
+        development_tickets_module,
+        "_builder_skill_manager",
+        lambda: _Manager(),
+    )
+
+    result = development_tickets_module._default_builder_prototype_submitter(
+        instruction="Rename Board to Dashboard.",
+        object_id="flowboard",
+        project_id="flowboard",
+        package_id="bpackage.test",
+        repair_id="repair.test",
+        ticket_ids=["dticket.test"],
+        webspace_id="desktop-dev",
+        conversation_id="conversation.test",
+    )
+
+    assert result["ok"] is True
+    params = calls[0]["params"]
+    assert isinstance(params, dict)
+    packet = params["conversation_context"]
+    assert packet["schema"] == "adaos.context.packet.v1"
+    assert packet["conversation_id"] == "conversation.test"
+    assert packet["messages"] == []
+    assert packet["diagnostics"]["fallbacks"] == [
+        "development_ticket:dticket.test",
+        "builder_package:bpackage.test",
+        "builder_repair:repair.test",
+    ]
+    assert params["instruction"] == "Rename Board to Dashboard."
 
 
 def test_autonomous_repair_brief_excludes_historical_builder_noise() -> None:
@@ -308,6 +358,23 @@ class _FakePublishedBuilderAutomation(_FakeFollowupBuilderAutomation):
             "state": "published",
             "change_set_id": "CH-published",
             "change_set_status": "published",
+        }
+
+
+class _FakePrototypeFirstBuilderAutomation(_FakeBuilderAutomation):
+    def __init__(self) -> None:
+        super().__init__()
+        self.workflow_state = "published"
+        self.workflow_source_message_ids: list[str] = []
+
+    def current_workflow_head(self, *, object_type: str, object_id: str):
+        return {
+            "schema": "adaos.builder.workflow_head.v1",
+            "object_type": object_type,
+            "object_id": object_id,
+            "state": self.workflow_state,
+            "change_set_id": "CH-prototype-first",
+            "source_message_ids": list(self.workflow_source_message_ids),
         }
 
 
@@ -1459,6 +1526,181 @@ def test_builder_package_uses_one_work_item_budget_and_automation(tmp_path: Path
         for ticket_id in ticket_ids
     )
     assert started["rollup"]["total_tokens"] == 150
+
+
+def test_scenario_webui_package_requires_prototype_acceptance_before_automation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario_id = "flowboard"
+    source = tmp_path / "dev" / "scenarios" / scenario_id
+    source.mkdir(parents=True)
+    webui = source / "webui.json"
+    original = b'{"schema":"adaos.webui.v1","title":"Board"}'
+    webui.write_bytes(original)
+    monkeypatch.setattr(
+        "adaos.services.development_tickets.development_source_options",
+        lambda _scope: {
+            "status": "source_available",
+            "source": "dev",
+            "target_type": "scenario",
+            "target_id": scenario_id,
+            "project_id": "flowboard_project",
+            "dev_source_path": str(source),
+        },
+    )
+    service = DevelopmentTicketService(state_dir=tmp_path / "state")
+    repair_service = BuilderRepairService(state_dir=tmp_path / "state")
+    automation = _FakePrototypeFirstBuilderAutomation()
+    summary = "Rename the Board heading to Board view. Change nothing else."
+    target_file = f"scenarios/{scenario_id}/webui.json"
+    signal = service.capture_signal(
+        kind="development_request",
+        summary=summary,
+        target_scope={
+            "type": "scenario",
+            "id": scenario_id,
+            "source": "dev",
+            "project_ref": "project:flowboard_project",
+            "project_id": "flowboard_project",
+        },
+        source="client_feedback",
+        owner_area="scenario",
+        component_ref=f"scenario:{scenario_id}",
+        metadata={
+            "builder_repair": {
+                "profile": "surgical_ui",
+                "concepts": ["ui"],
+                "target_files": [target_file],
+                "target_refs": ["page:board"],
+                "acceptance_checks": ["The heading is Board view."],
+                "max_changed_files": 1,
+                "requires_root_mcp": False,
+                "source_preconditions": [
+                    {
+                        "path": target_file,
+                        "sha256": "sha256:" + hashlib.sha256(original).hexdigest(),
+                        "size": len(original),
+                    }
+                ],
+            }
+        },
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        status="ready_for_builder",
+        owner_area="scenario",
+        component_ref=f"scenario:{scenario_id}",
+    )["ticket"]
+    planned = service.plan_builder_package(
+        [ticket["ticket_id"]],
+        actor="builder:qualifier",
+        repair_service=repair_service,
+    )
+    prototype_calls: list[dict] = []
+
+    def submit_prototype(**kwargs):
+        prototype_calls.append(dict(kwargs))
+        automation.workflow_state = "prototype_editing"
+        webui.write_bytes(b'{"schema":"adaos.webui.v1","title":"Board view"}')
+        return {
+            "ok": True,
+            "session_id": "builder.session.flowboard",
+            "patch": {"change_id": "builder_change.flowboard"},
+            "ui_revision": {"revision": "010"},
+        }
+
+    def read_prototype(**kwargs):
+        assert kwargs["session_id"] == "builder.session.flowboard"
+        return {
+            "ok": True,
+            "session": {
+                "id": "builder.session.flowboard",
+                "active_change_id": "builder_change.flowboard",
+                "ui_revision": "010",
+                "pending_llm_jobs": {},
+            },
+        }
+
+    assert planned["repair_hints"]["execution_route"] == "prototype_first"
+    assert planned["repair_hints"]["prototype_model_policy"] == "deterministic_first"
+
+    automation.workflow_state = "prototype_editing"
+    busy = service.start_autonomous_package(
+        planned["package_id"],
+        actor="builder:automation",
+        repair_service=repair_service,
+        automation_service=automation,
+        prototype_submitter=submit_prototype,
+        prototype_status_reader=read_prototype,
+    )
+    assert busy["status"] == "builder_workflow_busy"
+    assert prototype_calls == []
+
+    automation.workflow_source_message_ids = [
+        f"m.{planned['package_id']}.prototype.request"
+    ]
+    repair_service.transition_work_item(
+        planned["repair"]["repair_id"],
+        status="failed",
+        actor="builder:prototype",
+        reason="prototype_start:RuntimeError",
+    )
+
+    prototype_started = service.start_autonomous_package(
+        planned["package_id"],
+        actor="builder:automation",
+        repair_service=repair_service,
+        automation_service=automation,
+        prototype_submitter=submit_prototype,
+        prototype_status_reader=read_prototype,
+    )
+
+    assert prototype_started["started"] is True
+    assert prototype_started["stage"] == "prototype"
+    assert prototype_started["status"] == "prototype_acceptance_required"
+    assert prototype_calls[0]["instruction"] == summary
+    assert prototype_calls[0]["ticket_ids"] == [ticket["ticket_id"]]
+    assert automation.calls == []
+    assert prototype_started["repair"]["work_status"] == "in_progress"
+    assert prototype_started["repair"]["context"]["prototype"]["revision"] == "010"
+    assert prototype_started["tickets"][0]["status"] == "in_builder"
+    prototype_ref = prototype_started["tickets"][0]["builder_refs"][0]
+    assert prototype_ref["prototype_status"] == "prototype_review"
+    assert prototype_ref["prototype"]["revision"] == "010"
+
+    waiting = service.start_autonomous_package(
+        planned["package_id"],
+        actor="builder:automation",
+        repair_service=repair_service,
+        automation_service=automation,
+        prototype_submitter=submit_prototype,
+        prototype_status_reader=read_prototype,
+    )
+
+    assert waiting["started"] is False
+    assert waiting["status"] == "prototype_acceptance_required"
+    assert len(prototype_calls) == 1
+    assert automation.calls == []
+    assert waiting["tickets"][0]["status"] == "in_builder"
+
+    automation.workflow_state = "automation_ready"
+    automated = service.start_autonomous_package(
+        planned["package_id"],
+        actor="builder:automation",
+        repair_service=repair_service,
+        automation_service=automation,
+        prototype_submitter=submit_prototype,
+        prototype_status_reader=read_prototype,
+    )
+
+    assert automated["started"] is True
+    assert len(prototype_calls) == 1
+    assert len(automation.calls) == 1
+    assert automation.calls[0]["links"]["source_precondition_validation"]["status"] == (
+        "superseded_by_accepted_prototype"
+    )
 
 
 def test_builder_package_preserves_all_structured_edits_for_zero_model_route(

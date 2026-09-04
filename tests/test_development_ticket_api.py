@@ -1256,6 +1256,23 @@ def test_development_ticket_list_summary_projection_omits_heavy_fields(tmp_path:
     assert len(response.content) < 2_000
 
 
+def test_builder_prototype_projection_recovers_model_call_fact_from_job_id() -> None:
+    projected = tickets_api._builder_prototype_context(
+        {
+            "context": {
+                "prototype": {
+                    "schema": "adaos.builder.repair_prototype_link.v1",
+                    "llm_job_id": "llm.prototype",
+                    "model_call_expected": False,
+                }
+            }
+        }
+    )
+
+    assert projected["llm_job_id"] == "llm.prototype"
+    assert projected["model_call_expected"] is True
+
+
 def test_development_ticket_api_delegates_trial_decision_to_scoped_builder_target(tmp_path: Path) -> None:
     service = DevelopmentTicketService(state_dir=tmp_path)
     automation = _FakeAutomationService()

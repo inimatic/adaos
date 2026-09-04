@@ -202,6 +202,73 @@ def test_builder_work_item_can_fail_during_launch_preflight(tmp_path: Path) -> N
         "to": "failed",
         "reason": "automation_start:ValueError",
     }
+
+
+def test_builder_prototype_retry_reclaims_failed_work_item(tmp_path: Path) -> None:
+    service = BuilderRepairService(state_dir=tmp_path)
+    task = service.report(
+        project_id="flowboard",
+        signal_type="other",
+        summary="Rename a board title",
+        context={"package_id": "bpackage.retry"},
+    )["task"]
+    service.transition_work_item(
+        task["repair_id"],
+        status="failed",
+        actor="builder:prototype",
+        reason="prototype_start:RuntimeError",
+    )
+
+    linked = service.link_prototype(
+        task["repair_id"],
+        prototype={
+            "ok": True,
+            "session_id": "session.flowboard",
+            "ui_revision": {"revision": "010"},
+            "status": "prototype_review",
+        },
+        actor="builder:prototype",
+    )
+
+    assert linked["status"] == "in_progress"
+    assert linked["work_status"] == "in_progress"
+    assert linked["context"]["prototype"]["model_call_expected"] is False
+    transitions = [
+        entry["details"]
+        for entry in linked["timeline"]
+        if entry["event"] == "status_changed"
+    ]
+    assert transitions[-2]["from"] == "failed"
+    assert transitions[-2]["to"] == "claimed"
+    assert transitions[-2]["reason"] == "prototype_retry"
+    assert transitions[-1]["to"] == "in_progress"
+
+    refreshed = service.link_prototype(
+        task["repair_id"],
+        prototype={
+            "ok": True,
+            "session_id": "session.flowboard",
+            "ui_revision": {"revision": "011"},
+            "llm_job": {"job_id": "llm.flowboard"},
+            "status": "prototype_review",
+        },
+        actor="builder:prototype",
+    )
+    assert refreshed["context"]["prototype"]["model_call_expected"] is True
+
+    polled = service.link_prototype(
+        task["repair_id"],
+        prototype={
+            "ok": True,
+            "session_id": "session.flowboard",
+            "ui_revision": {"revision": "011"},
+            "status": "prototype_review",
+        },
+        actor="builder:prototype",
+    )
+    assert polled["context"]["prototype"]["model_call_expected"] is True
+
+
 def test_builder_work_item_keeps_user_visible_trial_receipt(tmp_path: Path) -> None:
     service = BuilderRepairService(state_dir=tmp_path)
     task = service.report(

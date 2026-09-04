@@ -540,6 +540,74 @@ def test_workspace_binding_rejects_legacy_project_selection(tmp_path: Path) -> N
         service.get_workspace_binding("desktop")
 
 
+def test_explicit_project_selection_replaces_legacy_binding(tmp_path: Path) -> None:
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state")
+    binding_path = service.binding_path("desktop")
+    binding_path.parent.mkdir(parents=True, exist_ok=True)
+    binding_path.write_text(
+        json.dumps(
+            {
+                "source_webspace_id": "desktop",
+                "runtime_scenario_id": "kanban_primary",
+                "selection": {
+                    "object_type": "project",
+                    "object_id": "kanban",
+                    "title": "Legacy Kanban",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    binding = service.set_selected_project(
+        source_webspace_id="desktop",
+        object_type="project",
+        object_id="flowboard",
+        title="Flowboard",
+    )
+
+    assert binding["selection"] == {
+        "schema": "adaos.builder.project_selection.v2",
+        "object_type": "project",
+        "object_id": "flowboard",
+        "ref": "project:flowboard",
+        "title": "Flowboard",
+        "description": "",
+        "context_topic_id": "prompt-project:project:flowboard",
+        "context_thread_id": "prompt-project:project:flowboard",
+    }
+    assert binding["preview_target"] is None
+
+
+def test_explicit_runtime_selection_replaces_legacy_binding(tmp_path: Path) -> None:
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state")
+    binding_path = service.binding_path("desktop")
+    binding_path.parent.mkdir(parents=True, exist_ok=True)
+    binding_path.write_text(
+        json.dumps(
+            {
+                "source_webspace_id": "desktop",
+                "runtime_scenario_id": "legacy",
+                "selection": {
+                    "object_type": "scenario",
+                    "object_id": "legacy",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    binding = service.set_active_draft(
+        source_webspace_id="desktop",
+        active_draft_id=None,
+        runtime_scenario_id="flowboard",
+        persist_projection=False,
+    )
+
+    assert binding["selection"]["schema"] == "adaos.builder.project_selection.v2"
+    assert binding["selection"]["object_id"] == "flowboard"
+
+
 def test_changing_runtime_project_clears_an_explicit_preview_from_the_previous_project(tmp_path: Path) -> None:
     service = BuilderWorkbenchService(state_dir=tmp_path / "state")
     service.set_active_draft(

@@ -1180,6 +1180,11 @@ class BuilderAutomationService:
             if isinstance(workflow.get("change_set"), Mapping)
             else {}
         )
+        source_message_ids = [
+            str(item).strip()
+            for item in change_set.get("source_message_ids") or []
+            if str(item).strip()
+        ][:32]
         return {
             "schema": "adaos.builder.workflow_head.v1",
             "object_type": kind,
@@ -1190,6 +1195,7 @@ class BuilderAutomationService:
             or None,
             "change_set_status": str(change_set.get("status") or "").strip()
             or None,
+            "source_message_ids": source_message_ids,
         }
 
     def _compile_iteration_context(

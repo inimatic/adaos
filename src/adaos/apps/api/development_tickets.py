@@ -457,6 +457,29 @@ def _builder_automation_context(ref: Mapping[str, Any], task: Mapping[str, Any])
     return dict(automation) if isinstance(automation, Mapping) else {}
 
 
+def _builder_prototype_context(task: Mapping[str, Any]) -> dict[str, Any]:
+    context = task.get("context") if isinstance(task.get("context"), Mapping) else {}
+    prototype = context.get("prototype") if isinstance(context.get("prototype"), Mapping) else {}
+    projected = {
+        key: prototype.get(key)
+        for key in (
+            "schema",
+            "session_id",
+            "change_id",
+            "revision",
+            "status",
+            "llm_job_id",
+            "model_call_expected",
+            "linked_by",
+            "linked_at",
+        )
+        if prototype.get(key) not in (None, "")
+    }
+    if projected.get("llm_job_id"):
+        projected["model_call_expected"] = True
+    return projected
+
+
 def _builder_attempt_is_current(ref: Mapping[str, Any], task: Mapping[str, Any]) -> bool:
     ref_task_id = str(ref.get("automation_task_id") or ref.get("task_id") or "").strip()
     context = task.get("context") if isinstance(task.get("context"), Mapping) else {}
@@ -718,6 +741,8 @@ def _builder_stream_entry(item: Mapping[str, Any]) -> dict[str, Any]:
             "repair_id",
             "automation_task_id",
             "automation_status",
+            "prototype_status",
+            "prototype_revision",
             "current_attempt",
             "repair_current_attempt",
             "human_manageable",
@@ -813,6 +838,7 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
                 )
             )
         automation = _builder_automation_context(ref, task)
+        prototype = _builder_prototype_context(task)
         repair_current_attempt = _builder_attempt_is_current(ref, task)
         current_attempt = repair_current_attempt and repair_id == latest_repair_id
         has_automation_attempt = bool(
@@ -853,12 +879,15 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
                 else {}
             ),
             "automation": automation,
+            "prototype": prototype,
             # Trial belongs to the user ticket/release candidate, not to each
             # historical Builder attempt. Keep it once at work-stream level.
             "trial": {},
             "automation_session_id": automation.get("session_id") or ref.get("automation_session_id"),
             "automation_task_id": automation.get("task_id") or ref.get("automation_task_id"),
             "automation_status": automation.get("status") or ref.get("automation_status"),
+            "prototype_status": prototype.get("status"),
+            "prototype_revision": prototype.get("revision"),
             "token_accounting": _builder_token_accounting(ref, task),
             "timeline_summary": _compact_builder_timeline(
                 ref.get("timeline")

@@ -1168,12 +1168,21 @@ class BuilderWorkbenchService:
         dev_id = relation.target_webspace_id
         scenario_token = str(scenario_id or existing.get("scenario_id") or BUILDER_WORKBENCH_SCENARIO_ID).strip()
         active_draft_token = str(active_draft_id or "").strip() or None
-        previous_selection = (
-            _require_project_selection_v2(existing.get("selection"))
+        explicit_runtime_id = str(runtime_scenario_id or "").strip()
+        raw_selection = (
+            existing.get("selection")
             if isinstance(existing.get("selection"), Mapping)
             else None
         )
-        explicit_runtime_id = str(runtime_scenario_id or "").strip()
+        previous_selection = (
+            None
+            if raw_selection
+            and raw_selection.get("schema") != "adaos.builder.project_selection.v2"
+            and explicit_runtime_id
+            else _require_project_selection_v2(raw_selection)
+            if raw_selection
+            else None
+        )
         if explicit_runtime_id and (
             not previous_selection
             or str(previous_selection.get("object_type") or "") == "scenario"
@@ -1230,6 +1239,26 @@ class BuilderWorkbenchService:
         persist_projection: bool = False,
     ) -> dict[str, Any]:
         source_id = self.resolve_source_webspace_id(source_webspace_id)
+        raw_binding = _read_json(self.binding_path(source_id))
+        raw_selection = (
+            raw_binding.get("selection")
+            if isinstance(raw_binding.get("selection"), Mapping)
+            else None
+        )
+        migrated = bool(
+            raw_selection
+            and raw_selection.get("schema") != "adaos.builder.project_selection.v2"
+        )
+        if migrated:
+            raw_binding["selection"] = _project_selection(
+                object_type,
+                object_id,
+                title=title,
+                description=description,
+            )
+            raw_binding["preview_target"] = None
+            raw_binding["updated_at"] = _now()
+            _write_json(self.binding_path(source_id), raw_binding)
         binding = self.get_workspace_binding(source_id)
         previous = binding.get("selection") if isinstance(binding.get("selection"), Mapping) else None
         selection = _project_selection(
@@ -1240,6 +1269,8 @@ class BuilderWorkbenchService:
             previous=previous,
         )
         if selection == previous:
+            if persist_projection and migrated:
+                self.publish_projection_sync(source_id)
             return binding
         updated = {**binding, "selection": selection, "updated_at": _now()}
         if not previous or (
