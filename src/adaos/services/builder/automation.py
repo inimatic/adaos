@@ -3302,7 +3302,7 @@ class BuilderAutomationService:
                 session["execution_budget_history"] = history[-20:]
                 session["execution_budget"] = next_budget
             transition_token = str(workflow_transition or "").strip() or None
-            starts_successor_change = False
+            starts_automation = False
             if transition_token != "return_to_prototype":
                 workflow_before = self._workflow().describe(
                     str(session.get("object_type") or ""),
@@ -3314,6 +3314,7 @@ class BuilderAutomationService:
                     else {}
                 )
                 governed_state = str(governed.get("state") or "").strip()
+                starts_automation = governed_state == "automation_ready"
                 if governed_state in {"trial_ready", "trial_review", "publication_ready"}:
                     delivery = (
                         workflow_before.get("delivery")
@@ -3391,7 +3392,6 @@ class BuilderAutomationService:
                     session["change_set_id"] = active_change_set_id
                     session["canonical_change_id"] = active_change_set_id
                     session.pop("context_packet_digest", None)
-                    starts_successor_change = governed_state == "automation_ready"
             session["iteration"] = int(session.get("iteration") or 0) + 1
             changed_at = _now_iso()
             previous_change_id = str(session.get("change_id") or "").strip()
@@ -3493,13 +3493,13 @@ class BuilderAutomationService:
                     str(session.get("object_id") or ""),
                     (
                         "automation_started"
-                        if starts_successor_change
+                        if starts_automation
                         else "automation_iteration_started"
                     ),
                     actor="builder.automation",
                     reason=(
-                        "a new Automation was queued for the approved successor Change"
-                        if starts_successor_change
+                        "a new Automation was queued from the accepted Prototype"
+                        if starts_automation
                         else "a new Automation iteration was queued"
                     ),
                     metadata={

@@ -2900,6 +2900,75 @@ def test_retry_failed_stops_before_codex_when_prototype_acceptance_is_stale(
         service.retry_failed(object_type="scenario", object_id="recipes")
 
 
+def test_retry_after_reaccepting_same_change_reenters_automation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation.scenario.recipes",
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "status": "failed",
+            "iteration": 1,
+            "change_set_id": "change.recipes",
+            "change_id": "automation.failed",
+            "updated_at": "2026-09-04T00:00:00+00:00",
+        }
+    )
+    transitions: list[str] = []
+    workflow = SimpleNamespace(
+        describe=lambda *_args: {
+            "active_phase": "prototype",
+            "governed": {"state": "automation_ready"},
+            "change_set": {
+                "change_set_id": "change.recipes",
+                "status": "approved",
+                "gate": "automation",
+            },
+        },
+        transition=lambda *_args, **_kwargs: transitions.append(_args[2]) or {},
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: workflow)
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "refresh_session",
+        lambda self, value: dict(value),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_refresh_session_companion_skill_ids",
+        lambda self, session: None,
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_capture_preview_binding",
+        lambda self, session: None,
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_submit",
+        lambda self, session, **_kwargs: {"task": {"task_id": "task.retry"}},
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_notify_started_session",
+        lambda self, session: session,
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_launch_worker", lambda *_args: None)
+
+    result = service.submit_turn(
+        text="Retry the unchanged accepted implementation.",
+        object_type="scenario",
+        object_id="recipes",
+    )
+
+    assert result["status"] == "automation_queued"
+    assert transitions == ["automation_started"]
+
+
 def test_background_automation_launches_durable_worker_process(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     service.background = True
