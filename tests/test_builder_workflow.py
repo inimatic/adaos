@@ -762,6 +762,22 @@ def test_strict_prototype_acceptance_requires_current_behavior_and_visual_eviden
     assert workflow["prototype"]["acceptance"]["revision"] == "001"
     assert workflow["change_set"]["gate"] == "automation"
 
+    started = service.transition(
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata={"task_id": "task.acceptance-refresh", "confirmed": True},
+        expected_generation=workflow["generation"],
+    )["workflow"]
+    workflow = service.transition(
+        "scenario",
+        "recipes",
+        "automation_failed",
+        metadata={"task_id": "task.acceptance-refresh", "error": "fixture failure"},
+        expected_generation=started["generation"],
+    )["workflow"]
+    assert workflow["active_phase"] == "automation"
+
     reaffirmed = service.accept_prototype(
         "scenario",
         "recipes",

@@ -5420,6 +5420,20 @@ class BuilderWorkflowService:
             update_change_set(status="in_progress", gate="prototype")
             return
         if action == "stabilize_prototype":
+            governed_state = str(_mapping(workflow.get("governed")).get("state") or "").strip()
+            if (
+                str(workflow.get("active_phase") or "prototype") == "automation"
+                and governed_state == "prototype_editing"
+                and str(prototype.get("acceptance_invalidation_reason") or "")
+                == "prototype_acceptance_refresh"
+            ):
+                workflow["active_phase"] = "prototype"
+                automation.update(
+                    {
+                        "status": "not_started",
+                        "source_prototype_revision": prototype.get("head_revision"),
+                    }
+                )
             self._require_active(workflow, "prototype", action)
             prototype.update({"status": "working", "stable": True, "stabilized_at": changed_at})
             prototype["head_revision"] = metadata.get("revision") or prototype.get("head_revision")
@@ -5437,6 +5451,13 @@ class BuilderWorkflowService:
                 update_change_set(status="approved", gate="automation")
             return
         if action == "prototype_acceptance_invalidated":
+            workflow["active_phase"] = "prototype"
+            automation.update(
+                {
+                    "status": "not_started",
+                    "source_prototype_revision": prototype.get("head_revision"),
+                }
+            )
             prototype.update(
                 {
                     "status": "working",
