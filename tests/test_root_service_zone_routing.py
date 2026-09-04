@@ -39,6 +39,9 @@ class _DummyPaths:
     def base_dir(self) -> Path:
         return self._base
 
+    def workspace_dir(self) -> Path:
+        return self._base / "workspace"
+
 
 def _workspace_tmp_dir() -> Path:
     path = Path("artifacts") / "test_tmp" / f"root-service-zone-{uuid.uuid4().hex}"
@@ -150,6 +153,223 @@ def test_project_candidate_keeps_exact_pushed_component_source_ref(
     assert captured["release_source_ref"].forge == "content-addressed-dev"
     assert captured["release_source_ref"].path_scope == ("projects/media/",)
     assert captured["release_validation_evidence"][0]["builder"] == "adaos.dev.project.push"
+
+
+def test_project_candidate_can_resolve_primary_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "dev"
+    project_dir = workspace / "projects" / "media"
+    project_dir.mkdir(parents=True)
+    (project_dir / "project.yaml").write_text(
+        """schema: adaos.project.v1
+kind: project
+id: media
+version: 1.0.0
+profiles: []
+components:
+  owned:
+    - ref: scenario:media
+      role: primary
+      exposure: application
+      lifecycle: bound
+      relations: [uses]
+  dependencies: []
+entrypoints: []
+catalog:
+  title: Media
+  description: ''
+  categories: []
+  tags: []
+publication:
+  stage: alpha
+  visibility: unlisted
+  channel: stable
+install:
+  default: false
+  features: []
+lifecycle:
+  uninstall:
+    components: remove_if_unreferenced
+    runtime_data: retain
+    source_artifacts: retain
+""",
+        encoding="utf-8",
+    )
+    checkpoint = SimpleNamespace(
+        source_ref=SimpleNamespace(revision="a" * 40)
+    )
+    publication = SimpleNamespace(
+        load_pushed_source=lambda kind, name: (
+            checkpoint
+            if (kind, name) == ("scenario", "media")
+            else (_ for _ in ()).throw(AssertionError((kind, name)))
+        )
+    )
+    service = RootDeveloperService(config_loader=lambda: object(), config_saver=lambda _cfg: None)
+    monkeypatch.setattr(service, "_workspace_root", lambda _cfg: workspace)
+    monkeypatch.setattr(service, "_artifact_publication_service", lambda _cfg: publication)
+    captured: dict[str, object] = {}
+
+    def prepare(project_id, **kwargs):
+        captured.update({"project_id": project_id, **kwargs})
+        return {"candidate": {"candidate_id": "candidate.media"}}
+
+    monkeypatch.setattr(service, "prepare_project_candidate", prepare)
+
+    result = service.prepare_project_candidate_from_primary_checkpoint(
+        "media",
+        change_ids=("change-1",),
+        validation_evidence={"status": "passed"},
+        target_webspace_id="desktop-dev",
+    )
+
+    assert result["candidate"]["candidate_id"] == "candidate.media"
+    assert captured["source_kind"] == "scenario"
+    assert captured["source_name"] == "media"
+    assert captured["source_revision"] == "a" * 40
+    assert captured["change_ids"] == ("change-1",)
+    assert captured["target_webspace_id"] == "desktop-dev"
+
+
+def test_project_candidate_reports_registry_phase_and_promotion_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_dummy_ctx(monkeypatch, tmp_path)
+    source_receipt = {
+        "status": "completed",
+        "repository": "origin",
+        "branch": "main",
+        "commit": "b" * 40,
+    }
+
+    class _Publication:
+        def get_candidate(self, candidate_id):
+            assert candidate_id == "candidate.media"
+            return SimpleNamespace(
+                status="accepted",
+                to_dict=lambda: {
+                    "candidate_id": candidate_id,
+                    "project_id": "media",
+                    "status": "accepted",
+                },
+            )
+
+        def load_promotion(self, candidate_id):
+            assert candidate_id == "candidate.media"
+            return {
+                "status": "completed",
+                "receipts": {"source_registry_published": source_receipt},
+            }
+
+        def get_trial_activation(self, candidate_id):
+            assert candidate_id == "candidate.media"
+            return {"status": "active"}
+
+    service = RootDeveloperService(
+        config_loader=lambda: object(),
+        config_saver=lambda _cfg: None,
+    )
+    monkeypatch.setattr(
+        service,
+        "_artifact_publication_service",
+        lambda _cfg: _Publication(),
+    )
+
+    result = service.get_artifact_candidate("candidate.media")
+
+    assert result["lifecycle_phase"] == "registry"
+    assert result["promotion"]["receipts"]["source_registry_published"] == source_receipt
+
+
+def test_promoted_project_source_publication_is_path_scoped_and_receipted(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / ".git").mkdir(parents=True)
+    git_calls: list[tuple[str, object]] = []
+
+    class _Git:
+        def changed_files(self, _root, subpath=None):
+            return [str(subpath)] if subpath == "projects/media" else []
+
+        def commit_subpath(self, _root, **kwargs):
+            git_calls.append(("commit", kwargs))
+            return "b" * 40
+
+        def push(self, _root, **kwargs):
+            git_calls.append(("push", kwargs))
+
+        def current_commit(self, _root):
+            return "b" * 40
+
+    receipt_calls: list[dict[str, object]] = []
+    release = SimpleNamespace(
+        release=SimpleNamespace(
+            project_id="media",
+            version="1.2.0",
+            release_digest="sha256:" + "a" * 64,
+            components=(
+                SimpleNamespace(kind="scenario", artifact_id="media"),
+                SimpleNamespace(kind="skill", artifact_id="media_skill"),
+            ),
+        )
+    )
+
+    class _Publication:
+        def verify_promoted_workspace_source(self, candidate_id):
+            assert candidate_id == "candidate.media"
+            return {"status": "passed"}
+
+        def get_candidate_release(self, candidate_id):
+            assert candidate_id == "candidate.media"
+            return release
+
+        def record_source_registry_publication(self, candidate_id, **kwargs):
+            receipt_calls.append({"candidate_id": candidate_id, **kwargs})
+            return {"status": "completed", **kwargs}
+
+    ctx = SimpleNamespace(
+        bus=_DummyBus(),
+        paths=_DummyPaths(tmp_path),
+        git=_Git(),
+        settings=SimpleNamespace(
+            git_author_name="AdaOS Test",
+            git_author_email="test@adaos.local",
+        ),
+    )
+    monkeypatch.setattr("adaos.services.root.service.get_ctx", lambda: ctx)
+    service = RootDeveloperService(
+        config_loader=lambda: object(),
+        config_saver=lambda _cfg: None,
+    )
+    monkeypatch.setattr(
+        service,
+        "_artifact_publication_service",
+        lambda _cfg: _Publication(),
+    )
+
+    result = service.publish_project_candidate_source(
+        "candidate.media",
+        remote="registry",
+        branch="main",
+        message="publish media",
+    )
+
+    assert result["status"] == "published"
+    commit = dict(git_calls[0][1])
+    assert commit["subpath"] == (
+        "projects/media",
+        "scenarios/media",
+        "skills/media_skill",
+        "registry.json",
+    )
+    assert git_calls[1] == ("push", {"remote": "registry", "branch": "main"})
+    assert receipt_calls[0]["commit"] == "b" * 40
+    assert receipt_calls[0]["paths"] == commit["subpath"]
 
 
 def test_root_init_reports_zone_aware_handshake_timeout(

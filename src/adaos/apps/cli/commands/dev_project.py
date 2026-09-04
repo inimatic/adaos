@@ -13,6 +13,7 @@ from adaos.services.builder.workspace import (
     BuilderSourceRecoveryRequired,
     BuilderWorkspaceService,
 )
+from adaos.services.root.service import RootDeveloperService
 from adaos.services.semver import bump_version
 from adaos.sdk.developer import compositions
 
@@ -22,6 +23,10 @@ app = typer.Typer(help="Manage complete Projects in the local DEV workspace.")
 
 def _service() -> BuilderWorkspaceService:
     return BuilderWorkspaceService.from_context()
+
+
+def _root_service() -> RootDeveloperService:
+    return RootDeveloperService()
 
 
 def _dev_workspace_root(service: BuilderWorkspaceService) -> Path:
@@ -63,6 +68,27 @@ def _snapshot(service: BuilderWorkspaceService, project_id: str) -> dict[str, An
     return project_source_snapshot(
         project_dir=root / "projects" / project_id,
         workspace_root=root,
+    )
+
+
+def _echo_candidate(payload: Mapping[str, Any], *, json_output: bool) -> None:
+    if json_output:
+        _echo(payload, json_output=True)
+        return
+    candidate = (
+        payload.get("candidate")
+        if isinstance(payload.get("candidate"), Mapping)
+        else payload
+    )
+    candidate_id = str(candidate.get("candidate_id") or "")
+    project_id = str(candidate.get("project_id") or candidate.get("name") or "")
+    version = str(candidate.get("version") or "")
+    status = str(candidate.get("status") or payload.get("status") or "")
+    phase = str(payload.get("lifecycle_phase") or "")
+    typer.echo(
+        " ".join(
+            item for item in (candidate_id, project_id, version, status, phase) if item
+        )
     )
 
 
@@ -305,6 +331,55 @@ def materialize(
     _echo(payload, json_output=json_output)
 
 
+@app.command("checkpoint")
+def checkpoint(
+    project_id: str,
+    change_id: str = typer.Option(..., "--change-id"),
+    message: str | None = typer.Option(None, "--message", "-m"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Checkpoint every owned Project component in the local Forge."""
+
+    project = _project(project_id)
+    change_token = str(change_id or "").strip()
+    if not change_token:
+        raise typer.BadParameter("change id is required", param_hint="--change-id")
+    service = _service()
+    checkpoints: list[dict[str, Any]] = []
+    for item in (project.get("components") or {}).get("owned") or []:
+        component_ref = str(item.get("ref") or "").strip()
+        kind, separator, artifact_id = component_ref.partition(":")
+        if separator != ":" or kind not in {"skill", "scenario"} or not artifact_id:
+            raise typer.BadParameter(
+                f"unsupported owned component ref: {component_ref!r}",
+                param_hint="project_id",
+            )
+        checkpoints.append(
+            service.checkpoint_artifact(
+                kind=kind,
+                artifact_id=artifact_id,
+                message=message or f"checkpoint(project): {project_id} {change_token}",
+                metadata={
+                    "project_id": project_id,
+                    "project_ref": f"project:{project_id}",
+                    "change_id": change_token,
+                },
+            )
+        )
+    failures = [item for item in checkpoints if not bool(item.get("ok"))]
+    payload = {
+        "ok": not failures,
+        "schema": "adaos.dev.project_checkpoint.v1",
+        "status": "checkpointed" if not failures else "checkpoint_failed",
+        "project_id": project_id,
+        "change_id": change_token,
+        "components": checkpoints,
+    }
+    _echo(payload, json_output=json_output)
+    if failures:
+        raise typer.Exit(1)
+
+
 @app.command("push")
 def push(
     project_id: str,
@@ -325,6 +400,8 @@ def push(
     ),
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
+    """Build and optionally upload an immutable ProjectRelease checkpoint."""
+
     service = _service()
     project = _project(project_id)
     bump_token = str(bump or "").strip().lower()
@@ -397,6 +474,156 @@ def push(
             temporary.replace(manifest_path)
         raise
     _echo(payload, json_output=json_output)
+
+
+@app.command("trial")
+def prepare_trial(
+    project_id: str,
+    change_ids: list[str] = typer.Option(
+        ...,
+        "--change-id",
+        help="Builder Change id; repeat for a batched Project change set.",
+    ),
+    evidence_refs: list[str] | None = typer.Option(
+        None,
+        "--evidence",
+        help="Validation evidence ref; repeat as needed.",
+    ),
+    target_webspace_id: str = typer.Option("desktop-dev", "--webspace"),
+    target_space_kind: str = typer.Option("development", "--space-kind"),
+    target_zone: str | None = typer.Option(None, "--zone"),
+    target_subnet_id: str | None = typer.Option(None, "--subnet"),
+    idempotency_key: str | None = typer.Option(None, "--idempotency-key"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Create the alpha runtime Trial from the exact Project checkpoint."""
+
+    bounded_changes = tuple(
+        dict.fromkeys(str(item).strip() for item in change_ids if str(item).strip())
+    )
+    if not bounded_changes:
+        raise typer.BadParameter("at least one change id is required", param_hint="--change-id")
+    refs = [str(item).strip() for item in evidence_refs or [] if str(item).strip()]
+    result = _root_service().prepare_project_candidate_from_primary_checkpoint(
+        project_id,
+        change_ids=bounded_changes,
+        validation_evidence={
+            "status": "passed",
+            "validator": "adaos.dev.project.trial",
+            "refs": refs,
+        },
+        target_webspace_id=target_webspace_id,
+        target_space_kind=target_space_kind,
+        target_zone=target_zone,
+        target_subnet_id=target_subnet_id,
+        idempotency_key=idempotency_key,
+    )
+    result.setdefault("lifecycle_phase", "alpha")
+    _echo_candidate(result, json_output=json_output)
+
+
+@app.command("candidate")
+def candidate(
+    candidate_id: str,
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    result = _root_service().get_artifact_candidate(candidate_id)
+    _echo_candidate(result, json_output=json_output)
+
+
+@app.command("trial-decide")
+def decide_trial(
+    candidate_id: str,
+    decision: str = typer.Argument(..., help="accept or reject"),
+    actor: str = typer.Option("user:local", "--actor"),
+    evidence_refs: list[str] | None = typer.Option(None, "--evidence"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Accept an exact Trial as beta, or request further changes."""
+
+    normalized = str(decision or "").strip().lower()
+    if normalized not in {"accept", "reject"}:
+        raise typer.BadParameter("decision must be accept or reject", param_hint="decision")
+    refs = [str(item).strip() for item in evidence_refs or [] if str(item).strip()]
+    result = _root_service().decide_artifact_candidate(
+        candidate_id,
+        accepted=normalized == "accept",
+        observations=(
+            {
+                "actor": actor,
+                "decision": "accepted" if normalized == "accept" else "changes_requested",
+                "evidence": refs,
+            },
+        ),
+    )
+    result.setdefault(
+        "lifecycle_phase",
+        "beta" if normalized == "accept" else "changes_requested",
+    )
+    _echo_candidate(result, json_output=json_output)
+
+
+@app.command("promote")
+def promote(
+    candidate_id: str,
+    confirmed: bool = typer.Option(
+        False,
+        "--confirm",
+        help="Confirm stable channel and Workspace activation.",
+    ),
+    actor: str = typer.Option("user:local", "--actor"),
+    approval_id: str | None = typer.Option(None, "--approval-id"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Promote an accepted beta candidate into the local Workspace."""
+
+    if not confirmed:
+        raise typer.BadParameter(
+            "promotion requires explicit --confirm",
+            param_hint="--confirm",
+        )
+    result = _root_service().promote_artifact_candidate(
+        candidate_id,
+        permission_decision={
+            "approved": True,
+            "actor": actor,
+            "actor_type": "user",
+            "approval_id": approval_id or f"candidate:{candidate_id}:promotion",
+        },
+    )
+    result.setdefault("lifecycle_phase", "workspace")
+    _echo_candidate(result, json_output=json_output)
+
+
+@app.command("publish")
+def publish(
+    candidate_id: str,
+    confirmed: bool = typer.Option(
+        False,
+        "--confirm",
+        help="Confirm publication of the promoted source to adaos-registry.",
+    ),
+    remote: str = typer.Option("origin", "--remote"),
+    branch: str = typer.Option("main", "--branch"),
+    message: str | None = typer.Option(None, "--message", "-m"),
+    signoff: bool = typer.Option(False, "--signoff"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Publish the promoted exact source closure to adaos-registry."""
+
+    if not confirmed:
+        raise typer.BadParameter(
+            "source registry publication requires explicit --confirm",
+            param_hint="--confirm",
+        )
+    result = _root_service().publish_project_candidate_source(
+        candidate_id,
+        remote=remote,
+        branch=branch,
+        message=message,
+        signoff=signoff,
+    )
+    _echo_candidate(result, json_output=json_output)
 
 
 __all__ = ["app"]

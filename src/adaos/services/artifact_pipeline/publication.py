@@ -554,6 +554,7 @@ class ArtifactPublicationService:
         plan: ReleasePlan,
     ) -> dict[str, Any]:
         packages = {item.key: item for item in plan.packages}
+        owned_package_keys = {item.key for item in plan.release.components}
         projected = []
         for raw in projection.get("entries") or []:
             if not isinstance(raw, Mapping):
@@ -564,6 +565,11 @@ class ArtifactPublicationService:
             snapshot_root = Path(str(raw.get("snapshot_root") or "")).resolve()
             target_root = self._workspace_package_target(package)
             roots = []
+            declared_roots = {
+                str(item or "").strip()
+                for item in raw.get("roots") or []
+                if str(item or "").strip()
+            }
             for raw_name in raw.get("roots") or []:
                 name = str(raw_name or "").strip()
                 if name not in _DEVELOPMENT_SOURCE_ROOTS:
@@ -576,6 +582,13 @@ class ArtifactPublicationService:
                     shutil.rmtree(target)
                 shutil.copytree(source, target)
                 roots.append(name)
+            if package.key in owned_package_keys:
+                for name in _DEVELOPMENT_SOURCE_ROOTS:
+                    if name in declared_roots:
+                        continue
+                    target = target_root / name
+                    if target.exists():
+                        shutil.rmtree(target)
             projected.append({"package": package.key, "roots": roots})
         project_projection: dict[str, Any] | None = None
         raw_project = projection.get("project")
@@ -645,6 +658,147 @@ class ArtifactPublicationService:
             candidate.project_id,
             candidate.release_digest,
         )
+
+    def verify_promoted_workspace_source(self, candidate_id: str) -> dict[str, Any]:
+        """Prove that Workspace source still matches the promoted candidate.
+
+        Runtime files are checked by rebuilding each owned component with the
+        candidate's exact SourceRef. Development-only tests and project.yaml
+        are checked against the source snapshot retained before Trial.
+        """
+
+        token = str(candidate_id or "").strip()
+        candidate = self.candidate_store.load(token)
+        plan = self.release_cache.get_release(
+            candidate.project_id,
+            candidate.release_digest,
+        )
+        operation = self.load_promotion(token)
+        if not isinstance(operation, Mapping) or operation.get("status") != "completed":
+            raise PublicationError(
+                "candidate must complete Workspace promotion before source publication"
+            )
+
+        checked_components: list[dict[str, Any]] = []
+        candidate_source = self._candidate_development_source_root(token)
+        for package in plan.release.components:
+            source_root = self._workspace_package_target(package)
+            rebuilt = build_artifact_package(
+                source_root,
+                kind=package.kind,
+                source_ref=package.source_ref,
+            )
+            if rebuilt.ref.digest != package.digest:
+                raise PublicationError(
+                    "Workspace source differs from promoted candidate package: "
+                    f"{package.key}"
+                )
+
+            expected_tests = candidate_source / package.kind / package.artifact_id / "tests"
+            actual_tests = source_root / "tests"
+            if expected_tests.is_dir():
+                if not actual_tests.is_dir():
+                    raise PublicationError(
+                        f"Workspace development tests are missing for {package.key}"
+                    )
+                expected_test_digest = self._development_source_manifest(expected_tests)[
+                    "digest"
+                ]
+                actual_test_digest = self._development_source_manifest(actual_tests)[
+                    "digest"
+                ]
+                if actual_test_digest != expected_test_digest:
+                    raise PublicationError(
+                        "Workspace development tests differ from promoted candidate: "
+                        f"{package.key}"
+                    )
+            elif actual_tests.exists():
+                raise PublicationError(
+                    "Workspace contains tests absent from promoted candidate: "
+                    f"{package.key}"
+                )
+            else:
+                actual_test_digest = None
+
+            checked_components.append(
+                {
+                    "component_ref": package.key,
+                    "package_digest": package.digest,
+                    "test_source_digest": actual_test_digest,
+                }
+            )
+
+        expected_project = (
+            candidate_source / "project" / candidate.project_id / "project.yaml"
+        )
+        actual_project = self.workspace_root / "projects" / candidate.project_id / "project.yaml"
+        if not expected_project.is_file() or not actual_project.is_file():
+            raise PublicationError("promoted Project source manifest is unavailable")
+        expected_project_digest = hashlib.sha256(expected_project.read_bytes()).hexdigest()
+        actual_project_digest = hashlib.sha256(actual_project.read_bytes()).hexdigest()
+        if actual_project_digest != expected_project_digest:
+            raise PublicationError(
+                "Workspace project.yaml differs from the promoted candidate"
+            )
+
+        return {
+            "schema": "adaos.artifact.promoted_workspace_source_verification.v1",
+            "status": "passed",
+            "candidate_id": token,
+            "project_id": candidate.project_id,
+            "release_digest": candidate.release_digest,
+            "project_manifest_sha256": actual_project_digest,
+            "components": checked_components,
+        }
+
+    def record_source_registry_publication(
+        self,
+        candidate_id: str,
+        *,
+        repository: str,
+        branch: str,
+        commit: str,
+        paths: tuple[str, ...],
+    ) -> dict[str, Any]:
+        """Attach an idempotent source-registry publication receipt."""
+
+        token = str(candidate_id or "").strip()
+        with mutation_lock(self.promotion_lock_path(token)):
+            operation = self.load_promotion(token)
+            if not isinstance(operation, dict) or operation.get("status") != "completed":
+                raise PublicationError(
+                    "candidate must complete Workspace promotion before source publication"
+                )
+            receipt = {
+                "status": "completed",
+                "candidate_id": token,
+                "repository": str(repository or "").strip(),
+                "branch": str(branch or "").strip(),
+                "commit": str(commit or "").strip(),
+                "paths": list(dict.fromkeys(str(item) for item in paths if str(item))),
+                "published_at": _now(),
+            }
+            if not receipt["repository"] or not receipt["branch"] or not receipt["commit"]:
+                raise PublicationError(
+                    "source registry receipt requires repository, branch, and commit"
+                )
+            receipts = operation.setdefault("receipts", {})
+            existing = receipts.get("source_registry_published")
+            if isinstance(existing, Mapping):
+                comparable = ("repository", "branch", "commit", "paths")
+                if any(existing.get(key) != receipt.get(key) for key in comparable):
+                    raise PublicationError(
+                        "candidate already has a different source registry publication receipt"
+                    )
+                return dict(existing)
+            stamped = {**receipt, "recorded_at": _now()}
+            receipts["source_registry_published"] = stamped
+            operation.setdefault("events", []).append(
+                {"phase": "source_registry_published", "at": stamped["recorded_at"]}
+            )
+            operation["source_registry_published_at"] = stamped["recorded_at"]
+            self._write_promotion(operation)
+            return stamped
 
     def _workspace_slot_id(
         self,

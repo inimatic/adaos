@@ -368,6 +368,57 @@ lifecycle:
     ).read_text(encoding="utf-8") == (project_dir / "project.yaml").read_text(
         encoding="utf-8"
     )
+    verification = service.verify_promoted_workspace_source(
+        prepared.candidate.candidate_id
+    )
+    assert verification["status"] == "passed"
+    assert {item["component_ref"] for item in verification["components"]} == {
+        "scenario:recipes",
+        "skill:shopping_skill",
+    }
+    receipt = service.record_source_registry_publication(
+        prepared.candidate.candidate_id,
+        repository="origin",
+        branch="main",
+        commit="b" * 40,
+        paths=(
+            "projects/recipes_project",
+            "scenarios/recipes",
+            "skills/shopping_skill",
+            "registry.json",
+        ),
+    )
+    assert receipt["status"] == "completed"
+    assert (
+        service.record_source_registry_publication(
+            prepared.candidate.candidate_id,
+            repository="origin",
+            branch="main",
+            commit="b" * 40,
+            paths=(
+                "projects/recipes_project",
+                "scenarios/recipes",
+                "skills/shopping_skill",
+                "registry.json",
+            ),
+        )["commit"]
+        == "b" * 40
+    )
+    with pytest.raises(PublicationError, match="different source registry"):
+        service.record_source_registry_publication(
+            prepared.candidate.candidate_id,
+            repository="origin",
+            branch="main",
+            commit="c" * 40,
+            paths=("projects/recipes_project",),
+        )
+
+    (tmp_path / "workspace" / "scenarios" / "recipes" / "webui.json").write_text(
+        '{"ui": {"changed": true}}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(PublicationError, match="differs from promoted candidate"):
+        service.verify_promoted_workspace_source(prepared.candidate.candidate_id)
 
 
 def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path) -> None:

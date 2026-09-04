@@ -313,3 +313,277 @@ def test_dev_project_push_rolls_back_version_when_build_fails(
 
     assert result.exit_code == 1
     assert manifest.read_bytes() == original
+
+
+def test_dev_project_trial_uses_primary_checkpoint_and_structured_evidence(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    class RootService:
+        def prepare_project_candidate_from_primary_checkpoint(self, project_id, **kwargs):
+            calls.append({"project_id": project_id, **kwargs})
+            return {
+                "candidate": {
+                    "candidate_id": "candidate.kanban",
+                    "project_id": project_id,
+                    "version": "0.2.0",
+                    "status": "trial",
+                }
+            }
+
+    monkeypatch.setattr(dev_project, "_root_service", RootService)
+
+    result = CliRunner().invoke(
+        dev_project.app,
+        [
+            "trial",
+            "kanban",
+            "--change-id",
+            "change-1",
+            "--change-id",
+            "change-2",
+            "--evidence",
+            "test:kanban",
+            "--zone",
+            "lo",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["change_ids"] == ("change-1", "change-2")
+    assert calls[0]["validation_evidence"] == {
+        "status": "passed",
+        "validator": "adaos.dev.project.trial",
+        "refs": ["test:kanban"],
+    }
+    assert calls[0]["target_zone"] == "lo"
+    assert '"candidate_id": "candidate.kanban"' in result.output
+
+
+def test_dev_project_checkpoint_covers_all_owned_components(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        dev_project,
+        "_project",
+        lambda _project_id: {
+            "components": {
+                "owned": [
+                    {"ref": "scenario:kanban"},
+                    {"ref": "skill:kanban_skill"},
+                ]
+            }
+        },
+    )
+
+    class Service:
+        def checkpoint_artifact(self, **kwargs):
+            calls.append(kwargs)
+            return {"ok": True, "kind": kwargs["kind"], "name": kwargs["artifact_id"]}
+
+    monkeypatch.setattr(dev_project, "_service", Service)
+
+    result = CliRunner().invoke(
+        dev_project.app,
+        [
+            "checkpoint",
+            "kanban",
+            "--change-id",
+            "change-1",
+            "--message",
+            "checkpoint kanban",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [(item["kind"], item["artifact_id"]) for item in calls] == [
+        ("scenario", "kanban"),
+        ("skill", "kanban_skill"),
+    ]
+    assert all(item["metadata"]["change_id"] == "change-1" for item in calls)
+    assert '"status": "checkpointed"' in result.output
+
+
+def test_dev_project_candidate_is_inspectable(monkeypatch) -> None:
+    service = SimpleNamespace(
+        get_artifact_candidate=lambda candidate_id: {
+            "candidate": {
+                "candidate_id": candidate_id,
+                "project_id": "kanban",
+                "version": "0.2.0",
+                "status": "trial",
+            }
+        }
+    )
+    monkeypatch.setattr(dev_project, "_root_service", lambda: service)
+
+    result = CliRunner().invoke(
+        dev_project.app,
+        ["candidate", "candidate.kanban", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert '"status": "trial"' in result.output
+
+
+def test_dev_project_trial_decision_records_actor_and_evidence(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def decide(candidate_id, **kwargs):
+        calls.append({"candidate_id": candidate_id, **kwargs})
+        return {
+            "candidate": {
+                "candidate_id": candidate_id,
+                "project_id": "kanban",
+                "version": "0.2.0",
+                "status": "accepted",
+            }
+        }
+
+    monkeypatch.setattr(
+        dev_project,
+        "_root_service",
+        lambda: SimpleNamespace(decide_artifact_candidate=decide),
+    )
+
+    result = CliRunner().invoke(
+        dev_project.app,
+        [
+            "trial-decide",
+            "candidate.kanban",
+            "accept",
+            "--actor",
+            "codex:e2e",
+            "--evidence",
+            "trial:visual-check",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["accepted"] is True
+    assert calls[0]["observations"] == (
+        {
+            "actor": "codex:e2e",
+            "decision": "accepted",
+            "evidence": ["trial:visual-check"],
+        },
+    )
+
+
+def test_dev_project_promote_requires_confirmation(monkeypatch) -> None:
+    service = SimpleNamespace(
+        promote_artifact_candidate=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("promotion must not run without confirmation")
+        )
+    )
+    monkeypatch.setattr(dev_project, "_root_service", lambda: service)
+
+    result = CliRunner().invoke(dev_project.app, ["promote", "candidate.kanban"])
+
+    assert result.exit_code == 2
+    assert "requires explicit --confirm" in result.output
+
+
+def test_dev_project_promote_passes_permission_receipt(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def promote_candidate(candidate_id, **kwargs):
+        calls.append({"candidate_id": candidate_id, **kwargs})
+        return {
+            "candidate_id": candidate_id,
+            "project_id": "kanban",
+            "version": "0.2.0",
+            "status": "published",
+        }
+
+    monkeypatch.setattr(
+        dev_project,
+        "_root_service",
+        lambda: SimpleNamespace(promote_artifact_candidate=promote_candidate),
+    )
+
+    result = CliRunner().invoke(
+        dev_project.app,
+        [
+            "promote",
+            "candidate.kanban",
+            "--confirm",
+            "--actor",
+            "codex:e2e",
+            "--approval-id",
+            "approval-1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["permission_decision"] == {
+        "approved": True,
+        "actor": "codex:e2e",
+        "actor_type": "user",
+        "approval_id": "approval-1",
+    }
+    assert '"status": "published"' in result.output
+
+
+def test_dev_project_publish_requires_confirmation(monkeypatch) -> None:
+    service = SimpleNamespace(
+        publish_project_candidate_source=lambda *_args, **_kwargs: (
+            _ for _ in ()
+        ).throw(AssertionError("publication must not run without confirmation"))
+    )
+    monkeypatch.setattr(dev_project, "_root_service", lambda: service)
+
+    result = CliRunner().invoke(dev_project.app, ["publish", "candidate.kanban"])
+
+    assert result.exit_code == 2
+    assert "source registry publication requires explicit" in result.output
+    assert "--confirm" in result.output
+
+
+def test_dev_project_publish_uses_exact_candidate_and_registry_target(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def publish_source(candidate_id, **kwargs):
+        calls.append({"candidate_id": candidate_id, **kwargs})
+        return {
+            "candidate_id": candidate_id,
+            "project_id": "kanban",
+            "version": "0.2.0",
+            "status": "published",
+            "lifecycle_phase": "registry",
+        }
+
+    monkeypatch.setattr(
+        dev_project,
+        "_root_service",
+        lambda: SimpleNamespace(publish_project_candidate_source=publish_source),
+    )
+
+    result = CliRunner().invoke(
+        dev_project.app,
+        [
+            "publish",
+            "candidate.kanban",
+            "--confirm",
+            "--remote",
+            "registry",
+            "--branch",
+            "main",
+            "--message",
+            "publish kanban",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        {
+            "candidate_id": "candidate.kanban",
+            "remote": "registry",
+            "branch": "main",
+            "message": "publish kanban",
+            "signoff": False,
+        }
+    ]
+    assert '"lifecycle_phase": "registry"' in result.output

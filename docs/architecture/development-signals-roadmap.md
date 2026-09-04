@@ -385,6 +385,12 @@ Ticket and signals, and closes only with evidence.
   from a canonical content-addressed source closure. Keep experimental runs
   local with `--local-only` and reject same-version/different-digest release
   mutation.
+- [ ] `[must]` `DS5-36` Close the complete Project delivery chain with one
+  resumable identity: project-level owned-component checkpoint, immutable
+  release, alpha runtime Trial, accepted beta candidate, health-gated local
+  Workspace promotion, and exact path-scoped GitHub `adaos-registry`
+  publication. Persist the final repository/branch/commit/path receipt and
+  prove the sequence on a fresh non-Builder Project through GitHub CI.
 
 Implementation note, 2026-09-03: `DS5-32` is deterministic-first. The
 `builder-qualification/language` endpoint calls the Root LLM only after the
@@ -517,7 +523,8 @@ ProjectRelease identity exposed by the Subscription E2E while preserving the
 explicit materialize/fork/overlay/defer choice for sources that are not in DEV.
 
 DEV Project CLI update, 2026-09-03: `adaos dev project
-list|show|status|materialize|push` now exposes the same project ownership unit
+list|show|status|materialize|checkpoint|push|trial|candidate|trial-decide|promote|publish`
+now exposes the same project ownership unit
 to Codex and human operators. Source identity is computed from the normalized
 Project definition and canonical package inputs, including transitive local
 skill/scenario requirements but excluding unrelated DEV projects. Push performs
@@ -526,6 +533,17 @@ remain local for experimental work. The first real probe rejected an attempted
 mutation of the existing `semantic_ui_demo@0.10.7` digest, then successfully
 built local `semantic_ui_demo@0.10.8` after a patch bump. Project listing also
 isolates invalid manifests instead of losing the whole catalog.
+
+Project delivery update, 2026-09-04: the CLI now names each governed boundary
+instead of treating Forge, Root artifact storage, Workspace activation, and Git
+publication as one ambiguous push. `checkpoint` covers every owned component
+under one Change id; `trial` and `trial-decide` derive alpha and beta from the
+exact Candidate; `promote` activates the accepted digest in Workspace; and
+`publish` verifies rebuilt owned packages plus retained tests and project
+source before a path-scoped registry commit/push. The promotion operation keeps
+an idempotent final source-registry receipt. `DS5-36` remains open until a fresh
+non-Builder project completes the whole path and GitHub CI confirms downstream
+delivery.
 
 ## DS6. Analytics, Campaigns, And Policy Hardening
 

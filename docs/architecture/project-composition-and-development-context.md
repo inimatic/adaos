@@ -229,20 +229,56 @@ ProjectRelease.
 
 Project ownership is a first-class developer boundary, not metadata inferred
 again from whichever skill or scenario happens to be open. The local CLI
-therefore exposes `adaos dev project list|show|status|materialize|push`:
+therefore exposes the complete gated Project lifecycle:
+`adaos dev project list|show|status|materialize|checkpoint|push|trial|candidate|trial-decide|promote|publish`.
 
 - `materialize` copies the complete Workspace-owned project slice into DEV,
   including every owned skill and scenario, and stops for explicit recovery
   decisions when source generations diverge;
 - `status` compares content-addressed DEV and Workspace source closures rather
   than assuming that a dirty checkout still represents Git `HEAD`;
+- `checkpoint` sends every owned component to the local Forge under one
+  Builder Change id. It does not publish Workspace source or move a stable
+  channel;
 - `push` applies an explicit semantic Project version bump, builds the exact
-  dependency closure, and emits an immutable ProjectRelease; `--local-only`
-  keeps experimental projects out of the remote registry until a trial is
-  ready for review;
+  dependency closure, and emits an immutable ProjectRelease checkpoint;
+  `--local-only` retains it on the current node;
+- `trial` creates an immutable Candidate and isolated TrialActivation, then
+  targets the development Webspace where the DEV runtime is exposed with an
+  `alpha` marker. Mutable DEV source is never the candidate authority;
+- `trial-decide ... accept` records user acceptance of that exact candidate
+  and moves its derived lifecycle stage to `beta`. Rejection detaches the
+  Trial and keeps Workspace unchanged;
+- `promote --confirm` repeats admission, reload, and health checks before
+  moving the stable ProjectRelease pointer and materializing the exact source
+  and package lock in the local Workspace;
+- `publish --confirm` first rebuilds every owned Workspace component against
+  its accepted package digest, verifies development tests and `project.yaml`
+  against the retained Candidate snapshot, then makes one path-scoped Git
+  commit and push to `adaos-registry`. The promotion journal receives an
+  idempotent source-registry receipt with repository, branch, commit, and
+  published paths;
 - the source revision is derived from the canonical Project definition and the
   same normalized component bytes used by package construction. Unrelated DEV
   projects do not perturb it.
+
+The intended state sequence is explicit rather than inferred from a manifest
+label:
+
+```text
+DEV source
+  -> owned-component Forge checkpoint
+  -> immutable ProjectRelease checkpoint
+  -> alpha runtime / isolated Trial
+  -> accepted beta candidate
+  -> stable local Workspace + WorkspaceLock
+  -> GitHub adaos-registry source publication
+```
+
+`publication.stage` in mutable source is catalog maturity metadata, not the
+authority for the current runtime stage. Client badges must prefer Candidate,
+Trial, WorkspaceLock, and source-registry receipts in that order. This avoids
+showing a stale `alpha` or `beta` label after an exact stable promotion.
 
 The ProjectRelease is the runtime-recoverable checkpoint. Developer-only
 component source can additionally use the existing skill/scenario Forge draft

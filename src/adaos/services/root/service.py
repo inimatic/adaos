@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends
 import yaml
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.eventbus import emit
+from adaos.services.git.safe_commit import check_no_denied, sanitize_message
 
 from adaos.services.crypto.pki import generate_rsa_key, make_csr, write_pem, write_private_key
 from adaos.services.node_config import (
@@ -2409,6 +2410,7 @@ class RootDeveloperService:
         )
         return {
             "ok": True,
+            "lifecycle_phase": "alpha",
             "candidate": prepared.candidate.to_dict(),
             "release": prepared.plan.release.to_dict(),
             "trial_workspace": str(prepared.trial_workspace),
@@ -2499,11 +2501,67 @@ class RootDeveloperService:
         )
         return {
             "ok": True,
+            "lifecycle_phase": "alpha",
             "candidate": prepared.candidate.to_dict(),
             "release": prepared.plan.release.to_dict(),
             "trial_workspace": str(prepared.trial_workspace),
             "trial_activation": dict(prepared.trial_activation),
         }
+
+    def prepare_project_candidate_from_primary_checkpoint(
+        self,
+        project_id: str,
+        *,
+        change_ids: tuple[str, ...],
+        validation_evidence: Mapping[str, Any] | None = None,
+        target_webspace_id: str = "desktop",
+        target_space_kind: str = "development",
+        target_zone: str | None = None,
+        target_subnet_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Prepare a Project Trial from its primary component's exact checkpoint."""
+
+        cfg = self._load_config()
+        project_path = self._workspace_root(cfg) / "projects" / project_id / "project.yaml"
+        try:
+            raw = yaml.safe_load(project_path.read_text(encoding="utf-8-sig")) or {}
+        except (OSError, UnicodeError, yaml.YAMLError) as exc:
+            raise ArtifactNotFoundError(
+                f"Project '{project_id}' not found or unreadable at {project_path}"
+            ) from exc
+        if not isinstance(raw, Mapping):
+            raise RootServiceError("Project manifest must contain an object")
+
+        from adaos.sdk.developer.compositions import validate as validate_project
+
+        project = validate_project(raw)
+        primary = [
+            dict(item)
+            for item in project["components"]["owned"]
+            if str(item.get("role") or "") == "primary"
+        ]
+        if len(primary) != 1:
+            raise RootServiceError("Project must declare exactly one primary component")
+        source_kind, separator, source_name = str(primary[0].get("ref") or "").partition(":")
+        if separator != ":" or source_kind not in {"skill", "scenario"} or not source_name:
+            raise RootServiceError("Project primary component must be skill:<id> or scenario:<id>")
+
+        publication = self._artifact_publication_service(cfg)
+        pushed = publication.load_pushed_source(source_kind, source_name)
+        return self.prepare_project_candidate(
+            project_id,
+            source_kind=source_kind,
+            source_name=source_name,
+            source_revision=pushed.source_ref.revision,
+            change_ids=change_ids,
+            validation_evidence=validation_evidence,
+            target_webspace_id=target_webspace_id,
+            target_space_kind=target_space_kind,
+            target_zone=target_zone,
+            target_subnet_id=target_subnet_id,
+            idempotency_key=idempotency_key,
+        )
 
     def project_release_versions(self, project_id: str) -> dict[str, str]:
         """Return locally known immutable release identities for a Project."""
@@ -2528,13 +2586,34 @@ class RootDeveloperService:
             accepted=accepted,
             observations=observations,
         )
-        return {"ok": True, "candidate": candidate.to_dict()}
+        return {
+            "ok": True,
+            "lifecycle_phase": "beta" if accepted else "changes_requested",
+            "candidate": candidate.to_dict(),
+        }
 
     def get_artifact_candidate(self, candidate_id: str) -> dict[str, Any]:
         cfg = self._load_config()
         token = str(candidate_id or "").strip()
-        candidate = self._artifact_publication_service(cfg).get_candidate(token)
         publication = self._artifact_publication_service(cfg)
+        candidate = publication.get_candidate(token)
+        promotion = publication.load_promotion(token)
+        promotion_receipts = (
+            promotion.get("receipts")
+            if isinstance(promotion, Mapping)
+            and isinstance(promotion.get("receipts"), Mapping)
+            else {}
+        )
+        if isinstance(promotion_receipts.get("source_registry_published"), Mapping):
+            lifecycle_phase = "registry"
+        elif isinstance(promotion, Mapping) and promotion.get("status") == "completed":
+            lifecycle_phase = "workspace"
+        elif candidate.status == "accepted":
+            lifecycle_phase = "beta"
+        elif candidate.status == "rejected":
+            lifecycle_phase = "changes_requested"
+        else:
+            lifecycle_phase = "alpha"
         trial_workspace = (
             Path(self.ctx.paths.workspace_dir())
             / ".runtime"
@@ -2544,9 +2623,11 @@ class RootDeveloperService:
         )
         return {
             "ok": True,
+            "lifecycle_phase": lifecycle_phase,
             "candidate": candidate.to_dict(),
             "trial_workspace": str(trial_workspace),
             "trial_activation": publication.get_trial_activation(token),
+            "promotion": dict(promotion) if isinstance(promotion, Mapping) else None,
         }
 
     def reconcile_artifact_trial_activation(self, candidate_id: str) -> dict[str, Any]:
@@ -2774,6 +2855,7 @@ class RootDeveloperService:
         }
         return {
             "ok": True,
+            "lifecycle_phase": "workspace",
             "candidate_id": candidate_id,
             "kind": component.kind,
             "name": component.artifact_id,
@@ -2787,6 +2869,96 @@ class RootDeveloperService:
             "commit": None,
             "activation_mode": "package_lock",
             "apply_evidence": apply_evidence,
+        }
+
+    def publish_project_candidate_source(
+        self,
+        candidate_id: str,
+        *,
+        remote: str = "origin",
+        branch: str = "main",
+        message: str | None = None,
+        signoff: bool = False,
+    ) -> dict[str, Any]:
+        """Publish an exact promoted Project source closure to its Git registry."""
+
+        token = str(candidate_id or "").strip()
+        if not token:
+            raise RootServiceError("candidate_id is required")
+        remote_name = str(remote or "").strip()
+        branch_name = str(branch or "").strip()
+        if not remote_name or not branch_name:
+            raise RootServiceError("source registry remote and branch are required")
+
+        cfg = self._load_config()
+        publication = self._artifact_publication_service(cfg)
+        verification = publication.verify_promoted_workspace_source(token)
+        plan = publication.get_candidate_release(token)
+        workspace = Path(self.ctx.paths.workspace_dir()).resolve()
+        if not (workspace / ".git").exists():
+            raise RootServiceError(
+                "Workspace registry is not a Git checkout; run `adaos skill sync` first"
+            )
+
+        paths = [f"projects/{plan.release.project_id}"]
+        for package in plan.release.components:
+            plural = "skills" if package.kind == "skill" else "scenarios"
+            paths.append(f"{plural}/{package.artifact_id}")
+        paths.append("registry.json")
+        bounded_paths = tuple(dict.fromkeys(paths))
+        changed = sorted(
+            {
+                item
+                for path in bounded_paths
+                for item in self.ctx.git.changed_files(str(workspace), subpath=path)
+            }
+        )
+        denied = check_no_denied(changed)
+        if denied:
+            raise PermissionError(
+                "source registry publication denied for sensitive files: "
+                + ", ".join(denied)
+            )
+
+        commit_message = sanitize_message(
+            message
+            or f"publish(project): {plan.release.project_id} v{plan.release.version}"
+        )
+        commit = self.ctx.git.commit_subpath(
+            str(workspace),
+            subpath=bounded_paths,
+            message=commit_message,
+            author_name=self.ctx.settings.git_author_name,
+            author_email=self.ctx.settings.git_author_email,
+            signoff=signoff,
+        )
+        self.ctx.git.push(
+            str(workspace),
+            remote=remote_name,
+            branch=branch_name,
+        )
+        if commit == "nothing-to-commit":
+            commit = self.ctx.git.current_commit(str(workspace))
+        else:
+            commit = self.ctx.git.current_commit(str(workspace)) or commit
+        receipt = publication.record_source_registry_publication(
+            token,
+            repository=remote_name,
+            branch=branch_name,
+            commit=commit,
+            paths=bounded_paths,
+        )
+        return {
+            "ok": True,
+            "status": "published",
+            "lifecycle_phase": "registry",
+            "candidate_id": token,
+            "project_id": plan.release.project_id,
+            "version": plan.release.version,
+            "release_digest": plan.release.release_digest,
+            "verification": verification,
+            "changed_files": changed,
+            "publication": receipt,
         }
 
     def check_artifact_subscription(self, project_id: str) -> dict[str, Any]:
