@@ -308,6 +308,61 @@ def test_project_source_snapshot_is_scoped_and_content_addressed(
     ]
 
 
+def test_project_source_snapshot_excludes_shared_dependency_source(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    owned_root = workspace / "skills" / "kanban_skill"
+    shared_root = workspace / "skills" / "shared_runtime"
+    _write_yaml(
+        owned_root / "skill.yaml",
+        {"name": "kanban_skill", "version": "0.1.0", "tools": []},
+    )
+    _write_yaml(
+        shared_root / "skill.yaml",
+        {"name": "shared_runtime", "version": "1.0.0", "tools": []},
+    )
+    shared_handler = shared_root / "handlers" / "main.py"
+    shared_handler.parent.mkdir(parents=True)
+    shared_handler.write_text("VALUE = 1\n", encoding="utf-8")
+    project_root = workspace / "projects" / "kanban"
+    _write_yaml(
+        project_root / "project.yaml",
+        {
+            "schema": "adaos.project.v1",
+            "kind": "project",
+            "id": "kanban",
+            "version": "0.1.0",
+            "profiles": [],
+            "components": {
+                "owned": [{"ref": "skill:kanban_skill", "role": "primary"}],
+                "dependencies": [{"ref": "skill:shared_runtime"}],
+            },
+            "entrypoints": [],
+            "catalog": {
+                "title": "Kanban",
+                "description": "",
+                "categories": [],
+                "tags": [],
+            },
+            "lifecycle": {
+                "uninstall": {
+                    "components": "retain",
+                    "runtime_data": "retain",
+                    "source_artifacts": "retain",
+                }
+            },
+        },
+    )
+
+    first = project_source_snapshot(project_dir=project_root, workspace_root=workspace)
+    shared_handler.write_text("VALUE = 2\n", encoding="utf-8")
+    unchanged = project_source_snapshot(project_dir=project_root, workspace_root=workspace)
+
+    assert first["source_revision"] == unchanged["source_revision"]
+    assert [item["ref"] for item in first["components"]] == ["skill:kanban_skill"]
+
+
 def test_workspace_project_build_locks_local_project_dependencies(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     _write_yaml(

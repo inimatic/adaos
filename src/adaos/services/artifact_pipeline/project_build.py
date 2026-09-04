@@ -204,24 +204,9 @@ def project_source_snapshot(
     owned_refs = tuple(
         str(item["ref"]) for item in definition["components"]["owned"]
     )
-    pending: list[tuple[str, bool]] = [(item, False) for item in owned_refs]
-    for item in definition["components"]["dependencies"]:
-        ref = str(item.get("ref") or "")
-        if ref.startswith(("skill:", "scenario:")):
-            pending.append((ref, False))
-
     components: dict[str, dict[str, Any]] = {}
-    while pending:
-        ref, optional = pending.pop(0)
-        if ref in components:
-            continue
-        try:
-            root = _component_root(workspace, ref)
-        except ProjectReleaseBuildError:
-            if optional:
-                continue
-            raise
-        kind, _artifact_id = _component_ref(ref)
+    for ref in owned_refs:
+        root = _component_root(workspace, ref)
         snapshot = artifact_source_snapshot(root)
         components[ref] = {
             "ref": ref,
@@ -230,11 +215,6 @@ def project_source_snapshot(
             "file_count": snapshot["file_count"],
             "size_bytes": snapshot["size_bytes"],
         }
-        requirements = parse_artifact_requirements(
-            _read_yaml(root / _component_manifest_name(kind)),
-            kind=kind,  # type: ignore[arg-type]
-        )
-        pending.extend((item.key, item.optional) for item in requirements)
 
     project_snapshot = artifact_source_snapshot(project_root)
     identity = {

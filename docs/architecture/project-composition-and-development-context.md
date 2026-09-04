@@ -230,11 +230,14 @@ ProjectRelease.
 Project ownership is a first-class developer boundary, not metadata inferred
 again from whichever skill or scenario happens to be open. The local CLI
 therefore exposes the complete gated Project lifecycle:
-`adaos dev project list|show|status|materialize|checkpoint|push|trial|candidate|trial-decide|promote|publish`.
+`adaos dev project list|show|status|materialize|fork|checkpoint|push|trial|candidate|trial-decide|promote|publish`.
 
 - `materialize` copies the complete Workspace-owned project slice into DEV,
   including every owned skill and scenario, and stops for explicit recovery
   decisions when source generations diverge;
+- `fork` is the explicit reviewed route for making the current authoritative
+  Workspace Project slice editable in DEV; it records a content-addressed
+  receipt and never treats shared dependencies as owned source;
 - `status` compares content-addressed DEV and Workspace source closures rather
   than assuming that a dirty checkout still represents Git `HEAD`;
 - `checkpoint` sends every owned component to the local Forge under one
