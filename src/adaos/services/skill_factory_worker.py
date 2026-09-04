@@ -899,7 +899,29 @@ def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, A
                     "mcp_tool_call",
                 }:
                     continue
-                context_bytes += len(raw_line.encode("utf-8", errors="replace"))
+                item_bytes = len(raw_line.encode("utf-8", errors="replace"))
+                if item_type == "mcp_tool_call":
+                    result = item.get("result") if isinstance(item.get("result"), Mapping) else {}
+                    metadata = result.get("_meta") if isinstance(result.get("_meta"), Mapping) else {}
+                    projection = (
+                        metadata.get("adaos/modelProjection")
+                        if isinstance(metadata.get("adaos/modelProjection"), Mapping)
+                        else {}
+                    )
+                    try:
+                        projected_bytes = int(projection.get("bytes") or 0)
+                    except (TypeError, ValueError):
+                        projected_bytes = 0
+                    if projected_bytes <= 0:
+                        content = result.get("content") if isinstance(result.get("content"), list) else []
+                        projected_bytes = sum(
+                            len(str(block.get("text") or "").encode("utf-8", errors="replace"))
+                            for block in content
+                            if isinstance(block, Mapping)
+                        )
+                    if projected_bytes > 0:
+                        item_bytes = projected_bytes
+                context_bytes += item_bytes
                 cumulative_tokens += max(1, (context_bytes + 3) // 4)
                 tool_rounds += 1
         except OSError:

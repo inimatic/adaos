@@ -3887,6 +3887,40 @@ def test_codex_live_budget_estimate_counts_growing_tool_context(tmp_path: Path) 
     ) < usage["model_tokens"]
 
 
+def test_codex_live_budget_counts_mcp_model_projection_not_audit_payload(
+    tmp_path: Path,
+) -> None:
+    journal = tmp_path / "codex-events.jsonl"
+    journal.write_text(
+        json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "mcp_tool_call",
+                    "result": {
+                        "content": [{"type": "text", "text": '{"ok":true}'}],
+                        "structuredContent": {"audit": "x" * 1_000_000},
+                        "_meta": {
+                            "adaos/modelProjection": {
+                                "bytes": 11,
+                                "token_estimate": 3,
+                            }
+                        },
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    usage = _codex_jsonl_live_budget_estimate(journal, prompt="small task")
+
+    assert usage["tool_rounds"] == 1
+    assert usage["visible_context_bytes"] < 100
+    assert usage["model_tokens"] < 40_000
+
+
 def test_codex_live_budget_treats_each_completed_tool_as_a_model_round(
     tmp_path: Path,
 ) -> None:
