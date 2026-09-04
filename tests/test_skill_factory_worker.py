@@ -4044,6 +4044,83 @@ def test_context_packet_omits_intent_duplicated_by_implementation_brief() -> Non
     assert "intent" not in projected["change"]
 
 
+def test_context_packet_compacts_accepted_prototype_and_resolved_issues() -> None:
+    packet = {
+        "change": {
+            "change_id": "change.board",
+            "request_addenda": ["obsolete prototype instruction"],
+            "issues": [
+                {
+                    "issue_id": "issue.prototype",
+                    "lane": "prototype",
+                    "status": "resolved",
+                    "title": "Resolved prototype detail",
+                },
+                {
+                    "issue_id": "issue.automation",
+                    "lane": "automation",
+                    "status": "open",
+                    "title": "Implement the accepted resource provider",
+                    "acceptance_criteria": ["CRUD is durable"],
+                },
+            ],
+        },
+        "artifacts": {
+            "prototype": {
+                "status": "frozen",
+                "head_revision": "007",
+                "acceptance": {
+                    "decision": "accepted",
+                    "revision": "007",
+                    "digest": "sha256:acceptance",
+                    "webui_digest": "sha256:webui",
+                    "deterministic_evaluation": {
+                        "qualification": {
+                            "surface_kind": "board",
+                            "concepts": ["resource_crud"],
+                            "requirements": {
+                                "resource_query": True,
+                                "operation_kinds": ["create", "update", "delete"],
+                            },
+                        },
+                        "postconditions": [
+                            {"id": "large.repeated.detail", "actual": "x" * 10_000}
+                        ],
+                    },
+                    "behavior_checks": [
+                        {
+                            "id": "resource.create",
+                            "status": "passed",
+                            "evidence_refs": ["trace:large-repeated-evidence"],
+                        }
+                    ],
+                },
+            },
+            "implementation": {
+                "status": "failed",
+                "error": "large historical failure that must stay out of the prompt",
+            },
+        },
+    }
+
+    projected = _context_packet_prompt_projection(packet)
+    encoded = json.dumps(projected, ensure_ascii=False)
+
+    assert [item["issue_id"] for item in projected["change"]["issues"]] == [
+        "issue.automation"
+    ]
+    assert "request_addenda" not in projected["change"]
+    acceptance = projected["artifacts"]["prototype"]["acceptance"]
+    assert acceptance["revision"] == "007"
+    assert acceptance["qualification"]["requirements"]["resource_query"] is True
+    assert acceptance["behavior_checks"] == [
+        {"id": "resource.create", "status": "passed"}
+    ]
+    assert "large.repeated.detail" not in encoded
+    assert "large historical failure" not in encoded
+    assert "large-repeated-evidence" not in encoded
+
+
 def test_codex_task_runtime_is_outside_candidate_worktree(tmp_path: Path) -> None:
     workspace = tmp_path / "run" / "workspace"
     output_dir = tmp_path / "run" / "output"

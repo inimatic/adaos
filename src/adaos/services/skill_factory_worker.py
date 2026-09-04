@@ -1053,6 +1053,126 @@ def _codex_budget_exceeded_receipt(
     }
 
 
+def _prototype_acceptance_prompt_projection(value: Any) -> dict[str, Any]:
+    acceptance = dict(value) if isinstance(value, Mapping) else {}
+    evaluation = (
+        dict(acceptance.get("deterministic_evaluation") or {})
+        if isinstance(acceptance.get("deterministic_evaluation"), Mapping)
+        else {}
+    )
+    qualification = (
+        dict(evaluation.get("qualification") or {})
+        if isinstance(evaluation.get("qualification"), Mapping)
+        else {}
+    )
+    capability_validation = (
+        dict(evaluation.get("capability_validation") or {})
+        if isinstance(evaluation.get("capability_validation"), Mapping)
+        else {}
+    )
+    projected = {
+        key: acceptance.get(key)
+        for key in (
+            "schema",
+            "acceptance_id",
+            "change_id",
+            "decision",
+            "revision",
+            "digest",
+            "request_digest",
+            "webui_digest",
+        )
+        if acceptance.get(key) not in (None, "", [], {})
+    }
+    projected["qualification"] = {
+        key: qualification.get(key)
+        for key in (
+            "schema",
+            "ready",
+            "surface_kind",
+            "concepts",
+            "requirements",
+            "capability_gaps",
+        )
+        if qualification.get(key) not in (None, "", [], {})
+    }
+    projected["capability_validation"] = {
+        key: capability_validation.get(key)
+        for key in ("ok", "catalog_version", "catalog_digest")
+        if capability_validation.get(key) not in (None, "", [], {})
+    }
+    projected["prototype_resources"] = [
+        {
+            key: item.get(key)
+            for key in (
+                "resource_type",
+                "generation",
+                "record_count",
+                "definition_digest",
+                "records_digest",
+                "bundle_digest",
+            )
+            if item.get(key) not in (None, "", [], {})
+        }
+        for item in acceptance.get("prototype_resources") or []
+        if isinstance(item, Mapping)
+    ][:20]
+    projected["behavior_checks"] = [
+        {"id": item.get("id"), "status": item.get("status")}
+        for item in acceptance.get("behavior_checks") or []
+        if isinstance(item, Mapping)
+    ][:50]
+    projected["visual_checks"] = [
+        {"breakpoint": item.get("breakpoint"), "status": item.get("status")}
+        for item in acceptance.get("visual_checks") or []
+        if isinstance(item, Mapping)
+    ][:20]
+    return projected
+
+
+def _context_artifacts_prompt_projection(value: Any) -> dict[str, Any]:
+    artifacts = dict(value) if isinstance(value, Mapping) else {}
+    projected: dict[str, Any] = {}
+    prototype = (
+        dict(artifacts.get("prototype") or {})
+        if isinstance(artifacts.get("prototype"), Mapping)
+        else {}
+    )
+    if prototype:
+        projected["prototype"] = {
+            key: prototype.get(key)
+            for key in (
+                "status",
+                "stable",
+                "head_revision",
+                "acceptance_required",
+            )
+            if prototype.get(key) not in (None, "", [], {})
+        }
+        acceptance = _prototype_acceptance_prompt_projection(
+            prototype.get("acceptance")
+        )
+        if acceptance:
+            projected["prototype"]["acceptance"] = acceptance
+    for artifact_name in ("implementation", "trial", "publication"):
+        artifact = artifacts.get(artifact_name)
+        if not isinstance(artifact, Mapping):
+            continue
+        summary = {
+            key: artifact.get(key)
+            for key in (
+                "status",
+                "source_prototype_revision",
+                "release",
+                "release_digest",
+            )
+            if artifact.get(key) not in (None, "", [], {})
+        }
+        if summary:
+            projected[artifact_name] = summary
+    return projected
+
+
 def context_packet_prompt_projection(value: Any, *, implementation_brief: str = "") -> dict[str, Any]:
     """Keep Codex context useful and bounded without replacing exact evidence."""
 
@@ -1060,27 +1180,36 @@ def context_packet_prompt_projection(value: Any, *, implementation_brief: str = 
     if not packet:
         return {}
     change = dict(packet.get("change") or {})
+    issues = [
+        item for item in change.get("issues") or [] if isinstance(item, Mapping)
+    ]
+    active_issues = [
+        item
+        for item in issues
+        if str(item.get("status") or "").strip().lower()
+        not in {"resolved", "verified", "closed", "accepted", "rejected", "superseded"}
+    ]
     projected_issues: list[dict[str, Any]] = []
-    for item in change.get("issues") or []:
+    for item in active_issues or issues[-10:]:
         if not isinstance(item, Mapping):
             continue
         projected_issues.append(
             {
                 "issue_id": item.get("issue_id"),
-                "title": str(item.get("title") or "")[:1000],
+                "title": str(item.get("title") or "")[:500],
                 "lane": item.get("lane"),
                 "status": item.get("status"),
                 "acceptance_criteria": [
-                    str(criterion)[:1500]
+                    str(criterion)[:500]
                     for criterion in item.get("acceptance_criteria") or []
                     if str(criterion).strip()
-                ][:20],
+                ][:8],
                 "semantic_refs": [
                     str(ref) for ref in item.get("semantic_refs") or [] if str(ref).strip()
-                ][:50],
+                ][:12],
             }
         )
-        if len(projected_issues) >= 50:
+        if len(projected_issues) >= 20:
             break
     projected_change = {
         key: change.get(key)
@@ -1095,6 +1224,29 @@ def context_packet_prompt_projection(value: Any, *, implementation_brief: str = 
         )
         if change.get(key) not in (None, "", [])
     }
+    accepted_prototype = bool(
+        isinstance((packet.get("artifacts") or {}).get("prototype"), Mapping)
+        and isinstance(
+            (packet.get("artifacts") or {}).get("prototype", {}).get("acceptance"),
+            Mapping,
+        )
+        and str(
+            (packet.get("artifacts") or {})
+            .get("prototype", {})
+            .get("acceptance", {})
+            .get("decision")
+            or ""
+        ).strip().lower()
+        == "accepted"
+    )
+    if accepted_prototype:
+        projected_change.pop("request_addenda", None)
+    elif "request_addenda" in projected_change:
+        projected_change["request_addenda"] = [
+            str(item)[:1000]
+            for item in projected_change.get("request_addenda") or []
+            if str(item).strip()
+        ][-3:]
     projected_change["issues"] = projected_issues
     projected_change["acceptance_constraints"] = list(
         change.get("acceptance_constraints") or []
@@ -1174,7 +1326,7 @@ def context_packet_prompt_projection(value: Any, *, implementation_brief: str = 
         "project": dict(packet.get("project") or {}),
         "change": projected_change,
         "base": dict(packet.get("base") or {}),
-        "artifacts": dict(packet.get("artifacts") or {}),
+        "artifacts": _context_artifacts_prompt_projection(packet.get("artifacts")),
         "dependencies": list(packet.get("dependencies") or [])[:200],
         "allowed_paths": list(packet.get("allowed_paths") or [])[:200],
         "instruction_refs": list(packet.get("instruction_refs") or [])[:100],
@@ -5198,6 +5350,23 @@ Omit the envelope when there is no substantive development feedback. It is advis
             else {}
         )
         qualified_repair_complete = bool(repair_coverage.get("complete"))
+        prototype_artifact = (
+            dict(context_projection.get("artifacts", {}).get("prototype") or {})
+            if isinstance(context_projection.get("artifacts"), Mapping)
+            else {}
+        )
+        prototype_acceptance = (
+            dict(prototype_artifact.get("acceptance") or {})
+            if isinstance(prototype_artifact.get("acceptance"), Mapping)
+            else {}
+        )
+        accepted_revision = str(prototype_acceptance.get("revision") or "").strip()
+        accepted_prototype_instruction = (
+            f" The exact UI authority is scenarios/{target_id}/ui_revisions/"
+            f"{accepted_revision}.json; do not also print equivalent webui.json or scenario.json."
+            if target_type == "scenario" and accepted_revision
+            else ""
+        )
         if surgical_ui:
             if qualified_repair_complete:
                 required_result = """1. This is source work inside an existing AdaOS skill, not Codex skill authoring. Do not load generic skill-creator instructions.
@@ -5242,22 +5411,23 @@ Omit the envelope when there is no substantive development feedback. It is advis
 8. Do not publish, install, activate, or mutate the canonical workspace. The worker owns validation, checkpointing, trial activation, and evidence.
 9. Conclude against each ticket acceptance point. Report any unmet point explicitly instead of describing the repair as complete."""
         else:
-            required_result = """1. Inspect all existing files under the target paths before editing.
+            required_result = """1. Inspect only the admitted manifests and source files needed for the accepted change; do not enumerate or print every file under a target directory.
 2. Edit only the current scenario's declarative prototype files; do not modify companion skills.
 3. Preserve useful UX while removing functional tool, service, credential, external-network, device, and production-data bindings from the Prototype.
 4. Use bounded local mock or `initialState` data so the resulting `webui.json` remains safely interactive.
 5. Keep `scenario.yaml` and `webui.json` valid and do not publish or activate a release.
 6. Run relevant bounded checks and fix failures caused by your changes.
 7. Do not edit anything outside these task paths: {allowed_paths}.
-8. Do not edit `.builder_previous_automation`; it is immutable input.""" if workflow_transition == "return_to_prototype" else """1. Inspect the admitted target source and machine contracts before editing; do not rediscover context already present in the packet.
+8. Do not edit `.builder_previous_automation`; it is immutable input.""" if workflow_transition == "return_to_prototype" else """1. Inspect only admitted source needed for the change; do not rediscover packet context.{accepted_prototype_instruction}
 2. Implement the approved behavior through public AdaOS SDK/API contracts and the repository's existing manifest, handler, UI, and test conventions.
 3. Edit only these authorized paths: {allowed_paths}. Preserve unrelated behavior, UTF-8 text, immutable Builder inputs, and manifest `version`/`updated_at`; Forge owns release metadata.
 4. Use `ADAOS_PYTHON` with the commit-bound SDK snapshot exposed by `ADAOS_REPO_ROOT`/`PYTHONPATH`. Do not inspect its parent, the canonical checkout, sibling projects, installed skills, production data, secrets, or undeclared services.
 5. Resolve mutable owner-scoped state through public SDK bindings such as `skill_data_root()` and ContentRef. Keep test/runtime files under `ADAOS_BASE_DIR` or `ADAOS_TASK_RUNTIME_DIR`, never in candidate source.
 6. Keep packaged tests hermetic and capable of failing for a stub. Exercise the real requested boundary with bounded fixtures; the trusted package-shaped test allowance is {generated_test_timeout_seconds} seconds.
 7. Declare every imported dependency and validate the package through the authoritative manifest schema and install-strict validation. Do not add a dependency unless the task requires it.
-8. Run only relevant bounded checks and fix failures caused by this change. Do not publish, install, activate, or copy the candidate into workspace/runtime; the trusted worker owns finalization and rollback evidence.
-9. Conclude against every governed acceptance point and report any unmet point explicitly."""
+8. Do not run generic CLI help or broad discovery commands. Use only targeted source reads and exact validation commands; keep every command bounded. The trusted worker reruns authoritative checks after the turn.
+9. Do not publish, install, activate, or copy the candidate into workspace/runtime; the trusted worker owns finalization and rollback evidence.
+10. Conclude against every governed acceptance point and report any unmet point explicitly."""
         required_result = required_result.format(
             target_id=target_id,
             companion=companion,
@@ -5269,6 +5439,7 @@ Omit the envelope when there is no substantive development feedback. It is advis
             command_output_lines=BOUNDED_REPAIR_COMMAND_OUTPUT_LINES,
             command_output_bytes=BOUNDED_REPAIR_COMMAND_OUTPUT_BYTES,
             discovery_lines=BOUNDED_REPAIR_DISCOVERY_LINES,
+            accepted_prototype_instruction=accepted_prototype_instruction,
         )
         governed_context = (
             json.dumps(context_projection, ensure_ascii=False, indent=2, sort_keys=True)

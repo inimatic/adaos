@@ -2193,6 +2193,13 @@ class BuilderAutomationService:
                 raise ValueError(
                     "Automation is already the active process; submit a new Automation iteration instead"
                 )
+            provider_artifacts = self._ensure_resource_provider_companion(
+                kind=kind,
+                project_id=project_id,
+                links=external_links,
+                prototype_acceptance=prototype_acceptance,
+                implementation_brief=brief,
+            )
             companion_skill_ids = self._resolve_companion_skill_ids(
                 kind,
                 project_id,
@@ -2202,12 +2209,15 @@ class BuilderAutomationService:
                     or ""
                 ),
             )
-            created_artifacts = self._ensure_automation_artifacts_created(
-                kind=kind,
-                project_id=project_id,
-                companion_skill_ids=companion_skill_ids,
-                implementation_brief=brief,
-            )
+            created_artifacts = [
+                *provider_artifacts,
+                *self._ensure_automation_artifacts_created(
+                    kind=kind,
+                    project_id=project_id,
+                    companion_skill_ids=companion_skill_ids,
+                    implementation_brief=brief,
+                ),
+            ]
             project_ownership = self._ensure_project_component_ownership(
                 links=external_links,
                 component_refs=[
@@ -2726,6 +2736,114 @@ class BuilderAutomationService:
                 }
             )
         return created
+
+    @staticmethod
+    def _prototype_requires_resource_provider(
+        prototype_acceptance: Mapping[str, Any] | None,
+    ) -> bool:
+        acceptance = (
+            prototype_acceptance
+            if isinstance(prototype_acceptance, Mapping)
+            else {}
+        )
+        evaluation = (
+            acceptance.get("deterministic_evaluation")
+            if isinstance(acceptance.get("deterministic_evaluation"), Mapping)
+            else {}
+        )
+        qualification = (
+            evaluation.get("qualification")
+            if isinstance(evaluation.get("qualification"), Mapping)
+            else {}
+        )
+        requirements = (
+            qualification.get("requirements")
+            if isinstance(qualification.get("requirements"), Mapping)
+            else {}
+        )
+        operations = {
+            str(item).strip().lower()
+            for item in requirements.get("operation_kinds") or []
+            if str(item).strip()
+        }
+        return bool(requirements.get("resource_query")) and bool(
+            operations & {"create", "update", "delete"}
+        )
+
+    def _ensure_resource_provider_companion(
+        self,
+        *,
+        kind: str,
+        project_id: str,
+        links: Mapping[str, Any],
+        prototype_acceptance: Mapping[str, Any] | None,
+        implementation_brief: str,
+    ) -> list[dict[str, Any]]:
+        """Materialize authority needed by an accepted writable resource UI."""
+
+        if kind != "scenario" or not self._prototype_requires_resource_provider(
+            prototype_acceptance
+        ):
+            return []
+        existing = self._resolve_companion_skill_ids(
+            kind,
+            project_id,
+            project_ref=str(links.get("project_ref") or "").strip() or None,
+        )
+        if existing:
+            return []
+        project_ref = str(
+            links.get("development_ticket_project_ref")
+            or links.get("project_ref")
+            or ""
+        ).strip()
+        if not project_ref.startswith("project:"):
+            raise ValueError(
+                "accepted writable resource prototype requires an owning Project"
+            )
+        owner_project_id = project_ref.split(":", 1)[1].strip()
+        if not owner_project_id:
+            raise ValueError(
+                "accepted writable resource prototype requires an owning Project"
+            )
+        skill_id = _safe_token(f"{owner_project_id}_skill", fallback="")
+        if not skill_id:
+            raise ValueError("could not derive the Project resource provider skill id")
+        root = self.dev_skills_root / skill_id
+        created: dict[str, Any] | None = None
+        if not root.is_dir():
+            service = self.workspace_service or BuilderWorkspaceService.from_context()
+            result = service.create_draft(
+                kind="skill",
+                artifact_id=skill_id,
+                source_idea=(
+                    "Project-owned typed resource provider for the accepted prototype. "
+                    + implementation_brief
+                ),
+                template_id="skill_default",
+            )
+            created = {
+                "kind": "skill",
+                "name": skill_id,
+                "draft_id": str((result.get("draft") or {}).get("draft_id") or "")
+                or None,
+                "artifact_root": str(result.get("artifact_root") or root),
+                "source": "accepted_resource_provider_scaffold",
+            }
+        from adaos.sdk.developer import compositions
+
+        ownership = compositions.ensure_owned_component(
+            owner_project_id,
+            f"skill:{skill_id}",
+        )
+        if created is not None:
+            created["project_ownership"] = {
+                "project_ref": project_ref,
+                "component_ref": f"skill:{skill_id}",
+                "idempotent": bool(ownership.get("idempotent")),
+            }
+            return [created]
+        return []
 
     @staticmethod
     def _ensure_project_component_ownership(

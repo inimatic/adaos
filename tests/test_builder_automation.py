@@ -3445,6 +3445,61 @@ def test_ui_only_scenario_does_not_invent_conventional_companion_skill(
     assert not (service.dev_skills_root / "recipes_skill").exists()
 
 
+def test_writable_resource_prototype_materializes_project_owned_provider_skill(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from adaos.sdk.developer import compositions
+
+    service = _service(tmp_path)
+    acceptance = {
+        "deterministic_evaluation": {
+            "qualification": {
+                "requirements": {
+                    "resource_query": True,
+                    "operation_kinds": ["create", "update", "delete"],
+                }
+            }
+        }
+    }
+    monkeypatch.setattr(
+        type(service._workflow()),
+        "require_current_prototype_acceptance",
+        lambda self, object_type, object_id: acceptance,
+    )
+
+    def ensure_owned_component(project_id: str, component_ref: str):
+        assert project_id == "recipes"
+        assert component_ref == "skill:recipes_skill"
+        _write_project_manifest(tmp_path / "dev", skill_ids=("recipes_skill",))
+        return {"ok": True, "idempotent": False, "project": {"id": project_id}}
+
+    monkeypatch.setattr(compositions, "ensure_owned_component", ensure_owned_component)
+
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement the accepted writable recipe board.",
+        webspace_id="prompt-dev",
+        links={"project_ref": "project:recipes"},
+    )
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == started["session"]["current_task_id"]
+    )
+
+    assert started["session"]["companion_skill_ids"] == ["recipes_skill"]
+    assert (service.dev_skills_root / "recipes_skill" / "skill.yaml").is_file()
+    assert task["realize_request"]["artifacts"]["companion_skill_ids"] == [
+        "recipes_skill"
+    ]
+    assert "skills/recipes_skill/" in task["forge"]["sparse_paths"]
+    assert started["session"]["created_artifacts"][0]["source"] == (
+        "accepted_resource_provider_scaffold"
+    )
+
+
 def test_persisted_automation_state_drops_singular_companion_alias(tmp_path: Path) -> None:
     service = _service(tmp_path)
     session = {
