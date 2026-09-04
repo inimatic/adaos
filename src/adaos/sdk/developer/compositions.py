@@ -68,6 +68,12 @@ def _root_parent() -> Path:
     return root
 
 
+def _service():
+    from adaos.services.root.service import RootDeveloperService
+
+    return RootDeveloperService()
+
+
 def resolve_root(project_id: str, *, required: bool = True) -> Path:
     parent = _root_parent()
     root = (parent / _project_id(project_id)).resolve()
@@ -377,6 +383,21 @@ def advance_version(
         "previous_version": str(current.get("version") or ""),
         "version_bump": level,
         "skipped_occupied_versions": skipped,
+    }
+
+
+def release_versions(project_id: str) -> dict[str, str]:
+    """Return immutable release digests keyed by occupied Project version."""
+
+    token = _project_id(project_id)
+    get(token)
+    versions = _service().project_release_versions(token)
+    if not isinstance(versions, Mapping):
+        raise ProjectCompositionError("Project release version registry returned an invalid result")
+    return {
+        str(version).strip(): str(digest).strip()
+        for version, digest in versions.items()
+        if str(version).strip() and str(digest).strip()
     }
 
 
@@ -862,6 +883,7 @@ __all__ = [
     "normalized_definition",
     "prepare_candidate",
     "project_for_component",
+    "release_versions",
     "resolve_presentation",
     "resolve_root",
     "validate",

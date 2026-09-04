@@ -439,6 +439,29 @@ def test_project_version_advance_is_optimistic_and_skips_occupied_versions(
     assert unchanged["manifest_digest"] == advanced["manifest_digest"]
 
 
+def test_project_release_versions_uses_authoritative_release_store(
+    project_space,
+    monkeypatch,
+) -> None:
+    _skill(project_space["skills"], "candidate_skill")
+    compositions.create(_project("candidate_project", "candidate_skill"))
+
+    class _Service:
+        def project_release_versions(self, project_id: str) -> dict[str, str]:
+            assert project_id == "candidate_project"
+            return {
+                "0.1.1": "sha256:" + "1" * 64,
+                "0.1.2": "sha256:" + "2" * 64,
+            }
+
+    monkeypatch.setattr(compositions, "_service", _Service)
+
+    assert compositions.release_versions("candidate_project") == {
+        "0.1.1": "sha256:" + "1" * 64,
+        "0.1.2": "sha256:" + "2" * 64,
+    }
+
+
 def test_local_artifact_group_copies_files_and_detects_tampering(project_space, tmp_path: Path) -> None:
     skill_root = _skill(project_space["skills"], "tlp_direction")
     source = tmp_path / "review.md"
