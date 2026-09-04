@@ -28,6 +28,12 @@ def _load_active_lock(workspace_root: Path) -> WorkspaceLock | None:
         ) from exc
 
 
+def load_active_workspace_lock(workspace_root: Path) -> WorkspaceLock | None:
+    """Load the trusted WorkspaceLock used by release-aware source commands."""
+
+    return _load_active_lock(Path(workspace_root))
+
+
 def assert_workspace_component_mutable(
     workspace_root: Path,
     *,
@@ -108,4 +114,5 @@ __all__ = [
     "WorkspaceSourceMutationBlocked",
     "assert_workspace_component_maintenance_owned",
     "assert_workspace_component_mutable",
+    "load_active_workspace_lock",
 ]

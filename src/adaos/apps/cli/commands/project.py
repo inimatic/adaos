@@ -16,6 +16,7 @@ from adaos.services.artifact_pipeline.project_build import (
     build_workspace_project_release,
     project_release_build_evidence,
 )
+from adaos.services.workspace_release_guard import load_active_workspace_lock
 
 
 app = typer.Typer(help="Build and inspect immutable Project releases.")
@@ -117,6 +118,7 @@ def _build_project_release(
 ) -> dict[str, object]:
     workspace, artifact_root = _roots(workspace_root)
     _assert_project_source_clean(workspace, project_id)
+    active_workspace_lock = load_active_workspace_lock(workspace)
     result = build_workspace_project_release(
         project_dir=workspace / "projects" / project_id,
         workspace_root=workspace,
@@ -135,6 +137,7 @@ def _build_project_release(
         validation_evidence=(
             project_release_build_evidence(revision, builder=builder),
         ),
+        active_workspace_lock=active_workspace_lock,
     )
     return result.to_dict()
 

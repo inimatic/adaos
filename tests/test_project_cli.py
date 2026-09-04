@@ -84,3 +84,29 @@ components:
 
     with pytest.raises(typer.BadParameter, match="uncommitted changes"):
         project_cli._assert_project_source_clean(tmp_path, "media_center")
+
+
+def test_project_release_uses_active_workspace_lock(monkeypatch, tmp_path) -> None:
+    lock = object()
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(project_cli, "_roots", lambda _root: (tmp_path, tmp_path / "state"))
+    monkeypatch.setattr(project_cli, "_assert_project_source_clean", lambda *_args: None)
+    monkeypatch.setattr(project_cli, "load_active_workspace_lock", lambda _root: lock)
+
+    def build(**kwargs):
+        captured.update(kwargs)
+        return type("Result", (), {"to_dict": lambda self: _release()})()
+
+    monkeypatch.setattr(project_cli, "build_workspace_project_release", build)
+
+    result = project_cli._build_project_release(
+        "media_center",
+        revision="a" * 40,
+        repository="registry",
+        forge="github",
+        workspace_root=None,
+        builder="test",
+    )
+
+    assert result["project_id"] == "media_center"
+    assert captured["active_workspace_lock"] is lock
