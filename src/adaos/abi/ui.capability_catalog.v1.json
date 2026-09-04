@@ -1,0 +1,312 @@
+{
+  "schema": "adaos.ui.capability_catalog.v1",
+  "catalog_version": "1.1.0",
+  "webui_schema": "adaos.webui.v1",
+  "layouts": [
+    {
+      "id": "layout.flow",
+      "kind": "layout",
+      "title": "Linear flow",
+      "summary": "One ordered content flow for forms, compact pages, sheets, and modal content.",
+      "aliases": {
+        "en": ["flow", "stack", "single column", "linear"],
+        "ru": ["поток", "стопка", "одна колонка", "последовательно"]
+      },
+      "manifest": {
+        "types": ["single", "stack"],
+        "patterns": ["stack", "modal", "sheet", "tabs"]
+      },
+      "responsive": {
+        "desktop": "single ordered track",
+        "compact": "single ordered track"
+      },
+      "postconditions": [
+        "Rendered areas retain declaration order.",
+        "No area is presented as a parallel peer column."
+      ]
+    },
+    {
+      "id": "layout.split",
+      "kind": "layout",
+      "title": "Primary and supporting regions",
+      "summary": "Role-aware main, navigation, detail, auxiliary, and footer placement.",
+      "aliases": {
+        "en": ["split", "sidebar", "master detail", "side panel"],
+        "ru": ["разделенный", "боковая панель", "мастер детали", "панель справа"]
+      },
+      "manifest": {
+        "types": ["split", "responsive"],
+        "patterns": ["split", "sidebar-content", "focus-detail", "outline-detail"]
+      },
+      "responsive": {
+        "desktop": "role-aware parallel regions",
+        "compact": "main, auxiliary, and footer stack; navigation may use a drawer"
+      },
+      "postconditions": [
+        "At most one area owns each placement role.",
+        "Main and supporting regions are parallel on a sufficiently wide viewport."
+      ]
+    },
+    {
+      "id": "layout.grid",
+      "kind": "layout",
+      "title": "Responsive area grid",
+      "summary": "An unordered responsive grid of independent page areas; not a workflow board.",
+      "aliases": {
+        "en": ["grid", "dashboard", "tiles", "overview"],
+        "ru": ["сетка", "дашборд", "плитки", "обзор"]
+      },
+      "manifest": {
+        "types": ["grid", "custom"],
+        "patterns": ["grid", "dashboard", "desktop-zones"]
+      },
+      "responsive": {
+        "desktop": "auto-fit peer areas with a 280px minimum",
+        "compact": "areas wrap into fewer columns"
+      },
+      "limitations": [
+        "Area order has no lane or workflow-state meaning.",
+        "Use collection.board for Kanban or status-lane semantics."
+      ],
+      "postconditions": [
+        "Peer areas use the grid render plan instead of the linear flow plan.",
+        "Every area remains at least 280px wide before wrapping."
+      ]
+    }
+  ],
+  "components": [
+    {
+      "id": "collection.board",
+      "kind": "component",
+      "title": "Resource board",
+      "summary": "A field-driven board projection of one flat resource collection into ordered lanes.",
+      "aliases": {
+        "en": ["kanban", "board", "lanes", "task board", "status columns"],
+        "ru": ["канбан", "доска", "дорожки", "доска задач", "колонки статусов"]
+      },
+      "manifest": {
+        "widget_type": "collection.board",
+        "required_inputs": ["lanes", "laneKey", "titleKey"],
+        "optional_inputs": ["descriptionKey", "cardFields", "imageKey", "imageAltKey", "itemIdKey", "minLaneWidth", "showCounts", "compact", "dragDrop", "loadingText", "emptyText", "addItemLabel", "moveItemLabel", "buttons"]
+      },
+      "data_shape": {
+        "kind": "flat_collection",
+        "lane_membership": "Each item laneKey value equals one declared lanes[].id.",
+        "lane": { "required": ["id", "label"] },
+        "item": { "required": ["stable id", "title value", "lane value"], "optional_projection": "cardFields maps arbitrary typed resource fields without domain-specific card code" }
+      },
+      "events": ["select", "click", "add", "move", "click:<buttonId>"],
+      "responsive": {
+        "desktop": "all lanes are equal peer columns when width permits",
+        "compact": "lane order is preserved in a horizontally scrollable rail"
+      },
+      "interactions": {
+        "query": "Prefer dataSource.kind=resourceQuery for typed filters, search, sort, cursor, and relevance over Resource Workbench.",
+        "crud": "Use action.type=resourceOperation for ordinary create/update/delete. action.target is resource_type; params.operation_id selects the declared operation.",
+        "drag_drop": "Set inputs.dragDrop=true and declare on=move. The event contains record id, fromLaneId, toLaneId, positions, laneKey, and patch; resourceOperation(update) can persist the patch without a skill-specific method.",
+        "accessible_move": "A lane selector is rendered with draggable cards so the same move is available without a dragging gesture.",
+        "lane_create": "Declare on=add to expose one add command per lane. The event provides laneId and defaults containing the lane field."
+      },
+      "feature_levels": {
+        "implemented": ["ordered lanes", "configurable card fields", "counts", "soft lane limits", "lane create", "drag move", "single-pointer move alternative", "responsive horizontal rail", "optimistic rollback"],
+        "composable": ["typed query filters and search", "create/edit form", "record details", "delete/archive commands", "role-gated operations"],
+        "deferred": ["swimlanes", "multi-select and bulk move", "lane authoring", "saved personal views", "virtualized very-large boards", "collaborative rank conflict resolution"]
+      },
+      "limitations": [
+        "The renderer never becomes data authority; Resource Workbench or a declared domain command applies mutations.",
+        "dragDrop=true requires an on=move persistence action; the renderer only provides optimistic feedback and rollback.",
+        "Images are optional and should not be invented unless the request makes imagery relevant."
+      ],
+      "postconditions": [
+        "One rendered lane exists for every declared lane in declaration order.",
+        "Every item is rendered in the lane selected by laneKey.",
+        "Unknown lane values are reported by validation rather than silently dropped."
+      ]
+    },
+    {
+      "id": "ui.list",
+      "kind": "component",
+      "title": "List and card collection",
+      "summary": "Rows, grouped rows, or a responsive card catalog without workflow-lane semantics.",
+      "aliases": { "en": ["list", "cards", "catalog"], "ru": ["список", "карточки", "каталог"] },
+      "manifest": { "widget_type": "ui.list", "variants": ["list", "cards"] },
+      "data_shape": { "kind": "collection" },
+      "events": ["select", "click", "add", "click:<buttonId>"],
+      "responsive": { "desktop": "rows or auto-fit cards", "compact": "rows or narrower card tracks" },
+      "limitations": ["Separate list widgets do not form a semantic Kanban board."],
+      "postconditions": ["Every visible collection item has a stable focus identity."]
+    },
+    {
+      "id": "ui.table",
+      "kind": "component",
+      "title": "Dense table",
+      "summary": "A dense comparison of typed textual, status, boolean, icon, and action columns.",
+      "aliases": { "en": ["table", "rows", "columns"], "ru": ["таблица", "строки", "столбцы"] },
+      "manifest": { "widget_type": "ui.table" },
+      "data_shape": { "kind": "collection" },
+      "events": ["select", "click:<buttonId>"],
+      "responsive": { "desktop": "tabular", "compact": "bounded horizontal overflow" },
+      "limitations": ["Image cells and free-form HTML are not supported."],
+      "postconditions": ["Declared columns map to rendered cells in declaration order."]
+    },
+    {
+      "id": "ui.form",
+      "kind": "component",
+      "title": "Typed form",
+      "summary": "Typed data capture with validation and bounded form lifecycle actions.",
+      "aliases": { "en": ["form", "input", "questionnaire"], "ru": ["форма", "ввод", "анкета"] },
+      "manifest": { "widget_type": "ui.form" },
+      "data_shape": { "kind": "record" },
+      "events": ["submit", "validate", "save_draft", "reset", "change:<fieldId>"],
+      "responsive": { "desktop": "stack or responsiveGrid", "compact": "one column when fields no longer fit" },
+      "postconditions": ["Every required answer is represented by a typed field."]
+    },
+    {
+      "id": "item.details",
+      "kind": "component",
+      "title": "Selected item details",
+      "summary": "A readable field projection for one selected or bound record.",
+      "aliases": { "en": ["details", "record", "selected item"], "ru": ["детали", "запись", "выбранный элемент"] },
+      "manifest": { "widget_type": "item.details" },
+      "data_shape": { "kind": "record_or_keyed_records" },
+      "events": ["click:<actionId>"],
+      "responsive": { "desktop": "detail surface", "compact": "detail surface" },
+      "postconditions": ["When selectedStateKey is used, visible details change with that selected key."]
+    },
+    {
+      "id": "collection.tree",
+      "kind": "component",
+      "title": "Hierarchy tree",
+      "summary": "Hierarchical navigation for files, lifecycle nodes, and nested domain records.",
+      "aliases": { "en": ["tree", "hierarchy", "files"], "ru": ["дерево", "иерархия", "файлы"] },
+      "manifest": { "widget_type": "collection.tree" },
+      "data_shape": { "kind": "tree" },
+      "events": ["select"],
+      "responsive": { "desktop": "nested outline", "compact": "nested outline" },
+      "postconditions": ["Every selectable leaf provides all fields consumed by its select action."]
+    },
+    {
+      "id": "ui.actions",
+      "kind": "component",
+      "title": "Command surface",
+      "summary": "Explicit toolbar, segmented, stack, or compact commands.",
+      "aliases": { "en": ["actions", "toolbar", "buttons", "segmented"], "ru": ["действия", "панель", "кнопки", "переключатель"] },
+      "manifest": { "widget_type": "ui.actions" },
+      "data_shape": { "kind": "none" },
+      "events": ["click", "click:<buttonId>"],
+      "responsive": { "desktop": "bounded command group", "compact": "wraps without overlapping" },
+      "postconditions": ["Every declared button has an executable or explicitly disabled action contract."]
+    },
+    {
+      "id": "input.selector",
+      "kind": "component",
+      "title": "Option selector",
+      "summary": "One compact selectable option set with optional search.",
+      "aliases": { "en": ["select", "dropdown", "option"], "ru": ["выбор", "выпадающий список", "опция"] },
+      "manifest": { "widget_type": "input.selector" },
+      "data_shape": { "kind": "options" },
+      "events": ["change", "select"],
+      "responsive": { "desktop": "anchored popup", "compact": "viewport-bounded popup" },
+      "postconditions": ["The selected value maps to one declared option value."]
+    },
+    {
+      "id": "visual.metricChart",
+      "kind": "component",
+      "title": "Metric chart",
+      "summary": "A bounded chart projection for metric or timeseries values.",
+      "aliases": { "en": ["chart", "metric", "trend"], "ru": ["график", "метрика", "тренд"] },
+      "manifest": { "widget_type": "visual.metricChart", "aliases": ["visual.timeseriesChart"] },
+      "data_shape": { "kind": "series" },
+      "events": [],
+      "responsive": { "desktop": "bounded chart", "compact": "bounded chart" },
+      "postconditions": ["A non-empty numeric series produces a non-blank chart."]
+    }
+  ],
+  "recipes": [
+    {
+      "id": "recipe.kanban_board",
+      "title": "Kanban resource board",
+      "summary": "Map any typed resource collection into explicit ordered workflow lanes.",
+      "aliases": {
+        "en": ["kanban", "task board", "board with columns", "planned in progress done"],
+        "ru": ["канбан", "доска задач", "доска с колонками", "запланировано в работе готово"]
+      },
+      "requires": { "layouts": ["layout.flow"], "components": ["collection.board"] },
+      "composition": {
+        "page_layout": { "type": "single", "pattern": "stack", "areas": [{ "id": "main", "role": "main" }] },
+        "widget": {
+          "type": "collection.board",
+          "area": "main",
+          "inputs": {
+            "lanes": "Ordered array of {id,label}.",
+            "laneKey": "Resource field containing a lane id.",
+            "titleKey": "Resource title field.",
+            "cardFields": "Optional typed field projections shown on compact cards."
+          },
+          "dataSource": "One flat collection; use resourceQuery for query/search/filter backed resources."
+        },
+        "visual_rule": "Use compact text-first cards. Add images only when the request explicitly makes imagery relevant."
+      },
+      "interactions": {
+        "drag_drop": "Set inputs.dragDrop=true and declare an on=move persistence action. Prefer resourceOperation(update) with record_id=$event.id and payload=$event.patch for ordinary field changes.",
+        "crud": "Compose resourceQuery, resourceOperation, ui.form, and item.details before adding skill-specific handlers."
+      },
+      "postconditions": [
+        "The page contains one collection.board widget.",
+        "The declared lane count equals the requested column count.",
+        "Every requested sample card belongs to exactly one declared lane.",
+        "Every lane contains the requested number of sample cards when specified."
+      ]
+    },
+    {
+      "id": "recipe.resource_board_workbench",
+      "title": "Resource board workbench",
+      "summary": "Compose query controls, a board projection, record details, and typed CRUD over one Resource Workbench definition.",
+      "aliases": {
+        "en": ["editable board", "filterable board", "resource board", "board crud"],
+        "ru": ["редактируемая доска", "доска с фильтрами", "доска ресурсов", "crud доска"]
+      },
+      "requires": { "layouts": ["layout.flow", "layout.split"], "components": ["collection.board", "input.text", "input.selector", "ui.form", "item.details"] },
+      "composition": {
+        "query": "Toolbar controls write typed search/filter/sort values to page state; resourceQuery consumes those values.",
+        "board": "collection.board projects query items by laneKey and writes selection to state.",
+        "details": "item.details or a modal reads the selected resource record; ui.form edits it.",
+        "operations": "resourceOperation implements create/update/delete and lane-field updates; domain commands remain separate.",
+        "prototype": "Builder may bind the same contracts to disposable local_crud synthetic data before a durable provider exists."
+      },
+      "postconditions": [
+        "Changing a query control changes the resource query rather than filtering an unrelated client copy.",
+        "Selecting a card identifies one stable resource record for details or editing.",
+        "Ordinary CRUD does not require a generated skill-specific handler.",
+        "Every mutation is checked against the ResourceDefinition operation and role policy."
+      ]
+    },
+    {
+      "id": "recipe.master_detail",
+      "title": "Master and detail",
+      "summary": "Select one collection item and show a state-bound detail surface.",
+      "aliases": { "en": ["master detail", "selected item", "side details"], "ru": ["список и детали", "выбранный элемент", "детали справа"] },
+      "requires": { "layouts": ["layout.split"], "components": ["ui.list", "item.details"] },
+      "composition": { "selection": "Master writes selected id; details read the same id." },
+      "postconditions": ["Selecting different master records changes the visible detail record."]
+    },
+    {
+      "id": "recipe.data_entry",
+      "title": "Typed data entry",
+      "summary": "Capture a typed record and expose explicit lifecycle actions.",
+      "aliases": { "en": ["form", "create record", "questionnaire"], "ru": ["форма", "создать запись", "анкета"] },
+      "requires": { "layouts": ["layout.flow"], "components": ["ui.form"] },
+      "composition": { "input": "Typed fields", "command": "Declared submit or save action" },
+      "postconditions": ["Each requested answer has one editable typed field."]
+    },
+    {
+      "id": "recipe.dashboard",
+      "title": "Operational dashboard",
+      "summary": "Compose independent metrics and summaries in a responsive area grid.",
+      "aliases": { "en": ["dashboard", "metrics overview"], "ru": ["дашборд", "обзор метрик"] },
+      "requires": { "layouts": ["layout.grid"], "components": ["visual.metricChart"] },
+      "composition": { "layout": "Independent peer areas using pattern=dashboard or grid." },
+      "postconditions": ["Metric areas use a grid render plan on a sufficiently wide viewport."]
+    }
+  ]
+}

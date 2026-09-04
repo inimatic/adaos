@@ -18,6 +18,7 @@ from adaos.services import conversation_links, conversation_safety
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from adaos.services.runtime_paths import current_base_dir, current_repo_root, current_state_dir
 from adaos.services.skill.validation import validate_data_route_contract
+from adaos.services.ui_capabilities import validate_webui_capabilities
 
 
 _ARTIFACT_ID_RE = re.compile(r"^[a-z0-9_.-]+$")
@@ -2113,7 +2114,24 @@ class BuilderWorkspaceService:
                 checks.append(self._validate_schema("services/skill_schema.json", _load_runtime_skill_schema(), data, "draft202012"))
             webui = artifact_root / "webui.json"
             if webui.exists():
-                checks.append(self._validate_schema("webui.v1.schema.json", _load_abi_schema("webui.v1.schema.json"), _read_json(webui), "draft202012"))
+                webui_payload = _read_json(webui)
+                checks.append(self._validate_schema("webui.v1.schema.json", _load_abi_schema("webui.v1.schema.json"), webui_payload, "draft202012"))
+                capability_report = validate_webui_capabilities(webui_payload)
+                checks.append(
+                    {
+                        "name": "ui.capability_catalog",
+                        "ok": capability_report["ok"],
+                        "issues": [
+                            _issue(
+                                "error" if item.get("severity") == "error" else "warning",
+                                str(item.get("code") or "ui.capability.invalid"),
+                                str(item.get("message") or "UI capability validation failed"),
+                                str(item.get("path") or "") or None,
+                            )
+                            for item in capability_report["findings"]
+                        ],
+                    }
+                )
         elif artifact_kind == "scenario":
             manifest_path = self._descriptor_manifest_path(artifact_root, "scenario")
             if manifest_path is None:

@@ -596,6 +596,7 @@
     "widgetType": {
       "type": "string",
       "enum": [
+        "collection.board",
         "collection.grid",
         "collection.tree",
         "navigation.outline",
@@ -868,6 +869,14 @@
           }
         },
         {
+          "if": { "properties": { "type": { "const": "collection.board" } } },
+          "then": {
+            "properties": {
+              "inputs": { "$ref": "#/$defs/boardInputs" }
+            }
+          }
+        },
+        {
           "if": { "properties": { "type": { "const": "navigation.outline" } } },
           "then": {
             "properties": {
@@ -1070,7 +1079,10 @@
       "additionalProperties": true,
       "required": ["type", "areas"],
       "properties": {
-        "type": { "type": "string", "minLength": 1 },
+        "type": {
+          "type": "string",
+          "enum": ["single", "stack", "split", "grid", "custom", "responsive"]
+        },
         "pattern": {
           "type": "string",
           "enum": [
@@ -1124,7 +1136,10 @@
           "type": "boolean",
           "description": "Use this variant when no when expression matches. Authors should declare at most one default."
         },
-        "type": { "type": "string", "minLength": 1 },
+        "type": {
+          "type": "string",
+          "enum": ["single", "stack", "split", "grid", "custom", "responsive"]
+        },
         "pattern": {
           "type": "string",
           "enum": [
@@ -1212,6 +1227,14 @@
           }
         },
         {
+          "if": { "properties": { "type": { "const": "collection.board" } } },
+          "then": {
+            "properties": {
+              "inputs": { "$ref": "#/$defs/boardInputs" }
+            }
+          }
+        },
+        {
           "if": { "properties": { "type": { "const": "navigation.outline" } } },
           "then": {
             "properties": {
@@ -1243,7 +1266,7 @@
       "additionalProperties": true,
       "required": ["kind"],
       "properties": {
-        "kind": { "type": "string", "enum": ["skill", "api", "static", "resource", "y", "stream"] },
+        "kind": { "type": "string", "enum": ["skill", "api", "static", "resource", "resourceQuery", "y", "stream"] },
         "name": {
           "type": "string",
           "description": "Skill data source target in '<skill>.<method>' form."
@@ -1284,6 +1307,16 @@
         "resource": {
           "$ref": "#/$defs/id",
           "description": "Resource id from top-level resources when kind='resource'."
+        },
+        "resourceType": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Canonical Resource Workbench type when kind='resourceQuery'."
+        },
+        "query": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Typed Resource Workbench query. Values may reference page state through declarative expressions."
         },
         "path": { "type": "string" },
         "nodeId": {
@@ -1328,6 +1361,10 @@
         {
           "if": { "properties": { "kind": { "const": "resource" } } },
           "then": { "required": ["resource"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "resourceQuery" } } },
+          "then": { "required": ["resourceType"] }
         },
         {
           "if": { "properties": { "kind": { "const": "stream" } } },
@@ -1589,6 +1626,68 @@
           "type": "array",
           "items": { "$ref": "#/$defs/actionButton" }
         }
+      }
+    },
+
+    "boardInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Typed board projection over one flat resource collection. Lane moves are optimistic UI operations and require a declarative persistence action.",
+      "required": ["lanes", "laneKey", "titleKey"],
+      "properties": {
+        "lanes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "label"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "label": { "type": "string", "minLength": 1 },
+              "label_i18n": { "$ref": "#/$defs/i18nTextSpec" },
+              "description": { "type": "string" },
+              "limit": { "type": "integer", "minimum": 1 },
+              "tone": { "enum": ["neutral", "info", "success", "warning", "danger"] }
+            }
+          }
+        },
+        "collectionKey": { "$ref": "#/$defs/fieldPath" },
+        "laneKey": { "$ref": "#/$defs/fieldPath" },
+        "itemIdKey": { "$ref": "#/$defs/fieldPath" },
+        "titleKey": { "$ref": "#/$defs/fieldPath" },
+        "descriptionKey": { "$ref": "#/$defs/fieldPath" },
+        "cardFields": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key"],
+            "properties": {
+              "key": { "$ref": "#/$defs/fieldPath" },
+              "label": { "type": "string" },
+              "label_i18n": { "$ref": "#/$defs/i18nTextSpec" },
+              "presentation": { "enum": ["text", "badge", "tags", "date", "number", "person"] },
+              "hideWhenEmpty": { "type": "boolean" }
+            }
+          }
+        },
+        "imageKey": { "$ref": "#/$defs/fieldPath" },
+        "imageAltKey": { "$ref": "#/$defs/fieldPath" },
+        "minLaneWidth": { "type": "integer", "minimum": 220, "maximum": 480 },
+        "showCounts": { "type": "boolean" },
+        "compact": { "type": "boolean" },
+        "dragDrop": { "type": "boolean" },
+        "loadingText": { "type": "string" },
+        "loadingText_i18n": { "$ref": "#/$defs/i18nTextSpec" },
+        "emptyText": { "type": "string" },
+        "emptyText_i18n": { "$ref": "#/$defs/i18nTextSpec" },
+        "addItemLabel": { "type": "string" },
+        "addItemLabel_i18n": { "$ref": "#/$defs/i18nTextSpec" },
+        "moveItemLabel": { "type": "string" },
+        "moveItemLabel_i18n": { "$ref": "#/$defs/i18nTextSpec" },
+        "buttons": { "type": "array", "items": { "$ref": "#/$defs/actionButton" } }
       }
     },
 
@@ -2506,8 +2605,37 @@
               "params": { "$ref": "#/$defs/mutateStateActionParams" }
             }
           }
+        },
+        {
+          "if": { "properties": { "type": { "const": "resourceOperation" } } },
+          "then": {
+            "required": ["target", "params"],
+            "properties": {
+              "params": { "$ref": "#/$defs/resourceOperationActionParams" }
+            }
+          }
         }
       ]
+    },
+
+    "resourceOperationActionParams": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["operation_id"],
+      "properties": {
+        "operation_id": { "type": "string", "minLength": 1 },
+        "record_id": {},
+        "payload": {},
+        "expected_revision": {},
+        "actor": {},
+        "subject": {},
+        "delegation": {},
+        "idempotency_key": {},
+        "evidence_refs": {},
+        "locale": {},
+        "context": {}
+      },
+      "description": "Generic typed Resource Workbench mutation. action.target is the canonical resource type; params use the resource operation API field names and may contain declarative event/state expressions."
     },
 
     "openDevTicketsActionParams": {

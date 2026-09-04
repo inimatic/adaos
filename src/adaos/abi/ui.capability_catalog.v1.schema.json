@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.ui.capability_catalog.v1",
+  "title": "AdaOS declarative UI capability catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "catalog_version", "webui_schema", "layouts", "components", "recipes"],
+  "properties": {
+    "schema": { "const": "adaos.ui.capability_catalog.v1" },
+    "catalog_version": { "type": "string", "minLength": 1 },
+    "webui_schema": { "const": "adaos.webui.v1" },
+    "layouts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/capability" }
+    },
+    "components": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/capability" }
+    },
+    "recipes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/recipe" }
+    }
+  },
+  "$defs": {
+    "localizedTerms": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "kind", "title", "summary", "manifest", "responsive", "postconditions"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["layout", "component"] },
+        "title": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string", "minLength": 1 },
+        "aliases": { "$ref": "#/$defs/localizedTerms" },
+        "manifest": { "type": "object", "minProperties": 1 },
+        "data_shape": { "type": "object" },
+        "events": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "responsive": { "type": "object", "minProperties": 1 },
+        "limitations": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "postconditions": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "recipe": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "title", "summary", "aliases", "requires", "composition", "postconditions"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string", "minLength": 1 },
+        "aliases": { "$ref": "#/$defs/localizedTerms" },
+        "requires": {
+          "type": "object",
+          "properties": {
+            "layouts": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+            "components": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+          }
+        },
+        "composition": { "type": "object", "minProperties": 1 },
+        "unsupported": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "postconditions": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+      }
+    }
+  }
+}

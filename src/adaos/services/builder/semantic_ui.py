@@ -10,6 +10,8 @@ from typing import Any, Mapping
 
 from jsonschema import Draft202012Validator
 
+from adaos.services.ui_capabilities import validate_webui_capabilities
+
 from .workflow import (
     BUILDER_CONTEXT_PACKET_SCHEMA,
     BuilderWorkflowError,
@@ -364,6 +366,12 @@ class BuilderSemanticUIService:
             else:
                 edit = _remove(after_webui, target, target_ref)
             Draft202012Validator(_schema("webui.v1.schema.json")).validate(after_webui)
+            capability_report = validate_webui_capabilities(after_webui)
+            if not capability_report["ok"]:
+                finding = capability_report["findings"][0]
+                raise BuilderWorkflowError(
+                    f"UI capability validation failed: {finding['code']}: {finding['message']}"
+                )
 
             scenario_json = _read_json(scenario_json_path, label="scenario.json")
             scenario_json["ui"] = copy.deepcopy(after_webui.get("ui") or {})

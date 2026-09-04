@@ -19,6 +19,7 @@ from adaos.services.system_model.model import (
     SyncStatus,
     TrustStatus,
 )
+from adaos.services.ui_capabilities import ui_capability_catalog
 
 from .policy import capability_registry_payload, capability_registry_summary
 from .reports import control_report_registry_summary
@@ -503,6 +504,7 @@ def _descriptor_build_profile() -> dict[str, Any]:
         ],
         "published_descriptor_ids": [
             "sdk_metadata",
+            "ui_capability_catalog",
             "system_model_vocabulary",
             "skill_manifest_schema",
             "scenario_manifest_schema",
@@ -664,6 +666,8 @@ def _descriptor_payload(
         if effective_level not in {"mini", "std", "rich"}:
             effective_level = "std"
         return _sdk_metadata(effective_level, query=query, limit=limit)
+    if token == "ui_capability_catalog":
+        return ui_capability_catalog()
     if token == "system_model_vocabulary":
         return _system_model_vocabulary()
     if token == "skill_manifest_schema":
@@ -953,6 +957,14 @@ def list_descriptor_sets() -> list[dict[str, Any]]:
             source_kind="docs_architecture_index",
             descriptor_class="architecture",
             tags=["development", "architecture", "docs"],
+        ),
+        _descriptor_entry(
+            "ui_capability_catalog",
+            title="UI capability catalog",
+            summary="Versioned semantic layouts, components, recipes, limitations, and acceptance postconditions for Builder-authored WebUI.",
+            source_kind="ui_capability_catalog",
+            descriptor_class="client",
+            tags=["development", "builder", "client", "ui", "components", "recipes"],
         ),
         _descriptor_entry(
             "capability_registry",

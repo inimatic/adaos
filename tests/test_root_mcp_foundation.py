@@ -493,6 +493,46 @@ def test_root_mcp_searches_compact_headers_then_reads_one_item(monkeypatch) -> N
     assert descriptor_item["item"]["name"] == selected["item_id"]
 
 
+def test_root_mcp_searches_ui_capabilities_then_reads_exact_contract(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_ROOT_OWNER_TOKEN", "owner-secret")
+    client = _make_client()
+    headers = {"X-Owner-Token": "owner-secret"}
+
+    searched = client.post(
+        "/v1/root/mcp/call",
+        headers=headers,
+        json={
+            "tool_id": "development.search_descriptors",
+            "arguments": {
+                "query": "канбан доска задач колонки",
+                "descriptor_ids": ["ui_capability_catalog"],
+                "limit": 8,
+            },
+        },
+    ).json()
+
+    search = searched["response"]["result"]["search"]
+    selected = next(item for item in search["items"] if item["item_id"] == "collection.board")
+    assert "manifest" not in selected
+
+    detail = client.post(
+        "/v1/root/mcp/call",
+        headers=headers,
+        json={
+            "tool_id": "development.get_descriptor_item",
+            "arguments": {
+                "descriptor_id": "ui_capability_catalog",
+                "item_id": "collection.board",
+                "level": "std",
+            },
+        },
+    ).json()
+
+    contract = detail["response"]["result"]["descriptor_item"]["item"]
+    assert contract["manifest"]["widget_type"] == "collection.board"
+    assert contract["interactions"]["drag_drop"].startswith("Set inputs.dragDrop=true")
+
+
 def test_root_mcp_searches_context_headers_then_reads_one_capsule(
     monkeypatch,
     tmp_path,

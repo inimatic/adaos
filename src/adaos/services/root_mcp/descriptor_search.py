@@ -10,6 +10,7 @@ from .registry import get_descriptor_set, list_descriptor_sets
 
 _CHILD_INDEX_DESCRIPTORS = {
     "sdk_metadata",
+    "ui_capability_catalog",
     "architecture_catalog",
     "template_catalog",
     "public_skill_registry_summary",
@@ -103,6 +104,40 @@ def _payload_headers(descriptor_id: str, payload: Mapping[str, Any]) -> list[dic
                     args=metadata.get("args") or (),
                 )
             )
+        return rows
+    if descriptor_id == "ui_capability_catalog":
+        rows = []
+        for key, fallback_kind in (
+            ("layouts", "ui.layout"),
+            ("components", "ui.component"),
+            ("recipes", "ui.recipe"),
+        ):
+            for item in payload.get(key) or []:
+                if not isinstance(item, Mapping):
+                    continue
+                item_id = str(item.get("id") or "").strip()
+                if not item_id:
+                    continue
+                aliases = item.get("aliases") if isinstance(item.get("aliases"), Mapping) else {}
+                tags = [
+                    str(alias)
+                    for values in aliases.values()
+                    if isinstance(values, list)
+                    for alias in values
+                    if str(alias).strip()
+                ]
+                rows.append(
+                    _header(
+                        descriptor_id=descriptor_id,
+                        item_id=item_id,
+                        kind=str(item.get("kind") or fallback_kind),
+                        title=str(item.get("title") or item_id),
+                        summary=str(item.get("summary") or ""),
+                        owner="adaos.client",
+                        stability=str(payload.get("stage") or "experimental"),
+                        tags=tags,
+                    )
+                )
         return rows
     if descriptor_id == "architecture_catalog":
         return [
@@ -298,6 +333,17 @@ def get_descriptor_item(
                     for candidate in payload.get("pages") or []
                     if isinstance(candidate, Mapping)
                     and str(candidate.get("path") or candidate.get("title") or "") == selected_item_id
+                ),
+                None,
+            )
+        elif token == "ui_capability_catalog":
+            item = next(
+                (
+                    dict(candidate)
+                    for key in ("layouts", "components", "recipes")
+                    for candidate in payload.get(key) or []
+                    if isinstance(candidate, Mapping)
+                    and str(candidate.get("id") or "") == selected_item_id
                 ),
                 None,
             )

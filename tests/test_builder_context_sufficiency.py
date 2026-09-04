@@ -66,7 +66,14 @@ def test_spatial_context_reports_structure_abi_constraints_data_and_authority(
     service: BuilderWorkflowService,
 ) -> None:
     _plan(service, "widget:recipe-title")
-    required = ["target_structure", "abi", "constraints", "data_policy", "execution_authority"]
+    required = [
+        "target_structure",
+        "abi",
+        "ui_capabilities",
+        "constraints",
+        "data_policy",
+        "execution_authority",
+    ]
     packet = service.build_context_packet(
         "scenario",
         "recipes",
@@ -86,6 +93,8 @@ def test_spatial_context_reports_structure_abi_constraints_data_and_authority(
     assert target["siblings"] == ["recipe-title", "recipe-list"]
     assert target["order"] == 0
     assert packet["facets"]["abi"]["definition_ref"] == "abi:webui.v1.schema.json"
+    assert packet["facets"]["ui_capabilities"]["catalog_ref"] == "descriptor:ui_capability_catalog"
+    assert packet["facets"]["ui_capabilities"]["status"] == "present"
     assert packet["facets"]["data_policy"]["selected_mode"] == "mock"
 
 

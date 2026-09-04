@@ -4500,6 +4500,7 @@ class BuilderWorkflowService:
                         }
                     )
             from adaos.services.builder.repair import BuilderRepairService
+            from adaos.services.ui_capabilities import selected_ui_capabilities
 
             repair_context = BuilderRepairService(
                 state_dir=Path(self.state_dir)
@@ -4516,6 +4517,9 @@ class BuilderWorkflowService:
                     "artifact_ref": "webui.json",
                     "artifact_digest": webui_digest,
                 },
+                "ui_capabilities": selected_ui_capabilities(
+                    scoped_intent or str(change.get("request") or "")
+                ),
                 "constraints": constraints,
                 "data_policy": data_policy,
                 "workflow_definition": workflow_definition,
