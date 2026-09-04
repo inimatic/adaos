@@ -67,6 +67,39 @@ def test_project_push_local_only_skips_remote_publication(monkeypatch) -> None:
     assert "media_center@1.2.3" in result.output
 
 
+def test_project_push_without_revision_checkpoints_and_builds_that_commit(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(project_cli, "_roots", lambda _root: (tmp_path, tmp_path / "state"))
+    monkeypatch.setattr(
+        project_cli,
+        "_checkpoint_project_source",
+        lambda *_args, **_kwargs: {
+            "previous_version": "1.2.3",
+            "version": "1.2.4",
+            "revision": "release-commit",
+            "skipped_occupied_versions": [],
+            "pushed": False,
+        },
+    )
+
+    def build(*_args, **kwargs):
+        captured.update(kwargs)
+        return _release()
+
+    monkeypatch.setattr(project_cli, "_build_project_release", build)
+    result = CliRunner().invoke(
+        project_cli.app,
+        ["push", "media_center", "--local-only", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["revision"] == "release-commit"
+    assert '"version": "1.2.4"' in result.output
+
+
 def test_project_release_rejects_dirty_owned_source(monkeypatch, tmp_path) -> None:
     project = tmp_path / "projects" / "media_center"
     project.mkdir(parents=True)

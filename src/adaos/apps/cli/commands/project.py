@@ -17,6 +17,7 @@ from adaos.services.artifact_pipeline.project_build import (
     project_release_build_evidence,
 )
 from adaos.services.workspace_release_guard import load_active_workspace_lock
+from adaos.services.semver import bump_version
 
 
 app = typer.Typer(help="Build and inspect immutable Project releases.")
@@ -44,6 +45,21 @@ def _git_text(workspace: Path, *args: str) -> str:
     except OSError:
         return ""
     return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def _git_checked(workspace: Path, *args: str) -> str:
+    proc = subprocess.run(
+        ["git", "-C", str(workspace), *args],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+    )
+    if proc.returncode:
+        detail = (proc.stderr or proc.stdout).strip()
+        raise RuntimeError(f"git {' '.join(args)} failed: {detail}")
+    return proc.stdout.strip()
 
 
 def _default_revision(workspace: Path) -> str:
@@ -105,6 +121,81 @@ def _assert_project_source_clean(workspace: Path, project_id: str) -> None:
             "building an immutable release",
             param_hint="project_id",
         )
+
+
+def _checkpoint_project_source(
+    workspace: Path,
+    project_id: str,
+    *,
+    remote: str,
+    message: str | None,
+    publish_commit: bool,
+) -> dict[str, Any]:
+    """Bump and checkpoint one Workspace Project before immutable release build."""
+
+    _assert_project_source_clean(workspace, project_id)
+    manifest_path = workspace / "projects" / project_id / "project.yaml"
+    try:
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8-sig")) or {}
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise typer.BadParameter(
+            f"cannot read Project manifest: {manifest_path}",
+            param_hint="project_id",
+        ) from exc
+    if not isinstance(manifest, Mapping):
+        raise typer.BadParameter("Project manifest must be an object", param_hint="project_id")
+    current = str(manifest.get("version") or "0.0.0").strip()
+    _, artifact_root = _roots(workspace)
+    occupied = set(
+        ReleaseRepository(artifact_root / "release-cache").release_digests_by_version(
+            project_id
+        )
+    )
+    next_version = bump_version(current, 2)
+    skipped: list[str] = []
+    while next_version in occupied:
+        skipped.append(next_version)
+        next_version = bump_version(next_version, 2)
+    updated = {**dict(manifest), "version": next_version}
+    temporary = manifest_path.with_name(f".{manifest_path.name}.push-tmp")
+    temporary.write_text(
+        yaml.safe_dump(updated, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    temporary.replace(manifest_path)
+    relative = manifest_path.relative_to(workspace).as_posix()
+    committed = False
+    try:
+        _git_checked(workspace, "add", "--", relative)
+        _git_checked(
+            workspace,
+            "commit",
+            "-m",
+            message or f"chore({project_id}): release project {next_version}",
+            "--",
+            relative,
+        )
+        committed = True
+        revision = _default_revision(workspace)
+        if publish_commit:
+            _git_checked(workspace, "push", remote, "HEAD")
+    except Exception:
+        if committed:
+            # A successful commit is durable evidence and must not be rewritten.
+            raise
+        _git_checked(workspace, "reset", "--", relative)
+        manifest_path.write_text(
+            yaml.safe_dump(dict(manifest), sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        raise
+    return {
+        "previous_version": current,
+        "version": next_version,
+        "revision": revision,
+        "skipped_occupied_versions": skipped,
+        "pushed": publish_commit,
+    }
 
 
 def _build_project_release(
@@ -234,9 +325,26 @@ def push(
         "--local-only",
         help="Build the immutable release locally without publishing it to Root.",
     ),
+    bump: bool = typer.Option(
+        True,
+        "--bump/--no-bump",
+        help="Increment project.yaml patch version when --revision is not supplied.",
+    ),
+    remote: str = typer.Option("origin", "--remote", help="Workspace git remote."),
+    message: str | None = typer.Option(None, "--message", "-m", help="Project checkpoint message."),
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
     workspace, _ = _roots(workspace_root)
+    checkpoint: dict[str, Any] | None = None
+    if revision is None and bump:
+        checkpoint = _checkpoint_project_source(
+            workspace,
+            project_id,
+            remote=remote,
+            message=message,
+            publish_commit=not local_only,
+        )
+        revision = str(checkpoint["revision"])
     payload = _build_project_release(
         project_id,
         revision=revision or _default_revision(workspace),
@@ -245,6 +353,8 @@ def push(
         workspace_root=workspace_root,
         builder="adaos.project.push",
     )
+    if checkpoint:
+        payload["source_checkpoint"] = checkpoint
     if not local_only:
         payload["publication"] = _publish_project_release(
             payload,
