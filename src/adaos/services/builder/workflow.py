@@ -1871,6 +1871,21 @@ class BuilderWorkflowService:
             prototype_records=prototype_records,
             prototype_resources=self._prototype_resource_evidence(snapshots),
         )
+        governed_state = str(_mapping(current.get("governed")).get("state") or "").strip()
+        if governed_state == "automation_ready":
+            reopened = self.transition(
+                object_type,
+                object_id,
+                "prototype_acceptance_invalidated",
+                actor=actor,
+                metadata={
+                    "confirmed": True,
+                    "reason": "prototype_acceptance_refresh",
+                    "evidence_refs": [acceptance["acceptance_id"]],
+                },
+                expected_generation=expected_generation,
+            )
+            expected_generation = int(reopened["workflow"].get("generation") or 0)
         result = self.transition(
             object_type,
             object_id,
@@ -5420,6 +5435,21 @@ class BuilderWorkflowService:
                     ):
                         issue["status"] = "resolved"
                 update_change_set(status="approved", gate="automation")
+            return
+        if action == "prototype_acceptance_invalidated":
+            prototype.update(
+                {
+                    "status": "working",
+                    "stable": False,
+                    "acceptance": None,
+                    "acceptance_invalidated_at": changed_at,
+                    "acceptance_invalidation_reason": str(
+                        metadata.get("reason") or "prototype_acceptance_refresh"
+                    ),
+                }
+            )
+            update_change_set(status="changes_requested", gate="prototype")
+            invalidate_delivery("prototype_acceptance_invalidated")
             return
         if action in {"handoff_to_automation", "automation_started"}:
             governed_state = str(

@@ -762,6 +762,39 @@ def test_strict_prototype_acceptance_requires_current_behavior_and_visual_eviden
     assert workflow["prototype"]["acceptance"]["revision"] == "001"
     assert workflow["change_set"]["gate"] == "automation"
 
+    reaffirmed = service.accept_prototype(
+        "scenario",
+        "recipes",
+        reviewer={"id": "agent:codex", "kind": "agent", "delegated_by": "user:owner"},
+        behavior_checks=[
+            {
+                "id": "render.ready",
+                "status": "passed",
+                "evidence_refs": ["test:prototype-render-reaffirmed"],
+            }
+        ],
+        visual_checks=[
+            {
+                "breakpoint": "compact",
+                "viewport": {"width": 390, "height": 844},
+                "status": "passed",
+                "evidence_ref": "screenshot:.tmp/recipes-compact-reaffirmed.png",
+            },
+            {
+                "breakpoint": "wide",
+                "viewport": {"width": 1440, "height": 900},
+                "status": "passed",
+                "evidence_ref": "screenshot:.tmp/recipes-wide-reaffirmed.png",
+            },
+        ],
+        expected_generation=workflow["generation"],
+    )
+    assert reaffirmed["workflow"]["governed"]["state"] == "automation_ready"
+    assert reaffirmed["workflow"]["governed"]["history"][-2]["command"] == (
+        "accept_review_constraint"
+    )
+    assert reaffirmed["workflow"]["governed"]["history"][-1]["command"] == "accept_prototype"
+
     webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"] = [
         {"id": "changed", "type": "ui.text", "area": "main", "inputs": {"text": "Changed"}}
     ]

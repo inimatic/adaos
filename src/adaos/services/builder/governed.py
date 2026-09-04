@@ -169,6 +169,7 @@ def canonical_command(action: str, workflow: Mapping[str, Any], metadata: Mappin
         "adopt_experiment": "adopt_prototype_experiment",
         "discard_experiment": "discard_prototype_experiment",
         "stabilize_prototype": "accept_prototype",
+        "prototype_acceptance_invalidated": "accept_review_constraint",
         "handoff_to_automation": "start_automation",
         "automation_started": "start_automation",
         "automation_iteration_started": "retry_automation",
