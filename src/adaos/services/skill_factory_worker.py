@@ -1564,6 +1564,94 @@ def _selected_prompt_rule_capsules(
     return projected
 
 
+def _prototype_prompt_facts(context_packet: Mapping[str, Any]) -> dict[str, Any]:
+    """Translate accepted UI qualification into language-neutral routing facts."""
+
+    artifacts = (
+        dict(context_packet.get("artifacts") or {})
+        if isinstance(context_packet.get("artifacts"), Mapping)
+        else {}
+    )
+    prototype = (
+        dict(artifacts.get("prototype") or {})
+        if isinstance(artifacts.get("prototype"), Mapping)
+        else {}
+    )
+    acceptance = (
+        dict(prototype.get("acceptance") or {})
+        if isinstance(prototype.get("acceptance"), Mapping)
+        else {}
+    )
+    evaluation = (
+        dict(acceptance.get("deterministic_evaluation") or {})
+        if isinstance(acceptance.get("deterministic_evaluation"), Mapping)
+        else {}
+    )
+    qualification = acceptance.get("qualification") or evaluation.get("qualification")
+    qualification = dict(qualification) if isinstance(qualification, Mapping) else {}
+    if str(acceptance.get("decision") or "").strip().lower() != "accepted" or not qualification:
+        return {}
+    requirements = (
+        dict(qualification.get("requirements") or {})
+        if isinstance(qualification.get("requirements"), Mapping)
+        else {}
+    )
+    concepts = [
+        str(item).strip()
+        for item in qualification.get("concepts") or []
+        if str(item).strip()
+    ]
+    surface_kind = str(qualification.get("surface_kind") or "").strip()
+    operation_kinds = [
+        str(item).strip()
+        for item in requirements.get("operation_kinds") or []
+        if str(item).strip()
+    ]
+    data_planes: list[str] = []
+    if any(item in concepts for item in ("resource_query", "resource_crud")):
+        data_planes.append("resource_provider")
+    return {
+        "concepts": list(dict.fromkeys(concepts)),
+        "surface_kinds": [surface_kind] if surface_kind else [],
+        "operation_kinds": list(dict.fromkeys(operation_kinds)),
+        "data_planes": data_planes,
+        "effects": ["resource_mutation"] if operation_kinds else [],
+        "requires_i18n": bool(requirements.get("requires_i18n")),
+        "requires_access": bool(requirements.get("requires_access")),
+        "requires_conversation": bool(requirements.get("requires_conversation")),
+        "requires_lifecycle": bool(requirements.get("requires_lifecycle")),
+    }
+
+
+def _merge_prompt_facts(*values: Mapping[str, Any]) -> dict[str, Any]:
+    sequence_keys = {
+        "concepts",
+        "surface_kinds",
+        "operation_kinds",
+        "data_planes",
+        "effects",
+    }
+    merged: dict[str, Any] = {}
+    for value in values:
+        for key, item in value.items():
+            if key in sequence_keys:
+                existing = merged.get(key) if isinstance(merged.get(key), list) else []
+                incoming = item if isinstance(item, (list, tuple, set)) else []
+                merged[key] = list(
+                    dict.fromkeys(
+                        [
+                            *existing,
+                            *(str(token).strip() for token in incoming if str(token).strip()),
+                        ]
+                    )
+                )
+            elif isinstance(item, bool):
+                merged[key] = bool(merged.get(key)) or item
+            elif item not in (None, "", [], {}):
+                merged[key] = copy.deepcopy(item)
+    return merged
+
+
 def _contract_prompt_facet_keys(
     checklist: Mapping[str, Any],
 ) -> list[str]:
@@ -5249,6 +5337,15 @@ class LocalSkillFactoryWorker:
                 ]
             )
         )
+        existing_prompt_facts = (
+            dict(capsule_repair_hints.get("prompt_facts") or {})
+            if isinstance(capsule_repair_hints.get("prompt_facts"), Mapping)
+            else {}
+        )
+        capsule_repair_hints["prompt_facts"] = _merge_prompt_facts(
+            _prototype_prompt_facts(context_packet),
+            existing_prompt_facts,
+        )
         prompt_rule_capsules = _selected_prompt_rule_capsules(
             target_type=target_type,
             repair_hints=capsule_repair_hints,
@@ -5362,8 +5459,10 @@ Omit the envelope when there is no substantive development feedback. It is advis
         )
         accepted_revision = str(prototype_acceptance.get("revision") or "").strip()
         accepted_prototype_instruction = (
-            f" The exact UI authority is scenarios/{target_id}/ui_revisions/"
-            f"{accepted_revision}.json; do not also print equivalent webui.json or scenario.json."
+            f" The accepted Prototype revision is {accepted_revision}; its materialized "
+            f"source authority is scenarios/{target_id}/webui.json. Read and edit that "
+            "canonical file only. ui_revisions is immutable audit evidence and must not "
+            "be opened unless the packet reports a digest mismatch."
             if target_type == "scenario" and accepted_revision
             else ""
         )

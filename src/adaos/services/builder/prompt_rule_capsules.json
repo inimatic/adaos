@@ -1,7 +1,7 @@
 {
   "schema": "adaos.builder.prompt_rule_registry.v1",
-  "version": "0.4.1",
-  "published_at": "2026-09-03T15:30:00+00:00",
+  "version": "0.4.2",
+  "published_at": "2026-09-04T14:00:00+00:00",
   "authority_ref": "core:adaos.prompt-rule-registry",
   "items": [
     {
@@ -19,7 +19,7 @@
       "id": "adaos.skill.sdk_boundary.v1",
       "title": "Skill public SDK boundary and feedback",
       "source": "docs/guides/llm-skill-development.md#golden-rule",
-      "applicability": {"always": true, "target_types": ["skill"]},
+      "applicability": {"always": true, "target_types": ["skill", "scenario"]},
       "rules": [
         "Skill source may use public `adaos.sdk` contracts only; never import `adaos.services`, edit core, imitate a missing core contract locally, or depend on worker internals.",
         "If the admitted SDK/API cannot express the requested behavior, stop that branch and return typed development feedback with the missing or unclear contract, impact, evidence, and the smallest useful capability request.",
@@ -32,9 +32,9 @@
       "title": "Skill WebUI and public tool contract",
       "source": "docs/guides/llm-skill-development.md#machine-checkable-route-contract",
       "applicability": {
-        "target_types": ["skill"],
-        "concepts": ["ui"],
-        "surface_kinds": ["ui", "page", "modal", "widget", "panel", "view"],
+        "target_types": ["skill", "scenario"],
+        "concepts": ["ui", "kanban_board", "drag_drop", "resource_query", "resource_crud"],
+        "surface_kinds": ["ui", "page", "modal", "widget", "panel", "view", "board"],
         "target_path_globs": ["**/webui.json", "**/skill.yaml", "**/handlers/*.py"],
         "match_any": ["webui.json", "skill.yaml", "handlers/", "modal:", "widget:", "callskill", "data_source"]
       },
@@ -50,8 +50,8 @@
       "source": "docs/guides/llm-skill-development.md#page-state-and-full-surface-layout-rules",
       "applicability": {
         "target_types": ["skill", "scenario"],
-        "concepts": ["ui"],
-        "surface_kinds": ["ui", "page", "modal", "widget", "panel", "view", "scenario"],
+        "concepts": ["ui", "kanban_board", "drag_drop", "resource_query", "resource_crud"],
+        "surface_kinds": ["ui", "page", "modal", "widget", "panel", "view", "scenario", "board"],
         "target_path_globs": ["**/webui.json", "**/scenario.json"],
         "match_any": ["layout", "widget", "modal", "view state", "initialstate"]
       },
@@ -67,8 +67,8 @@
       "source": "docs/guides/llm-skill-development.md#declarative-ui-authoring-guidelines",
       "applicability": {
         "target_types": ["skill", "scenario"],
-        "concepts": ["ui"],
-        "surface_kinds": ["ui", "page", "modal", "widget", "panel", "view", "scenario"]
+        "concepts": ["ui", "kanban_board", "drag_drop", "resource_query", "resource_crud"],
+        "surface_kinds": ["ui", "page", "modal", "widget", "panel", "view", "scenario", "board"]
       },
       "rules": [
         "Declare initial focus, default action, stable action feedback, loading, empty, stale, permission-denied, unavailable, and retry behavior where the surface can encounter them.",
@@ -156,8 +156,10 @@
       "title": "Typed resource and storage boundary",
       "source": "docs/guides/llm-skill-development.md#memory-and-reload-safety",
       "applicability": {
+        "target_types": ["skill", "scenario"],
         "profiles": ["resource_crud"],
-        "concepts": ["crud"],
+        "concepts": ["crud", "resource_crud", "resource_query", "kanban_board"],
+        "operation_kinds": ["create", "update", "delete", "patch", "list", "show", "search"],
         "data_planes": ["resource_provider", "skill_local"],
         "target_ref_prefixes": ["resource:"],
         "match_any": ["resource_crud", "resource", "storage", "contentref", "provider", "data root"]

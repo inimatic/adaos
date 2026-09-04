@@ -1957,6 +1957,47 @@ def test_prompt_rule_capsules_are_selected_from_task_facets() -> None:
     ]
 
 
+def test_accepted_prototype_qualification_routes_scenario_capsules() -> None:
+    context_packet = {
+        "artifacts": {
+            "prototype": {
+                "acceptance": {
+                    "decision": "accepted",
+                    "qualification": {
+                        "surface_kind": "board",
+                        "concepts": [
+                            "kanban_board",
+                            "drag_drop",
+                            "resource_query",
+                            "resource_crud",
+                        ],
+                        "requirements": {
+                            "operation_kinds": ["create", "update", "delete"]
+                        },
+                    },
+                }
+            }
+        }
+    }
+
+    prompt_facts = worker_module._prototype_prompt_facts(context_packet)
+    capsules = worker_module._selected_prompt_rule_capsules(
+        target_type="scenario",
+        repair_hints={"prompt_facts": prompt_facts},
+        context_packet=context_packet,
+    )
+
+    assert prompt_facts["surface_kinds"] == ["board"]
+    assert prompt_facts["data_planes"] == ["resource_provider"]
+    assert prompt_facts["operation_kinds"] == ["create", "update", "delete"]
+    ids = [item["id"] for item in capsules]
+    assert "adaos.skill.sdk_boundary.v1" in ids
+    assert "adaos.skill.webui_tool_contract.v2" in ids
+    assert "adaos.ui.declarative_state.v1" in ids
+    assert "adaos.ui.interaction_resources.v1" in ids
+    assert "adaos.skill.resource_storage.v1" in ids
+
+
 def test_worker_records_codex_development_feedback_as_workspace_resource(
     tmp_path: Path,
 ) -> None:
