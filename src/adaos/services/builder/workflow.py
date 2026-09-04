@@ -1910,14 +1910,19 @@ class BuilderWorkflowService:
 
         current = self.describe(object_type, object_id)
         prototype = _mapping(current.get("prototype"))
-        if not bool(prototype.get("acceptance_required")):
+        acceptance = _mapping(prototype.get("acceptance"))
+        acceptance_required = bool(prototype.get("acceptance_required"))
+        if not acceptance and not acceptance_required:
             return None
+        if not acceptance:
+            raise BuilderWorkflowError("Prototype acceptance evidence is required")
         if not bool(prototype.get("stable")):
             raise BuilderWorkflowError("Prototype must be accepted before Automation starts")
         return self._admit_current_prototype_acceptance(
             object_type,
             object_id,
             current,
+            acceptance,
         )
 
     def _normalized_workflow(
