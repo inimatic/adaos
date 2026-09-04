@@ -657,6 +657,23 @@ class ArtifactPublicationService:
             candidate.release_digest,
         )
 
+    def candidate_runtime_component_keys(self, candidate_id: str) -> frozenset[str]:
+        """Return only release components whose installed digest will change."""
+
+        plan = self.get_candidate_release(candidate_id)
+        active_lock = load_workspace_lock(
+            self.workspace_root / ".adaos" / "workspace.lock.json"
+        )
+        active = {
+            item.key: item.digest
+            for item in (active_lock.components if active_lock is not None else ())
+        }
+        return frozenset(
+            package.key
+            for package in plan.packages
+            if active.get(package.key) != package.digest
+        )
+
     def verify_promoted_workspace_source(self, candidate_id: str) -> dict[str, Any]:
         """Prove that Workspace source still matches the promoted candidate.
 

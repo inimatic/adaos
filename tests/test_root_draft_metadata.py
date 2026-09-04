@@ -311,13 +311,10 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks() 
     )
 
     class _Publication:
-        def get_candidate_release(self, candidate_id: str):
+        def candidate_runtime_component_keys(self, candidate_id: str):
             assert candidate_id == "candidate-1"
-            return SimpleNamespace(
-                packages=(
-                    SimpleNamespace(key="scenario:taiga_ui_demo_scenario"),
-                    SimpleNamespace(key="skill:builder_skill"),
-                )
+            return frozenset(
+                {"scenario:taiga_ui_demo_scenario", "skill:builder_skill"}
             )
 
         def promote(self, candidate_id: str, **kwargs):

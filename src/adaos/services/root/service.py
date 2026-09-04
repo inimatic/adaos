@@ -2705,9 +2705,8 @@ class RootDeveloperService:
     ) -> dict[str, Any]:
         cfg = self._load_config()
         publication = self._artifact_publication_service(cfg)
-        candidate_release = publication.get_candidate_release(candidate_id)
-        affected_component_keys = frozenset(
-            package.key for package in candidate_release.packages
+        affected_component_keys = publication.candidate_runtime_component_keys(
+            candidate_id
         )
 
         def reload_candidate_runtime(lock: Any) -> dict[str, Any]:

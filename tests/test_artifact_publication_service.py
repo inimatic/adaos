@@ -1433,6 +1433,61 @@ def test_scenario_candidate_migrates_installed_dependency_without_dev_copy(
     ]
 
 
+def test_candidate_runtime_scope_excludes_retained_shared_dependency(
+    tmp_path: Path,
+) -> None:
+    remote = _Remote(tmp_path / "remote")
+    dev_root = tmp_path / "dev"
+    skill_dir = _skill(dev_root / "skills")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+    )
+    service.record_push(
+        kind="skill",
+        artifact_id="shopping_skill",
+        artifact_dir=skill_dir,
+        source_ref=_source(),
+    )
+    skill_candidate = service.prepare_candidate(
+        kind="skill",
+        artifact_id="shopping_skill",
+        artifact_dir=skill_dir,
+        change_ids=("install-shared-skill",),
+        validation_evidence={"status": "passed"},
+    )
+    service.decide_candidate(skill_candidate.candidate.candidate_id, accepted=True)
+    _promote(service, skill_candidate.candidate.candidate_id)
+
+    scenario_dir = _scenario(dev_root / "scenarios")
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.0.0\ndepends:\n  - shopping_skill\n",
+        encoding="utf-8",
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=scenario_dir,
+        change_ids=("add-recipes",),
+        validation_evidence={"status": "passed"},
+    )
+
+    assert {item.key for item in prepared.plan.packages} == {
+        "scenario:recipes",
+        "skill:shopping_skill",
+    }
+    assert service.candidate_runtime_component_keys(
+        prepared.candidate.candidate_id
+    ) == frozenset({"scenario:recipes"})
+
+
 def test_follow_up_candidate_reuses_dependency_from_stable_project_release(
     tmp_path: Path,
 ) -> None:
