@@ -463,7 +463,7 @@ class ArtifactPublicationService:
             project_snapshot = staging / "project" / project_id / "project.yaml"
             project_snapshot.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(project_manifest, project_snapshot)
-            for package in plan.packages:
+            for package in plan.release.components:
                 collection = "skills" if package.kind == "skill" else "scenarios"
                 source_root = workspace / collection / package.artifact_id
                 package_root = staging / package.kind / package.artifact_id
@@ -502,7 +502,7 @@ class ArtifactPublicationService:
         )
         entries = []
         candidate_source = self._candidate_development_source_root(candidate.candidate_id)
-        for package in plan.packages:
+        for package in plan.release.components:
             project_candidate_source = candidate_source / package.kind / package.artifact_id
             source_root = (
                 project_candidate_source
@@ -553,8 +553,7 @@ class ArtifactPublicationService:
         *,
         plan: ReleasePlan,
     ) -> dict[str, Any]:
-        packages = {item.key: item for item in plan.packages}
-        owned_package_keys = {item.key for item in plan.release.components}
+        packages = {item.key: item for item in plan.release.components}
         projected = []
         for raw in projection.get("entries") or []:
             if not isinstance(raw, Mapping):
@@ -582,13 +581,12 @@ class ArtifactPublicationService:
                     shutil.rmtree(target)
                 shutil.copytree(source, target)
                 roots.append(name)
-            if package.key in owned_package_keys:
-                for name in _DEVELOPMENT_SOURCE_ROOTS:
-                    if name in declared_roots:
-                        continue
-                    target = target_root / name
-                    if target.exists():
-                        shutil.rmtree(target)
+            for name in _DEVELOPMENT_SOURCE_ROOTS:
+                if name in declared_roots:
+                    continue
+                target = target_root / name
+                if target.exists():
+                    shutil.rmtree(target)
             projected.append({"package": package.key, "roots": roots})
         project_projection: dict[str, Any] | None = None
         raw_project = projection.get("project")

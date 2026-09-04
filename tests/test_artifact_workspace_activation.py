@@ -496,6 +496,34 @@ def test_removed_dependency_is_pruned_from_lock_and_workspace(tmp_path: Path) ->
     assert operation["component_plan"]["removed"] == ["skill:shopping"]
 
 
+def test_retained_dependency_source_is_not_replaced_by_project_upgrade(tmp_path: Path) -> None:
+    first = _built_scenario(tmp_path, version="1.0.0", marker="first")
+    second = _built_scenario(tmp_path, version="1.1.0", marker="second")
+    skill = _built_skill(tmp_path, version="1.0.0", marker="shared")
+    store, manager = _manager(tmp_path)
+    for built in (first, second, skill):
+        store.put(built.archive_bytes)
+    _activate(manager, _plan_with_skill(first, skill), idempotency_key="shared-base")
+
+    skill_target = tmp_path / "workspace" / "skills" / "shopping"
+    local_source = skill_target / "tests" / "local_change.py"
+    local_source.parent.mkdir()
+    local_source.write_text("LOCAL = True\n", encoding="utf-8")
+
+    result = _activate(
+        manager,
+        _plan_with_skill(second, skill),
+        idempotency_key="scenario-only-upgrade",
+    )
+
+    assert local_source.read_text(encoding="utf-8") == "LOCAL = True\n"
+    operation = json.loads(
+        manager.operation_path(result.operation_id).read_text(encoding="utf-8")
+    )
+    assert operation["component_plan"]["retained"] == ["skill:shopping"]
+    assert [move["package"] for move in operation["moves"]] == ["scenario:recipes"]
+
+
 def test_project_release_consolidates_replaced_standalone_component_slot(
     tmp_path: Path,
 ) -> None:

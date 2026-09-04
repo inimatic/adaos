@@ -1603,7 +1603,10 @@ class WorkspaceActivationManager:
             )
 
             moves: list[dict[str, Any]] = []
+            mutable_keys = set(component_plan["added"]) | set(component_plan["changed"])
             for package in plan.packages:
+                if package.key not in mutable_keys:
+                    continue
                 target = self._target_for(package)
                 backup = backup_root / package.kind / package.artifact_id
                 moves.append(

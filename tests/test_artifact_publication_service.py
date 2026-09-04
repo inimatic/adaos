@@ -1424,6 +1424,13 @@ def test_scenario_candidate_migrates_installed_dependency_without_dev_copy(
     assert (
         prepared.trial_workspace / "skills" / "shopping_skill" / "skill.yaml"
     ).is_file()
+    source_projection = service._prepare_development_source_projection(
+        candidate=prepared.candidate,
+        plan=prepared.plan,
+    )
+    assert [item["package"] for item in source_projection["entries"]] == [
+        "scenario:recipes"
+    ]
 
 
 def test_follow_up_candidate_reuses_dependency_from_stable_project_release(
