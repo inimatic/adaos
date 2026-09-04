@@ -2329,7 +2329,7 @@ async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
         auth_context={
             "method": "root_token",
             "actor": "root:route_proxy",
-            "capabilities": list(allowed_tools),
+            "capabilities": ["development.read.descriptors"],
             "allowed_target_ids": [scope.get("target_id")] if scope.get("target_id") else [],
             "subnet_id": scope.get("subnet_id"),
         },

@@ -912,7 +912,7 @@ def test_admin_root_mcp_call_allows_read_only_descriptor_tools(monkeypatch, tool
 
     assert payload["ok"] is True
     assert calls[0]["tool_id"] == tool_id
-    assert tool_id in calls[0]["auth_context"]["capabilities"]
+    assert calls[0]["auth_context"]["capabilities"] == ["development.read.descriptors"]
 
 
 def test_admin_root_mcp_call_blocks_non_allowlisted_tool() -> None:
