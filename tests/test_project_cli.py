@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+import typer
 from typer.testing import CliRunner
 
 from adaos.apps.cli.commands import project as project_cli
@@ -63,3 +65,22 @@ def test_project_push_local_only_skips_remote_publication(monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert "media_center@1.2.3" in result.output
+
+
+def test_project_release_rejects_dirty_owned_source(monkeypatch, tmp_path) -> None:
+    project = tmp_path / "projects" / "media_center"
+    project.mkdir(parents=True)
+    (project / "project.yaml").write_text(
+        """schema: adaos.project.v1
+id: media_center
+components:
+  owned:
+    - ref: scenario:media_center
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(project_cli, "_git_text", lambda *_args: " M scenarios/media_center/webui.json")
+
+    with pytest.raises(typer.BadParameter, match="uncommitted changes"):
+        project_cli._assert_project_source_clean(tmp_path, "media_center")

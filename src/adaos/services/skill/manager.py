@@ -62,7 +62,10 @@ from adaos.services.capacity import install_skill_in_capacity, uninstall_skill_f
 from adaos.services.semver import bump_version
 from adaos.services.skill.version_policy import RESERVED_DATA_MIGRATION_FILE, bump_index, effective_skill_bump
 from adaos.services.component_manifest_versioning import write_component_version_atomically
-from adaos.services.workspace_release_guard import assert_workspace_component_mutable
+from adaos.services.workspace_release_guard import (
+    assert_workspace_component_maintenance_owned,
+    assert_workspace_component_mutable,
+)
 import ast
 
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
@@ -1649,6 +1652,7 @@ class SkillManager:
         signoff: bool = False,
         bump: bool = True,
         publish_private_models: bool = False,
+        maintenance_project: str | None = None,
     ) -> str:
         self.caps.require("core", "skills.manage", "git.write", "net.git")
         root = self.ctx.paths.workspace_dir()
@@ -1664,7 +1668,15 @@ class SkillManager:
             raise RuntimeError("Skills repo is not initialized. Run `adaos skill sync` once.")
 
         sub = name.strip()
-        assert_workspace_component_mutable(root, kind="skill", artifact_id=sub)
+        if maintenance_project:
+            assert_workspace_component_maintenance_owned(
+                root,
+                kind="skill",
+                artifact_id=sub,
+                project_id=maintenance_project,
+            )
+        else:
+            assert_workspace_component_mutable(root, kind="skill", artifact_id=sub)
         subpath = f"skills/{sub}"
         self._ensure_skill_subpath_materialized(root, sub)
         try:

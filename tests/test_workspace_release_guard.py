@@ -12,6 +12,7 @@ from adaos.domain.artifact_release import (
 )
 from adaos.services.workspace_release_guard import (
     WorkspaceSourceMutationBlocked,
+    assert_workspace_component_maintenance_owned,
     assert_workspace_component_mutable,
 )
 
@@ -79,4 +80,51 @@ def test_workspace_guard_fails_closed_for_untrusted_lock(tmp_path: Path) -> None
             tmp_path,
             kind="scenario",
             artifact_id="builder",
+        )
+
+
+def test_workspace_guard_allows_explicit_maintenance_by_declared_project_owner(
+    tmp_path: Path,
+) -> None:
+    _write_lock(tmp_path)
+    project = tmp_path / "projects" / "builder"
+    project.mkdir(parents=True)
+    (project / "project.yaml").write_text(
+        """schema: adaos.project.v1
+id: builder
+components:
+  owned:
+    - ref: scenario:builder
+""",
+        encoding="utf-8",
+    )
+
+    assert_workspace_component_maintenance_owned(
+        tmp_path,
+        kind="scenario",
+        artifact_id="builder",
+        project_id="builder",
+    )
+
+
+def test_workspace_guard_denies_maintenance_by_unrelated_project(tmp_path: Path) -> None:
+    _write_lock(tmp_path)
+    project = tmp_path / "projects" / "other"
+    project.mkdir(parents=True)
+    (project / "project.yaml").write_text(
+        """schema: adaos.project.v1
+id: other
+components:
+  owned:
+    - ref: skill:other_skill
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkspaceSourceMutationBlocked, match="does not own"):
+        assert_workspace_component_maintenance_owned(
+            tmp_path,
+            kind="scenario",
+            artifact_id="builder",
+            project_id="other",
         )

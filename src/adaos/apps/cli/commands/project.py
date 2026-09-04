@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from typing import Any, Mapping
 
 import typer
+import yaml
 
 from adaos.domain.artifact_release import ArtifactSourceRef
 from adaos.services.agent_context import get_ctx
@@ -57,6 +59,53 @@ def _default_repository(workspace: Path) -> str:
     return workspace.name
 
 
+def _project_source_paths(workspace: Path, project_id: str) -> tuple[str, ...]:
+    manifest = workspace / "projects" / project_id / "project.yaml"
+    try:
+        project: Any = yaml.safe_load(manifest.read_text(encoding="utf-8-sig")) or {}
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise typer.BadParameter(
+            f"cannot read Project manifest: {manifest}",
+            param_hint="project_id",
+        ) from exc
+    owned = (
+        project.get("components", {}).get("owned", [])
+        if isinstance(project, Mapping)
+        and isinstance(project.get("components"), Mapping)
+        else []
+    )
+    paths = [f"projects/{project_id}"]
+    for item in owned:
+        if not isinstance(item, Mapping):
+            continue
+        kind, separator, artifact_id = str(item.get("ref") or "").strip().partition(":")
+        if separator != ":" or kind not in {"skill", "scenario"} or not artifact_id:
+            continue
+        plural = "skills" if kind == "skill" else "scenarios"
+        paths.append(f"{plural}/{artifact_id}")
+    return tuple(dict.fromkeys(paths))
+
+
+def _assert_project_source_clean(workspace: Path, project_id: str) -> None:
+    if not (workspace / ".git").exists():
+        return
+    paths = _project_source_paths(workspace, project_id)
+    dirty = _git_text(
+        workspace,
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        "--",
+        *paths,
+    )
+    if dirty:
+        raise typer.BadParameter(
+            "Project source closure has uncommitted changes; checkpoint it before "
+            "building an immutable release",
+            param_hint="project_id",
+        )
+
+
 def _build_project_release(
     project_id: str,
     *,
@@ -67,6 +116,7 @@ def _build_project_release(
     builder: str,
 ) -> dict[str, object]:
     workspace, artifact_root = _roots(workspace_root)
+    _assert_project_source_clean(workspace, project_id)
     result = build_workspace_project_release(
         project_dir=workspace / "projects" / project_id,
         workspace_root=workspace,

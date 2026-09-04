@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+import yaml
+
 from adaos.domain.artifact_release import WorkspaceLock
 
 
@@ -53,4 +55,57 @@ def assert_workspace_component_mutable(
     )
 
 
-__all__ = ["WorkspaceSourceMutationBlocked", "assert_workspace_component_mutable"]
+def assert_workspace_component_maintenance_owned(
+    workspace_root: Path,
+    *,
+    kind: str,
+    artifact_id: str,
+    project_id: str,
+) -> None:
+    """Authorize an explicit maintenance push only for a declared Project owner."""
+
+    root = Path(workspace_root).resolve()
+    normalized_kind = str(kind or "").strip().lower().rstrip("s")
+    normalized_id = str(artifact_id or "").strip()
+    normalized_project = str(project_id or "").strip()
+    if normalized_kind not in {"skill", "scenario"} or not normalized_id:
+        raise ValueError("kind and artifact_id must identify a skill or scenario")
+    if not normalized_project:
+        raise WorkspaceSourceMutationBlocked("maintenance project id is required")
+
+    lock = _load_active_lock(root)
+    component_key = f"{normalized_kind}:{normalized_id}"
+    if lock is None or not any(item.key == component_key for item in lock.components):
+        raise WorkspaceSourceMutationBlocked(
+            f"maintenance push requires {component_key} in the active WorkspaceLock"
+        )
+
+    manifest = root / "projects" / normalized_project / "project.yaml"
+    try:
+        project: Any = yaml.safe_load(manifest.read_text(encoding="utf-8-sig")) or {}
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise WorkspaceSourceMutationBlocked(
+            f"cannot verify maintenance Project ownership from {manifest}"
+        ) from exc
+    owned = (
+        project.get("components", {}).get("owned", [])
+        if isinstance(project, Mapping)
+        and isinstance(project.get("components"), Mapping)
+        else []
+    )
+    refs = {
+        str(item.get("ref") or "").strip()
+        for item in owned
+        if isinstance(item, Mapping)
+    }
+    if component_key not in refs:
+        raise WorkspaceSourceMutationBlocked(
+            f"Project {normalized_project!r} does not own {component_key}; maintenance push denied"
+        )
+
+
+__all__ = [
+    "WorkspaceSourceMutationBlocked",
+    "assert_workspace_component_maintenance_owned",
+    "assert_workspace_component_mutable",
+]

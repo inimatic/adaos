@@ -1273,6 +1273,14 @@ def push_command(
         "--publish-private-models",
         help="Upload model artifacts marked models.private/private to Root during this push.",
     ),
+    maintenance_project: str | None = typer.Option(
+        None,
+        "--maintenance-project",
+        help=(
+            "Explicitly maintain a lock-managed Workspace component owned by this Project. "
+            "Normal project development must use DEV Candidate/Trial/Publication."
+        ),
+    ),
 ):
     """
     Release workspace skill changes through manifest version bump, registry
@@ -1330,6 +1338,7 @@ def push_command(
         signoff=signoff,
         bump=bump,
         publish_private_models=publish_private_models,
+        maintenance_project=maintenance_project,
     )
     if res in {"nothing-to-push", "nothing-to-commit"}:
         typer.echo(_("cli.skill.push.nothing"))
