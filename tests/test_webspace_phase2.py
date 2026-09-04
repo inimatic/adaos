@@ -122,6 +122,27 @@ def test_component_metadata_replaces_stale_publication_projection() -> None:
     assert "componentUpdate" not in without_notice["_adaos"]
 
 
+def test_component_metadata_preserves_builder_materialization_stage() -> None:
+    projected = _apply_component_metadata(
+        {
+            "id": "flowboard",
+            "_adaos": {
+                "releaseStage": "BETA",
+                "releaseStageSource": "builder_materialization",
+                "materialization": {"stage": "trial", "revision": "0.1.1"},
+            },
+        },
+        component_type="scenario",
+        component_id="flowboard",
+        version="0.1.10",
+        source_authority="trial",
+    )
+
+    assert projected["_adaos"]["releaseStage"] == "BETA"
+    assert projected["_adaos"]["releaseStageSource"] == "builder_materialization"
+    assert projected["_adaos"]["materialization"]["stage"] == "trial"
+
+
 def test_build_local_desktop_catalog_snapshot_uses_runtime_skill_decls(monkeypatch) -> None:
     captured_modes: list[str] = []
 
@@ -5322,8 +5343,18 @@ def test_builder_preview_sources_exact_prototype_and_retained_automation(monkeyp
 
     assert prototype_space == "dev"
     assert prototype_content["ui"]["application"]["desktop"]["pageSchema"]["title"] == "proto:002 Recipes prototype"
+    assert prototype_content["ui"]["application"]["desktop"]["pageSchema"]["_adaos"] == {
+        "releaseStage": "ALPHA",
+        "releaseStageSource": "builder_materialization",
+        "materialization": {
+            "stage": "prototype",
+            "revision": "002",
+            "sourceSpace": "dev",
+        },
+    }
     assert automation_space == "dev"
     assert automation_content["ui"]["application"]["desktop"]["pageSchema"]["title"] == "active: Recipes automation"
+    assert automation_content["ui"]["application"]["desktop"]["pageSchema"]["_adaos"]["releaseStage"] == "ALPHA"
 
 
 def test_builder_publication_preview_reads_workspace_snapshot(monkeypatch) -> None:
@@ -5349,6 +5380,7 @@ def test_builder_publication_preview_reads_workspace_snapshot(monkeypatch) -> No
     assert calls == [("recipes", "workspace")]
     assert source_space == "workspace"
     assert content["ui"]["application"]["desktop"]["pageSchema"]["title"] == "public:0.2.0 Published recipes"
+    assert content["ui"]["application"]["desktop"]["pageSchema"]["_adaos"]["releaseStage"] == "STABLE"
 
 
 def test_builder_trial_preview_reads_exact_runtime_activation(monkeypatch, tmp_path: Path) -> None:
@@ -5402,6 +5434,15 @@ def test_builder_trial_preview_reads_exact_runtime_activation(monkeypatch, tmp_p
     assert content["ui"]["application"]["desktop"]["pageSchema"]["title"] == (
         "trial:0.2.0 Candidate recipes"
     )
+    assert content["ui"]["application"]["desktop"]["pageSchema"]["_adaos"] == {
+        "releaseStage": "BETA",
+        "releaseStageSource": "builder_materialization",
+        "materialization": {
+            "stage": "trial",
+            "revision": "0.2.0",
+            "sourceSpace": "workspace",
+        },
+    }
 
 
 def test_builder_publication_preview_reads_verified_installed_package_when_slot_is_inactive(

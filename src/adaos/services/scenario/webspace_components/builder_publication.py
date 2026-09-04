@@ -316,6 +316,25 @@ class WebspaceBuilderPublicationService:
                 "publication": f"public:{str(revision or 'current').strip() or 'current'}",
             }[stage_token]
             page["title"] = str(label or f"{prefix} {existing_title}").strip()
+            metadata = (
+                dict(page.get("_adaos"))
+                if isinstance(page.get("_adaos"), Mapping)
+                else {}
+            )
+            release_stage = {
+                "prototype": "ALPHA",
+                "automation": "ALPHA",
+                "trial": "BETA",
+                "publication": "STABLE",
+            }[stage_token]
+            metadata["releaseStage"] = release_stage
+            metadata["releaseStageSource"] = "builder_materialization"
+            metadata["materialization"] = {
+                "stage": stage_token,
+                "revision": revision_token or None,
+                "sourceSpace": source_space,
+            }
+            page["_adaos"] = metadata
         return dict(override), source_space
 
     async def apply_revision_materialization(

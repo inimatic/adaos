@@ -107,7 +107,9 @@ def _apply_component_metadata(
         data["release_stage"] = metadata["releaseStage"]
     else:
         metadata.pop("componentUpdate", None)
-        metadata.pop("releaseStage", None)
+        if str(metadata.get("releaseStageSource") or "").strip() != "builder_materialization":
+            metadata.pop("releaseStage", None)
+            metadata.pop("releaseStageSource", None)
         data.pop("component_update", None)
         data.pop("release_stage", None)
     data["_adaos"] = metadata
