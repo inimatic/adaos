@@ -71,6 +71,25 @@ def _snapshot(service: BuilderWorkspaceService, project_id: str) -> dict[str, An
     )
 
 
+def _occupied_project_versions(workspace_root: Path, project_id: str) -> set[str]:
+    _, artifact_root = project_cli._roots(workspace_root)
+    repository = project_cli.ReleaseRepository(artifact_root / "release-cache")
+    return set(repository.release_digests_by_version(project_id))
+
+
+def _next_available_project_version(
+    current: str,
+    bump_index: int,
+    occupied: set[str],
+) -> tuple[str, list[str]]:
+    candidate = bump_version(current, bump_index)
+    skipped: list[str] = []
+    while candidate in occupied:
+        skipped.append(candidate)
+        candidate = bump_version(candidate, bump_index)
+    return candidate, skipped
+
+
 def _echo_candidate(payload: Mapping[str, Any], *, json_output: bool) -> None:
     if json_output:
         _echo(payload, json_output=True)
@@ -438,6 +457,8 @@ def push(
     manifest_path: Path | None = None
     original_manifest: bytes | None = None
     bumped = False
+    skipped_versions: list[str] = []
+    workspace_root = _dev_workspace_root(service)
     if bump_token != "none":
         manifest_path = Path(str(project["source_path"])) / "project.yaml"
         original_manifest = manifest_path.read_bytes()
@@ -446,9 +467,10 @@ def push(
             for key, value in project.items()
             if key not in {"ref", "manifest_digest", "source_path"}
         }
-        replacement["version"] = bump_version(
+        replacement["version"], skipped_versions = _next_available_project_version(
             str(project.get("version") or "0.0.0"),
             bump_indexes[bump_token],
+            _occupied_project_versions(workspace_root, project_id),
         )
         project = compositions.replace(
             project_id,
@@ -465,7 +487,6 @@ def push(
         or getattr(config, "node_id", "")
         or "local"
     ).strip()
-    workspace_root = _dev_workspace_root(service)
     try:
         source = _snapshot(service, project_id)
         payload = project_cli._build_project_release(
@@ -491,6 +512,8 @@ def push(
             (project.get("publication") or {}).get("stage") or "alpha"
         )
         payload["version_bump"] = bump_token
+        if skipped_versions:
+            payload["skipped_occupied_versions"] = skipped_versions
         if not local_only:
             payload["publication"] = project_cli._publish_project_release(
                 payload,

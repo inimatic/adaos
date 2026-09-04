@@ -337,6 +337,8 @@ def test_dev_project_push_rolls_back_version_when_build_fails(
     }
     monkeypatch.setattr(dev_project, "_service", lambda: SimpleNamespace())
     monkeypatch.setattr(dev_project, "_project", lambda *_: dict(project))
+    monkeypatch.setattr(dev_project, "_dev_workspace_root", lambda *_: tmp_path)
+    monkeypatch.setattr(dev_project, "_occupied_project_versions", lambda *_: set())
 
     def replace(_project_id, replacement, **_kwargs):
         assert replacement["version"] == "1.2.4"
@@ -354,7 +356,6 @@ def test_dev_project_push_rolls_back_version_when_build_fails(
             )
         ),
     )
-    monkeypatch.setattr(dev_project, "_dev_workspace_root", lambda *_: tmp_path)
     monkeypatch.setattr(
         dev_project,
         "_snapshot",
@@ -365,6 +366,67 @@ def test_dev_project_push_rolls_back_version_when_build_fails(
 
     assert result.exit_code == 1
     assert manifest.read_bytes() == original
+
+
+def test_dev_project_push_skips_occupied_patch_version(monkeypatch, tmp_path) -> None:
+    project_root = tmp_path / "projects" / "builder"
+    project_root.mkdir(parents=True)
+    manifest = project_root / "project.yaml"
+    manifest.write_text("version: 0.2.69\n", encoding="utf-8")
+    project = {
+        "id": "builder",
+        "version": "0.2.69",
+        "manifest_digest": "sha256:" + "c" * 64,
+        "source_path": str(project_root),
+        "publication": {"stage": "alpha"},
+    }
+    monkeypatch.setattr(dev_project, "_service", lambda: SimpleNamespace())
+    monkeypatch.setattr(dev_project, "_project", lambda *_: dict(project))
+    monkeypatch.setattr(dev_project, "_dev_workspace_root", lambda *_: tmp_path)
+    monkeypatch.setattr(
+        dev_project,
+        "_occupied_project_versions",
+        lambda *_: {"0.2.70"},
+    )
+
+    def replace(_project_id, replacement, **_kwargs):
+        assert replacement["version"] == "0.2.71"
+        manifest.write_text("version: 0.2.71\n", encoding="utf-8")
+        return {**project, **replacement}
+
+    monkeypatch.setattr(dev_project.compositions, "replace", replace)
+    monkeypatch.setattr(
+        dev_project,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                subnet_id="sn_test",
+                node_settings=SimpleNamespace(id="node_test"),
+            )
+        ),
+    )
+    monkeypatch.setattr(dev_project, "_snapshot", lambda *_: _source())
+    monkeypatch.setattr(
+        dev_project.project_cli,
+        "_build_project_release",
+        lambda *args, **kwargs: {
+            **_release(),
+            "project_id": "builder",
+            "version": "0.2.71",
+        },
+    )
+    monkeypatch.setattr(
+        dev_project.project_cli,
+        "_publish_project_release",
+        lambda *_args, **_kwargs: {"published": True},
+    )
+
+    result = CliRunner().invoke(dev_project.app, ["push", "builder", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert '"skipped_occupied_versions": [' in result.output
+    assert '"0.2.70"' in result.output
+    assert manifest.read_text(encoding="utf-8") == "version: 0.2.71\n"
 
 
 def test_dev_project_trial_uses_primary_checkpoint_and_structured_evidence(monkeypatch) -> None:
