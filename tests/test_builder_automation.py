@@ -14,6 +14,7 @@ import yaml
 from adaos.services.builder import automation as automation_module
 from adaos.services.builder.automation import (
     BuilderAutomationService,
+    _UNCHANGED_RETRY_INSTRUCTION,
     _brief_has_structured_edits,
     _context_budget_window,
     _context_plan_failure_message,
@@ -2967,6 +2968,56 @@ def test_retry_after_reaccepting_same_change_reenters_automation(
 
     assert result["status"] == "automation_queued"
     assert transitions == ["automation_started"]
+
+
+def test_retry_replays_its_queued_task_without_creating_a_duplicate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.scenario.recipes",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "status": "queued",
+        "iteration": 2,
+        "change_id": "automation.retry",
+        "current_task_id": "task.retry",
+        "turns": [{"iteration": 2, "text": _UNCHANGED_RETRY_INSTRUCTION}],
+        "updated_at": "2026-09-04T00:00:00+00:00",
+    }
+    service._save_session(session)
+    transitions: list[str] = []
+    workflow = SimpleNamespace(
+        describe=lambda *_args: {
+            "active_phase": "prototype",
+            "governed": {"state": "automation_ready"},
+        },
+        transition=lambda *_args, **_kwargs: transitions.append(_args[2]) or {},
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: workflow)
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "refresh_session",
+        lambda self, value: dict(value),
+    )
+    service.factory = SimpleNamespace(
+        read_task=lambda task_id: {"task_id": task_id, "status": "queued"}
+    )
+    launched: list[str] = []
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_launch_worker",
+        lambda self, session_id: launched.append(session_id),
+    )
+
+    result = service.retry_failed(object_type="scenario", object_id="recipes")
+
+    assert result["recovered_queued_retry"] is True
+    assert result["task"]["task_id"] == "task.retry"
+    assert transitions == ["automation_started"]
+    assert launched == ["automation.scenario.recipes"]
 
 
 def test_background_automation_launches_durable_worker_process(tmp_path: Path, monkeypatch) -> None:

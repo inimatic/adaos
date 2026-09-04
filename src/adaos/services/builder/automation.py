@@ -82,6 +82,10 @@ _AUTOMATION_STEPS = (
     ("verification", "builder.automation.step.verification", 3),
     ("result", "builder.automation.step.result", 4),
 )
+_UNCHANGED_RETRY_INSTRUCTION = (
+    "Retry the unchanged accepted implementation after the previous executor "
+    "failure. Do not reinterpret or expand the user request."
+)
 
 
 def _preserved_candidate_has_changes(run_root: Path) -> bool:
@@ -3539,7 +3543,66 @@ class BuilderAutomationService:
             if not session:
                 raise ValueError("automation_session_not_found")
             session = self.refresh_session(session)
-            if str(session.get("status") or "").strip() != "failed":
+            status = str(session.get("status") or "").strip()
+            if status == "queued":
+                turns = [
+                    dict(item)
+                    for item in session.get("turns") or []
+                    if isinstance(item, Mapping)
+                ]
+                if not turns or str(turns[-1].get("text") or "").strip() != (
+                    _UNCHANGED_RETRY_INSTRUCTION
+                ):
+                    raise ValueError("only a failed Automation session can be retried")
+                task_id = str(session.get("current_task_id") or "").strip()
+                try:
+                    task = self.factory.read_task(task_id)
+                except KeyError as exc:
+                    raise ValueError("queued retry task is unavailable") from exc
+                if str(task.get("status") or "").strip() != "queued":
+                    raise ValueError("queued retry task is already owned by a worker")
+                workflow = self._workflow()
+                projection = workflow.describe(kind, project_id)
+                active_phase = str(projection.get("active_phase") or "").strip()
+                governed = (
+                    projection.get("governed")
+                    if isinstance(projection.get("governed"), Mapping)
+                    else {}
+                )
+                if active_phase == "prototype" and str(governed.get("state") or "") == (
+                    "automation_ready"
+                ):
+                    workflow.transition(
+                        kind,
+                        project_id,
+                        "automation_started",
+                        actor="builder.automation",
+                        reason="resume the queued retry from the accepted Prototype",
+                        metadata={
+                            "confirmed": True,
+                            "task_id": task_id,
+                            "change_id": session.get("change_id"),
+                            "run_id": session.get("change_id"),
+                            "context_packet_digest": session.get("context_packet_digest"),
+                        },
+                    )
+                elif active_phase != "automation":
+                    raise ValueError(
+                        "queued retry cannot resume from the current Builder workflow state"
+                    )
+                self._launch_worker(str(session.get("session_id") or ""))
+                return {
+                    "ok": True,
+                    "handled": True,
+                    "status": "automation_queued",
+                    "message": "Resumed the unchanged queued Automation retry.",
+                    "session": session,
+                    "task": task,
+                    "automation": self.project_session(session),
+                    "retried_unchanged_request": True,
+                    "recovered_queued_retry": True,
+                }
+            if status != "failed":
                 raise ValueError("only a failed Automation session can be retried")
             if isinstance(session.get("prototype_acceptance"), Mapping):
                 session["prototype_acceptance"] = (
@@ -3552,10 +3615,7 @@ class BuilderAutomationService:
             self._save_session(session)
 
         result = self.submit_turn(
-            text=(
-                "Retry the unchanged accepted implementation after the previous "
-                "executor failure. Do not reinterpret or expand the user request."
-            ),
+            text=_UNCHANGED_RETRY_INSTRUCTION,
             object_type=kind,
             object_id=project_id,
             webspace_id=webspace_id,
