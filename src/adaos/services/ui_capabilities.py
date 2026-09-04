@@ -444,6 +444,17 @@ def _read_path(value: Any, path: str) -> Any:
     return current
 
 
+def _has_path(value: Any, path: str) -> bool:
+    current = value
+    for token in str(path or "").split("."):
+        if not token:
+            continue
+        if not isinstance(current, Mapping) or token not in current:
+            return False
+        current = current[token]
+    return True
+
+
 def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
     catalog = ui_capability_catalog()
     known_types = {
@@ -465,6 +476,7 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                 }
             )
         widgets = page.get("widgets") if isinstance(page.get("widgets"), list) else []
+        initial_state = page.get("initialState") if isinstance(page.get("initialState"), Mapping) else {}
         for index, widget in enumerate(widgets):
             if not isinstance(widget, Mapping):
                 continue
@@ -480,6 +492,30 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                     }
                 )
                 continue
+            data_source = widget.get("dataSource") if isinstance(widget.get("dataSource"), Mapping) else {}
+            if str(data_source.get("kind") or "") == "resourceQuery":
+                query = data_source.get("query") if isinstance(data_source.get("query"), Mapping) else {}
+                state_refs = sorted(
+                    set(
+                        re.findall(
+                            r"\$state\.([A-Za-z0-9_.-]+)",
+                            json.dumps(query, ensure_ascii=False, sort_keys=True),
+                        )
+                    )
+                )
+                missing_refs = [ref for ref in state_refs if not _has_path(initial_state, ref)]
+                if missing_refs:
+                    findings.append(
+                        {
+                            "code": "ui.resource_query.state_uninitialized",
+                            "severity": "error",
+                            "path": f"{widget_path}.dataSource.query",
+                            "message": (
+                                "Resource query state references require defaults in the owning "
+                                "page initialState: " + ", ".join(missing_refs)
+                            ),
+                        }
+                    )
             if widget_type != "collection.board":
                 continue
             inputs = widget.get("inputs") if isinstance(widget.get("inputs"), Mapping) else {}
@@ -499,7 +535,6 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                     }
                 )
             lane_key = str(inputs.get("laneKey") or "").strip()
-            data_source = widget.get("dataSource") if isinstance(widget.get("dataSource"), Mapping) else {}
             rows = data_source.get("value") if str(data_source.get("kind") or "") == "static" else None
             if isinstance(rows, list) and lane_key and lane_ids:
                 unknown = sorted(

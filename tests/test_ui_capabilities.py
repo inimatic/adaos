@@ -192,6 +192,7 @@ def test_request_evaluation_requires_board_semantics_not_parallel_lists() -> Non
 def _resource_board_webui() -> dict:
     webui = _board_webui()
     page = webui["ui"]["application"]["desktop"]["pageSchema"]
+    page["initialState"] = {"searchQuery": "", "selectedRecordId": ""}
     board = page["widgets"][0]
     board["inputs"]["dragDrop"] = True
     board["inputs"]["buttons"] = [
@@ -349,6 +350,22 @@ def test_resource_board_query_binding_rejects_nested_event_object() -> None:
     )
     assert query_binding["ok"] is False
     assert query_binding["actual"]["executableRefs"] == []
+
+
+def test_resource_query_requires_initial_state_for_query_references() -> None:
+    webui = _resource_board_webui()
+    page = webui["ui"]["application"]["desktop"]["pageSchema"]
+    page.pop("initialState")
+
+    result = validate_webui_capabilities(webui)
+
+    finding = next(
+        item
+        for item in result["findings"]
+        if item["code"] == "ui.resource_query.state_uninitialized"
+    )
+    assert result["ok"] is False
+    assert "searchQuery" in finding["message"]
 
 
 def test_modal_board_editor_selects_record_on_the_opening_event() -> None:

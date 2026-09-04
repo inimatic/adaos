@@ -28,6 +28,21 @@ def _page_widgets(webui: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return [item for item in page.get("widgets") or [] if isinstance(item, Mapping)]
 
 
+def _surface_widgets(webui: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    widgets = list(_page_widgets(webui))
+    ui = webui.get("ui") if isinstance(webui.get("ui"), Mapping) else {}
+    application = ui.get("application") if isinstance(ui.get("application"), Mapping) else {}
+    modals = application.get("modals") if isinstance(application.get("modals"), Mapping) else {}
+    for modal in modals.values():
+        if not isinstance(modal, Mapping):
+            continue
+        schema = modal.get("schema") if isinstance(modal.get("schema"), Mapping) else {}
+        widgets.extend(
+            item for item in schema.get("widgets") or [] if isinstance(item, Mapping)
+        )
+    return widgets
+
+
 def _json_type(values: Sequence[Any]) -> dict[str, Any]:
     observed = set()
     for value in values:
@@ -174,7 +189,8 @@ def derive_board_resource_spec(
     }
     action_operations = {
         str(dict(action.get("params") or {}).get("operation_id") or "").strip()
-        for action in board.get("actions") or []
+        for widget in _surface_widgets(webui)
+        for action in widget.get("actions") or []
         if isinstance(action, Mapping)
         and str(action.get("type") or "") == "resourceOperation"
         and str(action.get("target") or "") == resource_type

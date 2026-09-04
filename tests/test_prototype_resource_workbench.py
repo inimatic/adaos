@@ -324,9 +324,8 @@ def test_board_projection_derives_typed_disposable_resource(tmp_path: Path) -> N
                                     },
                                     {
                                         "on": "add",
-                                        "type": "resourceOperation",
-                                        "target": "prototype.delivery.cards",
-                                        "params": {"operation_id": "create"},
+                                        "type": "openModal",
+                                        "params": {"modalId": "create-card"},
                                     },
                                     {
                                         "on": "delete",
@@ -338,7 +337,31 @@ def test_board_projection_derives_typed_disposable_resource(tmp_path: Path) -> N
                             }
                         ],
                     }
-                }
+                },
+                "modals": {
+                    "create-card": {
+                        "id": "create-card",
+                        "schema": {
+                            "id": "create-card",
+                            "layout": {"type": "single", "areas": [{"id": "main", "role": "main"}]},
+                            "widgets": [
+                                {
+                                    "id": "create-card-form",
+                                    "type": "ui.form",
+                                    "area": "main",
+                                    "actions": [
+                                        {
+                                            "on": "submit",
+                                            "type": "resourceOperation",
+                                            "target": "prototype.delivery.cards",
+                                            "params": {"operation_id": "create", "payload": "$event.values"},
+                                        }
+                                    ],
+                                }
+                            ],
+                        },
+                    }
+                },
             }
         },
     }
