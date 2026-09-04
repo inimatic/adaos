@@ -73,6 +73,8 @@ def declaration_paths(manifest: Mapping[str, Any]) -> list[str]:
     runtime = manifest.get("resource_runtime")
     if not isinstance(runtime, Mapping):
         return []
+    if "declarations" not in runtime:
+        return []
     values = runtime.get("declarations")
     if not isinstance(values, list):
         raise ValueError("resource_runtime.declarations must be an array")

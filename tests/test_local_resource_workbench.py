@@ -11,6 +11,7 @@ from adaos.services.resources import (
     ResourceConflict,
     ResourceWorkbenchService,
 )
+from adaos.services.resources.local import declaration_paths
 from adaos.services.skill.validation import SkillValidationService
 from adaos.services.agent_context import get_ctx
 
@@ -103,6 +104,12 @@ def _operate(service: ResourceWorkbenchService, operation_id: str, **values) -> 
             **values,
         }
     )
+
+
+def test_resolved_manifest_without_resource_declarations_is_a_noop() -> None:
+    assert declaration_paths({"resource_runtime": {}}) == []
+    with pytest.raises(ValueError, match="must be an array"):
+        declaration_paths({"resource_runtime": {"declarations": None}})
 
 
 def test_local_resource_survives_declaration_refresh_and_supports_crud(tmp_path: Path) -> None:
