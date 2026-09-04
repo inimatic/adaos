@@ -12,7 +12,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 import yaml
 from jsonschema import Draft202012Validator, ValidationError
@@ -27,6 +27,7 @@ from adaos.services.workflow_registry import (
     platform_workflow_adapter_registry,
 )
 from adaos.services.skill.dependency_disk_guard import heavy_dependency_names, heavy_import_dependency_names
+from adaos.services.resources.local import declaration_paths, validate_local_resource_bundle
 
 SCHEMA_PATH = Path(__file__).with_name("skill_schema.json")
 WEBUI_SCHEMA_RES = ("adaos.abi", "webui.v1.schema.json")
@@ -250,6 +251,61 @@ def _normalize_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
     return s
 
 
+def validate_local_resource_declarations(
+    skill_dir: Path,
+    manifest: Mapping[str, Any],
+) -> List[Issue]:
+    issues: List[Issue] = []
+    skill_name = str(manifest.get("name") or "").strip()
+    try:
+        paths = declaration_paths(manifest)
+    except ValueError as exc:
+        return [Issue("error", "resource_runtime.declarations.invalid", str(exc), "resource_runtime.declarations")]
+    root = skill_dir.resolve()
+    for relative in paths:
+        path = (root / Path(relative)).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError:
+            issues.append(
+                Issue(
+                    "error",
+                    "resource_runtime.declaration.unsafe_path",
+                    f"resource declaration escapes skill root: {relative}",
+                    relative,
+                )
+            )
+            continue
+        if not path.is_file():
+            issues.append(
+                Issue(
+                    "error",
+                    "resource_runtime.declaration.missing",
+                    f"resource declaration not found: {relative}",
+                    relative,
+                )
+            )
+            continue
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(value, Mapping):
+                raise ValueError("resource declaration must be a JSON object")
+            validate_local_resource_bundle(
+                value,
+                expected_owner_ref=f"skill:{skill_name}",
+            )
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            issues.append(
+                Issue(
+                    "error",
+                    "resource_runtime.declaration.invalid",
+                    f"invalid resource declaration {relative}: {exc}",
+                    relative,
+                )
+            )
+    return issues
+
+
 def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
     issues: List[Issue] = []
     sy = skill_dir / "skill.yaml"
@@ -337,6 +393,7 @@ def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
             for item in conversational.validation.report.get("diagnostics") or []
         )
     issues.extend(validate_data_route_contract(data))
+    issues.extend(validate_local_resource_declarations(skill_dir, data))
     issues.extend(validate_provider_contract_declarations(data, install_mode=install_mode))
     issues.extend(_sdk_only_import_issues(skill_dir, manifest=data))
     issues.extend(_direct_projection_write_issues(skill_dir))

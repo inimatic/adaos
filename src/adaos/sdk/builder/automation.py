@@ -139,6 +139,33 @@ def submit(
     )
 
 
+def retry_failed(
+    *,
+    object_type: str,
+    object_id: str,
+    webspace_id: str = "desktop",
+    conversation_id: str | None = None,
+    execution_budget: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Retry a failed run without accepting a replacement user instruction."""
+
+    service = _service()
+    result = service.retry_failed(
+        object_type=object_type,
+        object_id=object_id,
+        webspace_id=webspace_id,
+        conversation_id=conversation_id,
+        execution_budget=execution_budget,
+    ) or {}
+    return _foreground_result(
+        service,
+        result,
+        object_type=object_type,
+        object_id=object_id,
+        webspace_id=webspace_id,
+    )
+
+
 def return_to_prototype(
     *,
     object_type: str,
@@ -249,6 +276,7 @@ __all__ = [
     "reconcile_checkpoint",
     "recover_validated_result",
     "return_to_prototype",
+    "retry_failed",
     "start",
     "standard_prompt_version",
     "submit",

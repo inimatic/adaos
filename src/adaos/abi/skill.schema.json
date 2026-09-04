@@ -58,6 +58,10 @@
       "$ref": "#/$defs/prototypeRuntime",
       "description": "Optional bounded executable Prototype artifacts. These files model disposable data, bindings, one conversational workflow slice, and representative states; they are not runtime implementation evidence."
     },
+    "resource_runtime": {
+      "$ref": "#/$defs/resourceRuntime",
+      "description": "Typed skill-owned Resource Workbench declarations loaded during activation."
+    },
 
     "runtime": {
       "description": "Runtime requirements for the skill handlers (mapped to adaos.services.skill.runtime).",
@@ -406,6 +410,22 @@
         "representative_states": { "$ref": "#/$defs/prototypeArtifactPath" }
       },
       "additionalProperties": false
+    },
+    "resourceRuntime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["declarations"],
+      "properties": {
+        "declarations": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+\\.json$"
+          }
+        }
+      }
     },
     "prototypeArtifactPath": {
       "type": "string",

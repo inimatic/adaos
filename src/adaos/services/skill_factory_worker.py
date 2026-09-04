@@ -1564,6 +1564,19 @@ def _selected_prompt_rule_capsules(
     return projected
 
 
+def _prototype_acceptance_from_context(value: Mapping[str, Any]) -> dict[str, Any]:
+    artifacts = value.get("artifacts") if isinstance(value.get("artifacts"), Mapping) else {}
+    prototype = artifacts.get("prototype") if isinstance(artifacts.get("prototype"), Mapping) else {}
+    acceptance = prototype.get("acceptance") if isinstance(prototype.get("acceptance"), Mapping) else {}
+    return copy.deepcopy(dict(acceptance))
+
+
+def _production_resource_type(skill_name: str, prototype_type: str) -> str:
+    suffix = str(prototype_type or "").strip().removeprefix("prototype.")
+    suffix = _safe_token(suffix, fallback="records")
+    return f"skill.{_safe_token(skill_name, fallback='generated_skill')}.{suffix}"
+
+
 def _prototype_prompt_facts(context_packet: Mapping[str, Any]) -> dict[str, Any]:
     """Translate accepted UI qualification into language-neutral routing facts."""
 
@@ -5257,6 +5270,167 @@ class LocalSkillFactoryWorker:
                 result.append(token)
         return result
 
+    def _prototype_resource_implementation_handoff(
+        self,
+        *,
+        target_type: str,
+        target_id: str,
+        companion_skill_ids: Sequence[str],
+        context_packet: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        acceptance = _prototype_acceptance_from_context(context_packet)
+        expected_resources = [
+            dict(item)
+            for item in acceptance.get("prototype_resources") or []
+            if isinstance(item, Mapping)
+        ]
+        if not expected_resources:
+            return None
+        if target_type != "scenario" or not companion_skill_ids:
+            raise ValueError(
+                "accepted prototype resources require a scenario companion skill"
+            )
+        project_ref = f"{target_type}:{target_id}"
+        change_id = str(acceptance.get("change_id") or "").strip()
+        revision = str(acceptance.get("revision") or "").strip()
+        webui_digest = str(acceptance.get("webui_digest") or "").strip()
+        if not change_id or not revision or not webui_digest:
+            raise ValueError("accepted prototype resource evidence is incomplete")
+
+        from adaos.services.resources.prototype import PrototypeResourceService
+
+        service = PrototypeResourceService(state_dir=self.state_dir)
+        resource_types = [
+            str(item.get("resource_type") or "").strip()
+            for item in expected_resources
+            if str(item.get("resource_type") or "").strip()
+        ]
+        snapshots = service.acceptance_snapshots(
+            project_ref=project_ref,
+            change_id=change_id,
+            revision=revision,
+            webui_digest=webui_digest,
+            resource_types=resource_types,
+        )
+        expected_by_type = {
+            str(item.get("resource_type") or "").strip(): item
+            for item in expected_resources
+        }
+        for snapshot in snapshots:
+            resource_type = str(snapshot.get("resource_type") or "").strip()
+            expected = expected_by_type.get(resource_type) or {}
+            for key in (
+                "bundle_digest",
+                "definition_digest",
+                "generation",
+                "record_count",
+                "records_digest",
+            ):
+                if expected.get(key) != snapshot.get(key):
+                    raise ValueError(
+                        "prototype acceptance is stale: "
+                        f"{resource_type}.{key} expected {expected.get(key)!r}, "
+                        f"current {snapshot.get(key)!r}"
+                    )
+
+        companion = str(companion_skill_ids[0])
+        resources: list[dict[str, Any]] = []
+        for snapshot in snapshots:
+            prototype_type = str(snapshot["resource_type"])
+            definition = service.definition(prototype_type)
+            if not isinstance(definition, Mapping):
+                raise ValueError(f"prototype resource definition is missing: {prototype_type}")
+            production_type = _production_resource_type(companion, prototype_type)
+            production_definition = copy.deepcopy(dict(definition))
+            production_definition.update(
+                {
+                    "resource_type": production_type,
+                    "version": "1.0.0",
+                    "record_schema_ref": f"inline:{production_type}",
+                    "authority": {
+                        "provider": "local_crud",
+                        "binding": companion,
+                        "writes": "optimistic",
+                        "source_of_truth": "local_skill_state",
+                    },
+                    "scope": {
+                        "owner": f"skill:{companion}",
+                        "target_refs": [project_ref, f"skill:{companion}"],
+                    },
+                }
+            )
+            production_definition["operations"] = [
+                {
+                    key: copy.deepcopy(value)
+                    for key, value in dict(item).items()
+                    if key != "prototype_activity_id"
+                }
+                for item in production_definition.get("operations") or []
+                if isinstance(item, Mapping)
+            ]
+            metadata = (
+                dict(production_definition.get("metadata") or {})
+                if isinstance(production_definition.get("metadata"), Mapping)
+                else {}
+            )
+            for key in ("prototype", "project_ref", "change_id", "revision", "webui_digest"):
+                metadata.pop(key, None)
+            production_definition["metadata"] = {
+                **metadata,
+                "prototype_acceptance_id": str(acceptance.get("acceptance_id") or ""),
+                "prototype_records_digest": str(snapshot.get("records_digest") or ""),
+            }
+            privacy = (
+                dict(production_definition.get("privacy") or {})
+                if isinstance(production_definition.get("privacy"), Mapping)
+                else {}
+            )
+            production_definition["privacy"] = {
+                **privacy,
+                "sensitivity": "workspace",
+                "retention": "skill_owned",
+                "external_export": privacy.get("external_export") or "denied",
+            }
+            relative_path = (
+                "resources/"
+                + _safe_token(prototype_type.removeprefix("prototype."), fallback="records")
+                + ".resource.json"
+            )
+            resources.append(
+                {
+                    "source_resource_type": prototype_type,
+                    "target_resource_type": production_type,
+                    "declaration_path": f"skills/{companion}/{relative_path}",
+                    "manifest_declaration": relative_path,
+                    "bundle": {
+                        "schema": "adaos.resource.local_crud.v1",
+                        "owner_ref": f"skill:{companion}",
+                        "seed_policy": "if_missing",
+                        "resource_definition": production_definition,
+                        "seed": copy.deepcopy(snapshot.get("records") or []),
+                    },
+                    "webui_rewrites": [
+                        {"from": prototype_type, "to": production_type}
+                    ],
+                }
+            )
+            from adaos.services.resources.local import validate_local_resource_bundle
+
+            validate_local_resource_bundle(
+                resources[-1]["bundle"],
+                expected_owner_ref=f"skill:{companion}",
+            )
+        return {
+            "schema": "adaos.builder.resource_implementation_handoff.v1",
+            "acceptance_id": acceptance.get("acceptance_id"),
+            "project_ref": project_ref,
+            "change_id": change_id,
+            "revision": revision,
+            "companion_skill_id": companion,
+            "manifest_field": "resource_runtime.declarations",
+            "resources": resources,
+        }
+
     def _build_packet(
         self,
         assignment: Mapping[str, Any],
@@ -5337,6 +5511,12 @@ class LocalSkillFactoryWorker:
                 ]
             )
         )
+        prototype_resource_handoff = self._prototype_resource_implementation_handoff(
+            target_type=target_type,
+            target_id=target_id,
+            companion_skill_ids=companions,
+            context_packet=context_packet,
+        )
         existing_prompt_facts = (
             dict(capsule_repair_hints.get("prompt_facts") or {})
             if isinstance(capsule_repair_hints.get("prompt_facts"), Mapping)
@@ -5381,8 +5561,14 @@ class LocalSkillFactoryWorker:
             "repair_hints": repair_hints or None,
             "repair_target_context": repair_target_context or None,
             "prompt_rule_capsules": prompt_rule_capsules,
+            "prototype_resource_handoff": prototype_resource_handoff,
         }
         _write_json(input_dir / "packet.json", packet)
+        if prototype_resource_handoff:
+            _write_json(
+                input_dir / "prototype-resource-handoff.json",
+                prototype_resource_handoff,
+            )
         (input_dir / "allowed_files.txt").write_text("\n".join(allowed) + "\n", encoding="utf-8")
         transition_requirements = """
 ## Workflow transition constraints
@@ -5574,6 +5760,19 @@ authoritative files and trusted worker checks remain decisive.
             if contract_execution_checklist
             else ""
         )
+        resource_implementation_section = (
+            """## Accepted resource implementation handoff
+
+`prototype-resource-handoff.json` is the machine-generated, acceptance-bound
+mapping from disposable Prototype resources to skill-owned production
+resources. Read this one file before source discovery. Materialize its exact
+declaration bundles, add the listed manifest declarations, and apply only its
+WebUI resource-type rewrites. Do not create custom CRUD handlers for these
+operations and do not read `ui_revisions` to reconstruct accepted data.
+"""
+            if prototype_resource_handoff
+            else ""
+        )
         root_mcp_context = (
             json.dumps(root_mcp, ensure_ascii=False, indent=2, sort_keys=True)
             if root_mcp
@@ -5733,6 +5932,8 @@ part of the submitted source snapshot.
 ```json
 {development_inputs}
 ```
+
+{resource_implementation_section}
 
 {contract_execution_section}
 

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/resource.local_crud.v1.schema.json",
+  "title": "AdaOS Skill-owned Local CRUD Resource v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "owner_ref", "resource_definition", "seed"],
+  "properties": {
+    "schema": { "const": "adaos.resource.local_crud.v1" },
+    "owner_ref": {
+      "type": "string",
+      "pattern": "^skill:[a-z0-9_.-]{1,160}$"
+    },
+    "resource_definition": { "type": "object" },
+    "seed": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": { "type": "object" }
+    },
+    "seed_policy": {
+      "const": "if_missing",
+      "default": "if_missing"
+    }
+  }
+}

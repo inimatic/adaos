@@ -14,7 +14,9 @@ from typing import Any
 import pytest
 import yaml
 
+from adaos.sdk.developer.prototypes import derive_board_resource_spec
 from adaos.services import skill_factory_worker as worker_module
+from adaos.services.resources.prototype import PrototypeResourceService, prototype_webui_digest
 from adaos.services.root.service import _rewrite_skill_template_identity
 from adaos.services.skill_factory import SkillFactoryService
 from adaos.services.skill_factory_mcp import task_scope_enabled_tools
@@ -6565,3 +6567,159 @@ def test_worker_reports_progress_to_automation_callback(tmp_path: Path) -> None:
         )
     ]
     assert projected == [("task.1", "tests_running", "Running validation")]
+
+
+def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    state_dir = tmp_path / "state"
+    project_id = "flowboard"
+    companion = "flowboard_skill"
+    prototype_type = "prototype.work_items"
+    webui = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": project_id,
+                        "layout": {
+                            "type": "single",
+                            "areas": [{"id": "main", "role": "main"}],
+                        },
+                        "widgets": [
+                            {
+                                "id": "board",
+                                "type": "collection.board",
+                                "area": "main",
+                                "inputs": {
+                                    "lanes": [
+                                        {"id": "planned", "label": "Planned"},
+                                        {"id": "done", "label": "Done"},
+                                    ],
+                                    "laneKey": "status",
+                                    "titleKey": "title",
+                                    "dragDrop": True,
+                                },
+                                "dataSource": {
+                                    "kind": "resourceQuery",
+                                    "resourceType": prototype_type,
+                                    "query": {},
+                                },
+                                "actions": [
+                                    {
+                                        "on": "move",
+                                        "type": "resourceOperation",
+                                        "target": prototype_type,
+                                        "params": {"operation_id": "update"},
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+    }
+    records = [
+        {"id": "one", "title": "Plan", "status": "planned"},
+        {"id": "two", "title": "Ship", "status": "done"},
+    ]
+    spec = derive_board_resource_spec(webui, records)
+    service = PrototypeResourceService(state_dir=state_dir)
+    digest = prototype_webui_digest(webui)
+    materialized = service.materialize(
+        {
+            "schema": "adaos.builder.prototype_resource.v1",
+            "project_ref": f"scenario:{project_id}",
+            "change_id": "change-flowboard",
+            "revision": "007",
+            "webui_digest": digest,
+            **spec,
+        }
+    )
+    snapshot = service.acceptance_snapshots(
+        project_ref=f"scenario:{project_id}",
+        change_id="change-flowboard",
+        revision="007",
+        webui_digest=digest,
+        resource_types=[prototype_type],
+    )[0]
+    evidence_keys = (
+        "resource_type",
+        "bundle_digest",
+        "definition_digest",
+        "generation",
+        "record_count",
+        "records_digest",
+    )
+    context_packet = {
+        "schema": "adaos.builder.context_packet.v1",
+        "artifacts": {
+            "prototype": {
+                "acceptance": {
+                    "schema": "adaos.builder.prototype_acceptance.v1",
+                    "acceptance_id": "acceptance:flowboard:007",
+                    "change_id": "change-flowboard",
+                    "decision": "accepted",
+                    "revision": "007",
+                    "webui_digest": digest,
+                    "prototype_resources": [
+                        {key: snapshot.get(key) for key in evidence_keys}
+                    ],
+                }
+            }
+        },
+    }
+    assignment = {
+        "task_id": "task.flowboard",
+        "target": {"type": "scenario", "id": project_id},
+        "forge": {
+            "sparse_paths": [
+                f"scenarios/{project_id}/",
+                f"skills/{companion}/",
+            ]
+        },
+        "realize_request": {
+            "artifacts": {
+                "companion_skill_ids": [companion],
+                "implementation_brief": "Implement the accepted prototype.",
+                "context_packet": context_packet,
+            }
+        },
+    }
+    workspace = tmp_path / "workspace"
+    (workspace / "scenarios" / project_id).mkdir(parents=True)
+    (workspace / "skills" / companion).mkdir(parents=True)
+    worker = LocalSkillFactoryWorker(
+        state_dir=state_dir,
+        repo_root=repo_root,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+
+    packet = worker._build_packet(assignment, workspace, tmp_path / "input")
+    handoff = packet["prototype_resource_handoff"]
+    resource = handoff["resources"][0]
+
+    assert resource["target_resource_type"] == "skill.flowboard_skill.work_items"
+    assert resource["bundle"]["seed"] == materialized["state"]["records"]
+    assert resource["bundle"]["resource_definition"]["authority"] == {
+        "provider": "local_crud",
+        "binding": companion,
+        "writes": "optimistic",
+        "source_of_truth": "local_skill_state",
+    }
+    prompt = (tmp_path / "input" / "task.md").read_text(encoding="utf-8")
+    assert "prototype-resource-handoff.json" in prompt
+    assert "Do not create custom CRUD handlers" in prompt
+
+    service.operate(
+        prototype_type,
+        "update",
+        record_id="one",
+        payload={"status": "done"},
+    )
+    with pytest.raises(ValueError, match="prototype acceptance is stale"):
+        worker._build_packet(assignment, workspace, tmp_path / "stale-input")

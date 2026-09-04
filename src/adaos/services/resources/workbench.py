@@ -16,6 +16,7 @@ from adaos.services.development_tickets import DevelopmentTicketService
 from adaos.services.development_feedback import DevelopmentFeedbackService
 from adaos.services.id_gen import new_id
 from adaos.services.runtime_paths import current_state_dir
+from adaos.services.resources.local import LocalCrudResourceService, LocalResourceConflict
 from adaos.services.resources.prototype import PrototypeResourceConflict, PrototypeResourceService
 
 
@@ -694,6 +695,7 @@ class ResourceWorkbenchService:
     feedback_service: DevelopmentFeedbackService | None = None
     context_service: ContextControlService | None = None
     prototype_service: PrototypeResourceService | None = None
+    local_service: LocalCrudResourceService | None = None
 
     @property
     def root(self) -> Path:
@@ -726,6 +728,7 @@ class ResourceWorkbenchService:
                 _demo_metric_note_definition(),
                 _demo_metric_event_definition(),
                 *_context_resource_definitions(),
+                *self._locals().definitions(),
                 *self._prototypes().definitions(),
             ],
             key=lambda item: item["resource_type"],
@@ -963,6 +966,9 @@ class ResourceWorkbenchService:
     def _prototypes(self) -> PrototypeResourceService:
         return self.prototype_service or PrototypeResourceService(state_dir=self.state_dir)
 
+    def _locals(self) -> LocalCrudResourceService:
+        return self.local_service or LocalCrudResourceService(state_dir=self.state_dir)
+
     def _query_items(
         self,
         resource_type: str,
@@ -973,6 +979,14 @@ class ResourceWorkbenchService:
         limit: Any,
     ) -> list[dict[str, Any]]:
         max_items = int(limit) if isinstance(limit, int) else None
+        if self._locals().definition(resource_type) is not None:
+            return self._locals().query(
+                resource_type,
+                filters=filters,
+                search=search,
+                sort=sort,
+                limit=max_items,
+            )
         if resource_type.startswith("prototype."):
             return self._prototypes().query(
                 resource_type,
@@ -1081,6 +1095,17 @@ class ResourceWorkbenchService:
         raise ValueError(f"unknown resource_type: {resource_type}")
 
     def _operate(self, resource_type: str, operation_id: str, request: Mapping[str, Any]) -> dict[str, Any]:
+        if self._locals().definition(resource_type) is not None:
+            try:
+                return self._locals().operate(
+                    resource_type,
+                    operation_id,
+                    record_id=_text(request.get("record_id")),
+                    payload=_mapping(request.get("payload")),
+                    expected_revision=request.get("expected_revision"),
+                )
+            except LocalResourceConflict as exc:
+                raise ResourceConflict(str(exc)) from exc
         if resource_type.startswith("prototype."):
             try:
                 return self._prototypes().operate(

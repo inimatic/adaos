@@ -2803,6 +2803,103 @@ def test_followup_turn_can_replace_bounded_execution_budget(tmp_path: Path) -> N
     assert task["realize_request"]["artifacts"]["execution_budget"]["max_model_tokens"] == 200000
 
 
+def test_retry_failed_reuses_governed_request_and_refreshes_prototype_acceptance(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.scenario.recipes",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "status": "failed",
+        "prototype_acceptance": {"acceptance_id": "old"},
+        "implementation_brief": "Implement the accepted recipe prototype.",
+        "updated_at": "2026-09-04T00:00:00+00:00",
+    }
+    service._save_session(session)
+    refreshed_acceptance = {"acceptance_id": "current", "decision": "accepted"}
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "refresh_session",
+        lambda self, value: dict(value),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_workflow",
+        lambda self: SimpleNamespace(
+            require_current_prototype_acceptance=lambda *_args: refreshed_acceptance
+        ),
+    )
+    submitted: list[dict] = []
+
+    def _submit_turn(**kwargs):
+        submitted.append(dict(kwargs))
+        return {"ok": True, "session": {"status": "queued"}}
+
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "submit_turn",
+        lambda self, **kwargs: _submit_turn(**kwargs),
+    )
+
+    result = service.retry_failed(
+        object_type="scenario",
+        object_id="recipes",
+        webspace_id="desktop-dev",
+    )
+
+    assert result["retried_unchanged_request"] is True
+    assert submitted[0]["text"] == (
+        "Retry the unchanged accepted implementation after the previous "
+        "executor failure. Do not reinterpret or expand the user request."
+    )
+    assert service.get_session("scenario", "recipes")["prototype_acceptance"] == (
+        refreshed_acceptance
+    )
+
+
+def test_retry_failed_stops_before_codex_when_prototype_acceptance_is_stale(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation.scenario.recipes",
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "status": "failed",
+            "prototype_acceptance": {"acceptance_id": "old"},
+            "updated_at": "2026-09-04T00:00:00+00:00",
+        }
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "refresh_session",
+        lambda self, value: dict(value),
+    )
+
+    def _stale(*_args):
+        raise ValueError("prototype acceptance is stale: prototype_resources")
+
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_workflow",
+        lambda self: SimpleNamespace(require_current_prototype_acceptance=_stale),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "submit_turn",
+        lambda self, **_kwargs: pytest.fail("Codex must not be submitted"),
+    )
+
+    with pytest.raises(ValueError, match="prototype acceptance is stale"):
+        service.retry_failed(object_type="scenario", object_id="recipes")
+
+
 def test_background_automation_launches_durable_worker_process(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     service.background = True

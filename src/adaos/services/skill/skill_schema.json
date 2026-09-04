@@ -26,6 +26,10 @@
 			"$ref": "#/$defs/prototypeRuntime",
 			"description": "Optional bounded executable Prototype artifact references."
 		},
+		"resource_runtime": {
+			"$ref": "#/$defs/resourceRuntime",
+			"description": "Typed skill-owned Resource Workbench declarations loaded during activation."
+		},
     "runtime": {
       "type": "object",
       "properties": {
@@ -224,6 +228,22 @@
 				"representative_states": { "$ref": "#/$defs/prototypeArtifactPath" }
 			},
 			"additionalProperties": false
+		},
+		"resourceRuntime": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["declarations"],
+			"properties": {
+				"declarations": {
+					"type": "array",
+					"minItems": 1,
+					"uniqueItems": true,
+					"items": {
+						"type": "string",
+						"pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+\\.json$"
+					}
+				}
+			}
 		},
 		"prototypeArtifactPath": {
 			"type": "string",

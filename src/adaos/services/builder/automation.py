@@ -3522,6 +3522,49 @@ class BuilderAutomationService:
             "automation": self.project_session(session),
         }
 
+    def retry_failed(
+        self,
+        *,
+        object_type: str,
+        object_id: str,
+        webspace_id: str = "desktop",
+        conversation_id: str | None = None,
+        execution_budget: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Retry the unchanged governed request after a terminal executor failure."""
+
+        kind, project_id = self._project_ref(object_type, object_id)
+        with _LOCK:
+            session = self.get_session(kind, project_id)
+            if not session:
+                raise ValueError("automation_session_not_found")
+            session = self.refresh_session(session)
+            if str(session.get("status") or "").strip() != "failed":
+                raise ValueError("only a failed Automation session can be retried")
+            if isinstance(session.get("prototype_acceptance"), Mapping):
+                session["prototype_acceptance"] = (
+                    self._workflow().require_current_prototype_acceptance(
+                        kind,
+                        project_id,
+                    )
+                )
+            session["updated_at"] = _now_iso()
+            self._save_session(session)
+
+        result = self.submit_turn(
+            text=(
+                "Retry the unchanged accepted implementation after the previous "
+                "executor failure. Do not reinterpret or expand the user request."
+            ),
+            object_type=kind,
+            object_id=project_id,
+            webspace_id=webspace_id,
+            conversation_id=conversation_id,
+            execution_budget=execution_budget,
+        )
+        result["retried_unchanged_request"] = True
+        return result
+
     def _budget_continuation_checkpoint(self, session: Mapping[str, Any]) -> dict[str, Any] | None:
         task_id = str(session.get("current_task_id") or "").strip()
         if not task_id:

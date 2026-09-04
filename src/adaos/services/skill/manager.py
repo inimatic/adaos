@@ -3786,6 +3786,14 @@ class SkillManager:
             manifest,
             artifact_root=artifact_root,
         )
+        from adaos.services.resources.local import LocalCrudResourceService
+
+        resource_runtime = LocalCrudResourceService().load_manifest(
+            name,
+            manifest,
+            artifact_root=artifact_root,
+        )
+        loaded.update(resource_runtime)
         loaded["loaded_projection_total"] = projection_total
         return loaded
 
@@ -3858,7 +3866,17 @@ class SkillManager:
 
     @staticmethod
     def _verify_staged_declaration_artifacts(source: Path, target: Path) -> None:
-        for name in ("skill.yaml", "webui.json"):
+        names = ["skill.yaml", "webui.json"]
+        manifest_path = source / "skill.yaml"
+        if manifest_path.is_file():
+            try:
+                manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+                from adaos.services.resources.local import declaration_paths
+
+                names.extend(declaration_paths(manifest))
+            except (OSError, ValueError, yaml.YAMLError) as exc:
+                raise RuntimeError(f"cannot verify skill declaration artifacts: {exc}") from exc
+        for name in names:
             source_path = source / name
             if not source_path.is_file():
                 continue
@@ -5605,6 +5623,7 @@ class SkillManager:
             "webui": manifest.get("webui"),
             "data_routes": manifest.get("data_routes") if isinstance(manifest.get("data_routes"), list) else [],
             "data_projections": manifest.get("data_projections") if isinstance(manifest.get("data_projections"), list) else [],
+            "resource_runtime": manifest.get("resource_runtime") if isinstance(manifest.get("resource_runtime"), Mapping) else {},
             "memory_budget": manifest.get("memory_budget") if isinstance(manifest.get("memory_budget"), Mapping) else {},
             "lifecycle": manifest.get("lifecycle") if isinstance(manifest.get("lifecycle"), Mapping) else {},
             "models": manifest.get("models"),
