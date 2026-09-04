@@ -9,6 +9,12 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+from adaos.domain.artifact_release import (
+    ArtifactPackageRef,
+    ArtifactSourceRef,
+    WorkspaceLock,
+)
+
 if "y_py" not in sys.modules:
     sys.modules["y_py"] = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),
@@ -427,6 +433,83 @@ def test_scenario_push_updates_registry_and_commits_it(monkeypatch, tmp_path: Pa
     assert git.pull_calls == []
     assert git.commit_calls[0]["subpath"] == ["scenarios/welcome_scene", "registry.json"]
     assert git.push_calls == [str(workspace)]
+
+
+def test_scenario_push_allows_declared_project_maintenance(monkeypatch, tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / ".git").mkdir(parents=True)
+    scenario_dir = workspace / "scenarios" / "builder"
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: builder\nversion: 0.2.0\n",
+        encoding="utf-8",
+    )
+    project_dir = workspace / "projects" / "builder"
+    project_dir.mkdir(parents=True)
+    (project_dir / "project.yaml").write_text(
+        "\n".join(
+            [
+                "schema: adaos.project.v1",
+                "kind: project",
+                "id: builder",
+                "version: 0.2.0",
+                "components:",
+                "  owned:",
+                "    - ref: scenario:builder",
+                "      role: primary",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (workspace / ".adaos").mkdir()
+    source = ArtifactSourceRef(
+        forge="github",
+        repository="example/repo",
+        revision="c" * 40,
+        path_scope=("scenarios/builder/",),
+    )
+    package = ArtifactPackageRef(
+        kind="scenario",
+        artifact_id="builder",
+        version="0.2.0",
+        digest="sha256:" + "a" * 64,
+        manifest_digest="sha256:" + "b" * 64,
+        source_ref=source,
+        builder_id="test",
+        build_policy_digest="sha256:" + "d" * 64,
+        materialization_path="scenarios/builder",
+    )
+    lock = WorkspaceLock(
+        lock_revision=1,
+        updated_at="2026-09-04T00:00:00+00:00",
+        components=(package,),
+    )
+    (workspace / ".adaos" / "workspace.lock.json").write_text(
+        json.dumps(lock.to_dict()),
+        encoding="utf-8",
+    )
+    git = _FakeGit()
+    ctx = _workspace_ctx(workspace, git)
+    monkeypatch.setattr(
+        "adaos.services.scenario.manager.get_git_availability",
+        lambda base_dir=None: SimpleNamespace(enabled=True),
+        raising=False,
+    )
+    monkeypatch.setattr("adaos.services.scenario.manager.get_ctx", lambda: ctx)
+    manager = object.__new__(ScenarioManager)
+    manager.caps = _FakeCaps()
+    manager.git = git
+    manager.ctx = ctx
+
+    revision = manager.push(
+        "builder",
+        "maintain builder",
+        maintenance_project="builder",
+    )
+
+    assert revision == "rev-1"
+    assert yaml.safe_load((scenario_dir / "scenario.yaml").read_text(encoding="utf-8"))["version"] == "0.2.1"
 
 
 def test_scenario_push_bumps_bound_conversational_version_atomically(monkeypatch, tmp_path: Path) -> None:

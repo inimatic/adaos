@@ -38,7 +38,10 @@ from adaos.services.runtime_activation_observations import (
     emit_runtime_activation_failure,
     emit_runtime_activation_success,
 )
-from adaos.services.workspace_release_guard import assert_workspace_component_mutable
+from adaos.services.workspace_release_guard import (
+    assert_workspace_component_maintenance_owned,
+    assert_workspace_component_mutable,
+)
 
 if TYPE_CHECKING:
     from adaos.services.scenario.validation import ScenarioValidationReport
@@ -806,7 +809,15 @@ class ScenarioManager:
         except Exception:
             pass
 
-    def push(self, name: str, message: str, *, signoff: bool = False, bump: bool = True) -> str:
+    def push(
+        self,
+        name: str,
+        message: str,
+        *,
+        signoff: bool = False,
+        bump: bool = True,
+        maintenance_project: str | None = None,
+    ) -> str:
         self.caps.require("core", "scenarios.manage", "git.write", "net.git")
         root = self.ctx.paths.workspace_dir()
         try:
@@ -820,7 +831,15 @@ class ScenarioManager:
         if not (Path(root) / ".git").exists():
             raise RuntimeError("Scenarios repo is not initialized. Run `adaos scenario sync` once.")
         sub = name.strip()
-        assert_workspace_component_mutable(Path(root), kind="scenario", artifact_id=sub)
+        if maintenance_project:
+            assert_workspace_component_maintenance_owned(
+                Path(root),
+                kind="scenario",
+                artifact_id=sub,
+                project_id=maintenance_project,
+            )
+        else:
+            assert_workspace_component_mutable(Path(root), kind="scenario", artifact_id=sub)
         subpath = f"scenarios/{sub}"
         self._ensure_scenario_subpath_materialized(Path(root), sub)
         version = self._bump_scenario_manifest_patch(Path(root) / "scenarios" / sub) if bump else None

@@ -580,6 +580,14 @@ def push_command(
     scenario_name: str = typer.Argument(..., help=_("cli.scenario.push.name_help")),
     message: Optional[str] = typer.Option(None, "--message", "-m", help=_("cli.commit_message.help")),
     signoff: bool = typer.Option(False, "--signoff", help=_("cli.option.signoff")),
+    maintenance_project: str | None = typer.Option(
+        None,
+        "--maintenance-project",
+        help=(
+            "Explicitly maintain a lock-managed Workspace component owned by this Project. "
+            "Normal project development must use DEV Candidate/Trial/Publication."
+        ),
+    ),
 ):
     """Commit changes inside a scenario directory and push to remote."""
 
@@ -599,7 +607,12 @@ def push_command(
 
     mgr = _mgr()
     _resolve_scenario_path(scenario_name)
-    result = mgr.push(scenario_name, message, signoff=signoff)
+    result = mgr.push(
+        scenario_name,
+        message,
+        signoff=signoff,
+        maintenance_project=maintenance_project,
+    )
     if result in {"nothing-to-push", "nothing-to-commit"}:
         typer.echo(_("cli.scenario.push.nothing"))
     else:
