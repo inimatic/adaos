@@ -5,6 +5,9 @@ from pathlib import Path
 
 import pytest
 
+from adaos.sdk.developer import prototypes as developer_prototypes
+from adaos.sdk.developer.prototypes import derive_board_resource_spec
+from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.services.resources import (
     PrototypeResourceService,
     ResourceConflict,
@@ -281,3 +284,134 @@ def test_prototype_resource_rejects_durable_or_mismatched_authority(tmp_path: Pa
     mismatch["resource_definition"]["authority"]["binding"] = "other.cards"
     with pytest.raises(ValueError, match="must equal"):
         service.materialize(mismatch)
+
+
+def test_board_projection_derives_typed_disposable_resource(tmp_path: Path) -> None:
+    webui = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "kanban",
+                        "layout": {"type": "single", "areas": [{"id": "main", "role": "main"}]},
+                        "widgets": [
+                            {
+                                "id": "cards",
+                                "type": "collection.board",
+                                "area": "main",
+                                "title": "Delivery board",
+                                "inputs": {
+                                    "lanes": [
+                                        {"id": "planned", "label": "Planned"},
+                                        {"id": "done", "label": "Done"},
+                                    ],
+                                    "laneKey": "status",
+                                    "titleKey": "title",
+                                    "dragDrop": True,
+                                },
+                                "dataSource": {
+                                    "kind": "resourceQuery",
+                                    "resourceType": "prototype.delivery.cards",
+                                    "queryId": "all",
+                                },
+                                "actions": [
+                                    {
+                                        "on": "move",
+                                        "type": "resourceOperation",
+                                        "target": "prototype.delivery.cards",
+                                        "params": {"operation_id": "update"},
+                                    },
+                                    {
+                                        "on": "add",
+                                        "type": "resourceOperation",
+                                        "target": "prototype.delivery.cards",
+                                        "params": {"operation_id": "create"},
+                                    },
+                                    {
+                                        "on": "delete",
+                                        "type": "resourceOperation",
+                                        "target": "prototype.delivery.cards",
+                                        "params": {"operation_id": "delete"},
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+    }
+    spec = derive_board_resource_spec(
+        webui,
+        [
+            {"id": "one", "title": "Plan release", "status": "planned", "priority": "high"},
+            {"id": "two", "title": "Ship release", "status": "done", "priority": "medium"},
+        ],
+    )
+
+    definition = spec["resource_definition"]
+    assert definition["resource_type"] == "prototype.delivery.cards"
+    assert {item["id"] for item in definition["operations"]} == {
+        "list",
+        "show",
+        "create",
+        "update",
+        "delete",
+    }
+    assert definition["record_schema"]["properties"]["status"]["enum"] == [
+        "planned",
+        "done",
+    ]
+    materialized = PrototypeResourceService(state_dir=tmp_path).materialize(
+        {
+            "schema": "adaos.builder.prototype_resource.v1",
+            "project_ref": "project:delivery",
+            "change_id": "change-delivery",
+            "revision": "003",
+            "webui_digest": "sha256:" + "3" * 64,
+            **spec,
+        }
+    )
+    assert materialized["state"]["records"][0]["revision"] == 1
+
+
+def test_materialize_resources_stamps_authoritative_revision_identity(monkeypatch) -> None:
+    captured: list[dict] = []
+
+    class _PrototypeService:
+        def materialize(self, payload):
+            captured.append(copy.deepcopy(dict(payload)))
+            return {
+                "duplicate": False,
+                "state": {
+                    "resource_type": payload["resource_definition"]["resource_type"],
+                    "bundle_digest": "sha256:" + "b" * 64,
+                    "generation": 1,
+                },
+            }
+
+    monkeypatch.setattr(
+        developer_prototypes,
+        "PrototypeResourceService",
+        _PrototypeService,
+    )
+    webui = {"schema": "adaos.webui.v1", "ui": {"application": {}}}
+    spec = {
+        "resource_definition": {"resource_type": "prototype.cards"},
+        "data_definition": {"source_id": "cards"},
+    }
+
+    result = developer_prototypes.materialize_resources(
+        project_ref="project:kanban",
+        change_id="change-1",
+        revision="007",
+        webui=webui,
+        resources=[spec],
+    )
+
+    assert captured[0]["project_ref"] == "project:kanban"
+    assert captured[0]["change_id"] == "change-1"
+    assert captured[0]["revision"] == "007"
+    assert captured[0]["webui_digest"] == canonical_payload_digest(webui)
+    assert result["webui_digest"] == captured[0]["webui_digest"]

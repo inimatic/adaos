@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
-from . import artifact_context, compositions, conversational, projects, prompt_context, ui, validation
+from . import (
+    artifact_context,
+    compositions,
+    conversational,
+    projects,
+    prompt_context,
+    prototypes,
+    ui,
+    validation,
+)
 
 __all__ = [
     "artifact_context",
@@ -10,6 +19,7 @@ __all__ = [
     "conversational",
     "projects",
     "prompt_context",
+    "prototypes",
     "ui",
     "validation",
 ]
