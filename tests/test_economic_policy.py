@@ -173,6 +173,61 @@ def test_refresh_entitlement_snapshot_from_root(monkeypatch, tmp_path) -> None:
     assert status["usage"]["codex.api.tokens"]["quota_remaining"] == 19999900
 
 
+def test_refresh_entitlement_uses_global_llm_usage_authority(monkeypatch, tmp_path) -> None:
+    calls: list[str] = []
+
+    class FakeRootClient:
+        def __init__(self, base_url: str) -> None:
+            self.base_url = base_url
+
+        def request(self, method, path, **kwargs):
+            calls.append(self.base_url)
+            assert method == "GET"
+            assert path == "/v1/hub/economic/entitlement"
+            is_global = self.base_url == "https://api.inimatic.com"
+            return {
+                "ok": True,
+                "entitlement": {
+                    "schema": "adaos.root_mgmnt.economic_entitlement.v1",
+                    "mode": "observe",
+                    "subscription": {"state": "active", "plan_id": "builder"},
+                    "entitlement": {"state": "enabled", "disabled_resources": []},
+                    "usage": {
+                        "llm.requests": {"used_24h": 27 if is_global else 1},
+                        "llm.tokens.input": {"used_24h": 197738 if is_global else 11},
+                        "codex.api.tokens": {"used_24h": 50 if is_global else 1819809},
+                    },
+                },
+            }
+
+    monkeypatch.setattr(economic_policy, "load_config", lambda: _config())
+    monkeypatch.setattr(economic_policy, "current_base_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        economic_policy,
+        "_economic_root_http_client",
+        lambda conf, *, base_dir, root_base_url=None: FakeRootClient(
+            root_base_url or "https://ru.api.inimatic.com"
+        ),
+    )
+    monkeypatch.delenv("ADAOS_ECONOMIC_ENTITLEMENT_SNAPSHOT", raising=False)
+    monkeypatch.delenv("ADAOS_ECONOMIC_LLM_AUTHORITY_BASE_URL", raising=False)
+    monkeypatch.delenv("ADAOS_ECONOMIC_SPLIT_USAGE_AUTHORITY", raising=False)
+
+    refresh = economic_policy.refresh_entitlement_snapshot_from_root(timeout=4)
+    status = economic_policy.current_subnet_economic_status()
+
+    assert calls == ["https://ru.api.inimatic.com", "https://api.inimatic.com"]
+    assert refresh["usage_authorities"] == {
+        "default": "https://ru.api.inimatic.com",
+        "llm": "https://api.inimatic.com",
+    }
+    assert status["usage"]["llm.requests"]["used_24h"] == 27
+    assert status["usage"]["llm.tokens.input"]["used_24h"] == 197738
+    assert status["usage"]["llm.requests"]["authority_scope"] == "global_llm_proxy"
+    assert status["usage"]["codex.api.tokens"]["used_24h"] == 1819809
+    assert status["usage_authority_warnings"] == []
+
+
 def test_estimate_codex_tokens_from_text_uses_utf8_bytes() -> None:
     assert economic_policy.estimate_codex_tokens_from_text("") == 0
     assert economic_policy.estimate_codex_tokens_from_text("abcd") == 1

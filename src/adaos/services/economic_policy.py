@@ -33,6 +33,12 @@ ROOT_GOVERNED_RESOURCES: tuple[str, ...] = (
     "media.indexing",
     "external.integrations",
 )
+LLM_GOVERNED_RESOURCES: tuple[str, ...] = (
+    "llm.requests",
+    "llm.tokens.input",
+    "llm.tokens.output",
+    "llm.tokens.reasoning",
+)
 
 
 def _now_iso() -> str:
@@ -275,6 +281,30 @@ def _unwrap_entitlement_snapshot(raw: Mapping[str, Any]) -> dict[str, Any]:
     return dict(raw)
 
 
+def _with_llm_usage_authority(
+    entitlement: Mapping[str, Any],
+    authority_entitlement: Mapping[str, Any],
+    *,
+    authority_base_url: str,
+) -> dict[str, Any]:
+    merged = dict(entitlement)
+    current_usage = entitlement.get("usage")
+    usage = dict(current_usage) if isinstance(current_usage, Mapping) else {}
+    authority_usage = authority_entitlement.get("usage")
+    authority_rows = authority_usage if isinstance(authority_usage, Mapping) else {}
+    for resource in LLM_GOVERNED_RESOURCES:
+        row = authority_rows.get(resource)
+        if not isinstance(row, Mapping):
+            continue
+        usage[resource] = {
+            **dict(row),
+            "authority_root_base_url": authority_base_url,
+            "authority_scope": "global_llm_proxy",
+        }
+    merged["usage"] = usage
+    return merged
+
+
 def refresh_entitlement_snapshot_from_root(
     root_base_url: str | None = None,
     *,
@@ -289,16 +319,67 @@ def refresh_entitlement_snapshot_from_root(
     entitlement = _unwrap_entitlement_snapshot(payload)
     if entitlement.get("schema") != ECONOMIC_ENTITLEMENT_SNAPSHOT_SCHEMA:
         raise RuntimeError("root returned invalid entitlement schema")
+    usage_authorities = {"default": client.base_url}
+    usage_authority_warnings: list[dict[str, str]] = []
+    llm_authority_base_url = _text(os.getenv("ADAOS_ECONOMIC_LLM_AUTHORITY_BASE_URL")).rstrip("/")
+    if not llm_authority_base_url:
+        llm_authority_base_url = _global_root_base_url()
+    should_read_llm_authority = (
+        root_base_url is None
+        and _env_bool("ADAOS_ECONOMIC_SPLIT_USAGE_AUTHORITY", default=True)
+        and llm_authority_base_url
+        and llm_authority_base_url != client.base_url
+    )
+    if should_read_llm_authority:
+        try:
+            llm_client = _economic_root_http_client(
+                conf,
+                base_dir=base_dir,
+                root_base_url=llm_authority_base_url,
+            )
+            llm_payload = llm_client.request("GET", "/v1/hub/economic/entitlement", timeout=timeout)
+            if not isinstance(llm_payload, Mapping):
+                raise RuntimeError("LLM authority returned invalid entitlement payload")
+            llm_entitlement = _unwrap_entitlement_snapshot(llm_payload)
+            if llm_entitlement.get("schema") != ECONOMIC_ENTITLEMENT_SNAPSHOT_SCHEMA:
+                raise RuntimeError("LLM authority returned invalid entitlement schema")
+            entitlement = _with_llm_usage_authority(
+                entitlement,
+                llm_entitlement,
+                authority_base_url=llm_client.base_url,
+            )
+            usage_authorities["llm"] = llm_client.base_url
+        except Exception as exc:
+            usage_authority_warnings.append(
+                {
+                    "authority": "llm",
+                    "root_base_url": llm_authority_base_url,
+                    "error": type(exc).__name__,
+                    "message": str(exc)[:240],
+                }
+            )
+    entitlement["usage_authorities"] = dict(usage_authorities)
+    if usage_authority_warnings:
+        entitlement["usage_authority_warnings"] = usage_authority_warnings
     path = entitlement_snapshot_path(base_dir=base_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     stored = dict(payload)
+    if isinstance(payload.get("entitlement"), Mapping):
+        stored["entitlement"] = entitlement
+    else:
+        stored = entitlement
     stored["retrieved_at"] = _now_iso()
     stored["root_base_url"] = client.base_url
+    stored["usage_authorities"] = dict(usage_authorities)
+    if usage_authority_warnings:
+        stored["usage_authority_warnings"] = usage_authority_warnings
     path.write_text(json.dumps(stored, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
     return {
         "ok": True,
         "path": str(path),
         "root_base_url": client.base_url,
+        "usage_authorities": usage_authorities,
+        "usage_authority_warnings": usage_authority_warnings,
         "subnet_id": _text(getattr(conf, "subnet_id", None)),
         "subscription_state": _text(_snapshot_subscription(entitlement).get("state")),
         "plan_id": _text(_snapshot_subscription(entitlement).get("plan_id")),
@@ -517,6 +598,12 @@ def current_subnet_economic_status() -> dict[str, Any]:
         "disabled_resource_count": len(disabled_resources),
         "disabled_resources": disabled_resources,
         "usage": usage_payload,
+        "usage_authorities": dict(raw_snapshot.get("usage_authorities"))
+        if isinstance(raw_snapshot.get("usage_authorities"), Mapping)
+        else {},
+        "usage_authority_warnings": list(raw_snapshot.get("usage_authority_warnings"))
+        if isinstance(raw_snapshot.get("usage_authority_warnings"), list)
+        else [],
         "management_authority": {
             "source": "global_root",
             "global_base_url": global_root_base,
