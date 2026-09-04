@@ -7,7 +7,7 @@ import pytest
 
 from adaos.sdk.developer import prototypes as developer_prototypes
 from adaos.sdk.developer.prototypes import derive_board_resource_spec
-from adaos.domain.artifact_release import canonical_payload_digest
+from adaos.services.resources.prototype import prototype_webui_digest
 from adaos.services.resources import (
     PrototypeResourceService,
     ResourceConflict,
@@ -386,7 +386,8 @@ def test_board_projection_derives_typed_disposable_resource(tmp_path: Path) -> N
         "planned",
         "done",
     ]
-    materialized = PrototypeResourceService(state_dir=tmp_path).materialize(
+    service = PrototypeResourceService(state_dir=tmp_path)
+    materialized = service.materialize(
         {
             "schema": "adaos.builder.prototype_resource.v1",
             "project_ref": "project:delivery",
@@ -397,6 +398,16 @@ def test_board_projection_derives_typed_disposable_resource(tmp_path: Path) -> N
         }
     )
     assert materialized["state"]["records"][0]["revision"] == 1
+    snapshots = service.acceptance_snapshots(
+        project_ref="project:delivery",
+        change_id="change-delivery",
+        revision="003",
+        webui_digest="sha256:" + "3" * 64,
+        resource_types=["prototype.delivery.cards"],
+    )
+    assert snapshots[0]["record_count"] == 2
+    assert snapshots[0]["records"] == materialized["state"]["records"]
+    assert snapshots[0]["records_digest"].startswith("sha256:")
 
 
 def test_materialize_resources_stamps_authoritative_revision_identity(monkeypatch) -> None:
@@ -436,5 +447,21 @@ def test_materialize_resources_stamps_authoritative_revision_identity(monkeypatc
     assert captured[0]["project_ref"] == "project:kanban"
     assert captured[0]["change_id"] == "change-1"
     assert captured[0]["revision"] == "007"
-    assert captured[0]["webui_digest"] == canonical_payload_digest(webui)
+    assert captured[0]["webui_digest"] == prototype_webui_digest(webui)
     assert result["webui_digest"] == captured[0]["webui_digest"]
+
+
+def test_prototype_webui_digest_ignores_release_version_only() -> None:
+    first = {
+        "schema": "adaos.webui.v1",
+        "ui": {"version": "0.1.0", "application": {"desktop": {"pageSchema": {"widgets": []}}}},
+    }
+    bumped = copy.deepcopy(first)
+    bumped["ui"]["version"] = "0.1.1"
+    changed = copy.deepcopy(bumped)
+    changed["ui"]["application"]["desktop"]["pageSchema"]["widgets"].append(
+        {"id": "board", "type": "collection.board"}
+    )
+
+    assert prototype_webui_digest(first) == prototype_webui_digest(bumped)
+    assert prototype_webui_digest(first) != prototype_webui_digest(changed)

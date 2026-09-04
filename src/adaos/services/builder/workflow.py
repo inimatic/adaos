@@ -1704,8 +1704,72 @@ class BuilderWorkflowService:
         revision = str(self.current_prototype_revision(kind, project_id) or "").strip()
         if not revision:
             raise BuilderWorkflowError("cannot accept prototype without an immutable UI revision")
+        from adaos.services.resources.prototype import prototype_webui_digest
+
         normalized = copy.deepcopy(dict(webui))
-        return normalized, revision, canonical_payload_digest(normalized)
+        return normalized, revision, prototype_webui_digest(normalized)
+
+    @staticmethod
+    def _prototype_resource_types(webui: Mapping[str, Any]) -> list[str]:
+        found: list[str] = []
+
+        def visit(value: Any) -> None:
+            if isinstance(value, Mapping):
+                if str(value.get("kind") or "").strip() == "resourceQuery":
+                    resource_type = str(value.get("resourceType") or "").strip()
+                    if resource_type.startswith("prototype.") and resource_type not in found:
+                        found.append(resource_type)
+                for nested in value.values():
+                    visit(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    visit(nested)
+
+        visit(webui)
+        return found
+
+    def _prototype_resource_snapshots(
+        self,
+        *,
+        object_type: str,
+        object_id: str,
+        change_id: str,
+        revision: str,
+        webui: Mapping[str, Any],
+        webui_digest: str,
+    ) -> list[dict[str, Any]]:
+        resource_types = self._prototype_resource_types(webui)
+        if not resource_types:
+            return []
+        from adaos.services.resources.prototype import (
+            PrototypeResourceConflict,
+            PrototypeResourceService,
+        )
+
+        try:
+            return PrototypeResourceService().acceptance_snapshots(
+                project_ref=f"{_kind(object_type)}:{_project_id(object_id)}",
+                change_id=change_id,
+                revision=revision,
+                webui_digest=webui_digest,
+                resource_types=resource_types,
+            )
+        except (ValueError, PrototypeResourceConflict) as exc:
+            raise BuilderWorkflowError(f"cannot accept prototype resource state: {exc}") from exc
+
+    @staticmethod
+    def _prototype_resource_evidence(
+        snapshots: Sequence[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        keys = (
+            "resource_type",
+            "bundle_digest",
+            "definition_digest",
+            "generation",
+            "record_count",
+            "records_digest",
+        )
+        return [{key: snapshot.get(key) for key in keys} for snapshot in snapshots]
 
     @staticmethod
     def _prototype_request(change: Mapping[str, Any]) -> str:
@@ -1732,7 +1796,14 @@ class BuilderWorkflowService:
         if change is None:
             raise BuilderWorkflowError("prototype acceptance requires an active Change")
         webui, revision, webui_digest = self._prototype_webui_snapshot(object_type, object_id)
-        del webui
+        snapshots = self._prototype_resource_snapshots(
+            object_type=object_type,
+            object_id=object_id,
+            change_id=str(change.get("change_id") or ""),
+            revision=revision,
+            webui=webui,
+            webui_digest=webui_digest,
+        )
         acceptance = value if isinstance(value, Mapping) else _mapping(
             _mapping(workflow.get("prototype")).get("acceptance")
         )
@@ -1744,6 +1815,7 @@ class BuilderWorkflowService:
             expected_change_id=str(change.get("change_id") or ""),
             expected_revision=revision,
             expected_webui_digest=webui_digest,
+            expected_prototype_resources=self._prototype_resource_evidence(snapshots),
         )
 
     def accept_prototype(
@@ -1769,6 +1841,20 @@ class BuilderWorkflowService:
         if change is None:
             raise BuilderWorkflowError("prototype acceptance requires an active Change")
         webui, revision, webui_digest = self._prototype_webui_snapshot(object_type, object_id)
+        snapshots = self._prototype_resource_snapshots(
+            object_type=object_type,
+            object_id=object_id,
+            change_id=str(change.get("change_id") or ""),
+            revision=revision,
+            webui=webui,
+            webui_digest=webui_digest,
+        )
+        prototype_records = [
+            dict(record)
+            for snapshot in snapshots
+            for record in snapshot.get("records") or []
+            if isinstance(record, Mapping)
+        ]
         identifier = str(acceptance_id or "").strip() or (
             f"acceptance:{change['change_id']}:{revision}:{webui_digest.removeprefix('sha256:')[:16]}"
         )
@@ -1782,6 +1868,8 @@ class BuilderWorkflowService:
             reviewer=reviewer,
             behavior_checks=behavior_checks,
             visual_checks=visual_checks,
+            prototype_records=prototype_records,
+            prototype_resources=self._prototype_resource_evidence(snapshots),
         )
         result = self.transition(
             object_type,

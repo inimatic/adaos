@@ -75,11 +75,12 @@ MANIFEST_REWRITE_SHRINK_RATIO = 0.5
 CODEX_TOKEN_BUDGET_CHECK_INTERVAL_SECONDS = 2.0
 CODEX_TOKEN_BUDGET_EXIT_CODE = 124
 CODEX_LIVE_BUDGET_SAFETY_FACTOR = 1.25
-# Calibrated from a local Codex repair with two tool rounds: 185,106 total
-# input tokens, including 173,824 cached input. Keep the marginal
-# fresh_plus_output budget independent from this provider-metered floor.
-CODEX_LIVE_PROVIDER_BASELINE_TOKENS = 176_000
-CODEX_LIVE_PROVIDER_TOKENS_PER_TOOL_ROUND = 8_000
+# Calibrated from an isolated one-turn Codex invocation. Provider input also
+# includes the agent harness and tool schemas, so it is additive to the task
+# prompt. Each completed tool call can trigger another model turn and replay
+# that baseline as cached input.
+CODEX_LIVE_PROVIDER_BASELINE_TOKENS = 14_000
+CODEX_LIVE_PROVIDER_TOKENS_PER_TOOL_ROUND = 14_000
 CODEX_LIVE_FRESH_BASELINE_TOKENS = 4_000
 CODEX_LIVE_FRESH_TOKENS_PER_TOOL_ROUND = 2_000
 BOUNDED_REPAIR_COMMAND_OUTPUT_BYTES = 8 * 1024
@@ -872,16 +873,7 @@ def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, A
     context_bytes = len(str(prompt or "").encode("utf-8", errors="replace"))
     cumulative_tokens = max(1, (context_bytes + 3) // 4)
     tool_rounds = 0
-    tool_batch_open = False
     assistant_output_bytes = 0
-
-    def close_tool_batch() -> None:
-        nonlocal cumulative_tokens, tool_rounds, tool_batch_open
-        if not tool_batch_open:
-            return
-        cumulative_tokens += max(1, (context_bytes + 3) // 4)
-        tool_rounds += 1
-        tool_batch_open = False
 
     if path.is_file():
         try:
@@ -897,7 +889,6 @@ def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, A
                     continue
                 item_type = str(item.get("type") or "")
                 if item_type == "agent_message":
-                    close_tool_batch()
                     raw_bytes = len(raw_line.encode("utf-8", errors="replace"))
                     context_bytes += raw_bytes
                     assistant_output_bytes += raw_bytes
@@ -909,10 +900,10 @@ def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, A
                 }:
                     continue
                 context_bytes += len(raw_line.encode("utf-8", errors="replace"))
-                tool_batch_open = True
+                cumulative_tokens += max(1, (context_bytes + 3) // 4)
+                tool_rounds += 1
         except OSError:
             return {}
-    close_tool_batch()
     unique_tokens = max(1, (context_bytes + 3) // 4)
     visible_estimate = max(
         1,
@@ -922,7 +913,7 @@ def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, A
         CODEX_LIVE_PROVIDER_BASELINE_TOKENS
         + CODEX_LIVE_PROVIDER_TOKENS_PER_TOOL_ROUND * tool_rounds
     )
-    estimated = max(visible_estimate, provider_context_floor)
+    estimated = visible_estimate + provider_context_floor
     visible_fresh_estimate = max(
         1,
         int(unique_tokens * CODEX_LIVE_BUDGET_SAFETY_FACTOR),
@@ -2475,9 +2466,8 @@ def _codex_prompt_budget_check(
         1,
         int(estimate * CODEX_LIVE_BUDGET_SAFETY_FACTOR),
     )
-    provider_input_estimate = max(
-        scaled_prompt_estimate,
-        CODEX_LIVE_PROVIDER_BASELINE_TOKENS,
+    provider_input_estimate = (
+        scaled_prompt_estimate + CODEX_LIVE_PROVIDER_BASELINE_TOKENS
     )
     fresh_input_estimate = min(
         provider_input_estimate,
@@ -2491,7 +2481,12 @@ def _codex_prompt_budget_check(
     )
     required_primary_tokens = primary_input_estimate + reserve
     max_billable_tokens = int(budget.get("max_billable_tokens") or 0)
-    required_billable_tokens = provider_input_estimate + reserve
+    billable_output_reserve = (
+        min(reserve, max(1_024, max_billable_tokens // 10))
+        if max_billable_tokens
+        else reserve
+    )
+    required_billable_tokens = provider_input_estimate + billable_output_reserve
     blocked_reasons: list[str] = []
     if required_primary_tokens > max_tokens:
         blocked_reasons.append("primary_budget_below_estimated_first_turn")
@@ -2514,6 +2509,7 @@ def _codex_prompt_budget_check(
             "required_billable_tokens": required_billable_tokens,
         },
         "reserved_for_tools_and_output": reserve,
+        "reserved_for_billable_output": billable_output_reserve,
         "declared": budget,
     }
 

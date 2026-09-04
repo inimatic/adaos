@@ -5,8 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from adaos.domain.artifact_release import canonical_payload_digest
-from adaos.services.resources.prototype import PrototypeResourceService
+from adaos.services.resources.prototype import (
+    PrototypeResourceService,
+    prototype_webui_digest,
+)
 
 
 def _read_path(value: Mapping[str, Any], path: str) -> Any:
@@ -300,7 +302,7 @@ def materialize_resources(
         "project_ref": str(project_ref).strip(),
         "change_id": str(change_id).strip(),
         "revision": str(revision).strip(),
-        "webui_digest": canonical_payload_digest(dict(webui)),
+        "webui_digest": prototype_webui_digest(webui),
     }
     service = PrototypeResourceService()
     results = []

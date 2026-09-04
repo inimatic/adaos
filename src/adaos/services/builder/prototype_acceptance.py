@@ -11,6 +11,7 @@ from typing import Any, Mapping, Sequence
 from jsonschema import Draft202012Validator, ValidationError
 
 from adaos.domain.artifact_release import canonical_payload_digest
+from adaos.services.resources.prototype import prototype_webui_digest
 from adaos.services.ui_capabilities import evaluate_ui_request
 
 from .workflow import BuilderWorkflowError
@@ -117,12 +118,14 @@ def build_prototype_acceptance(
     reviewer: Mapping[str, Any],
     behavior_checks: Sequence[Mapping[str, Any]],
     visual_checks: Sequence[Mapping[str, Any]],
+    prototype_records: Sequence[Mapping[str, Any]] | None = None,
+    prototype_resources: Sequence[Mapping[str, Any]] | None = None,
     accepted_at: str | None = None,
 ) -> dict[str, Any]:
     """Build acceptance only after deterministic, behavioral, and visual checks pass."""
 
     _validate("webui.v1.schema.json", webui, label="prototype WebUI")
-    evaluation = evaluate_ui_request(request, webui)
+    evaluation = evaluate_ui_request(request, webui, prototype_records=prototype_records)
     if not bool(evaluation.get("ok")):
         failures = [
             str(item.get("id") or item.get("code") or "unknown")
@@ -147,11 +150,14 @@ def build_prototype_acceptance(
         "project_ref": str(project_ref).strip(),
         "change_id": str(change_id).strip(),
         "revision": str(revision).strip(),
-        "webui_digest": canonical_payload_digest(dict(webui)),
+        "webui_digest": prototype_webui_digest(webui),
         "request_digest": canonical_payload_digest({"request": str(request)}),
         "reviewer": copy.deepcopy(dict(reviewer)),
         "decision": "accepted",
         "deterministic_evaluation": copy.deepcopy(dict(evaluation)),
+        "prototype_resources": [
+            copy.deepcopy(dict(item)) for item in prototype_resources or [] if isinstance(item, Mapping)
+        ],
         "behavior_checks": checks,
         "visual_checks": visuals,
         "accepted_at": timestamp,
@@ -172,6 +178,7 @@ def admit_prototype_acceptance(
     expected_change_id: str,
     expected_revision: str,
     expected_webui_digest: str,
+    expected_prototype_resources: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Verify immutable acceptance identity before crossing the Automation gate."""
 
@@ -199,6 +206,11 @@ def admit_prototype_acceptance(
         raise BuilderWorkflowError(
             "prototype acceptance is stale or belongs to another Change: " + ", ".join(mismatches)
         )
+    if expected_prototype_resources is not None:
+        actual_resources = list(acceptance.get("prototype_resources") or [])
+        expected_resources = [dict(item) for item in expected_prototype_resources]
+        if canonical_payload_digest(actual_resources) != canonical_payload_digest(expected_resources):
+            raise BuilderWorkflowError("prototype acceptance is stale: prototype_resources")
     if not bool(dict(acceptance.get("deterministic_evaluation") or {}).get("ok")):
         raise BuilderWorkflowError("prototype acceptance contains a failed deterministic evaluation")
     return acceptance

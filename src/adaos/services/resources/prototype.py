@@ -12,7 +12,6 @@ from typing import Any, Mapping, Sequence
 from jsonschema import Draft202012Validator, ValidationError
 
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
-from adaos.services.builder.prototype_runtime import PrototypeDataRuntime
 from adaos.services.id_gen import new_id
 from adaos.services.runtime_paths import current_state_dir
 
@@ -46,6 +45,16 @@ def _clone(value: Any) -> Any:
 def _digest(value: Any) -> str:
     raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def prototype_webui_digest(value: Mapping[str, Any]) -> str:
+    """Digest executable Prototype UI while ignoring release bookkeeping."""
+
+    normalized = copy.deepcopy(dict(value))
+    ui = normalized.get("ui")
+    if isinstance(ui, dict):
+        ui.pop("version", None)
+    return _digest(normalized)
 
 
 def _text(value: Any) -> str:
@@ -91,6 +100,10 @@ class PrototypeResourceService:
         return self.root / ".prototype-resources.lock"
 
     def materialize(self, bundle: Mapping[str, Any]) -> dict[str, Any]:
+        # Keep Builder's orchestration package out of this provider's import
+        # graph; Skill Factory imports developer SDK helpers during startup.
+        from adaos.services.builder.prototype_runtime import PrototypeDataRuntime
+
         value = copy.deepcopy(dict(bundle))
         _validate(
             "builder.prototype_resource.v1.schema.json",
@@ -169,6 +182,45 @@ class PrototypeResourceService:
         state = self._state(resource_type)
         return _clone(state["definition"]) if state else None
 
+    def acceptance_snapshots(
+        self,
+        *,
+        project_ref: str,
+        change_id: str,
+        revision: str,
+        webui_digest: str,
+        resource_types: Sequence[str],
+    ) -> list[dict[str, Any]]:
+        """Return exact resource state used by fail-closed Prototype acceptance."""
+
+        snapshots: list[dict[str, Any]] = []
+        for resource_type in dict.fromkeys(_text(item) for item in resource_types if _text(item)):
+            state = self._require_state(resource_type)
+            expected = {
+                "project_ref": _text(project_ref),
+                "change_id": _text(change_id),
+                "revision": _text(revision),
+                "webui_digest": _text(webui_digest),
+            }
+            mismatches = [key for key, value in expected.items() if _text(state.get(key)) != value]
+            if mismatches:
+                raise PrototypeResourceConflict(
+                    f"prototype resource {resource_type} is stale: {', '.join(mismatches)}"
+                )
+            records = [dict(item) for item in state.get("records") or [] if isinstance(item, Mapping)]
+            snapshots.append(
+                {
+                    "resource_type": resource_type,
+                    "bundle_digest": _text(state.get("bundle_digest")),
+                    "definition_digest": _text(state.get("definition_digest")),
+                    "generation": int(state.get("generation") or 0),
+                    "record_count": len(records),
+                    "records_digest": _digest(records),
+                    "records": _clone(records),
+                }
+            )
+        return snapshots
+
     def query(
         self,
         resource_type: str,
@@ -211,6 +263,8 @@ class PrototypeResourceService:
         payload: Mapping[str, Any],
         expected_revision: Any = None,
     ) -> dict[str, Any]:
+        from adaos.services.builder.prototype_runtime import PrototypeDataRuntime
+
         with mutation_lock(self.lock_path, timeout_s=30.0):
             registry = self._read_registry()
             state = registry["resources"].get(resource_type)
