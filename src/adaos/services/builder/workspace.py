@@ -961,6 +961,7 @@ class BuilderWorkspaceService:
         artifact_id: str,
         project_id: str | None = None,
         actor: str = "builder",
+        refresh: bool = False,
     ) -> dict[str, Any]:
         """Fork current Workspace source into DEV with a digest-bound receipt."""
 
@@ -1037,15 +1038,20 @@ class BuilderWorkspaceService:
                     continue
                 target_snapshot = _source_tree_snapshot(target)
                 if target_snapshot["digest"] != entry["source_snapshot"]["digest"]:
-                    raise ValueError(
-                        "local fork intersects divergent DEV source: "
-                        f"{entry['kind']}:{entry['id']}"
-                    )
+                    if not refresh:
+                        raise ValueError(
+                            "local fork intersects divergent DEV source: "
+                            f"{entry['kind']}:{entry['id']}"
+                        )
+                    entry["target_status"] = "divergent"
+                    entry["target_snapshot"] = target_snapshot
+                    continue
                 entry["target_status"] = "identical"
 
             fork_identity = {
                 "component_ref": component_ref,
                 "project_id": owner_id or None,
+                "refresh": bool(refresh),
                 "sources": [
                     {
                         "kind": entry["kind"],
@@ -1055,6 +1061,16 @@ class BuilderWorkspaceService:
                     for entry in entries
                 ],
             }
+            if refresh:
+                fork_identity["replaced"] = [
+                    {
+                        "kind": entry["kind"],
+                        "id": entry["id"],
+                        "digest": entry["target_snapshot"]["digest"],
+                    }
+                    for entry in entries
+                    if entry["target_status"] == "divergent"
+                ]
             identity_json = json.dumps(
                 fork_identity,
                 ensure_ascii=True,
@@ -1073,6 +1089,7 @@ class BuilderWorkspaceService:
             created_targets: list[Path] = []
             created_project_root: Path | None = None
             copied: list[dict[str, Any]] = []
+            recovery: list[dict[str, Any]] = []
             try:
                 for entry in entries:
                     source = Path(entry["source"])
@@ -1080,6 +1097,29 @@ class BuilderWorkspaceService:
                     if entry["target_status"] == "identical":
                         status = "already_present"
                     else:
+                        if entry["target_status"] == "divergent":
+                            recovery_target = (
+                                state_root
+                                / "recovery"
+                                / fork_id
+                                / f"{entry['kind']}s"
+                                / str(entry["id"])
+                            )
+                            recovery_target.parent.mkdir(parents=True, exist_ok=True)
+                            if recovery_target.exists():
+                                raise FileExistsError(
+                                    f"local fork recovery target already exists: {recovery_target}"
+                                )
+                            shutil.move(str(target), str(recovery_target))
+                            recovery.append(
+                                {
+                                    "kind": entry["kind"],
+                                    "name": entry["id"],
+                                    "source_path": str(target),
+                                    "recovery_path": str(recovery_target),
+                                    "source_digest": entry["target_snapshot"]["digest"],
+                                }
+                            )
                         result = self._copy_workspace_dir(
                             source_root=source,
                             target_root=target,
@@ -1124,13 +1164,14 @@ class BuilderWorkspaceService:
                 receipt = {
                     "schema": "adaos.builder.local_source_fork.v1",
                     "fork_id": fork_id,
-                    "strategy": "create_local_fork",
+                    "strategy": "refresh_local_fork" if recovery else "create_local_fork",
                     "status": "materialized",
                     "component_ref": component_ref,
                     "project_id": project_resolution.get("project_id"),
                     "project_ref": project_resolution.get("project_ref"),
                     "source_digest": identity_digest,
                     "components": copied,
+                    "recovery": recovery,
                     "project_resolution": project_resolution,
                     "actor": actor_token,
                     "created_at": _now_iso(),
@@ -1143,6 +1184,14 @@ class BuilderWorkspaceService:
                 for target in reversed(created_targets):
                     if target.is_dir():
                         shutil.rmtree(target)
+                for item in reversed(recovery):
+                    original = Path(str(item["source_path"]))
+                    backup = Path(str(item["recovery_path"]))
+                    if original.exists():
+                        shutil.rmtree(original)
+                    if backup.exists():
+                        original.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(backup), str(original))
                 raise
             return receipt
 
@@ -1151,6 +1200,7 @@ class BuilderWorkspaceService:
         project_id: str,
         *,
         actor: str = "builder",
+        refresh: bool = False,
     ) -> dict[str, Any]:
         """Materialize one complete Workspace-owned Project slice into DEV."""
 
@@ -1185,6 +1235,7 @@ class BuilderWorkspaceService:
             artifact_id=artifact_id,
             project_id=project_token,
             actor=actor,
+            refresh=refresh,
         )
 
     def materialize_dev_source(

@@ -303,6 +303,29 @@ def test_create_local_fork_rejects_divergent_orphaned_dev_source(tmp_path: Path)
     ).exists()
 
 
+def test_create_local_fork_refreshes_divergent_source_with_recovery(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    workspace_skill = _write_demo_skill(tmp_path, "conflicted_skill")
+    dev_skill = _write_dev_skill(service, "conflicted_skill")
+    divergent_content = "name: conflicted_skill\nversion: 9.9.9\ntools: []\n"
+    (dev_skill / "skill.yaml").write_text(divergent_content, encoding="utf-8")
+
+    result = service.create_local_fork(
+        kind="skill",
+        artifact_id="conflicted_skill",
+        actor="builder:test",
+        refresh=True,
+    )
+
+    assert result["strategy"] == "refresh_local_fork"
+    assert result["recovery"][0]["kind"] == "skill"
+    recovery_root = Path(result["recovery"][0]["recovery_path"])
+    assert (recovery_root / "skill.yaml").read_text(encoding="utf-8") == divergent_content
+    assert (dev_skill / "skill.yaml").read_text(encoding="utf-8") == (
+        workspace_skill / "skill.yaml"
+    ).read_text(encoding="utf-8")
+
+
 def test_builder_skill_default_rewrites_conversation_manifest_refs(tmp_path: Path) -> None:
     service = _service(tmp_path)
 

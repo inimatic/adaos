@@ -148,8 +148,33 @@ def test_dev_project_fork_materializes_complete_workspace_project(monkeypatch) -
     )
 
     assert result.exit_code == 0, result.output
-    assert calls == [{"project_id": "kanban", "actor": "codex:e2e"}]
+    assert calls == [{"project_id": "kanban", "actor": "codex:e2e", "refresh": False}]
     assert '"status": "materialized"' in result.output
+
+
+def test_dev_project_fork_can_refresh_divergent_source(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    class Service:
+        def create_project_local_fork(self, project_id: str, **kwargs):
+            calls.append({"project_id": project_id, **kwargs})
+            return {
+                "ok": True,
+                "status": "materialized",
+                "project_id": project_id,
+                "strategy": "refresh_local_fork",
+            }
+
+    monkeypatch.setattr(dev_project, "_service", Service)
+
+    result = CliRunner().invoke(
+        dev_project.app,
+        ["fork", "kanban", "--actor", "codex:e2e", "--refresh", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [{"project_id": "kanban", "actor": "codex:e2e", "refresh": True}]
+    assert '"strategy": "refresh_local_fork"' in result.output
 
 
 def test_dev_project_depend_declares_shared_dependency(monkeypatch) -> None:
