@@ -331,6 +331,21 @@ def materialize(
     _echo(payload, json_output=json_output)
 
 
+@app.command("fork")
+def fork(
+    project_id: str,
+    actor: str = typer.Option("user:local", "--actor"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Fork the complete authoritative Workspace Project slice into DEV."""
+
+    try:
+        payload = _service().create_project_local_fork(project_id, actor=actor)
+    except Exception as exc:
+        raise typer.BadParameter(str(exc), param_hint="project_id") from exc
+    _echo(payload, json_output=json_output)
+
+
 @app.command("checkpoint")
 def checkpoint(
     project_id: str,

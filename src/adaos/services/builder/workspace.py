@@ -1146,6 +1146,47 @@ class BuilderWorkspaceService:
                 raise
             return receipt
 
+    def create_project_local_fork(
+        self,
+        project_id: str,
+        *,
+        actor: str = "builder",
+    ) -> dict[str, Any]:
+        """Materialize one complete Workspace-owned Project slice into DEV."""
+
+        project_token = _slug(project_id)
+        manifest_info = self._read_workspace_project_manifest(project_token)
+        if manifest_info is None:
+            raise FileNotFoundError(f"workspace project source not found: {project_token}")
+        _, manifest = manifest_info
+        owned = [
+            item
+            for item in (
+                manifest.get("components", {}).get("owned", [])
+                if isinstance(manifest.get("components"), Mapping)
+                else []
+            )
+            if isinstance(item, Mapping)
+        ]
+        primary = next(
+            (item for item in owned if str(item.get("role") or "").strip() == "primary"),
+            owned[0] if owned else None,
+        )
+        primary_ref = str((primary or {}).get("ref") or "").strip()
+        kind, separator, artifact_id = primary_ref.partition(":")
+        kind = kind.strip().lower().rstrip("s")
+        artifact_id = _slug(artifact_id) if separator else ""
+        if kind not in {"skill", "scenario"} or not artifact_id:
+            raise ValueError(
+                f"Workspace Project {project_token!r} has no valid primary owned component"
+            )
+        return self.create_local_fork(
+            kind=kind,
+            artifact_id=artifact_id,
+            project_id=project_token,
+            actor=actor,
+        )
+
     def materialize_dev_source(
         self,
         *,
