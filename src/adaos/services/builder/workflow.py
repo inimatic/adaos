@@ -183,7 +183,14 @@ def _reset_compatibility_head_for_new_change(
     workflow["pending_transition"] = None
     if prototype_first:
         prototype = _mapping(workflow.get("prototype"))
-        prototype.update({"status": "working", "stable": False, "frozen_at": None})
+        prototype.update(
+            {
+                "status": "working",
+                "stable": False,
+                "frozen_at": None,
+                "acceptance": None,
+            }
+        )
         workflow["prototype"] = prototype
 
 
@@ -1669,6 +1676,147 @@ class BuilderWorkflowService:
             return None
         return revision
 
+    def _prototype_webui_snapshot(
+        self,
+        object_type: str,
+        object_id: str,
+    ) -> tuple[dict[str, Any], str, str]:
+        kind = _kind(object_type)
+        project_id = _project_id(object_id)
+        source_kind = kind
+        source_id = project_id
+        if kind == "project":
+            presentation = self._project_presentation(kind, project_id)
+            source_id = str((presentation or {}).get("scenario_id") or "").strip()
+            if not source_id:
+                raise BuilderWorkflowError(
+                    "project Prototype acceptance requires a primary presentation scenario"
+                )
+            source_kind = "scenario"
+        root = self.project_root(source_kind, source_id)
+        path = root / "webui.json"
+        try:
+            webui = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise BuilderWorkflowError(f"cannot accept prototype webui.json: {exc}") from exc
+        if not isinstance(webui, Mapping):
+            raise BuilderWorkflowError("cannot accept prototype: webui.json must be an object")
+        revision = str(self.current_prototype_revision(kind, project_id) or "").strip()
+        if not revision:
+            raise BuilderWorkflowError("cannot accept prototype without an immutable UI revision")
+        normalized = copy.deepcopy(dict(webui))
+        return normalized, revision, canonical_payload_digest(normalized)
+
+    @staticmethod
+    def _prototype_request(change: Mapping[str, Any]) -> str:
+        parts = [str(change.get("request") or "").strip()]
+        parts.extend(
+            str(item).strip()
+            for item in change.get("request_addenda") or []
+            if str(item).strip()
+        )
+        return "\n\n".join(item for item in parts if item)
+
+    def _admit_current_prototype_acceptance(
+        self,
+        object_type: str,
+        object_id: str,
+        workflow: Mapping[str, Any],
+        value: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        from adaos.services.builder.prototype_acceptance import (
+            admit_prototype_acceptance,
+        )
+
+        change = _normalize_change(workflow.get("change") or workflow.get("change_set"))
+        if change is None:
+            raise BuilderWorkflowError("prototype acceptance requires an active Change")
+        webui, revision, webui_digest = self._prototype_webui_snapshot(object_type, object_id)
+        del webui
+        acceptance = value if isinstance(value, Mapping) else _mapping(
+            _mapping(workflow.get("prototype")).get("acceptance")
+        )
+        if not acceptance:
+            raise BuilderWorkflowError("Prototype acceptance evidence is required")
+        return admit_prototype_acceptance(
+            acceptance,
+            expected_project_ref=f"{_kind(object_type)}:{_project_id(object_id)}",
+            expected_change_id=str(change.get("change_id") or ""),
+            expected_revision=revision,
+            expected_webui_digest=webui_digest,
+        )
+
+    def accept_prototype(
+        self,
+        object_type: str,
+        object_id: str,
+        *,
+        reviewer: Mapping[str, Any],
+        behavior_checks: Sequence[Mapping[str, Any]],
+        visual_checks: Sequence[Mapping[str, Any]],
+        acceptance_id: str | None = None,
+        actor: str = "builder.prototype.reviewer",
+        expected_generation: int | None = None,
+    ) -> dict[str, Any]:
+        """Accept the exact executable prototype and advance its Change gate."""
+
+        from adaos.services.builder.prototype_acceptance import (
+            build_prototype_acceptance,
+        )
+
+        current = self.describe(object_type, object_id)
+        change = _normalize_change(current.get("change") or current.get("change_set"))
+        if change is None:
+            raise BuilderWorkflowError("prototype acceptance requires an active Change")
+        webui, revision, webui_digest = self._prototype_webui_snapshot(object_type, object_id)
+        identifier = str(acceptance_id or "").strip() or (
+            f"acceptance:{change['change_id']}:{revision}:{webui_digest.removeprefix('sha256:')[:16]}"
+        )
+        acceptance = build_prototype_acceptance(
+            acceptance_id=identifier,
+            project_ref=f"{_kind(object_type)}:{_project_id(object_id)}",
+            change_id=str(change["change_id"]),
+            revision=revision,
+            webui=webui,
+            request=self._prototype_request(change),
+            reviewer=reviewer,
+            behavior_checks=behavior_checks,
+            visual_checks=visual_checks,
+        )
+        result = self.transition(
+            object_type,
+            object_id,
+            "stabilize_prototype",
+            actor=actor,
+            metadata={
+                "confirmed": True,
+                "revision": revision,
+                "acceptance": acceptance,
+                "acceptance_digest": acceptance["digest"],
+            },
+            expected_generation=expected_generation,
+        )
+        return {**result, "acceptance": acceptance}
+
+    def require_current_prototype_acceptance(
+        self,
+        object_type: str,
+        object_id: str,
+    ) -> dict[str, Any] | None:
+        """Return admitted strict acceptance, or reject a stale/missing Prototype."""
+
+        current = self.describe(object_type, object_id)
+        prototype = _mapping(current.get("prototype"))
+        if not bool(prototype.get("acceptance_required")):
+            return None
+        if not bool(prototype.get("stable")):
+            raise BuilderWorkflowError("Prototype must be accepted before Automation starts")
+        return self._admit_current_prototype_acceptance(
+            object_type,
+            object_id,
+            current,
+        )
+
     def _normalized_workflow(
         self,
         state: Mapping[str, Any],
@@ -1714,6 +1862,8 @@ class BuilderWorkflowService:
             prototype["head_revision"] = current_revision
         prototype.setdefault("status", "working" if active_phase == "prototype" else "frozen")
         prototype.setdefault("stable", legacy_state in {"prototype_stable", "automation", "publication"})
+        prototype.setdefault("acceptance_required", False)
+        prototype.setdefault("acceptance", None)
 
         if "status" not in automation:
             if legacy_state == "publication":
@@ -1886,10 +2036,14 @@ class BuilderWorkflowService:
             retained_automation and automation_status in {"adapting", "failed", "frozen"}
         )
         mutable = not archived
+        strict_acceptance = bool(_mapping(workflow.get("prototype")).get("acceptance_required"))
+        accepted_prototype = bool(_mapping(workflow.get("prototype")).get("acceptance"))
         return {
             "can_edit_prototype": mutable and active == "prototype",
             "can_stabilize_prototype": mutable and active == "prototype",
-            "can_handoff_to_automation": mutable and active == "prototype",
+            "can_handoff_to_automation": mutable
+            and active == "prototype"
+            and (not strict_acceptance or accepted_prototype),
             "can_edit_automation": mutable and active == "automation" and automation_status != "adapting",
             "can_return_to_prototype": mutable and active == "automation" and automation_status == "completed",
             "can_prepare_candidate": mutable
@@ -3464,6 +3618,7 @@ class BuilderWorkflowService:
                     **_mapping(workflow.get("prototype")),
                     "status": "working",
                     "stable": False,
+                    "acceptance": None,
                 }
                 workflow["automation"] = {
                     "status": "not_started",
@@ -3487,6 +3642,18 @@ class BuilderWorkflowService:
                     raise BuilderWorkflowError(
                         f"Prototype data contracts require implementation mappings: {missing}"
                     )
+                if bool(_mapping(workflow.get("prototype")).get("acceptance_required")):
+                    self._admit_current_prototype_acceptance(kind, project_id, workflow)
+            if (
+                action_token == "stabilize_prototype"
+                and bool(_mapping(workflow.get("prototype")).get("acceptance_required"))
+            ):
+                details["acceptance"] = self._admit_current_prototype_acceptance(
+                    kind,
+                    project_id,
+                    workflow,
+                    details.get("acceptance") if isinstance(details.get("acceptance"), Mapping) else None,
+                )
             mutation_started = False
             mutation_change_id = str(
                 (_normalize_change(workflow.get("change") or workflow.get("change_set")) or {}).get(
@@ -4797,6 +4964,12 @@ class BuilderWorkflowService:
                 ).strip()
                 or None,
             }
+            planned_prototype = workflow["prototype"]
+            planned_prototype["acceptance_required"] = bool(
+                route == "prototype_first"
+                and metadata.get("prototype_acceptance_required")
+            )
+            planned_prototype["acceptance"] = None
             interaction = _mapping(workflow.get("interaction"))
             interaction["conversation_focus"] = f"change:{change_set_id}"
             workflow["interaction"] = interaction
@@ -4854,6 +5027,7 @@ class BuilderWorkflowService:
                 if isinstance(item, Mapping)
             )
             if prototype_added or prototype_pending:
+                prototype.update({"stable": False, "acceptance": None})
                 current["route"] = "prototype_first"
                 update_change_set(
                     status="changes_requested" if prototype_added else "in_progress",
@@ -4877,7 +5051,12 @@ class BuilderWorkflowService:
             if not isinstance(issue, dict):
                 raise BuilderWorkflowError(f"unknown change set issue_id: {issue_id}")
             issue["status"] = status
-            update_change_set(status="in_progress" if status == "in_progress" else None)
+            if issue.get("lane") == "prototype" and status in {"open", "in_progress"}:
+                prototype.update({"stable": False, "acceptance": None})
+                update_change_set(status="changes_requested", gate="prototype")
+                invalidate_delivery("prototype_issue_reopened")
+            else:
+                update_change_set(status="in_progress" if status == "in_progress" else None)
             return
         if action == "change_issue_split":
             current = require_change_set(metadata.get("change_set_id"))
@@ -4919,6 +5098,8 @@ class BuilderWorkflowService:
                 status="changes_requested",
                 gate="prototype" if prototype_pending else "automation",
             )
+            if prototype_pending:
+                prototype.update({"stable": False, "acceptance": None})
             invalidate_delivery("issue_structure_changed")
             return
         if action == "change_issues_merged":
@@ -4951,6 +5132,8 @@ class BuilderWorkflowService:
                 status="changes_requested",
                 gate="prototype" if merged["lane"] == "prototype" else "automation",
             )
+            if merged["lane"] == "prototype":
+                prototype.update({"stable": False, "acceptance": None})
             invalidate_delivery("issue_structure_changed")
             return
         if action == "change_evidence_recorded":
@@ -4978,6 +5161,7 @@ class BuilderWorkflowService:
             constraints.append(constraint)
             current_change["acceptance_constraints"] = constraints
             workflow["change"] = current_change
+            prototype.update({"stable": False, "acceptance": None})
             update_change_set(status="changes_requested", gate="prototype")
             invalidate_delivery("review_constraint_added")
             return
@@ -5013,6 +5197,7 @@ class BuilderWorkflowService:
             current_change["acceptance_constraints"] = constraints
             workflow["change"] = current_change
             if any_violation:
+                prototype.update({"stable": False, "acceptance": None})
                 update_change_set(status="changes_requested", gate="prototype")
             return
         if action == "review_constraint_superseded":
@@ -5054,6 +5239,7 @@ class BuilderWorkflowService:
                     "stable": False,
                     "head_revision": revision,
                     "revised_at": changed_at,
+                    "acceptance": None,
                 }
             )
             invalidate_delivery("prototype_revision_recorded")
@@ -5121,6 +5307,7 @@ class BuilderWorkflowService:
                     "status": "working",
                     "stable": False,
                     "revised_at": changed_at,
+                    "acceptance": None,
                 }
             )
             experiment["status"] = "adopted"
@@ -5133,6 +5320,8 @@ class BuilderWorkflowService:
             self._require_active(workflow, "prototype", action)
             prototype.update({"status": "working", "stable": True, "stabilized_at": changed_at})
             prototype["head_revision"] = metadata.get("revision") or prototype.get("head_revision")
+            if isinstance(metadata.get("acceptance"), Mapping):
+                prototype["acceptance"] = copy.deepcopy(dict(metadata["acceptance"]))
             current = workflow.get("change_set")
             if isinstance(current, dict) and current.get("gate") == "prototype":
                 for issue in current.get("issues") or []:
@@ -5176,6 +5365,10 @@ class BuilderWorkflowService:
                     "started_at": changed_at,
                     "completed_at": None,
                     "error": None,
+                    "prototype_acceptance_digest": str(
+                        _mapping(prototype.get("acceptance")).get("digest") or ""
+                    )
+                    or None,
                 }
             )
             invalidate_delivery("automation_started")

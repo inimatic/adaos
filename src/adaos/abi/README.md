@@ -46,6 +46,8 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   conversational workflow candidate pinned to a canonical definition digest
 - `builder.prototype_handoff.v1.schema.json` - exact fail-closed Prototype to
   Automation evidence and implementation-mapping bundle
+- `builder.prototype_acceptance.v1.schema.json` - reviewer-bound acceptance of
+  one exact Prototype revision with deterministic, behavioral, and visual evidence
 - `builder.semantic_ui_change.v1.schema.json` - reversible semantic operation
   against stable declarative UI refs
 - `builder.review_anchor.v1.schema.json` - durable target model for Review

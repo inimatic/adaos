@@ -681,6 +681,95 @@ def test_change_set_routes_interface_work_through_prototype_first(
     assert approved["change_set"]["issues"][1]["status"] == "open"
 
 
+def test_strict_prototype_acceptance_requires_current_behavior_and_visual_evidence(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    webui = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "recipes",
+                        "layout": {
+                            "type": "single",
+                            "areas": [{"id": "main", "role": "main"}],
+                        },
+                        "widgets": [],
+                    }
+                }
+            }
+        },
+    }
+    (root / "webui.json").write_text(json.dumps(webui), encoding="utf-8")
+    planned = service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-strict-prototype",
+            "request": "Show the recipe workspace.",
+            "prototype_acceptance_required": True,
+            "issues": [
+                {
+                    "issue_id": "prototype-layout",
+                    "title": "Create the prototype layout",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["The workspace is visible."],
+                }
+            ],
+        },
+    )["workflow"]
+
+    with pytest.raises(BuilderWorkflowError, match="acceptance evidence is required"):
+        service.transition(
+            "scenario",
+            "recipes",
+            "stabilize_prototype",
+            metadata=_confirmed({"revision": "001"}),
+        )
+
+    accepted = service.accept_prototype(
+        "scenario",
+        "recipes",
+        reviewer={"id": "agent:codex", "kind": "agent", "delegated_by": "user:owner"},
+        behavior_checks=[
+            {
+                "id": "render.ready",
+                "status": "passed",
+                "evidence_refs": ["test:prototype-render"],
+            }
+        ],
+        visual_checks=[
+            {
+                "breakpoint": "compact",
+                "viewport": {"width": 390, "height": 844},
+                "status": "passed",
+                "evidence_ref": "screenshot:.tmp/recipes-compact.png",
+            },
+            {
+                "breakpoint": "wide",
+                "viewport": {"width": 1440, "height": 900},
+                "status": "passed",
+                "evidence_ref": "screenshot:.tmp/recipes-wide.png",
+            },
+        ],
+        expected_generation=planned["generation"],
+    )
+
+    workflow = accepted["workflow"]
+    assert workflow["prototype"]["acceptance"]["revision"] == "001"
+    assert workflow["change_set"]["gate"] == "automation"
+
+    webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"] = [
+        {"id": "changed", "type": "ui.text", "area": "main", "inputs": {"text": "Changed"}}
+    ]
+    (root / "webui.json").write_text(json.dumps(webui), encoding="utf-8")
+    with pytest.raises(BuilderWorkflowError, match="stale"):
+        service.transition("scenario", "recipes", "automation_started")
+
+
 def test_change_set_projects_one_canonical_change_and_transition_runs(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

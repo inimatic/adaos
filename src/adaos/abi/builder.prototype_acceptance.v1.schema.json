@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.prototype_acceptance.v1",
+  "title": "AdaOS Builder Prototype Acceptance",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "acceptance_id",
+    "project_ref",
+    "change_id",
+    "revision",
+    "webui_digest",
+    "request_digest",
+    "reviewer",
+    "decision",
+    "deterministic_evaluation",
+    "behavior_checks",
+    "visual_checks",
+    "accepted_at",
+    "digest"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.builder.prototype_acceptance.v1" },
+    "acceptance_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "project_ref": {
+      "type": "string",
+      "pattern": "^(project|scenario|skill):[A-Za-z0-9_.-]+$"
+    },
+    "change_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "revision": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "webui_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "request_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "reviewer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "kind": { "enum": ["human", "agent"] },
+        "delegated_by": { "type": ["string", "null"], "maxLength": 200 }
+      }
+    },
+    "decision": { "const": "accepted" },
+    "deterministic_evaluation": { "type": "object" },
+    "behavior_checks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/check" }
+    },
+    "visual_checks": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["breakpoint", "viewport", "status", "evidence_ref"],
+        "properties": {
+          "breakpoint": { "enum": ["compact", "wide"] },
+          "viewport": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["width", "height"],
+            "properties": {
+              "width": { "type": "integer", "minimum": 240, "maximum": 10000 },
+              "height": { "type": "integer", "minimum": 240, "maximum": 10000 }
+            }
+          },
+          "status": { "const": "passed" },
+          "evidence_ref": { "type": "string", "minLength": 1, "maxLength": 500 }
+        }
+      }
+    },
+    "accepted_at": { "type": "string", "format": "date-time" },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+  },
+  "$defs": {
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "evidence_refs"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "status": { "const": "passed" },
+        "evidence_refs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+        }
+      }
+    }
+  }
+}

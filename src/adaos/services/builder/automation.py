@@ -1915,6 +1915,10 @@ class BuilderAutomationService:
         workflow_before = self._workflow().describe(kind, project_id)
         if workflow_before.get("archived"):
             raise ValueError("archived projects cannot start automation")
+        prototype_acceptance = self._workflow().require_current_prototype_acceptance(
+            kind,
+            project_id,
+        )
         active_change_set = (
             workflow_before.get("change_set")
             if isinstance(workflow_before.get("change_set"), Mapping)
@@ -2237,6 +2241,7 @@ class BuilderAutomationService:
                 "change_set_id": requested_change_set_id,
                 "canonical_change_id": requested_change_set_id,
                 "source_prototype_version": self._project_prototype_ref(kind, project_id),
+                "prototype_acceptance": prototype_acceptance,
                 "prototype_handoff": admitted_handoff,
                 "development_session_id": admitted_development_session_id,
                 "execution_budget": admitted_execution_budget,
@@ -6482,6 +6487,9 @@ class BuilderAutomationService:
                 "compiled_context_ref": context_control["compiled_context_ref"],
                 "development_context": development_context,
                 "prototype_handoff": copy.deepcopy(session.get("prototype_handoff")),
+                "prototype_acceptance": copy.deepcopy(
+                    session.get("prototype_acceptance")
+                ),
                 "continuation_checkpoint": copy.deepcopy(
                     session.get("pending_continuation_checkpoint")
                 ),
@@ -6519,6 +6527,9 @@ class BuilderAutomationService:
                 "compiled_context_ref": context_control["compiled_context_ref"],
                 "prototype_handoff_digest": str(
                     dict(session.get("prototype_handoff") or {}).get("digest") or ""
+                ) or None,
+                "prototype_acceptance_digest": str(
+                    dict(session.get("prototype_acceptance") or {}).get("digest") or ""
                 ) or None,
                 "development_session_id": development_session_id or None,
                 "development_context_digest": str(

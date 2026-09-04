@@ -204,6 +204,43 @@ def transition(
     )
 
 
+def accept_prototype(
+    object_type: str,
+    object_id: str,
+    *,
+    reviewer: Mapping[str, Any],
+    behavior_checks: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...],
+    visual_checks: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...],
+    acceptance_id: str | None = None,
+    actor: str = "builder.prototype.reviewer",
+    expected_generation: int | None = None,
+) -> dict[str, Any]:
+    """Accept one exact executable Prototype revision with review evidence."""
+
+    return dict(
+        _service().accept_prototype(
+            object_type,
+            object_id,
+            reviewer=reviewer,
+            behavior_checks=behavior_checks,
+            visual_checks=visual_checks,
+            acceptance_id=acceptance_id,
+            actor=actor,
+            expected_generation=expected_generation,
+        )
+    )
+
+
+def require_current_prototype_acceptance(
+    object_type: str,
+    object_id: str,
+) -> dict[str, Any] | None:
+    """Verify that the strict Prototype acceptance still matches current UI."""
+
+    value = _service().require_current_prototype_acceptance(object_type, object_id)
+    return dict(value) if value is not None else None
+
+
 def build_context_packet(
     object_type: str,
     object_id: str,
@@ -251,6 +288,7 @@ def update_interaction_context(
 
 
 __all__ = [
+    "accept_prototype",
     "build_context_packet",
     "create_conversation_interaction",
     "create_conversation_input_interaction",
@@ -262,6 +300,7 @@ __all__ = [
     "invoke_interaction_response",
     "rebase_change",
     "record_project_placement",
+    "require_current_prototype_acceptance",
     "transition",
     "update_interaction_context",
 ]
