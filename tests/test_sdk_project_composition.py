@@ -409,6 +409,36 @@ def test_project_replace_is_identity_stable_and_optimistic(project_space) -> Non
         )
 
 
+def test_project_version_advance_is_optimistic_and_skips_occupied_versions(
+    project_space,
+) -> None:
+    _skill(project_space["skills"], "candidate_skill")
+    created = compositions.create(_project("candidate_project", "candidate_skill"))
+
+    advanced = compositions.advance_version(
+        "candidate_project",
+        bump="patch",
+        expected_manifest_digest=created["manifest_digest"],
+        occupied_versions=("0.1.1", "0.1.2"),
+    )
+
+    assert advanced["version"] == "0.1.3"
+    assert advanced["previous_version"] == "0.1.0"
+    assert advanced["skipped_occupied_versions"] == ["0.1.1", "0.1.2"]
+    with pytest.raises(compositions.ProjectCompositionError, match="changed since"):
+        compositions.advance_version(
+            "candidate_project",
+            expected_manifest_digest=created["manifest_digest"],
+        )
+    unchanged = compositions.advance_version(
+        "candidate_project",
+        bump="none",
+        expected_manifest_digest=advanced["manifest_digest"],
+    )
+    assert unchanged["version"] == "0.1.3"
+    assert unchanged["manifest_digest"] == advanced["manifest_digest"]
+
+
 def test_local_artifact_group_copies_files_and_detects_tampering(project_space, tmp_path: Path) -> None:
     skill_root = _skill(project_space["skills"], "tlp_direction")
     source = tmp_path / "review.md"

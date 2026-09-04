@@ -322,6 +322,64 @@ def replace(
     return get(token)
 
 
+def advance_version(
+    project_id: str,
+    *,
+    bump: str = "patch",
+    expected_manifest_digest: str | None = None,
+    occupied_versions: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Advance a mutable DEV Project version with optimistic concurrency."""
+
+    levels = {"major": 0, "minor": 1, "patch": 2}
+    level = str(bump or "").strip().lower()
+    if level not in {*levels, "none"}:
+        raise ProjectCompositionError("bump must be patch, minor, major, or none")
+    current = get(project_id)
+    expected = str(expected_manifest_digest or current["manifest_digest"]).strip().lower()
+    if expected != str(current["manifest_digest"]):
+        raise ProjectCompositionError(
+            "project manifest changed since it was read; refresh and retry"
+        )
+    if level == "none":
+        return {**current, "version_bump": "none", "skipped_occupied_versions": []}
+
+    parts = [0, 0, 0]
+    for index, token in enumerate(str(current.get("version") or "").split(".")[:3]):
+        digits = "".join(character for character in token if character.isdigit())
+        if digits:
+            parts[index] = int(digits)
+    bump_index = levels[level]
+    occupied = {str(item).strip() for item in occupied_versions if str(item).strip()}
+    skipped: list[str] = []
+    while True:
+        parts[bump_index] += 1
+        for index in range(bump_index + 1, 3):
+            parts[index] = 0
+        candidate = ".".join(str(item) for item in parts)
+        if candidate not in occupied:
+            break
+        skipped.append(candidate)
+
+    replacement = {
+        key: value
+        for key, value in current.items()
+        if key not in {"ref", "manifest_digest", "source_path"}
+    }
+    replacement["version"] = candidate
+    updated = replace(
+        project_id,
+        replacement,
+        expected_manifest_digest=expected,
+    )
+    return {
+        **updated,
+        "previous_version": str(current.get("version") or ""),
+        "version_bump": level,
+        "skipped_occupied_versions": skipped,
+    }
+
+
 def _new_project_definition(
     project_id: str,
     *,
@@ -792,6 +850,7 @@ def resolve_presentation(component_ref: str, *, project_id: str | None = None) -
 __all__ = [
     "ProjectCompositionError",
     "ProjectCompositionNotFound",
+    "advance_version",
     "create",
     "replace",
     "create_with_primary_component",
