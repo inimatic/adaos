@@ -2303,7 +2303,12 @@ async def admin_root_mcp_logs(
 
 @app.post("/api/admin/root_mcp/call", dependencies=[Depends(require_token)])
 async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
-    allowed_tools = {"nlu_authoring.check_phrase", "desktop.preview_action"}
+    allowed_tools = {
+        "development.get_descriptor_item",
+        "development.search_descriptors",
+        "desktop.preview_action",
+        "nlu_authoring.check_phrase",
+    }
     tool_id = str(body.tool_id or "").strip()
     if tool_id not in allowed_tools:
         raise HTTPException(status_code=403, detail={"code": "tool_not_allowed", "tool_id": tool_id})
