@@ -89,6 +89,7 @@ _CRUD_TERMS = {
     "создавать редактировать удалять",
 }
 _CREATE_TERMS = {
+    "create",
     "allow create",
     "create items",
     "create records",
@@ -100,6 +101,7 @@ _CREATE_TERMS = {
 }
 _UPDATE_TERMS = {"update", "edit", "change", "редакт", "измен"}
 _DELETE_TERMS = {"delete", "remove", "archive", "удал", "архив"}
+_EDIT_TERMS = {"edit", "editing", "record editor", "редакт"}
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -337,6 +339,7 @@ def qualify_ui_request(request: str) -> dict[str, Any]:
                 "drag_drop": requires_drag_drop,
                 "resource_query": requires_query,
                 "operation_kinds": operation_kinds,
+                "record_edit": _contains_any(text, _EDIT_TERMS),
             }
         )
     gaps: list[dict[str, Any]] = []
@@ -371,7 +374,34 @@ def selected_ui_capabilities(request: str, *, limit: int = 8) -> dict[str, Any]:
             for item in search_ui_capabilities(request, limit=limit).get("items") or []
             if str(item.get("id") or "")
         )
-    items = [get_ui_capability(item_id) for item_id in selected_ids[: max(1, limit)]]
+    root_ids = selected_ids[: max(1, limit)]
+    expanded_ids = list(root_ids)
+    index = {
+        str(item.get("id") or ""): item
+        for key in ("layouts", "components", "recipes")
+        for item in catalog.get(key) or []
+        if isinstance(item, Mapping) and str(item.get("id") or "")
+    }
+    cursor = 0
+    while cursor < len(expanded_ids) and len(expanded_ids) < 24:
+        item = index.get(expanded_ids[cursor])
+        cursor += 1
+        requires = item.get("requires") if isinstance(item, Mapping) else None
+        if not isinstance(requires, Mapping):
+            continue
+        for key in ("layouts", "components", "recipes"):
+            values = requires.get(key)
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                dependency_id = str(value or "").strip()
+                if dependency_id and dependency_id not in expanded_ids:
+                    expanded_ids.append(dependency_id)
+                    if len(expanded_ids) >= 24:
+                        break
+            if len(expanded_ids) >= 24:
+                break
+    items = [get_ui_capability(item_id) for item_id in expanded_ids]
     return {
         "schema": "adaos.ui.capability_selection.v1",
         "status": "present",
@@ -379,6 +409,8 @@ def selected_ui_capabilities(request: str, *, limit: int = 8) -> dict[str, Any]:
         "catalog_version": catalog["catalog_version"],
         "catalog_digest": catalog["catalog_digest"],
         "qualification": qualification,
+        "root_item_ids": root_ids,
+        "dependency_closure": [item_id for item_id in expanded_ids if item_id not in root_ids],
         "items": items,
     }
 
@@ -512,6 +544,8 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                         not resource_type
                         or str(action.get("target") or "") != resource_type
                         or str(params.get("operation_id") or "") != "update"
+                        or str(params.get("record_id") or "") != "$event.id"
+                        or str(params.get("payload") or "") != "$event.patch"
                     ):
                         findings.append(
                             {
@@ -520,10 +554,41 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                                 "path": f"{widget_path}.actions[{action_index}]",
                                 "message": (
                                     "A Resource Workbench move must target the board resourceType "
-                                    "and use operation_id=update."
+                                    "and use update with record_id=$event.id and payload=$event.patch."
                                 ),
                             }
                         )
+            actions = widget.get("actions") if isinstance(widget.get("actions"), list) else []
+            for action_index, action in enumerate(actions):
+                if not isinstance(action, Mapping) or str(action.get("type") or "") != "resourceOperation":
+                    continue
+                params = action.get("params") if isinstance(action.get("params"), Mapping) else {}
+                payload = params.get("payload")
+                if isinstance(payload, Mapping) and payload.get("__noop") is True:
+                    findings.append(
+                        {
+                            "code": "ui.resource_operation.noop_payload",
+                            "severity": "error",
+                            "path": f"{widget_path}.actions[{action_index}].params.payload",
+                            "message": "A declared resource mutation cannot use a no-op placeholder payload.",
+                        }
+                    )
+                if (
+                    str(action.get("on") or "") == "add"
+                    and str(params.get("operation_id") or "") == "create"
+                    and str(payload or "") == "$event.payload"
+                ):
+                    findings.append(
+                        {
+                            "code": "ui.board.create_event_invalid",
+                            "severity": "error",
+                            "path": f"{widget_path}.actions[{action_index}].params.payload",
+                            "message": (
+                                "collection.board add emits laneId, laneKey, and defaults; it does not emit payload. "
+                                "Use a typed form for required create fields."
+                            ),
+                        }
+                    )
     return {
         "schema": VALIDATION_SCHEMA,
         "catalog_version": catalog["catalog_version"],
@@ -533,7 +598,12 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def evaluate_ui_request(request: str, webui: Mapping[str, Any]) -> dict[str, Any]:
+def evaluate_ui_request(
+    request: str,
+    webui: Mapping[str, Any],
+    *,
+    prototype_records: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
     qualification = qualify_ui_request(request)
     capability_validation = validate_webui_capabilities(webui)
     postconditions: list[dict[str, Any]] = []
@@ -571,7 +641,13 @@ def evaluate_ui_request(request: str, webui: Mapping[str, Any]) -> dict[str, Any
                 )
             expected_items = requirements.get("items_per_lane")
             data_source = board.get("dataSource") if isinstance(board.get("dataSource"), Mapping) else {}
-            rows = data_source.get("value") if str(data_source.get("kind") or "") == "static" else None
+            rows = (
+                data_source.get("value")
+                if str(data_source.get("kind") or "") == "static"
+                else list(prototype_records or [])
+                if str(data_source.get("kind") or "") == "resourceQuery"
+                else None
+            )
             lane_key = str(inputs.get("laneKey") or "").strip()
             if expected_items is not None and isinstance(rows, list) and lane_key:
                 counts = {
@@ -629,6 +705,47 @@ def evaluate_ui_request(request: str, webui: Mapping[str, Any]) -> dict[str, Any
                         "actual": data_source.get("kind"),
                     }
                 )
+                query = data_source.get("query") if isinstance(data_source.get("query"), Mapping) else {}
+                serialized_query = json.dumps(query, ensure_ascii=False, sort_keys=True)
+                query_state_refs = set(re.findall(r"\$state\.([A-Za-z0-9_.-]+)", serialized_query))
+                state_write_actions = [
+                    action
+                    for _, page in _page_schemas(webui)
+                    for widget in page.get("widgets") or []
+                    if isinstance(widget, Mapping)
+                    for action in widget.get("actions") or []
+                    if isinstance(action, Mapping)
+                    and str(action.get("type") or "") == "updateState"
+                    and isinstance(action.get("params"), Mapping)
+                ]
+                state_writes = {
+                    str(key)
+                    for action in state_write_actions
+                    for key in action.get("params", {})
+                }
+                executable_query_refs = {
+                    ref
+                    for ref in query_state_refs
+                    if any(
+                        isinstance(_read_path(action.get("params", {}), ref), str)
+                        and "$event." in _read_path(action.get("params", {}), ref)
+                        for action in state_write_actions
+                    )
+                }
+                postconditions.append(
+                    {
+                        "id": "kanban.query_binding",
+                        "ok": bool(executable_query_refs),
+                        "expected": (
+                            "resourceQuery.query references state written directly from a query-control event"
+                        ),
+                        "actual": {
+                            "queryStateRefs": sorted(query_state_refs),
+                            "stateWrites": sorted(state_writes),
+                            "executableRefs": sorted(executable_query_refs),
+                        },
+                    }
+                )
             expected_operations = set(requirements.get("operation_kinds") or [])
             if expected_operations:
                 actual_operations = {
@@ -649,6 +766,173 @@ def evaluate_ui_request(request: str, webui: Mapping[str, Any]) -> dict[str, Any
                         "actual": sorted(actual_operations),
                     }
                 )
+                resource_type = str(data_source.get("resourceType") or "").strip()
+                resource_actions = [
+                    (page_path, widget, action)
+                    for page_path, page in _page_schemas(webui)
+                    for widget in page.get("widgets") or []
+                    if isinstance(widget, Mapping)
+                    for action in widget.get("actions") or []
+                    if isinstance(action, Mapping)
+                    and str(action.get("type") or "") == "resourceOperation"
+                    and str(action.get("target") or "") == resource_type
+                ]
+                if "create" in expected_operations:
+                    create_forms = [
+                        (page_path, widget, action)
+                        for page_path, widget, action in resource_actions
+                        if str(widget.get("type") or "") == "ui.form"
+                        and str(action.get("on") or "") == "submit"
+                        and str(action.get("params", {}).get("operation_id") or "") == "create"
+                        and "$event.values"
+                        in json.dumps(action.get("params", {}).get("payload"), sort_keys=True)
+                    ]
+                    title_key = str(inputs.get("titleKey") or "title").strip()
+                    required_create_fields = {title_key, lane_key}
+                    complete_create_forms = [
+                        (page_path, widget, action)
+                        for page_path, widget, action in create_forms
+                        if required_create_fields.issubset(
+                            {
+                                str(field.get("id") or "").strip()
+                                for field in (widget.get("inputs") or {}).get("fields", [])
+                                if isinstance(field, Mapping)
+                            }
+                        )
+                    ]
+                    postconditions.append(
+                        {
+                            "id": "kanban.create_form",
+                            "ok": bool(complete_create_forms),
+                            "expected": (
+                                "ui.form captures title and lane, then creates the board resource from $event.values"
+                            ),
+                            "actual": {
+                                "forms": len(create_forms),
+                                "completeForms": len(complete_create_forms),
+                                "requiredFields": sorted(required_create_fields),
+                            },
+                        }
+                    )
+                    modal_create_ids = {
+                        page_path[len("ui.application.modals.") : -len(".schema")]
+                        for page_path, _, _ in complete_create_forms
+                        if page_path.startswith("ui.application.modals.")
+                        and page_path.endswith(".schema")
+                    }
+                    inline_create = any(
+                        page_path == "ui.application.desktop.pageSchema"
+                        for page_path, _, _ in complete_create_forms
+                    )
+                    board_actions = board.get("actions") if isinstance(board.get("actions"), list) else []
+                    create_entry_actions = [
+                        action
+                        for action in board_actions
+                        if isinstance(action, Mapping)
+                        and str(action.get("on") or "") == "add"
+                        and str(action.get("type") or "") == "openModal"
+                        and str(
+                            (action.get("params") or {}).get("modalId")
+                            or (action.get("params") or {}).get("modal_id")
+                            or ""
+                        )
+                        in modal_create_ids
+                    ]
+                    postconditions.append(
+                        {
+                            "id": "kanban.create_entry",
+                            "ok": inline_create or bool(create_entry_actions),
+                            "expected": "board add opens the complete create form, or that form is inline",
+                            "actual": {
+                                "inline": inline_create,
+                                "modalIds": sorted(modal_create_ids),
+                                "boardAddOpenModalActions": len(create_entry_actions),
+                            },
+                        }
+                    )
+                if requirements.get("record_edit") is True:
+                    update_forms = [
+                        (page_path, widget, action)
+                        for page_path, widget, action in resource_actions
+                        if str(widget.get("type") or "") == "ui.form"
+                        and str(action.get("on") or "") == "submit"
+                        and str(action.get("params", {}).get("operation_id") or "") == "update"
+                        and str(action.get("params", {}).get("record_id") or "").strip()
+                        and "$event.values"
+                        in json.dumps(action.get("params", {}).get("payload"), sort_keys=True)
+                    ]
+                    postconditions.append(
+                        {
+                            "id": "kanban.edit_form",
+                            "ok": bool(update_forms),
+                            "expected": "ui.form submit updates one selected board record from $event.values",
+                            "actual": len(update_forms),
+                        }
+                    )
+                    edit_state_refs = {
+                        match
+                        for _, _, action in update_forms
+                        for match in re.findall(
+                            r"\$state\.([A-Za-z0-9_.-]+)",
+                            str((action.get("params") or {}).get("record_id") or ""),
+                        )
+                    }
+                    modal_edit_ids = {
+                        page_path[len("ui.application.modals.") : -len(".schema")]
+                        for page_path, _, _ in update_forms
+                        if page_path.startswith("ui.application.modals.")
+                        and page_path.endswith(".schema")
+                    }
+                    board_actions = board.get("actions") if isinstance(board.get("actions"), list) else []
+                    modal_events = {
+                        str(action.get("on") or "")
+                        for action in board_actions
+                        if isinstance(action, Mapping)
+                        and str(action.get("type") or "") == "openModal"
+                        and str(
+                            (action.get("params") or {}).get("modalId")
+                            or (action.get("params") or {}).get("modal_id")
+                            or ""
+                        )
+                        in modal_edit_ids
+                    }
+                    edit_selection_events = {
+                        str(action.get("on") or "")
+                        for action in board_actions
+                        if isinstance(action, Mapping)
+                        and str(action.get("type") or "") == "updateState"
+                        and any(
+                            str(_read_path(action.get("params", {}), ref) or "") == "$event.id"
+                            for ref in edit_state_refs
+                        )
+                    }
+                    inline_edit = any(
+                        page_path == "ui.application.desktop.pageSchema"
+                        for page_path, _, _ in update_forms
+                    )
+                    edit_selection_ok = bool(
+                        edit_state_refs
+                        and (
+                            (inline_edit and edit_selection_events)
+                            or (modal_events & edit_selection_events)
+                        )
+                    )
+                    postconditions.append(
+                        {
+                            "id": "kanban.edit_selection",
+                            "ok": edit_selection_ok,
+                            "expected": (
+                                "the board writes the edited record id from $event.id on the same event that opens "
+                                "a modal editor, or on selection for an inline editor"
+                            ),
+                            "actual": {
+                                "stateRefs": sorted(edit_state_refs),
+                                "modalEvents": sorted(modal_events),
+                                "selectionEvents": sorted(edit_selection_events),
+                                "inline": inline_edit,
+                            },
+                        }
+                    )
     failures = [item for item in postconditions if not item.get("ok")]
     gaps = list(qualification.get("capability_gaps") or [])
     return {

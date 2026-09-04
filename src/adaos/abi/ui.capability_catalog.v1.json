@@ -103,9 +103,10 @@
       "interactions": {
         "query": "Prefer dataSource.kind=resourceQuery for typed filters, search, sort, cursor, and relevance over Resource Workbench.",
         "crud": "Use action.type=resourceOperation for ordinary create/update/delete. action.target is resource_type; params.operation_id selects the declared operation.",
+        "button_scope": "inputs.buttons are repeated on every card. Do not put a board-level Add command there; use the lane add event.",
         "drag_drop": "Set inputs.dragDrop=true and declare on=move. The event contains record id, fromLaneId, toLaneId, positions, laneKey, and patch; resourceOperation(update) can persist the patch without a skill-specific method.",
         "accessible_move": "A lane selector is rendered with draggable cards so the same move is available without a dragging gesture.",
-        "lane_create": "Declare on=add to expose one add command per lane. The event provides laneId and defaults containing the lane field."
+        "lane_create": "Declare on=add to expose one add command per lane. The event provides laneId and defaults containing the lane field, but never payload. When required fields must be entered, on=add opens a typed create form; it must not directly create from $event.payload."
       },
       "feature_levels": {
         "implemented": ["ordered lanes", "configurable card fields", "counts", "soft lane limits", "lane create", "drag move", "single-pointer move alternative", "responsive horizontal rail", "optimistic rollback"],
@@ -155,7 +156,12 @@
       "title": "Typed form",
       "summary": "Typed data capture with validation and bounded form lifecycle actions.",
       "aliases": { "en": ["form", "input", "questionnaire"], "ru": ["форма", "ввод", "анкета"] },
-      "manifest": { "widget_type": "ui.form" },
+      "manifest": {
+        "widget_type": "ui.form",
+        "field_type_property": "inputs.fields[*].type",
+        "choice_field_types": ["select", "dropdown", "combobox", "singleChoice", "radio"],
+        "invalid_field_types": ["selector", "input.selector"]
+      },
       "data_shape": { "kind": "record" },
       "events": ["submit", "validate", "save_draft", "reset", "change:<fieldId>"],
       "responsive": { "desktop": "stack or responsiveGrid", "compact": "one column when fields no longer fit" },
@@ -203,7 +209,12 @@
       "title": "Option selector",
       "summary": "One compact selectable option set with optional search.",
       "aliases": { "en": ["select", "dropdown", "option"], "ru": ["выбор", "выпадающий список", "опция"] },
-      "manifest": { "widget_type": "input.selector" },
+      "manifest": {
+        "widget_type": "input.selector",
+        "scope": "standalone widget only",
+        "form_field_equivalents": ["select", "dropdown", "combobox"],
+        "form_field_invalid": "selector"
+      },
       "data_shape": { "kind": "options" },
       "events": ["change", "select"],
       "responsive": { "desktop": "anchored popup", "compact": "viewport-bounded popup" },
@@ -243,7 +254,11 @@
             "titleKey": "Resource title field.",
             "cardFields": "Optional typed field projections shown on compact cards."
           },
-          "dataSource": "One flat collection; use resourceQuery for query/search/filter backed resources."
+          "dataSource": {
+            "prototype_or_crud": { "kind": "resourceQuery", "resourceType": "prototype.<resource_name>", "query": {} },
+            "static_preview_only": { "kind": "static", "value": "one flat array of records" },
+            "forbidden_kind": "local_crud is a provider mode, never a WebUI dataSource.kind"
+          }
         },
         "visual_rule": "Use compact text-first cards. Add images only when the request explicitly makes imagery relevant."
       },
@@ -272,7 +287,33 @@
         "board": "collection.board projects query items by laneKey and writes selection to state.",
         "details": "item.details or a modal reads the selected resource record; ui.form edits it.",
         "operations": "resourceOperation implements create/update/delete and lane-field updates; domain commands remain separate.",
-        "prototype": "Builder may bind the same contracts to disposable local_crud synthetic data before a durable provider exists."
+        "prototype": {
+          "webui_data_source": { "kind": "resourceQuery", "resourceType": "prototype.<resource_name>", "query": {} },
+          "provider_mode": "The separate PrototypeData artifact uses mode=local_crud; never put local_crud in WebUI dataSource.kind.",
+          "records": "Return prototype_records beside webui in adaos.builder.webui_result.v1 so Builder can materialize the disposable provider.",
+          "forms": "Use ui.form inputs.fields with formInputType values. For a choice field use select, dropdown, or combobox; selector is invalid and input.selector is a separate standalone widget.",
+          "query_binding": {
+            "control": { "type": "input.text", "actions": [{ "on": "change", "type": "updateState", "params": { "searchQuery": "$event.value" } }] },
+            "resource_query": { "search": "$state.searchQuery" }
+          },
+          "board_create_entry": {
+            "on": "add",
+            "type": "openModal",
+            "params": { "modalId": "create-item" },
+            "rule": "The create-item modal contains a ui.form with title and laneKey fields; do not add a repeated per-card Add button."
+          },
+          "board_edit_entry": [
+            { "on": "click:edit", "type": "updateState", "params": { "selectedRecordId": "$event.id", "selectedRecord": "$event" } },
+            { "on": "click:edit", "type": "openModal", "params": { "modalId": "edit-item" } }
+          ],
+          "actions": {
+            "create_form_submit": { "on": "submit", "type": "resourceOperation", "target": "prototype.<resource_name>", "params": { "operation_id": "create", "payload": "$event.values" } },
+            "edit_form_submit": { "on": "submit", "type": "resourceOperation", "target": "prototype.<resource_name>", "params": { "operation_id": "update", "record_id": "$state.selectedRecordId", "payload": "$event.values" } },
+            "move": { "on": "move", "type": "resourceOperation", "target": "prototype.<resource_name>", "params": { "operation_id": "update", "record_id": "$event.id", "payload": "$event.patch" } },
+            "delete": { "on": "click:delete", "type": "resourceOperation", "target": "prototype.<resource_name>", "params": { "operation_id": "delete", "record_id": "$event.id" } }
+          },
+          "modal_rule": "When openModal is used, declare that exact literal id under ui.application.modals and provide a schema object containing widgets. In a complete JSON document use create-item, never @create-item; @<id> is reserved for JSON Patch pointer paths."
+        }
       },
       "postconditions": [
         "Changing a query control changes the resource query rather than filtering an unrelated client copy.",

@@ -35,8 +35,13 @@ def validate(webui: Mapping[str, Any]) -> dict[str, Any]:
     return _validate_webui_capabilities(webui)
 
 
-def evaluate(request: str, webui: Mapping[str, Any]) -> dict[str, Any]:
-    return _evaluate_ui_request(request, webui)
+def evaluate(
+    request: str,
+    webui: Mapping[str, Any],
+    *,
+    prototype_records: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return _evaluate_ui_request(request, webui, prototype_records=prototype_records)
 
 
 __all__ = ["evaluate", "get", "qualify", "search", "select", "validate"]
