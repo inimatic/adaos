@@ -4468,7 +4468,10 @@ class LocalSkillFactoryWorker:
         workspace: Path,
     ) -> dict[str, Any]:
         constraints = dict(assignment.get("constraints") or {})
-        if str(constraints.get("mode") or "").strip() != "dev_ticket_repair":
+        if str(constraints.get("mode") or "").strip() not in {
+            "dev_ticket_repair",
+            "accepted_prototype_validation",
+        }:
             return {}
         artifacts = dict(dict(assignment.get("realize_request") or {}).get("artifacts") or {})
         hints = dict(artifacts.get("repair_hints") or {})

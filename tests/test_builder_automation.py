@@ -15,6 +15,7 @@ from adaos.services.builder import automation as automation_module
 from adaos.services.builder.automation import (
     BuilderAutomationService,
     _UNCHANGED_RETRY_INSTRUCTION,
+    _accepted_prototype_validation_brief,
     _brief_has_structured_edits,
     _context_budget_window,
     _context_plan_failure_message,
@@ -23,8 +24,10 @@ from adaos.services.builder.automation import (
 )
 from adaos.services.builder.workspace import BuilderWorkspaceService
 from adaos.services.context_control import ContextControlService
+from adaos.services.resources.prototype import prototype_webui_digest
 from adaos.services.root.service import _rewrite_skill_template_identity
 from adaos.services.skill_factory_worker import CodexRunResult, LocalSkillFactoryWorker
+from adaos.services.ui_capabilities import evaluate_ui_request
 
 
 def _write_project_manifest(
@@ -3660,6 +3663,117 @@ def test_ui_only_scenario_does_not_invent_conventional_companion_skill(
     assert started["session"]["companion_skill_ids"] == []
     assert task["realize_request"]["artifacts"]["companion_skill_ids"] == []
     assert not (service.dev_skills_root / "recipes_skill").exists()
+
+
+def test_accepted_literal_ui_prototype_is_validated_without_codex(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    request = "Переименуй колонку Запланировано в Бэклог. Больше ничего не меняй."
+    webui = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "board",
+                        "layout": {
+                            "type": "single",
+                            "areas": [{"id": "main", "role": "main"}],
+                        },
+                        "widgets": [
+                            {
+                                "id": "tasks",
+                                "type": "collection.board",
+                                "area": "main",
+                                "inputs": {
+                                    "lanes": [
+                                        {"id": "planned", "label": "Бэклог"},
+                                        {"id": "doing", "label": "В работе"},
+                                    ],
+                                    "laneKey": "status",
+                                    "titleKey": "title",
+                                },
+                                "dataSource": {"kind": "static", "value": []},
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+    }
+    source = service.dev_scenarios_root / "recipes" / "webui.json"
+    source.write_text(json.dumps(webui, ensure_ascii=False), encoding="utf-8")
+    manifest_path = service.dev_scenarios_root / "recipes" / "scenario.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["ui"] = {"manifest": "webui.json"}
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+    acceptance = {
+        "decision": "accepted",
+        "digest": "sha256:" + "1" * 64,
+        "webui_digest": prototype_webui_digest(webui),
+        "prototype_resources": [],
+        "deterministic_evaluation": evaluate_ui_request(request, webui),
+    }
+    monkeypatch.setattr(
+        type(service._workflow()),
+        "require_current_prototype_acceptance",
+        lambda self, object_type, object_id: acceptance,
+    )
+
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief=request,
+        webspace_id="prompt-dev",
+    )
+
+    task = service.factory.read_task(started["session"]["current_task_id"])
+    assert started["session"]["context_control"]["model_call_expected"] is False
+    assert task["realize_request"]["constraints"]["mode"] == (
+        "accepted_prototype_validation"
+    )
+    assert task["realize_request"]["artifacts"]["repair_hints"][
+        "validation_only"
+    ] is True
+    assert task["result"]["execution_strategy"] == "validation_only"
+    assert task["result"]["no_source_change"] is True
+    assert json.loads(source.read_text(encoding="utf-8")) == webui
+
+
+def test_accepted_prototype_validation_rejects_stale_or_broad_acceptance(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "scenario"
+    source_root.mkdir()
+    webui = {"schema": "adaos.webui.v1"}
+    (source_root / "webui.json").write_text(json.dumps(webui), encoding="utf-8")
+    acceptance = {
+        "decision": "accepted",
+        "webui_digest": prototype_webui_digest(webui),
+        "prototype_resources": [],
+        "deterministic_evaluation": {
+            "ok": True,
+            "qualification": {"requirements": {}},
+            "capability_validation": {"ok": True},
+            "postconditions": [],
+        },
+    }
+
+    result = _accepted_prototype_validation_brief(
+        kind="scenario",
+        object_id="recipes",
+        source_root=source_root,
+        prototype_acceptance=acceptance,
+        implementation_brief="Build a complete application.",
+        iteration_instruction="",
+    )
+
+    assert result == {}
 
 
 def test_writable_resource_prototype_materializes_project_owned_provider_skill(

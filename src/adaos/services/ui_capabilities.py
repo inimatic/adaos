@@ -102,6 +102,19 @@ _CREATE_TERMS = {
 _UPDATE_TERMS = {"update", "edit", "change", "редакт", "измен"}
 _DELETE_TERMS = {"delete", "remove", "archive", "удал", "архив"}
 _EDIT_TERMS = {"edit", "editing", "record editor", "редакт"}
+_LITERAL_RENAME_PATTERNS = (
+    re.compile(
+        r"\b(?:переименуй(?:те)?|переименовать)\s+"
+        r"(?P<kind>колонку|колонка|столбец|дорожку|заголовок|кнопку|раздел)\s+"
+        r"(?P<old>[^.!?]+?)\s+в\s+(?P<new>[^.!?]+)",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"\brename\s+(?P<kind>column|lane|heading|title|button|section)\s+"
+        r"(?P<old>[^.!?]+?)\s+to\s+(?P<new>[^.!?]+)",
+        flags=re.IGNORECASE,
+    ),
+)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -288,9 +301,59 @@ def _nearby_number(text: str, noun_pattern: str, *, prefix: str = "") -> int | N
     return None
 
 
+def _clean_literal(value: Any) -> str:
+    return str(value or "").strip().strip("'\"«»“”„`").strip()
+
+
+def _literal_text_change(request: str) -> dict[str, Any] | None:
+    raw = " ".join(str(request or "").split())
+    for pattern in _LITERAL_RENAME_PATTERNS:
+        match = pattern.search(raw)
+        if not match:
+            continue
+        old = _clean_literal(match.group("old"))
+        new = _clean_literal(match.group("new"))
+        if not old or not new or old.casefold() == new.casefold():
+            return None
+        kind = _normalized_text(match.group("kind"))
+        return {
+            "target_kind": (
+                "column"
+                if kind in {"колонку", "колонка", "столбец", "дорожку", "column", "lane"}
+                else "text"
+            ),
+            "from": old,
+            "to": new,
+            "only_change": _contains_any(
+                _normalized_text(raw),
+                {
+                    "больше ничего не меняй",
+                    "ничего больше не меняй",
+                    "change nothing else",
+                    "do not change anything else",
+                    "only this",
+                },
+            ),
+        }
+    return None
+
+
+def _count_exact_scalar(value: Any, expected: str) -> int:
+    if isinstance(value, str):
+        return int(value == expected)
+    if isinstance(value, Mapping):
+        return sum(_count_exact_scalar(item, expected) for item in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return sum(_count_exact_scalar(item, expected) for item in value)
+    return 0
+
+
 def qualify_ui_request(request: str) -> dict[str, Any]:
     text = _normalized_text(request)
-    board = _contains_any(text, _BOARD_TERMS)
+    literal_text_change = _literal_text_change(request)
+    board = _contains_any(text, _BOARD_TERMS) or bool(
+        literal_text_change and literal_text_change.get("target_kind") == "column"
+    )
     lane_count = (
         _nearby_number(text, r"(?:колон(?:ка|ки|ок|ку|ках)|columns?|lanes?)")
         if board
@@ -326,6 +389,8 @@ def qualify_ui_request(request: str) -> dict[str, Any]:
         concepts.append("resource_query")
     if operation_kinds:
         concepts.append("resource_crud")
+    if literal_text_change:
+        concepts.append("ui_text_rename")
     requirements: dict[str, Any] = {}
     if board:
         requirements.update(
@@ -342,11 +407,13 @@ def qualify_ui_request(request: str) -> dict[str, Any]:
                 "record_edit": _contains_any(text, _EDIT_TERMS),
             }
         )
+    if literal_text_change:
+        requirements["literal_text_change"] = literal_text_change
     gaps: list[dict[str, Any]] = []
     return {
         "schema": QUALIFICATION_SCHEMA,
         "request_digest": _digest({"request": request}),
-        "surface_kind": "board" if board else "unspecified",
+        "surface_kind": "board" if board else "ui" if literal_text_change else "unspecified",
         "concepts": concepts,
         "requirements": requirements,
         "capability_gaps": gaps,
@@ -643,6 +710,30 @@ def evaluate_ui_request(
     capability_validation = validate_webui_capabilities(webui)
     postconditions: list[dict[str, Any]] = []
     requirements = qualification.get("requirements") or {}
+    literal_text_change = (
+        requirements.get("literal_text_change")
+        if isinstance(requirements.get("literal_text_change"), Mapping)
+        else None
+    )
+    if literal_text_change:
+        source_text = str(literal_text_change.get("from") or "")
+        target_text = str(literal_text_change.get("to") or "")
+        source_count = _count_exact_scalar(webui, source_text)
+        target_count = _count_exact_scalar(webui, target_text)
+        postconditions.append(
+            {
+                "id": "ui.literal_text_change",
+                "ok": source_count == 0 and target_count > 0,
+                "expected": {
+                    "absent": source_text,
+                    "present": target_text,
+                },
+                "actual": {
+                    "sourceCount": source_count,
+                    "targetCount": target_count,
+                },
+            }
+        )
     if requirements.get("component_type") == "collection.board":
         boards: list[Mapping[str, Any]] = []
         for _, page in _page_schemas(webui):

@@ -100,6 +100,51 @@ def test_qualification_selects_supported_board_drag_drop_contract() -> None:
     assert result["capability_gaps"] == []
 
 
+def test_qualification_extracts_exact_russian_column_rename() -> None:
+    result = qualify_ui_request(
+        "Переименуй колонку Запланировано в Бэклог. Больше ничего не меняй."
+    )
+
+    assert result["surface_kind"] == "board"
+    assert "ui_text_rename" in result["concepts"]
+    assert result["requirements"]["literal_text_change"] == {
+        "target_kind": "column",
+        "from": "Запланировано",
+        "to": "Бэклог",
+        "only_change": True,
+    }
+
+
+def test_request_evaluation_requires_exact_requested_literal() -> None:
+    request = "Переименуй колонку Запланировано в Бэклог. Больше ничего не меняй."
+    webui = _board_webui()
+    first_lane = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0][
+        "inputs"
+    ]["lanes"][0]
+    first_lane["label"] = "Backlog"
+
+    rejected = evaluate_ui_request(request, webui)
+
+    literal = next(
+        item
+        for item in rejected["postconditions"]
+        if item["id"] == "ui.literal_text_change"
+    )
+    assert rejected["ok"] is False
+    assert literal["actual"] == {"sourceCount": 0, "targetCount": 0}
+
+    first_lane["label"] = "Бэклог"
+    accepted = evaluate_ui_request(request, webui)
+
+    literal = next(
+        item
+        for item in accepted["postconditions"]
+        if item["id"] == "ui.literal_text_change"
+    )
+    assert accepted["ok"] is True
+    assert literal["actual"] == {"sourceCount": 0, "targetCount": 1}
+
+
 def test_qualification_selects_resource_workbench_for_russian_board_crud() -> None:
     request = (
         "Сделай канбан-доску с поиском и фильтрами. "

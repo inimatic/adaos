@@ -33,6 +33,7 @@ from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation
 from adaos.services.builder.workspace import BuilderWorkspaceService
 from adaos.services.builder.workflow import BuilderWorkflowService
 from adaos.services.context_control import ContextControlService
+from adaos.services.resources.prototype import prototype_webui_digest
 from adaos.services.runtime_paths import current_repo_root, current_state_dir
 from adaos.services.skill_factory import SkillFactoryService
 from adaos.services.skill_factory_sources import capture_source_snapshot
@@ -404,6 +405,103 @@ def _brief_deterministic_strategy(value: Any) -> str:
     if _brief_has_structured_edits(value):
         return "structured_edits"
     return ""
+
+
+def _accepted_prototype_validation_brief(
+    *,
+    kind: str,
+    object_id: str,
+    source_root: Path,
+    prototype_acceptance: Mapping[str, Any] | None,
+    implementation_brief: str,
+    iteration_instruction: str,
+) -> dict[str, Any]:
+    """Admit a fully represented literal UI edit without another model turn."""
+
+    if str(kind).strip() != "scenario" or str(iteration_instruction or "").strip():
+        return {}
+    acceptance = (
+        dict(prototype_acceptance)
+        if isinstance(prototype_acceptance, Mapping)
+        else {}
+    )
+    if (
+        str(acceptance.get("decision") or "").strip() != "accepted"
+        or list(acceptance.get("prototype_resources") or [])
+    ):
+        return {}
+    evaluation = (
+        dict(acceptance.get("deterministic_evaluation"))
+        if isinstance(acceptance.get("deterministic_evaluation"), Mapping)
+        else {}
+    )
+    qualification = (
+        dict(evaluation.get("qualification"))
+        if isinstance(evaluation.get("qualification"), Mapping)
+        else {}
+    )
+    requirements = (
+        dict(qualification.get("requirements"))
+        if isinstance(qualification.get("requirements"), Mapping)
+        else {}
+    )
+    literal_change = requirements.get("literal_text_change")
+    postconditions = [
+        dict(item)
+        for item in evaluation.get("postconditions") or []
+        if isinstance(item, Mapping)
+    ]
+    if (
+        not isinstance(literal_change, Mapping)
+        or not bool(evaluation.get("ok"))
+        or not postconditions
+        or any(item.get("ok") is not True for item in postconditions)
+        or requirements.get("resource_query") is True
+        or list(requirements.get("operation_kinds") or [])
+        or requirements.get("drag_drop") is True
+    ):
+        return {}
+    capability_validation = (
+        dict(evaluation.get("capability_validation"))
+        if isinstance(evaluation.get("capability_validation"), Mapping)
+        else {}
+    )
+    if capability_validation.get("ok") is not True:
+        return {}
+    webui_path = Path(source_root) / "webui.json"
+    try:
+        raw = webui_path.read_bytes()
+        webui = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(webui, Mapping) or prototype_webui_digest(webui) != str(
+        acceptance.get("webui_digest") or ""
+    ):
+        return {}
+    relative_path = f"scenarios/{_safe_token(object_id)}/webui.json"
+    return {
+        "schema": "adaos.builder.accepted_prototype_validation.v1",
+        "summary": _brief_summary(implementation_brief),
+        "repair_hints": {
+            "profile": "accepted_ui_prototype",
+            "validation_only": True,
+            "target_files": [relative_path],
+            "source_preconditions": [
+                {
+                    "path": relative_path,
+                    "sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+                    "size": len(raw),
+                }
+            ],
+            "acceptance_checks": [
+                str(item.get("id") or "").strip()
+                for item in postconditions
+                if str(item.get("id") or "").strip()
+            ],
+            "requires_root_mcp": False,
+        },
+        "prototype_acceptance_digest": str(acceptance.get("digest") or "") or None,
+    }
 
 
 def _brief_is_bounded_dev_ticket_repair(value: Any) -> bool:
@@ -6472,6 +6570,32 @@ class BuilderAutomationService:
             attachments=attachments,
             created_at=_now_iso(),
         )
+        accepted_prototype_validation = _accepted_prototype_validation_brief(
+            kind=kind,
+            object_id=project_id,
+            source_root=(
+                self.dev_scenarios_root if kind == "scenario" else self.dev_skills_root
+            )
+            / project_id,
+            prototype_acceptance=(
+                session.get("prototype_acceptance")
+                if isinstance(session.get("prototype_acceptance"), Mapping)
+                else None
+            ),
+            implementation_brief=str(session.get("implementation_brief") or ""),
+            iteration_instruction=iteration_instruction,
+        )
+        execution_brief = (
+            json.dumps(
+                accepted_prototype_validation,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            if accepted_prototype_validation
+            else iteration_instruction
+            or str(session.get("implementation_brief") or "")
+        )
         workflow_service = self._workflow()
         workflow_state = workflow_service.describe(kind, project_id)
         change_set = (
@@ -6526,9 +6650,7 @@ class BuilderAutomationService:
                         or ""
                     ).strip()
                 ],
-                "intent": _brief_summary(
-                    iteration_instruction or session.get("implementation_brief")
-                ),
+                "intent": _brief_summary(execution_brief),
             },
             run_purpose=str(session.get("run_purpose") or "iteration"),
             required_facets=required_context_facets,
@@ -6553,8 +6675,7 @@ class BuilderAutomationService:
             project_id=project_id,
             context_packet=context_packet,
             source_snapshot=source_snapshot,
-            implementation_brief=iteration_instruction
-            or str(session.get("implementation_brief") or ""),
+            implementation_brief=execution_brief,
         )
         if isinstance(session, dict):
             session["context_control"] = {
@@ -6612,6 +6733,10 @@ class BuilderAutomationService:
             if isinstance(repair_brief.get("repair_hints"), Mapping)
             else {}
         )
+        if accepted_prototype_validation:
+            repair_hints = dict(
+                accepted_prototype_validation.get("repair_hints") or {}
+            )
         repair_hints = _canonical_repair_hints(
             repair_hints,
             kind=kind,
@@ -6629,7 +6754,8 @@ class BuilderAutomationService:
             "no_external_api": True,
             "no_secrets": True,
             "must_add_tests": True,
-            "must_update_manifest": not is_dev_ticket_repair,
+            "must_update_manifest": not is_dev_ticket_repair
+            and not accepted_prototype_validation,
             "local_process_debug": True,
         }
         if is_dev_ticket_repair:
@@ -6654,12 +6780,27 @@ class BuilderAutomationService:
                 realization_constraints["max_changed_files"] = int(
                     repair_hints["max_changed_files"]
                 )
+        elif accepted_prototype_validation:
+            realization_constraints.update(
+                {
+                    "mode": "accepted_prototype_validation",
+                    "minimal_diff": True,
+                    "preserve_declarative_manifests": True,
+                    "repair_profile": "accepted_ui_prototype",
+                    "exact_changed_paths": list(
+                        repair_hints.get("target_files") or []
+                    ),
+                    "max_changed_files": 1,
+                }
+            )
         request_id = (
             f"realize.{_safe_token(kind)}.{_safe_token(project_id)}."
             f"{_safe_token(session.get('change_id'), fallback='change')}."
             f"{max(0, int(session.get('iteration') or 0))}"
         )
-        if is_dev_ticket_repair:
+        if accepted_prototype_validation:
+            request_mcp = {"enabled": False, "requested_scope": []}
+        elif is_dev_ticket_repair:
             if repair_hints.get("requires_root_mcp") is False:
                 request_mcp = {"enabled": False, "requested_scope": []}
             else:
@@ -6687,8 +6828,14 @@ class BuilderAutomationService:
             "user_subnet_id": subnet_id,
             "target": {"type": kind, "id": project_id},
             "source": {
-                "type": "prompt_ide_execute" if not iteration_instruction else "builder_automation_chat",
-                "text": iteration_instruction or str(session.get("implementation_brief") or ""),
+                "type": (
+                    "accepted_prototype_validation"
+                    if accepted_prototype_validation
+                    else "prompt_ide_execute"
+                    if not iteration_instruction
+                    else "builder_automation_chat"
+                ),
+                "text": execution_brief,
             },
             "source_conversation_id": session.get("conversation_id"),
             "artifacts": {
