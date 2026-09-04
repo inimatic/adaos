@@ -479,7 +479,10 @@ def _release_changed_skills(
     signoff: bool = False,
     publish_private_models: bool = False,
     allow_version_bump: bool = True,
+    maintenance_project: str | None = None,
 ) -> dict[str, object]:
+    if maintenance_project and not skill_name:
+        raise ValueError("--maintenance-project requires an explicit skill name")
     candidates = _collect_skill_release_candidates(skill_name=skill_name, remote=remote)
     candidate_items = [item for item in candidates.get("skills") or [] if isinstance(item, dict)]
 
@@ -510,13 +513,14 @@ def _release_changed_skills(
             reasons - {"registry-version", "registry-missing"}
         )
         message = _default_skill_release_message(name)
-        revision = mgr.push(
-            name,
-            message,
-            signoff=signoff,
-            bump=bump,
-            publish_private_models=publish_private_models,
-        )
+        push_options: dict[str, object] = {
+            "signoff": signoff,
+            "bump": bump,
+            "publish_private_models": publish_private_models,
+        }
+        if maintenance_project:
+            push_options["maintenance_project"] = maintenance_project
+        revision = mgr.push(name, message, **push_options)
         released.append(
             {
                 "name": name,
@@ -1300,6 +1304,7 @@ def push_command(
                 signoff=signoff,
                 publish_private_models=publish_private_models,
                 allow_version_bump=bump,
+                maintenance_project=maintenance_project,
             )
         except Exception as exc:
             typer.secho(f"push failed: {exc}", fg=typer.colors.RED)
@@ -1332,14 +1337,14 @@ def push_command(
 
     _resolve_skill_path(skill_name)
     mgr = _mgr()
-    res = mgr.push(
-        skill_name,
-        message,
-        signoff=signoff,
-        bump=bump,
-        publish_private_models=publish_private_models,
-        maintenance_project=maintenance_project,
-    )
+    push_options: dict[str, object] = {
+        "signoff": signoff,
+        "bump": bump,
+        "publish_private_models": publish_private_models,
+    }
+    if maintenance_project:
+        push_options["maintenance_project"] = maintenance_project
+    res = mgr.push(skill_name, message, **push_options)
     if res in {"nothing-to-push", "nothing-to-commit"}:
         typer.echo(_("cli.skill.push.nothing"))
     else:

@@ -122,6 +122,51 @@ def test_skill_push_without_message_honors_no_bump(monkeypatch) -> None:
     assert pushed == [False]
 
 
+def test_skill_push_without_message_forwards_explicit_maintenance_project(
+    monkeypatch,
+) -> None:
+    runner = CliRunner()
+    pushed: list[str | None] = []
+
+    class _Mgr:
+        def push(
+            self,
+            *_args,
+            maintenance_project: str | None = None,
+            **_kwargs,
+        ) -> str:
+            pushed.append(maintenance_project)
+            return "rev-builder"
+
+    monkeypatch.setattr(skill_cmd, "_mgr", lambda: _Mgr())
+    monkeypatch.setattr(
+        skill_cmd,
+        "_collect_skill_release_candidates",
+        lambda **_kwargs: {
+            "base_ref": "origin/main",
+            "ahead_count": 1,
+            "behind_count": 0,
+            "skills": [{"name": "builder_sdk_control_skill", "reasons": ["git-ahead"]}],
+        },
+    )
+    monkeypatch.setattr(
+        skill_cmd, "_warn_if_registry_tracking_refresh_failed", lambda: None
+    )
+
+    result = runner.invoke(
+        skill_cmd.app,
+        [
+            "push",
+            "builder_sdk_control_skill",
+            "--maintenance-project",
+            "builder",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert pushed == ["builder"]
+
+
 def test_skill_release_paths_ignore_process_local_state() -> None:
     assert skill_cmd._skill_names_from_paths(
         [
