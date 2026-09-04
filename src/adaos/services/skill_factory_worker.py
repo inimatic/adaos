@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,7 +59,7 @@ from adaos.services.workflow_artifacts import (
 )
 
 
-RUNNER_VERSION = "adaos-local-codex-worker/0.10.0"
+RUNNER_VERSION = "adaos-local-codex-worker/0.11.0"
 PACKET_SCHEMA = "adaos.skill_factory.codex_packet.v1"
 LOCAL_SESSION_SCHEMA = "adaos.skill_factory.local_run.v1"
 _log = logging.getLogger("adaos.skill_factory.local_worker")
@@ -3813,6 +3814,7 @@ class LocalSkillFactoryWorker:
         for path in (input_dir, output_dir, runtime_dir):
             path.mkdir(parents=True, exist_ok=True)
         process_owner = self._current_process_owner()
+        failure_stage = "initializing"
         _write_json(
             runtime_dir / "state.json",
             {
@@ -3824,6 +3826,7 @@ class LocalSkillFactoryWorker:
         )
 
         try:
+            failure_stage = "workspace_preparing"
             root_mcp = _root_mcp_profile_from_assignment(
                 assignment,
                 include_private_token=True,
@@ -3842,7 +3845,25 @@ class LocalSkillFactoryWorker:
                 workspace,
                 str((assignment.get("forge") or {}).get("branch") or f"realize/{task_id}"),
             )
-            continuation = self._restore_continuation_candidate(assignment, workspace)
+            prototype_resource_handoff = self._prototype_resource_handoff_from_assignment(
+                assignment,
+                workspace,
+            )
+            deterministic_resource_realization = bool(
+                prototype_resource_handoff
+                and not dict(prototype_resource_handoff.get("completion") or {}).get(
+                    "model_required",
+                    True,
+                )
+            )
+            # A complete accepted declarative prototype is the authority. Do
+            # not restore a partial model candidate when the remaining work is
+            # fully represented by the trusted resource handoff.
+            continuation = (
+                None
+                if deterministic_resource_realization
+                else self._restore_continuation_candidate(assignment, workspace)
+            )
             structured_edits = self._structured_edits_from_assignment(assignment)
             validation_only = self._validation_only_from_assignment(assignment, workspace)
             descriptor_working_set: dict[str, Any] | None = None
@@ -3874,16 +3895,24 @@ class LocalSkillFactoryWorker:
                 workspace,
                 input_dir,
                 descriptor_working_set=descriptor_working_set,
+                prototype_resource_handoff=prototype_resource_handoff,
             )
             prompt = (input_dir / "task.md").read_text(encoding="utf-8")
             packet_hash = "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()
             prompt_budget = _codex_prompt_budget_check(assignment, prompt)
-            if continuation or structured_edits or validation_only:
+            if (
+                continuation
+                or structured_edits
+                or validation_only
+                or deterministic_resource_realization
+            ):
                 prompt_budget = {
                     **prompt_budget,
                     "status": "not_applicable",
                     "reason": (
-                        "validation_only_continuation"
+                        "accepted_prototype_resource_handoff_without_model"
+                        if deterministic_resource_realization
+                        else "validation_only_continuation"
                         if continuation
                         else "qualified_source_validation_without_model"
                         if validation_only
@@ -3902,12 +3931,37 @@ class LocalSkillFactoryWorker:
                     f"reasons={','.join(prompt_budget.get('blocked_reasons') or [])}"
                 )
             structured_edit_receipt: dict[str, Any] | None = None
+            prototype_resource_receipt: dict[str, Any] | None = None
             root_mcp_evidence: dict[str, Any] | None = (
                 dict(descriptor_working_set.get("evidence") or {})
                 if descriptor_working_set
                 else None
             )
-            if continuation:
+            if prototype_resource_handoff:
+                failure_stage = "prototype_resource_handoff"
+                prototype_resource_receipt = self._apply_prototype_resource_handoff(
+                    workspace,
+                    prototype_resource_handoff,
+                )
+                _write_json(
+                    runtime_dir / "prototype-resource-receipt.json",
+                    prototype_resource_receipt,
+                )
+            if deterministic_resource_realization:
+                self._progress(
+                    task_id,
+                    "tests_running",
+                    "Materialized accepted declarative resources without a model call",
+                )
+                self._ensure_task_active(task_id)
+                codex_result = CodexRunResult(
+                    returncode=0,
+                    final_message=(
+                        "Materialized the accepted declarative Prototype as a skill-owned "
+                        "Resource Workbench runtime without starting a model turn."
+                    ),
+                )
+            elif continuation:
                 self._progress(
                     task_id,
                     "in_progress" if structured_edits else "tests_running",
@@ -4040,12 +4094,14 @@ class LocalSkillFactoryWorker:
             validation_repair_limit = (
                 0
                 if structured_edit_receipt is not None
+                or deterministic_resource_realization
                 or validation_only
                 or development_escalations
                 else min(self.max_repair_attempts, max(0, model_attempt_limit - 1))
             )
             test_report: dict[str, Any] = {}
             for repair_attempt in range(validation_repair_limit + 1):
+                failure_stage = "deterministic_validation"
                 self._ensure_task_active(task_id)
                 self._progress(task_id, "tests_running", "Validating generated manifests, Python and Web UI")
                 self._cleanup_generated_files(workspace)
@@ -4237,6 +4293,8 @@ class LocalSkillFactoryWorker:
                     if development_escalations
                     else "structured_edits"
                     if structured_edit_receipt is not None
+                    else "accepted_prototype_resource_handoff"
+                    if deterministic_resource_realization
                     else "validation_only"
                     if validation_only
                     else "preserved_candidate"
@@ -4244,6 +4302,7 @@ class LocalSkillFactoryWorker:
                     else "codex"
                 ),
                 "structured_edit_receipt": structured_edit_receipt,
+                "prototype_resource_receipt": prototype_resource_receipt,
                 "validation_only": validation_only or None,
                 "created_at": _now_iso(),
             }
@@ -4266,6 +4325,7 @@ class LocalSkillFactoryWorker:
             (evidence_root / "changed_files.txt").write_text("\n".join(all_changed_paths) + "\n", encoding="utf-8")
 
             self._progress(task_id, "commit_ready", "Committing validated local result")
+            failure_stage = "commit"
             self._ensure_task_active(task_id)
             self._stage_scoped_changes(workspace, assignment)
             if _git(["diff", "--cached", "--name-only"], cwd=workspace):
@@ -4273,6 +4333,7 @@ class LocalSkillFactoryWorker:
             commit_hash = _git(["rev-parse", "HEAD"], cwd=workspace)
             final_changed_paths = self._changed_from_baseline(workspace)
             self._ensure_task_active(task_id)
+            failure_stage = "artifact_activation"
             self._sync_artifacts(assignment, workspace)
             self._ensure_task_active(task_id)
             result = {
@@ -4295,6 +4356,7 @@ class LocalSkillFactoryWorker:
                 "execution_strategy": provenance["execution_strategy"],
             }
             _write_json(output_dir / "result.json", result)
+            failure_stage = "task_completion"
             completed = self.factory.complete_task(result)
             _write_json(
                 runtime_dir / "state.json",
@@ -4314,7 +4376,18 @@ class LocalSkillFactoryWorker:
             )
             return {"ok": False, "assignment": dict(assignment), **cancelled, "run_dir": str(run_root)}
         except Exception as exc:
-            failure = {"status": "failed", "error": f"{type(exc).__name__}: {exc}", "failed_at": _now_iso()}
+            failure = {
+                "status": "failed",
+                "stage": failure_stage,
+                "error": f"{type(exc).__name__}: {exc}",
+                "traceback": traceback.format_exc(limit=24),
+                "failed_at": _now_iso(),
+            }
+            _log.exception(
+                "Builder local worker failed task=%s stage=%s",
+                task_id,
+                failure_stage,
+            )
             _write_json(
                 runtime_dir / "state.json",
                 {"schema": LOCAL_SESSION_SCHEMA, "owner": process_owner, **failure},
@@ -4324,6 +4397,7 @@ class LocalSkillFactoryWorker:
                     "task_id": task_id,
                     "node_id": self.node_id,
                     "message": failure["error"],
+                    "stage": failure_stage,
                     "retryable": True,
                 }
                 if failure_feedback_refs:
@@ -5270,6 +5344,321 @@ class LocalSkillFactoryWorker:
                 result.append(token)
         return result
 
+    @staticmethod
+    def _count_exact_string(value: Any, expected: str) -> int:
+        if isinstance(value, Mapping):
+            return sum(
+                LocalSkillFactoryWorker._count_exact_string(item, expected)
+                for item in value.values()
+            )
+        if isinstance(value, list):
+            return sum(
+                LocalSkillFactoryWorker._count_exact_string(item, expected)
+                for item in value
+            )
+        return int(isinstance(value, str) and value == expected)
+
+    @staticmethod
+    def _rewrite_exact_strings(value: Any, replacements: Mapping[str, str]) -> int:
+        changed = 0
+        if isinstance(value, dict):
+            for key, item in list(value.items()):
+                if isinstance(item, str) and item in replacements:
+                    value[key] = replacements[item]
+                    changed += 1
+                else:
+                    changed += LocalSkillFactoryWorker._rewrite_exact_strings(
+                        item,
+                        replacements,
+                    )
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                if isinstance(item, str) and item in replacements:
+                    value[index] = replacements[item]
+                    changed += 1
+                else:
+                    changed += LocalSkillFactoryWorker._rewrite_exact_strings(
+                        item,
+                        replacements,
+                    )
+        return changed
+
+    @staticmethod
+    def _prototype_resource_completion(
+        workspace: Path,
+        *,
+        target_id: str,
+        handoff: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        webui_path = workspace / "scenarios" / target_id / "webui.json"
+        if not webui_path.is_file():
+            return {
+                "strategy": "codex",
+                "model_required": True,
+                "reasons": ["canonical_webui_missing"],
+            }
+        webui = _read_json(webui_path)
+        source_types = {
+            str(item.get("source_resource_type") or "").strip()
+            for item in handoff.get("resources") or []
+            if isinstance(item, Mapping)
+            and str(item.get("source_resource_type") or "").strip()
+        }
+        prototype_refs: set[str] = set()
+        implementation_bindings: set[str] = set()
+
+        def inspect(value: Any) -> None:
+            if isinstance(value, Mapping):
+                action_type = str(value.get("type") or "").strip()
+                data_kind = str(value.get("kind") or "").strip()
+                if action_type == "callSkill":
+                    implementation_bindings.add("action:callSkill")
+                if data_kind in {"skill", "api", "stream"}:
+                    implementation_bindings.add(f"data_source:{data_kind}")
+                for item in value.values():
+                    inspect(item)
+            elif isinstance(value, list):
+                for item in value:
+                    inspect(item)
+            elif isinstance(value, str) and value.startswith("prototype."):
+                prototype_refs.add(value)
+
+        inspect(webui)
+        uncovered = sorted(prototype_refs - source_types)
+        reasons = [
+            *sorted(implementation_bindings),
+            *[f"uncovered_prototype_resource:{item}" for item in uncovered],
+        ]
+        return {
+            "strategy": (
+                "codex"
+                if reasons
+                else "deterministic_resource_promotion"
+            ),
+            "model_required": bool(reasons),
+            "reasons": reasons,
+            "covered_resource_types": sorted(source_types),
+        }
+
+    def _prototype_resource_handoff_from_assignment(
+        self,
+        assignment: Mapping[str, Any],
+        workspace: Path,
+    ) -> dict[str, Any] | None:
+        request = dict(assignment.get("realize_request") or {})
+        artifacts = dict(request.get("artifacts") or {})
+        context_packet = (
+            dict(artifacts.get("context_packet") or {})
+            if isinstance(artifacts.get("context_packet"), Mapping)
+            else dict(artifacts.get("context_projection") or {})
+            if isinstance(artifacts.get("context_projection"), Mapping)
+            else {}
+        )
+        target = dict(assignment.get("target") or {})
+        target_type = str(target.get("type") or "skill").strip().lower()
+        target_id = _safe_token(target.get("id"), fallback="generated_skill")
+        companions = self._companion_skill_ids(assignment)
+        handoff = self._prototype_resource_implementation_handoff(
+            target_type=target_type,
+            target_id=target_id,
+            companion_skill_ids=companions,
+            context_packet=context_packet,
+        )
+        if handoff is None:
+            return None
+        handoff["completion"] = self._prototype_resource_completion(
+            workspace,
+            target_id=target_id,
+            handoff=handoff,
+        )
+        return handoff
+
+    def _apply_prototype_resource_handoff(
+        self,
+        workspace: Path,
+        handoff: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        if str(handoff.get("schema") or "").strip() != (
+            "adaos.builder.resource_implementation_handoff.v1"
+        ):
+            raise ValueError("unsupported prototype resource handoff schema")
+        companion = _safe_token(handoff.get("companion_skill_id"), fallback="")
+        project_ref = str(handoff.get("project_ref") or "").strip()
+        target_id = _safe_token(project_ref.removeprefix("scenario:"), fallback="")
+        if not companion or not target_id or project_ref != f"scenario:{target_id}":
+            raise ValueError("prototype resource handoff target is invalid")
+        skill_root = (workspace / "skills" / companion).resolve()
+        scenario_root = (workspace / "scenarios" / target_id).resolve()
+        manifest_path = skill_root / "skill.yaml"
+        webui_path = scenario_root / "webui.json"
+        if not manifest_path.is_file() or not webui_path.is_file():
+            raise ValueError("prototype resource handoff source roots are incomplete")
+
+        from adaos.services.resources.local import validate_local_resource_bundle
+
+        declarations: list[str] = []
+        replacements: dict[str, str] = {}
+        changed_files: set[str] = set()
+        resource_receipts: list[dict[str, Any]] = []
+        for raw in handoff.get("resources") or []:
+            if not isinstance(raw, Mapping):
+                raise ValueError("prototype resource handoff entries must be objects")
+            resource = dict(raw)
+            relative = str(resource.get("declaration_path") or "").replace("\\", "/").strip("/")
+            expected_prefix = f"skills/{companion}/"
+            if not relative.startswith(expected_prefix):
+                raise ValueError(f"prototype resource declaration escapes companion skill: {relative}")
+            declaration_path = (workspace / Path(relative)).resolve()
+            try:
+                declaration_path.relative_to(skill_root)
+            except ValueError as exc:
+                raise ValueError(f"prototype resource declaration escapes companion skill: {relative}") from exc
+            bundle = copy.deepcopy(dict(resource.get("bundle") or {}))
+            validate_local_resource_bundle(
+                bundle,
+                expected_owner_ref=f"skill:{companion}",
+            )
+            before = _read_json(declaration_path) if declaration_path.is_file() else None
+            if before != bundle:
+                _write_json(declaration_path, bundle)
+                changed_files.add(relative)
+            declaration = str(resource.get("manifest_declaration") or "").replace("\\", "/").strip("/")
+            if not declaration:
+                raise ValueError("prototype resource manifest declaration is missing")
+            declarations.append(declaration)
+            source_type = str(resource.get("source_resource_type") or "").strip()
+            target_type = str(resource.get("target_resource_type") or "").strip()
+            if not source_type or not target_type or source_type == target_type:
+                raise ValueError("prototype resource rewrite is invalid")
+            replacements[source_type] = target_type
+            resource_receipts.append(
+                {
+                    "source_resource_type": source_type,
+                    "target_resource_type": target_type,
+                    "declaration_path": relative,
+                }
+            )
+
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(manifest, Mapping):
+            raise ValueError("companion skill manifest must be an object")
+        manifest = copy.deepcopy(dict(manifest))
+        resource_runtime = manifest.get("resource_runtime")
+        if resource_runtime is None:
+            resource_runtime = {}
+        if not isinstance(resource_runtime, Mapping):
+            raise ValueError("resource_runtime must be an object")
+        resource_runtime = copy.deepcopy(dict(resource_runtime))
+        current_declarations = resource_runtime.get("declarations")
+        if current_declarations is None:
+            current_declarations = []
+        if not isinstance(current_declarations, list):
+            raise ValueError("resource_runtime.declarations must be an array")
+        merged_declarations = list(
+            dict.fromkeys(
+                [
+                    *[str(item).replace("\\", "/").strip("/") for item in current_declarations],
+                    *declarations,
+                ]
+            )
+        )
+        resource_runtime["declarations"] = merged_declarations
+        if manifest.get("resource_runtime") != resource_runtime:
+            manifest["resource_runtime"] = resource_runtime
+            manifest_path.write_text(
+                yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True),
+                encoding="utf-8",
+            )
+            changed_files.add(manifest_path.relative_to(workspace).as_posix())
+
+        webui = _read_json(webui_path)
+        rewrite_count = self._rewrite_exact_strings(webui, replacements)
+        if rewrite_count:
+            _write_json(webui_path, webui)
+            changed_files.add(webui_path.relative_to(workspace).as_posix())
+        return {
+            "schema": "adaos.skill_factory.prototype_resource_receipt.v1",
+            "strategy": "deterministic_resource_promotion",
+            "acceptance_id": handoff.get("acceptance_id"),
+            "resource_count": len(resource_receipts),
+            "rewrite_count": rewrite_count,
+            "changed_files": sorted(changed_files),
+            "resources": resource_receipts,
+            "model_tokens": 0,
+            "created_at": _now_iso(),
+        }
+
+    def _validate_prototype_resource_handoff(
+        self,
+        assignment: Mapping[str, Any],
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        try:
+            handoff = self._prototype_resource_handoff_from_assignment(
+                assignment,
+                workspace,
+            )
+        except Exception as exc:
+            errors.append(f"prototype resource handoff: {type(exc).__name__}: {exc}")
+            return
+        if not handoff:
+            return
+        companion = _safe_token(handoff.get("companion_skill_id"), fallback="")
+        target_id = _safe_token(
+            str(handoff.get("project_ref") or "").removeprefix("scenario:"),
+            fallback="",
+        )
+        manifest_path = workspace / "skills" / companion / "skill.yaml"
+        webui_path = workspace / "scenarios" / target_id / "webui.json"
+        try:
+            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+            runtime = manifest.get("resource_runtime") if isinstance(manifest, Mapping) else None
+            declarations = runtime.get("declarations") if isinstance(runtime, Mapping) else None
+            declared = {
+                str(item).replace("\\", "/").strip("/")
+                for item in declarations or []
+                if str(item).strip()
+            }
+            webui = _read_json(webui_path)
+        except Exception as exc:
+            errors.append(f"prototype resource handoff closure: {type(exc).__name__}: {exc}")
+            return
+        for raw in handoff.get("resources") or []:
+            resource = dict(raw)
+            relative = str(resource.get("declaration_path") or "").replace("\\", "/").strip("/")
+            declaration_path = workspace / Path(relative)
+            expected_bundle = dict(resource.get("bundle") or {})
+            manifest_declaration = str(resource.get("manifest_declaration") or "").replace("\\", "/").strip("/")
+            source_type = str(resource.get("source_resource_type") or "").strip()
+            target_type = str(resource.get("target_resource_type") or "").strip()
+            failures: list[str] = []
+            if not declaration_path.is_file():
+                failures.append(f"missing exact declaration {relative}")
+            elif _read_json(declaration_path) != expected_bundle:
+                failures.append(f"declaration differs from accepted bundle {relative}")
+            if manifest_declaration not in declared:
+                failures.append(f"skill.yaml does not declare {manifest_declaration}")
+            source_count = self._count_exact_string(webui, source_type)
+            target_count = self._count_exact_string(webui, target_type)
+            if source_count:
+                failures.append(f"WebUI retains {source_count} reference(s) to {source_type}")
+            if not target_count:
+                failures.append(f"WebUI does not reference {target_type}")
+            if failures:
+                errors.extend(f"prototype resource handoff: {item}" for item in failures)
+            else:
+                checks.append(
+                    {
+                        "kind": "prototype_resource_handoff.exact",
+                        "resource_type": target_type,
+                        "declaration_path": relative,
+                        "webui_references": target_count,
+                        "ok": True,
+                    }
+                )
+
     def _prototype_resource_implementation_handoff(
         self,
         *,
@@ -5438,6 +5827,7 @@ class LocalSkillFactoryWorker:
         input_dir: Path,
         *,
         descriptor_working_set: Mapping[str, Any] | None = None,
+        prototype_resource_handoff: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         request = dict(assignment.get("realize_request") or {})
         target = dict(assignment.get("target") or {})
@@ -5511,11 +5901,10 @@ class LocalSkillFactoryWorker:
                 ]
             )
         )
-        prototype_resource_handoff = self._prototype_resource_implementation_handoff(
-            target_type=target_type,
-            target_id=target_id,
-            companion_skill_ids=companions,
-            context_packet=context_packet,
+        prototype_resource_handoff = (
+            copy.deepcopy(dict(prototype_resource_handoff))
+            if isinstance(prototype_resource_handoff, Mapping)
+            else self._prototype_resource_handoff_from_assignment(assignment, workspace)
         )
         existing_prompt_facts = (
             dict(capsule_repair_hints.get("prompt_facts") or {})
@@ -6199,6 +6588,12 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         self._validate_skill_dependency_isolation(workspace, checks, errors)
         self._validate_brief_contract_requirements(assignment, workspace, checks, errors)
         self._validate_admitted_operation_schemas(assignment, workspace, checks, errors)
+        self._validate_prototype_resource_handoff(
+            assignment,
+            workspace,
+            checks,
+            errors,
+        )
         for path in sorted(workspace.rglob("*.json")):
             if ".git" in path.parts:
                 continue

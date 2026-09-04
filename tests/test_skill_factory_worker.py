@@ -114,6 +114,7 @@ def test_run_assignment_persists_preflight_mcp_failure(
             "task_id": "task.invalid-mcp",
             "node_id": worker.node_id,
             "message": result["error"],
+            "stage": "workspace_preparing",
             "retryable": True,
         }
     ]
@@ -6692,6 +6693,14 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     workspace = tmp_path / "workspace"
     (workspace / "scenarios" / project_id).mkdir(parents=True)
     (workspace / "skills" / companion).mkdir(parents=True)
+    (workspace / "scenarios" / project_id / "webui.json").write_text(
+        json.dumps(webui, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (workspace / "skills" / companion / "skill.yaml").write_text(
+        "name: flowboard_skill\nversion: 0.1.0\ndescription: Flowboard\n",
+        encoding="utf-8",
+    )
     worker = LocalSkillFactoryWorker(
         state_dir=state_dir,
         repo_root=repo_root,
@@ -6714,6 +6723,58 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     prompt = (tmp_path / "input" / "task.md").read_text(encoding="utf-8")
     assert "prototype-resource-handoff.json" in prompt
     assert "Do not create custom CRUD handlers" in prompt
+    assert handoff["completion"] == {
+        "strategy": "deterministic_resource_promotion",
+        "model_required": False,
+        "reasons": [],
+        "covered_resource_types": [prototype_type],
+    }
+
+    receipt = worker._apply_prototype_resource_handoff(workspace, handoff)
+
+    assert receipt["model_tokens"] == 0
+    assert receipt["rewrite_count"] == 2
+    assert set(receipt["changed_files"]) == {
+        f"scenarios/{project_id}/webui.json",
+        f"skills/{companion}/resources/work_items.resource.json",
+        f"skills/{companion}/skill.yaml",
+    }
+    manifest = yaml.safe_load(
+        (workspace / "skills" / companion / "skill.yaml").read_text(encoding="utf-8")
+    )
+    assert manifest["resource_runtime"]["declarations"] == [
+        "resources/work_items.resource.json"
+    ]
+    realized_webui = json.loads(
+        (workspace / "scenarios" / project_id / "webui.json").read_text(encoding="utf-8")
+    )
+    assert worker._count_exact_string(realized_webui, prototype_type) == 0
+    assert worker._count_exact_string(
+        realized_webui,
+        "skill.flowboard_skill.work_items",
+    ) == 2
+    checks: list[dict] = []
+    errors: list[str] = []
+    worker._validate_prototype_resource_handoff(
+        assignment,
+        workspace,
+        checks,
+        errors,
+    )
+    assert errors == []
+    assert checks[0]["kind"] == "prototype_resource_handoff.exact"
+
+    (workspace / "skills" / companion / "resources" / "work_items.resource.json").unlink()
+    checks = []
+    errors = []
+    worker._validate_prototype_resource_handoff(
+        assignment,
+        workspace,
+        checks,
+        errors,
+    )
+    assert checks == []
+    assert any("missing exact declaration" in item for item in errors)
 
     service.operate(
         prototype_type,
