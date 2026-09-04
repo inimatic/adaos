@@ -63,6 +63,7 @@ def _json_text(payload: Any) -> str:
 
 _MODEL_TEXT_FORMATS = {"json", "min_json", "jsonl", "toon"}
 _COMPACT_MODEL_TEXT_TOOLS = {
+    "foundation",
     "get_builder_context",
     "get_architecture_catalog",
     "get_sdk_metadata",
@@ -354,6 +355,33 @@ def _descriptor_model_payload(payload: Mapping[str, Any], key: str) -> dict[str,
     result = response.get("result") if isinstance(response.get("result"), Mapping) else {}
     selected = result.get(key) if key in result else payload.get(key)
     return {key: selected} if selected is not None else dict(payload)
+
+
+def _task_foundation_model_payload(
+    payload: Mapping[str, Any],
+    *,
+    enabled_tools: Sequence[str] | None,
+) -> dict[str, Any]:
+    """Project the Root bootstrap without replaying every registry descriptor."""
+
+    foundation = payload.get("foundation") if isinstance(payload.get("foundation"), Mapping) else {}
+    scope = payload.get("scope") if isinstance(payload.get("scope"), Mapping) else {}
+    return {
+        "foundation": {
+            "id": foundation.get("id"),
+            "status": foundation.get("status"),
+            "build": foundation.get("build"),
+            "preferred_descriptive_surface": foundation.get(
+                "preferred_descriptive_surface"
+            ),
+        },
+        "scope": dict(scope),
+        "enabled_tools": _normalize_unique(list(enabled_tools or [])),
+        "guidance": (
+            "Use search_descriptors for task-relevant discovery and "
+            "get_descriptor_item for one exact contract."
+        ),
+    }
 
 
 class CodexRootMcpBridge:
@@ -1435,6 +1463,8 @@ class CodexRootMcpBridge:
             if definition.get("name") in _COMPACT_MODEL_TEXT_TOOLS:
                 tool_format_property = dict(format_property)
                 if self.profile.task_id and definition.get("name") in {
+                    "foundation",
+                    "get_builder_context",
                     "get_sdk_metadata",
                     "search_descriptors",
                     "get_descriptor_item",
@@ -1458,21 +1488,41 @@ class CodexRootMcpBridge:
             raise PermissionError(f"MCP tool is outside this bridge profile: {tool}")
         model_text_format = str(args.get("model_text_format") or "json").strip().lower()
         if tool == "foundation":
-            return _tool_text(client.foundation())
+            payload = client.foundation()
+            task_scoped = bool(self.profile.task_id)
+            return _tool_text(
+                payload,
+                model_text_format="min_json" if task_scoped else model_text_format,
+                model_payload=(
+                    _task_foundation_model_payload(
+                        payload,
+                        enabled_tools=self.profile.enabled_tools,
+                    )
+                    if task_scoped
+                    else None
+                ),
+            )
         if tool == "get_builder_context":
             raw_locales = args.get("preferred_locales")
             preferred_locales = _normalize_unique(raw_locales if isinstance(raw_locales, list) else None)
+            task_scoped = bool(self.profile.task_id)
+            payload = client.get_builder_context(
+                webspace_id=_normalize_text(args.get("webspace_id")),
+                level=str(args.get("level") or "mini"),
+                request_locale=_normalize_text(args.get("request_locale")),
+                preferred_locales=preferred_locales,
+                include_live=bool(args.get("include_live", True)),
+                include_hints=bool(args.get("include_hints", True)),
+                include_payloads=bool(args.get("include_payloads", False)),
+            )
             return _tool_text(
-                client.get_builder_context(
-                    webspace_id=_normalize_text(args.get("webspace_id")),
-                    level=str(args.get("level") or "mini"),
-                    request_locale=_normalize_text(args.get("request_locale")),
-                    preferred_locales=preferred_locales,
-                    include_live=bool(args.get("include_live", True)),
-                    include_hints=bool(args.get("include_hints", True)),
-                    include_payloads=bool(args.get("include_payloads", False)),
+                payload,
+                model_text_format="min_json" if task_scoped else model_text_format,
+                model_payload=(
+                    _descriptor_model_payload(payload, "builder_context")
+                    if task_scoped
+                    else None
                 ),
-                model_text_format=model_text_format,
             )
         if tool == "list_dev_tickets":
             return _tool_text(

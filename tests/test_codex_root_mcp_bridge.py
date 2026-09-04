@@ -811,6 +811,72 @@ def test_codex_bridge_filters_task_scoped_tools() -> None:
         bridge.call_tool("get_runtime_summary", {})
 
 
+def test_task_scoped_bootstrap_projects_model_text_without_transport_envelope(
+    monkeypatch,
+) -> None:
+    class WrappedClient(_FakeRootMcpClient):
+        def foundation(self) -> dict:
+            return {
+                "ok": True,
+                "scope": {"subnet_id": "sn_bound"},
+                "foundation": {
+                    "id": "root-mcp-foundation",
+                    "status": "experimental",
+                    "build": {"version": "0.1.test"},
+                    "preferred_descriptive_surface": "adaos_dev",
+                    "registries": {"large": "x" * 100_000},
+                },
+            }
+
+        def get_builder_context(self, **kwargs) -> dict:
+            return {
+                "ok": True,
+                "response": {
+                    "result": {
+                        "builder_context": {
+                            "context_id": "builder_context.v1",
+                            "descriptor_level": "mini",
+                            "next_tools": ["search_descriptors"],
+                        }
+                    }
+                },
+                "audit": {"large": "y" * 100_000},
+            }
+
+    bridge = bridge_mod.CodexRootMcpBridge(
+        bridge_mod.CodexBridgeProfile(
+            root_url="https://root.example.test",
+            target_id="hub:sn_bound",
+            task_id="task.bound",
+            access_token="task-access",
+            enabled_tools=["foundation", "get_builder_context"],
+        )
+    )
+    monkeypatch.setattr(bridge, "_client", WrappedClient)
+
+    definitions = {item["name"]: item for item in bridge.tool_definitions()}
+    foundation = bridge.call_tool("foundation", {})
+    context = bridge.call_tool(
+        "get_builder_context",
+        {"level": "mini", "model_text_format": "json"},
+    )
+
+    assert definitions["foundation"]["inputSchema"]["properties"]["model_text_format"]["enum"] == ["min_json"]
+    assert definitions["get_builder_context"]["inputSchema"]["properties"]["model_text_format"]["enum"] == ["min_json"]
+    assert foundation["structuredContent"]["foundation"]["registries"]["large"]
+    assert "registries" not in foundation["content"][0]["text"]
+    assert context["structuredContent"]["audit"]["large"]
+    assert json.loads(context["content"][0]["text"]) == {
+        "builder_context": {
+            "context_id": "builder_context.v1",
+            "descriptor_level": "mini",
+            "next_tools": ["search_descriptors"],
+        }
+    }
+    assert len(foundation["content"][0]["text"]) < 1_000
+    assert len(context["content"][0]["text"]) < 1_000
+
+
 def test_model_text_formats_preserve_canonical_structured_content(monkeypatch) -> None:
     payload = {
         "schema": "adaos.test.overview.v1",

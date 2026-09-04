@@ -233,6 +233,8 @@ def test_root_mcp_foundation_and_contracts(monkeypatch) -> None:
     assert builder_context["authoring_boundaries"]["side_effects"] == "none"
     assert builder_context["redaction_policy"]["secrets"] == "never_include_values"
     assert builder_context["runtime_status"]["available"] is False
+    assert builder_context["nlu_authoring"]["detail_included"] is False
+    assert builder_context["nlu_authoring"]["next_tool"] == "get_nlu_authoring_context"
     assert "architecture_catalog" in builder_context["descriptors"]
     assert "builder_task_schema" in builder_context["descriptors"]
     assert "builder_draft_schema" in builder_context["descriptors"]

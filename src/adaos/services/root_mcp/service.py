@@ -2392,6 +2392,32 @@ def _builder_descriptor_summary(descriptor: Mapping[str, Any], *, include_payloa
     return summary
 
 
+def _builder_nlu_context_summary(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep mini Builder context routable without embedding the NLU workspace."""
+
+    summary = {
+        key: value.get(key)
+        for key in (
+            "available",
+            "status",
+            "plane_id",
+            "webspace_id",
+            "request_locale",
+            "resolved_locale",
+            "fingerprint",
+        )
+        if key in value
+    }
+    summary.update(
+        {
+            "detail_included": False,
+            "detail_reason": "mini_projection",
+            "next_tool": "get_nlu_authoring_context",
+        }
+    )
+    return summary
+
+
 def _handle_builder_context(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
     level = (_text_or_none(arguments.get("level")) or "mini").lower()
@@ -2444,6 +2470,8 @@ def _handle_builder_context(arguments: dict[str, Any], *, dry_run: bool) -> dict
             },
             dry_run=True,
         ).get("context")
+        if level == "mini" and isinstance(nlu_context, Mapping):
+            nlu_context = _builder_nlu_context_summary(nlu_context)
     except Exception as exc:  # pragma: no cover - defensive best-effort context enrichment.
         nlu_context = {
             "available": False,
@@ -2456,7 +2484,7 @@ def _handle_builder_context(arguments: dict[str, Any], *, dry_run: bool) -> dict
         "target_id": target_id,
         "status": "not_requested" if not target_id else "unavailable",
     }
-    if target_id:
+    if target_id and include_live:
         try:
             runtime_status = {
                 "available": True,
