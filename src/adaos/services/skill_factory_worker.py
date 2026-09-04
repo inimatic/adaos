@@ -202,6 +202,18 @@ def _write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _write_json_preserving_style(path: Path, payload: Any, original: str) -> None:
+    newline = "\r\n" if "\r\n" in original else "\r" if "\r" in original else "\n"
+    indent_match = re.search(r"(?:\r\n|\r|\n)([ \t]+)\"", original)
+    indent: int | str = indent_match.group(1) if indent_match else 2
+    rendered = json.dumps(payload, ensure_ascii=False, indent=indent)
+    if newline != "\n":
+        rendered = rendered.replace("\n", newline)
+    if original.endswith(("\n", "\r")):
+        rendered += newline
+    path.write_text(rendered, encoding="utf-8", newline="")
+
+
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -5571,10 +5583,11 @@ class LocalSkillFactoryWorker:
             )
             changed_files.add(manifest_path.relative_to(workspace).as_posix())
 
+        original_webui = webui_path.read_text(encoding="utf-8")
         webui = _read_json(webui_path)
         rewrite_count = self._rewrite_exact_strings(webui, replacements)
         if rewrite_count:
-            _write_json(webui_path, webui)
+            _write_json_preserving_style(webui_path, webui, original_webui)
             changed_files.add(webui_path.relative_to(workspace).as_posix())
         return {
             "schema": "adaos.skill_factory.prototype_resource_receipt.v1",

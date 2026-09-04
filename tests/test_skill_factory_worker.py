@@ -6694,7 +6694,7 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     (workspace / "scenarios" / project_id).mkdir(parents=True)
     (workspace / "skills" / companion).mkdir(parents=True)
     (workspace / "scenarios" / project_id / "webui.json").write_text(
-        json.dumps(webui, ensure_ascii=False, indent=2) + "\n",
+        json.dumps(webui, ensure_ascii=False, indent=4) + "\n",
         encoding="utf-8",
     )
     (workspace / "skills" / companion / "skill.yaml").write_text(
@@ -6748,6 +6748,9 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     realized_webui = json.loads(
         (workspace / "scenarios" / project_id / "webui.json").read_text(encoding="utf-8")
     )
+    assert (
+        workspace / "scenarios" / project_id / "webui.json"
+    ).read_text(encoding="utf-8").splitlines()[1].startswith("    ")
     assert worker._count_exact_string(realized_webui, prototype_type) == 0
     assert worker._count_exact_string(
         realized_webui,
