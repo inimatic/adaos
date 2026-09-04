@@ -251,9 +251,11 @@ def test_subscription_activation_does_not_invent_runtime_skip_policies() -> None
     assert captured["health_policy"] is None
 
 
-def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks() -> None:
+def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured: dict[str, object] = {}
-    component = SimpleNamespace(
+    scenario_component = SimpleNamespace(
         artifact_id="taiga_ui_demo_scenario",
         kind="scenario",
         key="scenario:taiga_ui_demo_scenario",
@@ -261,10 +263,18 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks() 
         digest="sha256:" + "a" * 64,
         source_ref=SimpleNamespace(revision="revision-1"),
     )
+    skill_component = SimpleNamespace(
+        artifact_id="builder_skill",
+        kind="skill",
+        key="skill:builder_skill",
+        version="4.5.6",
+        digest="sha256:" + "d" * 64,
+        source_ref=SimpleNamespace(revision="revision-2"),
+    )
     promoted = SimpleNamespace(
         plan=SimpleNamespace(
             release=SimpleNamespace(
-                components=[component],
+                components=[scenario_component, skill_component],
                 composition_lock=SimpleNamespace(
                     members=(
                         SimpleNamespace(
@@ -344,6 +354,20 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks() 
     service._health_published_workspace_runtime = lambda _lock, component_keys=None: (
         health_scopes.append(component_keys) or {"status": "healthy"}
     )
+    closed_components: list[dict[str, object]] = []
+
+    class _Tickets:
+        def close_publication_gate_failures(self, **kwargs):
+            closed_components.append(dict(kwargs))
+            return [{"ticket_id": f"ticket:{kwargs['component_id']}"}]
+
+    service.ctx = SimpleNamespace(
+        paths=SimpleNamespace(state_dir=lambda: Path("state"))
+    )
+    monkeypatch.setattr(
+        "adaos.services.development_tickets.DevelopmentTicketService",
+        lambda **_kwargs: _Tickets(),
+    )
 
     result = service.promote_artifact_candidate("candidate-1")
 
@@ -363,6 +387,37 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks() 
     assert result["apply_evidence"]["activation"]["operation_id"] == "activation-1"
     assert result["apply_evidence"]["approval"]["actor_id"] == "user:test"
     assert result["name"] == "taiga_ui_demo_scenario"
+    reconciliation = result["development_ticket_reconciliation"]
+    assert reconciliation["status"] == "completed"
+    assert reconciliation["closed_ticket_ids"] == [
+        "ticket:builder_skill",
+        "ticket:taiga_ui_demo_scenario",
+    ]
+    assert [item["component_id"] for item in closed_components] == [
+        "taiga_ui_demo_scenario",
+        "builder_skill",
+    ]
+    assert all(
+        item["actor"] == "artifact_pipeline.promotion"
+        for item in closed_components
+    )
+    assert all(
+        any(
+            ref.get("type") == "builder_trial"
+            and ref.get("status") == "accepted"
+            and ref.get("decision") == "accept"
+            for ref in item["evidence_refs"]
+        )
+        for item in closed_components
+    )
+    assert all(
+        any(
+            ref.get("type") == "project_release"
+            and ref.get("status") == "published"
+            for ref in item["evidence_refs"]
+        )
+        for item in closed_components
+    )
 
 
 def test_workspace_runtime_callbacks_reload_and_verify_exact_lock(

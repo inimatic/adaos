@@ -2852,6 +2852,10 @@ class RootDeveloperService:
                 "operation_ref": promoted.activation.operation_id,
             },
         }
+        ticket_reconciliation = self._close_promoted_publication_gate_failures(
+            promoted=promoted,
+            actor=actor_id,
+        )
         return {
             "ok": True,
             "lifecycle_phase": "workspace",
@@ -2868,7 +2872,95 @@ class RootDeveloperService:
             "commit": None,
             "activation_mode": "package_lock",
             "apply_evidence": apply_evidence,
+            "development_ticket_reconciliation": ticket_reconciliation,
         }
+
+    def _close_promoted_publication_gate_failures(
+        self,
+        *,
+        promoted: Any,
+        actor: str,
+    ) -> dict[str, Any]:
+        """Reconcile component publication debt after exact Workspace activation."""
+
+        candidate = promoted.candidate
+        release = promoted.plan.release
+        accepted_trial = next(
+            (item for item in reversed(candidate.trials) if item.status == "accepted"),
+            None,
+        )
+        evidence_refs = [
+            {
+                "type": "builder_trial",
+                "id": candidate.candidate_id,
+                "status": "accepted",
+                "decision": "accept",
+                "approved_by": actor or None,
+                "observations": (
+                    [dict(item) for item in accepted_trial.observations]
+                    if accepted_trial is not None
+                    else []
+                ),
+            },
+            {
+                "type": "project_release",
+                "id": promoted.pointer.release,
+                "status": "published",
+                "digest": promoted.pointer.release_digest,
+            },
+            {
+                "type": "runtime_activation",
+                "id": promoted.activation.operation_id,
+                "status": "passed",
+            },
+        ]
+        try:
+            from adaos.services.development_tickets import DevelopmentTicketService
+
+            ticket_service = DevelopmentTicketService(
+                state_dir=Path(self.ctx.paths.state_dir())
+            )
+            components: list[dict[str, Any]] = []
+            closed_ticket_ids: list[str] = []
+            for component in release.components:
+                closed = ticket_service.close_publication_gate_failures(
+                    component_type=component.kind,
+                    component_id=component.artifact_id,
+                    actor="artifact_pipeline.promotion",
+                    evidence_refs=evidence_refs,
+                    resolved_by_version=component.version,
+                    resolved_by_overlay=candidate.candidate_id,
+                )
+                ticket_ids = [
+                    str(item.get("ticket_id") or "").strip()
+                    for item in closed
+                    if str(item.get("ticket_id") or "").strip()
+                ]
+                closed_ticket_ids.extend(ticket_ids)
+                components.append(
+                    {
+                        "component_ref": component.key,
+                        "version": component.version,
+                        "closed_ticket_ids": ticket_ids,
+                    }
+                )
+            return {
+                "status": "completed",
+                "closed_ticket_ids": sorted(set(closed_ticket_ids)),
+                "components": components,
+                "evidence_refs": evidence_refs,
+            }
+        except Exception as exc:
+            logger.warning(
+                "Promoted candidate %s but failed to reconcile publication gate tickets: %s",
+                candidate.candidate_id,
+                exc,
+            )
+            return {
+                "status": "failed",
+                "error": str(exc),
+                "evidence_refs": evidence_refs,
+            }
 
     def publish_project_candidate_source(
         self,
