@@ -465,6 +465,11 @@ def push(
             repository=repository or f"adaos-dev:{subnet_id}:{node_id}",
             forge="content-addressed-dev",
             workspace_root=workspace_root,
+            lock_workspace_root=(
+                Path(service.workspace_root)
+                if getattr(service, "workspace_root", None) is not None
+                else None
+            ),
             builder="adaos.dev.project.push",
         )
         payload["source_revision"] = source["source_revision"]

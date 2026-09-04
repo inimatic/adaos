@@ -115,10 +115,15 @@ def _build_project_release(
     forge: str,
     workspace_root: Path | None,
     builder: str,
+    lock_workspace_root: Path | None = None,
 ) -> dict[str, object]:
     workspace, artifact_root = _roots(workspace_root)
     _assert_project_source_clean(workspace, project_id)
-    active_workspace_lock = load_active_workspace_lock(workspace)
+    active_workspace_lock = load_active_workspace_lock(
+        Path(lock_workspace_root).expanduser().resolve()
+        if lock_workspace_root is not None
+        else workspace
+    )
     result = build_workspace_project_release(
         project_dir=workspace / "projects" / project_id,
         workspace_root=workspace,

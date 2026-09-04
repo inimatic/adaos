@@ -201,7 +201,8 @@ def test_dev_project_push_uses_content_revision_and_can_stay_local(
     monkeypatch,
     tmp_path,
 ) -> None:
-    service = SimpleNamespace()
+    installed_workspace = tmp_path / "installed-workspace"
+    service = SimpleNamespace(workspace_root=installed_workspace)
     captured: dict[str, object] = {}
     monkeypatch.setattr(dev_project, "_service", lambda: service)
     monkeypatch.setattr(
@@ -244,6 +245,7 @@ def test_dev_project_push_uses_content_revision_and_can_stay_local(
     assert result.exit_code == 0, result.output
     assert captured["revision"] == _source()["source_revision"]
     assert captured["workspace_root"] == tmp_path
+    assert captured["lock_workspace_root"] == installed_workspace
     assert captured["forge"] == "content-addressed-dev"
     assert '"publication_stage": "alpha"' in result.output
     assert '"publication"' not in result.output
