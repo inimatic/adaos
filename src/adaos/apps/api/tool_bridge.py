@@ -56,8 +56,6 @@ _UI_NAVIGATION_TOOL_NAMES: tuple[str, ...] = (
 _WORKSPACE_AUTOSYNC_EXEMPT_TOOL_PREFIXES: tuple[str, ...] = (
     "slideshow_skill:",
 )
-_BUILDER_DEV_CONTROL_SKILLS = frozenset({"builder_sdk_control_skill"})
-_BUILDER_HOST_SCENARIOS = frozenset({"builder", "prompt_engineer_scenario"})
 _DECLARED_SIDE_EFFECT_RISK_CLASS: dict[str, str] = {
     "safe": "safe",
     "none": "safe",
@@ -1105,20 +1103,6 @@ def _should_autosync_workspace_runtime(*, tool_name: str) -> bool:
     return True
 
 
-def _builder_host_uses_dev_runtime(skill_name: str, payload: Mapping[str, Any]) -> bool:
-    if str(skill_name or "").strip() not in _BUILDER_DEV_CONTROL_SKILLS:
-        return False
-    meta = payload.get("_meta") if isinstance(payload.get("_meta"), Mapping) else {}
-    current_scenario = str(
-        payload.get("current_scenario")
-        or payload.get("scenario_id")
-        or meta.get("current_scenario")
-        or meta.get("scenario_id")
-        or ""
-    ).strip()
-    return current_scenario in _BUILDER_HOST_SCENARIOS
-
-
 def _workspace_runtime_lock(skill_name: str) -> threading.RLock:
     key = str(skill_name or "").strip()
     with _WORKSPACE_RUNTIME_LOCKS_LOCK:
@@ -1788,12 +1772,9 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
         context_webspace_id = str(routing_context.get("webspace_id") or "").strip()
         if context_webspace_id:
             routing_payload["webspace_id"] = context_webspace_id
-    implicit_dev_webspace = (not body.dev) and (
-        _builder_host_uses_dev_runtime(skill_name, routing_payload)
-        or await asyncio.to_thread(
-            _webspace_uses_dev_runtime,
-            routing_payload,
-        )
+    implicit_dev_webspace = (not body.dev) and await asyncio.to_thread(
+        _webspace_uses_dev_runtime,
+        routing_payload,
     )
 
     mgr = await _skill_manager_for_context(ctx)

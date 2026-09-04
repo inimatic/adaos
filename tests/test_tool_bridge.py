@@ -673,6 +673,9 @@ def test_webspace_runtime_resolution_uses_registered_kind(monkeypatch) -> None:
 
     assert tool_bridge_module._webspace_uses_dev_runtime({"webspace_id": "dev2-dev"}) is True
     assert tool_bridge_module._webspace_uses_dev_runtime({"webspace_id": "desktop"}) is False
+    assert tool_bridge_module._webspace_uses_dev_runtime(
+        {"webspace_id": "desktop", "_meta": {"current_scenario": "builder"}}
+    ) is False
 
 
 def test_webspace_runtime_resolution_uses_http_context(monkeypatch) -> None:
@@ -691,20 +694,6 @@ def test_webspace_runtime_resolution_uses_http_context(monkeypatch) -> None:
         {"webspace_id": "builder-sdk-control-dev"},
     ) is True
     assert requested == ["builder-sdk-control-dev"]
-
-
-def test_builder_control_runtime_resolution_is_limited_to_builder_host() -> None:
-    payload = {"webspace_id": "desktop", "_meta": {"current_scenario": "builder"}}
-
-    assert tool_bridge_module._builder_host_uses_dev_runtime(
-        "builder_sdk_control_skill",
-        payload,
-    ) is True
-    assert tool_bridge_module._builder_host_uses_dev_runtime("notebook_skill", payload) is False
-    assert tool_bridge_module._builder_host_uses_dev_runtime(
-        "builder_sdk_control_skill",
-        {"webspace_id": "desktop", "_meta": {"current_scenario": "web_desktop"}},
-    ) is False
 
 
 def test_call_tool_infers_dev_runtime_from_registered_webspace(monkeypatch) -> None:
