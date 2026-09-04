@@ -24,6 +24,7 @@ from adaos.services.skill_factory_sources import (
     SourceSnapshotError,
     capture_source_snapshot,
     materialize_source_snapshot,
+    source_tree_digest,
     verify_source_snapshot,
 )
 from adaos.services.skill_factory_worker import (
@@ -842,6 +843,63 @@ def test_projected_snapshot_activation_preserves_owner_artifacts(
         encoding="utf-8"
     ) == "owner evidence"
     assert (skill / "prompt_state.json").is_file()
+
+
+def test_filewise_artifact_activation_rolls_back_all_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    staged_rows: list[tuple[Path, Path, Path]] = []
+    expected: dict[Path, tuple[str, frozenset[str]]] = {}
+    for index in range(2):
+        current = tmp_path / "dev" / f"component-{index}"
+        staged = tmp_path / "staged" / f"component-{index}"
+        current.mkdir(parents=True)
+        staged.mkdir(parents=True)
+        (current / "value.txt").write_text(f"before-{index}", encoding="utf-8")
+        (staged / "value.txt").write_text(f"after-{index}", encoding="utf-8")
+        staged_rows.append((staged, current, tmp_path / f"unused-{index}"))
+        expected[current] = (source_tree_digest(current), frozenset())
+
+    original_replace = worker_module.replace_with_retry
+    apply_calls = 0
+
+    def fail_second_apply(source: Path, target: Path, *, attempts: int = 8) -> None:
+        nonlocal apply_calls
+        if ".apply.transaction-test.tmp" in source.name:
+            apply_calls += 1
+            if apply_calls == 2:
+                raise PermissionError("simulated live-reader lock")
+        original_replace(source, target, attempts=attempts)
+
+    monkeypatch.setattr(worker_module, "replace_with_retry", fail_second_apply)
+
+    with pytest.raises(PermissionError, match="live-reader lock"):
+        worker._replace_artifacts_filewise(
+            staged_rows,
+            expected_by_destination=expected,
+            transaction_id="transaction-test",
+        )
+
+    assert (tmp_path / "dev" / "component-0" / "value.txt").read_text(
+        encoding="utf-8"
+    ) == "before-0"
+    assert (tmp_path / "dev" / "component-1" / "value.txt").read_text(
+        encoding="utf-8"
+    ) == "before-1"
+    assert not (
+        tmp_path
+        / "state"
+        / "skill_factory"
+        / "activation_backups"
+        / "transaction-test"
+    ).exists()
 
 
 def _scenario(root: Path, scenario_id: str) -> Path:

@@ -8105,6 +8105,14 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 self._cleanup_generated_files(staged)
                 staged_rows.append((staged, destination, backup))
 
+            if os.name == "nt":
+                self._replace_artifacts_filewise(
+                    staged_rows,
+                    expected_by_destination=expected_by_destination,
+                    transaction_id=transaction_id,
+                )
+                return
+
             for staged, destination, backup in staged_rows:
                 expected_digest, excluded_dirs = expected_by_destination.get(
                     destination, ("", frozenset())
@@ -8147,6 +8155,132 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     shutil.rmtree(staged, ignore_errors=True)
                 if backup.exists():
                     shutil.rmtree(backup, ignore_errors=True)
+
+    def _replace_artifacts_filewise(
+        self,
+        staged_rows: Sequence[tuple[Path, Path, Path]],
+        *,
+        expected_by_destination: Mapping[Path, tuple[str, frozenset[str]]],
+        transaction_id: str,
+    ) -> None:
+        """Apply source trees without renaming live directories on Windows."""
+
+        backup_root = (
+            self.state_dir
+            / "skill_factory"
+            / "activation_backups"
+            / transaction_id
+        )
+        journal: list[tuple[Path, Path | None]] = []
+
+        def files(root: Path) -> dict[str, Path]:
+            return {
+                path.relative_to(root).as_posix(): path
+                for path in root.rglob("*")
+                if path.is_file()
+            }
+
+        try:
+            for _staged, destination, _backup in staged_rows:
+                expected_digest, excluded_dirs = expected_by_destination.get(
+                    destination,
+                    ("", frozenset()),
+                )
+                if not expected_digest or source_tree_digest(
+                    destination,
+                    excluded_dirs=excluded_dirs,
+                ) != expected_digest:
+                    raise SourceSnapshotError(
+                        f"DEV source changed during result activation: {destination.name}; "
+                        "the transaction was rolled back"
+                    )
+
+            for row_index, (staged, destination, _backup) in enumerate(staged_rows):
+                desired = files(staged)
+                current = files(destination)
+                for relative in sorted(set(desired) | set(current)):
+                    source_file = desired.get(relative)
+                    destination_file = destination / Path(relative)
+                    current_file = current.get(relative)
+                    if (
+                        source_file is not None
+                        and current_file is not None
+                        and source_file.read_bytes() == current_file.read_bytes()
+                    ):
+                        continue
+                    backup_file: Path | None = None
+                    if current_file is not None:
+                        backup_file = backup_root / str(row_index) / Path(relative)
+                        backup_file.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(current_file, backup_file)
+                    journal.append((destination_file, backup_file))
+                    if source_file is None:
+                        destination_file.unlink()
+                        continue
+                    destination_file.parent.mkdir(parents=True, exist_ok=True)
+                    temporary = destination_file.parent / (
+                        f".{destination_file.name}.apply.{transaction_id}.tmp"
+                    )
+                    try:
+                        shutil.copy2(source_file, temporary)
+                        replace_with_retry(temporary, destination_file)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+
+                for directory in sorted(
+                    (path for path in destination.rglob("*") if path.is_dir()),
+                    key=lambda path: len(path.parts),
+                    reverse=True,
+                ):
+                    try:
+                        directory.rmdir()
+                    except OSError:
+                        pass
+
+                _old_digest, excluded_dirs = expected_by_destination.get(
+                    destination,
+                    ("", frozenset()),
+                )
+                desired_digest = source_tree_digest(
+                    staged,
+                    excluded_dirs=excluded_dirs,
+                )
+                actual_digest = source_tree_digest(
+                    destination,
+                    excluded_dirs=excluded_dirs,
+                )
+                if actual_digest != desired_digest:
+                    raise SourceSnapshotError(
+                        f"DEV result activation digest mismatch: {destination.name}"
+                    )
+        except Exception as apply_error:
+            rollback_errors: list[str] = []
+            for destination_file, backup_file in reversed(journal):
+                try:
+                    if backup_file is None:
+                        destination_file.unlink(missing_ok=True)
+                        continue
+                    destination_file.parent.mkdir(parents=True, exist_ok=True)
+                    temporary = destination_file.parent / (
+                        f".{destination_file.name}.rollback.{transaction_id}.tmp"
+                    )
+                    try:
+                        shutil.copy2(backup_file, temporary)
+                        replace_with_retry(temporary, destination_file)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+                except Exception as exc:
+                    rollback_errors.append(
+                        f"{destination_file}: {type(exc).__name__}: {exc}"
+                    )
+            if rollback_errors:
+                raise RuntimeError(
+                    f"DEV result activation failed ({apply_error}); "
+                    f"rollback also failed: {rollback_errors}"
+                ) from apply_error
+            raise
+        finally:
+            shutil.rmtree(backup_root, ignore_errors=True)
 
 
 __all__ = ["CodexRunResult", "LocalSkillFactoryWorker", "SubprocessCodexExecutor", "TaskExecutionCancelled"]
