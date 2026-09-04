@@ -1919,7 +1919,7 @@ class ArtifactPublicationService:
                 if release_validation_evidence is not None
                 else (dict(validation_evidence),)
             ),
-            active_workspace_lock=None,
+            active_workspace_lock=active_lock,
         )
         plan = built.plan
         if plan.release.project_id != str(project_id or "").strip():

@@ -43,7 +43,6 @@ class _Remote:
         self.attestation_sets: dict[str, ReleaseAttestationSet] = {}
         self.attestation_binding_writes = 0
         self.fail_after_attestation_binding_once = False
-
     def put_release(self, plan: ReleasePlan, archives: dict[str, bytes]) -> None:
         self.archives.update(archives)
         self.releases.put_release(plan)
@@ -103,6 +102,52 @@ class _Remote:
 
     def tree_revision(self, source_ref: ArtifactSourceRef) -> str:
         return self.tree
+
+
+def test_project_candidate_build_uses_active_workspace_lock(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=_Remote(tmp_path / "remote"),
+    )
+    active_lock = object()
+    captured: dict[str, object] = {}
+
+    class BuildStopped(RuntimeError):
+        pass
+
+    def stop_after_capture(**kwargs):
+        captured.update(kwargs)
+        raise BuildStopped
+
+    monkeypatch.setattr(
+        "adaos.services.artifact_pipeline.publication.load_workspace_lock",
+        lambda _path: active_lock,
+    )
+    monkeypatch.setattr(
+        "adaos.services.artifact_pipeline.publication.build_workspace_project_release",
+        stop_after_capture,
+    )
+
+    with pytest.raises(BuildStopped):
+        service.prepare_project_candidate(
+            project_id="kanban",
+            project_dir=tmp_path / "source" / "projects" / "kanban",
+            source_workspace_root=tmp_path / "source",
+            source_ref=ArtifactSourceRef(
+                forge="content-addressed-dev",
+                repository="adaos-dev:test:node",
+                revision="a" * 40,
+                path_scope=("scenarios/kanban/",),
+            ),
+            change_ids=("change-1",),
+            validation_evidence={"status": "passed"},
+        )
+
+    assert captured["active_workspace_lock"] is active_lock
 
 
 def _source() -> ArtifactSourceRef:
