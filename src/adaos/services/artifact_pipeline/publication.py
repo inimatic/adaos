@@ -2018,7 +2018,13 @@ class ArtifactPublicationService:
                 "source_tree": existing_candidate.source_tree,
                 "change_ids": tuple(sorted(existing_candidate.change_ids)),
             }
-            if observed_identity != expected_identity:
+            expected_change_ids = set(expected_identity.pop("change_ids"))
+            observed_change_ids = set(observed_identity.pop("change_ids"))
+            compatible_change_ids = bool(observed_change_ids) and (
+                observed_change_ids <= expected_change_ids
+                or expected_change_ids <= observed_change_ids
+            )
+            if observed_identity != expected_identity or not compatible_change_ids:
                 raise PublicationError(
                     "existing Project candidate identity differs from the prepared release"
                 )

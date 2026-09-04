@@ -384,6 +384,36 @@ lifecycle:
     assert replayed.candidate == prepared.candidate
     assert replayed.trial_activation == prepared.trial_activation
 
+    expanded_replay = service.prepare_project_candidate(
+        project_id="recipes_project",
+        project_dir=project_dir,
+        source_workspace_root=source_workspace,
+        source_ref=verification_source_ref,
+        release_source_ref=release_source_ref,
+        release_validation_evidence=release_evidence,
+        change_ids=("change-project-1", "change-project-checkpoint"),
+        validation_evidence={
+            "status": "passed",
+            "checkpoint_package_digest": checkpoint.ref.digest,
+            "checkpoint_component_ref": "skill:shopping_skill",
+        },
+        idempotency_key="expanded-builder-change-set",
+    )
+    assert expanded_replay.candidate == prepared.candidate
+    assert expanded_replay.trial_activation == prepared.trial_activation
+
+    with pytest.raises(PublicationError, match="candidate identity differs"):
+        service.prepare_project_candidate(
+            project_id="recipes_project",
+            project_dir=project_dir,
+            source_workspace_root=source_workspace,
+            source_ref=verification_source_ref,
+            release_source_ref=release_source_ref,
+            release_validation_evidence=release_evidence,
+            change_ids=("unrelated-change",),
+            validation_evidence={"status": "passed"},
+        )
+
     legacy_candidate = replace(
         prepared.candidate,
         verification_source_ref=None,
