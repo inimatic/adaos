@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.prototype_resource.v1",
+  "title": "AdaOS Builder Prototype Resource Materialization",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "project_ref",
+    "change_id",
+    "revision",
+    "webui_digest",
+    "resource_definition",
+    "data_definition"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.builder.prototype_resource.v1" },
+    "project_ref": {
+      "type": "string",
+      "pattern": "^(project|scenario|skill):[A-Za-z0-9_.-]{1,160}$"
+    },
+    "change_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "revision": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "webui_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "resource_definition": { "type": "object" },
+    "data_definition": { "type": "object" }
+  }
+}

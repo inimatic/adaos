@@ -16,6 +16,7 @@ from adaos.services.development_tickets import DevelopmentTicketService
 from adaos.services.development_feedback import DevelopmentFeedbackService
 from adaos.services.id_gen import new_id
 from adaos.services.runtime_paths import current_state_dir
+from adaos.services.resources.prototype import PrototypeResourceConflict, PrototypeResourceService
 
 
 RESOURCE_DEFINITION_SCHEMA = "adaos.resource.definition.v1"
@@ -692,6 +693,7 @@ class ResourceWorkbenchService:
     ticket_service: DevelopmentTicketService | None = None
     feedback_service: DevelopmentFeedbackService | None = None
     context_service: ContextControlService | None = None
+    prototype_service: PrototypeResourceService | None = None
 
     @property
     def root(self) -> Path:
@@ -724,6 +726,7 @@ class ResourceWorkbenchService:
                 _demo_metric_note_definition(),
                 _demo_metric_event_definition(),
                 *_context_resource_definitions(),
+                *self._prototypes().definitions(),
             ],
             key=lambda item: item["resource_type"],
         )
@@ -783,7 +786,13 @@ class ResourceWorkbenchService:
             self._append_trace(trace)
             raise ValueError(f"unsupported resource query filters: {', '.join(unsupported)}")
         try:
-            items = self._query_items(resource_type, filters=filters, search=search, limit=request.get("limit"))
+            items = self._query_items(
+                resource_type,
+                filters=filters,
+                search=search,
+                sort=request.get("sort"),
+                limit=request.get("limit"),
+            )
             trace = {
                 **trace_base,
                 "status": "completed",
@@ -951,8 +960,27 @@ class ResourceWorkbenchService:
     def _contexts(self) -> ContextControlService:
         return self.context_service or ContextControlService(state_dir=self.state_dir)
 
-    def _query_items(self, resource_type: str, *, filters: Mapping[str, Any], search: str, limit: Any) -> list[dict[str, Any]]:
+    def _prototypes(self) -> PrototypeResourceService:
+        return self.prototype_service or PrototypeResourceService(state_dir=self.state_dir)
+
+    def _query_items(
+        self,
+        resource_type: str,
+        *,
+        filters: Mapping[str, Any],
+        search: str,
+        sort: Sequence[Any] | None,
+        limit: Any,
+    ) -> list[dict[str, Any]]:
         max_items = int(limit) if isinstance(limit, int) else None
+        if resource_type.startswith("prototype."):
+            return self._prototypes().query(
+                resource_type,
+                filters=filters,
+                search=search,
+                sort=sort,
+                limit=max_items,
+            )
         if resource_type == "adaos.dev.ticket":
             target_tokens = []
             for key in ("target_ref", "project_id", "scenario_id", "skill_id", "modal_id", "component"):
@@ -1053,6 +1081,17 @@ class ResourceWorkbenchService:
         raise ValueError(f"unknown resource_type: {resource_type}")
 
     def _operate(self, resource_type: str, operation_id: str, request: Mapping[str, Any]) -> dict[str, Any]:
+        if resource_type.startswith("prototype."):
+            try:
+                return self._prototypes().operate(
+                    resource_type,
+                    operation_id,
+                    record_id=_text(request.get("record_id")),
+                    payload=_mapping(request.get("payload")),
+                    expected_revision=request.get("expected_revision"),
+                )
+            except PrototypeResourceConflict as exc:
+                raise ResourceConflict(str(exc)) from exc
         if resource_type == "adaos.dev.ticket":
             return self._operate_dev_ticket(operation_id, request)
         if resource_type == "adaos.development.feedback":

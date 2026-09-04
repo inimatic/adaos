@@ -28,6 +28,10 @@
     "authority": { "type": "object", "additionalProperties": true },
     "scope": { "type": "object", "additionalProperties": true },
     "record_schema_ref": { "type": "string", "minLength": 1 },
+    "record_schema": {
+      "type": "object",
+      "description": "Inline JSON Schema for disposable or dynamically declared providers. Durable providers should prefer record_schema_ref."
+    },
     "query": {
       "type": "object",
       "additionalProperties": true,
