@@ -112,7 +112,7 @@ Project/Application identity collapse.
 - [ ] `[must]` `APP1-04` Remove Application inventory authority from
   Infrastate; expose a technical deep link from Application detail to component
   and runtime diagnostics.
-- [ ] `[must]` `APP1-05` Implement aggregate install/update/remove planning over
+- [x] `[must]` `APP1-05` Implement aggregate install/update/remove planning over
   one exact ApplicationRelease and the transactional Artifact Pipeline.
 - [x] `[must]` `APP1-06` Add component reference accounting for bound/shared
   lifecycle, active runtime leases, rollback holds, uncertain operations, and

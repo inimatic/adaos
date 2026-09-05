@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -596,7 +597,15 @@ def test_default_runtimes_share_durable_store_and_publish_local_inventory(monkey
     assert distributed.service_invoker is not None
     assert deployment.admission_policy is not None
     assert deployment.releases.fallback is release_fallback
+    from adaos.services.applications import get_application_service, register_application_executor
+    from adaos.services.applications.deployment_executor import ApplicationDeploymentExecutor
 
+    assert isinstance(
+        get_application_service(Path(ctx.paths.state_dir())).executor,
+        ApplicationDeploymentExecutor,
+    )
+
+    register_application_executor(None)
     register_project_deployment_authority(None)
     register_project_deployment_runtime(None)
     register_distributed_runtime(None)

@@ -6,7 +6,6 @@ from typing import Any, Callable, Mapping
 
 from adaos.domain.application import (
     Application,
-    ApplicationContractError,
     ApplicationInstallation,
     ApplicationOperation,
     ApplicationRelease,
@@ -425,6 +424,9 @@ class ApplicationService:
             "schema": "adaos.application.operation_plan.v1",
             "application_id": application_id,
             "legacy_project_id": application.legacy_project_id,
+            "actor_ref": actor_ref,
+            "subnet_ref": subnet_ref,
+            "idempotency_key": idempotency_key,
             "kind": operation_kind,
             "expected_revision": expected_revision,
             "release_digest": release_digest,

@@ -584,6 +584,15 @@ Shared components remain while any installation, active runtime lease,
 rollback hold, or uncertain operation references them. User/domain data follows
 its own `retain`, `archive`, or `purge-with-approval` policy.
 
+The preparatory implementation executes each reviewed Application plan through
+the existing `ProjectDeploymentRuntime`; Applications does not own a parallel
+component installer. Canonical local data is under
+`state/applications/data/<application-id>`, outside both runtime trees. Update
+and snapshot-then-delete operations create bounded, content-verified snapshots
+under `state/applications/data_snapshots`; deterministic deployment failure
+restores the prior desired deployment and snapshot, while an uncertain outcome
+remains fenced for reconciliation instead of attempting an unsafe rollback.
+
 ## Data Migration and Rollback
 
 Semantic version alone does not authorize a migration. Every release declares

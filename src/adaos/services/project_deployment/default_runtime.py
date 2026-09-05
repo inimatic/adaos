@@ -841,6 +841,12 @@ def configure_default_distributed_runtimes(
             execute_service_tool,
             node_id=str(conf.node_id),
         )
+        from adaos.services.applications import register_application_executor
+        from adaos.services.applications.deployment_executor import ApplicationDeploymentExecutor
+
+        register_application_executor(
+            ApplicationDeploymentExecutor(runtime=deployment, state_dir=state_dir)
+        )
         _configured_key = key
         _configured_authoritative = bool(authoritative)
         return {

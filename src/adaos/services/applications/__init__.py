@@ -34,12 +34,20 @@ from .report_relay import (
     DevelopmentReportRelayError,
     DurableDevelopmentReportRelay,
 )
+from .deployment_executor import (
+    ApplicationDataSnapshotStore,
+    ApplicationDeploymentExecutor,
+    ApplicationDeploymentExecutorError,
+)
 
 __all__ = [
     "ApplicationChannelConflict",
     "ApplicationExecutor",
     "ApplicationDistributionError",
     "ApplicationDistributionService",
+    "ApplicationDataSnapshotStore",
+    "ApplicationDeploymentExecutor",
+    "ApplicationDeploymentExecutorError",
     "ApplicationPlanConflict",
     "ApplicationRevisionConflict",
     "ApplicationRetentionError",
