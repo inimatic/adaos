@@ -79,6 +79,8 @@ class WebspaceRebuildService:
         materialization_identity: Mapping[str, Any] | None = None,
         scenario_content_override: Mapping[str, Any] | None = None,
         skill_source_mode: str | None = None,
+        skill_decls_snapshot: Any = None,
+        skill_decls_fingerprint: str | None = None,
     ) -> dict[str, Any]:
         """
         Single semantic rebuild primitive for the current runtime.
@@ -426,6 +428,11 @@ class WebspaceRebuildService:
                     payload_rebuild_kwargs["scenario_content_override"] = scenario_content_override
                 if str(skill_source_mode or "").strip():
                     payload_rebuild_kwargs["skill_source_mode"] = str(skill_source_mode).strip()
+                if skill_decls_snapshot is not None:
+                    payload_rebuild_kwargs["skill_decls_snapshot"] = skill_decls_snapshot
+                    payload_rebuild_kwargs["skill_decls_fingerprint"] = str(
+                        skill_decls_fingerprint or ""
+                    ).strip()
                 if str(request_id or "").strip():
                     payload_rebuild_kwargs["request_id"] = request_id
                 rebuild_coro = runtime.resolve_materialized_payload_async(webspace_id, **payload_rebuild_kwargs)

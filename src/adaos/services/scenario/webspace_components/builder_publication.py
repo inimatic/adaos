@@ -147,6 +147,76 @@ class WebspaceBuilderPublicationService:
             raise ValueError("Builder publication package is unavailable or invalid") from exc
         return dict(payload) if isinstance(payload, Mapping) else None
 
+    def trial_workspace_for_preview(
+        self,
+        scenario_id: str,
+        *,
+        revision: str | None,
+        operations: BuilderPublicationOperations,
+    ) -> tuple[dict[str, Any], Path]:
+        from adaos.services.artifact_pipeline.trial_activation import (
+            TrialActivationStore,
+            legacy_runtime_trial_workspace,
+            trial_workspace_root,
+        )
+        from adaos.services.runtime_paths import current_state_dir
+
+        activations = TrialActivationStore(
+            current_state_dir() / "artifact_pipeline" / "trial-activations"
+        )
+        activation = activations.find_for_target(
+            scenario_id=scenario_id,
+            revision=str(revision or "").strip() or None,
+        )
+        if activation is None:
+            raise ValueError(
+                f"Builder Trial activation is unavailable: "
+                f"{scenario_id}@{str(revision or '').strip() or 'current'}"
+            )
+        runtime_binding = (
+            activation.get("runtime_binding")
+            if isinstance(activation.get("runtime_binding"), Mapping)
+            else {}
+        )
+        candidate_ref = (
+            activation.get("candidate_ref")
+            if isinstance(activation.get("candidate_ref"), Mapping)
+            else {}
+        )
+        candidate_id = str(candidate_ref.get("candidate_id") or "").strip()
+        if not candidate_id:
+            raise ValueError("Builder Trial activation has no Candidate identity")
+        installed_scenario = operations.scenarios_loader.scenario_root_for_space(
+            scenario_id, "workspace"
+        )
+        workspace_root = installed_scenario.parent.parent
+        canonical_root = trial_workspace_root(workspace_root, candidate_id).resolve()
+        legacy_root = legacy_runtime_trial_workspace(
+            workspace_root, candidate_id
+        ).resolve()
+        bound_path = str(runtime_binding.get("path") or "").strip()
+        bound_root = Path(bound_path).resolve() if bound_path else canonical_root
+        if bound_root not in {canonical_root, legacy_root}:
+            raise ValueError("Builder Trial activation points outside its governed root")
+        canonical_contract = bool(
+            bound_root == canonical_root
+            and str(runtime_binding.get("kind") or "").strip()
+            == "isolated_trial_workspace"
+            and str(runtime_binding.get("authority") or "").strip()
+            == "immutable_candidate"
+        )
+        legacy_contract = bool(
+            bound_root == legacy_root
+            and str(runtime_binding.get("kind") or "").strip()
+            in {"", "derived_workspace_runtime"}
+        )
+        if not canonical_contract and not legacy_contract:
+            raise ValueError("Builder Trial activation has no trusted source authority")
+        selected_root = canonical_root if canonical_root.is_dir() else bound_root
+        if not selected_root.is_dir():
+            raise ValueError("Builder Trial Workspace is unavailable")
+        return dict(activation), selected_root
+
     def preview_content_override(
         self,
         scenario_id: str,
@@ -159,7 +229,12 @@ class WebspaceBuilderPublicationService:
         stage_token = str(stage or "").strip().lower()
         if stage_token not in {"prototype", "automation", "trial", "publication"}:
             return None, None
-        source_space = "workspace" if stage_token in {"trial", "publication"} else "dev"
+        source_space = {
+            "prototype": "dev",
+            "automation": "dev",
+            "trial": "trial",
+            "publication": "workspace",
+        }[stage_token]
         content: Mapping[str, Any] | None = None
         revision_token = str(revision or "").strip()
         if stage_token == "prototype" and revision_token:
@@ -196,30 +271,12 @@ class WebspaceBuilderPublicationService:
                 snapshot_payload = None
             content = snapshot_payload if isinstance(snapshot_payload, Mapping) else None
         elif stage_token == "trial":
-            from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
-            from adaos.services.runtime_paths import current_state_dir
-
-            activations = TrialActivationStore(
-                current_state_dir() / "artifact_pipeline" / "trial-activations"
-            )
-            activation = activations.find_for_target(
-                scenario_id=scenario_id,
+            _, selected_root = self.trial_workspace_for_preview(
+                scenario_id,
                 revision=revision_token or None,
+                operations=operations,
             )
-            if activation is None:
-                raise ValueError(
-                    f"Builder Trial activation is unavailable: {scenario_id}@{revision_token or 'current'}"
-                )
-            runtime_binding = (
-                activation.get("runtime_binding")
-                if isinstance(activation.get("runtime_binding"), Mapping)
-                else {}
-            )
-            scenario_root = (
-                Path(str(runtime_binding.get("path") or ""))
-                / "scenarios"
-                / scenario_id
-            )
+            scenario_root = selected_root / "scenarios" / scenario_id
             manifest: Mapping[str, Any] = {}
             manifest_path = scenario_root / "scenario.yaml"
             if manifest_path.is_file():
@@ -245,6 +302,10 @@ class WebspaceBuilderPublicationService:
                 if isinstance(loaded, Mapping):
                     content = loaded
                     break
+        if stage_token == "trial" and not isinstance(content, Mapping):
+            raise ValueError(
+                f"Builder Trial package content is unavailable: {scenario_id}"
+            )
         if not isinstance(content, Mapping):
             content = operations.scenarios_loader.read_content(
                 scenario_id, space=source_space
@@ -358,6 +419,7 @@ class WebspaceBuilderPublicationService:
         requested_scenario = str(scenario_id or "").strip()
         if not requested_scenario:
             raise ValueError("scenario_id is required")
+        preview_stage_token = str(preview_stage or "").strip().lower()
 
         source_webspace_id = str(
             (event_payload or {}).get("source_webspace_id") or ""
@@ -412,13 +474,52 @@ class WebspaceBuilderPublicationService:
                 prefer_manifest_home_before_current=False,
             )
         )
-        resolved_scenario_id, scenario_resolution, preflight = (
-            operations.preflight_validated_scenario(
+        if preview_stage_token == "trial" and resolved_scenario_id:
+            trial_activation, trial_workspace = self.trial_workspace_for_preview(
                 resolved_scenario_id,
-                source_mode=state.source_mode,
-                resolution=scenario_resolution or "builder_revision",
+                revision=revision,
+                operations=operations,
             )
-        )
+            trial_scenario = trial_workspace / "scenarios" / resolved_scenario_id
+            if not trial_scenario.is_dir():
+                raise ValueError(
+                    f"Builder Trial scenario is unavailable: {resolved_scenario_id}"
+                )
+            candidate_ref = (
+                trial_activation.get("candidate_ref")
+                if isinstance(trial_activation.get("candidate_ref"), Mapping)
+                else {}
+            )
+            release_ref = (
+                trial_activation.get("release_ref")
+                if isinstance(trial_activation.get("release_ref"), Mapping)
+                else {}
+            )
+            candidate_id = str(candidate_ref.get("candidate_id") or "").strip()
+            release_digest = str(
+                candidate_ref.get("release_digest")
+                or release_ref.get("digest")
+                or candidate_ref.get("package_digest")
+                or candidate_id
+            ).strip()
+            source_fingerprint = f"trial:{release_digest}"
+            scenario_resolution = "builder_trial_candidate"
+            preflight = {
+                "ok": True,
+                "scenario_id": resolved_scenario_id,
+                "resolution": scenario_resolution,
+                "source": "immutable_trial_workspace",
+                "candidate_id": candidate_id,
+                "path": str(trial_scenario),
+            }
+        else:
+            resolved_scenario_id, scenario_resolution, preflight = (
+                operations.preflight_validated_scenario(
+                    resolved_scenario_id,
+                    source_mode=state.source_mode,
+                    resolution=scenario_resolution or "builder_revision",
+                )
+            )
         if not resolved_scenario_id:
             return {
                 "ok": False,
@@ -486,6 +587,22 @@ class WebspaceBuilderPublicationService:
             label=preview_label,
             operations=operations,
         )
+        skill_decls_snapshot = None
+        skill_decls_fingerprint = None
+        if str(preview_stage or "").strip().lower() == "trial":
+            _, trial_workspace = self.trial_workspace_for_preview(
+                resolved_scenario_id,
+                revision=revision,
+                operations=operations,
+            )
+            trial_runtime = operations.scenario_runtime_type()
+            skill_decls_snapshot = trial_runtime._collect_skill_decls_from_root(
+                trial_workspace / "skills"
+            )
+            skill_decls_fingerprint = str(
+                getattr(trial_runtime, "_last_skill_decls_fingerprint", "") or ""
+            ).strip()
+            skill_source_mode = None
         request_id = f"builder-revision-{identity['key_hash']}-{int(time.time() * 1000)}"
         trace = operations.payload_command_trace(event_payload or {})
         operations.logger.info(
@@ -513,6 +630,8 @@ class WebspaceBuilderPublicationService:
             materialization_identity=identity,
             scenario_content_override=content_override,
             skill_source_mode=skill_source_mode,
+            skill_decls_snapshot=skill_decls_snapshot,
+            skill_decls_fingerprint=skill_decls_fingerprint,
         )
         result.update(
             {

@@ -5135,6 +5135,8 @@ class WebspaceScenarioRuntime:
         space: str,
         *,
         log_missing: bool = False,
+        root_override: Path | None = None,
+        source_authority_override: str | None = None,
     ) -> dict[str, Any] | None:
         return _RUNTIME.skill_catalog.load_webui(
             self,
@@ -5142,6 +5144,8 @@ class WebspaceScenarioRuntime:
             skill_name,
             space,
             log_missing=log_missing,
+            root_override=root_override,
+            source_authority_override=source_authority_override,
         )
 
     def _collect_skill_decls(
@@ -5161,6 +5165,13 @@ class WebspaceScenarioRuntime:
         return _RUNTIME.skill_catalog.collect_remote_skill_decls(
             self,
             _skill_catalog_operations(),
+        )
+
+    def _collect_skill_decls_from_root(self, skills_root: Path) -> list[dict[str, Any]]:
+        return _RUNTIME.skill_catalog.collect_skill_decls_from_root(
+            self,
+            _skill_catalog_operations(),
+            skills_root,
         )
 
     def _apply_ydoc_defaults_in_txn(self, ydoc: Y.YDoc, txn: Any, decls: List[Dict[str, Any]]) -> None:  # type: ignore[override]
@@ -7347,6 +7358,8 @@ async def rebuild_webspace_from_sources(
     materialization_identity: Mapping[str, Any] | None = None,
     scenario_content_override: Mapping[str, Any] | None = None,
     skill_source_mode: str | None = None,
+    skill_decls_snapshot: Iterable[Mapping[str, Any]] | None = None,
+    skill_decls_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     return await _RUNTIME.rebuild.rebuild(
         _rebuild_operations(),
@@ -7363,6 +7376,8 @@ async def rebuild_webspace_from_sources(
         materialization_identity=materialization_identity,
         scenario_content_override=scenario_content_override,
         skill_source_mode=skill_source_mode,
+        skill_decls_snapshot=skill_decls_snapshot,
+        skill_decls_fingerprint=skill_decls_fingerprint,
     )
 
 

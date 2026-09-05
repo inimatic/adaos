@@ -787,7 +787,7 @@ class BuilderWorkspaceService:
                 "source": "unknown",
                 "target_type": normalized_kind or "unknown",
                 "target_id": artifact_id or None,
-                "options": ["materialize_dev_source", "create_local_fork", "create_runtime_overlay", "defer"],
+                "options": ["materialize_dev_source", "create_local_fork", "defer"],
                 "default_option": "materialize_dev_source",
             }
         if normalized_kind == "project":
@@ -812,7 +812,7 @@ class BuilderWorkspaceService:
                 "target_id": artifact_id,
                 "project_id": artifact_id,
                 "source_path": str(workspace_project) if workspace_project is not None else None,
-                "options": ["materialize_dev_source", "create_local_fork", "create_runtime_overlay", "defer"],
+                "options": ["materialize_dev_source", "create_local_fork", "defer"],
                 "default_option": "materialize_dev_source",
             }
         try:
@@ -854,7 +854,6 @@ class BuilderWorkspaceService:
                     "options": [
                         "materialize_dev_source",
                         "create_local_fork",
-                        "create_runtime_overlay",
                         "defer",
                     ],
                     "default_option": "materialize_dev_source",
@@ -894,7 +893,7 @@ class BuilderWorkspaceService:
             "project_ids": owners,
             "ambiguous_project_owners": owners if len(owners) > 1 else [],
             "source_path": str(workspace_artifact) if workspace_artifact is not None else None,
-            "options": ["materialize_dev_source", "create_local_fork", "create_runtime_overlay", "defer"],
+            "options": ["materialize_dev_source", "create_local_fork", "defer"],
             "default_option": "materialize_dev_source",
         }
 

@@ -120,7 +120,7 @@ def test_project_candidate_keeps_exact_pushed_component_source_ref(
         def prepare_project_candidate(self, **kwargs):
             captured.update(kwargs)
             return SimpleNamespace(
-                candidate=SimpleNamespace(to_dict=lambda: {"candidate_id": "candidate.media"}),
+                candidate=SimpleNamespace(to_dict=lambda: {"candidate_id": "candidate-media"}),
                 plan=SimpleNamespace(
                     release=SimpleNamespace(to_dict=lambda: {"project_id": "media"})
                 ),
@@ -145,7 +145,8 @@ def test_project_candidate_keeps_exact_pushed_component_source_ref(
         change_ids=("change-1",),
     )
 
-    assert result["candidate"]["candidate_id"] == "candidate.media"
+    assert result["candidate"]["candidate_id"] == "candidate-media"
+    assert result["lifecycle_phase"] == "beta"
     assert captured["source_ref"] == exact_ref
     assert captured["source_ref"].path_scope == (
         "subnets/sn_test/nodes/node_test/skills/media_skill/",
@@ -214,7 +215,7 @@ lifecycle:
 
     def prepare(project_id, **kwargs):
         captured.update({"project_id": project_id, **kwargs})
-        return {"candidate": {"candidate_id": "candidate.media"}}
+        return {"candidate": {"candidate_id": "candidate-media"}}
 
     monkeypatch.setattr(service, "prepare_project_candidate", prepare)
 
@@ -225,7 +226,7 @@ lifecycle:
         target_webspace_id="desktop-dev",
     )
 
-    assert result["candidate"]["candidate_id"] == "candidate.media"
+    assert result["candidate"]["candidate_id"] == "candidate-media"
     assert captured["source_kind"] == "scenario"
     assert captured["source_name"] == "media"
     assert captured["source_revision"] == "a" * 40
@@ -247,7 +248,7 @@ def test_project_candidate_reports_registry_phase_and_promotion_receipt(
 
     class _Publication:
         def get_candidate(self, candidate_id):
-            assert candidate_id == "candidate.media"
+            assert candidate_id == "candidate-media"
             return SimpleNamespace(
                 status="accepted",
                 to_dict=lambda: {
@@ -258,14 +259,14 @@ def test_project_candidate_reports_registry_phase_and_promotion_receipt(
             )
 
         def load_promotion(self, candidate_id):
-            assert candidate_id == "candidate.media"
+            assert candidate_id == "candidate-media"
             return {
                 "status": "completed",
                 "receipts": {"source_registry_published": source_receipt},
             }
 
         def get_trial_activation(self, candidate_id):
-            assert candidate_id == "candidate.media"
+            assert candidate_id == "candidate-media"
             return {"status": "active"}
 
     service = RootDeveloperService(
@@ -278,7 +279,7 @@ def test_project_candidate_reports_registry_phase_and_promotion_receipt(
         lambda _cfg: _Publication(),
     )
 
-    result = service.get_artifact_candidate("candidate.media")
+    result = service.get_artifact_candidate("candidate-media")
 
     assert result["lifecycle_phase"] == "registry"
     assert result["promotion"]["receipts"]["source_registry_published"] == source_receipt
@@ -321,11 +322,11 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
 
     class _Publication:
         def verify_promoted_workspace_source(self, candidate_id):
-            assert candidate_id == "candidate.media"
+            assert candidate_id == "candidate-media"
             return {"status": "passed"}
 
         def get_candidate_release(self, candidate_id):
-            assert candidate_id == "candidate.media"
+            assert candidate_id == "candidate-media"
             return release
 
         def record_source_registry_publication(self, candidate_id, **kwargs):
@@ -353,7 +354,7 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
     )
 
     result = service.publish_project_candidate_source(
-        "candidate.media",
+        "candidate-media",
         remote="registry",
         branch="main",
         message="publish media",

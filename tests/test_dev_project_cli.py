@@ -472,6 +472,7 @@ def test_dev_project_trial_uses_primary_checkpoint_and_structured_evidence(monke
     }
     assert calls[0]["target_zone"] == "lo"
     assert '"candidate_id": "candidate.kanban"' in result.output
+    assert '"lifecycle_phase": "beta"' in result.output
 
 
 def test_dev_project_checkpoint_covers_all_owned_components(monkeypatch) -> None:

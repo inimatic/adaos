@@ -368,7 +368,6 @@ def _source_materialization_options(
         "options": [
             "materialize_dev_source",
             "create_local_fork",
-            "create_runtime_overlay",
             "defer",
         ],
         "default_option": "materialize_dev_source",

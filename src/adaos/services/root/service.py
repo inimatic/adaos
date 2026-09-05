@@ -59,6 +59,7 @@ from adaos.services.artifact_pipeline import (
     RemoteReleaseRepository,
     build_artifact_package,
     compose_artifact_trust_runtime,
+    trial_workspace_root,
 )
 from adaos.services.artifact_pipeline.storage import atomic_write_bytes, atomic_write_json
 from adaos.services.artifact_pipeline.project_build import (
@@ -2410,7 +2411,7 @@ class RootDeveloperService:
         )
         return {
             "ok": True,
-            "lifecycle_phase": "alpha",
+            "lifecycle_phase": "beta",
             "candidate": prepared.candidate.to_dict(),
             "release": prepared.plan.release.to_dict(),
             "trial_workspace": str(prepared.trial_workspace),
@@ -2501,7 +2502,7 @@ class RootDeveloperService:
         )
         return {
             "ok": True,
-            "lifecycle_phase": "alpha",
+            "lifecycle_phase": "beta",
             "candidate": prepared.candidate.to_dict(),
             "release": prepared.plan.release.to_dict(),
             "trial_workspace": str(prepared.trial_workspace),
@@ -2613,13 +2614,9 @@ class RootDeveloperService:
         elif candidate.status == "rejected":
             lifecycle_phase = "changes_requested"
         else:
-            lifecycle_phase = "alpha"
-        trial_workspace = (
-            Path(self.ctx.paths.workspace_dir())
-            / ".runtime"
-            / "trials"
-            / token
-            / "workspace"
+            lifecycle_phase = "beta"
+        trial_workspace = trial_workspace_root(
+            Path(self.ctx.paths.workspace_dir()), token
         )
         return {
             "ok": True,

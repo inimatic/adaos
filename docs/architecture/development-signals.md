@@ -179,7 +179,8 @@ Implementation status, 2026-08-31:
 - Builder handoff links the ticket to a repair task, opens the Builder
   workbench with ticket/target context, and records development-source choices
   (`use_existing_dev_source`, `materialize_dev_source`, `create_local_fork`,
-  `create_runtime_overlay`, `defer`) when source is absent.
+  `defer`) when source is absent. Trial creation is a later governed lifecycle
+  transition, not a source-recovery strategy.
 - Ticket detail and Builder context expose linked Builder repair tasks as
   read-only work items so a single user report can spawn multiple Builder
   tasks without collapsing their lifecycle into the human ticket lifecycle.

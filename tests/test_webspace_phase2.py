@@ -5385,7 +5385,9 @@ def test_builder_publication_preview_reads_workspace_snapshot(monkeypatch) -> No
 
 def test_builder_trial_preview_reads_exact_runtime_activation(monkeypatch, tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
-    runtime_workspace = tmp_path / "workspace" / ".runtime" / "trials" / "candidate-1" / "workspace"
+    runtime_workspace = tmp_path / "workspace" / "trials" / "candidate-1"
+    installed_scenario = tmp_path / "workspace" / "scenarios" / "recipes"
+    installed_scenario.mkdir(parents=True)
     scenario_root = runtime_workspace / "scenarios" / "recipes"
     scenario_root.mkdir(parents=True)
     (scenario_root / "scenario.yaml").write_text(
@@ -5415,13 +5417,22 @@ def test_builder_trial_preview_reads_exact_runtime_activation(monkeypatch, tmp_p
                 "candidate_ref": {"candidate_id": "candidate-1"},
                 "release_ref": {"version": "0.2.0"},
                 "target": {"scenario_id": "recipes", "webspace_id": "dev1-dev"},
-                "runtime_binding": {"path": str(runtime_workspace)},
+                "runtime_binding": {
+                    "kind": "isolated_trial_workspace",
+                    "authority": "immutable_candidate",
+                    "path": str(runtime_workspace),
+                },
                 "updated_at": "2026-08-06T00:00:00+00:00",
             }
         ),
         encoding="utf-8",
     )
     monkeypatch.setattr("adaos.services.runtime_paths.current_state_dir", lambda: state_dir)
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "scenario_root_for_space",
+        lambda scenario_id, space: installed_scenario,
+    )
 
     content, source_space = webspace_runtime_module._builder_preview_content_override(
         "recipes",
@@ -5430,7 +5441,7 @@ def test_builder_trial_preview_reads_exact_runtime_activation(monkeypatch, tmp_p
         label=None,
     )
 
-    assert source_space == "workspace"
+    assert source_space == "trial"
     assert content["ui"]["application"]["desktop"]["pageSchema"]["title"] == (
         "trial:0.2.0 Candidate recipes"
     )
@@ -5440,9 +5451,138 @@ def test_builder_trial_preview_reads_exact_runtime_activation(monkeypatch, tmp_p
         "materialization": {
             "stage": "trial",
             "revision": "0.2.0",
-            "sourceSpace": "workspace",
+            "sourceSpace": "trial",
         },
     }
+
+
+def test_builder_trial_apply_uses_candidate_preflight_and_exact_skill_snapshot(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    webspace_id = "phase2-exact-trial-preview"
+    ensure_workspace(webspace_id)
+    set_workspace_manifest(
+        webspace_id,
+        display_name="DEV: Exact Trial",
+        kind="dev",
+        source_mode="dev",
+        home_scenario="recipes",
+    )
+    state_dir = tmp_path / "state"
+    workspace = tmp_path / "workspace"
+    installed_scenario = workspace / "scenarios" / "recipes"
+    installed_scenario.mkdir(parents=True)
+    trial_workspace = workspace / "trials" / "candidate-1"
+    trial_scenario = trial_workspace / "scenarios" / "recipes"
+    trial_scenario.mkdir(parents=True)
+    (trial_scenario / "scenario.yaml").write_text(
+        "id: recipes\nversion: 0.2.0\nui:\n  manifest: webui.json\n",
+        encoding="utf-8",
+    )
+    (trial_scenario / "webui.json").write_text(
+        json.dumps(
+            {
+                "schema": "adaos.webui.v1",
+                "ui": {
+                    "application": {
+                        "desktop": {"pageSchema": {"title": "Exact candidate"}}
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (trial_workspace / "skills" / "candidate_skill").mkdir(parents=True)
+    records = state_dir / "artifact_pipeline" / "trial-activations"
+    records.mkdir(parents=True)
+    release_digest = "sha256:" + "a" * 64
+    (records / "candidate-1.json").write_text(
+        json.dumps(
+            {
+                "schema": "adaos.trial.activation.v1",
+                "status": "active",
+                "candidate_ref": {
+                    "candidate_id": "candidate-1",
+                    "release_digest": release_digest,
+                },
+                "release_ref": {"version": "0.2.0", "digest": release_digest},
+                "target": {"scenario_id": "recipes", "webspace_id": webspace_id},
+                "runtime_binding": {
+                    "kind": "isolated_trial_workspace",
+                    "authority": "immutable_candidate",
+                    "path": str(trial_workspace),
+                },
+                "updated_at": "2026-08-06T00:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    rebuild_calls: list[dict[str, object]] = []
+
+    async def _fake_rebuild(*args, **kwargs):  # noqa: ARG001
+        rebuild_calls.append(dict(kwargs))
+        return {"ok": True, "accepted": True}
+
+    def _exact_skills(self, skills_root: Path):
+        assert skills_root == trial_workspace / "skills"
+        self._last_skill_decls_fingerprint = "sha256:trial-skills"
+        return [
+            {
+                "skill": "candidate_skill",
+                "source_authority": "immutable_trial_workspace",
+            }
+        ]
+
+    monkeypatch.setattr("adaos.services.runtime_paths.current_state_dir", lambda: state_dir)
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "scenario_root_for_space",
+        lambda scenario_id, space: installed_scenario,
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_preflight_validated_scenario",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Trial preview must not preflight DEV source")
+        ),
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "_collect_skill_decls_from_root",
+        _exact_skills,
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "rebuild_webspace_from_sources",
+        _fake_rebuild,
+    )
+
+    result = asyncio.run(
+        webspace_runtime_module.apply_builder_revision_materialization(
+            webspace_id,
+            scenario_id="recipes",
+            revision="0.2.0",
+            preview_stage="trial",
+            source_fingerprint="dev:must-not-be-used",
+        )
+    )
+
+    assert result["accepted"] is True
+    assert result["validation"]["source"] == "immutable_trial_workspace"
+    assert result["validation"]["candidate_id"] == "candidate-1"
+    assert rebuild_calls[0]["scenario_resolution"] == "builder_trial_candidate"
+    assert rebuild_calls[0]["skill_source_mode"] is None
+    assert rebuild_calls[0]["skill_decls_snapshot"] == [
+        {
+            "skill": "candidate_skill",
+            "source_authority": "immutable_trial_workspace",
+        }
+    ]
+    assert rebuild_calls[0]["skill_decls_fingerprint"] == "sha256:trial-skills"
+    assert rebuild_calls[0]["materialization_identity"]["source_fingerprint"] == (
+        f"trial_sha256_{'a' * 64}"
+    )
 
 
 def test_builder_publication_preview_reads_verified_installed_package_when_slot_is_inactive(

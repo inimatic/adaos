@@ -86,7 +86,7 @@ def _plan(
 
 def test_empty_scenario_completes_dependent_cross_channel_flow(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    planned = _plan(service)
+    _plan(service)
     revised = service.transition(
         "scenario",
         "empty_scenario",
@@ -273,6 +273,7 @@ def test_empty_scenario_completes_dependent_cross_channel_flow(tmp_path: Path) -
     assert {item["label"].split(":", 1)[0] for item in published["process"]["preview_options"]} == {
         "proto",
         "active",
+        "trial",
         "public",
     }
     canonical_history = [

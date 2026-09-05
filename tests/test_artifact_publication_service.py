@@ -535,7 +535,7 @@ def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path
     assert trial.reload_receipt["status"] == "skipped"
     assert trial.health_receipt["status"] == "passed"
     assert prepared.trial_workspace == (
-        workspace / ".runtime" / "trials" / prepared.candidate.candidate_id / "workspace"
+        workspace / "trials" / prepared.candidate.candidate_id
     )
     assert prepared.trial_activation["schema"] == "adaos.trial.activation.v1"
     assert prepared.trial_activation["status"] == "active"
@@ -2001,6 +2001,12 @@ def test_promotion_continues_after_projection_failure_without_reactivation(
     assert "channel_moved" in paused["receipts"]
     assert "workspace_activated" in paused["receipts"]
     assert "projection_recorded" not in paused["receipts"]
+    assert (
+        paused["receipts"]["workspace_activated"]["workspace_lock"]["updated_at"]
+        == paused["receipts"]["workflow_admitted"]["admission"][
+            "desired_lock_updated_at"
+        ]
+    )
     activation_operation = paused["receipts"]["workspace_activated"]["operation_id"]
     monkeypatch.setattr(service, "_record_workspace_projection", original_projection)
 

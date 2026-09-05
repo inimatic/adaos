@@ -335,6 +335,112 @@ def test_rolled_back_history_is_audited_but_does_not_pin_packages(
     }
 
 
+def test_retention_removes_only_terminal_promoted_trial_workspace(
+    tmp_path: Path,
+) -> None:
+    state_root = tmp_path / "state" / "artifact_pipeline"
+    workspace_root = tmp_path / "workspace"
+    candidate_id = "recipes-1-0-0-deadbeef"
+    trial = workspace_root / "trials" / candidate_id
+    trial_state = state_root / "trials" / candidate_id
+    (trial / ".adaos").mkdir(parents=True)
+    (trial / ".adaos" / "workspace.lock.json").write_text("{}\n", encoding="utf-8")
+    trial_state.mkdir(parents=True)
+    (trial_state / "operation.json").write_text("{}\n", encoding="utf-8")
+    activations = state_root / "trial-activations"
+    promotions = state_root / "promotions"
+    activations.mkdir(parents=True)
+    promotions.mkdir(parents=True)
+    activation_path = activations / f"{candidate_id}.json"
+    activation_path.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.trial.activation.v1",
+                "status": "completed",
+                "candidate_ref": {"candidate_id": candidate_id},
+            }
+        ),
+        encoding="utf-8",
+    )
+    promotion_path = promotions / f"{candidate_id}.json"
+    promotion_path.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.artifact.promotion_operation.v1",
+                "candidate_id": candidate_id,
+                "status": "completed",
+            }
+        ),
+        encoding="utf-8",
+    )
+    now = time.time()
+    for path in (trial, trial_state, activation_path, promotion_path):
+        _old(path, now=now)
+    retention = ArtifactPipelineRetentionManager(
+        state_root=state_root,
+        workspace_root=workspace_root,
+        policy=_policy(),
+    )
+
+    plan = retention.run(dry_run=True, now=now)
+
+    terminal_targets = {
+        item["path"]
+        for item in plan["actions"]
+        if item["reason"] == "expired_promoted_trial"
+    }
+    assert terminal_targets == {str(trial.resolve()), str(trial_state.resolve())}
+
+    retention.run(dry_run=False, now=now)
+    assert not trial.exists()
+    assert not trial_state.exists()
+
+
+def test_retention_preserves_active_and_unproven_trial_workspaces(
+    tmp_path: Path,
+) -> None:
+    state_root = tmp_path / "state" / "artifact_pipeline"
+    workspace_root = tmp_path / "workspace"
+    activations = state_root / "trial-activations"
+    activations.mkdir(parents=True)
+    now = time.time()
+    for candidate_id, status in (
+        ("active-candidate", "active"),
+        ("completed-without-promotion", "completed"),
+    ):
+        trial = workspace_root / "trials" / candidate_id
+        trial.mkdir(parents=True)
+        activation_path = activations / f"{candidate_id}.json"
+        activation_path.write_text(
+            json.dumps(
+                {
+                    "schema": "adaos.trial.activation.v1",
+                    "status": status,
+                    "candidate_ref": {"candidate_id": candidate_id},
+                }
+            ),
+            encoding="utf-8",
+        )
+        _old(trial, now=now)
+        _old(activation_path, now=now)
+    retention = ArtifactPipelineRetentionManager(
+        state_root=state_root,
+        workspace_root=workspace_root,
+        policy=_policy(),
+    )
+
+    plan = retention.run(dry_run=True, now=now)
+
+    targets = {item["path"] for item in plan["actions"]}
+    assert str((workspace_root / "trials" / "active-candidate").resolve()) not in targets
+    assert (
+        str(
+            (workspace_root / "trials" / "completed-without-promotion").resolve()
+        )
+        not in targets
+    )
+
+
 def test_artifact_retention_cli_is_dry_run_by_default(cli_app, tmp_base_dir) -> None:
     result = CliRunner().invoke(
         cli_app,

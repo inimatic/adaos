@@ -1376,6 +1376,21 @@ def test_change_set_advances_through_automation_trial_and_publication(
         },
     )
     assert trial["change_set"]["status"] == "trial"
+    Draft202012Validator(
+        json.loads(
+            (ABI_ROOT / "builder.process_projection.v1.schema.json").read_text(encoding="utf-8")
+        )
+    ).validate(trial["process"])
+    trial_preview = next(
+        item for item in trial["process"]["preview_options"] if item["kind"] == "trial"
+    )
+    assert trial_preview["label"] == "trial:recipes:candidate-sync"
+    trial_action = next(
+        item
+        for item in service.interaction_frame("scenario", "recipes")["actions"]
+        if item["command"] == "builder.preview.trial"
+    )
+    assert trial_action["target_ref"] == trial_preview["label"]
 
     service.transition(
         "scenario",

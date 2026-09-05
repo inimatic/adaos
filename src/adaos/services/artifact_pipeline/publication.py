@@ -75,12 +75,13 @@ from adaos.services.artifact_pipeline.storage import (
     replace_with_retry,
 )
 from adaos.services.artifact_pipeline.trial_activation import (
+    TRIAL_WORKSPACE_LAYOUT_SCHEMA,
     TrialActivationError,
     TrialActivationStore,
+    TrialWorkspaceLayout,
     build_trial_activation,
+    ensure_trial_workspace_shape,
     load_workspace_lock,
-    runtime_trial_root,
-    runtime_trial_workspace,
     shared_skill_conflicts,
 )
 from adaos.services.conversational_pipeline import compile_conversational_package
@@ -344,6 +345,11 @@ class ArtifactPublicationService:
         self.trial_activations = TrialActivationStore(
             self.state_root / "trial-activations"
         )
+        self.trial_workspaces = TrialWorkspaceLayout(
+            workspace_root=self.workspace_root,
+            state_root=self.state_root,
+        )
+        self._migrate_legacy_trial_layouts()
         self.subscriptions = SubscriptionStore(self.workspace_root / ".adaos" / "subscriptions.json")
         self.registry_reconciler = WorkspaceRegistryReconciler(
             state_root=self.state_root,
@@ -355,6 +361,69 @@ class ArtifactPublicationService:
             workspace_root=self.workspace_root,
             remote=self.remote,
         )
+
+    def _migrate_legacy_trial_layouts(self) -> None:
+        try:
+            migrations = self.trial_workspaces.migrate_all()
+            for migration in migrations:
+                candidate_id = str(migration.get("candidate_id") or "").strip()
+                if not candidate_id:
+                    continue
+                activation = self.trial_activations.load(candidate_id)
+                if activation is None:
+                    continue
+                binding = (
+                    dict(activation.get("runtime_binding") or {})
+                    if isinstance(activation.get("runtime_binding"), Mapping)
+                    else {}
+                )
+                canonical = self.trial_workspaces.canonical(candidate_id)
+                if canonical.is_dir():
+                    binding.update(
+                        {
+                            "kind": "isolated_trial_workspace",
+                            "path": str(canonical),
+                            "channel": "beta",
+                            "authority": "immutable_candidate",
+                            "layout_schema": TRIAL_WORKSPACE_LAYOUT_SCHEMA,
+                        }
+                    )
+                self.trial_activations.update(
+                    candidate_id,
+                    runtime_binding=binding,
+                    layout_migration=migration,
+                )
+        except TrialActivationError as exc:
+            raise PublicationError(str(exc)) from exc
+
+    def _trial_workspace(self, candidate_id: str) -> Path:
+        try:
+            workspace, migration = self.trial_workspaces.ensure(candidate_id)
+            if migration is not None:
+                activation = self.trial_activations.load(candidate_id)
+                if activation is not None:
+                    binding = (
+                        dict(activation.get("runtime_binding") or {})
+                        if isinstance(activation.get("runtime_binding"), Mapping)
+                        else {}
+                    )
+                    binding.update(
+                        {
+                            "kind": "isolated_trial_workspace",
+                            "path": str(workspace),
+                            "channel": "beta",
+                            "authority": "immutable_candidate",
+                            "layout_schema": TRIAL_WORKSPACE_LAYOUT_SCHEMA,
+                        }
+                    )
+                    self.trial_activations.update(
+                        candidate_id,
+                        runtime_binding=binding,
+                        layout_migration=migration,
+                    )
+            return workspace
+        except TrialActivationError as exc:
+            raise PublicationError(str(exc)) from exc
 
     def _candidate_development_source_root(self, candidate_id: str) -> Path:
         return (
@@ -1792,7 +1861,8 @@ class ArtifactPublicationService:
         )
         candidate = record_validation(candidate, effective_validation_evidence, now=_now())
 
-        trial_workspace = runtime_trial_workspace(self.workspace_root, candidate_id)
+        trial_workspace = self._trial_workspace(candidate_id)
+        ensure_trial_workspace_shape(trial_workspace)
         trial_manager = WorkspaceActivationManager(
             workspace_root=trial_workspace,
             package_store=self.package_store,
@@ -2051,10 +2121,12 @@ class ArtifactPublicationService:
                     source_workspace_root=source_workspace_root,
                     plan=plan,
                 )
+                trial_workspace = self._trial_workspace(candidate_id)
+                ensure_trial_workspace_shape(trial_workspace)
                 return PreparedCandidate(
                     existing_candidate,
                     plan,
-                    runtime_trial_workspace(self.workspace_root, candidate_id),
+                    trial_workspace,
                     dict(activation_record),
                 )
             raise PublicationError(
@@ -2071,7 +2143,8 @@ class ArtifactPublicationService:
         )
         candidate = record_validation(candidate, validation_evidence, now=_now())
 
-        trial_workspace = runtime_trial_workspace(self.workspace_root, candidate_id)
+        trial_workspace = self._trial_workspace(candidate_id)
+        ensure_trial_workspace_shape(trial_workspace)
         trial_manager = WorkspaceActivationManager(
             workspace_root=trial_workspace,
             package_store=self.package_store,
@@ -2214,9 +2287,14 @@ class ArtifactPublicationService:
                 "recorded_at": _now(),
             }
         else:
-            trial_root = runtime_trial_root(self.workspace_root, candidate_id)
-            trial_workspace = trial_root / "workspace"
-            archive = trial_root / "rollback" / running.trial_id / "workspace"
+            trial_workspace = self._trial_workspace(candidate_id)
+            archive = (
+                self.state_root
+                / "trial-rollbacks"
+                / candidate_id
+                / running.trial_id
+                / "workspace"
+            )
             if not trial_workspace.is_dir():
                 raise PublicationError("rejected trial Workspace is missing before rollback")
             if archive.exists():
@@ -2281,9 +2359,11 @@ class ArtifactPublicationService:
             if isinstance(record.get("runtime_binding"), Mapping)
             else {}
         )
-        target = runtime_trial_workspace(self.workspace_root, token)
-        if target.is_dir() and (target / ".adaos" / "workspace.lock.json").is_file():
-            return record
+        target = self._trial_workspace(token)
+        if target.is_dir():
+            ensure_trial_workspace_shape(target)
+            if (target / ".adaos" / "workspace.lock.json").is_file():
+                return record
         candidate = self.candidate_store.load(token)
         plan = self.release_cache.get_release(
             candidate.project_id,
@@ -2300,6 +2380,7 @@ class ArtifactPublicationService:
             raise PublicationError("TrialActivation reconciliation found a shared-skill conflict")
         started = _now()
         self.trial_activations.update(token, status="reconciling")
+        ensure_trial_workspace_shape(target)
         manager = WorkspaceActivationManager(
             workspace_root=target,
             package_store=self.package_store,
@@ -2316,7 +2397,7 @@ class ArtifactPublicationService:
             reload_policy={
                 "mode": "skip",
                 "approved_by": "artifact_pipeline.runtime_trial_reconcile",
-                "reason": "rebuilding derived runtime-only Trial state",
+                "reason": "rebuilding isolated Trial Workspace state",
             },
             health_check=lambda lock: {
                 "status": "passed",
@@ -2610,6 +2691,7 @@ class ArtifactPublicationService:
                 activation_manager=activation_manager,
             )
             workflow_receipt = receipts.get("workflow_admitted")
+            workflow_admission: Mapping[str, Any]
             try:
                 if isinstance(workflow_receipt, Mapping):
                     raw_admission = workflow_receipt.get("admission")
@@ -2622,6 +2704,7 @@ class ArtifactPublicationService:
                         raw_admission,
                         slot_id=slot_id,
                     )
+                    workflow_admission = raw_admission
                 else:
                     admission = activation_manager.admit_release_candidate(
                         plan,
@@ -2633,6 +2716,7 @@ class ArtifactPublicationService:
                         "workflow_admitted",
                         {"admission": admission},
                     )
+                    workflow_admission = admission
             except ActivationError as exc:
                 raise PublicationError(
                     f"workflow publication admission failed: {exc}"
@@ -2827,6 +2911,9 @@ class ArtifactPublicationService:
                     migration_executor=migration_executor,
                     migration_rollback=migration_rollback,
                     repair_reporter=self._record_builder_repair,
+                    desired_lock_updated_at=str(
+                        workflow_admission["desired_lock_updated_at"]
+                    ),
                 )
                 activation_operation = json.loads(
                     activation_manager.operation_path(activation.operation_id).read_text(

@@ -548,7 +548,7 @@ def prepare_trial(
     idempotency_key: str | None = typer.Option(None, "--idempotency-key"),
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
-    """Create the alpha runtime Trial from the exact Project checkpoint."""
+    """Create an isolated beta Trial from the exact Project checkpoint."""
 
     bounded_changes = tuple(
         dict.fromkeys(str(item).strip() for item in change_ids if str(item).strip())
@@ -570,7 +570,7 @@ def prepare_trial(
         target_subnet_id=target_subnet_id,
         idempotency_key=idempotency_key,
     )
-    result.setdefault("lifecycle_phase", "alpha")
+    result.setdefault("lifecycle_phase", "beta")
     _echo_candidate(result, json_output=json_output)
 
 

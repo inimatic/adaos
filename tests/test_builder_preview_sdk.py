@@ -156,3 +156,117 @@ def test_skill_preview_state_keeps_component_presentation_context() -> None:
         "presentation": {"presentation": "scenario:research_workbench"},
         "bindings": {"direction_ref": "skill:tlp_research"},
     }
+
+
+def test_select_target_materializes_exact_trial_candidate(monkeypatch) -> None:
+    from adaos.services.builder.workflow import BuilderWorkflowService
+
+    service = _Workbench()
+    materializations: list[dict[str, object]] = []
+    monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(
+        BuilderWorkflowService,
+        "from_context",
+        classmethod(
+            lambda cls: type(
+                "Workflow",
+                (),
+                {
+                    "describe": lambda self, *_: {
+                        "active_phase": "automation",
+                        "capabilities": {"can_preview_trial": True},
+                        "delivery": {
+                            "status": "trial",
+                            "candidate_id": "candidate.recipes",
+                            "version": "0.2.0",
+                        },
+                    }
+                },
+            )()
+        ),
+    )
+    monkeypatch.setattr(
+        preview,
+        "select_project",
+        lambda *args, **kwargs: {
+            "preview_webspace_id": "dev1-dev",
+            "binding": {"selection": {"title": "Recipes"}},
+        },
+    )
+    monkeypatch.setattr(
+        preview,
+        "materialize_revision",
+        lambda **kwargs: materializations.append(dict(kwargs))
+        or {"ok": True, "materialization": {"ready": True}},
+    )
+    monkeypatch.setattr("adaos.sdk.data.events.publish", lambda *args, **kwargs: None)
+
+    result = preview.select_target(
+        "scenario",
+        "recipes",
+        stage="trial",
+        source_webspace_id="desktop",
+    )
+
+    assert result["target"]["stage"] == "trial"
+    assert result["target"]["revision"] == "0.2.0"
+    assert result["preview_webspace_id"] == "dev1-dev"
+    assert materializations[0]["preview_stage"] == "trial"
+    assert materializations[0]["revision"] == "0.2.0"
+
+
+def test_select_target_discovers_exact_external_trial_activation(monkeypatch) -> None:
+    from adaos.services.builder.workflow import BuilderWorkflowService
+
+    service = _Workbench()
+    materializations: list[dict[str, object]] = []
+    monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(
+        BuilderWorkflowService,
+        "from_context",
+        classmethod(
+            lambda cls: type(
+                "Workflow",
+                (),
+                {
+                    "describe": lambda self, *_: {
+                        "capabilities": {"can_preview_trial": False},
+                        "delivery": {"status": "idle"},
+                    }
+                },
+            )()
+        ),
+    )
+    monkeypatch.setattr(
+        preview,
+        "_active_trial_for_preview",
+        lambda scenario_id: {
+            "candidate_ref": {"candidate_id": "recipes-0-2-0-aabbcc"},
+            "release_ref": {"version": "0.2.0"},
+        },
+    )
+    monkeypatch.setattr(
+        preview,
+        "select_project",
+        lambda *args, **kwargs: {
+            "preview_webspace_id": "dev1-dev",
+            "binding": {"selection": {"title": "Recipes"}},
+        },
+    )
+    monkeypatch.setattr(
+        preview,
+        "materialize_revision",
+        lambda **kwargs: materializations.append(dict(kwargs)) or {"ok": True},
+    )
+    monkeypatch.setattr("adaos.sdk.data.events.publish", lambda *args, **kwargs: None)
+
+    result = preview.select_target(
+        "scenario",
+        "recipes",
+        stage="trial",
+        source_webspace_id="desktop",
+    )
+
+    assert result["target"]["revision"] == "0.2.0"
+    assert "recipes-0-2-0-aabbcc" in result["target"]["label"]
+    assert materializations[0]["revision"] == "0.2.0"

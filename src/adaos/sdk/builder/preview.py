@@ -21,6 +21,16 @@ def _plain(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _active_trial_for_preview(scenario_id: str) -> dict[str, Any]:
+    from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
+    from adaos.services.runtime_paths import current_state_dir
+
+    activation = TrialActivationStore(
+        current_state_dir() / "artifact_pipeline" / "trial-activations"
+    ).find_for_target(scenario_id=scenario_id)
+    return _plain(activation)
+
+
 def _complete(awaitable: Any) -> tuple[Any, bool]:
     """Complete an awaitable synchronously or schedule it on the active loop."""
 
@@ -597,19 +607,27 @@ def select_target(
     stage_token = str(stage or "").strip().lower()
     if follow_active:
         stage_token = str(workflow.get("active_phase") or "prototype")
-    if stage_token not in {"prototype", "automation", "publication"}:
-        raise ValueError("stage must be prototype, automation, or publication")
+    if stage_token not in {"prototype", "automation", "trial", "publication"}:
+        raise ValueError("stage must be prototype, automation, trial, or publication")
     capability = {
         "prototype": "can_preview_prototype",
         "automation": "can_preview_automation",
+        "trial": "can_preview_trial",
         "publication": "can_preview_publication",
     }[stage_token]
-    if not bool(_plain(workflow.get("capabilities")).get(capability)):
+    capability_available = bool(_plain(workflow.get("capabilities")).get(capability))
+    external_trial = (
+        _active_trial_for_preview(project_id)
+        if stage_token == "trial" and not capability_available
+        else {}
+    )
+    if not capability_available and not external_trial:
         raise ValueError(f"{stage_token} Preview is not available for this project")
 
     prototype = _plain(workflow.get("prototype"))
     automation_state = _plain(workflow.get("automation"))
     publication = _plain(workflow.get("publication"))
+    delivery = _plain(workflow.get("delivery"))
     target_revision = str(revision or "").strip()
     display_revision = ""
     if stage_token == "prototype" and not target_revision:
@@ -631,6 +649,22 @@ def select_target(
             raise ValueError("only the current Automation result can be shown in Preview")
         target_revision = current_automation
         display_revision = current_automation_version or "current"
+    elif stage_token == "trial":
+        external_candidate = _plain(external_trial.get("candidate_ref"))
+        external_release = _plain(external_trial.get("release_ref"))
+        current_version = str(
+            delivery.get("version") or external_release.get("version") or ""
+        ).strip()
+        current_candidate = str(
+            delivery.get("candidate_id") or external_candidate.get("candidate_id") or ""
+        ).strip()
+        accepted_revisions = {
+            value for value in (current_version, current_candidate) if value
+        }
+        if target_revision and target_revision not in accepted_revisions:
+            raise ValueError("only the current immutable Trial can be shown in Preview")
+        target_revision = current_version or current_candidate or "current"
+        display_revision = current_candidate or target_revision
     elif stage_token == "publication":
         current_publication = str(publication.get("current_version") or "current").strip() or "current"
         if target_revision and target_revision != current_publication:
@@ -671,7 +705,12 @@ def select_target(
     preview_id = str(selected.get("preview_webspace_id") or selected.get("dev_webspace_id") or "").strip()
     if not preview_id:
         raise RuntimeError("Builder preview relation is missing")
-    prefix = {"prototype": "proto", "automation": "active", "publication": "public"}[stage_token]
+    prefix = {
+        "prototype": "proto",
+        "automation": "active",
+        "trial": "trial",
+        "publication": "public",
+    }[stage_token]
     label = f"{prefix}: {project_id} · {display_revision or target_revision or 'current'}"
     materialized = materialize_revision(
         webspace_id=preview_id,

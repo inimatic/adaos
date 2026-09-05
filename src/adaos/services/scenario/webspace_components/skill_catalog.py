@@ -87,20 +87,34 @@ class WebspaceSkillCatalogService:
         space: str,
         *,
         log_missing: bool = False,
+        root_override: Path | None = None,
+        source_authority_override: str | None = None,
     ) -> dict[str, Any] | None:
         paths = runtime.ctx.paths
-        base = paths.dev_skills_dir() if space == "dev" else paths.skills_dir()
+        base = (
+            Path(root_override).expanduser().resolve()
+            if root_override is not None
+            else paths.dev_skills_dir()
+            if space == "dev"
+            else paths.skills_dir()
+        )
         skill_dir = Path(base) / skill_name
         manifest_path = skill_dir / "skill.yaml"
-        source_authority = "dev_workspace" if space == "dev" else "workspace_source"
-        runtime_source = self._active_runtime_source(paths, skill_name) if space != "dev" else None
+        source_authority = str(source_authority_override or "").strip() or (
+            "dev_workspace" if space == "dev" else "workspace_source"
+        )
+        runtime_source = (
+            self._active_runtime_source(paths, skill_name)
+            if space != "dev" and root_override is None
+            else None
+        )
         if runtime_source is not None:
             skill_dir = Path(runtime_source["skill_dir"])
             manifest_path = Path(runtime_source["manifest_path"])
             source_authority = "active_runtime_slot"
 
         path = skill_dir / "webui.json"
-        if not path.exists() and runtime_source is None:
+        if not path.exists() and runtime_source is None and root_override is None:
             try:
                 repo_root_attr = getattr(paths, "repo_root", None)
                 repo_root = repo_root_attr() if callable(repo_root_attr) else repo_root_attr
@@ -261,6 +275,44 @@ class WebspaceSkillCatalogService:
         if stamp is not None:
             operations.cache_state.put_webui_declaration(cache_key, stamp, payload)
         return payload
+
+    def collect_skill_decls_from_root(
+        self,
+        runtime: Any,
+        operations: WebspaceSkillCatalogOperations,
+        skills_root: Path,
+    ) -> list[dict[str, Any]]:
+        """Read exact local declarations from one immutable Trial Workspace."""
+
+        root = Path(skills_root).expanduser().resolve()
+        declarations: list[dict[str, Any]] = []
+        if root.is_dir():
+            for skill_dir in sorted(root.iterdir(), key=lambda item: item.name):
+                if not skill_dir.is_dir() or skill_dir.name.startswith("."):
+                    continue
+                declaration = self.load_webui(
+                    runtime,
+                    operations,
+                    skill_dir.name,
+                    "trial",
+                    root_override=root,
+                    source_authority_override="immutable_trial_workspace",
+                )
+                if declaration:
+                    declarations.append(declaration)
+
+        if not any(item.get("skill") == "web_desktop_skill" for item in declarations):
+            desktop = self.load_webui(
+                runtime,
+                operations,
+                "web_desktop_skill",
+                "default",
+            )
+            if desktop:
+                declarations.append(desktop)
+        fingerprint = operations.fingerprint_json_like(declarations)
+        runtime._last_skill_decls_fingerprint = fingerprint
+        return declarations
 
 
     def collect_skill_decls(

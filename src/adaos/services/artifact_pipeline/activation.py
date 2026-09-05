@@ -1291,6 +1291,7 @@ class WorkspaceActivationManager:
         phase_hook: Callable[[str], None] | None = None,
         repair_reporter: Callable[[Mapping[str, Any]], Any] | None = None,
         expected_lock_digest: str | None | object = _CAPTURE_CURRENT_LOCK,
+        desired_lock_updated_at: str | None = None,
     ) -> ActivationResult:
         self._assert_plan(plan)
         if self.attestation_admission is not None:
@@ -1326,6 +1327,7 @@ class WorkspaceActivationManager:
                     phase_hook=phase_hook,
                     repair_reporter=repair_reporter,
                     expected_lock_digest=expected_lock_digest,
+                    desired_lock_updated_at=desired_lock_updated_at,
                 )
         except MutationLockTimeout as exc:
             raise ActivationError("Workspace writer lease is busy") from exc
@@ -1355,6 +1357,7 @@ class WorkspaceActivationManager:
         phase_hook: Callable[[str], None] | None = None,
         repair_reporter: Callable[[Mapping[str, Any]], Any] | None = None,
         expected_lock_digest: str | None | object = _CAPTURE_CURRENT_LOCK,
+        desired_lock_updated_at: str | None = None,
     ) -> ActivationResult:
         operation_id = self.operation_id(idempotency_key)
         release_digest = plan.release.release_digest or plan.release.computed_digest()
@@ -1490,6 +1493,7 @@ class WorkspaceActivationManager:
                 audience=audience,
                 data_mode=data_mode,
                 data_ref=data_ref,
+                updated_at=desired_lock_updated_at,
             )
             operation["desired_lock"] = desired.to_dict()
             release_admission = self._release_admission_record(

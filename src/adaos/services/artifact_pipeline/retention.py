@@ -157,7 +157,14 @@ class ArtifactPipelineRetentionManager:
 
     @property
     def _allowed_tree_roots(self) -> tuple[Path, ...]:
-        return (self.activation.staging_root, self.activation.backups_root)
+        return (
+            self.activation.staging_root,
+            self.activation.backups_root,
+            self.workspace_root / "trials",
+            self.state_root / "trials",
+            self.state_root / "trial-rollbacks",
+            self.state_root / "legacy-trial-layout",
+        )
 
     @staticmethod
     def _lock_digests(lock: WorkspaceLock | None) -> set[str]:
@@ -312,6 +319,97 @@ class ArtifactPipelineRetentionManager:
                 actions.append(self._tree_action(path, label, now))
         return actions
 
+    def _terminal_trial_actions(self, *, now: float) -> list[dict[str, Any]]:
+        """Remove old derived Trial trees only after a durable terminal outcome."""
+
+        actions: list[dict[str, Any]] = []
+        activations_root = self.state_root / "trial-activations"
+        if activations_root.is_dir():
+            for activation_path in activations_root.glob("*.json"):
+                activation = _json(activation_path)
+                if (
+                    activation is None
+                    or activation.get("schema") != "adaos.trial.activation.v1"
+                    or _age_seconds(activation_path, now)
+                    < self.policy.record_retention_seconds
+                ):
+                    continue
+                candidate_ref = activation.get("candidate_ref")
+                candidate_id = str(
+                    candidate_ref.get("candidate_id")
+                    if isinstance(candidate_ref, Mapping)
+                    else ""
+                ).strip()
+                if not candidate_id or activation_path.stem != candidate_id:
+                    continue
+                status = _status(activation)
+                terminal_proven = False
+                reason = ""
+                if status == "completed":
+                    promotion_path = self.state_root / "promotions" / f"{candidate_id}.json"
+                    promotion = _json(promotion_path)
+                    terminal_proven = bool(
+                        promotion
+                        and promotion.get("schema")
+                        == "adaos.artifact.promotion_operation.v1"
+                        and promotion.get("candidate_id") == candidate_id
+                        and _status(promotion) == "completed"
+                        and _age_seconds(promotion_path, now)
+                        >= self.policy.record_retention_seconds
+                    )
+                    reason = "expired_promoted_trial"
+                elif status == "detached":
+                    candidate_path = self.state_root / "candidates" / f"{candidate_id}.json"
+                    candidate = _json(candidate_path)
+                    terminal_proven = bool(
+                        candidate
+                        and candidate.get("candidate_id") == candidate_id
+                        and _status(candidate) == "rejected"
+                        and _age_seconds(candidate_path, now)
+                        >= self.policy.record_retention_seconds
+                    )
+                    reason = "expired_rejected_trial"
+                if not terminal_proven:
+                    continue
+                roots = [self.state_root / "trials" / candidate_id]
+                if status == "completed":
+                    roots.append(self.workspace_root / "trials" / candidate_id)
+                else:
+                    roots.append(self.state_root / "trial-rollbacks" / candidate_id)
+                for root in roots:
+                    if (
+                        root.is_dir()
+                        and _age_seconds(root, now)
+                        >= self.policy.record_retention_seconds
+                    ):
+                        actions.append(self._tree_action(root, reason, now))
+
+        migrations_root = self.state_root / "trial-layout-migrations"
+        if migrations_root.is_dir():
+            for migration_path in migrations_root.glob("*.json"):
+                migration = _json(migration_path)
+                if (
+                    migration is None
+                    or migration.get("schema") != "adaos.trial.workspace_layout.v1"
+                    or _status(migration) != "completed"
+                    or _age_seconds(migration_path, now)
+                    < self.policy.record_retention_seconds
+                ):
+                    continue
+                candidate_id = str(migration.get("candidate_id") or "").strip()
+                archive = self.state_root / "legacy-trial-layout" / candidate_id
+                if (
+                    candidate_id
+                    and migration_path.stem == candidate_id
+                    and archive.is_dir()
+                    and _age_seconds(archive, now)
+                    >= self.policy.record_retention_seconds
+                ):
+                    actions.append(
+                        self._tree_action(archive, "expired_legacy_trial_layout", now)
+                    )
+        return actions
+
     @staticmethod
     def _file_action(path: Path, reason: str, now: float) -> dict[str, Any]:
         stat = path.stat()
@@ -356,6 +454,7 @@ class ArtifactPipelineRetentionManager:
 
         actions.extend(self._operation_actions(now=now))
         actions.extend(self._orphan_tree_actions(now=now))
+        actions.extend(self._terminal_trial_actions(now=now))
 
         release_roots = (
             self.activation.releases_root,

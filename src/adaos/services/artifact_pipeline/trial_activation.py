@@ -1,23 +1,32 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import os
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
 from adaos.domain.artifact_release import WorkspaceLock
 from adaos.services.artifact_pipeline.releases import ReleasePlan
-from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+from adaos.services.artifact_pipeline.storage import (
+    atomic_write_bytes,
+    atomic_write_json,
+    mutation_lock,
+    replace_with_retry,
+)
 
 
 TRIAL_ACTIVATION_SCHEMA = "adaos.trial.activation.v1"
+TRIAL_WORKSPACE_LAYOUT_SCHEMA = "adaos.trial.workspace_layout.v1"
 _STATUSES = {"active", "reconciling", "detached", "failed", "expired", "completed"}
 _DATA_MODES = {"empty", "mock", "snapshot", "read_only", "real"}
 
 
 class TrialActivationError(ValueError):
-    """Raised when a runtime-only Trial cannot be represented safely."""
+    """Raised when an isolated Trial Workspace cannot be represented safely."""
 
 
 def _now() -> str:
@@ -31,15 +40,326 @@ def _text(value: Any, field: str) -> str:
     return token
 
 
-def runtime_trial_root(workspace_root: Path, candidate_id: str) -> Path:
+def _safe_candidate_id(candidate_id: str) -> str:
     token = _text(candidate_id, "candidate_id")
-    if token in {".", ".."} or "/" in token or "\\" in token:
-        raise TrialActivationError("candidate_id is not a safe runtime path segment")
-    return Path(workspace_root).resolve() / ".runtime" / "trials" / token
+    if not all(char.isalnum() or char in {"-", "_"} for char in token):
+        raise TrialActivationError("candidate_id is not a safe Trial path segment")
+    return token
+
+
+def _workspace_child(workspace_root: Path, *parts: str) -> Path:
+    root = Path(workspace_root).resolve()
+    target = root.joinpath(*parts)
+    if target.resolve() != target:
+        raise TrialActivationError("Trial path traverses a Workspace link or junction")
+    return target
+
+
+def trial_workspace_root(workspace_root: Path, candidate_id: str) -> Path:
+    """Return the canonical Workspace-shaped root for an immutable Trial."""
+
+    return _workspace_child(workspace_root, "trials", _safe_candidate_id(candidate_id))
+
+
+def legacy_runtime_trial_root(workspace_root: Path, candidate_id: str) -> Path:
+    return _workspace_child(
+        workspace_root,
+        ".runtime",
+        "trials",
+        _safe_candidate_id(candidate_id),
+    )
+
+
+def legacy_runtime_trial_workspace(workspace_root: Path, candidate_id: str) -> Path:
+    return legacy_runtime_trial_root(workspace_root, candidate_id) / "workspace"
+
+
+def runtime_trial_root(workspace_root: Path, candidate_id: str) -> Path:
+    """Compatibility alias for the canonical Trial Workspace root."""
+
+    return trial_workspace_root(workspace_root, candidate_id)
 
 
 def runtime_trial_workspace(workspace_root: Path, candidate_id: str) -> Path:
-    return runtime_trial_root(workspace_root, candidate_id) / "workspace"
+    """Compatibility alias retained for callers of the pre-layout API."""
+
+    return trial_workspace_root(workspace_root, candidate_id)
+
+
+def ensure_trial_workspace_shape(trial_root: Path) -> Path:
+    """Create the executable directory skeleton for one Trial Workspace."""
+
+    root = Path(trial_root).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    for relative in (
+        ".adaos",
+        ".runtime",
+        "projects",
+        "scenarios",
+        "skills",
+        "skills/.runtime",
+    ):
+        target = root / relative
+        if target.resolve() != target:
+            raise TrialActivationError(
+                f"Trial Workspace directory traverses a link or junction: {relative}"
+            )
+        target.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _tree_digest(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+        relative = path.relative_to(root).as_posix().encode("utf-8")
+        if path.is_symlink():
+            digest.update(b"L\0" + relative + b"\0" + os.readlink(path).encode("utf-8"))
+            continue
+        if path.is_dir():
+            digest.update(b"D\0" + relative + b"\0")
+            continue
+        if not path.is_file():
+            raise TrialActivationError(f"unsupported Trial entry during migration: {path}")
+        digest.update(b"F\0" + relative + b"\0")
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+        digest.update(b"\0")
+    return "sha256:" + digest.hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class TrialWorkspaceLayout:
+    workspace_root: Path
+    state_root: Path
+
+    def __init__(self, *, workspace_root: Path, state_root: Path) -> None:
+        object.__setattr__(self, "workspace_root", Path(workspace_root).resolve())
+        object.__setattr__(self, "state_root", Path(state_root).resolve())
+
+    @property
+    def migration_root(self) -> Path:
+        return self.state_root / "trial-layout-migrations"
+
+    @property
+    def legacy_archive_root(self) -> Path:
+        return self.state_root / "legacy-trial-layout"
+
+    def canonical(self, candidate_id: str) -> Path:
+        return trial_workspace_root(self.workspace_root, candidate_id)
+
+    def legacy(self, candidate_id: str) -> Path:
+        return legacy_runtime_trial_workspace(self.workspace_root, candidate_id)
+
+    def receipt_path(self, candidate_id: str) -> Path:
+        return self.migration_root / f"{_safe_candidate_id(candidate_id)}.json"
+
+    def load_receipt(self, candidate_id: str) -> dict[str, Any] | None:
+        path = self.receipt_path(candidate_id)
+        if not path.is_file():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        except Exception as exc:
+            raise TrialActivationError(f"cannot read Trial layout migration: {exc}") from exc
+        if (
+            not isinstance(payload, Mapping)
+            or payload.get("schema") != TRIAL_WORKSPACE_LAYOUT_SCHEMA
+        ):
+            raise TrialActivationError("invalid Trial layout migration receipt")
+        return copy.deepcopy(dict(payload))
+
+    def _archive_legacy_wrapper(self, candidate_id: str) -> str | None:
+        token = _safe_candidate_id(candidate_id)
+        wrapper = legacy_runtime_trial_root(self.workspace_root, token)
+        archive = self.legacy_archive_root / token
+        if not wrapper.exists():
+            return str(archive) if archive.is_dir() else None
+        if archive.exists():
+            raise TrialActivationError(
+                "legacy Trial layout archive already exists; reconciliation is required"
+            )
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        replace_with_retry(wrapper, archive)
+        legacy_trials = self.workspace_root / ".runtime" / "trials"
+        if legacy_trials.is_dir() and not any(legacy_trials.iterdir()):
+            legacy_trials.rmdir()
+        legacy_runtime = self.workspace_root / ".runtime"
+        if legacy_runtime.is_dir() and not any(legacy_runtime.iterdir()):
+            legacy_runtime.rmdir()
+        return str(archive)
+
+    def _ensure_git_exclude(self) -> None:
+        """Keep derived Trial roots outside the stable Workspace Git authority."""
+
+        git_dir = self.workspace_root / ".git"
+        if not git_dir.is_dir():
+            return
+        exclude = git_dir / "info" / "exclude"
+        lock = exclude.with_name(f"{exclude.name}.lock")
+        with mutation_lock(lock):
+            try:
+                current = exclude.read_text(encoding="utf-8-sig")
+            except FileNotFoundError:
+                current = ""
+            except UnicodeError as exc:
+                raise TrialActivationError(
+                    "Workspace Git exclude is not valid UTF-8"
+                ) from exc
+            entries = {
+                line.strip()
+                for line in current.splitlines()
+                if line.strip() and not line.lstrip().startswith("#")
+            }
+            if "/trials/" in entries or "trials/" in entries:
+                return
+            separator = "" if not current or current.endswith(("\n", "\r")) else "\n"
+            atomic_write_bytes(
+                exclude,
+                f"{current}{separator}/trials/\n".encode("utf-8"),
+            )
+
+    def _resume_migration(
+        self,
+        candidate_id: str,
+        canonical: Path,
+        receipt: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        status = str(receipt.get("status") or "").strip()
+        if status not in {"prepared", "verified", "verified_duplicate"}:
+            return copy.deepcopy(dict(receipt))
+        if not canonical.is_dir():
+            raise TrialActivationError(
+                "incomplete Trial layout migration has no canonical Workspace"
+            )
+        source_digest = str(receipt.get("source_digest") or "").strip()
+        target_digest = _tree_digest(canonical)
+        if not source_digest or target_digest != source_digest:
+            raise TrialActivationError(
+                "canonical Trial Workspace differs from the interrupted migration source"
+            )
+        resumed = copy.deepcopy(dict(receipt))
+        resumed["status"] = "verified"
+        resumed["target_digest"] = target_digest
+        atomic_write_json(self.receipt_path(candidate_id), resumed)
+        resumed["legacy_archive"] = self._archive_legacy_wrapper(candidate_id)
+        resumed["status"] = "completed"
+        resumed["completed_at"] = _now()
+        atomic_write_json(self.receipt_path(candidate_id), resumed)
+        return resumed
+
+    def ensure(self, candidate_id: str) -> tuple[Path, dict[str, Any] | None]:
+        """Resolve one Trial root and migrate its legacy layout when present."""
+
+        token = _safe_candidate_id(candidate_id)
+        canonical = self.canonical(token)
+        legacy = self.legacy(token)
+        receipt_path = self.receipt_path(token)
+        self._ensure_git_exclude()
+        with mutation_lock(receipt_path.with_suffix(".lock")):
+            canonical_exists = canonical.is_dir()
+            legacy_exists = legacy.is_dir()
+            if canonical.exists() and not canonical_exists:
+                raise TrialActivationError("canonical Trial Workspace path is not a directory")
+            if legacy.exists() and not legacy_exists:
+                raise TrialActivationError("legacy Trial Workspace path is not a directory")
+            if not legacy_exists:
+                receipt = self.load_receipt(token)
+                if receipt is None:
+                    return canonical, None
+                resumed = self._resume_migration(token, canonical, receipt)
+                return canonical, resumed
+
+            source_digest = _tree_digest(legacy)
+            started_at = _now()
+            if canonical_exists:
+                target_digest = _tree_digest(canonical)
+                if target_digest != source_digest:
+                    raise TrialActivationError(
+                        "canonical and legacy Trial Workspaces diverge; manual reconciliation is required"
+                    )
+                receipt = {
+                    "schema": TRIAL_WORKSPACE_LAYOUT_SCHEMA,
+                    "candidate_id": token,
+                    "status": "verified_duplicate",
+                    "legacy_path": str(legacy),
+                    "canonical_path": str(canonical),
+                    "source_digest": source_digest,
+                    "target_digest": target_digest,
+                    "started_at": started_at,
+                    "completed_at": started_at,
+                }
+                atomic_write_json(receipt_path, receipt)
+                archive = self._archive_legacy_wrapper(token)
+                receipt["status"] = "completed"
+                receipt["legacy_archive"] = archive
+                receipt["completed_at"] = _now()
+                atomic_write_json(receipt_path, receipt)
+                return canonical, copy.deepcopy(receipt)
+
+            receipt = {
+                "schema": TRIAL_WORKSPACE_LAYOUT_SCHEMA,
+                "candidate_id": token,
+                "status": "prepared",
+                "legacy_path": str(legacy),
+                "canonical_path": str(canonical),
+                "source_digest": source_digest,
+                "target_digest": None,
+                "started_at": started_at,
+                "completed_at": None,
+            }
+            atomic_write_json(receipt_path, receipt)
+            canonical.parent.mkdir(parents=True, exist_ok=True)
+            replace_with_retry(legacy, canonical)
+            target_digest = _tree_digest(canonical)
+            if target_digest != source_digest:
+                raise TrialActivationError(
+                    "migrated Trial Workspace digest differs from the legacy source"
+                )
+            receipt["status"] = "verified"
+            receipt["target_digest"] = target_digest
+            atomic_write_json(receipt_path, receipt)
+            archive = self._archive_legacy_wrapper(token)
+            receipt["status"] = "completed"
+            receipt["legacy_archive"] = archive
+            receipt["completed_at"] = _now()
+            atomic_write_json(receipt_path, receipt)
+            return canonical, copy.deepcopy(receipt)
+
+    def migrate_all(self) -> list[dict[str, Any]]:
+        legacy_trials = self.workspace_root / ".runtime" / "trials"
+        if not legacy_trials.is_dir():
+            return []
+        receipts: list[dict[str, Any]] = []
+        for entry in sorted(legacy_trials.iterdir(), key=lambda item: item.name):
+            if not entry.is_dir():
+                raise TrialActivationError(
+                    f"unexpected entry in legacy Trial root: {entry}"
+                )
+            token = _safe_candidate_id(entry.name)
+            if (entry / "workspace").is_dir():
+                _, receipt = self.ensure(token)
+                if receipt is not None:
+                    receipts.append(receipt)
+                continue
+            receipt_path = self.receipt_path(token)
+            with mutation_lock(receipt_path.with_suffix(".lock")):
+                archived = self._archive_legacy_wrapper(token)
+                receipt = {
+                    "schema": TRIAL_WORKSPACE_LAYOUT_SCHEMA,
+                    "candidate_id": token,
+                    "status": "archived_legacy_metadata",
+                    "legacy_path": str(entry),
+                    "canonical_path": str(self.canonical(token)),
+                    "source_digest": None,
+                    "target_digest": None,
+                    "legacy_archive": archived,
+                    "started_at": _now(),
+                    "completed_at": _now(),
+                }
+                atomic_write_json(receipt_path, receipt)
+                receipts.append(receipt)
+        return receipts
 
 
 def load_workspace_lock(path: Path) -> WorkspaceLock | None:
@@ -142,7 +462,7 @@ def build_trial_activation(
     project_id = _text(plan.release.project_id, "release.project_id")
     target_map = dict(target or {})
     target_webspace = _text(target_map.get("webspace_id"), "target.webspace_id")
-    runtime_workspace = runtime_trial_workspace(workspace_root, candidate_id)
+    runtime_workspace = trial_workspace_root(workspace_root, candidate_id)
     return {
         "schema": TRIAL_ACTIVATION_SCHEMA,
         "activation_id": f"trial-activation:{candidate_id}",
@@ -171,8 +491,11 @@ def build_trial_activation(
         "data_ref": str(data_ref or "").strip() or None,
         "safety_evidence": copy.deepcopy(safety),
         "runtime_binding": {
-            "kind": "derived_workspace_runtime",
+            "kind": "isolated_trial_workspace",
             "path": str(runtime_workspace),
+            "channel": "beta",
+            "authority": "immutable_candidate",
+            "layout_schema": TRIAL_WORKSPACE_LAYOUT_SCHEMA,
             "activation_operation_id": activation_operation_id,
             "workspace_lock_digest": workspace_lock.to_dict()["lock_digest"],
             "components": [item.to_dict() for item in workspace_lock.components],
@@ -197,9 +520,7 @@ class TrialActivationStore:
         self.root = Path(root).resolve()
 
     def path(self, candidate_id: str) -> Path:
-        token = _text(candidate_id, "candidate_id")
-        if token in {".", ".."} or "/" in token or "\\" in token:
-            raise TrialActivationError("candidate_id is not a safe record path segment")
+        token = _safe_candidate_id(candidate_id)
         return self.root / f"{token}.json"
 
     def load(self, candidate_id: str) -> dict[str, Any] | None:
@@ -290,11 +611,17 @@ class TrialActivationStore:
 
 __all__ = [
     "TRIAL_ACTIVATION_SCHEMA",
+    "TRIAL_WORKSPACE_LAYOUT_SCHEMA",
     "TrialActivationError",
     "TrialActivationStore",
+    "TrialWorkspaceLayout",
     "build_trial_activation",
+    "ensure_trial_workspace_shape",
+    "legacy_runtime_trial_root",
+    "legacy_runtime_trial_workspace",
     "load_workspace_lock",
     "runtime_trial_root",
     "runtime_trial_workspace",
     "shared_skill_conflicts",
+    "trial_workspace_root",
 ]

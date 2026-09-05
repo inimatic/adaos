@@ -4453,8 +4453,6 @@ class BuilderAutomationService:
 
         accepted = decision_token == "accept"
         rollback: dict[str, Any] | None = None
-        if not accepted:
-            rollback = self._rollback_aprobation_overlay(current, aprobation)
         workflow_before = self._workflow().describe(kind, project_id)
         governed_before = (
             dict(workflow_before.get("governed"))
@@ -4519,6 +4517,25 @@ class BuilderAutomationService:
                 actor=actor_token,
                 idempotency_key=f"trial-decision:{candidate_id}:{decision_token}",
             )
+        if not accepted:
+            decided_candidate = (
+                dict(decision_result.get("candidate"))
+                if isinstance(decision_result.get("candidate"), Mapping)
+                else {}
+            )
+            decided_trials = [
+                dict(item)
+                for item in decided_candidate.get("trials") or []
+                if isinstance(item, Mapping)
+            ]
+            rollback = (
+                dict(decided_trials[-1].get("rollback_receipt"))
+                if decided_trials
+                and isinstance(decided_trials[-1].get("rollback_receipt"), Mapping)
+                else None
+            )
+            if rollback is None:
+                raise RuntimeError("rejected Builder Trial has no rollback receipt")
         publication: dict[str, Any] | None = None
         component_update: dict[str, Any] | None = None
         component_update_projection: dict[str, Any] | None = None
@@ -4690,11 +4707,16 @@ class BuilderAutomationService:
                 }
             )
         elif rollback:
+            rollback_status = str(rollback.get("status") or "").strip().lower()
             evidence_refs.append(
                 {
-                    "type": "runtime_overlay_rollback",
+                    "type": "trial_workspace_rollback",
                     "id": candidate_id,
-                    "status": "completed" if rollback.get("ok") else "failed",
+                    "status": (
+                        "completed"
+                        if rollback_status in {"rolled_back", "detached", "completed"}
+                        else "failed"
+                    ),
                 }
             )
 
@@ -5031,8 +5053,8 @@ class BuilderAutomationService:
         if (
             str(current.get("status") or "").strip() == "completed"
             and bool(readiness.get("ok"))
-            and self._session_requires_aprobation_overlay(current)
-            and not self._aprobation_overlay_ready(aprobation)
+            and self._session_requires_aprobation_trial(current)
+            and not self._aprobation_trial_ready(aprobation)
         ):
             _log.info(
                 "reconciling required Dev Ticket aprobation session=%s task=%s",
@@ -5052,8 +5074,8 @@ class BuilderAutomationService:
         if (
             str(current.get("status") or "").strip() == "completed"
             and bool(readiness.get("ok"))
-            and self._session_requires_aprobation_overlay(current)
-            and self._aprobation_overlay_ready(aprobation)
+            and self._session_requires_aprobation_trial(current)
+            and self._aprobation_trial_ready(aprobation)
             and (
                 not isinstance(aprobation.get("component_update_projection"), Mapping)
                 or not bool(aprobation.get("component_update_projection", {}).get("ok"))
@@ -5081,8 +5103,8 @@ class BuilderAutomationService:
         if (
             str(current.get("status") or "").strip() == "completed"
             and bool(readiness.get("ok"))
-            and self._session_requires_aprobation_overlay(current)
-            and self._aprobation_overlay_ready(
+            and self._session_requires_aprobation_trial(current)
+            and self._aprobation_trial_ready(
                 readiness.get("aprobation")
                 if isinstance(readiness.get("aprobation"), Mapping)
                 else {}
@@ -5102,9 +5124,13 @@ class BuilderAutomationService:
         return current
 
     @staticmethod
-    def _aprobation_overlay_ready(value: Mapping[str, Any] | None) -> bool:
+    def _aprobation_trial_ready(value: Mapping[str, Any] | None) -> bool:
         receipt = dict(value) if isinstance(value, Mapping) else {}
-        if not bool(receipt.get("ok")):
+        if (
+            not bool(receipt.get("ok"))
+            or str(receipt.get("mode") or "").strip()
+            != "immutable_candidate_trial_workspace"
+        ):
             return False
         trial = (
             dict(receipt.get("trial"))
@@ -5118,32 +5144,39 @@ class BuilderAutomationService:
             or not str(trial.get("candidate_digest") or "").strip()
         ):
             return False
-        for raw_skill in receipt.get("skills") or []:
-            if not isinstance(raw_skill, Mapping):
-                continue
-            skill = dict(raw_skill)
-            projection = (
-                dict(skill.get("webspace_projection"))
-                if isinstance(skill.get("webspace_projection"), Mapping)
-                else {}
-            )
-            if projection and not bool(projection.get("ok")):
-                return False
-            materialization = (
-                projection.get("materialization")
-                if isinstance(projection.get("materialization"), Mapping)
-                else None
-            )
-            cache = (
-                skill.get("materialization_cache")
-                if isinstance(skill.get("materialization_cache"), Mapping)
-                else {}
-            )
-            if materialization is None and isinstance(cache.get("materialization"), Mapping):
-                materialization = cache["materialization"]
-            if isinstance(materialization, Mapping) and materialization.get("ready") is not True:
-                return False
-        return True
+        activation = (
+            dict(receipt.get("activation"))
+            if isinstance(receipt.get("activation"), Mapping)
+            else {}
+        )
+        binding = (
+            dict(activation.get("runtime_binding"))
+            if isinstance(activation.get("runtime_binding"), Mapping)
+            else {}
+        )
+        activation_candidate = (
+            dict(activation.get("candidate_ref"))
+            if isinstance(activation.get("candidate_ref"), Mapping)
+            else {}
+        )
+        candidate_id = str(trial.get("candidate_id") or "").strip()
+        bound_path = Path(str(binding.get("path") or "").strip())
+        canonical_shape = bool(
+            bound_path.name == candidate_id and bound_path.parent.name == "trials"
+        )
+        materialized = bool(
+            not bound_path.is_absolute()
+            or (bound_path / ".adaos" / "workspace.lock.json").is_file()
+        )
+        return bool(
+            str(activation.get("status") or "").strip() in {"active", "completed"}
+            and str(activation_candidate.get("candidate_id") or candidate_id).strip()
+            == candidate_id
+            and str(binding.get("kind") or "").strip() == "isolated_trial_workspace"
+            and str(binding.get("authority") or "").strip() == "immutable_candidate"
+            and canonical_shape
+            and materialized
+        )
 
     @staticmethod
     def empty_projection(*, webspace_id: str | None = None) -> dict[str, Any]:
@@ -5242,7 +5275,7 @@ class BuilderAutomationService:
             "summary": str(result.get("summary") or result.get("message") or "").strip() or None,
             "budget_usage": budget_usage,
             "delivery": {
-                "aprobation_required": BuilderAutomationService._session_requires_aprobation_overlay(
+                "aprobation_required": BuilderAutomationService._session_requires_aprobation_trial(
                     session
                 ),
                 "aprobation_ready": bool(aprobation.get("ok")),
@@ -6344,7 +6377,7 @@ class BuilderAutomationService:
         )
         if (
             terminal_readiness
-            and self._session_requires_aprobation_overlay(current)
+            and self._session_requires_aprobation_trial(current)
             and not bool(aprobation.get("ok"))
         ):
             reconciled = self._reconcile_completed_workflow(current)
@@ -7395,27 +7428,10 @@ class BuilderAutomationService:
                     checkpoints=checkpoints,
                 )
             )
-        if self._session_requires_aprobation_overlay(current):
-            trial_receipt = self._ensure_governed_aprobation_trial(
-                current,
-                existing_aprobation,
-                record_update=False,
-            )
-            overlay_receipt = existing_aprobation
-            if not self._aprobation_overlay_ready(existing_aprobation):
-                companion_skill_ids = self._session_changed_companion_skill_ids(current)
-                scenario_id = object_id if object_type == "scenario" else None
-                if companion_skill_ids or scenario_id:
-                    overlay_receipt = self._prepare_and_activate_aprobation_overlay(
-                        current,
-                        skill_ids=companion_skill_ids,
-                        scenario_id=scenario_id,
-                        webspace_id=str(current.get("webspace_id") or "desktop").strip()
-                        or "desktop",
-                    )
+        if self._session_requires_aprobation_trial(current):
             readiness["aprobation"] = self._ensure_governed_aprobation_trial(
                 current,
-                {**dict(trial_receipt), **dict(overlay_receipt)},
+                existing_aprobation,
             )
         completed_at = str(
             automation.get("completed_at")
@@ -7445,7 +7461,7 @@ class BuilderAutomationService:
                 "completed_at": completed_at,
                 "workflow_reconciliation": {
                     "status": (
-                        "existing_trial_overlay_recovered"
+                        "existing_trial_workspace_recovered"
                         if trial_matches
                         else "already_checkpointed"
                     ),
@@ -7770,8 +7786,6 @@ class BuilderAutomationService:
                         )
                     )
 
-            aprobation_scenario_id = object_id if object_type == "scenario" and object_id else None
-
             if object_type == "scenario" and object_id:
                 from adaos.services.builder.workbench import BuilderWorkbenchService
 
@@ -7783,33 +7797,19 @@ class BuilderAutomationService:
                     if isinstance(existing_binding.get("preview_target"), Mapping)
                     else None
                 )
-                aprobation_overlay = (
+                aprobation_trial = (
                     readiness.get("aprobation")
                     if isinstance(readiness.get("aprobation"), Mapping)
                     else {}
                 )
-                if bool(aprobation_overlay.get("ok")):
-                    # The governed overlay already rebuilt the user's source
-                    # webspace. The selected Builder preview may now belong to
-                    # another ticket and must remain untouched.
-                    scenario_overlay = (
-                        aprobation_overlay.get("scenario")
-                        if isinstance(aprobation_overlay.get("scenario"), Mapping)
-                        else {}
-                    )
-                    overlay_projection = (
-                        scenario_overlay.get("webspace_projection")
-                        if isinstance(scenario_overlay.get("webspace_projection"), Mapping)
-                        else {}
-                    )
+                if self._aprobation_trial_ready(aprobation_trial):
                     readiness["materialization"] = {
-                        **dict(overlay_projection),
                         "ok": True,
-                        "skipped": "governed_aprobation_overlay_active",
+                        "skipped": "isolated_trial_workspace_active",
                         "webspace_id": webspace_id,
                         "preview_webspace_id": None,
                     }
-                elif self._session_requires_aprobation_overlay(current):
+                elif self._session_requires_aprobation_trial(current):
                     readiness["materialization"] = {
                         "ok": True,
                         "skipped": "awaiting_governed_trial",
@@ -8073,62 +8073,38 @@ class BuilderAutomationService:
                                 "task_id": current.get("current_task_id"),
                             },
                         )
-                if self._session_requires_aprobation_overlay(current):
+                if self._session_requires_aprobation_trial(current):
                     with self._finalization_stage(
                         current,
                         readiness,
                         "trial_projection",
                         "Validating the immutable Project Trial candidate",
                     ):
-                        trial_receipt = self._ensure_governed_aprobation_trial(
+                        readiness["aprobation"] = self._ensure_governed_aprobation_trial(
                             current,
                             readiness.get("aprobation")
                             if isinstance(readiness.get("aprobation"), Mapping)
                             else {},
-                            record_update=False,
                         )
-                    if companion_skill_ids or aprobation_scenario_id:
-                        with self._finalization_stage(
-                            current,
-                            readiness,
-                            "aprobation_activation",
-                            "Activating the validated Project repair for user review",
-                        ):
-                            overlay_receipt = self._prepare_and_activate_aprobation_overlay(
-                                current,
-                                skill_ids=companion_skill_ids,
-                                scenario_id=aprobation_scenario_id,
-                                webspace_id=webspace_id,
-                            )
-                    else:
-                        overlay_receipt = {"ok": False, "skipped": "no_runtime_components"}
-                    readiness["aprobation"] = self._ensure_governed_aprobation_trial(
-                        current,
-                        {**dict(trial_receipt), **dict(overlay_receipt)},
-                    )
                     readiness["resolved_publication_gate_failures"] = (
                         self._resolve_publication_gate_findings_for_trial(
                             current,
                             readiness,
                         )
                     )
-                    if object_type == "scenario" and bool(overlay_receipt.get("ok")):
-                        scenario_overlay = (
-                            overlay_receipt.get("scenario")
-                            if isinstance(overlay_receipt.get("scenario"), Mapping)
-                            else {}
+                    trial_projection = (
+                        readiness["aprobation"].get("component_update_projection")
+                        if isinstance(readiness["aprobation"], Mapping)
+                        and isinstance(
+                            readiness["aprobation"].get("component_update_projection"),
+                            Mapping,
                         )
-                        overlay_projection = (
-                            scenario_overlay.get("webspace_projection")
-                            if isinstance(scenario_overlay.get("webspace_projection"), Mapping)
-                            else {}
-                        )
+                        else {}
+                    )
+                    if object_type == "scenario" and trial_projection:
                         readiness["materialization"] = {
-                            **dict(overlay_projection),
-                            "ok": True,
-                            "skipped": "governed_aprobation_overlay_active",
+                            **dict(trial_projection),
                             "webspace_id": webspace_id,
-                            "preview_webspace_id": None,
                         }
             readiness["ok"] = True
             readiness["completed_at"] = _now_iso()
@@ -8607,7 +8583,7 @@ class BuilderAutomationService:
         return dict(payload) if isinstance(payload, Mapping) else {}
 
     @classmethod
-    def _session_requires_aprobation_overlay(cls, session: Mapping[str, Any]) -> bool:
+    def _session_requires_aprobation_trial(cls, session: Mapping[str, Any]) -> bool:
         links = session.get("links") if isinstance(session.get("links"), Mapping) else {}
         ticket_id = str(links.get("development_ticket_id") or "").strip()
         brief = cls._session_repair_brief(session)
@@ -8624,11 +8600,11 @@ class BuilderAutomationService:
     def _ensure_governed_aprobation_trial(
         self,
         session: Mapping[str, Any],
-        overlay_receipt: Mapping[str, Any],
+        current_receipt: Mapping[str, Any],
         *,
         record_update: bool = True,
     ) -> dict[str, Any]:
-        """Bind the live runtime overlay to Builder's immutable Trial candidate."""
+        """Bind Builder review to one immutable, isolated Trial Workspace."""
 
         object_type = str(session.get("object_type") or "").strip()
         object_id = str(session.get("object_id") or "").strip()
@@ -8673,8 +8649,7 @@ class BuilderAutomationService:
                 ),
                 source_webspace_id=str(session.get("webspace_id") or "desktop").strip()
                 or "desktop",
-                target_webspace_id=str(session.get("webspace_id") or "desktop").strip()
-                or "desktop",
+                target_webspace_id=None,
                 publication_project_ref=publication_project_ref or None,
             )
             workflow = (
@@ -8694,14 +8669,21 @@ class BuilderAutomationService:
                 f"{delivery_status or 'missing'}"
             )
 
-        brief = self._session_repair_brief(session)
-        issues = [
-            dict(item)
-            for item in brief.get("issues") or []
-            if isinstance(item, Mapping)
-        ]
-        if not issues and str(brief.get("summary") or "").strip():
-            issues = [{"summary": str(brief.get("summary") or "").strip()}]
+        candidate_id = str(
+            delivery.get("candidate_id")
+            or (
+                result.get("candidate", {}).get("candidate_id")
+                if isinstance(result.get("candidate"), Mapping)
+                else ""
+            )
+        ).strip()
+        if not candidate_id:
+            raise RuntimeError("Builder Trial has no immutable Candidate identity")
+        resumed_existing = not result
+        if resumed_existing:
+            from adaos.sdk.developer import projects
+
+            result = projects.get_candidate(candidate_id)
         candidate = (
             dict(result.get("candidate"))
             if isinstance(result.get("candidate"), Mapping)
@@ -8712,6 +8694,81 @@ class BuilderAutomationService:
             if isinstance(result.get("release"), Mapping)
             else {}
         )
+        activation = (
+            dict(result.get("trial_activation"))
+            if isinstance(result.get("trial_activation"), Mapping)
+            else dict(current_receipt.get("activation"))
+            if isinstance(current_receipt.get("activation"), Mapping)
+            else {}
+        )
+        runtime_binding = (
+            dict(activation.get("runtime_binding"))
+            if isinstance(activation.get("runtime_binding"), Mapping)
+            else {}
+        )
+        activation_candidate = (
+            dict(activation.get("candidate_ref"))
+            if isinstance(activation.get("candidate_ref"), Mapping)
+            else {}
+        )
+        trial_workspace = str(
+            runtime_binding.get("path")
+            or result.get("trial_workspace")
+            or delivery.get("trial_workspace")
+            or ""
+        ).strip()
+        trial_workspace_path = Path(trial_workspace)
+        if (
+            resumed_existing
+            and str(activation.get("status") or "").strip() == "active"
+            and trial_workspace_path.is_absolute()
+            and not (
+                trial_workspace_path / ".adaos" / "workspace.lock.json"
+            ).is_file()
+        ):
+            reconciled = projects.reconcile_candidate_trial(candidate_id)
+            activation = (
+                dict(reconciled.get("trial_activation"))
+                if isinstance(reconciled.get("trial_activation"), Mapping)
+                else {}
+            )
+            runtime_binding = (
+                dict(activation.get("runtime_binding"))
+                if isinstance(activation.get("runtime_binding"), Mapping)
+                else {}
+            )
+            activation_candidate = (
+                dict(activation.get("candidate_ref"))
+                if isinstance(activation.get("candidate_ref"), Mapping)
+                else {}
+            )
+            trial_workspace = str(runtime_binding.get("path") or "").strip()
+            trial_workspace_path = Path(trial_workspace)
+        if (
+            str(activation.get("status") or "").strip() not in {"active", "completed"}
+            or (
+                str(activation_candidate.get("candidate_id") or "").strip()
+                and str(activation_candidate.get("candidate_id") or "").strip()
+                != candidate_id
+            )
+            or str(runtime_binding.get("kind") or "").strip()
+            != "isolated_trial_workspace"
+            or str(runtime_binding.get("authority") or "").strip()
+            != "immutable_candidate"
+            or not trial_workspace
+            or trial_workspace_path.name != candidate_id
+            or trial_workspace_path.parent.name != "trials"
+        ):
+            raise RuntimeError("Builder Trial has no exact isolated Workspace activation")
+
+        brief = self._session_repair_brief(session)
+        issues = [
+            dict(item)
+            for item in brief.get("issues") or []
+            if isinstance(item, Mapping)
+        ]
+        if not issues and str(brief.get("summary") or "").strip():
+            issues = [{"summary": str(brief.get("summary") or "").strip()}]
         repair_hints = (
             dict(brief.get("repair_hints"))
             if isinstance(brief.get("repair_hints"), Mapping)
@@ -8739,15 +8796,20 @@ class BuilderAutomationService:
         )
         ticket_ids = [item for item in ticket_ids if item]
         receipt = {
-            **dict(overlay_receipt),
-            "ok": bool(overlay_receipt.get("ok")),
-            "audience": "alpha",
-            "source_kind": "devspace",
+            "schema": "adaos.builder.aprobation_trial_workspace.v1",
+            "ok": True,
+            "mode": "immutable_candidate_trial_workspace",
+            "audience": "beta",
+            "source_kind": "candidate_package",
+            "source_policy": "stable_workspace_preserved",
+            "runtime_space": "trial",
+            "webspace_id": str(session.get("webspace_id") or "desktop").strip()
+            or "desktop",
+            "activation": activation,
             "trial": {
                 "schema": "adaos.builder.component_trial.v1",
                 "status": delivery_status,
-                "candidate_id": str(delivery.get("candidate_id") or candidate.get("candidate_id") or "").strip()
-                or None,
+                "candidate_id": candidate_id,
                 "candidate_digest": str(
                     delivery.get("package_digest")
                     or candidate.get("package_digest")
@@ -8768,13 +8830,13 @@ class BuilderAutomationService:
                 ).strip()
                 or None,
                 "workflow_generation": workflow.get("generation"),
-                "trial_workspace": delivery.get("trial_workspace")
-                or result.get("trial_workspace"),
+                "trial_workspace": trial_workspace,
+                "runtime_binding": runtime_binding,
                 "started_at": delivery.get("prepared_at") or _now_iso(),
             },
             "changelog": {
                 "schema": "adaos.component_changelog.v1",
-                "title": f"{object_id} alpha update",
+                "title": f"{object_id} beta update",
                 "summary": change_summary or "Builder prepared an update for review.",
                 "changes": [
                     str(item.get("summary") or item.get("title") or "").strip()
@@ -9073,23 +9135,13 @@ class BuilderAutomationService:
     ) -> dict[str, Any] | None:
         """Make a persisted review notice visible in the same runtime transition."""
 
-        if str(aprobation.get("mode") or "").strip() != "devspace_to_workspace_runtime_overlay":
+        mode = str(aprobation.get("mode") or "").strip()
+        if mode == "devspace_to_workspace_runtime_overlay":
+            # Legacy receipts remain readable but can no longer mutate the
+            # stable runtime. Reconciliation replaces them with a Trial.
             return None
-        skills = [
-            dict(item)
-            for item in aprobation.get("skills") or []
-            if isinstance(item, Mapping) and str(item.get("id") or "").strip()
-        ]
-        scenario = (
-            dict(aprobation.get("scenario"))
-            if isinstance(aprobation.get("scenario"), Mapping)
-            else {}
-        )
-        if not skills and (not scenario or bool(scenario.get("skipped"))):
+        if mode != "immutable_candidate_trial_workspace":
             return None
-
-        from adaos.services.runtime_refresh import rebuild_webspace_projection_sync
-        from adaos.services.scenario.webspace_runtime import invalidate_webspace_materialization_cache
 
         webspace_id = str(
             aprobation.get("webspace_id") or session.get("webspace_id") or "desktop"
@@ -9103,6 +9155,53 @@ class BuilderAutomationService:
         trial_pending = trial_status == "trial" and not str(trial.get("decision") or "").strip()
         object_type = str(session.get("object_type") or "").strip().lower()
         object_id = str(session.get("object_id") or "").strip()
+        if object_type != "scenario" or not object_id:
+            return None
+        if trial_pending:
+            from adaos.sdk.builder import preview
+
+            selected = preview.select_target(
+                object_type,
+                object_id,
+                stage="trial",
+                source_webspace_id=webspace_id,
+                follow_active=False,
+            )
+            projection = (
+                dict(selected.get("materialization"))
+                if isinstance(selected.get("materialization"), Mapping)
+                else {}
+            )
+            materialization = (
+                dict(projection.get("materialization"))
+                if isinstance(projection.get("materialization"), Mapping)
+                else {}
+            )
+            ready = bool(selected.get("ok")) and bool(projection.get("ok", True))
+            if materialization:
+                ready = ready and materialization.get("ready") is True
+            return {
+                "ok": ready,
+                "webspace_id": webspace_id,
+                "preview_webspace_id": selected.get("preview_webspace_id"),
+                "stage": "beta",
+                "candidate_id": trial.get("candidate_id"),
+                "materialization": materialization or projection,
+                "attempts": [
+                    {
+                        "attempt": 1,
+                        "ok": ready,
+                        "error": projection.get("error"),
+                        "request_id": projection.get("request_id"),
+                    }
+                ],
+                "recovered": False,
+                "retryable": not ready,
+                "error": None if ready else projection.get("error") or "trial_preview_not_ready",
+            }
+
+        from adaos.services.runtime_refresh import rebuild_webspace_projection_sync
+        from adaos.services.scenario.webspace_runtime import invalidate_webspace_materialization_cache
 
         transient_errors = {
             "stale_rebuild_superseded",
@@ -9119,35 +9218,12 @@ class BuilderAutomationService:
                 action="builder_component_update_sync",
                 source_of_truth="component_update_notice",
             )
-            if (
-                trial_pending
-                and object_type == "scenario"
-                and scenario
-                and not bool(scenario.get("skipped"))
-            ):
-                refreshed = self._prepare_and_activate_aprobation_scenario(
-                    object_id,
-                    webspace_id=webspace_id,
-                )
-                projection = (
-                    dict(refreshed.get("webspace_projection"))
-                    if isinstance(refreshed.get("webspace_projection"), Mapping)
-                    else {}
-                )
-            else:
-                projection = rebuild_webspace_projection_sync(
-                    webspace_id=webspace_id,
-                    action="builder_component_update_sync",
-                    source_of_truth=(
-                        "devspace_runtime_overlay"
-                        if trial_pending
-                        else "component_update_notice"
-                    ),
-                    scenario_resolution=(
-                        "builder_aprobation_overlay" if trial_pending else None
-                    ),
-                    skill_source_mode=("dev" if trial_pending else "workspace"),
-                )
+            projection = rebuild_webspace_projection_sync(
+                webspace_id=webspace_id,
+                action="builder_component_update_sync",
+                source_of_truth="component_update_notice",
+                skill_source_mode="workspace",
+            )
             materialization = (
                 dict(projection.get("materialization"))
                 if isinstance(projection.get("materialization"), Mapping)
@@ -9177,7 +9253,7 @@ class BuilderAutomationService:
         return {
             "ok": projection_ready,
             "webspace_id": webspace_id,
-            "stage": "alpha" if trial_pending else "published_or_reverted",
+            "stage": "stable",
             "materialization": materialization,
             "attempts": attempt_receipts,
             "recovered": projection_ready and len(attempt_receipts) > 1,
@@ -9187,474 +9263,6 @@ class BuilderAutomationService:
                 if projection_ready
                 else str(projection.get("error") or "").strip() or None
             ),
-        }
-
-    def _rollback_aprobation_overlay(
-        self,
-        session: Mapping[str, Any],
-        receipt: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Restore the exact workspace runtime that preceded a DEV overlay."""
-
-        from adaos.adapters.db import SqliteSkillRegistry
-        from adaos.services.agent_context import get_ctx
-        from adaos.services.runtime_refresh import rebuild_webspace_projection_sync
-        from adaos.services.scenario.webspace_runtime import (
-            invalidate_webspace_materialization_cache,
-            rebuild_webspace_from_sources,
-        )
-        from adaos.services.skill.manager import SkillManager
-        from adaos.services.skills_loader_importlib import ImportlibSkillsLoader
-
-        ctx = get_ctx()
-        manager = SkillManager(
-            repo=ctx.skills_repo,
-            registry=SqliteSkillRegistry(ctx.sql),
-            git=ctx.git,
-            paths=ctx.paths,
-            bus=getattr(ctx, "bus", None),
-            caps=ctx.caps,
-            settings=ctx.settings,
-        )
-        webspace_id = str(
-            receipt.get("webspace_id") or session.get("webspace_id") or "desktop"
-        ).strip() or "desktop"
-        restored_skills: list[dict[str, Any]] = []
-        errors: list[str] = []
-        for raw_skill in receipt.get("skills") or []:
-            if not isinstance(raw_skill, Mapping):
-                continue
-            skill = dict(raw_skill)
-            skill_id = str(skill.get("id") or "").strip()
-            previous = (
-                dict(skill.get("previous_runtime"))
-                if isinstance(skill.get("previous_runtime"), Mapping)
-                else {}
-            )
-            if not skill_id:
-                continue
-            try:
-                version = str(previous.get("version") or "").strip()
-                slot = str(previous.get("slot") or "").strip().upper()
-                if version and slot in {"A", "B"}:
-                    restored = manager.restore_runtime_selection_exact(
-                        skill_id,
-                        version=version,
-                        slot=slot,
-                        previous_deactivation=(
-                            previous.get("deactivation")
-                            if isinstance(previous.get("deactivation"), Mapping)
-                            else None
-                        ),
-                        webspace_id=webspace_id,
-                        emit_activation=False,
-                    )
-                else:
-                    restored_slot = manager.rollback_runtime(skill_id)
-                    restored = {
-                        "ok": True,
-                        "restored_active_slot": restored_slot,
-                        "mode": "runtime_history",
-                    }
-                handlers = asyncio.run(
-                    ImportlibSkillsLoader().reload_skill_handlers(
-                        ctx.paths.skills_dir(),
-                        skill_id,
-                    )
-                )
-                restored_skills.append(
-                    {
-                        "id": skill_id,
-                        "runtime": restored,
-                        "handler_reload": handlers,
-                    }
-                )
-            except Exception as exc:
-                errors.append(f"{skill_id}: {type(exc).__name__}: {exc}")
-
-        scenario = (
-            dict(receipt.get("scenario"))
-            if isinstance(receipt.get("scenario"), Mapping)
-            else {}
-        )
-        scenario_id = str(scenario.get("id") or "").strip()
-        scenario_projection: dict[str, Any] | None = None
-        if scenario_id and not bool(scenario.get("skipped")):
-
-            async def _restore_scenario() -> dict[str, Any]:
-                return await rebuild_webspace_from_sources(
-                    webspace_id,
-                    action="builder_aprobation_rollback",
-                    scenario_id=scenario_id,
-                    scenario_resolution="workspace_source_restore",
-                    source_of_truth="workspace_sources",
-                    reseed_from_scenario=False,
-                    request_id=f"builder-aprobation-rollback-{time.time_ns()}",
-                    switch_mode="materialization_pointer_compat",
-                    skill_source_mode="workspace",
-                )
-
-            try:
-                try:
-                    asyncio.get_running_loop()
-                except RuntimeError:
-                    scenario_projection = asyncio.run(_restore_scenario())
-                else:
-                    result: dict[str, Any] | None = None
-                    error: BaseException | None = None
-
-                    def _thread_main() -> None:
-                        nonlocal result
-                        nonlocal error
-                        try:
-                            result = asyncio.run(_restore_scenario())
-                        except BaseException as exc:
-                            error = exc
-
-                    thread = threading.Thread(
-                        target=_thread_main,
-                        name="builder-aprobation-scenario-rollback",
-                        daemon=True,
-                    )
-                    thread.start()
-                    thread.join()
-                    if error is not None:
-                        raise error
-                    scenario_projection = result if isinstance(result, dict) else {}
-                if not bool((scenario_projection or {}).get("ok")):
-                    raise RuntimeError(
-                        str(
-                            (scenario_projection or {}).get("error")
-                            or "scenario overlay rollback failed"
-                        )
-                    )
-            except Exception as exc:
-                errors.append(f"scenario:{scenario_id}: {type(exc).__name__}: {exc}")
-        elif restored_skills:
-            try:
-                invalidate_webspace_materialization_cache(
-                    webspace_id,
-                    reason="builder_aprobation_rollback",
-                    action="builder_aprobation_skill_rollback",
-                    source_of_truth="workspace_sources",
-                )
-                scenario_projection = rebuild_webspace_projection_sync(
-                    webspace_id=webspace_id,
-                    action="skill_aprobation_rollback",
-                    source_of_truth="workspace_sources",
-                    scenario_resolution="workspace_source_restore",
-                    skill_source_mode="workspace",
-                )
-                if not bool(scenario_projection.get("ok")):
-                    raise RuntimeError(
-                        str(
-                            scenario_projection.get("error")
-                            or "skill overlay rollback materialization failed"
-                        )
-                    )
-            except Exception as exc:
-                errors.append(f"webspace:{webspace_id}: {type(exc).__name__}: {exc}")
-
-        rollback = {
-            "schema": "adaos.builder.aprobation_runtime_rollback.v1",
-            "ok": not errors,
-            "mode": "restore_workspace_runtime",
-            "webspace_id": webspace_id,
-            "skills": restored_skills,
-            "scenario": scenario_projection,
-            "errors": errors,
-            "recorded_at": _now_iso(),
-        }
-        if errors:
-            raise RuntimeError("; ".join(errors))
-        return rollback
-
-    def _prepare_and_activate_aprobation_overlay(
-        self,
-        session: Mapping[str, Any],
-        *,
-        skill_ids: Sequence[str],
-        scenario_id: str | None = None,
-        webspace_id: str,
-    ) -> dict[str, Any]:
-        """Expose a validated DEV repair to the user without replacing sources.
-
-        The stable workspace source tree remains unchanged. Skill repairs are
-        prepared into the default workspace runtime from DEV source. Scenario
-        repairs are applied as a materialized runtime overlay in the target
-        webspace. A human can then accept/reopen the ticket from the real
-        client surface before any source promotion.
-        """
-
-        skills: list[dict[str, Any]] = []
-        errors: list[str] = []
-        for skill_id in dict.fromkeys(str(item).strip() for item in skill_ids if str(item).strip()):
-            try:
-                skills.append(
-                    self._prepare_and_activate_aprobation_skill(
-                        skill_id,
-                        webspace_id=webspace_id,
-                    )
-                )
-            except Exception as exc:
-                errors.append(f"{skill_id}: {type(exc).__name__}: {exc}")
-        scenario_receipt: dict[str, Any] | None = None
-        scenario_token = str(scenario_id or "").strip()
-        if scenario_token:
-            try:
-                scenario_receipt = self._prepare_and_activate_aprobation_scenario(
-                    scenario_token,
-                    webspace_id=webspace_id,
-                )
-            except Exception as exc:
-                errors.append(f"scenario:{scenario_token}: {type(exc).__name__}: {exc}")
-        applied_count = len(skills) + (
-            1
-            if isinstance(scenario_receipt, Mapping)
-            and not bool(scenario_receipt.get("skipped"))
-            else 0
-        )
-        receipt = {
-            "schema": "adaos.builder.aprobation_runtime_overlay.v1",
-            "ok": not errors and applied_count > 0,
-            "mode": "devspace_to_workspace_runtime_overlay",
-            "source_policy": "workspace_sources_preserved",
-            "runtime_space": "default",
-            "source_space": "dev",
-            "webspace_id": webspace_id,
-            "skill_count": len(skills),
-            "skills": skills,
-            "scenario": scenario_receipt,
-            "applied_count": applied_count,
-            "errors": errors,
-            "ticket_id": str(
-                (
-                    session.get("links")
-                    if isinstance(session.get("links"), Mapping)
-                    else {}
-                ).get("development_ticket_id")
-                or ""
-            ).strip()
-            or None,
-            "task_id": str(session.get("current_task_id") or "").strip() or None,
-            "created_at": _now_iso(),
-        }
-        if not errors and applied_count <= 0:
-            errors.append("no_aprobation_overlay_applied")
-        if errors:
-            receipt["ok"] = False
-            receipt["errors"] = errors
-            raise RuntimeError("; ".join(errors))
-        return receipt
-
-    def _prepare_and_activate_aprobation_skill(self, skill_id: str, *, webspace_id: str) -> dict[str, Any]:
-        from adaos.adapters.db import SqliteSkillRegistry
-        from adaos.services.agent_context import get_ctx
-        from adaos.services.runtime_refresh import rebuild_webspace_projection_sync
-        from adaos.services.scenario.webspace_runtime import invalidate_webspace_materialization_cache
-        from adaos.services.skill.manager import SkillManager
-        from adaos.services.skills_loader_importlib import ImportlibSkillsLoader
-
-        ctx = get_ctx()
-        source_path = Path(ctx.paths.dev_skills_dir()) / skill_id
-        if not source_path.is_dir():
-            raise FileNotFoundError(f"DEV skill source is missing: {source_path}")
-        manager = SkillManager(
-            repo=ctx.skills_repo,
-            registry=SqliteSkillRegistry(ctx.sql),
-            git=ctx.git,
-            paths=ctx.paths,
-            bus=getattr(ctx, "bus", None),
-            caps=ctx.caps,
-            settings=ctx.settings,
-        )
-        try:
-            previous_runtime = manager.runtime_status(skill_id)
-        except RuntimeError:
-            previous_runtime = {}
-        prepared = manager.prepare_runtime(skill_id, path=source_path, run_tests=True)
-        slot = manager.activate_for_space(
-            skill_id,
-            version=prepared.version,
-            slot=prepared.slot,
-            space="default",
-            webspace_id=webspace_id,
-            defer_webspace_rebuild=True,
-            emit_activation=False,
-        )
-        handlers = asyncio.run(
-            ImportlibSkillsLoader().reload_skill_handlers(
-                ctx.paths.skills_dir(),
-                skill_id,
-            )
-        )
-        cache = invalidate_webspace_materialization_cache(
-            webspace_id,
-            reason="builder_aprobation_runtime_overlay",
-            action="builder_aprobation_skill_runtime",
-            source_of_truth="devspace_runtime_overlay",
-        )
-        projection = rebuild_webspace_projection_sync(
-            webspace_id=webspace_id,
-            action="skill_aprobation_sync",
-            source_of_truth="devspace_runtime_overlay",
-            scenario_resolution="builder_aprobation_overlay",
-            skill_source_mode="dev",
-        )
-        materialization = (
-            dict(projection.get("materialization"))
-            if isinstance(projection.get("materialization"), Mapping)
-            else {}
-        )
-        if not bool(projection.get("ok")) or materialization.get("ready") is not True:
-            raise RuntimeError(
-                str(projection.get("error") or "DEV skill webspace materialization is not ready")
-            )
-        cache = {
-            **dict(cache),
-            "status": "ready",
-            "pending": False,
-            "finished_at": time.time(),
-            "materialization": materialization,
-            "error": None,
-        }
-        return {
-            "ok": True,
-            "id": skill_id,
-            "source_path": str(source_path),
-            "source_space": "dev",
-            "runtime_space": "default",
-            "version": prepared.version,
-            "previous_runtime": {
-                "version": previous_runtime.get("version"),
-                "slot": previous_runtime.get("active_slot"),
-                "deactivation": previous_runtime.get("deactivation"),
-            }
-            if previous_runtime
-            else None,
-            "prepared_slot": prepared.slot,
-            "activated_slot": slot,
-            "resolved_manifest": str(prepared.resolved_manifest),
-            "tests": {
-                str(name): str(result.status)
-                for name, result in dict(prepared.tests or {}).items()
-            },
-            "handler_reload": handlers,
-            "materialization_cache": cache,
-            "webspace_projection": projection,
-        }
-
-    def _prepare_and_activate_aprobation_scenario(self, scenario_id: str, *, webspace_id: str) -> dict[str, Any]:
-        from adaos.services.agent_context import get_ctx
-        from adaos.services.scenario.validation import validate_scenario_path
-        from adaos.services.scenario.webspace_runtime import (
-            canonical_materialization_identity,
-            rebuild_webspace_from_sources,
-        )
-        from adaos.services.scenarios import loader as scenarios_loader
-
-        source_path = Path(scenarios_loader.scenario_root_for_space(scenario_id, "dev"))
-        if not source_path.is_dir():
-            return {
-                "ok": True,
-                "id": scenario_id,
-                "source_path": str(source_path),
-                "source_space": "dev",
-                "runtime_space": "default",
-                "skipped": True,
-                "reason": "dev_scenario_source_missing",
-            }
-        ctx = get_ctx()
-        validation = validate_scenario_path(
-            source_path,
-            dependency_roots=(source_path.parent.parent / "skills", ctx.paths.skills_dir()),
-        )
-        if not validation.ok:
-            errors = [
-                f"{getattr(issue, 'code', 'validation.error')}: "
-                f"{getattr(issue, 'message', issue)}"
-                for issue in validation.issues
-                if getattr(issue, "level", "error") == "error"
-            ]
-            raise RuntimeError(
-                f"Validation failed for scenario '{scenario_id}': "
-                + ("; ".join(errors[:8]) or "unknown validation error")
-            )
-        content = scenarios_loader.read_content(scenario_id, space="dev")
-        if not isinstance(content, Mapping) or not content:
-            raise RuntimeError("DEV scenario content is unavailable")
-        try:
-            source_fingerprint = scenarios_loader.scenario_source_fingerprint(
-                scenario_id,
-                space="dev",
-            )
-        except Exception:
-            source_fingerprint = ""
-        identity = canonical_materialization_identity(
-            webspace_id=webspace_id,
-            scenario_id=scenario_id,
-            source_fingerprint=f"dev:{source_fingerprint or 'current'}",
-            user_id="builder",
-            roles=["builder", "aprobation"],
-            policy_fingerprint="devspace_runtime_overlay",
-        )
-
-        async def _apply() -> dict[str, Any]:
-            return await rebuild_webspace_from_sources(
-                webspace_id,
-                action="builder_aprobation_apply",
-                scenario_id=scenario_id,
-                scenario_resolution="builder_aprobation_overlay",
-                source_of_truth="devspace_runtime_overlay",
-                reseed_from_scenario=False,
-                request_id=(
-                    f"builder-aprobation-{identity.get('key_hash') or _safe_token(scenario_id)}-"
-                    f"{time.time_ns()}"
-                ),
-                switch_mode="materialization_pointer_compat",
-                materialization_identity=identity,
-                scenario_content_override=content,
-                skill_source_mode="dev",
-            )
-
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            projection = asyncio.run(_apply())
-        else:
-            result: dict[str, Any] | None = None
-            error: BaseException | None = None
-
-            def _thread_main() -> None:
-                nonlocal result
-                nonlocal error
-                try:
-                    result = asyncio.run(_apply())
-                except BaseException as exc:
-                    error = exc
-
-            thread = threading.Thread(
-                target=_thread_main,
-                name="builder-aprobation-scenario-runtime",
-                daemon=True,
-            )
-            thread.start()
-            thread.join()
-            if error is not None:
-                raise error
-            projection = result if isinstance(result, dict) else {}
-
-        if not bool(projection.get("ok")):
-            raise RuntimeError(str(projection.get("error") or "scenario overlay rebuild failed"))
-        return {
-            "ok": True,
-            "id": scenario_id,
-            "source_path": str(source_path),
-            "source_space": "dev",
-            "runtime_space": "default",
-            "source_fingerprint": source_fingerprint or None,
-            "materialization_identity": identity,
-            "webspace_projection": projection,
         }
 
     def _run_development_acceptance(

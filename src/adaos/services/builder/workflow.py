@@ -2165,6 +2165,9 @@ class BuilderWorkflowService:
             and delivery_status == "accepted",
             "can_preview_prototype": object_type in {"project", "scenario"},
             "can_preview_automation": object_type == "scenario" and automation_previewable,
+            "can_preview_trial": object_type == "scenario"
+            and delivery_status in {"trial", "accepted", "published"}
+            and bool(str(_mapping(workflow.get("delivery")).get("candidate_id") or "").strip()),
             "can_preview_publication": object_type == "scenario"
             and str(_mapping(workflow.get("publication")).get("status") or "") == "published",
             "can_plan_change_set": mutable
@@ -2888,6 +2891,11 @@ class BuilderWorkflowService:
                     "label": f"Trial {delivery.get('candidate_id') or ''}".strip(),
                     "status": trial_status,
                     "candidate_digest": delivery.get("package_digest") or delivery.get("release_digest"),
+                    "preview": (
+                        f"trial:{object_id}:{delivery.get('version') or delivery.get('candidate_id')}"
+                        if object_type == "scenario" and delivery.get("candidate_id")
+                        else None
+                    ),
                 }
             )
             parent_ref = trial_ref
@@ -3169,7 +3177,7 @@ class BuilderWorkflowService:
             )
 
         preview_options = {
-            str(item.get("stage") or ""): dict(item)
+            str(item.get("kind") or ""): dict(item)
             for item in _mapping(projection.get("process")).get("preview_options") or []
             if isinstance(item, Mapping)
         }
@@ -3186,6 +3194,13 @@ class BuilderWorkflowService:
                 "Preview implementation",
                 "read",
                 target_ref=f"implementation:{projection['object_id']}:active",
+            )
+        if workflow_state != "published" and "trial" in preview_options:
+            add_action(
+                "builder.preview.trial",
+                "Preview trial",
+                "read",
+                target_ref=str(preview_options["trial"]["label"]),
             )
         if workflow_state != "published" and "publication" in preview_options:
             add_action(

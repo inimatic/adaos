@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import copy
+import io
 import json
 import shutil
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -57,12 +59,12 @@ def _build_builder_package(
 def _activate_builder_package(
     workspace: Path,
     built: BuiltArtifactPackage,
-    source: Path,
 ) -> None:
     target = workspace / "skills" / "builder_skill"
     target.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source / "skill.yaml", target / "skill.yaml")
-    shutil.copyfile(source / "workflow.json", target / "workflow.json")
+    with zipfile.ZipFile(io.BytesIO(built.archive_bytes)) as archive:
+        archive.extract("skill.yaml", target)
+        archive.extract("workflow.json", target)
     lock = WorkspaceLock(
         lock_revision=1,
         updated_at="2026-08-04T00:00:00+00:00",
@@ -150,7 +152,7 @@ def test_builder_projection_exposes_process_and_project_workflow_inspection(
 
 def test_legacy_builder_instance_gets_digest_binding_without_losing_history(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    workflow = _plan(service)
+    _plan(service)
     state_path = service.dev_scenarios_root / "recipes" / "prompt_state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
     governed = state["workflow"]["governed"]
@@ -229,8 +231,8 @@ def test_builder_package_cutover_requires_active_workspace_lock(
     with pytest.raises(BuilderWorkflowError, match="active WorkspaceLock"):
         service.describe("scenario", "recipes")
 
-    built, source = _build_builder_package(tmp_path, builder_change_definition())
-    _activate_builder_package(workspace, built, source)
+    built, _source = _build_builder_package(tmp_path, builder_change_definition())
+    _activate_builder_package(workspace, built)
 
     workflow = _plan(service)
 
@@ -264,8 +266,8 @@ def test_builder_package_cutover_migrates_restarts_and_rolls_back_in_flight_inst
     target_definition = builder_change_definition()
     source_definition = copy.deepcopy(target_definition)
     source_definition["definition_version"] = "1.0.0"
-    source_built, source_root = _build_builder_package(tmp_path, source_definition)
-    _activate_builder_package(workspace, source_built, source_root)
+    source_built, _source_root = _build_builder_package(tmp_path, source_definition)
+    _activate_builder_package(workspace, source_built)
     service = BuilderWorkflowService(
         compatibility_service.dev_skills_root,
         compatibility_service.dev_scenarios_root,
@@ -275,7 +277,7 @@ def test_builder_package_cutover_migrates_restarts_and_rolls_back_in_flight_inst
     )
     before = _plan(service)["governed"]
 
-    target_built, target_root = _build_builder_package(tmp_path, target_definition)
+    target_built, _target_root = _build_builder_package(tmp_path, target_definition)
     migration = {
         "schema": "adaos.workflow.definition_migration.v1",
         "migration_id": "builder_change_1_0_to_current",
@@ -320,7 +322,7 @@ def test_builder_package_cutover_migrates_restarts_and_rolls_back_in_flight_inst
     assert replay["idempotent_replay"] is True
     assert replay["instance"] == migrated["instance"]
 
-    _activate_builder_package(workspace, target_built, target_root)
+    _activate_builder_package(workspace, target_built)
     restarted = BuilderWorkflowService(
         service.dev_skills_root,
         service.dev_scenarios_root,
@@ -343,7 +345,7 @@ def test_builder_package_cutover_migrates_restarts_and_rolls_back_in_flight_inst
         now="2026-08-04T02:00:00+00:00",
     )["idempotent_replay"] is True
 
-    _activate_builder_package(workspace, source_built, source_root)
+    _activate_builder_package(workspace, source_built)
     restored = BuilderWorkflowService(
         service.dev_skills_root,
         service.dev_scenarios_root,

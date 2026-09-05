@@ -29,8 +29,8 @@ def _aprobation(
         trial["decision"] = decision
     return {
         "ok": True,
-        "audience": "alpha",
-        "source_kind": "devspace",
+        "audience": "beta",
+        "source_kind": "candidate_package",
         "trial": trial,
         "changelog": {
             "title": "Demo Metrics update",
@@ -52,7 +52,7 @@ def test_component_update_tracks_release_and_viewer_lifecycle(tmp_path: Path) ->
     )
 
     assert alpha is not None
-    assert alpha["stage"] == "alpha"
+    assert alpha["stage"] == "beta"
     assert alpha["review_state"] == "pending"
     assert alpha["version"] == "0.2.0"
     assert service.list_notices(actor="user:owner", webspace_id="desktop")[0]["auto_prompt"] is True
@@ -150,7 +150,7 @@ def test_component_update_current_view_returns_latest_changeset_per_component(
         other["notice_id"],
     }
     demo = next(item for item in current if item["component"]["id"] == "demo_metrics_skill")
-    assert demo["stage"] == "alpha"
+    assert demo["stage"] == "beta"
     assert demo["transition"]["requires_user_decision"] is True
     assert demo["transition"]["workspace_committed"] is False
 

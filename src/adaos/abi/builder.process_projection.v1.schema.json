@@ -49,9 +49,9 @@
         "type": "object",
         "required": ["kind", "ref", "label"],
         "properties": {
-          "kind": { "enum": ["prototype", "automation", "publication"] },
+          "kind": { "enum": ["prototype", "automation", "trial", "publication"] },
           "ref": { "type": "string", "minLength": 1, "maxLength": 500 },
-          "label": { "type": "string", "pattern": "^(proto|active|public):" }
+          "label": { "type": "string", "pattern": "^(proto|active|trial|public):" }
         },
         "additionalProperties": false
       }

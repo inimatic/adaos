@@ -35,6 +35,7 @@ _ACTION_LABELS: dict[str, dict[str, str]] = {
     "builder.change.cancel": {"en": "Cancel change", "ru": "Отменить изменение"},
     "builder.preview.prototype": {"en": "Preview prototype", "ru": "Показать прототип"},
     "builder.preview.active": {"en": "Preview implementation", "ru": "Показать автоматизацию"},
+    "builder.preview.trial": {"en": "Preview beta trial", "ru": "Показать beta-апробацию"},
     "builder.preview.publication": {"en": "Preview publication", "ru": "Показать публикацию"},
     "builder.project.list": {"en": "Show projects", "ru": "Показать проекты"},
     "builder.preview.link": {"en": "Preview link", "ru": "Ссылка на Preview"},

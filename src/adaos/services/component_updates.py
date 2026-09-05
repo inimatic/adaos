@@ -109,11 +109,11 @@ class ComponentUpdateService:
             notice_status = "active"
             review_state = "publishing"
         elif trial_status in {"rejected", "rolled_back", "rollback"}:
-            stage = "alpha"
+            stage = "beta"
             notice_status = "rolled_back" if decision == "rollback" else "withdrawn"
             review_state = "rolled_back" if decision == "rollback" else "changes_requested"
         else:
-            stage = _text(aprobation.get("audience")).lower() or "alpha"
+            stage = "beta"
             notice_status = "active"
             review_state = "pending"
 
@@ -153,7 +153,7 @@ class ComponentUpdateService:
             transition = {
                 "state": review_state,
                 "requires_user_decision": (
-                    stage == "alpha" and notice_status == "active"
+                    stage == "beta" and notice_status == "active"
                 ),
                 "workspace_committed": stage == "stable",
                 "workspace_version": (
@@ -181,7 +181,7 @@ class ComponentUpdateService:
                 "stage": stage,
                 "status": notice_status,
                 "review_state": review_state,
-                "source_kind": _text(aprobation.get("source_kind")) or "devspace",
+                "source_kind": _text(aprobation.get("source_kind")) or "candidate_package",
                 "title": title,
                 "summary": _text(changelog.get("summary")) or "An updated component is ready for review.",
                 "changes": changes,

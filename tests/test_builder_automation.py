@@ -5222,7 +5222,7 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
     assert saved[-1]["progress"]["task_id"] == "task.1"
 
 
-def test_finalize_activates_dev_ticket_aprobation_overlay_after_checkpoint(
+def test_finalize_activates_isolated_trial_after_checkpoint(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -5252,24 +5252,21 @@ def test_finalize_activates_dev_ticket_aprobation_overlay_after_checkpoint(
         or {"ok": True, "slot": "B"},
     )
 
-    def fake_overlay(self, session, *, skill_ids, scenario_id, webspace_id):  # noqa: ARG001
-        calls.append("overlay")
-        assert list(skill_ids) == ["recipes_skill"]
-        assert scenario_id == "recipes"
-        assert webspace_id == "desktop"
-        return {"ok": True, "mode": "devspace_to_workspace_runtime_overlay"}
-
-    monkeypatch.setattr(
-        BuilderAutomationService,
-        "_prepare_and_activate_aprobation_overlay",
-        fake_overlay,
-    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_ensure_governed_aprobation_trial",
         lambda self, session, receipt, **kwargs: calls.append("trial")
         or {
-            **dict(receipt),
+            "ok": True,
+            "mode": "immutable_candidate_trial_workspace",
+            "activation": {
+                "status": "active",
+                "runtime_binding": {
+                    "kind": "isolated_trial_workspace",
+                    "authority": "immutable_candidate",
+                    "path": "trials/candidate.recipes",
+                },
+            },
             "trial": {
                 "status": "trial",
                 "candidate_id": "candidate.recipes",
@@ -5322,15 +5319,13 @@ def test_finalize_activates_dev_ticket_aprobation_overlay_after_checkpoint(
         "dev:recipes_skill",
         "checkpoint",
         "trial",
-        "overlay",
-        "trial",
         "notify",
     ]
     assert saved[-1]["completion_readiness"]["aprobation"]["ok"] is True
     assert saved[-1]["completion_readiness"]["resolved_publication_gate_failures"] == []
     assert (
         saved[-1]["completion_readiness"]["aprobation"]["mode"]
-        == "devspace_to_workspace_runtime_overlay"
+        == "immutable_candidate_trial_workspace"
     )
 
 
@@ -5467,23 +5462,20 @@ def test_finalize_scenario_only_repair_does_not_activate_unchanged_companion_ski
         ],
     )
 
-    def fake_overlay(self, session, *, skill_ids, scenario_id, webspace_id):  # noqa: ARG001
-        calls.append("overlay")
-        assert list(skill_ids) == []
-        assert scenario_id == "recipes"
-        assert webspace_id == "desktop"
-        return {"ok": True, "mode": "devspace_to_workspace_runtime_overlay"}
-
-    monkeypatch.setattr(
-        BuilderAutomationService,
-        "_prepare_and_activate_aprobation_overlay",
-        fake_overlay,
-    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_ensure_governed_aprobation_trial",
         lambda self, session, receipt, **kwargs: {
-            **dict(receipt),
+            "ok": True,
+            "mode": "immutable_candidate_trial_workspace",
+            "activation": {
+                "status": "active",
+                "runtime_binding": {
+                    "kind": "isolated_trial_workspace",
+                    "authority": "immutable_candidate",
+                    "path": "trials/candidate.recipes",
+                },
+            },
             "trial": {
                 "status": "trial",
                 "candidate_id": "candidate.recipes",
@@ -5545,17 +5537,17 @@ def test_finalize_scenario_only_repair_does_not_activate_unchanged_companion_ski
         }
     )
 
-    assert calls == ["checkpoint", "overlay"]
+    assert calls == ["checkpoint"]
     assert saved[-1]["completion_readiness"]["ok"] is True
     assert saved[-1]["completion_readiness"]["skills"] == []
     assert (
         saved[-1]["completion_readiness"]["materialization"]["skipped"]
-        == "governed_aprobation_overlay_active"
+        == "awaiting_governed_trial"
     )
 
 
-def test_dev_ticket_repair_defaults_to_aprobation_overlay() -> None:
-    assert BuilderAutomationService._session_requires_aprobation_overlay(
+def test_dev_ticket_repair_defaults_to_aprobation_trial() -> None:
+    assert BuilderAutomationService._session_requires_aprobation_trial(
         {
             "links": {"development_ticket_id": "dticket.1"},
             "implementation_brief": json.dumps(
@@ -5566,7 +5558,7 @@ def test_dev_ticket_repair_defaults_to_aprobation_overlay() -> None:
             ),
         }
     )
-    assert not BuilderAutomationService._session_requires_aprobation_overlay(
+    assert not BuilderAutomationService._session_requires_aprobation_trial(
         {
             "links": {"development_ticket_id": "dticket.1"},
             "implementation_brief": json.dumps(
@@ -5611,7 +5603,15 @@ def test_governed_aprobation_trial_binds_candidate_and_changelog(
                 "release_digest": "sha256:" + "3" * 64,
             },
             "release": {"version": "0.2.0"},
-            "trial_workspace": "trials/demo",
+            "trial_workspace": "trials/candidate.demo",
+            "trial_activation": {
+                "status": "active",
+                "runtime_binding": {
+                    "kind": "isolated_trial_workspace",
+                    "authority": "immutable_candidate",
+                    "path": "trials/candidate.demo",
+                },
+            },
             "workflow": {
                 "generation": 6,
                 "delivery": {
@@ -5645,19 +5645,20 @@ def test_governed_aprobation_trial_binds_candidate_and_changelog(
                 }
             ),
         },
-        {"ok": True, "mode": "devspace_to_workspace_runtime_overlay"},
+        {},
     )
 
     assert receipt["trial"]["status"] == "trial"
     assert receipt["trial"]["candidate_id"] == "candidate.demo"
     assert receipt["trial"]["version"] == "0.2.0"
-    assert receipt["audience"] == "alpha"
+    assert receipt["audience"] == "beta"
+    assert receipt["mode"] == "immutable_candidate_trial_workspace"
     assert receipt["changelog"]["ticket_ids"] == ["dticket.1", "dticket.2"]
     assert receipt["changelog"]["changes"] == [
         "Rename the Metrics table.",
         "Move Refresh before Create.",
     ]
-    assert receipt["component_update"]["stage"] == "alpha"
+    assert receipt["component_update"]["stage"] == "beta"
     assert receipt["component_update"]["version"] == "0.2.0"
 
 
@@ -5686,6 +5687,23 @@ def test_existing_trial_uses_project_version_when_delivery_omits_it(
         "_project_version",
         lambda self, object_type, object_id: "0.11.4",
     )
+    from adaos.sdk.developer import projects
+
+    monkeypatch.setattr(
+        projects,
+        "get_candidate",
+        lambda candidate_id: {
+            "candidate": {"candidate_id": candidate_id},
+            "trial_activation": {
+                "status": "active",
+                "runtime_binding": {
+                    "kind": "isolated_trial_workspace",
+                    "authority": "immutable_candidate",
+                    "path": f"trials/{candidate_id}",
+                },
+            },
+        },
+    )
 
     receipt = service._ensure_governed_aprobation_trial(
         {
@@ -5696,11 +5714,82 @@ def test_existing_trial_uses_project_version_when_delivery_omits_it(
             "links": {"development_ticket_id": "dticket.1"},
             "implementation_brief": json.dumps({"summary": "Improve Demo Metrics"}),
         },
-        {"ok": True, "mode": "devspace_to_workspace_runtime_overlay"},
+        {},
+        record_update=False,
     )
 
     assert receipt["trial"]["version"] == "0.11.4"
-    assert receipt["component_update"]["version"] == "0.11.4"
+
+
+def test_existing_trial_reconciles_missing_derived_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.sdk.developer import projects
+
+    service = _service(tmp_path)
+    candidate_id = "candidate.demo"
+    trial_workspace = (tmp_path / "workspace" / "trials" / candidate_id).resolve()
+    workflow = {
+        "generation": 7,
+        "delivery": {
+            "status": "trial",
+            "candidate_id": candidate_id,
+            "package_digest": "sha256:" + "2" * 64,
+            "release_digest": "sha256:" + "3" * 64,
+            "version": "0.2.0",
+        },
+    }
+    activation = {
+        "status": "active",
+        "candidate_ref": {"candidate_id": candidate_id},
+        "runtime_binding": {
+            "kind": "isolated_trial_workspace",
+            "authority": "immutable_candidate",
+            "path": str(trial_workspace),
+        },
+    }
+    reconciliations: list[str] = []
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_workflow",
+        lambda self: SimpleNamespace(describe=lambda *_: workflow),
+    )
+    monkeypatch.setattr(
+        projects,
+        "get_candidate",
+        lambda value: {
+            "candidate": {"candidate_id": value},
+            "trial_workspace": str(trial_workspace),
+            "trial_activation": activation,
+        },
+    )
+
+    def reconcile(value: str) -> dict:
+        reconciliations.append(value)
+        lock = trial_workspace / ".adaos" / "workspace.lock.json"
+        lock.parent.mkdir(parents=True)
+        lock.write_text("{}\n", encoding="utf-8")
+        return {"ok": True, "trial_activation": activation}
+
+    monkeypatch.setattr(projects, "reconcile_candidate_trial", reconcile)
+
+    receipt = service._ensure_governed_aprobation_trial(
+        {
+            "object_type": "scenario",
+            "object_id": "demo",
+            "current_task_id": "task.demo",
+            "webspace_id": "desktop",
+            "links": {"development_ticket_id": "dticket.1"},
+            "implementation_brief": json.dumps({"summary": "Improve Demo"}),
+        },
+        {},
+        record_update=False,
+    )
+
+    assert reconciliations == [candidate_id]
+    assert receipt["trial"]["trial_workspace"] == str(trial_workspace)
+    assert (trial_workspace / ".adaos" / "workspace.lock.json").is_file()
 
 
 def test_project_trial_idempotency_includes_composition_identity(
@@ -5730,23 +5819,9 @@ def test_project_trial_idempotency_includes_composition_identity(
     assert key.endswith(":project:aaaaaaaaaaaaaaaaaaaaaaaa")
 
 
-@pytest.mark.parametrize(
-    ("trial", "expected_source", "expected_skill_mode"),
-    [
-        ({"status": "trial"}, "devspace_runtime_overlay", "dev"),
-        (
-            {"status": "published", "decision": "accept"},
-            "component_update_notice",
-            "workspace",
-        ),
-    ],
-)
-def test_component_update_notice_refreshes_user_runtime_projection(
+def test_published_component_update_refreshes_stable_runtime_projection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    trial: dict[str, str],
-    expected_source: str,
-    expected_skill_mode: str | None,
 ) -> None:
     from adaos.services import runtime_refresh
     from adaos.services.scenario import webspace_runtime
@@ -5770,15 +5845,14 @@ def test_component_update_notice_refreshes_user_runtime_projection(
 
     result = service._refresh_component_update_projection(
         {
-            "object_type": "skill",
-            "object_id": "demo_metrics_skill",
+            "object_type": "scenario",
+            "object_id": "recipes",
             "webspace_id": "desktop",
         },
         {
-            "mode": "devspace_to_workspace_runtime_overlay",
+            "mode": "immutable_candidate_trial_workspace",
             "webspace_id": "desktop",
-            "skills": [{"id": "demo_metrics_skill"}],
-            "trial": trial,
+            "trial": {"status": "published", "decision": "accept"},
         },
     )
 
@@ -5788,8 +5862,60 @@ def test_component_update_notice_refreshes_user_runtime_projection(
         {"attempt": 1, "ok": True, "error": None, "request_id": None}
     ]
     assert invalidations[0]["reason"] == "component_update_notice_changed"
-    assert rebuilds[0]["source_of_truth"] == expected_source
-    assert rebuilds[0]["skill_source_mode"] == expected_skill_mode
+    assert result["stage"] == "stable"
+    assert rebuilds[0]["source_of_truth"] == "component_update_notice"
+    assert rebuilds[0]["skill_source_mode"] == "workspace"
+
+
+def test_pending_component_update_selects_exact_trial_preview(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.sdk.builder import preview
+
+    service = _service(tmp_path)
+    selections: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        preview,
+        "select_target",
+        lambda object_type, object_id, **kwargs: selections.append(
+            {"object_type": object_type, "object_id": object_id, **kwargs}
+        )
+        or {
+            "ok": True,
+            "preview_webspace_id": "desktop-dev",
+            "materialization": {
+                "ok": True,
+                "request_id": "trial-preview.1",
+                "materialization": {"ready": True},
+            },
+        },
+    )
+
+    result = service._refresh_component_update_projection(
+        {
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "webspace_id": "desktop",
+        },
+        {
+            "mode": "immutable_candidate_trial_workspace",
+            "trial": {"status": "trial", "candidate_id": "candidate.recipes"},
+        },
+    )
+
+    assert result is not None and result["ok"] is True
+    assert result["stage"] == "beta"
+    assert result["candidate_id"] == "candidate.recipes"
+    assert selections == [
+        {
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "stage": "trial",
+            "source_webspace_id": "desktop",
+            "follow_active": False,
+        }
+    ]
 
 
 def test_component_update_notice_retries_transient_webspace_rebuild(
@@ -5831,14 +5957,13 @@ def test_component_update_notice_retries_transient_webspace_rebuild(
 
     result = service._refresh_component_update_projection(
         {
-            "object_type": "skill",
-            "object_id": "demo_metrics_skill",
+            "object_type": "scenario",
+            "object_id": "recipes",
             "webspace_id": "desktop",
         },
         {
-            "mode": "devspace_to_workspace_runtime_overlay",
+            "mode": "immutable_candidate_trial_workspace",
             "webspace_id": "desktop",
-            "skills": [{"id": "demo_metrics_skill"}],
             "trial": {"status": "published", "decision": "accept"},
         },
     )
@@ -5891,15 +6016,14 @@ def test_component_update_notice_defers_exhausted_transient_projection(
 
     result = service._refresh_component_update_projection(
         {
-            "object_type": "skill",
-            "object_id": "demo_metrics_skill",
+            "object_type": "scenario",
+            "object_id": "recipes",
             "webspace_id": "desktop",
         },
         {
-            "mode": "devspace_to_workspace_runtime_overlay",
+            "mode": "immutable_candidate_trial_workspace",
             "webspace_id": "desktop",
-            "skills": [{"id": "demo_metrics_skill"}],
-            "trial": {"status": "trial"},
+            "trial": {"status": "published", "decision": "accept"},
         },
     )
 
@@ -5933,17 +6057,16 @@ def test_completed_session_reconciles_retryable_component_update_projection(
             "ok": True,
             "aprobation": {
                 "ok": True,
-                "mode": "devspace_to_workspace_runtime_overlay",
+                "mode": "immutable_candidate_trial_workspace",
                 "webspace_id": "desktop",
-                "skills": [
-                    {
-                        "id": "demo_metrics_skill",
-                        "webspace_projection": {
-                            "ok": True,
-                            "materialization": {"ready": True},
-                        },
-                    }
-                ],
+                "activation": {
+                    "status": "active",
+                    "runtime_binding": {
+                        "kind": "isolated_trial_workspace",
+                        "authority": "immutable_candidate",
+                        "path": "trials/candidate.demo",
+                    },
+                },
                 "trial": {
                     "status": "trial",
                     "candidate_id": "candidate.demo",
@@ -5963,7 +6086,7 @@ def test_completed_session_reconciles_retryable_component_update_projection(
         "_record_component_update",
         lambda self, current, aprobation: {
             "notice_id": "cupdate.demo",
-            "stage": "alpha",
+            "stage": "beta",
         },
     )
     monkeypatch.setattr(
@@ -6483,14 +6606,23 @@ def test_revising_aprobation_rolls_back_and_reopens_ticket(
         lambda self, value: dict(value),
     )
     monkeypatch.setattr(
-        BuilderAutomationService,
-        "_rollback_aprobation_overlay",
-        lambda self, current, receipt: {"ok": True, "mode": "restore_workspace_runtime"},
-    )
-    monkeypatch.setattr(
         lifecycle,
         "decide_trial",
-        lambda *args, **kwargs: {"ok": True, "accepted": False},
+        lambda *args, **kwargs: {
+            "ok": True,
+            "accepted": False,
+            "candidate": {
+                "trials": [
+                    {
+                        "status": "rejected",
+                        "rollback_receipt": {
+                            "status": "rolled_back",
+                            "mode": "isolated_workspace_detached",
+                        },
+                    }
+                ]
+            },
+        },
     )
     monkeypatch.setattr(
         BuilderAutomationService,
@@ -6508,7 +6640,7 @@ def test_revising_aprobation_rolls_back_and_reopens_ticket(
         reason="Refresh must stay visible on a narrow screen.",
     )
 
-    assert result["rollback"]["ok"] is True
+    assert result["rollback"]["status"] == "rolled_back"
     assert result["tickets"][0]["status"] == "in_progress"
     assert result["tickets"][0]["comments"][-1]["body"] == (
         "Refresh must stay visible on a narrow screen."
@@ -6547,101 +6679,66 @@ def test_revising_aprobation_rolls_back_and_reopens_ticket(
     ] == feedback[0]["feedback_id"]
 
 
-def test_aprobation_overlay_requires_ready_webspace_materialization() -> None:
-    assert not BuilderAutomationService._aprobation_overlay_ready(
+def test_aprobation_trial_requires_exact_isolated_activation() -> None:
+    assert not BuilderAutomationService._aprobation_trial_ready(
         {
             "ok": True,
+            "mode": "immutable_candidate_trial_workspace",
             "trial": {
                 "status": "trial",
                 "candidate_id": "candidate.demo",
                 "candidate_digest": "sha256:" + "1" * 64,
             },
-            "skills": [
-                {
-                    "id": "demo_metrics_skill",
-                    "webspace_projection": {"ok": True, "accepted": True},
-                    "materialization_cache": {
-                        "pending": True,
-                        "materialization": {"ready": False},
-                    },
-                }
-            ],
+            "activation": {"status": "active", "runtime_binding": {}},
         }
     )
-    assert BuilderAutomationService._aprobation_overlay_ready(
+    assert BuilderAutomationService._aprobation_trial_ready(
         {
             "ok": True,
+            "mode": "immutable_candidate_trial_workspace",
             "trial": {
                 "status": "trial",
                 "candidate_id": "candidate.demo",
                 "candidate_digest": "sha256:" + "1" * 64,
             },
-            "skills": [
-                {
-                    "id": "demo_metrics_skill",
-                    "webspace_projection": {
-                        "ok": True,
-                        "accepted": True,
-                        "materialization": {"ready": True},
-                    },
-                }
-            ],
+            "activation": {
+                "status": "active",
+                "runtime_binding": {
+                    "kind": "isolated_trial_workspace",
+                    "authority": "immutable_candidate",
+                    "path": "trials/candidate.demo",
+                },
+            },
+        }
+    )
+    assert not BuilderAutomationService._aprobation_trial_ready(
+        {
+            "ok": True,
+            "mode": "immutable_candidate_trial_workspace",
+            "trial": {
+                "status": "trial",
+                "candidate_id": "candidate.demo",
+                "candidate_digest": "sha256:" + "1" * 64,
+            },
+            "activation": {
+                "status": "active",
+                "candidate_ref": {"candidate_id": "candidate.other"},
+                "runtime_binding": {
+                    "kind": "isolated_trial_workspace",
+                    "authority": "immutable_candidate",
+                    "path": "trials/candidate.demo",
+                },
+            },
         }
     )
 
 
-def test_aprobation_scenario_validation_blocks_runtime_overlay(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from adaos.services import agent_context
-    from adaos.services.scenario import validation
-    from adaos.services.scenarios import loader as scenarios_loader
-
-    service = _service(tmp_path)
-    source = tmp_path / "dev" / "scenarios" / "invalid_scenario"
-    source.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(
-        scenarios_loader,
-        "scenario_root_for_space",
-        lambda *args, **kwargs: source,
-    )
-    monkeypatch.setattr(
-        validation,
-        "validate_scenario_path",
-        lambda *args, **kwargs: SimpleNamespace(
-            ok=False,
-            issues=[
-                SimpleNamespace(
-                    level="error",
-                    code="scenario.invalid",
-                    message="Scenario contract is invalid",
-                )
-            ],
-        ),
-    )
-    monkeypatch.setattr(
-        agent_context,
-        "get_ctx",
-        lambda: SimpleNamespace(
-            paths=SimpleNamespace(skills_dir=lambda: tmp_path / "workspace" / "skills")
-        ),
-    )
-
-    with pytest.raises(RuntimeError, match="scenario.invalid"):
-        service._prepare_and_activate_aprobation_scenario(
-            "invalid_scenario",
-            webspace_id="desktop",
-        )
-
-
-def test_completed_workflow_reconciliation_backfills_aprobation_overlay(
+def test_completed_workflow_reconciliation_backfills_aprobation_trial(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = _service(tmp_path)
     saved: list[dict] = []
-    overlay_calls: list[dict] = []
     composition_calls: list[list[dict]] = []
     workflow = {
         "generation": 4,
@@ -6669,21 +6766,6 @@ def test_completed_workflow_reconciliation_backfills_aprobation_overlay(
         lambda self, value: saved.append(dict(value)),
     )
 
-    def activate(self, session, *, skill_ids, scenario_id, webspace_id):  # noqa: ARG001
-        overlay_calls.append(
-            {
-                "skill_ids": list(skill_ids),
-                "scenario_id": scenario_id,
-                "webspace_id": webspace_id,
-            }
-        )
-        return {"ok": True, "mode": "devspace_to_workspace_runtime_overlay"}
-
-    monkeypatch.setattr(
-        BuilderAutomationService,
-        "_prepare_and_activate_aprobation_overlay",
-        activate,
-    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_ensure_project_composition_checkpoint",
@@ -6697,7 +6779,8 @@ def test_completed_workflow_reconciliation_backfills_aprobation_overlay(
         "_ensure_governed_aprobation_trial",
         lambda self, session, receipt, **kwargs: (
             {
-                **dict(receipt),
+                "ok": True,
+                "mode": "immutable_candidate_trial_workspace",
                 "trial": {
                     "status": "trial",
                     "candidate_id": "candidate.subscription",
@@ -6730,13 +6813,6 @@ def test_completed_workflow_reconciliation_backfills_aprobation_overlay(
         }
     )
 
-    assert overlay_calls == [
-        {
-            "skill_ids": ["subscription_status_skill"],
-            "scenario_id": None,
-            "webspace_id": "desktop",
-        }
-    ]
     assert reconciled["completion_readiness"]["aprobation"]["ok"] is True
     assert reconciled["completion_readiness"]["project_composition_checkpoint"][
         "version"
@@ -6745,13 +6821,12 @@ def test_completed_workflow_reconciliation_backfills_aprobation_overlay(
     assert saved[-1]["updated_at"] != "2026-08-31T12:00:00+00:00"
 
 
-def test_completed_trial_reconciliation_recovers_only_missing_runtime_overlay(
+def test_completed_trial_reconciliation_recovers_missing_trial_receipt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = _service(tmp_path)
     saved: list[dict] = []
-    overlay_calls: list[dict] = []
     trial_calls: list[dict] = []
     candidate_id = "subscription-status-0-1-20"
     candidate_digest = "sha256:" + "2" * 64
@@ -6786,25 +6861,11 @@ def test_completed_trial_reconciliation_recovers_only_missing_runtime_overlay(
         lambda *args, **kwargs: pytest.fail("an existing Trial must not create a new Project checkpoint"),
     )
 
-    def activate(self, session, *, skill_ids, scenario_id, webspace_id):  # noqa: ARG001
-        overlay_calls.append(
-            {
-                "skill_ids": list(skill_ids),
-                "scenario_id": scenario_id,
-                "webspace_id": webspace_id,
-            }
-        )
-        return {
-            "ok": True,
-            "mode": "devspace_to_workspace_runtime_overlay",
-            "skills": [{"id": "subscription_status_skill", "ok": True}],
-        }
-
     def project_trial(self, session, receipt, **kwargs):  # noqa: ARG001
         trial_calls.append({"receipt": dict(receipt), "kwargs": dict(kwargs)})
         return {
-            **dict(receipt),
-            "ok": bool(receipt.get("ok")),
+            "ok": True,
+            "mode": "immutable_candidate_trial_workspace",
             "trial": {
                 "status": "trial",
                 "candidate_id": candidate_id,
@@ -6813,11 +6874,6 @@ def test_completed_trial_reconciliation_recovers_only_missing_runtime_overlay(
             },
         }
 
-    monkeypatch.setattr(
-        BuilderAutomationService,
-        "_prepare_and_activate_aprobation_overlay",
-        activate,
-    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_ensure_governed_aprobation_trial",
@@ -6866,18 +6922,11 @@ def test_completed_trial_reconciliation_recovers_only_missing_runtime_overlay(
         }
     )
 
-    assert overlay_calls == [
-        {
-            "skill_ids": ["subscription_status_skill"],
-            "scenario_id": None,
-            "webspace_id": "desktop",
-        }
-    ]
-    assert len(trial_calls) == 2
-    assert trial_calls[0]["kwargs"] == {"record_update": False}
+    assert len(trial_calls) == 1
+    assert trial_calls[0]["kwargs"] == {}
     assert reconciled["completion_readiness"]["aprobation"]["ok"] is True
     assert reconciled["completion_readiness"]["workflow_reconciliation"]["status"] == (
-        "existing_trial_overlay_recovered"
+        "existing_trial_workspace_recovered"
     )
     assert reconciled["completion_readiness"]["workflow_reconciliation"][
         "candidate_id"
