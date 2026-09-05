@@ -265,14 +265,13 @@ def _local_runtime_base_url() -> str | None:
     configured = _configured_local_runtime_base_url()
     if configured:
         return configured
-    for key in (
-        "ADAOS_CONTROL_URL",
-        "ADAOS_CONTROL_BASE",
-        "ADAOS_SELF_BASE_URL",
-        "ADAOS_HUB_URL",
-        "ADAOS_API_BASE",
-        "ADAOS_BASE",
-    ):
+    explicit_control = ("ADAOS_CONTROL_URL", "ADAOS_CONTROL_BASE")
+    runtime_routes = (
+        ("ADAOS_HUB_URL", "ADAOS_SELF_BASE_URL")
+        if _supervisor_runtime_enabled()
+        else ("ADAOS_SELF_BASE_URL", "ADAOS_HUB_URL")
+    )
+    for key in (*explicit_control, *runtime_routes, "ADAOS_API_BASE", "ADAOS_BASE"):
         raw = str(os.getenv(key) or "").strip().rstrip("/")
         if raw:
             return raw

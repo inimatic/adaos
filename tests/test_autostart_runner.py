@@ -1,14 +1,29 @@
 from __future__ import annotations
 
 import json
+import os
 import signal
 import types
 from pathlib import Path
+
+import pytest
 
 from adaos.apps import autostart_runner
 from adaos.services import runtime_memory_profile
 from adaos.services.core_update_policy import SKIP_PENDING_CORE_UPDATE_ENV
 from adaos.services.supervisor_memory import read_memory_session_summary, supervisor_memory_session_artifacts_dir
+
+
+@pytest.fixture(autouse=True)
+def _restore_runtime_endpoint_env():
+    names = ("ADAOS_SELF_BASE_URL", "ADAOS_TOKEN")
+    previous = {name: os.environ.get(name) for name in names}
+    yield
+    for name, value in previous.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
 
 
 def test_terminal_update_status_does_not_own_later_runtime_failure(monkeypatch) -> None:

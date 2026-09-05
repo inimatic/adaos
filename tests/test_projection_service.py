@@ -772,7 +772,7 @@ def test_projection_service_surfaces_detached_persistence_failure(monkeypatch) -
     monkeypatch.setattr(
         projection_service_module,
         "run_detached_ydoc_mutation",
-        _fake_run_detached_with_update_callback(fake_state),
+        _fake_run_detached_with_update_callback(fake_state, update_bytes=128),
     )
     monkeypatch.setattr(projection_service_module, "_persist_detached_projection_store", _fail_persist)
 

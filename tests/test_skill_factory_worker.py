@@ -3797,6 +3797,7 @@ def test_worker_projects_task_scoped_mcp_lease_without_prompt_secret(
 ) -> None:
     monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
     monkeypatch.setenv("ADAOS_HUB_URL", "http://127.0.0.1:8778")
+    monkeypatch.setenv("ADAOS_SELF_BASE_URL", "http://127.0.0.1:8777")
     assignment = {
         "task_id": "task.lease",
         "target": {"type": "skill", "id": "demo"},
