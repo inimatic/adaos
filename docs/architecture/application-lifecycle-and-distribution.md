@@ -567,6 +567,14 @@ operations. SDK is the only supported programmatic interface for local
 consumers. MCP adapts SDK operations; it does not duplicate business logic or
 expose unrestricted filesystem, Git, registry, or process access.
 
+Product reads use an allowlisted release projection. They preserve the exact
+Application, publisher, release, package, dependency, provenance, and
+composition-lock identities needed for decisions, while replacing source with
+an explicit `redacted` marker and reducing migrations and free-form validation
+or acceptance evidence to counts and digest refs. Private repository names,
+source scopes, materialization paths, credentials, logs, and publisher-internal
+Dev Ticket data are not returned by `ApplicationsPlane`.
+
 Minimum user/agent SDK surface:
 
 ```text

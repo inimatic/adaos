@@ -6,6 +6,7 @@ filesystem paths, process commands, Git credentials, or raw registry writes.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -76,11 +77,101 @@ def _report_identity(
     return identity
 
 
+def _release_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
+    raw = dict(value)
+    project = raw.get("project_release")
+    project = dict(project) if isinstance(project, Mapping) else {}
+    components = []
+    for item in project.get("components") or ():
+        if not isinstance(item, Mapping):
+            continue
+        components.append({
+            key: deepcopy(item[key])
+            for key in (
+                "kind", "artifact_id", "version", "digest", "manifest_digest",
+                "builder_id", "build_policy_digest", "schema_locks",
+                "conversational_lock", "workflow_lock", "workflow_validation_lock",
+                "workflow_adapter_locks", "workflow_binding_digest",
+                "workflow_role_policy_digest",
+            )
+            if key in item
+        })
+    dependencies = []
+    for item in project.get("resolved_dependencies") or ():
+        if not isinstance(item, Mapping):
+            continue
+        dependencies.append({
+            key: deepcopy(item[key])
+            for key in (
+                "kind", "artifact_id", "version", "package_digest", "version_spec",
+                "optional",
+            )
+            if key in item
+        })
+    composition = project.get("composition_lock")
+    composition = dict(composition) if isinstance(composition, Mapping) else {}
+    safe_composition = {
+        key: deepcopy(composition[key])
+        for key in (
+            "schema", "project_definition_digest", "profiles", "members",
+            "project_dependencies",
+        )
+        if key in composition
+    }
+    safe_composition["entrypoint_ids"] = [
+        str(item.get("id") or "")
+        for item in composition.get("entrypoints") or ()
+        if isinstance(item, Mapping) and str(item.get("id") or "").strip()
+    ]
+    safe_project = {
+        key: deepcopy(project[key])
+        for key in (
+            "schema", "project_id", "version", "permissions", "schema_locks",
+            "migration_locks", "validation_evidence_refs", "release_digest",
+        )
+        if key in project
+    }
+    safe_project.update({
+        "components": components,
+        "resolved_dependencies": dependencies,
+        "composition_lock": safe_composition or None,
+        "migration": {
+            "required": bool(project.get("migrations")),
+            "count": len(project.get("migrations") or ()),
+        },
+        "validation_evidence_count": len(project.get("validation_evidence") or ()),
+        "private_source": "redacted",
+    })
+    return {
+        key: deepcopy(raw[key])
+        for key in (
+            "schema", "application_id", "publisher_ref", "legacy_project_id", "version",
+            "release_digest", "accepted_candidate_id", "provenance_refs",
+            "addresses_report_ids", "lifecycle", "published_at", "channels",
+        )
+        if key in raw
+    } | {
+        "project_release": safe_project,
+        "acceptance_evidence_count": len(raw.get("acceptance_evidence") or ()),
+    }
+
+
+def _application_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
+    model = deepcopy(dict(value))
+    effective = model.get("effective_release")
+    if isinstance(effective, dict) and isinstance(effective.get("release"), Mapping):
+        effective["release"] = _release_read_model(effective["release"])
+    return model
+
+
 def list_applications(*, installed_only: bool = False) -> list[dict[str, Any]]:
-    return _service().list_models(
-        installed_only=installed_only,
-        subscriber_subnet_ref=_local_subnet_ref(),
-    )
+    return [
+        _application_read_model(item)
+        for item in _service().list_models(
+            installed_only=installed_only,
+            subscriber_subnet_ref=_local_subnet_ref(),
+        )
+    ]
 
 
 def get_application(application_id: str) -> dict[str, Any]:
@@ -88,7 +179,7 @@ def get_application(application_id: str) -> dict[str, Any]:
     application = service.store.get_application(application_id)
     return next(
         item
-        for item in service.list_models(subscriber_subnet_ref=_local_subnet_ref())
+        for item in list_applications()
         if item["application"]["application_id"] == application.application_id
     )
 
@@ -96,14 +187,16 @@ def get_application(application_id: str) -> dict[str, Any]:
 def list_catalog() -> list[dict[str, Any]]:
     return [
         item
-        for item in _service().list_models(subscriber_subnet_ref=_local_subnet_ref())
+        for item in list_applications()
         if item["application"]["visibility"] == "public"
         and item["channels"].get("stable")
     ]
 
 
 def list_releases(application_id: str) -> list[dict[str, Any]]:
-    return _service().list_releases(application_id)
+    return [
+        _release_read_model(item) for item in _service().list_releases(application_id)
+    ]
 
 
 def get_subscription(application_id: str) -> dict[str, Any] | None:

@@ -166,3 +166,63 @@ def test_sdk_report_mutations_require_local_narrow_capability(monkeypatch) -> No
             )
     finally:
         register_development_report_service(None)
+
+
+def test_sdk_release_reads_preserve_identity_and_redact_private_source(monkeypatch) -> None:
+    digest = "sha256:" + "a" * 64
+    package_digest = "sha256:" + "b" * 64
+    raw_release = {
+        "schema": "adaos.application.release.v1",
+        "application_id": "app_private",
+        "publisher_ref": "subnet:publisher",
+        "legacy_project_id": "private",
+        "version": "1.0.0",
+        "release_digest": digest,
+        "accepted_candidate_id": "candidate.private.1",
+        "acceptance_evidence": [{"token": "secret", "path": "D:/private/source"}],
+        "provenance_refs": [digest],
+        "addresses_report_ids": [],
+        "lifecycle": "stable",
+        "project_release": {
+            "schema": "adaos.artifact.project_release.v1",
+            "project_id": "private",
+            "version": "1.0.0",
+            "source_ref": {
+                "repository": "private/repository", "path_scope": ["secret/"],
+            },
+            "components": [{
+                "kind": "scenario", "artifact_id": "private", "version": "1.0.0",
+                "digest": package_digest, "manifest_digest": digest,
+                "source_ref": {"repository": "private/repository"},
+                "materialization_path": "scenarios/private",
+            }],
+            "resolved_dependencies": [],
+            "permissions": ["network.read"],
+            "migrations": [{"command": "private-migration"}],
+            "validation_evidence": [{"log_path": "D:/private/log"}],
+            "schema_locks": [],
+            "migration_locks": [],
+            "validation_evidence_refs": [digest],
+            "release_digest": digest,
+        },
+    }
+
+    class Releases:
+        def list_releases(self, application_id):
+            assert application_id == "app_private"
+            return [raw_release]
+
+    monkeypatch.setattr(applications, "_service", lambda: Releases())
+    release = applications.list_releases("app_private")[0]
+    serialized = str(release)
+
+    assert release["release_digest"] == digest
+    assert release["publisher_ref"] == "subnet:publisher"
+    assert release["project_release"]["components"][0]["digest"] == package_digest
+    assert release["project_release"]["private_source"] == "redacted"
+    assert release["project_release"]["migration"] == {"required": True, "count": 1}
+    for private_value in (
+        "private/repository", "D:/private/source", "D:/private/log",
+        "private-migration", "materialization_path", "secret",
+    ):
+        assert private_value not in serialized

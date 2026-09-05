@@ -465,7 +465,7 @@ and its [roadmap](application-lifecycle-and-distribution-roadmap.md).
 - [x] `[must]` expose bounded Application list/detail, Catalog, release,
   installation, subscription, RuntimeSelection, operation, and public report
   status resources
-- [ ] `[must]` preserve exact release/package/publisher refs while redacting
+- [x] `[must]` preserve exact release/package/publisher refs while redacting
   private source, credentials, internal Dev Tickets, and raw external reports
 - [x] `[should]` add reconnect-safe operation subscription with polling fallback
   and structured recovery state

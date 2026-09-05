@@ -184,6 +184,10 @@ domain IDs, revisions, and intent only; paths, processes, registries, Git
 destinations/credentials, and keys stay inside trusted adapters. Full
 chat-driven use of these rails is the `APP4`/`APP6` proof and is not implied by
 this preparatory completion.
+Product release reads are allowlisted: exact release/package/publisher and
+composition-lock identities remain visible, while private source, build paths,
+credentials, and free-form validation/acceptance evidence are omitted or
+reduced to digest/count summaries.
 
 ## APP3. Prerelease Storage, Channels, and Access
 
