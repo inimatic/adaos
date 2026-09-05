@@ -365,34 +365,55 @@ class ArtifactPublicationService:
     def _migrate_legacy_trial_layouts(self) -> None:
         try:
             migrations = self.trial_workspaces.migrate_all()
-            for migration in migrations:
-                candidate_id = str(migration.get("candidate_id") or "").strip()
+            migrations_by_candidate = {
+                str(item.get("candidate_id") or "").strip(): item
+                for item in migrations
+                if str(item.get("candidate_id") or "").strip()
+            }
+            for activation in self.trial_activations.list_all():
+                candidate_ref = (
+                    activation.get("candidate_ref")
+                    if isinstance(activation.get("candidate_ref"), Mapping)
+                    else {}
+                )
+                candidate_id = str(candidate_ref.get("candidate_id") or "").strip()
                 if not candidate_id:
                     continue
-                activation = self.trial_activations.load(candidate_id)
-                if activation is None:
+                migration = migrations_by_candidate.get(candidate_id)
+                if migration is None:
+                    migration = self.trial_workspaces.load_receipt(candidate_id)
+                if not isinstance(migration, Mapping):
+                    continue
+                canonical = self.trial_workspaces.canonical(candidate_id)
+                if (
+                    str(migration.get("status") or "") != "completed"
+                    or not canonical.is_dir()
+                    or Path(str(migration.get("canonical_path") or "")).resolve()
+                    != canonical
+                ):
                     continue
                 binding = (
                     dict(activation.get("runtime_binding") or {})
                     if isinstance(activation.get("runtime_binding"), Mapping)
                     else {}
                 )
-                canonical = self.trial_workspaces.canonical(candidate_id)
-                if canonical.is_dir():
-                    binding.update(
-                        {
-                            "kind": "isolated_trial_workspace",
-                            "path": str(canonical),
-                            "channel": "beta",
-                            "authority": "immutable_candidate",
-                            "layout_schema": TRIAL_WORKSPACE_LAYOUT_SCHEMA,
-                        }
+                expected_binding = {
+                    **binding,
+                    "kind": "isolated_trial_workspace",
+                    "path": str(canonical),
+                    "channel": "beta",
+                    "authority": "immutable_candidate",
+                    "layout_schema": TRIAL_WORKSPACE_LAYOUT_SCHEMA,
+                }
+                if (
+                    binding != expected_binding
+                    or activation.get("layout_migration") != migration
+                ):
+                    self.trial_activations.update(
+                        candidate_id,
+                        runtime_binding=expected_binding,
+                        layout_migration=dict(migration),
                     )
-                self.trial_activations.update(
-                    candidate_id,
-                    runtime_binding=binding,
-                    layout_migration=migration,
-                )
         except TrialActivationError as exc:
             raise PublicationError(str(exc)) from exc
 
@@ -416,11 +437,15 @@ class ArtifactPublicationService:
                             "layout_schema": TRIAL_WORKSPACE_LAYOUT_SCHEMA,
                         }
                     )
-                    self.trial_activations.update(
-                        candidate_id,
-                        runtime_binding=binding,
-                        layout_migration=migration,
-                    )
+                    if (
+                        activation.get("runtime_binding") != binding
+                        or activation.get("layout_migration") != migration
+                    ):
+                        self.trial_activations.update(
+                            candidate_id,
+                            runtime_binding=binding,
+                            layout_migration=migration,
+                        )
             return workspace
         except TrialActivationError as exc:
             raise PublicationError(str(exc)) from exc

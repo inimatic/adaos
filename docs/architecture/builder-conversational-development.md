@@ -258,7 +258,7 @@ Candidate -> Release -> stable channel -> WorkspaceLock -> ProjectPlacement
 `TrialActivation` runs an immutable Candidate PackageRef. It never executes a
 mutable DEV directory directly and never moves the stable channel or primary
 WorkspaceLock selection. In the single-user MVP its files are materialized in
-an isolated Workspace-shaped `workspace/trials/<candidate-id>` root, while a
+an isolated Workspace-shaped `.adaos/trials/<candidate-id>` root, while a
 durable activation record retains the candidate digest, target Webspace,
 runtime bindings, data mode, expiry, previous bindings, and terminal/rollback
 status. Mutable DEV source is previewed only through `dev/.runtime`; stable

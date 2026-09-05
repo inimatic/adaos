@@ -167,7 +167,7 @@ ProjectRelease and package identities. A future `adaos-registry-beta`
 repository is a registry adapter for the beta channel, not a separate source of
 runtime truth. Stable catalog entries install into Workspace source/runtime;
 beta catalog entries install into isolated
-`workspace/trials/<candidate-id>` projections with beta provenance. Neither
+`.adaos/trials/<candidate-id>` projections with beta provenance. Neither
 catalog may capture mutable DEV source or `dev/.runtime`.
 
 It should not become:
@@ -556,7 +556,7 @@ Make Project publication plus `skill push` and `scenario push` update
   source closure, persist repository/branch/commit/path/channel receipts, and
   reject mutable DEV or unproven Trial input
 - [ ] `[must]` install/update beta into an exact
-  `workspace/trials/<candidate-id>` projection without mutating stable
+  `.adaos/trials/<candidate-id>` projection without mutating stable
   Workspace source, `workspace/.runtime`, WorkspaceLock, or subscription state
 - [ ] `[should]` support `adaos-registry-beta` through the shared normalizer and
   channel adapter rather than a second lifecycle model

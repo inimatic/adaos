@@ -549,7 +549,7 @@ runtime directly from DEV source.
 
 **Exit proof:** Builder previews mutable DEV source only in `dev/.runtime`,
 creates a candidate from an exact stable release, activates it below
-`workspace/trials/<candidate-id>`, preserves primary `workspace/.runtime`, and
+`.adaos/trials/<candidate-id>`, preserves primary `workspace/.runtime`, and
 records acceptance or rollback evidence. A legacy Trial is recovered without
 loss, and one chat-created Project completes this path through stable release.
 
@@ -580,23 +580,25 @@ make the non-recursive Trial layout and migration failure modes explicit.
   no-op rebuild.
 - [ ] `[deferred]` `AP4-10` Extract multiple-user WorkLogs into federated
   ChangeSets and public beta proposals.
-- [ ] `[must]` `AP4-11` Centralize runtime-root resolution and enforce three
+- [x] `[must]` `AP4-11` Centralize runtime-root resolution and enforce three
   authorities: mutable DEV previews under `dev/.runtime`, stable activation
   under primary `workspace/.runtime`, and immutable beta activation under
-  `workspace/trials/<candidate-id>`.
-- [ ] `[must]` `AP4-12` Make each Trial root reproduce the executable Workspace
+  `.adaos/trials/<candidate-id>`.
+- [x] `[must]` `AP4-12` Make each Trial root reproduce the executable Workspace
   shape and carry its own lock, runtime, Candidate provenance, health, and
-  rollback evidence. Exclude the parent `workspace/trials` tree from source
-  digests, package inputs, registry scans, and recursive materialization.
-- [ ] `[must]` `AP4-13` Move prepare, reload, health, reconcile, detach, rollback,
+  rollback evidence. Keep the sibling `.adaos/trials` tree outside stable
+  Workspace Git/source authority, package inputs, registry scans, and recursive
+  materialization.
+- [x] `[must]` `AP4-13` Move prepare, reload, health, reconcile, detach, rollback,
   recovery, and retention code from legacy
-  `workspace/.runtime/trials/<candidate-id>/workspace` to the canonical Trial
-  root without changing primary Workspace files or locks.
-- [ ] `[must]` `AP4-14` Add a journaled, idempotent legacy-layout migration that
+  `workspace/.runtime/trials/<candidate-id>/workspace` and the intermediate
+  `workspace/trials/<candidate-id>` layout to the canonical sibling Trial root
+  without changing primary Workspace files, Git excludes, or locks.
+- [x] `[must]` `AP4-14` Add a journaled, idempotent legacy-layout migration that
   detects both locations, rejects divergent duplicates, preserves active and
   rollback evidence, and deletes neither copy until the canonical result is
   durably verified.
-- [ ] `[must]` `AP4-15` Remove new dev-to-workspace overlay writes and alpha
+- [x] `[must]` `AP4-15` Remove new dev-to-workspace overlay writes and alpha
   Workspace controls from Builder, API, CLI, and Development Ticket paths;
   preserve old receipts as read-only history and route acceptance through an
   immutable TrialActivation.
@@ -610,6 +612,11 @@ make the non-recursive Trial layout and migration failure modes explicit.
 - [ ] `[could]` `AP4-18` Reuse immutable package files across retained Trial
   Workspaces through a verified copy-on-write or content-addressed strategy;
   keep the on-disk Workspace shape independent of that optimization.
+- [ ] `[should]` `AP4-19` Reconcile a Candidate/Trial created through the
+  Project CLI or another governed producer into Builder workflow delivery and
+  Process projection. The exact Trial is already selectable by deterministic
+  chat command, but the contextual Trial action must also appear without an
+  Automation-local delivery receipt.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md),
 candidate publication regressions in
@@ -621,6 +628,15 @@ and snapshot modes require isolation evidence, read-only/real modes require
 access safety proof, accepted trials require a successful health receipt, and
 every decision records duration and rollback disposition. Rejected isolated
 trial Workspaces are atomically detached into rollback history.
+
+Implementation evidence, 2026-09-05: `a3958e0ed` centralizes canonical and
+legacy Trial path resolution, creates a Workspace-compatible directory shape,
+migrates legacy roots under a digest-verified journal, routes exact Candidate
+content and skill declarations into beta Preview, makes rejection detach the
+whole Trial Workspace, and adds terminal retention. Targeted artifact,
+Builder, CLI, and Webspace regressions pass. `AP4-16` remains open until the
+accepted chat-created proof is promoted and published; `AP4-17` remains open
+because disk use and cleanup state are not yet projected to operators.
 
 ## Milestone AP5: Freshness Gate And Stable Promotion
 

@@ -157,6 +157,7 @@ class WebspaceBuilderPublicationService:
         from adaos.services.artifact_pipeline.trial_activation import (
             TrialActivationStore,
             legacy_runtime_trial_workspace,
+            legacy_workspace_trial_root,
             trial_workspace_root,
         )
         from adaos.services.runtime_paths import current_state_dir
@@ -191,12 +192,19 @@ class WebspaceBuilderPublicationService:
         )
         workspace_root = installed_scenario.parent.parent
         canonical_root = trial_workspace_root(workspace_root, candidate_id).resolve()
-        legacy_root = legacy_runtime_trial_workspace(
+        workspace_child_root = legacy_workspace_trial_root(
+            workspace_root, candidate_id
+        ).resolve()
+        runtime_nested_root = legacy_runtime_trial_workspace(
             workspace_root, candidate_id
         ).resolve()
         bound_path = str(runtime_binding.get("path") or "").strip()
         bound_root = Path(bound_path).resolve() if bound_path else canonical_root
-        if bound_root not in {canonical_root, legacy_root}:
+        if bound_root not in {
+            canonical_root,
+            workspace_child_root,
+            runtime_nested_root,
+        }:
             raise ValueError("Builder Trial activation points outside its governed root")
         canonical_contract = bool(
             bound_root == canonical_root
@@ -206,9 +214,9 @@ class WebspaceBuilderPublicationService:
             == "immutable_candidate"
         )
         legacy_contract = bool(
-            bound_root == legacy_root
+            bound_root in {workspace_child_root, runtime_nested_root}
             and str(runtime_binding.get("kind") or "").strip()
-            in {"", "derived_workspace_runtime"}
+            in {"", "derived_workspace_runtime", "isolated_trial_workspace"}
         )
         if not canonical_contract and not legacy_contract:
             raise ValueError("Builder Trial activation has no trusted source authority")

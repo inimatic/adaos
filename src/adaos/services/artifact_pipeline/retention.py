@@ -10,6 +10,7 @@ from typing import Any, Iterable, Mapping
 from adaos.domain.artifact_release import WorkspaceLock
 from adaos.services.artifact_pipeline.activation import WorkspaceActivationManager
 from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
+from adaos.services.artifact_pipeline.trial_activation import trial_workspace_root
 from adaos.services.artifact_pipeline.storage import (
     MutationLockTimeout,
     mutation_lock,
@@ -160,10 +161,11 @@ class ArtifactPipelineRetentionManager:
         return (
             self.activation.staging_root,
             self.activation.backups_root,
-            self.workspace_root / "trials",
+            self.workspace_root.parent / "trials",
             self.state_root / "trials",
             self.state_root / "trial-rollbacks",
             self.state_root / "legacy-trial-layout",
+            self.state_root / "legacy-trial-layout" / "workspace-child",
         )
 
     @staticmethod
@@ -373,7 +375,7 @@ class ArtifactPipelineRetentionManager:
                     continue
                 roots = [self.state_root / "trials" / candidate_id]
                 if status == "completed":
-                    roots.append(self.workspace_root / "trials" / candidate_id)
+                    roots.append(trial_workspace_root(self.workspace_root, candidate_id))
                 else:
                     roots.append(self.state_root / "trial-rollbacks" / candidate_id)
                 for root in roots:
@@ -397,17 +399,31 @@ class ArtifactPipelineRetentionManager:
                 ):
                     continue
                 candidate_id = str(migration.get("candidate_id") or "").strip()
-                archive = self.state_root / "legacy-trial-layout" / candidate_id
-                if (
-                    candidate_id
-                    and migration_path.stem == candidate_id
-                    and archive.is_dir()
-                    and _age_seconds(archive, now)
-                    >= self.policy.record_retention_seconds
-                ):
-                    actions.append(
-                        self._tree_action(archive, "expired_legacy_trial_layout", now)
-                    )
+                if not candidate_id or migration_path.stem != candidate_id:
+                    continue
+                archives = {
+                    self.state_root / "legacy-trial-layout" / candidate_id,
+                    self.state_root
+                    / "legacy-trial-layout"
+                    / "workspace-child"
+                    / candidate_id,
+                }
+                for raw in migration.get("legacy_archives") or []:
+                    if isinstance(raw, Mapping) and str(raw.get("path") or "").strip():
+                        archives.add(Path(str(raw["path"])).expanduser().resolve())
+                for archive in archives:
+                    if (
+                        archive.is_dir()
+                        and _age_seconds(archive, now)
+                        >= self.policy.record_retention_seconds
+                    ):
+                        actions.append(
+                            self._tree_action(
+                                archive,
+                                "expired_legacy_trial_layout",
+                                now,
+                            )
+                        )
         return actions
 
     @staticmethod

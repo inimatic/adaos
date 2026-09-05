@@ -5729,7 +5729,7 @@ def test_existing_trial_reconciles_missing_derived_workspace(
 
     service = _service(tmp_path)
     candidate_id = "candidate.demo"
-    trial_workspace = (tmp_path / "workspace" / "trials" / candidate_id).resolve()
+    trial_workspace = (tmp_path / "trials" / candidate_id).resolve()
     workflow = {
         "generation": 7,
         "delivery": {

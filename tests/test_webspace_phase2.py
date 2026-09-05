@@ -5385,7 +5385,7 @@ def test_builder_publication_preview_reads_workspace_snapshot(monkeypatch) -> No
 
 def test_builder_trial_preview_reads_exact_runtime_activation(monkeypatch, tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
-    runtime_workspace = tmp_path / "workspace" / "trials" / "candidate-1"
+    runtime_workspace = tmp_path / "trials" / "candidate-1"
     installed_scenario = tmp_path / "workspace" / "scenarios" / "recipes"
     installed_scenario.mkdir(parents=True)
     scenario_root = runtime_workspace / "scenarios" / "recipes"
@@ -5473,7 +5473,7 @@ def test_builder_trial_apply_uses_candidate_preflight_and_exact_skill_snapshot(
     workspace = tmp_path / "workspace"
     installed_scenario = workspace / "scenarios" / "recipes"
     installed_scenario.mkdir(parents=True)
-    trial_workspace = workspace / "trials" / "candidate-1"
+    trial_workspace = workspace.parent / "trials" / "candidate-1"
     trial_scenario = trial_workspace / "scenarios" / "recipes"
     trial_scenario.mkdir(parents=True)
     (trial_scenario / "scenario.yaml").write_text(

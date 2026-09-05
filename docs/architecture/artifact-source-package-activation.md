@@ -95,7 +95,7 @@ deferred until the single-user loop is stable.
 | DEV context | Mutable, isolated worktree or checkout created from a SourceRef. |
 | DEV runtime | Disposable preview target materialized directly from mutable DEV source. |
 | Workspace runtime | Stable user-facing runtime projection materialized from an immutable WorkspaceLock release. |
-| Trial Workspace | Isolated beta projection under `workspace/trials/<candidate-id>` that reproduces the executable Workspace layout from immutable Candidate packages. |
+| Trial Workspace | Isolated beta projection under `.adaos/trials/<candidate-id>` that reproduces the executable Workspace layout from immutable Candidate packages. |
 | Builder Development Session | Mutable policy overlay that selects development targets and read-only context for one Project iteration; it is not distributed. |
 | Trial | Reversible candidate activation for an explicitly bounded audience and data policy. |
 
@@ -297,18 +297,19 @@ package implicitly.
 Workspace is an activated package projection, not a development checkout. The
 primary `workspace/.runtime` projection is stable and is selected only from an
 immutable WorkspaceLock release. A beta Trial is materialized as an isolated
-Workspace-shaped root under `workspace/trials/<candidate-id>`; its own
+Workspace-shaped root under `.adaos/trials/<candidate-id>`; its own
 component tree, metadata, lock, and runtime state cannot replace or share
 authority with the primary Workspace. It is never built directly from mutable
 DEV source. DEV preview uses `dev/.runtime`, which is disposable and cannot
 become publication evidence by itself.
 
-`workspace/trials/<candidate-id>` reproduces the executable Workspace shape,
+`.adaos/trials/<candidate-id>` reproduces the executable Workspace shape,
 including `skills`, `scenarios`, `projects`, `.adaos/workspace.lock.json`, and
-derived runtime directories required by the selected packages. The parent
-`workspace/trials` directory is a control boundary: it is excluded from source
-digests, registry scans, package inputs, Workspace cloning, and nested Trial
-materialization.
+derived runtime directories required by the selected packages. The sibling
+`.adaos/trials` directory is a local derived-state boundary outside stable
+Workspace source and Git authority. It is excluded from source digests,
+registry scans, package inputs, Workspace cloning, and nested Trial
+materialization without modifying Workspace-local Git excludes.
 
 The authoritative record is `WorkspaceLock`:
 
@@ -800,7 +801,7 @@ from the immutable candidate:
 DEV source
   -> Candidate PackageRef
   -> durable beta TrialActivation
-  -> workspace/trials/<candidate-id> materialization
+  -> .adaos/trials/<candidate-id> materialization
   -> trial-local runtime
   -> Webspace-scoped runtime binding
   -> optional launcher placement with Trial/beta badge
@@ -841,7 +842,7 @@ and audience rollout policy remain deferred extension seams.
 ### Beta Subscription And Update
 
 Beta installation follows the same package-backed route as stable installation,
-but targets an isolated `workspace/trials/<candidate-id>` projection with beta
+but targets an isolated `.adaos/trials/<candidate-id>` projection with beta
 provenance. It does not write Workspace stable source, replace
 `workspace/.runtime`, move the stable channel, or close user feedback as
 verified. A separate `adaos-registry-beta` repository, if used, is a registry

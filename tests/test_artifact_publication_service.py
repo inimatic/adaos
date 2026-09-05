@@ -21,6 +21,8 @@ from adaos.services.artifact_pipeline import (
     ReleaseAttestationSet,
     ReleasePlan,
     ReleaseRepository,
+    TrialActivationStore,
+    TrialWorkspaceLayout,
     WorkspaceActivationManager,
 )
 from adaos.services.artifact_pipeline import packages as package_module
@@ -535,7 +537,7 @@ def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path
     assert trial.reload_receipt["status"] == "skipped"
     assert trial.health_receipt["status"] == "passed"
     assert prepared.trial_workspace == (
-        workspace / "trials" / prepared.candidate.candidate_id
+        workspace.parent / "trials" / prepared.candidate.candidate_id
     )
     assert prepared.trial_activation["schema"] == "adaos.trial.activation.v1"
     assert prepared.trial_activation["status"] == "active"
@@ -596,6 +598,66 @@ def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path
     assert (
         workspace / "scenarios" / "recipes" / "tests" / "test_scenario.py"
     ).is_file()
+
+
+def test_startup_reconciles_trial_binding_after_layout_move_interruption(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    nested_trial = workspace / "trials" / "candidate-1"
+    (nested_trial / "scenarios" / "recipes").mkdir(parents=True)
+    (nested_trial / "scenarios" / "recipes" / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.0.0\n",
+        encoding="utf-8",
+    )
+    state = tmp_path / "state"
+    activations = TrialActivationStore(state / "trial-activations")
+    activations.save(
+        {
+            "schema": "adaos.trial.activation.v1",
+            "candidate_ref": {
+                "candidate_id": "candidate-1",
+                "release_digest": "sha256:" + "a" * 64,
+                "package_digest": "sha256:" + "b" * 64,
+            },
+            "runtime_binding": {
+                "kind": "isolated_trial_workspace",
+                "path": str(nested_trial.resolve()),
+                "channel": "beta",
+                "authority": "immutable_candidate",
+            },
+            "status": "active",
+            "idempotency_key": "candidate-trial:candidate-1",
+            "updated_at": "2026-09-05T00:00:00+00:00",
+        }
+    )
+    layout = TrialWorkspaceLayout(workspace_root=workspace, state_root=state)
+
+    migrations = layout.migrate_all()
+
+    assert len(migrations) == 1
+    canonical = tmp_path / "trials" / "candidate-1"
+    assert canonical.is_dir()
+    assert activations.load("candidate-1")["runtime_binding"]["path"] == str(
+        nested_trial.resolve()
+    )
+
+    ArtifactPublicationService(
+        state_root=state,
+        workspace_root=workspace,
+        remote=_Remote(tmp_path / "remote"),
+    )
+
+    reconciled = activations.load("candidate-1")
+    assert reconciled is not None
+    assert reconciled["runtime_binding"] == {
+        "kind": "isolated_trial_workspace",
+        "path": str(canonical.resolve()),
+        "channel": "beta",
+        "authority": "immutable_candidate",
+        "layout_schema": "adaos.trial.workspace_layout.v1",
+    }
+    assert reconciled["layout_migration"]["status"] == "completed"
 
 
 def test_workflow_publication_admission_precedes_channel_and_binds_all_locks(

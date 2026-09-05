@@ -311,7 +311,7 @@ Checklist:
   source updates only `dev/.runtime`; stable runs only from
   `workspace/.runtime` backed by WorkspaceLock evidence.
 - [ ] `[must]` Materialize beta only as an immutable, Workspace-shaped
-  `workspace/trials/<candidate-id>` projection and route the selected Webspace
+  `.adaos/trials/<candidate-id>` projection and route the selected Webspace
   to it without changing the stable Workspace runtime.
 - [ ] `[should]` Expose exact DEV/beta/stable provenance and legacy Trial-layout
   migration diagnostics in Builder and operator surfaces.

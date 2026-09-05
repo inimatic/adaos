@@ -12,7 +12,6 @@ from typing import Any, Mapping
 from adaos.domain.artifact_release import WorkspaceLock
 from adaos.services.artifact_pipeline.releases import ReleasePlan
 from adaos.services.artifact_pipeline.storage import (
-    atomic_write_bytes,
     atomic_write_json,
     mutation_lock,
     replace_with_retry,
@@ -56,9 +55,24 @@ def _workspace_child(workspace_root: Path, *parts: str) -> Path:
 
 
 def trial_workspace_root(workspace_root: Path, candidate_id: str) -> Path:
-    """Return the canonical Workspace-shaped root for an immutable Trial."""
+    """Return the canonical sibling root for an immutable Trial Workspace."""
 
-    return _workspace_child(workspace_root, "trials", _safe_candidate_id(candidate_id))
+    workspace = Path(workspace_root).resolve()
+    return _workspace_child(
+        workspace.parent,
+        "trials",
+        _safe_candidate_id(candidate_id),
+    )
+
+
+def legacy_workspace_trial_root(workspace_root: Path, candidate_id: str) -> Path:
+    """Return the superseded Trial root that was nested below Workspace."""
+
+    return _workspace_child(
+        workspace_root,
+        "trials",
+        _safe_candidate_id(candidate_id),
+    )
 
 
 def legacy_runtime_trial_root(workspace_root: Path, candidate_id: str) -> Path:
@@ -151,6 +165,9 @@ class TrialWorkspaceLayout:
     def legacy(self, candidate_id: str) -> Path:
         return legacy_runtime_trial_workspace(self.workspace_root, candidate_id)
 
+    def legacy_workspace_child(self, candidate_id: str) -> Path:
+        return legacy_workspace_trial_root(self.workspace_root, candidate_id)
+
     def receipt_path(self, candidate_id: str) -> Path:
         return self.migration_root / f"{_safe_candidate_id(candidate_id)}.json"
 
@@ -189,35 +206,106 @@ class TrialWorkspaceLayout:
             legacy_runtime.rmdir()
         return str(archive)
 
-    def _ensure_git_exclude(self) -> None:
-        """Keep derived Trial roots outside the stable Workspace Git authority."""
-
-        git_dir = self.workspace_root / ".git"
-        if not git_dir.is_dir():
-            return
-        exclude = git_dir / "info" / "exclude"
-        lock = exclude.with_name(f"{exclude.name}.lock")
-        with mutation_lock(lock):
-            try:
-                current = exclude.read_text(encoding="utf-8-sig")
-            except FileNotFoundError:
-                current = ""
-            except UnicodeError as exc:
-                raise TrialActivationError(
-                    "Workspace Git exclude is not valid UTF-8"
-                ) from exc
-            entries = {
-                line.strip()
-                for line in current.splitlines()
-                if line.strip() and not line.lstrip().startswith("#")
-            }
-            if "/trials/" in entries or "trials/" in entries:
-                return
-            separator = "" if not current or current.endswith(("\n", "\r")) else "\n"
-            atomic_write_bytes(
-                exclude,
-                f"{current}{separator}/trials/\n".encode("utf-8"),
+    def _archive_workspace_child(self, candidate_id: str) -> str | None:
+        token = _safe_candidate_id(candidate_id)
+        source = self.legacy_workspace_child(token)
+        archive = self.legacy_archive_root / "workspace-child" / token
+        if not source.exists():
+            return str(archive) if archive.is_dir() else None
+        if archive.exists():
+            raise TrialActivationError(
+                "nested Workspace Trial archive already exists; reconciliation is required"
             )
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        replace_with_retry(source, archive)
+        parent = self.workspace_root / "trials"
+        if parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+        return str(archive)
+
+    def _preserve_receipt(
+        self,
+        candidate_id: str,
+        receipt: Mapping[str, Any] | None,
+    ) -> str | None:
+        if receipt is None:
+            return None
+        payload = copy.deepcopy(dict(receipt))
+        digest = hashlib.sha256(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        target = (
+            self.migration_root
+            / "history"
+            / _safe_candidate_id(candidate_id)
+            / f"{digest}.json"
+        )
+        if not target.is_file():
+            atomic_write_json(target, payload)
+        return str(target)
+
+    def _legacy_sources(self, candidate_id: str) -> list[tuple[str, Path]]:
+        token = _safe_candidate_id(candidate_id)
+        sources = (
+            ("workspace_child", self.legacy_workspace_child(token)),
+            ("runtime_nested", self.legacy(token)),
+        )
+        result: list[tuple[str, Path]] = []
+        for layout, path in sources:
+            if path.exists() and not path.is_dir():
+                raise TrialActivationError(
+                    f"legacy Trial Workspace path is not a directory: {path}"
+                )
+            if path.is_dir():
+                result.append((layout, path))
+        return result
+
+    def _finalize_legacy_sources(
+        self,
+        candidate_id: str,
+        canonical: Path,
+    ) -> list[dict[str, str]]:
+        token = _safe_candidate_id(candidate_id)
+        canonical_digest = _tree_digest(canonical)
+        archives: list[dict[str, str]] = []
+        workspace_child = self.legacy_workspace_child(token)
+        if workspace_child.is_dir():
+            if _tree_digest(workspace_child) != canonical_digest:
+                raise TrialActivationError(
+                    "canonical and nested Workspace Trial roots diverge"
+                )
+            archived = self._archive_workspace_child(token)
+            if archived:
+                archives.append({"layout": "workspace_child", "path": archived})
+        else:
+            parent = self.workspace_root / "trials"
+            if parent.is_dir() and not any(parent.iterdir()):
+                parent.rmdir()
+
+        runtime_wrapper = legacy_runtime_trial_root(self.workspace_root, token)
+        runtime_workspace = self.legacy(token)
+        if runtime_workspace.is_dir() and _tree_digest(runtime_workspace) != canonical_digest:
+            raise TrialActivationError(
+                "canonical and runtime-nested Trial roots diverge"
+            )
+        if runtime_wrapper.exists():
+            archived = self._archive_legacy_wrapper(token)
+            if archived:
+                archives.append({"layout": "runtime_wrapper", "path": archived})
+        return archives
+
+    @staticmethod
+    def _legacy_archive_value(archives: list[dict[str, str]]) -> str | None:
+        runtime = next(
+            (item["path"] for item in archives if item["layout"] == "runtime_wrapper"),
+            None,
+        )
+        return runtime or (archives[0]["path"] if archives else None)
 
     def _resume_migration(
         self,
@@ -242,7 +330,9 @@ class TrialWorkspaceLayout:
         resumed["status"] = "verified"
         resumed["target_digest"] = target_digest
         atomic_write_json(self.receipt_path(candidate_id), resumed)
-        resumed["legacy_archive"] = self._archive_legacy_wrapper(candidate_id)
+        archives = self._finalize_legacy_sources(candidate_id, canonical)
+        resumed["legacy_archives"] = archives
+        resumed["legacy_archive"] = self._legacy_archive_value(archives)
         resumed["status"] = "completed"
         resumed["completed_at"] = _now()
         atomic_write_json(self.receipt_path(candidate_id), resumed)
@@ -253,24 +343,51 @@ class TrialWorkspaceLayout:
 
         token = _safe_candidate_id(candidate_id)
         canonical = self.canonical(token)
-        legacy = self.legacy(token)
         receipt_path = self.receipt_path(token)
-        self._ensure_git_exclude()
         with mutation_lock(receipt_path.with_suffix(".lock")):
             canonical_exists = canonical.is_dir()
-            legacy_exists = legacy.is_dir()
             if canonical.exists() and not canonical_exists:
                 raise TrialActivationError("canonical Trial Workspace path is not a directory")
-            if legacy.exists() and not legacy_exists:
-                raise TrialActivationError("legacy Trial Workspace path is not a directory")
-            if not legacy_exists:
-                receipt = self.load_receipt(token)
-                if receipt is None:
-                    return canonical, None
-                resumed = self._resume_migration(token, canonical, receipt)
+            previous = self.load_receipt(token)
+            if previous is not None and str(previous.get("status") or "") in {
+                "prepared",
+                "verified",
+                "verified_duplicate",
+            }:
+                resumed = self._resume_migration(token, canonical, previous)
                 return canonical, resumed
 
-            source_digest = _tree_digest(legacy)
+            sources = self._legacy_sources(token)
+            if not sources:
+                if canonical_exists:
+                    recorded_path = str(
+                        (previous or {}).get("canonical_path") or ""
+                    ).strip()
+                    if recorded_path and Path(recorded_path).resolve() != canonical:
+                        raise TrialActivationError(
+                            "Trial migration receipt points to another canonical root"
+                        )
+                    return canonical, previous
+                if previous is not None:
+                    raise TrialActivationError(
+                        "completed Trial migration has no canonical or legacy Workspace"
+                    )
+                return canonical, None
+
+            source_records = [
+                {
+                    "layout": layout,
+                    "path": str(path),
+                    "digest": _tree_digest(path),
+                }
+                for layout, path in sources
+            ]
+            source_digests = {item["digest"] for item in source_records}
+            if len(source_digests) != 1:
+                raise TrialActivationError(
+                    "legacy Trial Workspaces diverge; manual reconciliation is required"
+                )
+            source_digest = str(source_records[0]["digest"])
             started_at = _now()
             if canonical_exists:
                 target_digest = _tree_digest(canonical)
@@ -282,35 +399,47 @@ class TrialWorkspaceLayout:
                     "schema": TRIAL_WORKSPACE_LAYOUT_SCHEMA,
                     "candidate_id": token,
                     "status": "verified_duplicate",
-                    "legacy_path": str(legacy),
+                    "source_layout": source_records[0]["layout"],
+                    "legacy_path": source_records[0]["path"],
+                    "legacy_paths": source_records,
                     "canonical_path": str(canonical),
                     "source_digest": source_digest,
                     "target_digest": target_digest,
                     "started_at": started_at,
                     "completed_at": started_at,
                 }
+                previous_receipt = self._preserve_receipt(token, previous)
+                if previous_receipt:
+                    receipt["previous_receipt"] = previous_receipt
                 atomic_write_json(receipt_path, receipt)
-                archive = self._archive_legacy_wrapper(token)
+                archives = self._finalize_legacy_sources(token, canonical)
                 receipt["status"] = "completed"
-                receipt["legacy_archive"] = archive
+                receipt["legacy_archives"] = archives
+                receipt["legacy_archive"] = self._legacy_archive_value(archives)
                 receipt["completed_at"] = _now()
                 atomic_write_json(receipt_path, receipt)
                 return canonical, copy.deepcopy(receipt)
 
+            source_layout, source = sources[0]
             receipt = {
                 "schema": TRIAL_WORKSPACE_LAYOUT_SCHEMA,
                 "candidate_id": token,
                 "status": "prepared",
-                "legacy_path": str(legacy),
+                "source_layout": source_layout,
+                "legacy_path": str(source),
+                "legacy_paths": source_records,
                 "canonical_path": str(canonical),
                 "source_digest": source_digest,
                 "target_digest": None,
                 "started_at": started_at,
                 "completed_at": None,
             }
+            previous_receipt = self._preserve_receipt(token, previous)
+            if previous_receipt:
+                receipt["previous_receipt"] = previous_receipt
             atomic_write_json(receipt_path, receipt)
             canonical.parent.mkdir(parents=True, exist_ok=True)
-            replace_with_retry(legacy, canonical)
+            replace_with_retry(source, canonical)
             target_digest = _tree_digest(canonical)
             if target_digest != source_digest:
                 raise TrialActivationError(
@@ -319,45 +448,62 @@ class TrialWorkspaceLayout:
             receipt["status"] = "verified"
             receipt["target_digest"] = target_digest
             atomic_write_json(receipt_path, receipt)
-            archive = self._archive_legacy_wrapper(token)
+            archives = self._finalize_legacy_sources(token, canonical)
             receipt["status"] = "completed"
-            receipt["legacy_archive"] = archive
+            receipt["legacy_archives"] = archives
+            receipt["legacy_archive"] = self._legacy_archive_value(archives)
             receipt["completed_at"] = _now()
             atomic_write_json(receipt_path, receipt)
             return canonical, copy.deepcopy(receipt)
 
     def migrate_all(self) -> list[dict[str, Any]]:
-        legacy_trials = self.workspace_root / ".runtime" / "trials"
-        if not legacy_trials.is_dir():
-            return []
-        receipts: list[dict[str, Any]] = []
-        for entry in sorted(legacy_trials.iterdir(), key=lambda item: item.name):
-            if not entry.is_dir():
-                raise TrialActivationError(
-                    f"unexpected entry in legacy Trial root: {entry}"
-                )
-            token = _safe_candidate_id(entry.name)
-            if (entry / "workspace").is_dir():
-                _, receipt = self.ensure(token)
-                if receipt is not None:
-                    receipts.append(receipt)
+        candidate_ids: set[str] = set()
+        for parent in (
+            self.workspace_root / "trials",
+            self.workspace_root / ".runtime" / "trials",
+        ):
+            if not parent.is_dir():
                 continue
-            receipt_path = self.receipt_path(token)
-            with mutation_lock(receipt_path.with_suffix(".lock")):
-                archived = self._archive_legacy_wrapper(token)
-                receipt = {
-                    "schema": TRIAL_WORKSPACE_LAYOUT_SCHEMA,
-                    "candidate_id": token,
-                    "status": "archived_legacy_metadata",
-                    "legacy_path": str(entry),
-                    "canonical_path": str(self.canonical(token)),
-                    "source_digest": None,
-                    "target_digest": None,
-                    "legacy_archive": archived,
-                    "started_at": _now(),
-                    "completed_at": _now(),
-                }
-                atomic_write_json(receipt_path, receipt)
+            for entry in parent.iterdir():
+                if not entry.is_dir():
+                    raise TrialActivationError(
+                        f"unexpected entry in legacy Trial root: {entry}"
+                    )
+                candidate_ids.add(_safe_candidate_id(entry.name))
+        receipts: list[dict[str, Any]] = []
+        for token in sorted(candidate_ids):
+            runtime_wrapper = legacy_runtime_trial_root(self.workspace_root, token)
+            if not self._legacy_sources(token) and runtime_wrapper.is_dir():
+                receipt_path = self.receipt_path(token)
+                with mutation_lock(receipt_path.with_suffix(".lock")):
+                    previous = self.load_receipt(token)
+                    previous_receipt = self._preserve_receipt(token, previous)
+                    started_at = _now()
+                    archived = self._archive_legacy_wrapper(token)
+                    receipt = {
+                        "schema": TRIAL_WORKSPACE_LAYOUT_SCHEMA,
+                        "candidate_id": token,
+                        "status": "archived_legacy_metadata",
+                        "legacy_path": str(runtime_wrapper),
+                        "canonical_path": str(self.canonical(token)),
+                        "source_digest": None,
+                        "target_digest": None,
+                        "legacy_archive": archived,
+                        "legacy_archives": (
+                            [{"layout": "runtime_wrapper", "path": archived}]
+                            if archived
+                            else []
+                        ),
+                        "started_at": started_at,
+                        "completed_at": _now(),
+                    }
+                    if previous_receipt:
+                        receipt["previous_receipt"] = previous_receipt
+                    atomic_write_json(receipt_path, receipt)
+                receipts.append(receipt)
+                continue
+            _, receipt = self.ensure(token)
+            if receipt is not None:
                 receipts.append(receipt)
         return receipts
 
@@ -568,6 +714,16 @@ class TrialActivationStore:
             atomic_write_json(path, record)
         return copy.deepcopy(record)
 
+    def list_all(self) -> list[dict[str, Any]]:
+        if not self.root.is_dir():
+            return []
+        records: list[dict[str, Any]] = []
+        for path in sorted(self.root.glob("*.json"), key=lambda item: item.name):
+            record = self.load(path.stem)
+            if record is not None:
+                records.append(record)
+        return records
+
     def find_for_target(
         self,
         *,
@@ -619,6 +775,7 @@ __all__ = [
     "ensure_trial_workspace_shape",
     "legacy_runtime_trial_root",
     "legacy_runtime_trial_workspace",
+    "legacy_workspace_trial_root",
     "load_workspace_lock",
     "runtime_trial_root",
     "runtime_trial_workspace",

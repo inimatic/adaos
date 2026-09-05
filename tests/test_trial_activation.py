@@ -19,6 +19,7 @@ from adaos.services.artifact_pipeline.trial_activation import (
     ensure_trial_workspace_shape,
     legacy_runtime_trial_root,
     legacy_runtime_trial_workspace,
+    legacy_workspace_trial_root,
     shared_skill_conflicts,
     trial_workspace_root,
 )
@@ -104,7 +105,7 @@ def test_trial_workspace_uses_workspace_shaped_sibling_root(tmp_path: Path) -> N
     workspace = tmp_path / "workspace"
 
     assert trial_workspace_root(workspace, "candidate-1") == (
-        workspace / "trials" / "candidate-1"
+        tmp_path / "trials" / "candidate-1"
     ).resolve()
     with pytest.raises(TrialActivationError, match="safe Trial path"):
         trial_workspace_root(workspace, "candidate:1")
@@ -112,7 +113,7 @@ def test_trial_workspace_uses_workspace_shaped_sibling_root(tmp_path: Path) -> N
 
 def test_trial_workspace_shape_includes_source_and_runtime_roots(tmp_path: Path) -> None:
     trial = ensure_trial_workspace_shape(
-        tmp_path / "workspace" / "trials" / "candidate-1"
+        tmp_path / "trials" / "candidate-1"
     )
 
     assert trial.is_dir()
@@ -153,6 +154,46 @@ def test_trial_workspace_layout_migrates_legacy_runtime_tree(tmp_path: Path) -> 
     assert receipt["status"] == "completed"
     assert receipt["source_digest"] == receipt["target_digest"]
     assert (Path(receipt["legacy_archive"]) / "operation.json").is_file()
+
+
+def test_trial_workspace_layout_migrates_nested_workspace_tree_and_preserves_receipt(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    state = tmp_path / "state"
+    candidate_id = "candidate-1"
+    nested = legacy_workspace_trial_root(workspace, candidate_id)
+    (nested / "scenarios" / "demo").mkdir(parents=True)
+    (nested / "scenarios" / "demo" / "scenario.yaml").write_text(
+        "id: demo\nversion: 1.0.0\n",
+        encoding="utf-8",
+    )
+    receipt_path = state / "trial-layout-migrations" / f"{candidate_id}.json"
+    receipt_path.parent.mkdir(parents=True)
+    receipt_path.write_text(
+        "{\n"
+        '  "schema": "adaos.trial.workspace_layout.v1",\n'
+        '  "candidate_id": "candidate-1",\n'
+        '  "status": "completed",\n'
+        f'  "canonical_path": "{nested.as_posix()}"\n'
+        "}\n",
+        encoding="utf-8",
+    )
+
+    canonical, receipt = TrialWorkspaceLayout(
+        workspace_root=workspace,
+        state_root=state,
+    ).ensure(candidate_id)
+
+    assert canonical == (tmp_path / "trials" / candidate_id).resolve()
+    assert (canonical / "scenarios" / "demo" / "scenario.yaml").is_file()
+    assert not nested.exists()
+    assert not (workspace / "trials").exists()
+    assert receipt is not None
+    assert receipt["status"] == "completed"
+    assert receipt["source_layout"] == "workspace_child"
+    assert receipt["source_digest"] == receipt["target_digest"]
+    assert Path(receipt["previous_receipt"]).is_file()
 
 
 def test_trial_workspace_layout_rejects_divergent_duplicate(tmp_path: Path) -> None:
@@ -211,7 +252,7 @@ def test_trial_workspace_layout_resumes_verified_interrupted_move(
     assert (Path(receipt["legacy_archive"]) / "operation.json").is_file()
 
 
-def test_trial_workspace_layout_adds_local_git_exclude_idempotently(
+def test_trial_workspace_layout_does_not_modify_stable_workspace_git_exclude(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -226,6 +267,7 @@ def test_trial_workspace_layout_adds_local_git_exclude_idempotently(
     layout.ensure("candidate-1")
     layout.ensure("candidate-2")
 
-    assert exclude.read_text(encoding="utf-8") == (
-        "# local rules\n.cache/\n/trials/\n"
-    )
+    assert exclude.read_text(encoding="utf-8") == "# local rules\n.cache/\n"
+    assert layout.canonical("candidate-1") == (
+        tmp_path / "trials" / "candidate-1"
+    ).resolve()

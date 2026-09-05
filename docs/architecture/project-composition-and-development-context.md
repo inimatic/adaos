@@ -81,7 +81,7 @@ The research-domain workflow remains owned by
 17. Builder has a separate DEV runtime target. `dev/.runtime` is the only
     runtime materialized directly from mutable DEV source. Stable runs from
     `workspace/.runtime`; beta runs from an immutable, Workspace-shaped
-    `workspace/trials/<candidate-id>` projection. `alpha` is not a Workspace
+    `.adaos/trials/<candidate-id>` projection. `alpha` is not a Workspace
     activation stage.
 
 ## Vocabulary
@@ -98,7 +98,7 @@ The research-domain workflow remains owned by
 | Development target | Component that the current session may change | Whatever is selected in the UI |
 | DEV runtime | Disposable preview/runtime target built from mutable DEV source | Installed Workspace runtime or release evidence |
 | Workspace runtime | Stable user-facing runtime projection selected from WorkspaceLock release evidence | Editable source checkout, beta Trial, or implicit DEV preview |
-| Trial Workspace | Isolated beta projection under `workspace/trials/<candidate-id>` with Workspace-compatible structure and candidate provenance | A child of `workspace/.runtime` or a mutable DEV checkout |
+| Trial Workspace | Isolated beta projection under `.adaos/trials/<candidate-id>` with Workspace-compatible structure and candidate provenance | A child of stable `workspace`, `workspace/.runtime`, or a mutable DEV checkout |
 | Context member | Read-only or filtered dependency visible to an agent | Implicit write authority |
 | Artifact group | Manifested local source material intended for human/LLM/Codex context | Mutable experiment/runtime data |
 | Runtime data | Skill-owned operational state under its activated runtime bucket | Project source or intake material |
@@ -259,7 +259,7 @@ therefore exposes the complete gated Project lifecycle:
   publication evidence;
 - `trial` snapshots the accepted DEV source into an immutable beta Candidate
   and isolated TrialActivation, then materializes the candidate under
-  `workspace/trials/<candidate-id>` with explicit Trial/beta provenance and a
+  `.adaos/trials/<candidate-id>` with explicit Trial/beta provenance and a
   Workspace-compatible structure. Mutable DEV source is never the stable or
   Trial runtime authority;
 - `trial-decide ... accept` records user acceptance of that exact candidate
@@ -290,7 +290,7 @@ DEV source
   -> owned-component Forge checkpoint
   -> immutable ProjectRelease checkpoint
   -> Trial source + beta Candidate
-  -> workspace/trials/<candidate-id> Trial/beta activation
+  -> .adaos/trials/<candidate-id> Trial/beta activation
   -> accepted beta evidence
   -> Workspace source + stable WorkspaceLock
   -> workspace/.runtime stable activation
@@ -304,10 +304,11 @@ showing a stale `beta` label after an exact stable promotion. `Alpha`, if used
 in UI copy at all, names the local DEV preview only and must not imply that the
 Workspace runtime was built from mutable DEV source.
 
-`workspace/trials` is excluded from Project source closure, package input,
-registry discovery, and Workspace-copy operations. This prevents a Trial from
-capturing another Trial recursively and keeps stable source identity independent
-from retained beta projections.
+`.adaos/trials` is a sibling of `workspace` and is excluded from Project source
+closure, package input, registry discovery, and Workspace-copy operations. This
+prevents a Trial from capturing another Trial recursively, avoids modifying the
+stable Workspace repository's Git excludes, and keeps stable source identity
+independent from retained beta projections.
 
 The ProjectRelease is the runtime-recoverable checkpoint. Developer-only
 component source can additionally use the existing skill/scenario Forge draft

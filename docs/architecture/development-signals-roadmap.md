@@ -390,21 +390,21 @@ Ticket and signals, and closes only with evidence.
 - [ ] `[must]` `DS5-36` Close the complete Project delivery chain with one
   resumable identity: project-level owned-component checkpoint, immutable
   release, `dev/.runtime` preview, isolated
-  `workspace/trials/<candidate-id>` activation, accepted beta evidence,
+  `.adaos/trials/<candidate-id>` activation, accepted beta evidence,
   health-gated local Workspace promotion, and exact path-scoped GitHub
   `adaos-registry` publication. Persist the final
   repository/branch/commit/path receipt and prove the sequence on a fresh
   chat-created Project through GitHub CI.
-- [ ] `[must]` `DS5-37` Replace the compatibility dev-to-workspace overlay with
+- [x] `[must]` `DS5-37` Replace the compatibility dev-to-workspace overlay with
   the target runtime split: mutable DEV source can update only `dev/.runtime`;
   stable uses primary `workspace/.runtime`; beta uses only the exact immutable
-  `workspace/trials/<candidate-id>` projection. Retire alpha Workspace badges
+  `.adaos/trials/<candidate-id>` projection. Retire alpha Workspace badges
   and overlay acceptance controls.
-- [ ] `[must]` `DS5-38` Preserve compatibility overlay receipts and ticket
+- [x] `[must]` `DS5-38` Preserve compatibility overlay receipts and ticket
   backlinks as read-only evidence while preventing replay from creating a new
   overlay; migrate pending eligible work to Candidate/Trial decisions with an
   explicit operation receipt.
-- [ ] `[must]` `DS5-39` Bind Trial success/failure observations to the exact
+- [x] `[must]` `DS5-39` Bind Trial success/failure observations to the exact
   Trial Workspace root, Candidate digest, lock, target Webspace, and health
   operation so neither acceptance nor ticket verification can consume evidence
   from DEV or primary stable runtime accidentally.
@@ -414,6 +414,10 @@ Ticket and signals, and closes only with evidence.
 - [ ] `[could]` `DS5-41` Let a user reopen a retained, still-valid Trial from a
   ticket or Builder history entry without rebuilding it; freshness, package
   admission, and data-mode policy must still pass.
+- [ ] `[should]` `DS5-42` Reconcile Project Candidates prepared outside the
+  current Builder Automation session into its delivery projection so the same
+  candidate, lock, and decision controls are discoverable from tickets, CLI,
+  and chat without reconstructing identity from mutable DEV state.
 
 Implementation note, 2026-09-03: `DS5-32` is deterministic-first. The
 `builder-qualification/language` endpoint calls the Root LLM only after the
@@ -469,7 +473,7 @@ Completed skill and scenario/project repairs can now be exposed to the user's
 workspace through the compatibility dev-to-workspace `.runtime` candidate
 without silently replacing stable workspace source. The target path supersedes
 that with `dev/.runtime` preview plus an immutable
-`workspace/trials/<candidate-id>` Trial Workspace. Explicit trial acceptance
+`.adaos/trials/<candidate-id>` Trial Workspace. Explicit trial acceptance
 records the ProjectRelease evidence used
 for verification and closure. Delayed completion
 notifications, realtime subscriptions, direct artifact preview, and client UI
@@ -572,6 +576,16 @@ source before a path-scoped registry commit/push. The promotion operation keeps
 an idempotent final source-registry receipt. `DS5-36` remains open until a fresh
 non-Builder project completes the whole path and GitHub CI confirms downstream
 delivery.
+
+Trial Workspace update, 2026-09-05: `a3958e0ed` removes new compatibility
+overlay writes, retains old overlay evidence as non-replayable history, binds
+beta observations to the Candidate digest and isolated WorkspaceLock, and
+migrates legacy Trial roots to `.adaos/trials/<candidate-id>`. A fresh
+chat-created Project reached an accepted exact beta Preview while the primary
+stable WorkspaceLock bytes remained unchanged. `DS5-36` stays open pending the
+final stable promotion and path-scoped registry publication; `DS5-40` remains
+open because operator projection does not yet include disk use and cleanup
+state.
 
 ## DS6. Analytics, Campaigns, And Policy Hardening
 

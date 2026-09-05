@@ -34,7 +34,7 @@ Run.
 | `Show prototype` | Select the accepted or current `proto:` revision as Preview target. |
 | `Show implementation` | Select the current `active:` Automation result when one exists. |
 | `Show publication` | Select the installed `public:` release when one exists. |
-| `Open Trial` | Open the exact runtime-only Trial placement from an immutable Candidate PackageRef. |
+| `Open Trial` | Open the exact isolated Trial Workspace from an immutable Candidate PackageRef. |
 | `Place in Webspace` | Request a target Workspace Webspace as durable `input_required`; the control itself does not invent a target. |
 | `Open published project` | Open an existing stable placement through Navigation SDK; available only after placement. |
 | `Continue project development` | Start a new Change over the published version. |
@@ -195,7 +195,7 @@ When Automation and acceptance criteria are complete, request an immutable
 Trial without publication.
 
 Verify exact Prototype and Automation identities, dependencies, validation
-results, Candidate PackageRef, runtime-only placement, data mode, health, and
+results, Candidate PackageRef, isolated Trial Workspace, data mode, health, and
 durable TrialActivation. Trial must not mutate the stable WorkspaceLock.
 Conflicting shared-skill versions are rejected before activation unless the
 runtime explicitly supports the combination.

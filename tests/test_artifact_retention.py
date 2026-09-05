@@ -341,7 +341,7 @@ def test_retention_removes_only_terminal_promoted_trial_workspace(
     state_root = tmp_path / "state" / "artifact_pipeline"
     workspace_root = tmp_path / "workspace"
     candidate_id = "recipes-1-0-0-deadbeef"
-    trial = workspace_root / "trials" / candidate_id
+    trial = workspace_root.parent / "trials" / candidate_id
     trial_state = state_root / "trials" / candidate_id
     (trial / ".adaos").mkdir(parents=True)
     (trial / ".adaos" / "workspace.lock.json").write_text("{}\n", encoding="utf-8")
@@ -408,7 +408,7 @@ def test_retention_preserves_active_and_unproven_trial_workspaces(
         ("active-candidate", "active"),
         ("completed-without-promotion", "completed"),
     ):
-        trial = workspace_root / "trials" / candidate_id
+        trial = workspace_root.parent / "trials" / candidate_id
         trial.mkdir(parents=True)
         activation_path = activations / f"{candidate_id}.json"
         activation_path.write_text(
@@ -432,10 +432,10 @@ def test_retention_preserves_active_and_unproven_trial_workspaces(
     plan = retention.run(dry_run=True, now=now)
 
     targets = {item["path"] for item in plan["actions"]}
-    assert str((workspace_root / "trials" / "active-candidate").resolve()) not in targets
+    assert str((workspace_root.parent / "trials" / "active-candidate").resolve()) not in targets
     assert (
         str(
-            (workspace_root / "trials" / "completed-without-promotion").resolve()
+            (workspace_root.parent / "trials" / "completed-without-promotion").resolve()
         )
         not in targets
     )

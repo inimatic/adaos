@@ -141,7 +141,7 @@ gate easy to read by priority.
 | 8. Product Experience | Complete for the current Builder refactor: dedicated Builder scenario, durable Review context, declarative tabs/modal/page/multistep behavior ABI, and stable no-op projections are covered. | Complete: a 32-cycle equal-object reload soak preserves live Yjs root identity. | Open: richer Automation log and cross-project history views. | Open: autonomous reproduction, large-module decomposition, and legacy Prompt IDE retirement. |
 | 9. Reference Runtime | Complete for the current reference slice: stable async job messages, bounded context/memory/repair evidence, broadened goldens, eval-to-repair backlinks, and a validated public generated-skill example exist. | Complete: the generated example demonstrates skill-owned conversation, consent-gated memory, Pending Action, and browser UI. | Open: optional model-backed repair graders. | None. |
 | 10. Skill Factory | Complete for the single isolated-node scope: task-scoped access leases, User Hub validation/staging/approval, exact assignment, sparse path enforcement, and six golden outcomes are implemented. | Complete: success and failure rails are replayed through the real service contracts. | Open: multi-node pools and parallel dev tasks. | None. |
-| 11. Conversational Development | Locally validated semantic foundation: canonical Change/Run/Project model, shared statechart/resolver, capability negotiation, context capsules, risk-aware controls, dependent Process projection, durable prose continuation, outcome-oriented stable installation/placement, runtime-only Trial activation, chat-first Workbench, neutral channel ingress, cross-topology navigation, conversational package contract, output IR, story/static reports, and one non-Builder semantic proof. Open must gates include the executable-prototype foundation: bounded local CRUD/provider mocks, semantic activity requirements and simulation trace, compact composition slices, and the constrained conversational workflow profile and Automation handoff; plus one production IntentProposal rail, compatibility-rail retirement, complete registered activity/reply recovery, and one fresh operational empty-scenario acceptance run through the runtime-only Trial path. | Open: complete Builder-caller migration, deterministic representative-state profiles, structured renderer composition evidence, durable external delivery receipts, live English/Russian mutating Telegram parity, human wide/compact acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. Web/Voice consumed-control parity is locally complete. | Open: additional semantic operations, education-on-the-go exports, and optional rich-channel adapters. | Explicitly deferred: screenshot/multimodal context, general workflow prototype slices and round trips, protected-node migration/retirement, reverse/legacy workflow inference, visual workflow studio, non-conversational/advanced workflow prototyping, full Trial data isolation, simultaneous shared-skill versions, public beta/prerelease rollout channels, hard Telegram parity, miniapp, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
+| 11. Conversational Development | Locally validated semantic foundation: canonical Change/Run/Project model, shared statechart/resolver, capability negotiation, context capsules, risk-aware controls, dependent Process projection, durable prose continuation, outcome-oriented stable installation/placement, isolated Trial Workspace activation, chat-first Workbench, neutral channel ingress, cross-topology navigation, conversational package contract, output IR, story/static reports, and one non-Builder semantic proof. Open must gates include the executable-prototype foundation: bounded local CRUD/provider mocks, semantic activity requirements and simulation trace, compact composition slices, and the constrained conversational workflow profile and Automation handoff; plus one production IntentProposal rail, compatibility-rail retirement, complete registered activity/reply recovery, and one fresh operational empty-scenario acceptance run through the isolated Trial path. | Open: complete Builder-caller migration, deterministic representative-state profiles, structured renderer composition evidence, durable external delivery receipts, live English/Russian mutating Telegram parity, human wide/compact acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. Web/Voice consumed-control parity is locally complete. | Open: additional semantic operations, education-on-the-go exports, and optional rich-channel adapters. | Explicitly deferred: screenshot/multimodal context, general workflow prototype slices and round trips, protected-node migration/retirement, reverse/legacy workflow inference, visual workflow studio, non-conversational/advanced workflow prototyping, full Trial data isolation, simultaneous shared-skill versions, public beta/prerelease rollout channels, hard Telegram parity, miniapp, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
 | 12. Project Composition And Scoped Development | Specified: Project is a distribution definition; Development Session, presentations, fallback skill preview, local artifact context, and canonical navigation have target contracts. | Open: registry/Catalog Project projection and portable artifact groups. | None. | External artifact providers/MCP and remote multi-component Project install/remove are deferred until local TLP proof. |
 | 13. Context-Compiled Execution | Open: typed subject resolution, ref-only automation state, role-scoped restoration, Context Receipts, domain handoff isolation, and Subscription accounting proofs. | Open: Context Inspector, related-work batching, and evidence-gated warm caches. | Open: model-assisted ranking behind deterministic policy gates. | Distributed context federation remains owned by the context/distributed roadmaps. |
 
@@ -1821,15 +1821,16 @@ The dated entries below remain the chronological implementation ledger.
   project/change/generation once and project a fresh action set. The durable
   continuation carries the project, Change, command, and expected generation;
   stale or repeated responses cannot start another mutation.
-- [x] `[must]` Implement runtime-only Trial activation from an immutable
-  Candidate PackageRef into derived beta state, with a durable TrialActivation
+- [x] `[must]` Implement immutable Trial activation from a Candidate PackageRef
+  into derived beta state, with a durable TrialActivation
   record, restart reconstruction, explicit detach, bounded data modes, and
   fail-closed shared-skill version-conflict detection. Commit `7ff2a05e`
-  implements the compatibility materialization under
-  `workspace/.runtime/trials`; the target relocation to an isolated
-  Workspace-shaped `workspace/trials/<candidate-id>` root remains open in
-  Phase 12. Simultaneous versions of a conflicting shared skill remain
-  deliberately rejected under the deferred boundary below.
+  implemented the historical compatibility materialization under
+  `workspace/.runtime/trials`. Phase 12 commit `a3958e0ed` supersedes that
+  layout with an isolated Workspace-shaped
+  `.adaos/trials/<candidate-id>` root. Simultaneous versions of a
+  conflicting shared skill remain deliberately rejected under the deferred
+  boundary below.
 - [x] `[should]` Apply the consumed-control lifecycle to Web/Voice chat as well
   as Telegram: accepted historical tokens are unusable, old controls disappear
   on live update and reload, and the replacement Interaction comes from the
@@ -1923,17 +1924,17 @@ failure; an immutable receipt makes completed replay idempotent. WorkspaceLock
 bytes remain unchanged until the ordinary Candidate, isolated Trial, explicit
 acceptance, and Publication workflow completes.
 
-- [ ] `[must]` Split runtime authority in the Builder product flow: mutable DEV
+- [x] `[must]` Split runtime authority in the Builder product flow: mutable DEV
   source may update only `dev/.runtime`; stable may update only primary
   `workspace/.runtime` from WorkspaceLock evidence; beta may update only an
-  immutable `workspace/trials/<candidate-id>` projection.
-- [ ] `[must]` Replace Builder's compatibility dev-to-workspace overlay actions
+  immutable `.adaos/trials/<candidate-id>` projection.
+- [x] `[must]` Replace Builder's compatibility dev-to-workspace overlay actions
   with Candidate/Trial actions, retire alpha Workspace labels, and retain
   historical overlay receipts as non-actionable evidence.
 - [ ] `[must]` Route chat-created Project work through one resumable Change and
   Candidate identity from template creation and DEV preview through Trial
   acceptance, stable promotion, and release publication.
-- [ ] `[must]` Rebind Trial Preview/Open actions and Webspace runtime selection
+- [x] `[must]` Rebind Trial Preview/Open actions and Webspace runtime selection
   to the exact Trial Workspace root while stable sessions continue to resolve
   the primary Workspace root; fail closed when provenance or lock evidence is
   missing.
@@ -1943,6 +1944,14 @@ acceptance, and Publication workflow completes.
 - [ ] `[could]` Add a bounded retained-Trial selector after exact routing,
   expiry, conflict detection, and cleanup are proven; selecting a Trial must
   never copy it into the stable runtime.
+- [ ] `[should]` Merge governed Candidate/Trial events created outside the
+  current Builder Automation session into workflow delivery and Process
+  projection. Direct `Show Trial` already resolves the exact active Candidate;
+  contextual actions must expose the same capability without a manual command.
+- [ ] `[should]` Make detached Yjs document ownership and shutdown explicit for
+  synchronous chat-driven Preview materialization. A successful command must
+  exit without the `YDoc ... dropped on another thread` finalizer diagnostic,
+  with a clean-shutdown regression on Windows.
 - [ ] `[should]` Add Project/Application catalog projections with profiles,
   localized categories, free tags, deployment scopes, and an advanced raw
   component view.

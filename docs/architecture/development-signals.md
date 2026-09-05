@@ -749,7 +749,7 @@ Autonomous repair may move a ticket to `resolved` with evidence, comment on
 the ticket, and publish a candidate release or beta Trial according to policy.
 The default user-acceptance path from Builder is no longer a dev-to-workspace
 runtime overlay. DEV source is previewed in `dev/.runtime`; a beta candidate is
-prepared in an isolated `workspace/trials/<candidate-id>` projection, while the
+prepared in an isolated `.adaos/trials/<candidate-id>` projection, while the
 user's primary `workspace/.runtime` remains bound to the stable Workspace
 release. It should not silently `verify` or `close` unless the ticket policy
 defines a deterministic acceptance gate and the evidence passes.
@@ -772,7 +772,7 @@ the governed transition and its evidence:
 
 ```text
 DEV preview -> dev/.runtime only
-immutable candidate -> workspace/trials/<candidate-id> Trial Workspace
+immutable candidate -> .adaos/trials/<candidate-id> Trial Workspace
 user accepts exact Trial -> beta evidence/publishing eligibility
 tests + scenario validation + activation health + durable promotion pass -> stable
 any gate fails -> beta_failed/publication_failed + linked runtime_failure Dev Ticket
