@@ -193,10 +193,10 @@ proof is not silently promoted to stand or production acceptance.
 | Milestone | Closed | Maturity | Validated task slices | Remaining broader gates |
 | --- | ---: | --- | --- | --- |
 | AP0 | 8/9 | validated-local (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility, deterministic historical registry/manifest migration fixtures, and read-only identity diagnostics | publisher namespaces and ownership transfer remain deferred |
-| AP1 | 11/14 | validated-stand plus local workflow gate (bounded, single-zone) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission, single-pass verified extraction, deployed binary transport, detached Ed25519 trust/admission, deterministic no-replay publication journal, immutable release binding, strict workflow/validation/adapter/role locks, separately provisioned signer/trust, and clean required-mode activation | streamed/object-store transport, multi-zone durability, package lifecycle diagnostics, publisher namespaces, and commercial entitlements remain open/deferred |
-| AP2 | 8/11 | validated-local (bounded) | exact component/dependency, permission, schema, migration, validation, and workflow adapter-binding locks; complete-set fixed-point selection; consistent bindings and reverse consumers | lock explain UI, plan cache, and stand validation |
+| AP1 | 12/14 | validated-stand plus local workflow gate (bounded, single-zone) | deterministic package build/store/verify, CAS deduplication and bounded retention diagnostics, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission, single-pass verified extraction, deployed binary transport, detached Ed25519 trust/admission, deterministic no-replay publication journal, immutable release binding, strict workflow/validation/adapter/role locks, separately provisioned signer/trust, and clean required-mode activation | streamed/object-store transport, multi-zone durability, publisher namespaces, and commercial entitlements remain open/deferred |
+| AP2 | 10/16 | validated-local (bounded) | exact component/dependency, project composition/dependency, permission, schema, migration, validation, and workflow adapter-binding locks; complete-set fixed-point selection; consistent bindings and reverse consumers | physical bound/shared activation semantics, lock explain UI, plan cache, publication compatibility, and stand validation |
 | AP3 | 13/14 | validated-stand plus local workflow generation proof (bounded, isolated same-host) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, terminal lock-history states, complete workflow/code generation admission, and clean package-only activation | unattended irreversible migrations remain deferred |
-| AP4 | 8/18 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | DEV/stable/Trial runtime authority split, legacy layout migration, policy-proven evidence reuse, and stand validation |
+| AP4 | 14/19 | validated-local plus bounded live publication evidence | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated Workspace-shaped Trial roots under `.adaos/trials`, immutable Builder task snapshot, concurrent-DEV compare-and-switch, runtime authority split, legacy layout migration, and no-alpha activation | policy-proven evidence reuse, operator visibility, current-contract external Candidate reconciliation, and broader stand validation |
 | AP5 | 7/10 | validated-stand + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend admission and atomic channel CAS, durable post-CAS continuation, and successful external package/release/channel round-trip across a backend redeploy | metadata rebase policy and later merge-queue support |
 | AP6 | 12/14 | validated-local + recovered-live (bounded) | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, Builder review/apply UI, digest-reviewed remote-to-local reconciliation, attested recovery of missing remote immutable state, one fail-closed package/legacy route contract, and explicit no-op planning for an up-to-date subscription | production deployment/observation of the route contract and later evidence-based retirement of the compatibility route |
 | AP7 | 15/17 | validated-stand + second-machine-core-recovered + local workflow proof (bounded), route-fix pending | source-faithful representative LLM/Codex scenario+skill proof, bounded resilience regressions, live Builder publication, external-backend clean required-mode activation, package/release/channel survival across redeploy, exact-build local A/B recovery, generation-bound second-machine core convergence, and manifest-bound workflow authoring/package/role/migration/rollback proof | candidate-before-health proxy admission, frontend/WebSocket continuity, offline browser-draft merge, plus broad production and marketplace acceptance remain open/deferred |
@@ -297,7 +297,7 @@ symlink, size, and corruption tests.
     publisher secret/trusted public keys on the stand.
   - [x] Prove required-mode activation from those remote assets on a clean
     stand, including timeout/reconciliation recovery.
-- [ ] `[could]` `AP1-08` Add package deduplication and bounded garbage collection
+- [x] `[could]` `AP1-08` Add package deduplication and bounded garbage collection
   diagnostics.
 - [ ] `[deferred]` `AP1-09` Add commercial license and entitlement payloads to
   package admission policy.
@@ -318,6 +318,13 @@ symlink, size, and corruption tests.
   to the package manifest with definition, validation-report, and required
   adapter-contract digests. Prove that code or workflow changes produce a new
   immutable package and cannot be published separately.
+
+`AP1-08` is closed for the bounded filesystem CAS: digest-addressed writes are
+idempotently deduplicated, Application retention expands live channel,
+installation, runtime, operation, grant, rollback, and report references, and
+reviewed compaction plus integrity diagnostics fail closed on unreadable
+authority state. Multi-zone/object-store lifecycle remains the separate open
+`AP1-12` gate.
 
 `AP1-14` is closed at `validated-local`. A declared `workflow.json` is strictly
 loaded, included in the package file inventory, and represented by recomputed
@@ -415,11 +422,11 @@ proof until the open composition items below close.
   exact dependency package registry contract, persist the resulting
   `workflow_binding_digest` in ProjectRelease, and reject missing, mutable,
   permission-broadening, or package-inconsistent bindings.
-- [ ] `[must]` `AP2-12` Bind the canonical `adaos.project.v1` definition and a
+- [x] `[must]` `AP2-12` Bind the canonical `adaos.project.v1` definition and a
   normalized composition digest into ProjectRelease. Lock member role,
   exposure, bound/shared lifecycle, relations, entry points, profiles, and
   compatibility rules; reject a release that contains only package digests.
-- [ ] `[must]` `AP2-13` Resolve Project-to-Project dependencies to exact
+- [x] `[must]` `AP2-13` Resolve Project-to-Project dependencies to exact
   ProjectRelease identities or an equivalent complete closure, preserve the
   dependency edge in the release, and reject cycles/ambiguity without partial
   publication.
@@ -436,6 +443,13 @@ proof until the open composition items below close.
 package adapter locks, aggregate binding digest, role-policy digest, package
 verifier, and shared publication/activation admission. The release candidate
 cannot resolve the same adapter id through a different mutable contract.
+`AP2-12` and `AP2-13` are closed at `validated-local` by
+`ProjectCompositionLock`, project-definition normalization, exact
+`ProjectDependencyLock` resolution, cycle/ambiguity rejection, and Workspace
+project-build regressions. `AP2-14` remains open because product-level
+Application reference accounting does not by itself prove that every legacy
+physical component activation/removal path enforces bound/shared and
+`project_only` semantics.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and dependency resolver regressions in

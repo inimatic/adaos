@@ -708,7 +708,7 @@ These items should remain visible but should not block phases 0-11:
 - [x] Phase 7 owner/admin user management surface.
 - [ ] Phase 8 privacy-zone enforcement and user data management.
 - [ ] Phase 9 skill, tool, and SDK enforcement.
-- [ ] Subnet publisher/relay key lifecycle contracts: purpose separation,
+- [x] Subnet publisher/relay key lifecycle contracts: purpose separation,
   rotation, revocation, recovery, and signed Root directory projection.
 
 ### Should
@@ -718,7 +718,7 @@ These items should remain visible but should not block phases 0-11:
 - [ ] More complete policy explanations and user-facing denial messages.
 - [ ] More complete policy simulation before committing grants.
 - [ ] Richer invite, recovery, and denial localization.
-- [ ] Implement and verify subnet publisher/relay key lifecycle before broad
+- [x] Implement and verify subnet publisher/relay key lifecycle before broad
   external prerelease use.
 
 ### Could

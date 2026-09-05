@@ -539,19 +539,19 @@ Define stable contracts before wiring UI and background workers.
   registry sync with backward-compatible component arrays
 - [ ] `[must]` keep `kind`, profiles/capabilities, categories/tags, and
   deployment scope as separate validated fields
-- [ ] `[must]` Application launch targets resolve presentations without making
+- [x] `[must]` Application launch targets resolve presentations without making
   a scenario, skill, or launch target a separate product identity
-- [ ] `[must]` Application member schema separates role, Catalog exposure,
+- [x] `[must]` Application member schema separates role, Catalog exposure,
   bound/shared lifecycle, and semantic relations; `project_only` is a discovery
   rule rather than a security or package-integrity shortcut
-- [ ] `[must]` ApplicationRelease catalog identity includes the exact
+- [x] `[must]` ApplicationRelease catalog identity includes the exact
   definition/composition digest and Application dependency locks, not only the set
   of component package digests
-- [ ] `[must]` Application, ApplicationRelease, ApplicationInstallation,
+- [x] `[must]` Application, ApplicationRelease, ApplicationInstallation,
   ApplicationSubscription, RuntimeSelection, Builder DevelopmentSession, and
   domain aggregate ids remain distinct in APIs and projections; legacy
   `Project*` records map without digest changes
-- [ ] `[must]` stable and prerelease entries reference the same immutable
+- [x] `[must]` stable and prerelease entries reference the same immutable
   ApplicationRelease/package identity model while retaining distinct channel,
   publication receipt, install target, and update policy
 - [x] shared operation state model
@@ -581,25 +581,25 @@ Make stable Application publication plus `skill push` and `scenario push` update
 - [ ] `[should]` add one Application publication SDK/CLI path and make existing
   component push commands backward-compatible one-component projections; do
   not add domain-specific publication CLIs
-- [ ] `[must]` publish a link-only Trial, or a prerelease after first stable,
+- [x] `[must]` publish a link-only Trial, or a prerelease after first stable,
   only from an immutable accepted Candidate/Trial into Root artifact storage;
   persist artifact/release/channel receipts and reject mutable DEV or unproven
   Trial input
-- [ ] `[must]` install/update link-only Trial or prerelease into an exact
+- [x] `[must]` install/update link-only Trial or prerelease into an exact
   `.adaos/trials/<candidate-id>` projection without mutating stable
   Workspace source, `workspace/.runtime`, WorkspaceLock, or subscription state
 - [ ] `[deferred]` retain `adaos-registry-beta` only as a temporary compatibility
   adapter; do not make Git the canonical Trial/prerelease archive
 - [ ] `[should]` preserve raw component discovery for advanced tooling while
   making Application the default Catalog read model
-- [ ] `[must]` test idempotent link-only Trial, stable, and prerelease create
+- [x] `[must]` test idempotent link-only Trial, stable, and prerelease create
   and update, channel isolation, receipt replay, moved-candidate rejection, and
   install-target separation
 - [ ] `[must]` make a successful required registry CI result part of the
   terminal publication receipt. The current `ci.yml` listens only to
   `pull_request`, but stable Project publication pushes `main` directly and can
   currently report `source_registry_published` without any check run.
-- [ ] `[could]` project public stable source and release notes to Git without
+- [x] `[could]` project public stable source and release notes to Git without
   changing Root artifact, local Trial, or release identity
 - [x] deterministic local workspace registry output ordering
 
@@ -626,10 +626,10 @@ scenario.
 
 ### Deliverables
 
-- [ ] `[must]` Application Core catalog/inventory adapter service
+- [x] `[must]` Application Core catalog/inventory adapter service
 - [ ] `[must]` full-screen Applications Installed, Catalog,
   Updates/Operations, and detail views
-- [ ] `[must]` filtering against ApplicationInstallation and subscription state
+- [x] `[must]` filtering against ApplicationInstallation and subscription state
 - [ ] `[must]` remove product Inventory from Infrastate and retain deep-linked
   technical component/runtime diagnostics
 - [ ] `[should]` advanced component detail and filters that use profiles for semantic selection,
@@ -643,14 +643,14 @@ Convert install/update flows from blocking request/response into accepted async 
 
 ### Deliverables
 
-- [ ] `[must]` Application add/update/remove operations resolve one exact
+- [x] `[must]` Application add/update/remove operations resolve one exact
   ApplicationRelease, acquire the ordinary Workspace writer/operation leases, and
   use the transactional Artifact Pipeline rather than sequencing component
   install endpoints in the client
-- [ ] `[must]` durable ApplicationInstallation/reference accounting preserves
+- [x] `[must]` durable ApplicationInstallation/reference accounting preserves
   shared dependencies, removes bound members only when unreferenced, and keeps
   runtime/domain data under declared retention policy
-- [ ] `[must]` application-bound members are materialized and verified as part
+- [x] `[must]` application-bound members are materialized and verified as part
   of their Application but cannot be independently added/removed from ordinary UI
 - [x] `OperationManager`
 - [x] async install command handlers
@@ -659,6 +659,12 @@ Convert install/update flows from blocking request/response into accepted async 
 - [x] durable recovery for accepted/running operations after runtime restart
 - [x] `[must]` governed subprocess cancellation and idempotent retry policy
 - [ ] `[must]` canary restart/cancel/retry evidence
+
+Contract/service completion in Phases 0-3 is validated locally by Application
+schema, composition-lock, Core/SDK/MCP, distribution, deployment, retention,
+and recovery regressions. It does not close the open shared registry normalizer,
+stable Application catalog projection, registry CI, Applications UI, or live
+canary items. Infrastate Inventory remains in place until Phase 2 UI acceptance.
 
 ## Phase 4: UI Binding and Notifications
 

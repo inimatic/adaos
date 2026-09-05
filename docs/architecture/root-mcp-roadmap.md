@@ -476,10 +476,13 @@ and its [roadmap](application-lifecycle-and-distribution-roadmap.md).
   update-track selection, and Trial-link installation
 - [x] `[must]` expose bounded Builder tools for create, DEV preview,
   Candidate/Trial, link-only Trial publication, prerelease publication,
-  exact-digest promotion, and stable publication without accepting arbitrary
-  filesystem or Git destinations
+  exact-digest promotion, stable publication, and exact-intent operation
+  reconciliation without accepting arbitrary filesystem or Git destinations
 - [x] `[must]` reject stale plans, capability mismatch, raw registry mutation,
   and direct Workspace/Trial path writes
+- [x] `[must]` gate development reconciliation with `applications.recover`,
+  original actor/subnet ownership, a bounded applying lease, and durable attempt
+  receipts; never accept a caller-supplied callback or replacement intent
 - [x] `[could]` expose dry-run dependency and retention explain traces
 
 ### `Applications-3`. Builder dogfood and proof

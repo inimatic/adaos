@@ -133,6 +133,14 @@ commands, Git credentials, and direct registry writes are outside the plane.
 Durable operation reads provide the baseline reconnect-safe polling path until
 streaming subscriptions are added.
 
+Builder development mutations use the same no-blind-replay rule. A caller may
+reconcile an `unknown` operation immediately, or an `applying` operation only
+after its bounded lease expires. Reconciliation requires the original actor,
+subnet, target Application, `applications.recover` capability, and the exact
+stored intent. The SDK reconstructs only a known lifecycle command from that
+intent; it never accepts a replacement callback or new filesystem/Git
+arguments. Attempts, recovery reason, result, and revision remain durable.
+
 Trial capability links are backed by `TrialAccessGrant` records plus private
 credential and redemption records. Links are bound to the recipient subnet,
 purpose-scoped key, zone, expiry, scope, and use limit. Only a token hash is
@@ -180,8 +188,10 @@ charging mailbox quota, retries at least once, deduplicates, applies TTL and
 hop limits, dead-letters exhausted messages, and deletes acknowledged
 ciphertext while retaining bounded receipts. Authenticated Root-to-Root
 forwarding receipts and a local durable sender outbox are implemented at the
-service boundary; wiring that peer interface to the live Hub/Root transport is
-still required before an inter-zone pilot.
+service boundary. The live Root HTTP adapter uses pinned peers, bounded ingress,
+signed directory projections, durable prepare/complete receipts, and retained
+retry state after offline or unknown outcomes. A clean inter-zone pilot remains
+required before this implementation is treated as operational evidence.
 
 Publisher intake preserves raw, deterministic normalized, and optional model
 classification provenance separately. Deterministic admission runs before any
@@ -599,6 +609,7 @@ application_development.publish_trial
 application_development.publish_prerelease
 application_development.promote_stable
 application_development.publish_stable
+application_development.reconcile_operation
 ```
 
 The concrete public facade is `adaos.sdk.builder.applications`. It is included
@@ -609,6 +620,11 @@ idempotency identity, terminal receipt, and `unknown` reconciliation fence.
 It does not accept filesystem paths, process commands, repository credentials,
 registry locations, or private signing keys. Publisher metadata is derived
 from the local subnet and the configured public release-signing identity.
+Recovery is capability-separated as `applications.recover`, preserves the
+original actor/subnet authority, and replays only the exact persisted intent
+through the SDK's closed command dispatcher. An `applying` operation has a
+five-minute lease before takeover; `unknown` may be observed and reconciled
+immediately.
 
 Product install/update/remove/track changes use reviewed
 `ApplicationOperation` records. Short compare-and-swap mutations such as a
@@ -755,6 +771,15 @@ draft -> queued -> delivered -> received -> triaged
 Release metadata explicitly lists report IDs it intends to address. Receipt of
 a release does not close the report. The guest verifies after installing the
 exact digest and may report that the problem still reproduces.
+
+Publication validates every addressed report before any remote artifact or
+channel mutation. The report must belong to the same Application, have an
+accepted publisher intake, and be `planned` or `still_reproduces`, unless the
+same report/release association was already announced idempotently. Successful
+link-only Trial, prerelease, and stable publication append durable signed public
+status events for the exact release digest. A failed status announcement is not
+reported as a successful report transition and is recoverable from the stored
+publication intent.
 
 External reports are untrusted input. Before publisher acceptance, deterministic
 admission validates schema, size, MIME, archive expansion, Unicode, URL and

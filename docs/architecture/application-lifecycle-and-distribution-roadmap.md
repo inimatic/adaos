@@ -178,12 +178,17 @@ path, process, Git credential, registry, or private-key arguments. Its durable
 coordinator records intent digest, actor, subnet, capability, expected
 Application revision, idempotency identity, outcome, and an explicit
 reconciliation fence for uncertain callbacks. `ApplicationsPlane` remains a
-thin adapter over the product SDK and now publishes eleven explicit
+thin adapter over the product SDK and publishes the bounded
 `applications.development.*` tools over the Builder facade. Those tools accept
 domain IDs, revisions, and intent only; paths, processes, registries, Git
 destinations/credentials, and keys stay inside trusted adapters. Full
 chat-driven use of these rails is the `APP4`/`APP6` proof and is not implied by
 this preparatory completion.
+Development recovery is a separate `applications.recover` capability. It
+requires original actor/subnet ownership, preserves the exact stored intent,
+allows immediate reconciliation of `unknown`, waits for the five-minute
+`applying` lease, and records every attempt and outcome. No caller-supplied
+callback or replacement intent crosses the SDK/MCP boundary.
 Product release reads are allowlisted: exact release/package/publisher and
 composition-lock identities remain visible, while private source, build paths,
 credentials, and free-form validation/acceptance evidence are omitted or
@@ -355,6 +360,11 @@ Dev Ticket. The complete report flow is now available through capability-scoped
 SDK and `ApplicationsPlane` MCP contracts: `applications.report` for reporter
 actions, `applications.publisher.read` for intake evidence, and
 `applications.publisher.triage` for publisher decisions.
+Distribution validates addressed report IDs against accepted intake and
+eligible publisher state before any remote publication. Link-only Trial,
+prerelease, and stable publication then append idempotent exact-digest report
+status announcements. This closes the release/report coupling at contract and
+hermetic-service level; the clean guest/publisher proof remains `APP6`.
 
 ## APP6. Full End-to-End Release Proof
 
@@ -423,3 +433,12 @@ These tasks remain visible but do not block APP0-APP6.
 - [ ] `[should]` Commit coherent implementation slices independently and avoid
   triggering remote CI until the full local verification for that slice has
   passed.
+
+## Readiness Boundary (2026-09-05)
+
+The preparatory Core, SDK, MCP, artifact, channel, recovery, and Development
+Report rails are implemented and locally testable. The repository is ready to
+start `APP4-01`: creating the Applications system product through Builder chat.
+This is not release readiness. `APP1-04`, all of `APP4`, and all of `APP6`
+remain open until the real UI replaces Infrastate Inventory and the complete
+clean-subnet chain is captured without manual state edits.

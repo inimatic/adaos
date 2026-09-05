@@ -877,6 +877,12 @@ host mounts, or image pulls; unavailability remains advisory. `DS10-09` uses
 the encrypted report channel for appeals and exposes only a 365-day
 publisher-local factual history with no reputation score. Response-time
 analytics remain `DS10-11` and do not block the Applications preparation gate.
+Application distribution now validates every addressed report against the same
+Application's accepted publisher intake and eligible public state before any
+remote mutation. Successful Trial/prerelease/stable publication emits an
+idempotent exact-digest status announcement. The clean guest/publisher release
+round trip remains an Application `APP6` acceptance proof rather than a closed
+DS10 service-contract item.
 
 ## Recommended First Slice
 
