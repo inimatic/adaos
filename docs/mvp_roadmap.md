@@ -307,6 +307,16 @@ Checklist:
 
 - [ ] Treat `builder_skill` as the reference conversation-native skill.
 - [ ] Complete Builder apply/release/rollback evidence through Pending Actions.
+- [ ] `[must]` Split Builder DEV preview from stable Workspace activation: DEV
+  source updates only `dev/.runtime`; stable runs only from
+  `workspace/.runtime` backed by WorkspaceLock evidence.
+- [ ] `[must]` Materialize beta only as an immutable, Workspace-shaped
+  `workspace/trials/<candidate-id>` projection and route the selected Webspace
+  to it without changing the stable Workspace runtime.
+- [ ] `[should]` Expose exact DEV/beta/stable provenance and legacy Trial-layout
+  migration diagnostics in Builder and operator surfaces.
+- [ ] `[could]` Retain and switch among policy-bounded completed Trial
+  projections without rebuilding unchanged candidate packages.
 - [ ] Keep Builder context packets as the only supported LLM context input for
   Builder runtime calls.
 - [ ] Keep NLU Teacher clarification, candidate confirmation, and safe apply

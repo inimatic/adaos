@@ -3,7 +3,7 @@
 Status: target architecture for the single-user artifact development,
 publication, installation, update, and rollback pipeline.
 
-Last reviewed: 2026-08-18.
+Last reviewed: 2026-09-05.
 
 This document defines the target boundaries and contracts. The bounded package
 path is now `validated-stand` on an isolated same-host stand using the deployed
@@ -30,18 +30,19 @@ The target architecture separates them:
 identified source revision
   -> deterministic immutable package
   -> registry channel
-  -> transactional workspace activation
+  -> transactional runtime activation
 ```
 
 A user-facing Builder change follows the reverse trace without editing an
-installed workspace:
+installed workspace or feeding Workspace runtime from mutable DEV source:
 
 ```text
 activated release
   -> exact source revision
   -> isolated DEV context
+  -> dev/.runtime preview
   -> candidate package
-  -> trial
+  -> beta trial activation
   -> freshness gate
   -> stable promotion
 ```
@@ -92,6 +93,9 @@ deferred until the single-user loop is stable.
 | Activation | Transactional selection of ProjectRelease packages for a workspace slot. |
 | WorkspaceLock | Authoritative record of the packages and dependency bindings currently selected for a workspace. |
 | DEV context | Mutable, isolated worktree or checkout created from a SourceRef. |
+| DEV runtime | Disposable preview target materialized directly from mutable DEV source. |
+| Workspace runtime | Stable user-facing runtime projection materialized from an immutable WorkspaceLock release. |
+| Trial Workspace | Isolated beta projection under `workspace/trials/<candidate-id>` that reproduces the executable Workspace layout from immutable Candidate packages. |
 | Builder Development Session | Mutable policy overlay that selects development targets and read-only context for one Project iteration; it is not distributed. |
 | Trial | Reversible candidate activation for an explicitly bounded audience and data policy. |
 
@@ -175,7 +179,7 @@ package_ref:
   schema: adaos.artifact.package_ref.v1
   kind: scenario
   artifact_id: recipes
-  version: 2.5.0-alpha.142.1
+  version: 2.5.0-beta.142.1
   digest: sha256:...
   source_ref: { ... }
   manifest_digest: sha256:...
@@ -263,18 +267,26 @@ project:
       release: recipes@2.4.1
       source_revision: 0123456789abcdef
       package_digest: sha256:...
+    beta:
+      release: recipes@2.5.0-beta.142.1
+      source_revision: fedcba9876543210
+      package_digest: sha256:...
 
   candidates:
     CS-142:
-      release: recipes@2.5.0-alpha.142.1
+      release: recipes@2.5.0-beta.142.1
       base_release: recipes@2.4.1
       source_revision: fedcba9876543210
       package_digest: sha256:...
 ```
 
-The first slice supports one `stable` channel and local candidates. Channel
-identifiers remain open strings so that integration, beta, edition, and group
-channels can be introduced later without replacing the contract.
+The first slice supports one `stable` channel and local candidates. `beta` is
+the target prerelease channel: it may later be represented by a channel in the
+same registry or by a separate `adaos-registry-beta` adapter, but it reuses the
+same ProjectRelease, package, source, admission, and runtime-activation
+contracts. Channel identifiers remain open strings so that integration,
+edition, and group channels can be introduced later without replacing the
+contract.
 
 Promotion changes a channel pointer only after source, package, validation,
 and release records are durable. It never rebuilds the already accepted
@@ -282,7 +294,21 @@ package implicitly.
 
 ### 5. Workspace Activation
 
-Workspace is an activated package projection, not a development checkout.
+Workspace is an activated package projection, not a development checkout. The
+primary `workspace/.runtime` projection is stable and is selected only from an
+immutable WorkspaceLock release. A beta Trial is materialized as an isolated
+Workspace-shaped root under `workspace/trials/<candidate-id>`; its own
+component tree, metadata, lock, and runtime state cannot replace or share
+authority with the primary Workspace. It is never built directly from mutable
+DEV source. DEV preview uses `dev/.runtime`, which is disposable and cannot
+become publication evidence by itself.
+
+`workspace/trials/<candidate-id>` reproduces the executable Workspace shape,
+including `skills`, `scenarios`, `projects`, `.adaos/workspace.lock.json`, and
+derived runtime directories required by the selected packages. The parent
+`workspace/trials` directory is a control boundary: it is excluded from source
+digests, registry scans, package inputs, Workspace cloning, and nested Trial
+materialization.
 
 The authoritative record is `WorkspaceLock`:
 
@@ -295,11 +321,13 @@ workspace_lock:
   slots:
     primary:
       project_id: recipes
+      channel: stable
       release: recipes@2.4.1
       release_digest: sha256:...
     trial:
       project_id: recipes
-      release: recipes@2.5.0-alpha.142.1
+      channel: beta
+      release: recipes@2.5.0-beta.142.1
       release_digest: sha256:...
       audience: user:local
 
@@ -715,8 +743,9 @@ candidate record changes; acceptance records `rollback:not_required`.
 stable release S0
   -> DEV context from exact S0 SourceRef
   -> implementation and deterministic validation
+  -> dev/.runtime preview
   -> candidate C1 with base S0
-  -> trial activation
+  -> beta trial activation
   -> acceptance evidence
   -> stable freshness gate
 ```
@@ -762,23 +791,26 @@ If stable moved:
 
 Evidence is never silently copied from an old digest to a changed candidate.
 
-### MVP Runtime Trial And Project Placement
+### MVP Trial Workspace And Project Placement
 
-The first deployable Trial does not require a second full Workspace. It uses a
-runtime-only activation derived from the immutable candidate:
+The first deployable Trial uses an isolated Workspace-shaped projection derived
+from the immutable candidate:
 
 ```text
 DEV source
   -> Candidate PackageRef
-  -> durable TrialActivation
-  -> workspace/.runtime materialization
+  -> durable beta TrialActivation
+  -> workspace/trials/<candidate-id> materialization
+  -> trial-local runtime
   -> Webspace-scoped runtime binding
-  -> optional launcher placement with Trial badge
+  -> optional launcher placement with Trial/beta badge
 ```
 
-The candidate digest, not the mutable DEV tree, is the authority. The
-`workspace/.runtime` tree is replaceable derived state. The durable
-`adaos.trial.activation.v1` record contains at minimum:
+The candidate digest, not the mutable DEV tree or `dev/.runtime`, is the
+authority. The Trial Workspace is replaceable derived state and must carry
+provenance for its exact beta Candidate. The primary `workspace/.runtime`
+continues to expose stable while the Trial is active. The
+durable `adaos.trial.activation.v1` record contains at minimum:
 
 - `trial_id`, project/candidate/release refs and exact package digests;
 - zone, subnet, target Webspace, scenario entry point, and audience;
@@ -803,8 +835,24 @@ multi-version resolution is deferred, but conflict detection is mandatory.
 For the MVP, `empty`, `mock`, and proven `read_only` modes are admitted by
 default. `real` writes require an explicit approval plus a tested reversible
 effect/rollback contract; unknown or irreversible effects are blocked. Full
-data-space isolation, simultaneous shared-skill versions, public alpha/beta
-channels, and audience rollout policy remain deferred extension seams.
+data-space isolation, simultaneous shared-skill versions, public beta channels,
+and audience rollout policy remain deferred extension seams.
+
+### Beta Subscription And Update
+
+Beta installation follows the same package-backed route as stable installation,
+but targets an isolated `workspace/trials/<candidate-id>` projection with beta
+provenance. It does not write Workspace stable source, replace
+`workspace/.runtime`, move the stable channel, or close user feedback as
+verified. A separate `adaos-registry-beta` repository, if used, is a registry
+adapter for the beta channel rather than a new lifecycle authority.
+
+When a beta channel moves, AdaOS may update the local Trial source and
+Trial Workspace according to the user's update policy. The update must create
+or atomically replace an exact candidate-scoped Trial root; it cannot mutate the
+stable Workspace in place.
+Promotion from beta to stable is always an explicit governed operation that
+rechecks freshness, admission, activation health, and rollback evidence.
 
 ## Stable Subscription And Update
 
@@ -988,7 +1036,7 @@ The architecture reserves, but does not implement:
 
 - multiple active versions through context-aware dependency bindings;
 - full Trial data sandboxing and per-Webspace state isolation;
-- public alpha/beta candidate channels and audience rollout policy;
+- public beta candidate channels and audience rollout policy;
 - feature and edition variants through additional channel and release metadata;
 - multi-user extraction from WorkLog into ChangeSets;
 - trusted development groups and zone-specific approvals;

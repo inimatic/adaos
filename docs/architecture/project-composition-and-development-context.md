@@ -5,7 +5,7 @@ Research Workbench pre-Codex milestone are specified here; a published Project
 catalog and transactional multi-component install/remove flow are follow-on
 work.
 
-Last reviewed: 2026-08-18.
+Last reviewed: 2026-09-05.
 
 This page defines the boundary between distributable AdaOS Projects,
 user-facing Applications, skill/scenario components, Builder development
@@ -78,6 +78,11 @@ The research-domain workflow remains owned by
     orchestration state, and published artifacts have independently named
     owners. Cross-component access requires an explicit capability,
     `ArtifactRef`, or logical-view projection.
+17. Builder has a separate DEV runtime target. `dev/.runtime` is the only
+    runtime materialized directly from mutable DEV source. Stable runs from
+    `workspace/.runtime`; beta runs from an immutable, Workspace-shaped
+    `workspace/trials/<candidate-id>` projection. `alpha` is not a Workspace
+    activation stage.
 
 ## Vocabulary
 
@@ -91,6 +96,9 @@ The research-domain workflow remains owned by
 | Presentation | Explicit binding from a skill/project entry point to a scenario host | Ownership, dependency, or validation evidence |
 | Builder Development Session | Mutable, policy-scoped overlay for one development iteration | Distributable Project manifest |
 | Development target | Component that the current session may change | Whatever is selected in the UI |
+| DEV runtime | Disposable preview/runtime target built from mutable DEV source | Installed Workspace runtime or release evidence |
+| Workspace runtime | Stable user-facing runtime projection selected from WorkspaceLock release evidence | Editable source checkout, beta Trial, or implicit DEV preview |
+| Trial Workspace | Isolated beta projection under `workspace/trials/<candidate-id>` with Workspace-compatible structure and candidate provenance | A child of `workspace/.runtime` or a mutable DEV checkout |
 | Context member | Read-only or filtered dependency visible to an agent | Implicit write authority |
 | Artifact group | Manifested local source material intended for human/LLM/Codex context | Mutable experiment/runtime data |
 | Runtime data | Skill-owned operational state under its activated runtime bucket | Project source or intake material |
@@ -246,19 +254,27 @@ therefore exposes the complete gated Project lifecycle:
 - `push` applies an explicit semantic Project version bump, builds the exact
   dependency closure, and emits an immutable ProjectRelease checkpoint;
   `--local-only` retains it on the current node;
-- `trial` creates an immutable Candidate and isolated TrialActivation, then
-  targets the development Webspace where the DEV runtime is exposed with an
-  `alpha` marker. Mutable DEV source is never the candidate authority;
+- DEV preview builds `dev/.runtime` from DEV source only. It is useful for
+  review and fast iteration, but it is not a Workspace activation, a Trial, or
+  publication evidence;
+- `trial` snapshots the accepted DEV source into an immutable beta Candidate
+  and isolated TrialActivation, then materializes the candidate under
+  `workspace/trials/<candidate-id>` with explicit Trial/beta provenance and a
+  Workspace-compatible structure. Mutable DEV source is never the stable or
+  Trial runtime authority;
 - `trial-decide ... accept` records user acceptance of that exact candidate
-  and moves its derived lifecycle stage to `beta`. Rejection detaches the
-  Trial and keeps Workspace unchanged;
+  as beta evidence. Rejection detaches the Trial and keeps stable Workspace
+  source and release pointers unchanged;
 - `promote --confirm` repeats admission, reload, and health checks before
-  moving the stable ProjectRelease pointer and materializing the exact source
-  and package lock in the local Workspace;
-- `publish --confirm` first rebuilds every owned Workspace component against
-  its accepted package digest, verifies development tests and `project.yaml`
-  against the retained Candidate snapshot, then makes one path-scoped Git
-  commit and push to `adaos-registry`. The promotion journal receives an
+  copying the accepted Trial source into Workspace source, moving the stable
+  ProjectRelease pointer, and materializing the exact package lock in the
+  Workspace runtime as stable;
+- `publish --confirm` for stable first rebuilds every owned Workspace
+  component against its accepted package digest, verifies development tests and
+  `project.yaml` against the retained Candidate snapshot, then makes one
+  path-scoped Git commit and push to `adaos-registry`. A policy-authorized beta
+  publication uses the Trial source/runtime evidence and targets a beta channel
+  or `adaos-registry-beta` adapter instead. The promotion journal receives an
   idempotent source-registry receipt with repository, branch, commit, and
   published paths;
 - the source revision is derived from the canonical Project definition and the
@@ -270,18 +286,28 @@ label:
 
 ```text
 DEV source
+  -> dev/.runtime preview
   -> owned-component Forge checkpoint
   -> immutable ProjectRelease checkpoint
-  -> alpha runtime / isolated Trial
-  -> accepted beta candidate
-  -> stable local Workspace + WorkspaceLock
-  -> GitHub adaos-registry source publication
+  -> Trial source + beta Candidate
+  -> workspace/trials/<candidate-id> Trial/beta activation
+  -> accepted beta evidence
+  -> Workspace source + stable WorkspaceLock
+  -> workspace/.runtime stable activation
+  -> GitHub adaos-registry stable source publication
 ```
 
 `publication.stage` in mutable source is catalog maturity metadata, not the
 authority for the current runtime stage. Client badges must prefer Candidate,
 Trial, WorkspaceLock, and source-registry receipts in that order. This avoids
-showing a stale `alpha` or `beta` label after an exact stable promotion.
+showing a stale `beta` label after an exact stable promotion. `Alpha`, if used
+in UI copy at all, names the local DEV preview only and must not imply that the
+Workspace runtime was built from mutable DEV source.
+
+`workspace/trials` is excluded from Project source closure, package input,
+registry discovery, and Workspace-copy operations. This prevents a Trial from
+capturing another Trial recursively and keeps stable source identity independent
+from retained beta projections.
 
 The ProjectRelease is the runtime-recoverable checkpoint. Developer-only
 component source can additionally use the existing skill/scenario Forge draft

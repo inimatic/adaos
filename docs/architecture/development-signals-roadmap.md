@@ -2,7 +2,7 @@
 
 Status: proposed cross-domain roadmap.
 
-Last reviewed: 2026-09-03.
+Last reviewed: 2026-09-05.
 
 This roadmap sequences the work needed to make evolution feedback a governed,
 natural AdaOS interface for both people and Codex. It is subordinate to
@@ -323,17 +323,19 @@ Ticket and signals, and closes only with evidence.
   merges exact files and digest preconditions once, and uses a bounded
   incremental token budget rather than multiplying singleton budgets.
 - [x] `[must]` `DS5-17` Make the absent-dev-source choice explicit:
-  `materialize`, `fork project`, `runtime overlay`, or `defer`.
+  `materialize`, `fork project`, `trial`, or `defer`.
 - [x] `[must]` `DS5-24` Publish completed Dev Ticket skill repairs to the user
-  as a dev-to-workspace `.runtime` overlay: prepare and test the default
-  workspace runtime slot from DEV source, preserve workspace source, rebuild
-  the target webspace, and record an `aprobation_runtime_overlay` receipt.
+  through the closed compatibility dev-to-workspace `.runtime` overlay:
+  prepare and test a compatibility acceptance runtime from DEV source, preserve
+  workspace source, rebuild the target webspace, and record an
+  `aprobation_runtime_overlay` receipt. The target replacement is `DS5-37`.
 - [x] `[must]` `DS5-25` Complete scenario/project acceptance publication with
-  the same rule: materialize the user's workspace projection from DEV
-  scenario/project source without replacing workspace source, keep an explicit
-  receipt, and provide rollback/acceptance controls for the overlay.
+  the same closed compatibility rule: materialize the user's workspace
+  projection from DEV scenario/project source without replacing workspace
+  source, keep an explicit receipt, and provide rollback/acceptance controls
+  for the overlay. The target replacement is `DS5-37`.
 - [x] `[must]` `DS5-26` Bind component stages to release gates: validated Trial
-  is `alpha`, accepted publication is `beta`, and only durable promotion plus
+  is beta evidence, DEV preview is local-only, and only durable promotion plus
   activation health evidence may produce `stable`.
 - [x] `[must]` `DS5-27` Create/deduplicate project-owned `runtime_failure`
   tickets when Builder tests, scenario validation, Trial activation, or
@@ -375,7 +377,7 @@ Ticket and signals, and closes only with evidence.
   qualified repair package can create Builder work. Reuse the single existing
   DEV owner, require materialization when the owner exists only in Workspace,
   stop on ambiguous ownership, and adopt a standalone DEV skill/scenario into
-  one validated alpha Project when no owner exists. Bind every package ticket
+  one validated DEV Project when no owner exists. Bind every package ticket
   and source signal to that Project before creating the repair so publication,
   trial, acceptance, and rollback share one ProjectRelease lineage.
 - [x] `[must]` `DS5-35` Add the operator/Codex `adaos dev project` lifecycle.
@@ -387,10 +389,31 @@ Ticket and signals, and closes only with evidence.
   mutation.
 - [ ] `[must]` `DS5-36` Close the complete Project delivery chain with one
   resumable identity: project-level owned-component checkpoint, immutable
-  release, alpha runtime Trial, accepted beta candidate, health-gated local
-  Workspace promotion, and exact path-scoped GitHub `adaos-registry`
-  publication. Persist the final repository/branch/commit/path receipt and
-  prove the sequence on a fresh non-Builder Project through GitHub CI.
+  release, `dev/.runtime` preview, isolated
+  `workspace/trials/<candidate-id>` activation, accepted beta evidence,
+  health-gated local Workspace promotion, and exact path-scoped GitHub
+  `adaos-registry` publication. Persist the final
+  repository/branch/commit/path receipt and prove the sequence on a fresh
+  chat-created Project through GitHub CI.
+- [ ] `[must]` `DS5-37` Replace the compatibility dev-to-workspace overlay with
+  the target runtime split: mutable DEV source can update only `dev/.runtime`;
+  stable uses primary `workspace/.runtime`; beta uses only the exact immutable
+  `workspace/trials/<candidate-id>` projection. Retire alpha Workspace badges
+  and overlay acceptance controls.
+- [ ] `[must]` `DS5-38` Preserve compatibility overlay receipts and ticket
+  backlinks as read-only evidence while preventing replay from creating a new
+  overlay; migrate pending eligible work to Candidate/Trial decisions with an
+  explicit operation receipt.
+- [ ] `[must]` `DS5-39` Bind Trial success/failure observations to the exact
+  Trial Workspace root, Candidate digest, lock, target Webspace, and health
+  operation so neither acceptance nor ticket verification can consume evidence
+  from DEV or primary stable runtime accidentally.
+- [ ] `[should]` `DS5-40` Show runtime authority, Trial path/migration status,
+  selected Webspace binding, expiry, and rollback disposition in ticket and
+  Builder projections without exposing native paths to untrusted clients.
+- [ ] `[could]` `DS5-41` Let a user reopen a retained, still-valid Trial from a
+  ticket or Builder history entry without rebuilding it; freshness, package
+  admission, and data-mode policy must still pass.
 
 Implementation note, 2026-09-03: `DS5-32` is deterministic-first. The
 `builder-qualification/language` endpoint calls the Root LLM only after the
@@ -443,9 +466,12 @@ including failed, errored, or cancelled provider calls with reported billable
 tokens. Resolution is evidence-gated, `resolved` is non-terminal, `verify`
 requires verification evidence, and normal closure requires verified status.
 Completed skill and scenario/project repairs can now be exposed to the user's
-workspace as a dev-to-workspace `.runtime` candidate without silently
-replacing stable workspace source. Explicit trial acceptance records the
-ProjectRelease evidence used for verification and closure. Delayed completion
+workspace through the compatibility dev-to-workspace `.runtime` candidate
+without silently replacing stable workspace source. The target path supersedes
+that with `dev/.runtime` preview plus an immutable
+`workspace/trials/<candidate-id>` Trial Workspace. Explicit trial acceptance
+records the ProjectRelease evidence used
+for verification and closure. Delayed completion
 notifications, realtime subscriptions, direct artifact preview, and client UI
 for duplicate/related relations remain open.
 
@@ -468,8 +494,9 @@ E2E acceptance note, 2026-08-31: a real autonomous repair for
 `subscription_status_skill` materialized source that was absent from DEV,
 created four separately visible Builder tasks under one user ticket, preserved
 and revalidated the budget-stopped Codex candidate instead of repeating model
-work, and activated DEV version `0.1.13` as an idempotent default-workspace
-runtime overlay while workspace source remained at `0.1.12`. Task-scoped MCP
+work, and activated DEV version `0.1.13` through the now-superseded
+compatibility default-workspace runtime overlay while workspace source remained
+at `0.1.12`. Task-scoped MCP
 leases admitted bounded task context without secrets. Failed Codex iterations
 reported `2,874,058` tokens to Root in total; the validation-only continuation
 reported zero additional model usage. Automation then synchronized validation,
@@ -537,8 +564,9 @@ isolates invalid manifests instead of losing the whole catalog.
 Project delivery update, 2026-09-04: the CLI now names each governed boundary
 instead of treating Forge, Root artifact storage, Workspace activation, and Git
 publication as one ambiguous push. `checkpoint` covers every owned component
-under one Change id; `trial` and `trial-decide` derive alpha and beta from the
-exact Candidate; `promote` activates the accepted digest in Workspace; and
+under one Change id; `trial` and `trial-decide` derive beta evidence from the
+exact Candidate while alpha remains a DEV-preview-only label; `promote`
+activates the accepted digest in Workspace; and
 `publish` verifies rebuilt owned packages plus retained tests and project
 source before a path-scoped registry commit/push. The promotion operation keeps
 an idempotent final source-registry receipt. `DS5-36` remains open until a fresh

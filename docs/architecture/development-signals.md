@@ -2,7 +2,7 @@
 
 Status: target architecture.
 
-Last reviewed: 2026-09-03.
+Last reviewed: 2026-09-05.
 
 This document defines the AdaOS boundary for user, runtime, review, and
 conversation feedback that may drive software evolution. It sits between raw
@@ -717,7 +717,7 @@ If the target artifact is installed, catalog, remote, or read-only, Builder
 first materializes an authorized development context:
 
 ```text
-existing DEV source | materialize source | fork project | runtime overlay |
+existing DEV source | materialize source | fork project | beta trial |
 upstream proposal | not_design_time_fixable | deferred
 ```
 
@@ -745,19 +745,19 @@ result comment and validation evidence per ticket even when the code change is
 shared.
 
 Autonomous repair may move a ticket to `resolved` with evidence, comment on
-the ticket, and publish a candidate release or runtime overlay according to
-policy. The default user-acceptance publication from Builder is a
-dev-to-workspace runtime overlay: workspace source remains the current stable
-source, while the user's workspace `.runtime`/materialized projection is
-prepared from the DEV repair so the real client can be used for acceptance.
-It should not silently `verify` or `close` unless the ticket policy defines a
-deterministic acceptance gate and the evidence passes.
+the ticket, and publish a candidate release or beta Trial according to policy.
+The default user-acceptance path from Builder is no longer a dev-to-workspace
+runtime overlay. DEV source is previewed in `dev/.runtime`; a beta candidate is
+prepared in an isolated `workspace/trials/<candidate-id>` projection, while the
+user's primary `workspace/.runtime` remains bound to the stable Workspace
+release. It should not silently `verify` or `close` unless the ticket policy
+defines a deterministic acceptance gate and the evidence passes.
 
 When a skill or scenario is not yet in development space, the default source
 strategy is project-level: materialize or fork the owning project when that is
 the distribution unit; otherwise materialize the individual artifact or create
-an explicit runtime overlay. Builder must show the choice to the user or
-operator as `materialize`, `fork`, `overlay`, or `defer`.
+an explicit beta Trial from an immutable candidate. Builder must show the choice
+to the user or operator as `materialize`, `fork`, `trial`, or `defer`.
 
 When Dev Tickets are opened from a modal or panel, the initial UI query should
 be scoped to the current component ref to reduce noise. The filter must remain
@@ -770,14 +770,17 @@ A Builder Trial is not a stable release. Its component stage is derived from
 the governed transition and its evidence:
 
 ```text
-validated DEV overlay -> alpha
-user accepts exact candidate -> beta/publishing
+DEV preview -> dev/.runtime only
+immutable candidate -> workspace/trials/<candidate-id> Trial Workspace
+user accepts exact Trial -> beta evidence/publishing eligibility
 tests + scenario validation + activation health + durable promotion pass -> stable
-any gate fails -> beta/publication_failed + linked runtime_failure Dev Ticket
+any gate fails -> beta_failed/publication_failed + linked runtime_failure Dev Ticket
 ```
 
-Skill tests run before the reviewable overlay is exposed. Scenario source is
-validated before its DEV content may replace the runtime materialization.
+Skill tests run before the reviewable DEV preview or Trial is exposed. Scenario
+source is validated before its candidate content may enter a Trial Workspace.
+Mutable DEV source never replaces stable Workspace runtime directly, and Trial
+materialization never writes below primary `workspace/.runtime`.
 Promotion repeats the package/WorkspaceLock activation and health gates. A
 failure must keep the stable Workspace source and release pointer unchanged,
 must not verify or close the originating user tickets, and must create or

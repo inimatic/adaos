@@ -257,11 +257,13 @@ Candidate -> Release -> stable channel -> WorkspaceLock -> ProjectPlacement
 
 `TrialActivation` runs an immutable Candidate PackageRef. It never executes a
 mutable DEV directory directly and never moves the stable channel or primary
-WorkspaceLock selection. In the single-user MVP its files may be materialized
-under `workspace/.runtime` as a derived cache, while a durable activation
-record retains the candidate digest, target Webspace, runtime bindings, data
-mode, expiry, previous bindings, and terminal/rollback status. A restart
-rebuilds the cache from the same digest; the cache is not source truth.
+WorkspaceLock selection. In the single-user MVP its files are materialized in
+an isolated Workspace-shaped `workspace/trials/<candidate-id>` root, while a
+durable activation record retains the candidate digest, target Webspace,
+runtime bindings, data mode, expiry, previous bindings, and terminal/rollback
+status. Mutable DEV source is previewed only through `dev/.runtime`; stable
+continues to run from `workspace/.runtime`. A restart rebuilds the Trial
+Workspace from the same candidate digest; the projection is not source truth.
 
 `ProjectPlacement` records where a Trial or stable Release is exposed to a
 user. It binds a project result, zone/subnet/Webspace destination, host
@@ -274,10 +276,11 @@ Full data sandboxing and simultaneous versions of one shared skill are
 deferred. Safety is not deferred: Trial admits `empty`, `mock`, and proven
 `read_only` data by default; live writes require explicit approval and proven
 reversibility. A different version of a shared active skill is blocked unless
-the runtime can prove a safe Webspace-scoped binding. Alpha and beta are future
-distribution channels/audiences, not mandatory business states. The MVP may
-show an `alpha`/`Trial` badge for a transient placement but must not claim that
-the candidate was published to an alpha registry channel.
+the runtime can prove a safe Webspace-scoped binding. Prerelease distribution
+channels and audiences are not mandatory business states. Alpha is reserved for
+disposable DEV preview if product copy needs the word; Workspace placement uses
+Trial/beta provenance and must not claim that the candidate was published to a
+registry channel until a beta or stable publication receipt exists.
 
 ## Builder Change Statechart
 
@@ -422,7 +425,7 @@ When no placement exists, `Place in Webspace` replaces the first action.
 `Preview link` is not a published-state action: Preview is a DEV projection,
 whereas a published link is derived from the accepted `ProjectPlacement` via
 the Navigation SDK. An active Trial uses `Open trial` and retains an explicit
-Trial/alpha badge and data-mode explanation.
+Trial/beta badge and data-mode explanation.
 
 `Show process` renders a semantic lineage/timeline, with the same nodes in
 every channel: request/Change, accepted Prototype when present, Automation,

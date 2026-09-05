@@ -3,7 +3,7 @@
 Status: domain roadmap for registry, publication, installation, and durable
 operation mechanics.
 
-Last reviewed: 2026-08-18.
+Last reviewed: 2026-09-05.
 
 This roadmap owns those mechanics. Their position in the broader managed
 deployment and verified-capability sequence is defined by
@@ -162,6 +162,13 @@ normalization.
 ## 1. Registry Sync
 
 `adaos-registry/registry.json` should be treated as a published catalog snapshot.
+Stable and beta publication are channel/catalog projections over the same
+ProjectRelease and package identities. A future `adaos-registry-beta`
+repository is a registry adapter for the beta channel, not a separate source of
+runtime truth. Stable catalog entries install into Workspace source/runtime;
+beta catalog entries install into isolated
+`workspace/trials/<candidate-id>` projections with beta provenance. Neither
+catalog may capture mutable DEV source or `dev/.runtime`.
 
 It should not become:
 
@@ -516,6 +523,9 @@ Define stable contracts before wiring UI and background workers.
 - [ ] `[must]` Project, ProjectRelease, ProjectInstallation, Builder
   DevelopmentSession, and domain aggregate ids remain distinct in APIs and
   projections
+- [ ] `[must]` stable and beta entries reference the same immutable
+  ProjectRelease/package identity model while retaining distinct channel,
+  publication receipt, install target, and update policy
 - [x] shared operation state model
 - [x] Yjs projection schema for `runtime.operations` and `runtime.notifications`
 - [x] explicit rule that Yjs is projection-only
@@ -542,9 +552,21 @@ Make Project publication plus `skill push` and `scenario push` update
 - [ ] `[should]` add one Project publication SDK/CLI path and make existing
   component push commands backward-compatible one-component projections; do
   not add domain-specific publication CLIs
+- [ ] `[must]` publish beta only from an immutable accepted Candidate/Trial
+  source closure, persist repository/branch/commit/path/channel receipts, and
+  reject mutable DEV or unproven Trial input
+- [ ] `[must]` install/update beta into an exact
+  `workspace/trials/<candidate-id>` projection without mutating stable
+  Workspace source, `workspace/.runtime`, WorkspaceLock, or subscription state
+- [ ] `[should]` support `adaos-registry-beta` through the shared normalizer and
+  channel adapter rather than a second lifecycle model
 - [ ] `[should]` preserve raw component discovery for advanced tooling while
   making Project/Application the default catalog read model
-- [ ] `[should]` tests for create/update behavior
+- [ ] `[must]` test idempotent stable/beta create and update, channel isolation,
+  receipt replay, moved-candidate rejection, and install-target separation
+- [ ] `[could]` allow one physical registry repository to expose stable and beta
+  channels when policy permits, without changing local Trial layout or release
+  identity
 - [x] deterministic local workspace registry output ordering
 
 ### Current anchors

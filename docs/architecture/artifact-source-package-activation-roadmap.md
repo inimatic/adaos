@@ -3,7 +3,7 @@
 Status: implementation roadmap for
 [Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md).
 
-Last reviewed: 2026-08-22.
+Last reviewed: 2026-09-05.
 
 ## Outcome
 
@@ -20,7 +20,7 @@ SourceRef
 ```
 
 The active delivery goal is the single-user path. Collaborative extraction,
-public feature proposals, editions, and multi-version runtime resolution are
+public beta proposals, editions, and multi-version runtime resolution are
 recorded but explicitly deferred.
 
 ## Priority Vocabulary
@@ -188,7 +188,7 @@ proof is not silently promoted to stand or production acceptance.
 | AP1 | 11/14 | validated-stand plus local workflow gate (bounded, single-zone) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission, single-pass verified extraction, deployed binary transport, detached Ed25519 trust/admission, deterministic no-replay publication journal, immutable release binding, strict workflow/validation/adapter/role locks, separately provisioned signer/trust, and clean required-mode activation | streamed/object-store transport, multi-zone durability, package lifecycle diagnostics, publisher namespaces, and commercial entitlements remain open/deferred |
 | AP2 | 8/11 | validated-local (bounded) | exact component/dependency, permission, schema, migration, validation, and workflow adapter-binding locks; complete-set fixed-point selection; consistent bindings and reverse consumers | lock explain UI, plan cache, and stand validation |
 | AP3 | 13/14 | validated-stand plus local workflow generation proof (bounded, isolated same-host) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, terminal lock-history states, complete workflow/code generation admission, and clean package-only activation | unattended irreversible migrations remain deferred |
-| AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
+| AP4 | 8/18 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | DEV/stable/Trial runtime authority split, legacy layout migration, policy-proven evidence reuse, and stand validation |
 | AP5 | 7/10 | validated-stand + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend admission and atomic channel CAS, durable post-CAS continuation, and successful external package/release/channel round-trip across a backend redeploy | metadata rebase policy and later merge-queue support |
 | AP6 | 12/14 | validated-local + recovered-live (bounded) | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, Builder review/apply UI, digest-reviewed remote-to-local reconciliation, attested recovery of missing remote immutable state, one fail-closed package/legacy route contract, and explicit no-op planning for an up-to-date subscription | production deployment/observation of the route contract and later evidence-based retirement of the compatibility route |
 | AP7 | 15/17 | validated-stand + second-machine-core-recovered + local workflow proof (bounded), route-fix pending | source-faithful representative LLM/Codex scenario+skill proof, bounded resilience regressions, live Builder publication, external-backend clean required-mode activation, package/release/channel survival across redeploy, exact-build local A/B recovery, generation-bound second-machine core convergence, and manifest-bound workflow authoring/package/role/migration/rollback proof | candidate-before-health proxy admission, frontend/WebSocket continuity, offline browser-draft merge, plus broad production and marketplace acceptance remain open/deferred |
@@ -541,13 +541,24 @@ history pin packages and preserves pending or malformed status fail-closed.
 ## Milestone AP4: Exact-Base DEV Candidate And Trial
 
 **Outcome:** Builder develops from the installed stable identity, produces an
-immutable candidate, and trials it without modifying primary stable activation.
+immutable candidate, and trials it as beta in an isolated Workspace-shaped
+root without modifying primary stable activation or building any accepted
+runtime directly from DEV source.
 
 **Admission gate:** AP3 can activate and roll back packages.
 
-**Exit proof:** Builder creates a candidate from an exact stable release,
-activates it in a trial slot, preserves primary stable activation, and records
-acceptance or rollback evidence.
+**Exit proof:** Builder previews mutable DEV source only in `dev/.runtime`,
+creates a candidate from an exact stable release, activates it below
+`workspace/trials/<candidate-id>`, preserves primary `workspace/.runtime`, and
+records acceptance or rollback evidence. A legacy Trial is recovered without
+loss, and one chat-created Project completes this path through stable release.
+
+Critical review, 2026-09-05: the previous single `AP4-11` item was not an
+implementable unit. It mixed runtime authority, physical layout, legacy
+migration, product controls, and acceptance evidence. It also left beta in the
+primary Workspace runtime, which prevented stable and Trial from remaining
+independently usable. `AP4-11` through `AP4-18` separate those concerns and
+make the non-recursive Trial layout and migration failure modes explicit.
 
 - [x] `[must]` `AP4-01` Resolve installed stable release to exact SourceRef and
   ProjectRelease before DEV creation.
@@ -568,7 +579,37 @@ acceptance or rollback evidence.
 - [ ] `[could]` `AP4-09` Reuse unchanged low-risk evidence after a policy-proven
   no-op rebuild.
 - [ ] `[deferred]` `AP4-10` Extract multiple-user WorkLogs into federated
-  ChangeSets and public alpha proposals.
+  ChangeSets and public beta proposals.
+- [ ] `[must]` `AP4-11` Centralize runtime-root resolution and enforce three
+  authorities: mutable DEV previews under `dev/.runtime`, stable activation
+  under primary `workspace/.runtime`, and immutable beta activation under
+  `workspace/trials/<candidate-id>`.
+- [ ] `[must]` `AP4-12` Make each Trial root reproduce the executable Workspace
+  shape and carry its own lock, runtime, Candidate provenance, health, and
+  rollback evidence. Exclude the parent `workspace/trials` tree from source
+  digests, package inputs, registry scans, and recursive materialization.
+- [ ] `[must]` `AP4-13` Move prepare, reload, health, reconcile, detach, rollback,
+  recovery, and retention code from legacy
+  `workspace/.runtime/trials/<candidate-id>/workspace` to the canonical Trial
+  root without changing primary Workspace files or locks.
+- [ ] `[must]` `AP4-14` Add a journaled, idempotent legacy-layout migration that
+  detects both locations, rejects divergent duplicates, preserves active and
+  rollback evidence, and deletes neither copy until the canonical result is
+  durably verified.
+- [ ] `[must]` `AP4-15` Remove new dev-to-workspace overlay writes and alpha
+  Workspace controls from Builder, API, CLI, and Development Ticket paths;
+  preserve old receipts as read-only history and route acceptance through an
+  immutable TrialActivation.
+- [ ] `[must]` `AP4-16` Prove create-from-chat -> DEV preview -> Candidate ->
+  Trial Workspace -> accept -> stable promotion -> release publication on a
+  fresh Project, including restart/reconciliation and unchanged stable-runtime
+  assertions at the Trial boundary.
+- [ ] `[should]` `AP4-17` Expose selected root, channel, Candidate digest,
+  migration state, expiry, disk use, and cleanup/rollback disposition in
+  Builder and operator diagnostics.
+- [ ] `[could]` `AP4-18` Reuse immutable package files across retained Trial
+  Workspaces through a verified copy-on-write or content-addressed strategy;
+  keep the on-disk Workspace shape independent of that optimization.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md),
 candidate publication regressions in
@@ -983,7 +1024,7 @@ active refactoring:
 - [ ] `[deferred]` `APD-01` Multi-user WorkLog extraction and issue grouping.
 - [ ] `[deferred]` `APD-02` Trusted development groups, delegated capability
   ownership, and proposal feeds.
-- [ ] `[deferred]` `APD-03` Public alpha candidate discovery and cross-user trial
+- [ ] `[deferred]` `APD-03` Public beta candidate discovery and cross-user trial
   evidence aggregation.
 - [ ] `[deferred]` `APD-04` Multiple simultaneously active versions of one skill
   id.
