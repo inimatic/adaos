@@ -560,6 +560,11 @@ def test_oci_provider_requires_digest_pin_and_builds_hostile_isolation_boundary(
     assert executor.capabilities.hostile_isolation is True
     assert "--network" in container_spec.command
     assert "none" in container_spec.command
+    assert "--pull" in container_spec.command
+    assert "never" in container_spec.command
+    assert "--read-only" in container_spec.command
+    assert "--cap-drop" in container_spec.command
+    assert "no-new-privileges:true" in container_spec.command
     assert "--cpus" in container_spec.command
     assert "--memory" in container_spec.command
     assert "--gpus" in container_spec.command

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from threading import RLock
 from typing import Any, Callable, Mapping
@@ -111,6 +112,7 @@ def create_local_development_report_service(
     from .report_directory import SubnetKeyDirectoryAuthority, SubnetKeyDirectoryClient
     from .report_keys import SubnetPurposeKeyStore
     from .report_relay import DurableDevelopmentReportRelay
+    from .report_classifier import OciDevelopmentReportClassifier
 
     root = Path(state_dir).expanduser().resolve()
     keys = SubnetPurposeKeyStore(root)
@@ -125,6 +127,20 @@ def create_local_development_report_service(
     )
     directory = SubnetKeyDirectoryClient()
     directory.update(projection)
+    classifier_image = str(
+        os.getenv("ADAOS_DEVELOPMENT_REPORT_CLASSIFIER_IMAGE") or ""
+    ).strip()
+    classifier = (
+        OciDevelopmentReportClassifier(
+            state_root=root / "applications" / "development_reports",
+            image=classifier_image,
+            runtime=str(
+                os.getenv("ADAOS_DEVELOPMENT_REPORT_CLASSIFIER_RUNTIME") or "docker"
+            ),
+        )
+        if classifier_image
+        else None
+    )
     return DevelopmentReportService(
         root,
         subnet_ref=subnet_ref,
@@ -132,6 +148,7 @@ def create_local_development_report_service(
         key_store=keys,
         directory=directory,
         relay=DurableDevelopmentReportRelay(root, zone_id=zone_id, directory=directory),
+        classifier=classifier,
     )
 
 

@@ -308,7 +308,7 @@ publisher-controlled resolution without receiving source authority.
   internal Dev Ticket comments, priorities, evidence, and Builder tasks local.
 - [x] `[must]` `APP5-08` Bind addressed report IDs to exact prerelease/stable
   releases and require guest-side verification before terminal closure.
-- [ ] `[should]` `APP5-09` Add isolated tool-free/network-free LLM
+- [x] `[should]` `APP5-09` Add isolated tool-free/network-free LLM
   classification after deterministic admission; preserve raw/normalized/model
   provenance and require publisher acceptance.
 - [ ] `[should]` `APP5-10` Implement signed subnet home-zone/key directory and
@@ -332,8 +332,11 @@ creation, an exact addressed release, guest verification, and status resync.
 The sender outbox and Root mailbox retain unknown/backpressured work without
 blind semantic replay. `APP5-10` has signed directory and authenticated
 store-and-forward primitives, but remains open until the peer adapter is wired
-to the live Root protocol. `APP5-09` remains open because an advisory Python
-interface alone is not an enforceable OS isolation boundary.
+to the live Root protocol. `APP5-09` now has an optional digest-pinned OCI
+adapter with no pull, network, secrets, AdaOS tools, or broad host mount;
+read-only root, dropped capabilities, resource/output bounds, and exact
+input/output/image provenance are enforced. Classifier unavailability is
+advisory and cannot turn a deterministically valid report into delivery loss.
 
 ## APP6. Full End-to-End Release Proof
 

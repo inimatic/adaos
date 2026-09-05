@@ -17,6 +17,22 @@ class DevelopmentReportAdmissionError(ValueError):
     pass
 
 
+class DevelopmentReportClassificationUnavailable(RuntimeError):
+    def __init__(
+        self,
+        reason_code: str,
+        *,
+        provider: str = "local-oci",
+        model: str = "unavailable",
+        provenance: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(reason_code)
+        self.reason_code = str(reason_code or "classification_unavailable")[:80]
+        self.provider = str(provider or "local-oci")[:80]
+        self.model = str(model or "unavailable")[:300]
+        self.provenance = dict(provenance or {})
+
+
 class DevelopmentReportClassifier(Protocol):
     def classify(self, *, summary: str, details: str, evidence: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]: ...
 
@@ -189,26 +205,64 @@ class DevelopmentReportAdmissionService:
 
     @staticmethod
     def _model_output(value: Mapping[str, Any], *, input_digest: str) -> dict[str, Any]:
-        allowed = {"provider", "model", "category", "confidence", "tags", "summary"}
+        allowed = {
+            "provider", "model", "category", "confidence", "tags", "summary",
+            "provenance", "status", "reason_code",
+        }
         if set(value) - allowed:
             raise DevelopmentReportAdmissionError("classifier returned authority-bearing or unsupported fields")
+        status = str(value.get("status") or "completed").strip().lower()
+        if status not in {"completed", "unavailable"}:
+            raise DevelopmentReportAdmissionError("classifier status is invalid")
         category = str(value.get("category") or "unknown").strip().lower()
         if category not in {"bug", "feature", "compatibility", "usability", "performance", "security", "unknown"}:
             raise DevelopmentReportAdmissionError("classifier category is invalid")
         confidence = float(value.get("confidence") or 0.0)
         if not 0.0 <= confidence <= 1.0:
             raise DevelopmentReportAdmissionError("classifier confidence is invalid")
-        tags = sorted({str(item).strip().lower() for item in list(value.get("tags") or []) if str(item).strip()})[:12]
+        raw_tags = value.get("tags") or []
+        if not isinstance(raw_tags, (list, tuple)) or len(raw_tags) > 50:
+            raise DevelopmentReportAdmissionError("classifier tags are invalid")
+        tags: list[str] = []
+        for raw_tag in raw_tags:
+            tag, findings = _normalize_and_redact(str(raw_tag).strip().lower())
+            if findings or not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,63}", tag):
+                raise DevelopmentReportAdmissionError("classifier tag is invalid")
+            tags.append(tag)
+        tags = sorted(set(tags))[:12]
         summary, findings = _normalize_and_redact(str(value.get("summary") or category))
         if findings:
             raise DevelopmentReportAdmissionError("classifier emitted secret-like content")
+        provider = str(value.get("provider") or "local-isolated").strip()
+        model = str(value.get("model") or "unspecified").strip()
+        if not provider or len(provider) > 80 or not model or len(model) > 300:
+            raise DevelopmentReportAdmissionError("classifier provenance identity is invalid")
+        provenance = value.get("provenance")
+        if provenance is not None:
+            if not isinstance(provenance, Mapping):
+                raise DevelopmentReportAdmissionError("classifier provenance is invalid")
+            if provenance.get("input_digest") != input_digest:
+                raise DevelopmentReportAdmissionError("classifier provenance input digest mismatch")
         return {
             "schema": "adaos.application.development_report_classification.v1",
-            "provider": str(value.get("provider") or "local-isolated").strip(),
-            "model": str(value.get("model") or "unspecified").strip(),
+            "provider": provider,
+            "model": model,
             "category": category, "confidence": confidence, "tags": tags,
             "summary": summary[:500], "input_digest": input_digest,
-            "authority": "advisory_only", "isolation": {"tools": False, "network": False, "memory": False},
+            "status": status,
+            "reason_code": (
+                str(value.get("reason_code") or "classification_unavailable")[:80]
+                if status == "unavailable"
+                else None
+            ),
+            "provenance": dict(provenance) if provenance is not None else None,
+            "authority": "advisory_only",
+            "isolation": {
+                "tools": False,
+                "network": False,
+                "secrets": False,
+                "host_files": "scratch_only",
+            },
         }
 
     def admit(
@@ -243,7 +297,25 @@ class DevelopmentReportAdmissionService:
         input_digest = f"sha256:{hashlib.sha256(canonical_json_bytes(normalized_input)).hexdigest()}"
         classification = None
         if self.classifier is not None:
-            classification = self._model_output(self.classifier.classify(summary=summary, details=details, evidence=evidence), input_digest=input_digest)
+            try:
+                model_output = self.classifier.classify(
+                    summary=summary,
+                    details=details,
+                    evidence=evidence,
+                )
+            except DevelopmentReportClassificationUnavailable as exc:
+                model_output = {
+                    "provider": exc.provider,
+                    "model": exc.model,
+                    "category": "unknown",
+                    "confidence": 0.0,
+                    "tags": ["classification_unavailable"],
+                    "summary": "Classification unavailable",
+                    "status": "unavailable",
+                    "reason_code": exc.reason_code,
+                    "provenance": {**exc.provenance, "input_digest": input_digest},
+                }
+            classification = self._model_output(model_output, input_digest=input_digest)
         return DevelopmentReportAdmission(
             raw_payload_digest=f"sha256:{hashlib.sha256(raw).hexdigest()}",
             normalized_summary=summary, normalized_details=details,

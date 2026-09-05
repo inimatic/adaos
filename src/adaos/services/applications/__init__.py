@@ -40,6 +40,7 @@ from .retention import ApplicationRetentionError, ApplicationRetentionService
 from .development_reports import DevelopmentReportService, DevelopmentReportServiceError
 from .report_admission import DevelopmentReportAdmissionError, DevelopmentReportAdmissionService
 from .report_crypto import DevelopmentReportCryptoError, DevelopmentReportEnvelopeCrypto
+from .report_classifier import OciDevelopmentReportClassifier
 from .report_directory import SubnetDirectoryError, SubnetKeyDirectoryAuthority, SubnetKeyDirectoryClient
 from .report_keys import SubnetKeyError, SubnetPurposeKey, SubnetPurposeKeyStore
 from .report_relay import (
@@ -97,6 +98,7 @@ __all__ = [
     "DistributionOutcomeUnknown",
     "GitStableSourcePublisher",
     "MetadataSigner",
+    "OciDevelopmentReportClassifier",
     "SubnetDirectoryError",
     "SubnetKeyDirectoryAuthority",
     "SubnetKeyDirectoryClient",

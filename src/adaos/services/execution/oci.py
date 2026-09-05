@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Mapping
@@ -54,6 +55,8 @@ class OCIExecutor(LocalProcessExecutor):
                 "memory_limit",
                 "gpu_allocation",
                 "network_offline",
+                "read_only_rootfs",
+                "capability_drop",
                 "bounded_logs",
                 "declared_outputs",
             ),
@@ -62,7 +65,7 @@ class OCIExecutor(LocalProcessExecutor):
 
     def _container_spec(self, spec: ExecutionSpec, *, idempotency_key: str) -> ExecutionSpec:
         image = str(spec.metadata.get("container_image") or "").strip()
-        if "@sha256:" not in image:
+        if not re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", image):
             raise ExecutionContractError("OCI execution requires a digest-pinned container_image")
         if spec.network.mode == "allowlist":
             raise ExecutionContractError("OCI allowlist network requires an operator network driver")
@@ -73,10 +76,21 @@ class OCIExecutor(LocalProcessExecutor):
             self._oci_runtime,
             "run",
             "--rm",
+            "--pull",
+            "never",
             "--name",
             f"adaos-{idempotency_key.encode('utf-8').hex()[:32]}",
             "--network",
             "none" if spec.network.mode == "offline" else "bridge",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges:true",
+            "--pids-limit",
+            "256",
+            "--tmpfs",
+            "/tmp:rw,noexec,nosuid,nodev,size=64m",
             "-v",
             f"{cwd}:/work:rw",
             "-w",

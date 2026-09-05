@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from adaos.domain.application import Application, ApplicationRelease
 from adaos.domain.artifact_release import ArtifactPackageRef, ArtifactSourceRef, ProjectRelease
 from adaos.domain.development_report import DevelopmentReport
 from adaos.services.applications.report_admission import DevelopmentReportAdmissionError, DevelopmentReportAdmissionService
+from adaos.services.applications.report_classifier import OciDevelopmentReportClassifier
 from adaos.services.applications.store import ApplicationStore
 
 
@@ -86,3 +88,95 @@ def test_classifier_is_advisory_and_cannot_return_authority_fields(tmp_path: Pat
     service = DevelopmentReportAdmissionService(application_store=store, classifier=PoisonedClassifier())
     with pytest.raises(DevelopmentReportAdmissionError, match="authority-bearing"):
         service.admit(_report(release))
+
+
+def test_oci_classifier_is_digest_pinned_scratch_only_and_advisory(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store, release = _store(tmp_path)
+    commands: list[list[str]] = []
+    observed_inputs: list[dict] = []
+
+    class CompletedProcess:
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+    def popen(command, **_kwargs):
+        commands.append(command)
+        mounts = [item for item in command if item.startswith("type=bind,src=")]
+        input_path = Path(mounts[0].split(",dst=", 1)[0].removeprefix("type=bind,src="))
+        output_path = Path(mounts[1].split(",dst=", 1)[0].removeprefix("type=bind,src="))
+        observed_inputs.append(json.loads(input_path.read_text(encoding="utf-8")))
+        output_path.write_text(
+            json.dumps(
+                {
+                    "category": "bug",
+                    "confidence": 0.9,
+                    "tags": ["import"],
+                    "summary": "Import fails",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return CompletedProcess()
+
+    monkeypatch.setattr(
+        "adaos.services.applications.report_classifier.shutil.which",
+        lambda _runtime: "docker",
+    )
+    monkeypatch.setattr(
+        "adaos.services.applications.report_classifier.subprocess.Popen",
+        popen,
+    )
+    image = "registry.example/adaos/report-classifier@sha256:" + "d" * 64
+    classifier = OciDevelopmentReportClassifier(
+        state_root=tmp_path / "classifier-state",
+        image=image,
+    )
+
+    admitted = DevelopmentReportAdmissionService(
+        application_store=store,
+        classifier=classifier,
+    ).admit(_report(release))
+
+    assert observed_inputs[0]["details"] == "token=[REDACTED]"
+    assert all("very-secret-token-value" not in item for item in commands[0])
+    for required in (
+        "--pull", "never", "--network", "none", "--read-only", "--cap-drop",
+        "ALL", "--security-opt", "no-new-privileges:true", "--user", "65532:65532",
+    ):
+        assert required in commands[0]
+    classification = admitted.model_classification
+    assert classification is not None
+    assert classification["authority"] == "advisory_only"
+    assert classification["status"] == "completed"
+    assert classification["model"] == image
+    assert classification["provenance"]["input_digest"] == classification["input_digest"]
+    assert list((tmp_path / "classifier-state" / "report-classifier").iterdir()) == []
+
+
+def test_oci_classifier_unavailability_does_not_reject_admitted_report(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store, release = _store(tmp_path)
+    monkeypatch.setattr(
+        "adaos.services.applications.report_classifier.shutil.which",
+        lambda _runtime: None,
+    )
+    classifier = OciDevelopmentReportClassifier(
+        state_root=tmp_path / "classifier-state",
+        image="registry.example/classifier@sha256:" + "e" * 64,
+    )
+
+    admitted = DevelopmentReportAdmissionService(
+        application_store=store,
+        classifier=classifier,
+    ).admit(_report(release))
+
+    assert admitted.model_classification is not None
+    assert admitted.model_classification["status"] == "unavailable"
+    assert admitted.model_classification["reason_code"] == "oci_runtime_unavailable"

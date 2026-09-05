@@ -757,6 +757,15 @@ Codex context by default.
 Optional LLM preprocessing is classification only. It runs without tools,
 network, long-term memory, release authority, or permission to create a Dev
 Ticket. Human or publisher policy acceptance remains the semantic boundary.
+When configured, the classifier image is digest-pinned and already present on
+the host: the runtime refuses image pulls, gives it a read-only root filesystem,
+drops capabilities and privilege escalation, applies CPU/memory/PID/time/output
+limits, and mounts only normalized input read-only plus one bounded scratch
+output file. Neither AdaOS state, tools, credentials, nor a container socket is
+mounted. Input/output/image/isolation provenance is retained. Model failure is
+recorded as advisory `unavailable` after deterministic admission and cannot
+discard a valid report; malformed authority-bearing output is rejected from
+publisher context.
 
 ## Encrypted Relay and Zones
 
