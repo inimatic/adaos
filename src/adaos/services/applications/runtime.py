@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 from threading import RLock
 from typing import Any, Callable, Mapping
+from urllib.parse import urlsplit
 
 from .service import ApplicationExecutor, ApplicationService
 from .store import ApplicationStore
@@ -111,8 +113,9 @@ def create_local_development_report_service(
     from .development_reports import DevelopmentReportService
     from .report_directory import SubnetKeyDirectoryAuthority, SubnetKeyDirectoryClient
     from .report_keys import SubnetPurposeKeyStore
-    from .report_relay import DurableDevelopmentReportRelay
+    from .report_relay import DurableDevelopmentReportRelay, HttpDevelopmentReportRelayPeer
     from .report_classifier import OciDevelopmentReportClassifier
+    from adaos.services.root.client import RootHttpClient
 
     root = Path(state_dir).expanduser().resolve()
     keys = SubnetPurposeKeyStore(root)
@@ -126,7 +129,56 @@ def create_local_development_report_service(
         display_name=display_name,
     )
     directory = SubnetKeyDirectoryClient()
-    directory.update(projection)
+    directory_path = str(
+        os.getenv("ADAOS_DEVELOPMENT_REPORT_DIRECTORY_PROJECTION") or ""
+    ).strip()
+    if directory_path:
+        try:
+            shared_projection = json.loads(
+                Path(directory_path).expanduser().resolve().read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError("signed Development Report directory is unreadable") from exc
+        directory.update(shared_projection)
+        for purpose in ("message_signing", "message_encryption"):
+            active = keys.active_key(subnet_ref, purpose)
+            directory.key(subnet_ref, active.key_id, purpose, allow_retiring=False)
+    else:
+        directory.update(projection)
+    relay = DurableDevelopmentReportRelay(root, zone_id=zone_id, directory=directory)
+    peer_config_raw = str(
+        os.getenv("ADAOS_DEVELOPMENT_REPORT_ROOT_PEERS_JSON") or ""
+    ).strip()
+    relay_peers: dict[str, HttpDevelopmentReportRelayPeer] = {}
+    if peer_config_raw:
+        try:
+            peer_config = json.loads(peer_config_raw)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Development Report Root peer configuration is invalid") from exc
+        if not isinstance(peer_config, dict) or len(peer_config) > 32:
+            raise RuntimeError("Development Report Root peer configuration is invalid")
+        for raw_zone, raw_peer in peer_config.items():
+            zone = str(raw_zone or "").strip().lower()
+            if not zone or not isinstance(raw_peer, dict) or set(raw_peer) - {
+                "base_url", "relay_token", "identity", "ca_path",
+            }:
+                raise RuntimeError("Development Report Root peer entry is invalid")
+            base_url = str(raw_peer.get("base_url") or "").strip().rstrip("/")
+            parsed = urlsplit(base_url)
+            loopback = parsed.hostname in {"127.0.0.1", "::1", "localhost"}
+            if parsed.scheme != "https" and not (parsed.scheme == "http" and loopback):
+                raise RuntimeError("Development Report Root peer requires HTTPS")
+            ca_path = str(raw_peer.get("ca_path") or "").strip()
+            verify: str | bool = ca_path or True
+            peer = HttpDevelopmentReportRelayPeer(
+                RootHttpClient(base_url=base_url, verify=verify),
+                identity=dict(raw_peer.get("identity") or {}),
+                relay_token=str(raw_peer.get("relay_token") or ""),
+            )
+            if peer.zone_id != zone or zone == relay.zone_id:
+                raise RuntimeError("Development Report Root peer zone binding is invalid")
+            relay.trust_peer(peer.public_identity())
+            relay_peers[zone] = peer
     classifier_image = str(
         os.getenv("ADAOS_DEVELOPMENT_REPORT_CLASSIFIER_IMAGE") or ""
     ).strip()
@@ -147,8 +199,9 @@ def create_local_development_report_service(
         application_store=get_application_service(root).store,
         key_store=keys,
         directory=directory,
-        relay=DurableDevelopmentReportRelay(root, zone_id=zone_id, directory=directory),
+        relay=relay,
         classifier=classifier,
+        relay_peers=relay_peers,
     )
 
 

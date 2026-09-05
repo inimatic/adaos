@@ -6,7 +6,7 @@ import json
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Protocol
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
@@ -24,6 +24,68 @@ class DevelopmentReportRelayError(ValueError):
 
 class DevelopmentReportRelayBackpressure(DevelopmentReportRelayError):
     pass
+
+
+class DevelopmentReportRelayPeer(Protocol):
+    zone_id: str
+
+    def public_identity(self) -> Mapping[str, Any]: ...
+
+    def accept_forward(
+        self,
+        envelope: Mapping[str, Any],
+        *,
+        offer: Mapping[str, Any],
+        source_identity: Mapping[str, Any],
+    ) -> Mapping[str, Any]: ...
+
+
+class HttpDevelopmentReportRelayPeer:
+    """Bound a pinned Root relay identity to the live Root HTTP protocol."""
+
+    def __init__(
+        self,
+        client: Any,
+        *,
+        identity: Mapping[str, Any],
+        relay_token: str,
+    ) -> None:
+        self.client = client
+        self.identity = dict(identity)
+        self.zone_id = str(self.identity.get("zone_id") or "").strip().lower()
+        self.relay_token = str(relay_token or "").strip()
+        if not self.zone_id or not self.relay_token:
+            raise DevelopmentReportRelayError("HTTP Root relay peer configuration is incomplete")
+        try:
+            raw = base64.b64decode(
+                str(self.identity.get("public_key_b64") or ""), validate=True
+            )
+            Ed25519PublicKey.from_public_bytes(raw)
+        except Exception as exc:
+            raise DevelopmentReportRelayError("HTTP Root relay peer key is invalid") from exc
+        if self.identity.get("key_id") != _key_id(raw):
+            raise DevelopmentReportRelayError("HTTP Root relay peer key identity is invalid")
+
+    def public_identity(self) -> dict[str, Any]:
+        return dict(self.identity)
+
+    def accept_forward(
+        self,
+        envelope: Mapping[str, Any],
+        *,
+        offer: Mapping[str, Any],
+        source_identity: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        response = self.client.accept_development_report_forward(
+            envelope=dict(envelope),
+            offer=dict(offer),
+            source_identity=dict(source_identity),
+            relay_token=self.relay_token,
+        )
+        receipt = response.get("receipt") if isinstance(response, Mapping) else None
+        if not isinstance(receipt, Mapping):
+            raise DevelopmentReportRelayError("destination Root returned no forwarding receipt")
+        return dict(receipt)
 
 
 def _now() -> datetime:
@@ -149,7 +211,11 @@ class DurableDevelopmentReportRelay:
         values = state["messages"].values()
         if recipient is not None:
             values = (item for item in values if item["recipient_subnet_ref"] == recipient)
-        return sum(1 for item in values if item.get("status") in {"queued", "delivering"})
+        return sum(
+            1
+            for item in values
+            if item.get("status") in {"queued", "delivering", "forwarding"}
+        )
 
     def _verify_envelope(self, envelope: DevelopmentReportEnvelope, *, allow_retiring: bool) -> None:
         if self.directory.home_zone(envelope.sender_subnet_ref) != envelope.source_zone:
@@ -285,35 +351,117 @@ class DurableDevelopmentReportRelay:
             atomic_write_json(self.state_path, state)
             return {"queued": self._active_count(state), "dead_letters": len(state["dead_letters"]), "receipts": len(state["receipts"])}
 
-    def forward(self, message_id: str, destination: "DurableDevelopmentReportRelay") -> dict[str, Any]:
+    def pending_forwards(self, *, limit: int = 100) -> list[dict[str, str]]:
+        state = self._read()
+        values = [
+            {
+                "message_id": str(item["message_id"]),
+                "destination_zone": str(item["destination_zone"]),
+            }
+            for item in state["messages"].values()
+            if item.get("destination_zone") != self.zone_id
+            and item.get("status") in {"queued", "delivering", "forwarding"}
+        ]
+        return sorted(values, key=lambda item: item["message_id"])[
+            : max(1, min(int(limit), 500))
+        ]
+
+    def prepare_forward(
+        self,
+        message_id: str,
+        destination_identity: Mapping[str, Any],
+    ) -> dict[str, Any]:
         with mutation_lock(self.lock_path, timeout_s=30.0):
             state = self._read()
             item = state["messages"].get(message_id)
             if item is None:
                 receipt = state["receipts"].get(message_id)
                 if receipt is not None and receipt.get("disposition") == "forwarded":
-                    return dict(receipt)
+                    return {"completed": True, "receipt": dict(receipt)}
                 raise DevelopmentReportRelayError("forward message is unknown")
-            if item["destination_zone"] == self.zone_id or destination.zone_id != item["destination_zone"]:
+            destination_zone = str(destination_identity.get("zone_id") or "").strip().lower()
+            if item["destination_zone"] == self.zone_id or destination_zone != item["destination_zone"]:
                 raise DevelopmentReportRelayError("Root-to-Root destination is invalid")
-            peer = state["trusted_peers"].get(destination.zone_id)
-            if peer is None or peer.get("key_id") != destination.public_identity()["key_id"]:
+            peer = state["trusted_peers"].get(destination_zone)
+            if peer is None or peer.get("key_id") != destination_identity.get("key_id"):
                 raise DevelopmentReportRelayError("destination Root is not trusted")
-            offer = self._signed({
-                "schema": "adaos.root.relay_forward_offer.v1", "message_id": message_id,
-                "envelope_digest": item["envelope_digest"], "source_zone": self.zone_id,
-                "destination_zone": destination.zone_id, "hop_count": int(item["hop_count"]) + 1,
-                "offered_at": _iso(self.now()),
-            })
-            destination_receipt = destination.accept_forward(item["envelope"], offer=offer, source_identity=self.public_identity())
+            offer = item.get("forward_offer")
+            if offer is None:
+                offer = self._signed({
+                    "schema": "adaos.root.relay_forward_offer.v1", "message_id": message_id,
+                    "envelope_digest": item["envelope_digest"], "source_zone": self.zone_id,
+                    "destination_zone": destination_zone,
+                    "destination_key_id": destination_identity.get("key_id"),
+                    "hop_count": int(item["hop_count"]) + 1,
+                    "offered_at": _iso(self.now()),
+                })
+                item["forward_offer"] = offer
+                item["status"] = "forwarding"
+                item["last_delivery_at"] = _iso(self.now())
+            elif offer.get("destination_key_id") != destination_identity.get("key_id"):
+                raise DevelopmentReportRelayError(
+                    "prepared forwarding offer names another destination Root key"
+                )
+            atomic_write_json(self.state_path, state)
+            return {
+                "completed": False,
+                "envelope": dict(item["envelope"]),
+                "offer": dict(offer),
+                "source_identity": self.public_identity(),
+            }
+
+    def complete_forward(
+        self,
+        message_id: str,
+        destination_receipt: Mapping[str, Any],
+        *,
+        destination_identity: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            existing = state["receipts"].get(message_id)
+            if existing is not None and existing.get("disposition") == "forwarded":
+                return dict(existing)
+            item = state["messages"].get(message_id)
+            if item is None:
+                raise DevelopmentReportRelayError("forward message is unknown")
+            destination_zone = str(destination_identity.get("zone_id") or "").strip().lower()
+            peer = state["trusted_peers"].get(destination_zone)
+            if peer is None or peer.get("key_id") != destination_identity.get("key_id"):
+                raise DevelopmentReportRelayError("destination Root is not trusted")
             verified = self._verify_signed(destination_receipt, peer)
-            if verified.get("message_id") != message_id or verified.get("envelope_digest") != item["envelope_digest"] or not verified.get("durably_accepted"):
+            if (
+                verified.get("message_id") != message_id
+                or verified.get("envelope_digest") != item["envelope_digest"]
+                or verified.get("destination_zone") != destination_zone
+                or not verified.get("durably_accepted")
+            ):
                 raise DevelopmentReportRelayError("destination Root receipt does not match transfer")
             receipt = {**verified, "schema": "adaos.root.relay_forward_receipt.local.v1", "disposition": "forwarded", "ciphertext_deleted_at": _iso(self.now())}
             state["receipts"][message_id] = receipt
             state["messages"].pop(message_id, None)
             atomic_write_json(self.state_path, state)
             return receipt
+
+    def forward(
+        self,
+        message_id: str,
+        destination: DevelopmentReportRelayPeer,
+    ) -> dict[str, Any]:
+        identity = dict(destination.public_identity())
+        prepared = self.prepare_forward(message_id, identity)
+        if prepared["completed"]:
+            return dict(prepared["receipt"])
+        destination_receipt = destination.accept_forward(
+            prepared["envelope"],
+            offer=prepared["offer"],
+            source_identity=prepared["source_identity"],
+        )
+        return self.complete_forward(
+            message_id,
+            destination_receipt,
+            destination_identity=identity,
+        )
 
     def accept_forward(self, envelope: Mapping[str, Any], *, offer: Mapping[str, Any], source_identity: Mapping[str, Any]) -> dict[str, Any]:
         value = DevelopmentReportEnvelope.from_mapping(envelope)
@@ -328,7 +476,12 @@ class DurableDevelopmentReportRelay:
                 raise DevelopmentReportRelayError("source Root is not trusted")
             verified_offer = self._verify_signed(offer, peer)
             digest = f"sha256:{hashlib.sha256(canonical_json_bytes(value.to_dict())).hexdigest()}"
-            if verified_offer.get("message_id") != value.message_id or verified_offer.get("envelope_digest") != digest or verified_offer.get("destination_zone") != self.zone_id:
+            if (
+                verified_offer.get("message_id") != value.message_id
+                or verified_offer.get("envelope_digest") != digest
+                or verified_offer.get("destination_zone") != self.zone_id
+                or verified_offer.get("destination_key_id") != self.public_identity()["key_id"]
+            ):
                 raise DevelopmentReportRelayError("Root forwarding offer does not match envelope")
             result = self._admit(state, value, hop_count=int(verified_offer.get("hop_count") or 0))
             atomic_write_json(self.state_path, state)
@@ -338,3 +491,12 @@ class DurableDevelopmentReportRelay:
             "durably_accepted": bool(result["accepted"]), "duplicate": bool(result["duplicate"]),
             "accepted_at": _iso(self.now()),
         })
+
+
+__all__ = [
+    "DevelopmentReportRelayBackpressure",
+    "DevelopmentReportRelayError",
+    "DevelopmentReportRelayPeer",
+    "DurableDevelopmentReportRelay",
+    "HttpDevelopmentReportRelayPeer",
+]

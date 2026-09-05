@@ -23,7 +23,9 @@ from adaos.services.applications.report_crypto import DevelopmentReportEnvelopeC
 from adaos.services.applications.report_directory import SubnetKeyDirectoryClient
 from adaos.services.applications.report_keys import SubnetPurposeKeyStore
 from adaos.services.applications.report_relay import (
+    DevelopmentReportRelayPeer,
     DevelopmentReportRelayBackpressure,
+    DevelopmentReportRelayError,
     DurableDevelopmentReportRelay,
 )
 from adaos.services.applications.store import ApplicationStore
@@ -117,6 +119,7 @@ class DevelopmentReportService:
         relay: DurableDevelopmentReportRelay,
         ticket_service: DevelopmentTicketService | None = None,
         classifier: DevelopmentReportClassifier | None = None,
+        relay_peers: Mapping[str, DevelopmentReportRelayPeer] | None = None,
         now: Callable[[], datetime] = _now,
     ) -> None:
         self.state_dir = Path(state_dir).expanduser().resolve()
@@ -127,6 +130,10 @@ class DevelopmentReportService:
         self.key_store = key_store
         self.directory = directory
         self.relay = relay
+        self.relay_peers = {
+            str(zone).strip().lower(): peer
+            for zone, peer in dict(relay_peers or {}).items()
+        }
         self.ticket_service = ticket_service or DevelopmentTicketService(state_dir=self.state_dir)
         self.admission = DevelopmentReportAdmissionService(application_store=application_store, classifier=classifier)
         self.crypto = DevelopmentReportEnvelopeCrypto(key_store=key_store, directory=directory, now=now)
@@ -224,6 +231,25 @@ class DevelopmentReportService:
             result = self.relay.enqueue(item["envelope"])
         except DevelopmentReportRelayBackpressure as exc:
             return {"accepted": False, "duplicate": False, "message_id": message_id, "local_status": "queued", "reason": str(exc)}
+        destination_zone = str(item["envelope"].get("destination_zone") or "").lower()
+        if destination_zone and destination_zone != self.relay.zone_id:
+            peer = self.relay_peers.get(destination_zone)
+            if peer is None:
+                result = {**result, "forward_status": "queued", "forward_reason": "peer_not_configured"}
+            else:
+                try:
+                    receipt = self.relay.forward(message_id, peer)
+                    result = {**result, "forward_status": "forwarded", "forward_receipt": receipt}
+                except Exception as exc:
+                    result = {
+                        **result,
+                        "forward_status": "queued",
+                        "forward_reason": (
+                            str(exc)
+                            if isinstance(exc, DevelopmentReportRelayError)
+                            else "peer_transport_unavailable"
+                        ),
+                    }
 
         def mark_sent(state: dict[str, Any]) -> None:
             current = state["outbox"].get(message_id)
@@ -244,7 +270,41 @@ class DevelopmentReportService:
             results.append(result)
             if result.get("local_status") == "queued":
                 break
-        return {"attempted": len(results), "remaining": len(self.store.read()["outbox"]), "results": results}
+        return {
+            "attempted": len(results),
+            "remaining": len(self.store.read()["outbox"]),
+            "results": results,
+            "relay": self.flush_relay_forwards(limit=limit),
+        }
+
+    def flush_relay_forwards(self, *, limit: int = 100) -> dict[str, Any]:
+        results: list[dict[str, Any]] = []
+        for item in self.relay.pending_forwards(limit=limit):
+            peer = self.relay_peers.get(item["destination_zone"])
+            if peer is None:
+                results.append({**item, "status": "queued", "reason": "peer_not_configured"})
+                continue
+            try:
+                receipt = self.relay.forward(item["message_id"], peer)
+            except Exception as exc:
+                results.append(
+                    {
+                        **item,
+                        "status": "queued",
+                        "reason": (
+                            str(exc)
+                            if isinstance(exc, DevelopmentReportRelayError)
+                            else "peer_transport_unavailable"
+                        ),
+                    }
+                )
+                continue
+            results.append({**item, "status": "forwarded", "receipt": receipt})
+        return {
+            "attempted": len(results),
+            "remaining": len(self.relay.pending_forwards(limit=500)),
+            "results": results,
+        }
 
     def _append_event(self, state: dict[str, Any], event: DevelopmentReportStatusEvent) -> None:
         events = state["events"].setdefault(event.report_id, [])

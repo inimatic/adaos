@@ -311,7 +311,7 @@ publisher-controlled resolution without receiving source authority.
 - [x] `[should]` `APP5-09` Add isolated tool-free/network-free LLM
   classification after deterministic admission; preserve raw/normalized/model
   provenance and require publisher acceptance.
-- [ ] `[should]` `APP5-10` Implement signed subnet home-zone/key directory and
+- [x] `[should]` `APP5-10` Implement signed subnet home-zone/key directory and
   Root-to-Root store-and-forward before an inter-zone pilot.
 - [ ] `[could]` `APP5-11` Add publisher-side duplicate clustering and reporter
   reputation only after transparent appeal and privacy policy exist.
@@ -330,9 +330,10 @@ hermetic two-subnet round trip over the durable same-zone mailbox, including
 offline publisher delivery, quarantine, explicit acceptance, local Dev Ticket
 creation, an exact addressed release, guest verification, and status resync.
 The sender outbox and Root mailbox retain unknown/backpressured work without
-blind semantic replay. `APP5-10` has signed directory and authenticated
-store-and-forward primitives, but remains open until the peer adapter is wired
-to the live Root protocol. `APP5-09` now has an optional digest-pinned OCI
+blind semantic replay. `APP5-10` now adds a bounded live HTTP Root endpoint,
+pinned peer adapter, shared signed-directory projection, durable prepare and
+verified-complete handoff, bounded ingress, immediate forwarding, and retained
+queue flush after an offline or unknown response. `APP5-09` has an optional digest-pinned OCI
 adapter with no pull, network, secrets, AdaOS tools, or broad host mount;
 read-only root, dropped capabilities, resource/output bounds, and exact
 input/output/image provenance are enforced. Classifier unavailability is

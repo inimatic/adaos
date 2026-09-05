@@ -172,6 +172,11 @@ class SubnetKeyDirectoryClient:
         self.high_water_generation = generation
         self._projection = {**payload, "signature_b64": signature_b64}
 
+    def projection(self) -> dict[str, Any]:
+        if self._projection is None:
+            raise SubnetDirectoryError("subnet directory is not initialized")
+        return json.loads(json.dumps(self._projection))
+
     def entry(self, subnet_ref: str) -> dict[str, Any]:
         if self._projection is None:
             raise SubnetDirectoryError("subnet directory is not initialized")
@@ -199,4 +204,3 @@ class SubnetKeyDirectoryClient:
 
     def home_zone(self, subnet_ref: str) -> str:
         return str(self.entry(subnet_ref)["home_zone"])
-

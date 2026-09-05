@@ -796,6 +796,18 @@ avoid loops and false terminal success. Same-zone relay is the first slice;
 cross-zone store-and-forward is required before an inter-zone pilot. Multiple
 independent Roots within one zone and automatic failover remain deferred.
 
+The live inter-zone adapter uses a pinned Root relay Ed25519 identity plus an
+HTTPS ingress token. It publishes bounded identity, signed-directory, forward,
+and retry-flush routes under
+`/v1/root/applications/development-reports/relay`. A source Root durably stores
+one signed forward offer before the HTTP call and retains ciphertext across an
+unknown response; only a verified destination receipt completes the handoff.
+Ingress reads a strictly bounded body before schema parsing. Runtime operators
+provide a shared signed directory projection with
+`ADAOS_DEVELOPMENT_REPORT_DIRECTORY_PROJECTION` and pinned zone peer records
+with `ADAOS_DEVELOPMENT_REPORT_ROOT_PEERS_JSON`; repository code and Builder do
+not receive relay tokens, CA paths, URLs, or peer keys as action arguments.
+
 ## Deferred Root Guard
 
 The future Root Guard will add private quarantine, structural and malware

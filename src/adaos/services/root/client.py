@@ -974,6 +974,58 @@ class RootHttpClient:
             )
         )
 
+    def get_development_report_relay_identity(self, *, relay_token: str) -> dict:
+        return dict(
+            self.request(
+                "GET",
+                "/v1/root/applications/development-reports/relay/identity",
+                headers={"X-AdaOS-Relay-Token": relay_token},
+                timeout=30.0,
+            )
+        )
+
+    def get_development_report_directory(self, *, relay_token: str) -> dict:
+        return dict(
+            self.request(
+                "GET",
+                "/v1/root/applications/development-reports/relay/directory",
+                headers={"X-AdaOS-Relay-Token": relay_token},
+                timeout=30.0,
+            )
+        )
+
+    def accept_development_report_forward(
+        self,
+        *,
+        envelope: Mapping[str, Any],
+        offer: Mapping[str, Any],
+        source_identity: Mapping[str, Any],
+        relay_token: str,
+    ) -> dict:
+        return dict(
+            self.request(
+                "POST",
+                "/v1/root/applications/development-reports/relay/forward",
+                json={
+                    "envelope": dict(envelope),
+                    "offer": dict(offer),
+                    "source_identity": dict(source_identity),
+                },
+                headers={"X-AdaOS-Relay-Token": relay_token},
+                timeout=120.0,
+            )
+        )
+
+    def flush_development_report_relay(self, *, relay_token: str) -> dict:
+        return dict(
+            self.request(
+                "POST",
+                "/v1/root/applications/development-reports/relay/flush",
+                headers={"X-AdaOS-Relay-Token": relay_token},
+                timeout=120.0,
+            )
+        )
+
     def put_artifact_package_bytes(
         self,
         *,

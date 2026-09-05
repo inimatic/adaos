@@ -46,7 +46,9 @@ from .report_keys import SubnetKeyError, SubnetPurposeKey, SubnetPurposeKeyStore
 from .report_relay import (
     DevelopmentReportRelayBackpressure,
     DevelopmentReportRelayError,
+    DevelopmentReportRelayPeer,
     DurableDevelopmentReportRelay,
+    HttpDevelopmentReportRelayPeer,
 )
 from .deployment_executor import (
     ApplicationDataSnapshotStore,
@@ -88,9 +90,11 @@ __all__ = [
     "DevelopmentReportEnvelopeCrypto",
     "DevelopmentReportRelayBackpressure",
     "DevelopmentReportRelayError",
+    "DevelopmentReportRelayPeer",
     "DevelopmentReportService",
     "DevelopmentReportServiceError",
     "DurableDevelopmentReportRelay",
+    "HttpDevelopmentReportRelayPeer",
     "ApplicationService",
     "ApplicationServiceError",
     "ApplicationStore",
