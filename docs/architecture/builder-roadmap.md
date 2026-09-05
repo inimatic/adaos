@@ -1846,7 +1846,8 @@ The dated entries below remain the chronological implementation ledger.
   SDK. Lifecycle examples and the prompt capsule define the DEV -> Trial ->
   prerelease -> stable sequence. This
   completes the prerequisite only; it is not evidence that Applications has
-  already been generated or released.
+  already been generated or released. The local gate is captured in
+  [Application Preparation Evidence - 2026-09-05](application-preparation-evidence-2026-09-05.md).
 - [ ] `[must]` Build and revise the Applications system scenario through
   conversational managed development using only the typed Application SDK and
   `ApplicationsPlane` MCP contracts, then prove its prerelease and stable

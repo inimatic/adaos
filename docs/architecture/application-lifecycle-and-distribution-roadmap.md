@@ -194,6 +194,9 @@ composition-lock identities remain visible, while private source, build paths,
 credentials, and free-form validation/acceptance evidence are omitted or
 reduced to digest/count summaries.
 
+Local preparation evidence is recorded in
+[Application Preparation Evidence - 2026-09-05](application-preparation-evidence-2026-09-05.md).
+
 ## APP3. Prerelease Storage, Channels, and Access
 
 **Outcome:** trusted publishers can publish one prerelease line without using a
@@ -439,6 +442,8 @@ These tasks remain visible but do not block APP0-APP6.
 The preparatory Core, SDK, MCP, artifact, channel, recovery, and Development
 Report rails are implemented and locally testable. The repository is ready to
 start `APP4-01`: creating the Applications system product through Builder chat.
+The exact local gate is captured in
+[Application Preparation Evidence - 2026-09-05](application-preparation-evidence-2026-09-05.md).
 This is not release readiness. `APP1-04`, all of `APP4`, and all of `APP6`
 remain open until the real UI replaces Infrastate Inventory and the complete
 clean-subnet chain is captured without manual state edits.
