@@ -107,6 +107,7 @@ class ApplicationDevelopmentCoordinator:
             raise ApplicationDevelopmentError("unsupported Application development action")
         actor = self._identity(actor_ref, "actor_ref")
         subnet = self._identity(subnet_ref, "subnet_ref").lower()
+        application = self._identity(application_id, "application_id")
         if not subnet.startswith("subnet:"):
             raise ApplicationDevelopmentError("subnet_ref must use subnet:<id>")
         if capability != required:
@@ -117,7 +118,7 @@ class ApplicationDevelopmentCoordinator:
         bounded_intent = dict(intent)
         intent_digest = canonical_payload_digest(bounded_intent)
         identity = hashlib.sha256(
-            f"{action_id}\x1f{application_id}\x1f{key}\x1f{intent_digest}".encode("utf-8")
+            f"{action_id}\x1f{application}\x1f{key}\x1f{intent_digest}".encode("utf-8")
         ).hexdigest()[:32]
         operation_id = f"appdevop.{identity}"
         path = self._path(operation_id)
@@ -126,8 +127,20 @@ class ApplicationDevelopmentCoordinator:
             if index_path.is_file():
                 index = json.loads(index_path.read_text(encoding="utf-8"))
                 existing = self.get(str(index.get("operation_id") or ""))
-                if existing["intent_digest"] != intent_digest or existing["action"] != action_id:
-                    raise ApplicationDevelopmentError("idempotency key names another development intent")
+                expected_identity = {
+                    "application_id": application,
+                    "action": action_id,
+                    "actor_ref": actor,
+                    "subnet_ref": subnet,
+                    "capability": capability,
+                    "expected_revision": int(expected_revision),
+                    "idempotency_key": key,
+                    "intent_digest": intent_digest,
+                }
+                if any(existing.get(field) != value for field, value in expected_identity.items()):
+                    raise ApplicationDevelopmentError(
+                        "idempotency key names another development authority or intent"
+                    )
                 if existing["status"] == "succeeded":
                     return existing
                 raise ApplicationDevelopmentOutcomeUnknown(
@@ -137,7 +150,7 @@ class ApplicationDevelopmentCoordinator:
             operation = {
                 "schema": "adaos.application.development_operation.v1",
                 "operation_id": operation_id,
-                "application_id": str(application_id),
+                "application_id": application,
                 "action": action_id,
                 "status": "planned",
                 "actor_ref": actor,

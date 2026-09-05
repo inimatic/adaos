@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from types import SimpleNamespace
 
 import pytest
 
@@ -33,6 +34,8 @@ class _Record:
 def test_sdk_application_mutations_forward_complete_review_context(monkeypatch) -> None:
     stub = _StubService()
     monkeypatch.setattr(applications, "_service", lambda: stub)
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:sn_home")
+    monkeypatch.setattr(applications, "_admit_active_skill_capability", lambda _capability: None)
 
     plan = applications.plan_install(
         "app_recipes",
@@ -138,6 +141,7 @@ def test_sdk_report_mutations_require_local_narrow_capability(monkeypatch) -> No
 
     reports = Reports()
     monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:sn_home")
+    monkeypatch.setattr(applications, "_admit_active_skill_capability", lambda _capability: None)
     register_development_report_service(reports)
     try:
         submitted = applications.submit_development_report(
@@ -166,6 +170,41 @@ def test_sdk_report_mutations_require_local_narrow_capability(monkeypatch) -> No
             )
     finally:
         register_development_report_service(None)
+
+
+def test_application_sdk_admits_active_skill_capability(monkeypatch) -> None:
+    decisions = []
+    context = SimpleNamespace(
+        skill_ctx=SimpleNamespace(get=lambda: SimpleNamespace(name="applications")),
+    )
+    monkeypatch.setattr(applications, "require_ctx", lambda _reason: context)
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:home")
+    monkeypatch.setattr(
+        applications,
+        "require_skill_capability",
+        lambda ctx, capability: decisions.append((ctx, capability)),
+    )
+
+    identity = applications._mutation_identity(
+        "user:owner",
+        "subnet:home",
+        "applications.apply",
+        "apply-1",
+        required_capability="applications.apply",
+    )
+
+    assert identity == (
+        "user:owner", "subnet:home", "applications.apply", "apply-1",
+    )
+    assert decisions == [(context, "applications.apply")]
+    with pytest.raises(ValueError, match="local identity"):
+        applications._mutation_identity(
+            "user:owner",
+            "subnet:foreign",
+            "applications.apply",
+            "apply-2",
+            required_capability="applications.apply",
+        )
 
 
 def test_sdk_release_reads_preserve_identity_and_redact_private_source(monkeypatch) -> None:

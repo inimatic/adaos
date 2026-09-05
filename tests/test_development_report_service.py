@@ -85,9 +85,16 @@ def test_offline_report_accept_release_verify_round_trip(tmp_path: Path) -> None
     )
     report_id = submitted["report"]["report_id"]
     assert guest.create_report(
-        application_id="app_recipes", summary="ignored", details="ignored",
+        application_id="app_recipes", summary="Import fails",
+        details="Authorization: Bearer abcdefghijklmnopqrstuvwxyz should not enter Builder.",
         idempotency_key="report-import-1",
     )["duplicate"] is True
+    with pytest.raises(ValueError, match="idempotency identity collision"):
+        guest.create_report(
+            application_id="app_recipes", summary="Changed request",
+            details="The same key must not identify changed report content.",
+            idempotency_key="report-import-1",
+        )
     with pytest.raises(ValueError, match="unknown release"):
         guest.create_report(
             application_id="app_recipes", summary="Wrong release", details="Not installed",
@@ -238,6 +245,11 @@ def test_publisher_triage_is_explainable_and_appeal_reopens_without_auto_accept(
         first["report_id"], statement=submitted["appeal"]["statement"],
         idempotency_key="appeal-csv-1",
     )["duplicate"] is True
+    with pytest.raises(ValueError, match="appeal idempotency identity collision"):
+        guest.submit_appeal(
+            first["report_id"], statement="A different appeal statement.",
+            idempotency_key="appeal-csv-1",
+        )
     publisher.receive()
     publisher_appeal = publisher.list_appeals(first["report_id"])[0]
     assert publisher_appeal["status"] == "received"

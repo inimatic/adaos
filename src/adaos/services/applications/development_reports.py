@@ -206,6 +206,32 @@ class DevelopmentReportService:
         values = list(state["raw_intake"].values()) + list(state["reports"].values())
         return sum(1 for item in values if item.get("reporter_subnet_ref") == reporter_subnet_ref and datetime.fromisoformat(str(item["created_at"]).replace("Z", "+00:00")) >= cutoff)
 
+    def _same_report_request(
+        self,
+        raw: Mapping[str, Any],
+        *,
+        application_id: str,
+        summary: str,
+        details: str,
+        idempotency_key: str,
+        evidence: Sequence[Mapping[str, Any]],
+        installed_release_digest: str | None,
+    ) -> bool:
+        expected = {
+            "application_id": application_id,
+            "reporter_subnet_ref": self.subnet_ref,
+            "idempotency_key": idempotency_key,
+            "summary": summary,
+            "details": details,
+            "evidence": [dict(item) for item in evidence],
+        }
+        if any(raw.get(field) != value for field, value in expected.items()):
+            return False
+        return (
+            installed_release_digest is None
+            or raw.get("installed_release_digest") == installed_release_digest
+        )
+
     def create_report(
         self,
         *,
@@ -216,13 +242,43 @@ class DevelopmentReportService:
         evidence: Sequence[Mapping[str, Any]] = (),
         installed_release_digest: str | None = None,
     ) -> dict[str, Any]:
+        application_id = str(application_id or "").strip().lower()
+        idempotency_key = str(idempotency_key or "").strip()
+        if not application_id:
+            raise DevelopmentReportServiceError("application_id is required")
+        if not idempotency_key:
+            raise DevelopmentReportServiceError("idempotency_key is required")
+        summary = str(summary or "").strip()
+        details = str(details or "").strip()
+        bounded_evidence = tuple(dict(item) for item in evidence)
+        requested_release_digest = (
+            str(installed_release_digest).strip().lower()
+            if installed_release_digest is not None
+            else None
+        )
         state = self.store.read()
         for raw in state["reports"].values():
             if raw.get("idempotency_key") == idempotency_key:
-                return {"report": dict(raw), "duplicate": True, "message_id": state["outbound_messages"].get(raw["report_id"])}
+                if not self._same_report_request(
+                    raw,
+                    application_id=application_id,
+                    summary=summary,
+                    details=details,
+                    idempotency_key=idempotency_key,
+                    evidence=bounded_evidence,
+                    installed_release_digest=requested_release_digest,
+                ):
+                    raise DevelopmentReportServiceError(
+                        "DevelopmentReport idempotency identity collision"
+                    )
+                return {
+                    "report": dict(raw),
+                    "duplicate": True,
+                    "message_id": state["outbound_messages"].get(raw["report_id"]),
+                }
         application = self.application_store.get_application(application_id)
         installation = self.application_store.get_installation(application_id)
-        release_digest = str(installed_release_digest or installation.installed_release_digest)
+        release_digest = str(requested_release_digest or installation.installed_release_digest)
         signing = self.key_store.active_key(self.subnet_ref, "message_signing")
         report_id = _id("report", self.subnet_ref, application_id, idempotency_key)
         report = DevelopmentReport(
@@ -231,7 +287,7 @@ class DevelopmentReportService:
             installed_release_digest=release_digest,
             installation_proof={"installation_id": installation.installation_id, "application_id": application_id, "release_digest": release_digest, "installation_revision": installation.revision},
             idempotency_key=idempotency_key, summary=summary, details=details,
-            evidence=tuple(dict(item) for item in evidence), status="queued", revision=1,
+            evidence=bounded_evidence, status="queued", revision=1,
         )
         self.admission.admit(
             report, recent_report_count=self._recent_count(state, self.subnet_ref),
@@ -243,15 +299,52 @@ class DevelopmentReportService:
             report.to_dict(), message_kind="report", sender_subnet_ref=self.subnet_ref,
             recipient_subnet_ref=application.publisher_ref, message_id=message_id,
         )
-        def persist(current: dict[str, Any]) -> None:
-            existing = current["reports"].get(report.report_id)
-            if existing is not None and existing != report.to_dict():
-                raise DevelopmentReportServiceError("DevelopmentReport idempotency identity collision")
-            current["reports"][report.report_id] = report.to_dict()
+        report_payload = report.to_dict()
+
+        def persist(current: dict[str, Any]) -> dict[str, Any]:
+            existing = next(
+                (
+                    raw
+                    for raw in current["reports"].values()
+                    if raw.get("reporter_subnet_ref") == self.subnet_ref
+                    and raw.get("idempotency_key") == idempotency_key
+                ),
+                None,
+            )
+            if existing is not None:
+                if not self._same_report_request(
+                    existing,
+                    application_id=application_id,
+                    summary=summary,
+                    details=details,
+                    idempotency_key=idempotency_key,
+                    evidence=bounded_evidence,
+                    installed_release_digest=requested_release_digest,
+                ):
+                    raise DevelopmentReportServiceError(
+                        "DevelopmentReport idempotency identity collision"
+                    )
+                return {
+                    "report": dict(existing),
+                    "duplicate": True,
+                    "message_id": current["outbound_messages"].get(existing["report_id"]),
+                }
+            current["reports"][report.report_id] = report_payload
             current["outbound_messages"][report.report_id] = message_id
             current["outbox"].setdefault(message_id, {"kind": "report", "envelope": envelope.to_dict(), "status": "queued", "created_at": _iso(self.now())})
-        self.store.mutate(persist)
-        return {"report": report.to_dict(), "duplicate": False, "message_id": message_id, "relay": self._dispatch_outbox(message_id)}
+            return {
+                "report": report_payload,
+                "duplicate": False,
+                "message_id": message_id,
+            }
+
+        persisted = self.store.mutate(persist)
+        if persisted["duplicate"]:
+            return persisted
+        return {
+            **persisted,
+            "relay": self._dispatch_outbox(message_id),
+        }
 
     def _dispatch_outbox(self, message_id: str) -> dict[str, Any]:
         item = self.store.read()["outbox"].get(message_id)
@@ -761,6 +854,7 @@ class DevelopmentReportService:
         statement: str,
         idempotency_key: str,
     ) -> dict[str, Any]:
+        idempotency_key = str(idempotency_key or "").strip()
         state = self.store.read()
         report_raw = state["reports"].get(report_id)
         if report_raw is None:
@@ -807,7 +901,32 @@ class DevelopmentReportService:
             message_id=message_id,
         )
 
-        def persist(current_state: dict[str, Any]) -> None:
+        def persist(current_state: dict[str, Any]) -> dict[str, Any]:
+            existing_raw = next(
+                (
+                    raw
+                    for raw in current_state["appeals"].values()
+                    if raw.get("reporter_subnet_ref") == self.subnet_ref
+                    and raw.get("idempotency_key") == idempotency_key
+                ),
+                None,
+            )
+            if existing_raw is not None:
+                existing = DevelopmentReportAppeal.from_mapping(existing_raw)
+                if (
+                    existing.reporter_subnet_ref != self.subnet_ref
+                    or existing.report_id != report_id
+                    or existing.idempotency_key != idempotency_key
+                    or existing.statement != normalized_statement
+                ):
+                    raise DevelopmentReportServiceError(
+                        "appeal idempotency identity collision"
+                    )
+                return {
+                    "appeal": existing.to_dict(),
+                    "duplicate": True,
+                    "message_id": _id("msg", existing.appeal_id, "appeal", 1),
+                }
             current_state["appeals"][appeal.appeal_id] = appeal.to_dict()
             current_state["outbox"].setdefault(
                 message_id,
@@ -816,10 +935,17 @@ class DevelopmentReportService:
                     "status": "queued", "created_at": _iso(self.now()),
                 },
             )
+            return {
+                "appeal": appeal.to_dict(),
+                "duplicate": False,
+                "message_id": message_id,
+            }
 
-        self.store.mutate(persist)
+        persisted = self.store.mutate(persist)
+        if persisted["duplicate"]:
+            return persisted
         return {
-            "appeal": appeal.to_dict(), "duplicate": False, "message_id": message_id,
+            **persisted,
             "relay": self._dispatch_outbox(message_id),
         }
 

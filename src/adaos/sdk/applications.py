@@ -19,6 +19,7 @@ from adaos.services.applications import (
     get_application_service,
     get_development_report_service,
 )
+from adaos.services.policy.skill_capabilities import require_skill_capability
 
 
 def _service():
@@ -32,6 +33,13 @@ def _local_subnet_ref() -> str:
         config.subnet_id_value if hasattr(config, "subnet_id_value") else config.subnet_id
     ).strip()
     return subnet_id if subnet_id.startswith("subnet:") else f"subnet:{subnet_id}"
+
+
+def _admit_active_skill_capability(required_capability: str) -> None:
+    ctx = require_ctx("sdk.applications")
+    current = ctx.skill_ctx.get()
+    if str(getattr(current, "name", "") or "").strip():
+        require_skill_capability(ctx, required_capability)
 
 
 def _mutation_identity(
@@ -54,6 +62,9 @@ def _mutation_identity(
         raise ValueError("idempotency_key is required")
     if granted != required_capability:
         raise ValueError(f"{required_capability} capability is required")
+    if subnet.lower() != _local_subnet_ref().lower():
+        raise ValueError("Application mutation subnet does not match local identity")
+    _admit_active_skill_capability(required_capability)
     return actor, subnet, granted, key
 
 

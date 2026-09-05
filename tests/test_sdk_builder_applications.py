@@ -4,6 +4,8 @@ import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from adaos.sdk.builder import applications
 from adaos.sdk.core.exporter import export
 from adaos.sdk.developer import compositions
@@ -17,6 +19,7 @@ def test_builder_application_create_uses_bounded_composition_and_core(monkeypatc
     created = []
     monkeypatch.setattr(applications, "_application_service", lambda: service)
     monkeypatch.setattr(applications, "_coordinator", lambda: coordinator)
+    monkeypatch.setattr(applications, "_admit_builder_mutation", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         applications,
         "publisher_context",
@@ -101,6 +104,56 @@ def test_builder_application_facade_is_discoverable() -> None:
     assert "adaos.sdk.builder.applications.promote_stable" in names
 
 
+def test_builder_application_mutations_require_local_admitted_capability(
+    monkeypatch,
+) -> None:
+    decisions = []
+    context = SimpleNamespace(
+        config=SimpleNamespace(subnet_id="home"),
+        skill_ctx=SimpleNamespace(get=lambda: SimpleNamespace(name="builder")),
+    )
+    monkeypatch.setattr(applications, "_ctx", lambda: context)
+    monkeypatch.setattr(
+        applications,
+        "require_skill_capability",
+        lambda ctx, capability: decisions.append((ctx, capability)),
+    )
+
+    applications._admit_builder_mutation(
+        "create",
+        "app_test",
+        subnet_ref="subnet:home",
+        capability="applications.develop",
+    )
+
+    assert decisions == [(context, "applications.develop")]
+    monkeypatch.setattr(
+        applications,
+        "_application_service",
+        lambda: SimpleNamespace(
+            store=SimpleNamespace(
+                get_application=lambda _application_id: SimpleNamespace(
+                    publisher_ref="subnet:foreign"
+                )
+            )
+        ),
+    )
+    with pytest.raises(ValueError, match="local Application publisher"):
+        applications._admit_builder_mutation(
+            "preview",
+            "app_foreign",
+            subnet_ref="subnet:home",
+            capability="applications.develop",
+        )
+    with pytest.raises(ValueError, match="local publisher identity"):
+        applications._admit_builder_mutation(
+            "create",
+            "app_test",
+            subnet_ref="subnet:foreign",
+            capability="applications.develop",
+        )
+
+
 def test_builder_application_reconciles_lost_create_response(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -170,6 +223,7 @@ def test_builder_application_reconciles_lost_create_response(
     monkeypatch.setattr(applications, "_application_service", lambda: service)
     monkeypatch.setattr(applications, "_coordinator", lambda: coordinator)
     monkeypatch.setattr(applications, "publisher_context", lambda: publisher)
+    monkeypatch.setattr(applications, "_admit_builder_mutation", lambda *args, **kwargs: None)
 
     operation = applications.reconcile_development_operation(
         coordinator.list()[0]["operation_id"],

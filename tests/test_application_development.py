@@ -38,6 +38,26 @@ def test_development_coordinator_is_idempotent_and_durable(tmp_path: Path) -> No
     assert coordinator.get(first["operation_id"])["result"]["candidate_id"] == "candidate.1"
 
 
+def test_development_coordinator_rejects_cross_application_idempotency_reuse(
+    tmp_path: Path,
+) -> None:
+    coordinator = ApplicationDevelopmentCoordinator(tmp_path)
+    coordinator.execute(
+        "create_trial", "app_first", actor_ref="user:owner",
+        subnet_ref="subnet:home", capability="applications.develop",
+        expected_revision=1, idempotency_key="shared-key",
+        intent={"revision": "change.1"}, callback=lambda: {"ok": True},
+    )
+
+    with pytest.raises(ApplicationDevelopmentError, match="authority or intent"):
+        coordinator.execute(
+            "create_trial", "app_second", actor_ref="user:owner",
+            subnet_ref="subnet:home", capability="applications.develop",
+            expected_revision=1, idempotency_key="shared-key",
+            intent={"revision": "change.1"}, callback=lambda: {"ok": True},
+        )
+
+
 def test_development_coordinator_blocks_blind_retry_after_unknown_outcome(tmp_path: Path) -> None:
     coordinator = ApplicationDevelopmentCoordinator(tmp_path)
 

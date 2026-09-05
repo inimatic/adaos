@@ -15,6 +15,21 @@ from adaos.services.applications import (
     get_stable_source_publisher,
 )
 from adaos.services.artifact_pipeline.runtime_trust import artifact_signing_public_identity
+from adaos.services.policy.skill_capabilities import require_skill_capability
+
+
+_ACTION_CAPABILITIES = {
+    "create": "applications.develop",
+    "materialize": "applications.develop",
+    "preview": "applications.develop",
+    "create_trial": "applications.develop",
+    "decide_trial": "applications.develop",
+    "publish_trial": "applications.publish",
+    "publish_prerelease": "applications.publish",
+    "promote_stable": "applications.publish",
+    "publish_stable_source": "applications.publish",
+    "recover": "applications.recover",
+}
 
 
 def _ctx():
@@ -31,6 +46,50 @@ def _application_service():
 
 def _coordinator() -> ApplicationDevelopmentCoordinator:
     return ApplicationDevelopmentCoordinator(_state_dir())
+
+
+def _local_subnet_ref() -> str:
+    config = _ctx().config
+    subnet_id = str(
+        config.subnet_id_value if hasattr(config, "subnet_id_value") else config.subnet_id
+    ).strip()
+    return subnet_id if subnet_id.startswith("subnet:") else f"subnet:{subnet_id}"
+
+
+def _admit_builder_mutation(
+    action: str,
+    application_id: str,
+    *,
+    subnet_ref: str,
+    capability: str,
+) -> None:
+    required = _ACTION_CAPABILITIES[action]
+    if capability != required:
+        raise ValueError(f"{required} capability is required")
+    if str(subnet_ref).strip().lower() != _local_subnet_ref().lower():
+        raise ValueError("Builder subnet does not match the local publisher identity")
+    ctx = _ctx()
+    current = ctx.skill_ctx.get()
+    if str(getattr(current, "name", "") or "").strip():
+        require_skill_capability(ctx, required)
+    if action not in {"create", "recover"}:
+        application = _application_service().store.get_application(application_id)
+        if application.publisher_ref.lower() != str(subnet_ref).strip().lower():
+            raise ValueError("only the local Application publisher may develop this Application")
+
+
+def _execute_development(
+    action: str,
+    application_id: str,
+    **arguments: Any,
+) -> dict[str, Any]:
+    _admit_builder_mutation(
+        action,
+        application_id,
+        subnet_ref=str(arguments.get("subnet_ref") or ""),
+        capability=str(arguments.get("capability") or ""),
+    )
+    return _coordinator().execute(action, application_id, **arguments)
 
 
 def _application(application_id: str, expected_revision: int) -> Application:
@@ -209,7 +268,7 @@ def create_application(
             publisher=publisher,
         )
 
-    return _coordinator().execute(
+    return _execute_development(
         "create",
         application_id,
         actor_ref=actor_ref,
@@ -255,7 +314,7 @@ def materialize_application(
         )
         return {"ok": bool(result.get("ok", True)), "preview": ready, "materialization": result}
 
-    return _coordinator().execute(
+    return _execute_development(
         "materialize", application_id, actor_ref=actor_ref, subnet_ref=subnet_ref,
         capability=capability, expected_revision=expected_revision,
         idempotency_key=idempotency_key, intent=intent, callback=execute,
@@ -286,7 +345,7 @@ def preview_development(
             wait_for_rebuild=True,
         )
 
-    return _coordinator().execute(
+    return _execute_development(
         "preview", application_id, actor_ref=actor_ref, subnet_ref=subnet_ref,
         capability=capability, expected_revision=expected_revision,
         idempotency_key=idempotency_key, intent=intent, callback=execute,
@@ -318,7 +377,7 @@ def create_trial(
             publication_project_ref=f"project:{application.legacy_project_id}",
         )
 
-    return _coordinator().execute(
+    return _execute_development(
         "create_trial", application_id, actor_ref=actor_ref, subnet_ref=subnet_ref,
         capability=capability, expected_revision=expected_revision,
         idempotency_key=idempotency_key, intent=intent, callback=execute,
@@ -346,7 +405,7 @@ def decide_trial(
             actor=actor_ref, idempotency_key=idempotency_key,
         )
 
-    return _coordinator().execute(
+    return _execute_development(
         "decide_trial", application_id, actor_ref=actor_ref, subnet_ref=subnet_ref,
         capability=capability, expected_revision=expected_revision,
         idempotency_key=idempotency_key, intent=intent, callback=execute,
@@ -390,7 +449,7 @@ def _publish_trial(
             addresses_report_ids=bounded_reports,
         )
 
-    return _coordinator().execute(
+    return _execute_development(
         action, application_id, actor_ref=actor_ref, subnet_ref=subnet_ref,
         capability=capability, expected_revision=expected_revision,
         idempotency_key=idempotency_key, intent=intent, callback=execute,
@@ -461,7 +520,7 @@ def promote_stable(
             expected_stable_digest=expected_stable_digest,
         )
 
-    return _coordinator().execute(
+    return _execute_development(
         "promote_stable", application_id, actor_ref=actor_ref, subnet_ref=subnet_ref,
         capability=capability, expected_revision=expected_revision,
         idempotency_key=idempotency_key, intent=intent, callback=execute,
@@ -494,7 +553,7 @@ def publish_stable_source(
             release_notes=release_notes,
         )
 
-    return _coordinator().execute(
+    return _execute_development(
         "publish_stable_source", application_id, actor_ref=actor_ref,
         subnet_ref=subnet_ref, capability=capability,
         expected_revision=expected_revision, idempotency_key=idempotency_key,
@@ -641,7 +700,15 @@ def reconcile_development_operation(
     subnet_ref: str,
     capability: str,
 ) -> dict[str, Any]:
-    return _coordinator().recover(
+    coordinator = _coordinator()
+    operation = coordinator.get(operation_id)
+    _admit_builder_mutation(
+        "recover",
+        str(operation.get("application_id") or ""),
+        subnet_ref=subnet_ref,
+        capability=capability,
+    )
+    return coordinator.recover(
         operation_id,
         actor_ref=actor_ref,
         subnet_ref=subnet_ref,

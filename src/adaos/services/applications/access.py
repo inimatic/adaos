@@ -88,9 +88,10 @@ class TrialAccessService:
             raise TrialAccessError("only the Application publisher may issue Trial access")
         if self._timestamp(expires_at, field="expires_at") <= datetime.now(timezone.utc):
             raise TrialAccessError("Trial access expiry must be in the future")
-        identity = ":".join((application_id, publisher_ref, str(idempotency_key or "").strip()))
-        if not identity.rsplit(":", 1)[-1]:
+        key = str(idempotency_key or "").strip()
+        if not key:
             raise TrialAccessError("idempotency_key is required")
+        identity = ":".join((application_id, publisher_ref, key))
         grant_id = "trialgrant." + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
         nonce = hashlib.sha256(f"{grant_id}:nonce".encode("utf-8")).hexdigest()
         value = TrialAccessGrant(
@@ -126,7 +127,8 @@ class TrialAccessService:
                 "schema": "adaos.application.trial_access_credential.v1",
                 "grant_id": grant_id,
                 "token_hash": "sha256:" + hashlib.sha256(token.encode("utf-8")).hexdigest(),
-                "idempotency_key_hash": "sha256:" + hashlib.sha256(str(idempotency_key).encode("utf-8")).hexdigest(),
+                "idempotency_key_hash": "sha256:"
+                + hashlib.sha256(key.encode("utf-8")).hexdigest(),
                 "issued_at": value.issued_at,
             }
             if existing is None:
@@ -168,29 +170,43 @@ class TrialAccessService:
             raise TrialAccessError("redemption_id is required")
         current_time = self._timestamp(now or utc_now(), field="now")
         with mutation_lock(self.store.lock_path, timeout_s=30.0):
-            receipt_path = self._redemption_path(redemption_token)
-            if receipt_path.is_file():
-                receipt = _read(receipt_path)
-                if receipt.get("grant_id") != grant_id or receipt.get("recipient_subnet_ref") != recipient_subnet_ref:
-                    raise TrialAccessError("redemption identity already names another capability use")
-                return {**receipt, "idempotent_replay": True}
             grant = self.store.get_grant(grant_id)
-            if grant.status != "active":
-                raise TrialAccessError(f"Trial access is {grant.status}")
-            if current_time >= self._timestamp(grant.expires_at, field="expires_at"):
-                expired = replace(grant, status="expired", revision=grant.revision + 1)
-                self.store.save_grant(expired, expected_revision=grant.revision)
-                raise TrialAccessError("Trial access has expired")
+            credential = _read(self._credential_path(grant_id))
+            if credential.get("grant_id") != grant_id:
+                raise TrialAccessError("Trial access credential record is inconsistent")
+            actual_hash = "sha256:" + hashlib.sha256(token.encode("utf-8")).hexdigest()
+            if not hmac.compare_digest(str(credential.get("token_hash") or ""), actual_hash):
+                raise TrialAccessError("Trial capability token is invalid")
             if grant.recipient_subnet_ref != recipient_subnet_ref:
                 raise TrialAccessError("Trial access belongs to another subnet")
             if grant.recipient_key_ref != recipient_key_ref:
                 raise TrialAccessError("Trial access belongs to another recipient key")
             if zone not in grant.allowed_zones:
                 raise TrialAccessError("Trial access is not valid in this zone")
-            credential = _read(self._credential_path(grant_id))
-            actual_hash = "sha256:" + hashlib.sha256(token.encode("utf-8")).hexdigest()
-            if not hmac.compare_digest(str(credential.get("token_hash") or ""), actual_hash):
-                raise TrialAccessError("Trial capability token is invalid")
+            receipt_path = self._redemption_path(redemption_token)
+            if receipt_path.is_file():
+                receipt = _read(receipt_path)
+                expected_receipt_identity = {
+                    "schema": "adaos.application.trial_access_redemption.v1",
+                    "redemption_id": redemption_token,
+                    "grant_id": grant_id,
+                    "application_id": grant.application_id,
+                    "recipient_subnet_ref": recipient_subnet_ref,
+                    "recipient_key_ref": recipient_key_ref,
+                    "zone": zone,
+                }
+                if any(
+                    receipt.get(field) != value
+                    for field, value in expected_receipt_identity.items()
+                ):
+                    raise TrialAccessError("redemption identity already names another capability use")
+                return {**receipt, "idempotent_replay": True}
+            if grant.status != "active":
+                raise TrialAccessError(f"Trial access is {grant.status}")
+            if current_time >= self._timestamp(grant.expires_at, field="expires_at"):
+                expired = replace(grant, status="expired", revision=grant.revision + 1)
+                self.store.save_grant(expired, expected_revision=grant.revision)
+                raise TrialAccessError("Trial access has expired")
             if grant.scope == "exact_release":
                 release_digest = str(grant.release_digest)
             else:

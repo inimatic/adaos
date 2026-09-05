@@ -93,7 +93,7 @@ def test_exact_trial_link_is_targeted_bounded_and_idempotent(tmp_path: Path) -> 
         expires_at=_expiry(),
         allowed_zones=("zone-a",),
         max_uses=1,
-        idempotency_key="invite-1",
+        idempotency_key=" invite-1 ",
     )
     repeated = access.issue(
         "app_recipes",
@@ -125,6 +125,55 @@ def test_exact_trial_link_is_targeted_bounded_and_idempotent(tmp_path: Path) -> 
     assert receipt["release_digest"] == release_digest
     assert replay["idempotent_replay"] is True
     assert access.store.get_grant(issued["grant"]["grant_id"]).status == "consumed"
+
+
+def test_trial_redemption_replay_reauthenticates_bearer_and_binding(tmp_path: Path) -> None:
+    _, access, release_digest = _core(tmp_path)
+    issued = access.issue(
+        "app_recipes",
+        publisher_ref="subnet:publisher",
+        recipient_subnet_ref="subnet:guest",
+        recipient_key_ref="subnet-key:guest-encryption-1",
+        scope="exact_release",
+        release_digest=release_digest,
+        expires_at=_expiry(),
+        allowed_zones=("zone-a",),
+        max_uses=1,
+        idempotency_key="invite-replay-auth",
+    )
+    access.resolve(
+        issued["link"],
+        recipient_subnet_ref="subnet:guest",
+        recipient_key_ref="subnet-key:guest-encryption-1",
+        zone="zone-a",
+        redemption_id="replay-auth",
+    )
+    forged_link = issued["link"].split("?", 1)[0] + "?token=tal_" + "0" * 64
+
+    with pytest.raises(TrialAccessError, match="token is invalid"):
+        access.resolve(
+            forged_link,
+            recipient_subnet_ref="subnet:guest",
+            recipient_key_ref="subnet-key:guest-encryption-1",
+            zone="zone-a",
+            redemption_id="replay-auth",
+        )
+    with pytest.raises(TrialAccessError, match="another recipient key"):
+        access.resolve(
+            issued["link"],
+            recipient_subnet_ref="subnet:guest",
+            recipient_key_ref="subnet-key:attacker",
+            zone="zone-a",
+            redemption_id="replay-auth",
+        )
+    with pytest.raises(TrialAccessError, match="not valid in this zone"):
+        access.resolve(
+            issued["link"],
+            recipient_subnet_ref="subnet:guest",
+            recipient_key_ref="subnet-key:guest-encryption-1",
+            zone="zone-b",
+            redemption_id="replay-auth",
+        )
 
 
 def test_trial_link_rejects_wrong_recipient_replay_and_revocation(tmp_path: Path) -> None:
