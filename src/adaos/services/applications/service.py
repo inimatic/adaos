@@ -29,6 +29,29 @@ class ApplicationPlanConflict(ApplicationServiceError):
 
 
 ApplicationExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any]]
+ApplicationOperationPublisher = Callable[[Mapping[str, Any]], Any]
+
+
+def _require_authority(
+    *,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    required_capability: str,
+) -> dict[str, str]:
+    actor = str(actor_ref or "").strip()
+    subnet = str(subnet_ref or "").strip()
+    granted = str(capability or "").strip()
+    if not actor:
+        raise ApplicationServiceError("actor_ref is required")
+    if not subnet.startswith("subnet:"):
+        raise ApplicationServiceError("subnet_ref must use subnet:<id>")
+    accepted = {required_capability}
+    if required_capability == "applications.plan":
+        accepted.add("applications.trial.install")
+    if granted not in accepted:
+        raise ApplicationServiceError(f"{required_capability} capability is required")
+    return {"actor_ref": actor, "subnet_ref": subnet, "capability": granted}
 
 
 class ApplicationService:
@@ -39,9 +62,27 @@ class ApplicationService:
         store: ApplicationStore,
         *,
         executor: ApplicationExecutor | None = None,
+        operation_publisher: ApplicationOperationPublisher | None = None,
     ) -> None:
         self.store = store
         self.executor = executor
+        self.operation_publisher = operation_publisher
+
+    def _publish_operation(self, operation: ApplicationOperation) -> None:
+        if self.operation_publisher is None:
+            return
+        self.operation_publisher(
+            {
+                "schema": "adaos.application.operation_notification.v1",
+                "event_id": f"{operation.operation_id}:{operation.revision}",
+                "application_id": operation.application_id,
+                "operation_id": operation.operation_id,
+                "operation_revision": operation.revision,
+                "status": operation.status,
+                "occurred_at": operation.updated_at,
+                "operation": operation.to_dict(),
+            }
+        )
 
     def register(self, application: Application, *, expected_revision: int = 0) -> Application:
         return self.store.save_application(application, expected_revision=expected_revision)
@@ -174,7 +215,16 @@ class ApplicationService:
         release_digest: str,
         runtime_root_ref: str,
         expected_revision: int,
+        actor_ref: str,
+        subnet_ref: str,
+        capability: str,
     ) -> RuntimeSelection:
+        _require_authority(
+            actor_ref=actor_ref,
+            subnet_ref=subnet_ref,
+            capability=capability,
+            required_capability="applications.apply",
+        )
         self.store.get_release(application_id, release_digest)
         try:
             current = self.store.get_runtime_selection(webspace_id, application_id)
@@ -317,6 +367,7 @@ class ApplicationService:
         *,
         actor_ref: str,
         subnet_ref: str,
+        capability: str,
         idempotency_key: str,
         expected_revision: int,
         release_digest: str | None = None,
@@ -327,6 +378,12 @@ class ApplicationService:
         pinned_release_digest: str | None = None,
         access_redemption_id: str | None = None,
     ) -> ApplicationOperation:
+        authority = _require_authority(
+            actor_ref=actor_ref,
+            subnet_ref=subnet_ref,
+            capability=capability,
+            required_capability="applications.plan",
+        )
         operation_kind = str(kind or "").strip().lower()
         if operation_kind not in {"install", "update", "remove", "select_track"}:
             raise ApplicationServiceError(
@@ -426,6 +483,7 @@ class ApplicationService:
             "legacy_project_id": application.legacy_project_id,
             "actor_ref": actor_ref,
             "subnet_ref": subnet_ref,
+            "authority": authority,
             "idempotency_key": idempotency_key,
             "kind": operation_kind,
             "expected_revision": expected_revision,
@@ -465,7 +523,9 @@ class ApplicationService:
             revision=1,
             plan=plan,
         )
-        return self.store.put_operation(operation)
+        stored = self.store.put_operation(operation)
+        self._publish_operation(stored)
+        return stored
 
     def _transition_operation(
         self,
@@ -483,7 +543,9 @@ class ApplicationService:
             revision=operation.revision + 1,
             updated_at=utc_now(),
         )
-        return self.store.save_operation(updated, expected_revision=operation.revision)
+        saved = self.store.save_operation(updated, expected_revision=operation.revision)
+        self._publish_operation(saved)
+        return saved
 
     def apply_operation(
         self,
@@ -491,8 +553,19 @@ class ApplicationService:
         *,
         plan_digest: str,
         idempotency_key: str,
+        actor_ref: str,
+        subnet_ref: str,
+        capability: str,
     ) -> ApplicationOperation:
         operation = self.store.get_operation(operation_id)
+        _require_authority(
+            actor_ref=actor_ref,
+            subnet_ref=subnet_ref,
+            capability=capability,
+            required_capability="applications.apply",
+        )
+        if operation.actor_ref != actor_ref or operation.subnet_ref != subnet_ref:
+            raise ApplicationServiceError("operation authority does not match reviewed plan")
         if operation.plan_digest != plan_digest or operation.idempotency_key != idempotency_key:
             raise ApplicationServiceError("reviewed plan or idempotency identity does not match")
         if operation.status == "succeeded":

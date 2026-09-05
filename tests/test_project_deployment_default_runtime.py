@@ -597,7 +597,13 @@ def test_default_runtimes_share_durable_store_and_publish_local_inventory(monkey
     assert distributed.service_invoker is not None
     assert deployment.admission_policy is not None
     assert deployment.releases.fallback is release_fallback
-    from adaos.services.applications import get_application_service, register_application_executor
+    from adaos.services.applications import (
+        get_application_service,
+        register_application_executor,
+        register_application_distribution_service_factory,
+        register_application_operation_publisher,
+        register_development_report_service_factory,
+    )
     from adaos.services.applications.deployment_executor import ApplicationDeploymentExecutor
 
     assert isinstance(
@@ -606,6 +612,9 @@ def test_default_runtimes_share_durable_store_and_publish_local_inventory(monkey
     )
 
     register_application_executor(None)
+    register_application_operation_publisher(None)
+    register_application_distribution_service_factory(None)
+    register_development_report_service_factory(None)
     register_project_deployment_authority(None)
     register_project_deployment_runtime(None)
     register_distributed_runtime(None)

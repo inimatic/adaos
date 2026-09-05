@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -58,6 +59,29 @@ def _read(path: Path) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise ApplicationStoreError(f"Application record {path.name} is not an object")
     return dict(payload)
+
+
+def _encode_event_cursor(sequence: int) -> str:
+    raw = json.dumps({"after": int(sequence)}, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_event_cursor(cursor: str | None) -> int:
+    if cursor is None:
+        return 0
+    try:
+        token = str(cursor).strip()
+        payload = json.loads(
+            base64.urlsafe_b64decode(token + "=" * (-len(token) % 4)).decode("utf-8")
+        )
+    except Exception as exc:
+        raise ApplicationStoreError("invalid Application operation event cursor") from exc
+    if not isinstance(payload, Mapping) or set(payload) != {"after"}:
+        raise ApplicationStoreError("invalid Application operation event cursor")
+    sequence = payload.get("after")
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
+        raise ApplicationStoreError("invalid Application operation event cursor")
+    return sequence
 
 
 class ApplicationStore:
@@ -297,6 +321,61 @@ class ApplicationStore:
             values = tuple(item for item in values if item.application_id == application_id)
         return tuple(sorted(values, key=lambda item: (item.created_at, item.operation_id), reverse=True))
 
+    def _append_operation_event_unlocked(self, value: ApplicationOperation) -> dict[str, Any]:
+        identity = _key(f"{value.operation_id}:{value.revision}")
+        index_path = self.root / "operation_event_index" / f"{identity}.json"
+        if index_path.is_file():
+            sequence = int(_read(index_path)["sequence"])
+            return _read(self.root / "operation_events" / f"{sequence:020d}.json")
+        sequence_path = self.root / "operation_events" / "sequence.json"
+        sequence = int(_read(sequence_path).get("sequence") or 0) + 1 if sequence_path.is_file() else 1
+        while (self.root / "operation_events" / f"{sequence:020d}.json").exists():
+            sequence += 1
+        event = {
+            "schema": "adaos.application.operation_event.v1",
+            "sequence": sequence,
+            "event_id": f"appopevent.{identity}",
+            "application_id": value.application_id,
+            "operation_id": value.operation_id,
+            "operation_revision": value.revision,
+            "status": value.status,
+            "occurred_at": value.updated_at,
+            "operation": value.to_dict(),
+        }
+        event_path = self.root / "operation_events" / f"{sequence:020d}.json"
+        if event_path.exists():
+            raise ApplicationStoreError("Application operation event sequence conflict")
+        atomic_write_json(event_path, event)
+        atomic_write_json(index_path, {"schema": "adaos.application.operation_event_index.v1", "sequence": sequence})
+        atomic_write_json(sequence_path, {"schema": "adaos.application.operation_event_sequence.v1", "sequence": sequence})
+        return event
+
+    def list_operation_events(
+        self,
+        *,
+        application_id: str | None = None,
+        cursor: str | None = None,
+        limit: int = 50,
+    ) -> tuple[tuple[dict[str, Any], ...], str | None]:
+        after = _decode_event_cursor(cursor)
+        size = max(1, min(int(limit), 200))
+        parent = self.root / "operation_events"
+        selected: list[dict[str, Any]] = []
+        if parent.is_dir():
+            for path in sorted(parent.glob("[0-9]*.json")):
+                event = _read(path)
+                sequence = int(event.get("sequence") or 0)
+                if sequence <= after:
+                    continue
+                if application_id is not None and event.get("application_id") != application_id:
+                    continue
+                selected.append(event)
+                if len(selected) > size:
+                    break
+        page = selected[:size]
+        next_cursor = _encode_event_cursor(int(page[-1]["sequence"])) if page else cursor
+        return tuple(page), next_cursor
+
     def put_operation(self, value: ApplicationOperation) -> ApplicationOperation:
         index_path = self.root / "idempotency" / f"{_key(value.idempotency_key)}.json"
         path = self._current_path("operations", value.operation_id)
@@ -312,12 +391,23 @@ class ApplicationStore:
                 if existing != value:
                     raise ApplicationStoreError("ApplicationOperation identity conflict")
                 return existing
+            self._append_operation_event_unlocked(value)
             atomic_write_json(path, value.to_dict())
             atomic_write_json(index_path, {"schema": "adaos.application.idempotency.v1", "idempotency_key": value.idempotency_key, "operation_id": value.operation_id, "plan_digest": value.plan_digest})
             return value
 
     def save_operation(self, value: ApplicationOperation, *, expected_revision: int) -> ApplicationOperation:
-        return self._save_revisioned("operations", value.operation_id, value, expected_revision=expected_revision, loader=ApplicationOperation.from_mapping)
+        path = self._current_path("operations", value.operation_id)
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            current = ApplicationOperation.from_mapping(_read(path)) if path.is_file() else None
+            observed = current.revision if current is not None else 0
+            if expected_revision != observed:
+                raise ApplicationRevisionConflict(expected=expected_revision, observed=observed)
+            if value.revision != observed + 1:
+                raise ApplicationStoreError("record revision must advance by exactly one")
+            self._append_operation_event_unlocked(value)
+            atomic_write_json(path, value.to_dict())
+            return value
 
     def get_grant(self, grant_id: str) -> TrialAccessGrant:
         path = self._current_path("trial_access_grants", grant_id)

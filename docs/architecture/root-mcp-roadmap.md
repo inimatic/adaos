@@ -453,32 +453,32 @@ and its [roadmap](application-lifecycle-and-distribution-roadmap.md).
   and Development Report capability profiles
 - [ ] `[must]` bind every mutating call to actor, subnet, target Application,
   expected revision, reviewed plan digest, idempotency key, and audit event
-- [ ] `[must]` require the typed Application SDK as the only business-logic
+- [x] `[must]` require the typed Application SDK as the only business-logic
   implementation behind the plane
 - [ ] `[deferred]` broad remote publisher automation and third-party
   administrative MCP clients
 
 ### `Applications-1`. Read resources
 
-- [ ] `[must]` expose bounded Application list/detail, Catalog, release,
+- [x] `[must]` expose bounded Application list/detail, Catalog, release,
   installation, subscription, RuntimeSelection, operation, and public report
   status resources
 - [ ] `[must]` preserve exact release/package/publisher refs while redacting
   private source, credentials, internal Dev Tickets, and raw external reports
-- [ ] `[should]` add reconnect-safe operation subscription with polling fallback
+- [x] `[should]` add reconnect-safe operation subscription with polling fallback
   and structured recovery state
 
 ### `Applications-2`. Reviewed mutations
 
-- [ ] `[must]` expose SDK-backed plan/apply tools for install, update, remove,
+- [x] `[must]` expose SDK-backed plan/apply tools for install, update, remove,
   update-track selection, and Trial-link installation
 - [ ] `[must]` expose bounded Builder tools for create, DEV preview,
   Candidate/Trial, link-only Trial publication, prerelease publication,
   exact-digest promotion, and stable publication without accepting arbitrary
   filesystem or Git destinations
-- [ ] `[must]` reject stale plans, capability mismatch, raw registry mutation,
+- [x] `[must]` reject stale plans, capability mismatch, raw registry mutation,
   and direct Workspace/Trial path writes
-- [ ] `[could]` expose dry-run dependency and retention explain traces
+- [x] `[could]` expose dry-run dependency and retention explain traces
 
 ### `Applications-3`. Builder dogfood and proof
 

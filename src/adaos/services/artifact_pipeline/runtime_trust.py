@@ -38,6 +38,32 @@ class ArtifactTrustRuntime:
     admission: ArtifactAttestationAdmission | None
 
 
+def artifact_signing_public_identity(
+    *, environ: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    """Return the configured publisher key identity without exposing private bytes."""
+
+    values = environ if environ is not None else os.environ
+    mode = str(values.get("ADAOS_ARTIFACT_ATTESTATIONS_MODE") or "off").strip().lower()
+    key_file = str(values.get("ADAOS_ARTIFACT_SIGNING_KEY_FILE") or "").strip()
+    issuer = str(values.get("ADAOS_ARTIFACT_SIGNING_ISSUER") or "").strip()
+    if mode not in {"publish", "required"} or not key_file or not issuer:
+        raise ArtifactTrustRuntimeError(
+            "publisher identity requires artifact attestation mode and signing key configuration"
+        )
+    signer = Ed25519ArtifactSigner.from_private_key_bytes(
+        issuer=issuer,
+        private_key=_private_key_bytes(Path(key_file)),
+    )
+    key = signer.trusted_key()
+    return {
+        "issuer": issuer,
+        "algorithm": "ed25519",
+        "key_id": str(key.key_id),
+        "release_key_ref": f"artifact-signing:{issuer}:{key.key_id}",
+    }
+
+
 def _private_key_bytes(path: Path) -> bytes:
     source = Path(path).expanduser().resolve()
     if not source.is_file():
@@ -159,5 +185,6 @@ def compose_artifact_trust_runtime(
 __all__ = [
     "ArtifactTrustRuntime",
     "ArtifactTrustRuntimeError",
+    "artifact_signing_public_identity",
     "compose_artifact_trust_runtime",
 ]

@@ -139,25 +139,27 @@ a failed migration restores the exact pre-update snapshot and prior runtime.
 **Outcome:** Applications and Builder can use the domain without internal
 imports, raw registry parsing, or filesystem mutation.
 
-- [ ] `[must]` `APP2-01` Add typed SDK reads for Application list/detail,
+- [x] `[must]` `APP2-01` Add typed SDK reads for Application list/detail,
   Catalog, releases, subscriptions, RuntimeSelection, operations, and
   Development Report status.
-- [ ] `[must]` `APP2-02` Add SDK `plan/apply` mutations for install, update,
+- [x] `[must]` `APP2-02` Add SDK `plan/apply` mutations for install, update,
   remove, update-track selection, and Trial-link resolution/install.
-- [ ] `[must]` `APP2-03` Add bounded Builder SDK operations for create,
+- [x] `[must]` `APP2-03` Add bounded Builder SDK operations for create,
   materialize, DEV preview, Candidate/Trial, link-only Trial publication,
   prerelease publication, exact-digest stable promotion, and stable source
   publication.
-- [ ] `[must]` `APP2-04` Require actor/subnet/capability context, expected
-  revision, reviewed plan digest, idempotency key, and durable operation ID for
-  every mutation.
+- [x] `[must]` `APP2-04` Require actor/subnet/capability context, expected
+  state identity, and idempotency identity at every public mutation boundary;
+  require a reviewed plan digest and durable `ApplicationOperation` for
+  install/update/remove/track apply, and a durable revisioned domain receipt
+  for bounded grant, redemption, selection, and development mutations.
 - [x] `[must]` `APP2-05` Add an `ApplicationsPlane` to Root MCP as a thin adapter
   over the SDK with bounded read resources and reviewed mutation tools.
 - [x] `[must]` `APP2-06` Deny arbitrary filesystem paths, raw Git credentials,
   direct registry writes, and unrestricted process operations through MCP.
-- [ ] `[should]` `APP2-07` Add operation subscriptions plus reconnect-safe
+- [x] `[should]` `APP2-07` Add operation subscriptions plus reconnect-safe
   polling fallback and structured recovery reasons.
-- [ ] `[should]` `APP2-08` Add machine-readable SDK/MCP examples and Builder
+- [x] `[should]` `APP2-08` Add machine-readable SDK/MCP examples and Builder
   context capsules for every supported lifecycle transition.
 - [x] `[could]` `APP2-09` Add dry-run explain traces for release and dependency
   resolution.
@@ -167,6 +169,17 @@ imports, raw registry parsing, or filesystem mutation.
 **Exit proof:** a test client performs the full local lifecycle through SDK and
 MCP only, and contract tests prove both surfaces return the same plans,
 operations, and terminal receipts.
+
+Implementation note, 2026-09-05: the public `adaos.sdk.applications` facade
+owns product reads and reviewed deployment operations, while
+`adaos.sdk.builder.applications` owns the bounded authoring lifecycle. The
+Builder facade is explicitly registered in SDK discovery and accepts no raw
+path, process, Git credential, registry, or private-key arguments. Its durable
+coordinator records intent digest, actor, subnet, capability, expected
+Application revision, idempotency identity, outcome, and an explicit
+reconciliation fence for uncertain callbacks. `ApplicationsPlane` remains a
+thin adapter over the product SDK. Full chat-driven use of these rails is the
+`APP4`/`APP6` proof and is not implied by this preparatory completion.
 
 ## APP3. Prerelease Storage, Channels, and Access
 

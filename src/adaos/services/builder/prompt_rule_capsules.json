@@ -1,7 +1,7 @@
 {
   "schema": "adaos.builder.prompt_rule_registry.v1",
-  "version": "0.4.2",
-  "published_at": "2026-09-04T14:00:00+00:00",
+  "version": "0.5.0",
+  "published_at": "2026-09-05T15:00:00+00:00",
   "authority_ref": "core:adaos.prompt-rule-registry",
   "items": [
     {
@@ -290,6 +290,23 @@
         "Run every required admitted conformance fixture against the production provider path. Keep independent contracts independent, use worker-supplied task runtime roots, and never return platform-protected environment keys.",
         "Resolve declared working directories and expected outputs exactly, then collect and verify through the admitted operations; do not substitute an implicit path or permissive local schema.",
         "When the public SDK/API cannot express the requirement, do not patch around core or imitate the contract locally; return the governed core-capability escalation."
+      ]
+    },
+    {
+      "id": "adaos.application.lifecycle.v1",
+      "title": "Application lifecycle and publisher authority",
+      "source": "docs/architecture/application-lifecycle-and-distribution.md",
+      "applicability": {
+        "target_types": ["scenario"],
+        "concepts": ["application", "applications", "catalog", "prerelease"],
+        "match_any": ["application", "applications", "catalog", "market", "prerelease", "stable", "trial link"]
+      },
+      "rules": [
+        "Use only `adaos.sdk.builder.applications` for authoring lifecycle and `adaos.sdk.applications` or ApplicationsPlane for product lifecycle; never import Application services, mutate registries, or address runtime filesystem paths.",
+        "Keep DEV preview in `dev/.runtime`, Trial source/runtime in the top-level `trials` tree, and stable installation/runtime in `workspace`; do not introduce alpha or place Trial state below Workspace.",
+        "Publish only an accepted immutable Candidate. First stable promotes its exact link-only Trial digest; later stable promotes the exact current prerelease digest and retires that prerelease pointer.",
+        "Bind every mutation to actor, publisher subnet, required capability, expected revision, idempotency key, and its durable operation and plan digests. An unknown outcome must be reconciled before retry.",
+        "Applications owns product inventory and Development Report UX, but do not remove Infrastate Inventory until the Applications system release has passed the replacement acceptance gate."
       ]
     },
     {

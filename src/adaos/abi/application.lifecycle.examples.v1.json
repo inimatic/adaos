@@ -1,0 +1,118 @@
+{
+  "schema": "adaos.application.lifecycle_examples.v1",
+  "version": "1.0.0",
+  "transitions": [
+    {
+      "id": "create",
+      "sdk": "adaos.sdk.builder.applications.create_application",
+      "capability": "applications.develop",
+      "required": ["application_id", "title", "actor_ref", "subnet_ref", "expected_revision", "idempotency_key"],
+      "expected_revision": 0,
+      "terminal_evidence": ["operation_id", "result.application.application_id", "result.composition.project"]
+    },
+    {
+      "id": "materialize_dev",
+      "sdk": "adaos.sdk.builder.applications.materialize_application",
+      "capability": "applications.develop",
+      "required": ["application_id", "revision", "actor_ref", "subnet_ref", "expected_revision", "idempotency_key"],
+      "terminal_evidence": ["operation_id", "result.materialization"]
+    },
+    {
+      "id": "preview_dev",
+      "sdk": "adaos.sdk.builder.applications.preview_development",
+      "capability": "applications.develop",
+      "required": ["application_id", "actor_ref", "subnet_ref", "expected_revision", "idempotency_key"],
+      "terminal_evidence": ["operation_id", "result.preview_webspace_id"]
+    },
+    {
+      "id": "create_trial",
+      "sdk": "adaos.sdk.builder.applications.create_trial",
+      "capability": "applications.develop",
+      "required": ["application_id", "actor_ref", "subnet_ref", "expected_revision", "idempotency_key"],
+      "terminal_evidence": ["operation_id", "result.candidate.candidate_id", "result.trial_activation.activation_id"]
+    },
+    {
+      "id": "accept_trial",
+      "sdk": "adaos.sdk.builder.applications.decide_trial",
+      "capability": "applications.develop",
+      "required": ["application_id", "accepted", "actor_ref", "subnet_ref", "expected_revision", "idempotency_key"],
+      "terminal_evidence": ["operation_id", "result.candidate.status"]
+    },
+    {
+      "id": "publish_link_trial",
+      "sdk": "adaos.sdk.builder.applications.publish_link_trial",
+      "capability": "applications.publish",
+      "required": ["application_id", "candidate_id", "actor_ref", "subnet_ref", "expected_revision", "idempotency_key"],
+      "terminal_evidence": ["operation_id", "result.release.release_digest", "result.operation.upload"]
+    },
+    {
+      "id": "promote_first_stable",
+      "sdk": "adaos.sdk.builder.applications.promote_stable",
+      "capability": "applications.publish",
+      "required": ["application_id", "candidate_id", "expected_stable_digest", "actor_ref", "subnet_ref", "expected_revision", "idempotency_key"],
+      "invariant": "the stable release digest equals the accepted link-only Trial digest",
+      "terminal_evidence": ["operation_id", "result.channel.pointer.release_digest"]
+    },
+    {
+      "id": "publish_prerelease",
+      "sdk": "adaos.sdk.builder.applications.publish_prerelease",
+      "capability": "applications.publish",
+      "required": ["application_id", "candidate_id", "expected_prerelease_digest", "actor_ref", "subnet_ref", "expected_revision", "idempotency_key"],
+      "precondition": "a public stable channel already exists",
+      "terminal_evidence": ["operation_id", "result.channel.pointer.release_digest"]
+    },
+    {
+      "id": "promote_next_stable",
+      "sdk": "adaos.sdk.builder.applications.promote_stable",
+      "capability": "applications.publish",
+      "required": ["application_id", "candidate_id", "expected_stable_digest", "actor_ref", "subnet_ref", "expected_revision", "idempotency_key"],
+      "invariant": "the stable release digest equals the current prerelease digest and prerelease is retired",
+      "terminal_evidence": ["operation_id", "result.channel.pointer.release_digest", "result.operation.prerelease_retirement"]
+    },
+    {
+      "id": "publish_stable_source",
+      "sdk": "adaos.sdk.builder.applications.publish_stable_source",
+      "capability": "applications.publish",
+      "required": ["application_id", "release_digest", "release_notes", "actor_ref", "subnet_ref", "expected_revision", "idempotency_key"],
+      "precondition": "the Application is public and release_digest is the current stable channel",
+      "terminal_evidence": ["operation_id", "result.repository", "result.commit", "result.source_revision"]
+    },
+    {
+      "id": "install_or_update",
+      "sdk": "adaos.sdk.applications.plan_install",
+      "mcp": "applications.plan",
+      "capability": "applications.plan",
+      "review_then_apply": "adaos.sdk.applications.apply_operation",
+      "apply_capability": "applications.apply",
+      "required": ["application_id", "release_digest", "expected_revision", "actor_ref", "subnet_ref", "idempotency_key"],
+      "terminal_evidence": ["operation_id", "plan_digest", "result.installation.installed_release_digest"]
+    },
+    {
+      "id": "install_trial_link",
+      "sdk": "adaos.sdk.applications.plan_trial_link_install",
+      "mcp": "applications.plan_trial_link_install",
+      "capability": "applications.trial.install",
+      "review_then_apply": "adaos.sdk.applications.apply_operation",
+      "required": ["link", "recipient_key_ref", "redemption_id", "expected_revision", "actor_ref", "subnet_ref", "idempotency_key"],
+      "terminal_evidence": ["redemption.redemption_id", "operation.operation_id", "operation.plan_digest"]
+    },
+    {
+      "id": "select_update_track",
+      "sdk": "adaos.sdk.applications.plan_update_track",
+      "mcp": "applications.plan",
+      "capability": "applications.plan",
+      "review_then_apply": "adaos.sdk.applications.apply_operation",
+      "required": ["application_id", "update_track", "update_policy", "expected_revision", "actor_ref", "subnet_ref", "idempotency_key"],
+      "terminal_evidence": ["operation_id", "plan_digest", "result.subscription.update_track"]
+    },
+    {
+      "id": "remove",
+      "sdk": "adaos.sdk.applications.plan_remove",
+      "mcp": "applications.plan",
+      "capability": "applications.plan",
+      "review_then_apply": "adaos.sdk.applications.apply_operation",
+      "required": ["application_id", "data_policy", "expected_revision", "actor_ref", "subnet_ref", "idempotency_key"],
+      "terminal_evidence": ["operation_id", "plan_digest", "result.installation.status"]
+    }
+  ]
+}

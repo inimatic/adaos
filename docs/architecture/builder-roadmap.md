@@ -1837,6 +1837,14 @@ The dated entries below remain the chronological implementation ledger.
   new workflow generation. Core commit `46f681f1` and client commit `466b3c9`
   persist and optimistically project consumed actions as empty; focused server
   and browser tests cover live update, reload, and idempotent re-use.
+- [x] `[must]` Prepare the bounded Application authoring facade before
+  dogfooding: Builder can discover typed create/materialize/preview/Trial/
+  prerelease/exact-stable/source-projection operations; calls are authority,
+  revision, and idempotency bound and cannot accept raw paths, processes, Git
+  credentials, registries, or private keys. Lifecycle examples and the prompt
+  capsule define the DEV -> Trial -> prerelease -> stable sequence. This
+  completes the prerequisite only; it is not evidence that Applications has
+  already been generated or released.
 - [ ] `[must]` Build and revise the Applications system scenario through
   conversational managed development using only the typed Application SDK and
   `ApplicationsPlane` MCP contracts, then prove its prerelease and stable

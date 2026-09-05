@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes, serialization
 
 from adaos.domain.artifact_release import canonical_json_bytes
-from adaos.domain.development_report import DevelopmentReportEnvelope, utc_now
+from adaos.domain.development_report import DevelopmentReportEnvelope
 from adaos.services.applications.report_directory import SubnetKeyDirectoryClient
 from adaos.services.applications.report_keys import SubnetPurposeKeyStore
 
@@ -144,4 +144,3 @@ class DevelopmentReportEnvelopeCrypto:
         if not isinstance(payload, dict):
             raise DevelopmentReportCryptoError("envelope payload must be an object")
         return payload
-

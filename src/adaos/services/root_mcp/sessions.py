@@ -22,6 +22,8 @@ DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
         "applications.read",
         "applications.plan",
         "applications.apply",
+        "applications.trial.install",
+        "applications.publisher.read",
     ],
     "ContextAgent": [
         *DEFAULT_BEARER_CAPABILITIES,
@@ -43,6 +45,11 @@ DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
         "context.memory.propose",
         "skill_factory.read.status",
         "skill_factory.submit.realize_request",
+        "applications.read",
+        "applications.plan",
+        "applications.apply",
+        "applications.develop",
+        "applications.publish",
     ],
     "NLUTeacherRead": [
         *DEFAULT_BEARER_CAPABILITIES,

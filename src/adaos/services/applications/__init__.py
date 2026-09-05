@@ -10,7 +10,20 @@ from .store import (
     ApplicationStore,
     ApplicationStoreError,
 )
-from .runtime import get_application_service, register_application_executor
+from .runtime import (
+    create_local_development_report_service,
+    get_application_distribution_service,
+    get_application_service,
+    get_development_report_service,
+    get_stable_source_publisher,
+    register_application_executor,
+    register_application_distribution_service,
+    register_application_distribution_service_factory,
+    register_application_operation_publisher,
+    register_development_report_service,
+    register_development_report_service_factory,
+    register_stable_source_publisher,
+)
 from .access import TrialAccessError, TrialAccessService
 from .distribution import (
     ApplicationDistributionError,
@@ -39,6 +52,12 @@ from .deployment_executor import (
     ApplicationDeploymentExecutor,
     ApplicationDeploymentExecutorError,
 )
+from .development import (
+    ApplicationDevelopmentCoordinator,
+    ApplicationDevelopmentError,
+    ApplicationDevelopmentOutcomeUnknown,
+)
+from .source_projection import StableSourceProjectionError, StableSourceProjectionService
 
 __all__ = [
     "ApplicationChannelConflict",
@@ -48,6 +67,9 @@ __all__ = [
     "ApplicationDataSnapshotStore",
     "ApplicationDeploymentExecutor",
     "ApplicationDeploymentExecutorError",
+    "ApplicationDevelopmentCoordinator",
+    "ApplicationDevelopmentError",
+    "ApplicationDevelopmentOutcomeUnknown",
     "ApplicationPlanConflict",
     "ApplicationRevisionConflict",
     "ApplicationRetentionError",
@@ -73,11 +95,23 @@ __all__ = [
     "SubnetKeyError",
     "SubnetPurposeKey",
     "SubnetPurposeKeyStore",
+    "StableSourceProjectionError",
+    "StableSourceProjectionService",
     "TrialAccessError",
     "TrialAccessService",
     "TrustedMetadataAuthority",
     "TrustedMetadataClient",
     "TrustedMetadataError",
     "get_application_service",
+    "get_application_distribution_service",
+    "get_development_report_service",
+    "get_stable_source_publisher",
+    "create_local_development_report_service",
     "register_application_executor",
+    "register_application_distribution_service",
+    "register_application_distribution_service_factory",
+    "register_application_operation_publisher",
+    "register_development_report_service",
+    "register_development_report_service_factory",
+    "register_stable_source_publisher",
 ]

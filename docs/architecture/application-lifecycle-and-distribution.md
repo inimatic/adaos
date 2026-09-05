@@ -555,9 +555,26 @@ application_development.promote_stable
 application_development.publish_stable
 ```
 
-Every MCP mutation binds actor, subnet, capability, target, expected revision,
-plan digest, and idempotency identity. Read resources are bounded and expose
-exact refs rather than raw mutable registries.
+The concrete public facade is `adaos.sdk.builder.applications`. It is included
+in the SDK descriptor exporter used by Builder context discovery. A durable
+development coordinator wraps each bounded adapter with an intent digest,
+actor/subnet/capability authority, expected Application revision,
+idempotency identity, terminal receipt, and `unknown` reconciliation fence.
+It does not accept filesystem paths, process commands, repository credentials,
+registry locations, or private signing keys. Publisher metadata is derived
+from the local subnet and the configured public release-signing identity.
+
+Product install/update/remove/track changes use reviewed
+`ApplicationOperation` records. Short compare-and-swap mutations such as a
+Trial grant, redemption, or RuntimeSelection keep their own durable resource
+identity and revision rather than pretending to be asynchronous operations.
+Both classes still require explicit authority and idempotency or expected-state
+identity at the public SDK/MCP boundary.
+
+Every MCP mutation binds actor, subnet, capability, target, and an explicit
+expected-state/idempotency identity. Reviewed deployment apply additionally
+binds the exact plan digest. Read resources are bounded and expose exact refs
+rather than raw mutable registries.
 
 ## Installation, Dependencies, and Removal
 

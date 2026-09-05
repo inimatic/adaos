@@ -4,6 +4,7 @@ import inspect
 
 from adaos.sdk import applications
 from adaos.sdk.core.exporter import export
+from adaos.services.applications import register_development_report_service
 
 
 class _StubService:
@@ -37,11 +38,15 @@ def test_sdk_application_mutations_forward_complete_review_context(monkeypatch) 
         expected_revision=3,
         actor_ref="skill:applications",
         subnet_ref="subnet:sn_home",
+        capability="applications.plan",
         idempotency_key="install-4",
     )
     result = applications.apply_operation(
         "appop.1",
         plan_digest=plan["plan_digest"],
+        actor_ref="skill:applications",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
         idempotency_key="install-4",
     )
 
@@ -54,12 +59,23 @@ def test_sdk_application_mutations_forward_complete_review_context(monkeypatch) 
             "expected_revision": 3,
             "actor_ref": "skill:applications",
             "subnet_ref": "subnet:sn_home",
-                "idempotency_key": "install-4",
-                "data_policy": "retain",
-                "access_redemption_id": None,
+            "capability": "applications.plan",
+            "idempotency_key": "install-4",
+            "data_policy": "retain",
+            "access_redemption_id": None,
         },
     )
-    assert stub.calls[1][0] == "apply_operation"
+    assert stub.calls[1] == (
+        "apply_operation",
+        ("appop.1",),
+        {
+            "plan_digest": "sha256:" + "a" * 64,
+            "idempotency_key": "install-4",
+            "actor_ref": "skill:applications",
+            "subnet_ref": "subnet:sn_home",
+            "capability": "applications.apply",
+        },
+    )
 
 
 def test_sdk_application_surface_has_no_raw_path_or_process_parameters() -> None:
@@ -76,3 +92,26 @@ def test_application_sdk_is_discoverable_for_builder_context() -> None:
     assert "adaos.sdk.applications.plan_install" in names
     assert "adaos.sdk.applications.plan_update_track" in names
     assert "adaos.sdk.applications.resolve_trial_link" in names
+
+
+def test_sdk_exposes_development_report_status_without_internal_store_access() -> None:
+    class Reports:
+        def list_reports(self):
+            return [{"report_id": "report.1"}]
+
+        def get_report(self, report_id):
+            return {"report_id": report_id}
+
+        def public_status(self, report_id):
+            return {"report_id": report_id, "status": "accepted"}
+
+        def list_publisher_intakes(self):
+            return [{"report_id": "report.1", "status": "quarantined"}]
+
+    register_development_report_service(Reports())
+    try:
+        assert applications.list_development_reports()[0]["report_id"] == "report.1"
+        assert applications.get_development_report_status("report.1")["status"] == "accepted"
+        assert applications.list_development_report_intakes()[0]["status"] == "quarantined"
+    finally:
+        register_development_report_service(None)

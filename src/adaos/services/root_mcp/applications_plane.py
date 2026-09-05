@@ -13,7 +13,9 @@ def _sdk():
 
 
 def contracts() -> list[RootMcpToolContract]:
-    response = lambda: deepcopy(ROOT_MCP_RESPONSE_SCHEMA)
+    def response() -> dict[str, Any]:
+        return deepcopy(ROOT_MCP_RESPONSE_SCHEMA)
+
     published = {"published_by": "plane:applications", "adapter": "adaos.sdk.applications"}
     identity = {
         "application_id": {"type": "string"},
@@ -62,6 +64,22 @@ def contracts() -> list[RootMcpToolContract]:
             metadata={**published, "handler": "applications_list_operations"},
         ),
         RootMcpToolContract(
+            id="applications.poll_operation_events",
+            title="Poll Application operation events",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Resume the durable Application operation event stream from an opaque cursor.",
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": ["string", "null"]},
+                    "cursor": {"type": ["string", "null"]},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                }
+            ),
+            output_schema=response(),
+            required_capability="applications.read",
+            metadata={**published, "handler": "applications_poll_operation_events"},
+        ),
+        RootMcpToolContract(
             id="applications.get_operation",
             title="Get Application operation",
             surface=RootMcpSurface.OPERATIONS,
@@ -80,6 +98,38 @@ def contracts() -> list[RootMcpToolContract]:
             output_schema=response(),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_list_trial_access"},
+        ),
+        RootMcpToolContract(
+            id="applications.list_development_reports",
+            title="List Development Reports",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="List bounded local Development Reports and their public state.",
+            input_schema=schema_object(),
+            output_schema=response(),
+            required_capability="applications.read",
+            metadata={**published, "handler": "applications_list_development_reports"},
+        ),
+        RootMcpToolContract(
+            id="applications.get_development_report_status",
+            title="Get Development Report status",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Read the public publisher status of one local Development Report.",
+            input_schema=schema_object(
+                properties={"report_id": {"type": "string"}}, required=["report_id"]
+            ),
+            output_schema=response(),
+            required_capability="applications.read",
+            metadata={**published, "handler": "applications_get_development_report_status"},
+        ),
+        RootMcpToolContract(
+            id="applications.list_development_report_intakes",
+            title="List publisher Development Report intakes",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="List publisher-local quarantined and accepted report intake metadata.",
+            input_schema=schema_object(),
+            output_schema=response(),
+            required_capability="applications.publisher.read",
+            metadata={**published, "handler": "applications_list_development_report_intakes"},
         ),
         RootMcpToolContract(
             id="applications.plan",
@@ -195,6 +245,34 @@ def contracts() -> list[RootMcpToolContract]:
             side_effects="write",
             metadata={**published, "handler": "applications_resolve_trial_link", "sensitive_input_paths": ["link"]},
         ),
+        RootMcpToolContract(
+            id="applications.plan_trial_link_install",
+            title="Plan Trial link installation",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Redeem a Trial link and persist an exact reviewed installation plan.",
+            input_schema=schema_object(
+                properties={
+                    "link": {"type": "string", "pattern": "^adaos://applications/trial/"},
+                    "recipient_key_ref": {"type": "string"},
+                    "redemption_id": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "expected_revision": {"type": "integer", "minimum": 0},
+                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "data_policy": {"enum": ["retain", "delete", "snapshot_then_delete"]},
+                },
+                required=[
+                    "link", "recipient_key_ref", "redemption_id",
+                    "expected_revision", "idempotency_key",
+                ],
+            ),
+            output_schema=response(),
+            required_capability="applications.trial.install",
+            side_effects="write",
+            metadata={
+                **published,
+                "handler": "applications_plan_trial_link_install",
+                "sensitive_input_paths": ["link"],
+            },
+        ),
     ]
 
 
@@ -237,6 +315,14 @@ def _handle_operations(arguments: dict[str, Any], *, dry_run: bool) -> dict[str,
     return {"operations": _sdk().list_operations(application_id)}
 
 
+def _handle_operation_events(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return _sdk().poll_operation_events(
+        application_id=str(arguments.get("application_id") or "").strip() or None,
+        cursor=str(arguments.get("cursor") or "").strip() or None,
+        limit=int(arguments.get("limit") or 50),
+    )
+
+
 def _handle_get_operation(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     operation_id = str(arguments.get("operation_id") or "").strip()
     if not operation_id:
@@ -247,6 +333,24 @@ def _handle_get_operation(arguments: dict[str, Any], *, dry_run: bool) -> dict[s
 def _handle_list_trial_access(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     application_id = str(arguments.get("application_id") or "").strip() or None
     return {"grants": _sdk().list_trial_access(application_id)}
+
+
+def _handle_list_development_reports(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return {"reports": _sdk().list_development_reports()}
+
+
+def _handle_development_report_status(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    report_id = str(arguments.get("report_id") or "").strip()
+    if not report_id:
+        raise ValueError("report_id is required")
+    return {
+        "report": _sdk().get_development_report(report_id),
+        "status": _sdk().get_development_report_status(report_id),
+    }
+
+
+def _handle_development_report_intakes(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return {"intakes": _sdk().list_development_report_intakes()}
 
 
 def _handle_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -260,6 +364,7 @@ def _handle_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
         "expected_revision": int(arguments.get("expected_revision") or 0),
         "actor_ref": actor_ref,
         "subnet_ref": subnet_ref,
+        "capability": "applications.plan",
         "idempotency_key": str(arguments.get("idempotency_key") or "").strip(),
     }
     sdk = _sdk()
@@ -302,10 +407,14 @@ def _handle_apply(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]
     request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
     if dry_run:
         return {"would_apply": True, "request": request}
+    actor_ref, subnet_ref = _context(arguments)
     return {
         "operation": _sdk().apply_operation(
             str(arguments.get("operation_id") or ""),
             plan_digest=str(arguments.get("plan_digest") or ""),
+            actor_ref=actor_ref,
+            subnet_ref=subnet_ref,
+            capability="applications.apply",
             idempotency_key=str(arguments.get("idempotency_key") or ""),
         )
     }
@@ -322,7 +431,7 @@ def _handle_issue_trial_access(arguments: dict[str, Any], *, dry_run: bool) -> d
     request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
     if dry_run:
         return {"would_issue": True, "request": request}
-    _, subnet_ref = _context(arguments)
+    actor_ref, subnet_ref = _context(arguments)
     return {
         "trial_access": _sdk().issue_trial_access(
             _application_id(arguments),
@@ -334,6 +443,9 @@ def _handle_issue_trial_access(arguments: dict[str, Any], *, dry_run: bool) -> d
             expires_at=str(arguments.get("expires_at") or ""),
             allowed_zones=tuple(arguments.get("allowed_zones") or ()),
             max_uses=int(arguments.get("max_uses") or 1),
+            actor_ref=actor_ref,
+            subnet_ref=subnet_ref,
+            capability="applications.apply",
             idempotency_key=str(arguments.get("idempotency_key") or ""),
         )
     }
@@ -343,11 +455,14 @@ def _handle_revoke_trial_access(arguments: dict[str, Any], *, dry_run: bool) -> 
     request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
     if dry_run:
         return {"would_revoke": True, "request": request}
-    _, subnet_ref = _context(arguments)
+    actor_ref, subnet_ref = _context(arguments)
     return {
         "grant": _sdk().revoke_trial_access(
             str(arguments.get("grant_id") or ""),
             publisher_ref=subnet_ref,
+            actor_ref=actor_ref,
+            subnet_ref=subnet_ref,
+            capability="applications.apply",
             expected_revision=int(arguments.get("expected_revision") or 0),
         )
     }
@@ -360,7 +475,7 @@ def _handle_resolve_trial_link(arguments: dict[str, Any], *, dry_run: bool) -> d
     raw = arguments.get("_mcp_context")
     context = dict(raw) if isinstance(raw, Mapping) else {}
     scope = context.get("scope") if isinstance(context.get("scope"), Mapping) else {}
-    _, subnet_ref = _context(arguments)
+    actor_ref, subnet_ref = _context(arguments)
     zone = str(scope.get("zone") or "").strip()
     if not zone:
         raise ValueError("MCP zone context is required")
@@ -370,9 +485,38 @@ def _handle_resolve_trial_link(arguments: dict[str, Any], *, dry_run: bool) -> d
             recipient_subnet_ref=subnet_ref,
             recipient_key_ref=str(arguments.get("recipient_key_ref") or ""),
             zone=zone,
+            actor_ref=actor_ref,
+            capability="applications.trial.redeem",
             redemption_id=str(arguments.get("redemption_id") or ""),
         )
     }
+
+
+def _handle_plan_trial_link_install(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = {
+        key: value for key, value in arguments.items() if key not in {"_mcp_context", "link"}
+    }
+    if dry_run:
+        return {"would_plan_trial_install": True, "request": request}
+    raw = arguments.get("_mcp_context")
+    context = dict(raw) if isinstance(raw, Mapping) else {}
+    scope = context.get("scope") if isinstance(context.get("scope"), Mapping) else {}
+    actor_ref, subnet_ref = _context(arguments)
+    zone = str(scope.get("zone") or "").strip()
+    if not zone:
+        raise ValueError("MCP zone context is required")
+    return _sdk().plan_trial_link_install(
+        str(arguments.get("link") or ""),
+        recipient_key_ref=str(arguments.get("recipient_key_ref") or ""),
+        zone=zone,
+        redemption_id=str(arguments.get("redemption_id") or ""),
+        expected_revision=int(arguments.get("expected_revision") or 0),
+        actor_ref=actor_ref,
+        subnet_ref=subnet_ref,
+        capability="applications.trial.install",
+        idempotency_key=str(arguments.get("idempotency_key") or ""),
+        data_policy=str(arguments.get("data_policy") or "retain"),
+    )
 
 
 def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
@@ -381,14 +525,19 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "applications.show": _handle_show,
         "applications.list_releases": _handle_releases,
         "applications.list_operations": _handle_operations,
+        "applications.poll_operation_events": _handle_operation_events,
         "applications.get_operation": _handle_get_operation,
         "applications.list_trial_access": _handle_list_trial_access,
+        "applications.list_development_reports": _handle_list_development_reports,
+        "applications.get_development_report_status": _handle_development_report_status,
+        "applications.list_development_report_intakes": _handle_development_report_intakes,
         "applications.plan": _handle_plan,
         "applications.apply": _handle_apply,
         "applications.explain_plan": _handle_explain,
         "applications.issue_trial_access": _handle_issue_trial_access,
         "applications.revoke_trial_access": _handle_revoke_trial_access,
         "applications.resolve_trial_link": _handle_resolve_trial_link,
+        "applications.plan_trial_link_install": _handle_plan_trial_link_install,
     }
 
 

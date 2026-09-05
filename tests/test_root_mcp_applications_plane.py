@@ -48,14 +48,19 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
         "applications.show",
         "applications.list_releases",
         "applications.list_operations",
+        "applications.poll_operation_events",
         "applications.get_operation",
         "applications.list_trial_access",
+        "applications.list_development_reports",
+        "applications.get_development_report_status",
+        "applications.list_development_report_intakes",
         "applications.plan",
         "applications.apply",
         "applications.explain_plan",
         "applications.issue_trial_access",
         "applications.revoke_trial_access",
         "applications.resolve_trial_link",
+        "applications.plan_trial_link_install",
     }
     forbidden = {"path", "command", "process", "git_credentials", "registry_path"}
     for contract in contracts:
@@ -138,8 +143,15 @@ def test_applications_contract_descriptor_and_capability_profile_are_published()
 
     assert len(schemas) == 7
     assert schemas["application.v1.schema.json"]["title"] == "AdaOS Application v1"
-    assert {"applications.read", "applications.plan", "applications.apply"} <= capabilities
-    assert {"applications.read", "applications.plan", "applications.apply"} <= set(
+    assert {
+        "applications.read", "applications.plan", "applications.apply",
+        "applications.trial.install", "applications.publisher.read",
+        "applications.develop", "applications.publish",
+    } <= capabilities
+    assert {
+        "applications.read", "applications.plan", "applications.apply",
+        "applications.trial.install", "applications.publisher.read",
+    } <= set(
         DEFAULT_CAPABILITY_PROFILES["ApplicationsOperator"]
     )
 

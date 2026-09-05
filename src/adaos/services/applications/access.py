@@ -14,7 +14,7 @@ from adaos.domain.application import TrialAccessGrant, utc_now
 from adaos.services.artifact_pipeline.storage import atomic_write_bytes, atomic_write_json, mutation_lock
 
 from .service import ApplicationService, ApplicationServiceError
-from .store import ApplicationStoreError, _read
+from .store import _read
 
 
 class TrialAccessError(ApplicationServiceError):

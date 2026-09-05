@@ -29,7 +29,7 @@ def test_prompt_rule_registry_is_versioned_and_selects_by_facets() -> None:
         {key: value for key, value in registry.items() if key != "digest"}
     )
     assert registry["schema"] == "adaos.builder.prompt_rule_registry.v1"
-    assert registry["version"] == "0.4.2"
+    assert registry["version"] == "0.5.0"
     assert registry["digest"].startswith("sha256:")
     assert len({item["id"] for item in registry["items"]}) == len(registry["items"])
     assert [
@@ -127,3 +127,15 @@ def test_prompt_rule_capsule_registration_is_idempotent_and_searchable(
     assert second["capsule_id"] == first["capsule_id"]
     assert second["digest"] == first["digest"]
     assert contexts.list_capsules(search="skill.yaml exports.tools", limit=1) == [first]
+
+
+def test_applications_builder_gets_lifecycle_authority_capsule() -> None:
+    selected = select_prompt_rules(
+        target_type="scenario",
+        evidence="Create the Applications catalog with prerelease and stable controls",
+        facts={"concepts": ["application", "catalog", "prerelease"]},
+    )
+    rule = next(item for item in selected if item["id"] == "adaos.application.lifecycle.v1")
+
+    assert "adaos.sdk.builder.applications" in rule["rules"][0]
+    assert "top-level `trials`" in rule["rules"][1]

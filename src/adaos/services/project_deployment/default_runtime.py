@@ -841,12 +841,67 @@ def configure_default_distributed_runtimes(
             execute_service_tool,
             node_id=str(conf.node_id),
         )
-        from adaos.services.applications import register_application_executor
+        from adaos.services.applications import (
+            ApplicationDistributionService,
+            create_local_development_report_service,
+            get_application_service,
+            register_application_executor,
+            register_application_distribution_service_factory,
+            register_application_operation_publisher,
+            register_development_report_service_factory,
+        )
         from adaos.services.applications.deployment_executor import ApplicationDeploymentExecutor
 
         register_application_executor(
             ApplicationDeploymentExecutor(runtime=deployment, state_dir=state_dir)
         )
+        register_application_operation_publisher(
+            _publisher(ctx=current, topic="application.operation.changed")
+        )
+        subnet_id = str(conf.subnet_id)
+        subnet_ref = subnet_id if subnet_id.startswith("subnet:") else f"subnet:{subnet_id}"
+        zone_id = str(getattr(conf, "zone_id", None) or "local")
+        register_development_report_service_factory(
+            lambda: create_local_development_report_service(
+                state_dir,
+                subnet_ref=subnet_ref,
+                zone_id=zone_id,
+                display_name=str(getattr(conf, "subnet_alias", None) or subnet_id),
+            )
+        )
+
+        def application_distribution_service() -> ApplicationDistributionService:
+            from adaos.services.artifact_pipeline.candidates import CandidateStore
+            from adaos.services.artifact_pipeline.channels import ReleaseRepository
+            from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
+            from adaos.services.artifact_pipeline.runtime_trust import (
+                compose_artifact_trust_runtime,
+            )
+            from adaos.services.root.service import RootDeveloperService
+
+            root_service = RootDeveloperService(current)
+            remote_repository = root_service.artifact_release_repository(role="hub")
+            artifact_root = state_dir / "artifact_pipeline"
+            trust = compose_artifact_trust_runtime(
+                state_root=artifact_root,
+                client=remote_repository.client,
+                verify=remote_repository.verify,
+                cert=remote_repository.cert,
+            )
+            if trust.admission is None:
+                raise RuntimeError(
+                    "Application publication requires required artifact attestation mode"
+                )
+            return ApplicationDistributionService(
+                applications=get_application_service(state_dir),
+                candidates=CandidateStore(artifact_root / "candidates"),
+                releases=ReleaseRepository(artifact_root / "release-cache"),
+                packages=ContentAddressedPackageStore(artifact_root / "packages"),
+                remote=remote_repository,
+                admission=trust.admission,
+            )
+
+        register_application_distribution_service_factory(application_distribution_service)
         _configured_key = key
         _configured_authoritative = bool(authoritative)
         return {

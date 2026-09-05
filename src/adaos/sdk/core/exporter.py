@@ -19,6 +19,7 @@ _ALLOWED_TOOL_PREFIXES: Tuple[str, ...] = ("manage.", "skills.", "scenarios.", "
 _DISCOVERY_PACKAGES: Tuple[str, ...] = ("adaos.sdk.manage", "adaos.sdk.data")
 _PUBLIC_FACADE_MODULES: Tuple[str, ...] = (
     "adaos.sdk.applications",
+    "adaos.sdk.builder.applications",
     "adaos.sdk.control_plane",
     "adaos.sdk.conversation",
     "adaos.sdk.context",
@@ -33,6 +34,7 @@ _PUBLIC_FACADE_MODULES: Tuple[str, ...] = (
 )
 _PUBLIC_FACADE_SUMMARIES: dict[str, str] = {
     "adaos.sdk.applications": "Inspect Applications and execute reviewed install, update, removal, and track operations.",
+    "adaos.sdk.builder.applications": "Create, preview, publish, and promote Applications through the governed Builder lifecycle.",
     "adaos.sdk.control_plane": "Read canonical node, subnet, reliability, quota, and inventory projections.",
     "adaos.sdk.conversation": "Read and update governed conversational threads and Builder topics.",
     "adaos.sdk.context": "Resolve, compile, inspect, and bind governed agent context.",

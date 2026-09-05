@@ -20,6 +20,7 @@ from adaos.services.applications import (
     ApplicationServiceError,
     ApplicationStore,
     ApplicationStoreError,
+    StableSourceProjectionService,
 )
 
 
@@ -161,10 +162,12 @@ def test_runtime_selection_is_webspace_scoped_and_compare_and_swap(service: Appl
     first = service.select_runtime(
         webspace_id="desktop", application_id="app_recipes", source="local_trial",
         release_digest=release.release_digest, runtime_root_ref="trial:candidate.recipes.1.0.0", expected_revision=0,
+        actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply",
     )
     second = service.select_runtime(
         webspace_id="desktop", application_id="app_recipes", source="stable_installation",
         release_digest=release.release_digest, runtime_root_ref="workspace", expected_revision=1,
+        actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply",
     )
 
     assert first.revision == 1
@@ -173,6 +176,7 @@ def test_runtime_selection_is_webspace_scoped_and_compare_and_swap(service: Appl
         service.select_runtime(
             webspace_id="desktop", application_id="app_recipes", source="stable_installation",
             release_digest=release.release_digest, runtime_root_ref="workspace", expected_revision=1,
+            actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply",
         )
 
 
@@ -198,16 +202,24 @@ def test_install_update_snapshot_and_remove_are_reviewed_durable_operations(tmp_
 
     install = service.plan_operation(
         "app_recipes", "install", actor_ref="user:owner", subnet_ref="subnet:sn_home",
+        capability="applications.plan",
         idempotency_key="install-1", expected_revision=0, release_digest=first.release_digest,
     )
-    installed = service.apply_operation(install.operation_id, plan_digest=install.plan_digest, idempotency_key="install-1")
+    installed = service.apply_operation(
+        install.operation_id, plan_digest=install.plan_digest, idempotency_key="install-1",
+        actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply",
+    )
     assert installed.status == "succeeded"
 
     update = service.plan_operation(
         "app_recipes", "update", actor_ref="user:owner", subnet_ref="subnet:sn_home",
+        capability="applications.plan",
         idempotency_key="update-1", expected_revision=1, release_digest=second.release_digest,
     )
-    updated = service.apply_operation(update.operation_id, plan_digest=update.plan_digest, idempotency_key="update-1")
+    updated = service.apply_operation(
+        update.operation_id, plan_digest=update.plan_digest, idempotency_key="update-1",
+        actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply",
+    )
     assert updated.status == "succeeded"
     assert updated.result["installation"]["snapshot_ref"] == "snapshot:recipes:1"
 
@@ -215,9 +227,13 @@ def test_install_update_snapshot_and_remove_are_reviewed_durable_operations(tmp_
     assert simulation["components"][0]["remove_package"] is True
     remove = service.plan_operation(
         "app_recipes", "remove", actor_ref="user:owner", subnet_ref="subnet:sn_home",
+        capability="applications.plan",
         idempotency_key="remove-1", expected_revision=2, data_policy="retain",
     )
-    removed = service.apply_operation(remove.operation_id, plan_digest=remove.plan_digest, idempotency_key="remove-1")
+    removed = service.apply_operation(
+        remove.operation_id, plan_digest=remove.plan_digest, idempotency_key="remove-1",
+        actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply",
+    )
     assert removed.status == "succeeded"
     assert removed.result["installation"]["status"] == "removed"
 
@@ -230,18 +246,26 @@ def test_shared_component_conflict_is_reported_before_apply(tmp_path: Path) -> N
     conflicting = service.register_release(_release(application_id="app_other", project_id="other", package_digest=DIGEST_B))
     install = service.plan_operation(
         "app_recipes", "install", actor_ref="user:owner", subnet_ref="subnet:sn_home",
+        capability="applications.plan",
         idempotency_key="install-recipes", expected_revision=0, release_digest=first.release_digest,
     )
-    service.apply_operation(install.operation_id, plan_digest=install.plan_digest, idempotency_key="install-recipes")
+    service.apply_operation(
+        install.operation_id, plan_digest=install.plan_digest, idempotency_key="install-recipes",
+        actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply",
+    )
 
     plan = service.plan_operation(
         "app_other", "install", actor_ref="user:owner", subnet_ref="subnet:sn_home",
+        capability="applications.plan",
         idempotency_key="install-other", expected_revision=0, release_digest=conflicting.release_digest,
     )
 
     assert plan.plan["conflicts"][0]["component_ref"] == "scenario:recipes"
     with pytest.raises(ApplicationPlanConflict):
-        service.apply_operation(plan.operation_id, plan_digest=plan.plan_digest, idempotency_key="install-other")
+        service.apply_operation(
+            plan.operation_id, plan_digest=plan.plan_digest, idempotency_key="install-other",
+            actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply",
+        )
 
 
 def test_unknown_executor_outcome_is_not_replayed_blindly(tmp_path: Path) -> None:
@@ -253,16 +277,23 @@ def test_unknown_executor_outcome_is_not_replayed_blindly(tmp_path: Path) -> Non
     release = service.register_release(_release())
     plan = service.plan_operation(
         "app_recipes", "install", actor_ref="user:owner", subnet_ref="subnet:sn_home",
+        capability="applications.plan",
         idempotency_key="install-unknown", expected_revision=0, release_digest=release.release_digest,
     )
 
     with pytest.raises(TimeoutError):
-        service.apply_operation(plan.operation_id, plan_digest=plan.plan_digest, idempotency_key="install-unknown")
+        service.apply_operation(
+            plan.operation_id, plan_digest=plan.plan_digest, idempotency_key="install-unknown",
+            actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply",
+        )
 
     unknown = service.store.get_operation(plan.operation_id)
     assert unknown.status == "unknown"
     with pytest.raises(ApplicationServiceError, match="cannot apply"):
-        service.apply_operation(plan.operation_id, plan_digest=plan.plan_digest, idempotency_key="install-unknown")
+        service.apply_operation(
+            plan.operation_id, plan_digest=plan.plan_digest, idempotency_key="install-unknown",
+            actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply",
+        )
 
 
 def test_failed_update_requires_verified_snapshot_restore_receipt(tmp_path: Path) -> None:
@@ -273,9 +304,13 @@ def test_failed_update_requires_verified_snapshot_restore_receipt(tmp_path: Path
     service.executor = lambda _plan: {"ok": True, "status": "succeeded"}
     install = service.plan_operation(
         "app_recipes", "install", actor_ref="user:owner", subnet_ref="subnet:sn_home",
+        capability="applications.plan",
         idempotency_key="install-before-failure", expected_revision=0, release_digest=first.release_digest,
     )
-    service.apply_operation(install.operation_id, plan_digest=install.plan_digest, idempotency_key="install-before-failure")
+    service.apply_operation(
+        install.operation_id, plan_digest=install.plan_digest, idempotency_key="install-before-failure",
+        actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply",
+    )
     service.executor = lambda _plan: {
         "ok": False,
         "status": "failed",
@@ -293,11 +328,13 @@ def test_failed_update_requires_verified_snapshot_restore_receipt(tmp_path: Path
     }
     update = service.plan_operation(
         "app_recipes", "update", actor_ref="user:owner", subnet_ref="subnet:sn_home",
+        capability="applications.plan",
         idempotency_key="failed-update", expected_revision=1, release_digest=second.release_digest,
     )
 
     result = service.apply_operation(
-        update.operation_id, plan_digest=update.plan_digest, idempotency_key="failed-update"
+        update.operation_id, plan_digest=update.plan_digest, idempotency_key="failed-update",
+        actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply",
     )
 
     assert result.status == "failed"
@@ -324,6 +361,7 @@ def test_update_track_is_a_reviewed_operation_and_does_not_require_runtime_execu
         "select_track",
         actor_ref="user:owner",
         subnet_ref="subnet:sn_home",
+        capability="applications.plan",
         idempotency_key="track-prerelease-1",
         expected_revision=0,
         update_track="prerelease",
@@ -334,8 +372,84 @@ def test_update_track_is_a_reviewed_operation_and_does_not_require_runtime_execu
         operation.operation_id,
         plan_digest=operation.plan_digest,
         idempotency_key="track-prerelease-1",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
     )
 
     assert result.status == "succeeded"
     assert result.result["subscription"]["update_track"] == "prerelease"
     assert service.store.get_subscription("app_recipes").revision == 1
+
+
+def test_operation_authority_and_reconnect_cursor_are_enforced(tmp_path: Path) -> None:
+    published: list[dict] = []
+    service = ApplicationService(
+        ApplicationStore(tmp_path),
+        executor=lambda _plan: {"ok": True, "status": "succeeded"},
+        operation_publisher=published.append,
+    )
+    service.register(_application())
+    release = service.register_release(_release())
+    with pytest.raises(ApplicationServiceError, match="applications.plan"):
+        service.plan_operation(
+            "app_recipes", "install", actor_ref="user:owner", subnet_ref="subnet:sn_home",
+            capability="applications.apply", idempotency_key="bad-authority",
+            expected_revision=0, release_digest=release.release_digest,
+        )
+    operation = service.plan_operation(
+        "app_recipes", "install", actor_ref="user:owner", subnet_ref="subnet:sn_home",
+        capability="applications.plan", idempotency_key="install-events",
+        expected_revision=0, release_digest=release.release_digest,
+    )
+    first_page, cursor = service.store.list_operation_events(limit=1)
+    assert [item["status"] for item in first_page] == ["planned"]
+    assert cursor
+    with pytest.raises(ApplicationServiceError, match="authority"):
+        service.apply_operation(
+            operation.operation_id, plan_digest=operation.plan_digest,
+            idempotency_key="install-events", actor_ref="user:other",
+            subnet_ref="subnet:sn_home", capability="applications.apply",
+        )
+
+    service.apply_operation(
+        operation.operation_id, plan_digest=operation.plan_digest,
+        idempotency_key="install-events", actor_ref="user:owner",
+        subnet_ref="subnet:sn_home", capability="applications.apply",
+    )
+    resumed, checkpoint = service.store.list_operation_events(cursor=cursor)
+
+    assert [item["status"] for item in resumed] == ["applying", "succeeded"]
+    assert checkpoint != cursor
+    assert [item["status"] for item in published] == ["planned", "applying", "succeeded"]
+
+
+def test_public_stable_source_projection_is_exact_and_idempotent(service: ApplicationService) -> None:
+    release = service.register_release(_release())
+    service.move_channel(
+        "app_recipes", "stable", release.release_digest,
+        publisher_ref="subnet:sn_home", expected_release_digest=None,
+    )
+    calls = []
+
+    def publish(**kwargs):
+        calls.append(kwargs)
+        return {
+            "repository": "inimatic/recipes",
+            "commit": "0123456789abcdef0123456789abcdef01234567",
+            "source_revision": kwargs["release"]["project_release"]["source_ref"]["revision"],
+        }
+
+    projection = StableSourceProjectionService(service, publisher=publish)
+    first = projection.publish(
+        "app_recipes", release.release_digest,
+        publisher_ref="subnet:sn_home", release_notes="Initial stable",
+    )
+    repeated = projection.publish(
+        "app_recipes", release.release_digest,
+        publisher_ref="subnet:sn_home", release_notes="Initial stable",
+    )
+
+    assert first == repeated
+    assert first["source_revision"] == release.project_release.source_ref.revision
+    assert len(calls) == 1

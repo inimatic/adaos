@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from . import (
     artifacts,
+    applications,
     automation,
     conversation,
     development_sessions,
@@ -26,6 +27,7 @@ from . import (
 
 __all__ = [
     "artifacts",
+    "applications",
     "automation",
     "conversation",
     "development_sessions",
