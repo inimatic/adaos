@@ -22,6 +22,7 @@ def test_artifact_package_registry_client_contract() -> None:
     digest = "sha256:" + "a" * 64
     plan = {"schema": "adaos.artifact.release_plan.v1"}
 
+    client.get_artifact_storage_diagnostics(verify_content=True)
     client.put_artifact_package(digest=digest, archive_b64="cGFja2FnZQ==")
     client.put_artifact_package_bytes(digest=digest, archive=b"package")
     client.get_artifact_package(digest=digest)
@@ -62,6 +63,7 @@ def test_artifact_package_registry_client_contract() -> None:
     )
 
     assert [(method, path) for method, path, _ in client.calls] == [
+        ("GET", "/v1/artifacts/storage/diagnostics"),
         ("POST", "/v1/artifacts/packages"),
         ("PUT", f"/v1/artifacts/packages/sha256%3A{'a' * 64}/content"),
         ("GET", f"/v1/artifacts/packages/sha256%3A{'a' * 64}"),
@@ -82,21 +84,22 @@ def test_artifact_package_registry_client_contract() -> None:
             f"/v1/artifacts/projects/recipes/releases/sha256%3A{'a' * 64}/attestations",
         ),
     ]
+    assert client.calls[0][2]["params"] == {"verify_content": "true"}
     assert client.calls[0][2]["cert"] == ("cert", "key")
-    assert client.calls[1][2]["data"] == b"package"
-    assert client.calls[1][2]["headers"] == {
+    assert client.calls[2][2]["data"] == b"package"
+    assert client.calls[2][2]["headers"] == {
         "Content-Type": "application/vnd.adaos.artifact-package+zip"
     }
-    assert client.calls[1][2]["cert"] == ("cert", "key")
-    assert client.calls[3][2]["response_bytes"] is True
-    assert client.calls[4][2]["json"] == {
+    assert client.calls[2][2]["cert"] == ("cert", "key")
+    assert client.calls[4][2]["response_bytes"] is True
+    assert client.calls[5][2]["json"] == {
         "release_digest": digest,
         "release_plan": plan,
     }
-    assert client.calls[6][2]["json"] == {
+    assert client.calls[7][2]["json"] == {
         "release_digest": digest,
         "expected_release_digest": None,
     }
-    assert client.calls[8][2]["json"] == {"expected_release_digest": digest}
-    assert client.calls[9][2]["json"] == {"attestation": attestation}
-    assert client.calls[11][2]["json"] == {"attestation_set": attestation_set}
+    assert client.calls[9][2]["json"] == {"expected_release_digest": digest}
+    assert client.calls[10][2]["json"] == {"attestation": attestation}
+    assert client.calls[12][2]["json"] == {"attestation_set": attestation_set}

@@ -216,7 +216,7 @@ Git repository as the artifact store.
 - [x] `[must]` `APP3-11` Add signed yank, release/key revocation, emergency
   disable, and explicit stale-metadata behavior without claiming that already
   delivered private bytes can be revoked.
-- [ ] `[should]` `APP3-12` Add backup, restore, storage quota, compaction, and
+- [x] `[should]` `APP3-12` Add backup, restore, storage quota, compaction, and
   object-store-compatible diagnostics for the initial on-disk CAS.
 - [x] `[should]` `APP3-13` Add sticky staged rollout/pause and health-based halt
   before broad prerelease use without creating multiple visible beta lines.
@@ -242,6 +242,10 @@ rollout. Signed cross-zone health transport remains part of `APP5-10`.
 `APP3-14` is wired to the production runtime through the configured Workspace
 registry repository, remote, and branch; Builder cannot inject Git controls or
 publish anything except the exact current public stable source closure.
+`APP3-12` is implemented by the Root filesystem CAS and its bounded offline
+operator command. Quota and streamed digest verification fail before CAS
+visibility; backup/restore and reviewed compaction have immutable receipts, and
+authenticated clients can request ordinary or full-integrity diagnostics.
 
 ## APP4. Applications Builder Dogfood
 

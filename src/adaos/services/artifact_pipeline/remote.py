@@ -16,6 +16,8 @@ from adaos.services.artifact_pipeline.releases import ReleasePlan
 
 
 class ArtifactRegistryClient(Protocol):
+    def get_artifact_storage_diagnostics(self, **kwargs: Any) -> dict: ...
+
     def put_artifact_package(self, **kwargs: Any) -> dict: ...
 
     def get_artifact_package(self, **kwargs: Any) -> dict: ...
@@ -49,6 +51,25 @@ class RemoteReleaseRepository:
 
     def _transport(self) -> dict[str, Any]:
         return {"verify": self.verify, "cert": self.cert}
+
+    def storage_diagnostics(self, *, verify_content: bool = False) -> dict[str, Any]:
+        response = self.client.get_artifact_storage_diagnostics(
+            verify_content=bool(verify_content),
+            **self._transport(),
+        )
+        if response.get("schema") != "adaos.artifact.storage_diagnostics.v1":
+            raise ValueError("artifact registry returned unsupported storage diagnostics")
+        for key in ("files", "used_bytes"):
+            value = response.get(key)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError("artifact registry returned invalid storage diagnostics")
+        integrity = response.get("integrity")
+        compatibility = response.get("object_store_compatibility")
+        if not isinstance(integrity, Mapping) or not isinstance(compatibility, Mapping):
+            raise ValueError("artifact registry returned incomplete storage diagnostics")
+        if verify_content and integrity.get("checked") is not True:
+            raise ValueError("artifact registry did not perform requested integrity verification")
+        return dict(response)
 
     def put_package(self, package: ArtifactPackageRef, archive_bytes: bytes) -> None:
         verified = verify_artifact_package(archive_bytes, expected_digest=package.digest)

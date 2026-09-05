@@ -497,6 +497,17 @@ The initial backend may be an on-disk CAS with durable metadata and backup.
 The storage contract must allow later object-store and multi-zone replication
 without changing package or release identity.
 
+The filesystem implementation enforces a configured byte quota before package
+visibility, streams uploads through a digest-verified temporary file, and
+reports bounded usage by storage class through the authenticated Root client.
+An explicit integrity pass hashes package content. Operator-only maintenance
+creates an immutable verified backup, emits a digest-reviewed plan containing
+only old unreferenced package blobs, and requires a new backup while applying
+that exact plan. Restore is an offline atomic swap and requires an explicit
+operator assertion that every writer is stopped. Diagnostics publish the
+immutable-object and compare-and-swap key requirements for a future object
+store adapter; they do not claim that the filesystem backend is replicated.
+
 Git is used only where source history and human source access are intentional.
 Removing a Trial path from Git does not bound Git history, and a private Git
 repository is not an artifact revocation mechanism. `adaos-trials` therefore

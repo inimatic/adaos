@@ -3,15 +3,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, MutableMapping, Optional, Tuple
 import httpx
-import ssl, os
 import logging
 import time
 import json
 import hashlib
+import os
+import ssl
 import threading
 import uuid
+from typing import Any, Mapping, MutableMapping, Optional, Tuple
 from urllib.parse import quote
 
 from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
@@ -952,6 +953,24 @@ class RootHttpClient:
                 verify=(self.verify if verify is None else verify),
                 cert=(self.cert if cert is None else cert),
                 timeout=120.0,
+            )
+        )
+
+    def get_artifact_storage_diagnostics(
+        self,
+        *,
+        verify_content: bool = False,
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+    ) -> dict:
+        return dict(
+            self._request(
+                "GET",
+                "/v1/artifacts/storage/diagnostics",
+                params={"verify_content": "true" if verify_content else "false"},
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=120.0 if verify_content else 30.0,
             )
         )
 

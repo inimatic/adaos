@@ -32,6 +32,24 @@ class _Client:
         self.attestations: dict[tuple[str, str], list[dict[str, Any]]] = {}
         self.attestation_sets: dict[tuple[str, str], dict[str, Any]] = {}
 
+    def get_artifact_storage_diagnostics(
+        self,
+        *,
+        verify_content: bool = False,
+        **kwargs: Any,
+    ) -> dict:
+        return {
+            "ok": True,
+            "schema": "adaos.artifact.storage_diagnostics.v1",
+            "backend": "filesystem-cas",
+            "files": 3,
+            "used_bytes": 1024,
+            "integrity": {"checked": verify_content, "failures": []},
+            "object_store_compatibility": {
+                "contract": "adaos.artifact.object_store_port.v1",
+            },
+        }
+
     def put_artifact_package(self, *, digest: str, archive_b64: str, **kwargs: Any) -> dict:
         self.packages[digest] = archive_b64
         return {"ok": True}
@@ -217,6 +235,9 @@ def test_remote_repository_upload_fetch_release_and_channel(tmp_path: Path) -> N
     client = _Client()
     remote = RemoteReleaseRepository(client, verify="ca", cert=("cert", "key"))
 
+    diagnostics = remote.storage_diagnostics(verify_content=True)
+    assert diagnostics["used_bytes"] == 1024
+    assert diagnostics["integrity"]["checked"] is True
     remote.put_release(plan, {built.ref.digest: built.archive_bytes})
     assert base64.b64decode(client.packages[built.ref.digest]) == built.archive_bytes
     assert remote.fetch_package(built.ref) == built.archive_bytes
