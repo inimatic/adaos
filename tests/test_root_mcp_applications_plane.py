@@ -51,6 +51,7 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
         "applications.poll_operation_events",
         "applications.get_operation",
         "applications.list_trial_access",
+        "applications.get_prerelease_rollout",
         "applications.list_development_reports",
         "applications.get_development_report_status",
         "applications.list_development_report_intakes",
@@ -61,6 +62,8 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
         "applications.revoke_trial_access",
         "applications.resolve_trial_link",
         "applications.plan_trial_link_install",
+        "applications.set_prerelease_rollout",
+        "applications.record_prerelease_health",
     }
     forbidden = {"path", "command", "process", "git_credentials", "registry_path"}
     for contract in contracts:
@@ -141,7 +144,7 @@ def test_applications_contract_descriptor_and_capability_profile_are_published()
     schemas = descriptor["payload"]["schemas"]
     capabilities = {item["capability"] for item in list_capability_classes()}
 
-    assert len(schemas) == 7
+    assert len(schemas) == 8
     assert schemas["application.v1.schema.json"]["title"] == "AdaOS Application v1"
     assert {
         "applications.read", "applications.plan", "applications.apply",

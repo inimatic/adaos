@@ -58,6 +58,7 @@ from .development import (
     ApplicationDevelopmentOutcomeUnknown,
 )
 from .source_projection import StableSourceProjectionError, StableSourceProjectionService
+from .rollout import ApplicationRolloutError, ApplicationRolloutService
 
 __all__ = [
     "ApplicationChannelConflict",
@@ -74,6 +75,8 @@ __all__ = [
     "ApplicationRevisionConflict",
     "ApplicationRetentionError",
     "ApplicationRetentionService",
+    "ApplicationRolloutError",
+    "ApplicationRolloutService",
     "DevelopmentReportAdmissionError",
     "DevelopmentReportAdmissionService",
     "DevelopmentReportCryptoError",

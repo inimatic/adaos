@@ -382,6 +382,7 @@ def _application_contracts() -> dict[str, Any]:
         "application.runtime-selection.v1.schema.json",
         "application.trial-access-grant.v1.schema.json",
         "application.operation.v1.schema.json",
+        "application.prerelease-rollout.v1.schema.json",
     )
     return {
         "schema": "adaos.application.contract_bundle.v1",

@@ -100,6 +100,18 @@ def contracts() -> list[RootMcpToolContract]:
             metadata={**published, "handler": "applications_list_trial_access"},
         ),
         RootMcpToolContract(
+            id="applications.get_prerelease_rollout",
+            title="Get prerelease rollout",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Read the one current prerelease staged-rollout policy and aggregate health.",
+            input_schema=schema_object(
+                properties={"application_id": {"type": "string"}}, required=["application_id"]
+            ),
+            output_schema=response(),
+            required_capability="applications.read",
+            metadata={**published, "handler": "applications_get_prerelease_rollout"},
+        ),
+        RootMcpToolContract(
             id="applications.list_development_reports",
             title="List Development Reports",
             surface=RootMcpSurface.OPERATIONS,
@@ -273,6 +285,60 @@ def contracts() -> list[RootMcpToolContract]:
                 "sensitive_input_paths": ["link"],
             },
         ),
+        RootMcpToolContract(
+            id="applications.set_prerelease_rollout",
+            title="Set prerelease rollout",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Set, pause, or explicitly resume one sticky prerelease rollout.",
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "release_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                    "percentage": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "paused": {"type": "boolean"},
+                    "minimum_health_subnets": {"type": "integer", "minimum": 1, "maximum": 10000},
+                    "failure_threshold": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+                    "expected_revision": {"type": "integer", "minimum": 0},
+                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "resume_after_halt": {"type": "boolean"},
+                },
+                required=[
+                    "application_id", "release_digest", "percentage", "paused",
+                    "minimum_health_subnets", "failure_threshold", "expected_revision",
+                    "idempotency_key",
+                ],
+            ),
+            output_schema=response(),
+            required_capability="applications.publish",
+            side_effects="write",
+            metadata={**published, "handler": "applications_set_prerelease_rollout"},
+        ),
+        RootMcpToolContract(
+            id="applications.record_prerelease_health",
+            title="Record prerelease health",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Record one evidence-bound subscriber health outcome for rollout halt policy.",
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "release_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                    "outcome": {"enum": ["healthy", "failed"]},
+                    "installation_revision": {"type": "integer", "minimum": 1},
+                    "evidence_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                    "observed_at": {"type": "string", "format": "date-time"},
+                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 240},
+                },
+                required=[
+                    "application_id", "release_digest", "outcome",
+                    "installation_revision", "evidence_digest", "observed_at",
+                    "idempotency_key",
+                ],
+            ),
+            output_schema=response(),
+            required_capability="applications.apply",
+            side_effects="write",
+            metadata={**published, "handler": "applications_record_prerelease_health"},
+        ),
     ]
 
 
@@ -333,6 +399,10 @@ def _handle_get_operation(arguments: dict[str, Any], *, dry_run: bool) -> dict[s
 def _handle_list_trial_access(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     application_id = str(arguments.get("application_id") or "").strip() or None
     return {"grants": _sdk().list_trial_access(application_id)}
+
+
+def _handle_get_prerelease_rollout(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return {"rollout": _sdk().get_prerelease_rollout(_application_id(arguments))}
 
 
 def _handle_list_development_reports(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -519,6 +589,48 @@ def _handle_plan_trial_link_install(arguments: dict[str, Any], *, dry_run: bool)
     )
 
 
+def _handle_set_prerelease_rollout(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_set_rollout": True, "request": request}
+    actor_ref, subnet_ref = _context(arguments)
+    return {
+        "rollout": _sdk().set_prerelease_rollout(
+            _application_id(arguments),
+            release_digest=str(arguments.get("release_digest") or ""),
+            percentage=int(arguments.get("percentage") or 0),
+            paused=bool(arguments.get("paused", False)),
+            minimum_health_subnets=int(arguments.get("minimum_health_subnets") or 0),
+            failure_threshold=float(arguments.get("failure_threshold") or 0.0),
+            expected_revision=int(arguments.get("expected_revision") or 0),
+            actor_ref=actor_ref,
+            subnet_ref=subnet_ref,
+            capability="applications.publish",
+            idempotency_key=str(arguments.get("idempotency_key") or ""),
+            resume_after_halt=bool(arguments.get("resume_after_halt", False)),
+        )
+    }
+
+
+def _handle_record_prerelease_health(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_record_health": True, "request": request}
+    actor_ref, subnet_ref = _context(arguments)
+    return _sdk().record_prerelease_health(
+        _application_id(arguments),
+        str(arguments.get("release_digest") or ""),
+        outcome=str(arguments.get("outcome") or ""),
+        installation_revision=int(arguments.get("installation_revision") or 0),
+        evidence_digest=str(arguments.get("evidence_digest") or ""),
+        observed_at=str(arguments.get("observed_at") or ""),
+        actor_ref=actor_ref,
+        subnet_ref=subnet_ref,
+        capability="applications.apply",
+        idempotency_key=str(arguments.get("idempotency_key") or ""),
+    )
+
+
 def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
     return {
         "applications.list": _handle_list,
@@ -528,6 +640,7 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "applications.poll_operation_events": _handle_operation_events,
         "applications.get_operation": _handle_get_operation,
         "applications.list_trial_access": _handle_list_trial_access,
+        "applications.get_prerelease_rollout": _handle_get_prerelease_rollout,
         "applications.list_development_reports": _handle_list_development_reports,
         "applications.get_development_report_status": _handle_development_report_status,
         "applications.list_development_report_intakes": _handle_development_report_intakes,
@@ -538,6 +651,8 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "applications.revoke_trial_access": _handle_revoke_trial_access,
         "applications.resolve_trial_link": _handle_resolve_trial_link,
         "applications.plan_trial_link_install": _handle_plan_trial_link_install,
+        "applications.set_prerelease_rollout": _handle_set_prerelease_rollout,
+        "applications.record_prerelease_health": _handle_record_prerelease_health,
     }
 
 

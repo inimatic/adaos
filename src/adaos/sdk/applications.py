@@ -12,6 +12,7 @@ from typing import Any
 from adaos.domain.application import RuntimeSelection
 from adaos.sdk.core._ctx import require_ctx
 from adaos.services.applications import (
+    ApplicationRolloutService,
     TrialAccessService,
     get_application_service,
     get_development_report_service,
@@ -21,6 +22,14 @@ from adaos.services.applications import (
 def _service():
     ctx = require_ctx("sdk.applications")
     return get_application_service(Path(ctx.paths.state_dir()))
+
+
+def _local_subnet_ref() -> str:
+    config = require_ctx("sdk.applications").config
+    subnet_id = str(
+        config.subnet_id_value if hasattr(config, "subnet_id_value") else config.subnet_id
+    ).strip()
+    return subnet_id if subnet_id.startswith("subnet:") else f"subnet:{subnet_id}"
 
 
 def _mutation_identity(
@@ -47,7 +56,10 @@ def _mutation_identity(
 
 
 def list_applications(*, installed_only: bool = False) -> list[dict[str, Any]]:
-    return _service().list_models(installed_only=installed_only)
+    return _service().list_models(
+        installed_only=installed_only,
+        subscriber_subnet_ref=_local_subnet_ref(),
+    )
 
 
 def get_application(application_id: str) -> dict[str, Any]:
@@ -55,7 +67,7 @@ def get_application(application_id: str) -> dict[str, Any]:
     application = service.store.get_application(application_id)
     return next(
         item
-        for item in service.list_models()
+        for item in service.list_models(subscriber_subnet_ref=_local_subnet_ref())
         if item["application"]["application_id"] == application.application_id
     )
 
@@ -63,7 +75,7 @@ def get_application(application_id: str) -> dict[str, Any]:
 def list_catalog() -> list[dict[str, Any]]:
     return [
         item
-        for item in _service().list_models()
+        for item in _service().list_models(subscriber_subnet_ref=_local_subnet_ref())
         if item["application"]["visibility"] == "public"
         and item["channels"].get("stable")
     ]
@@ -135,6 +147,87 @@ def get_operation(operation_id: str) -> dict[str, Any]:
 
 def list_trial_access(application_id: str | None = None) -> list[dict[str, Any]]:
     return [item.to_dict() for item in _service().store.list_grants(application_id)]
+
+
+def get_prerelease_rollout(application_id: str) -> dict[str, Any] | None:
+    service = _service()
+    policy = ApplicationRolloutService(service).get_policy(application_id)
+    if policy is None:
+        return None
+    return {
+        "policy": policy,
+        "health": ApplicationRolloutService(service).health_summary(
+            application_id, str(policy["release_digest"])
+        ),
+    }
+
+
+def set_prerelease_rollout(
+    application_id: str,
+    *,
+    release_digest: str,
+    percentage: int,
+    paused: bool,
+    minimum_health_subnets: int,
+    failure_threshold: float,
+    expected_revision: int,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+    resume_after_halt: bool = False,
+) -> dict[str, Any]:
+    _mutation_identity(
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
+        required_capability="applications.publish",
+    )
+    return ApplicationRolloutService(_service()).set_policy(
+        application_id,
+        release_digest=release_digest,
+        publisher_ref=subnet_ref,
+        percentage=percentage,
+        paused=paused,
+        minimum_health_subnets=minimum_health_subnets,
+        failure_threshold=failure_threshold,
+        expected_revision=expected_revision,
+        idempotency_key=idempotency_key,
+        resume_after_halt=resume_after_halt,
+    )
+
+
+def record_prerelease_health(
+    application_id: str,
+    release_digest: str,
+    *,
+    outcome: str,
+    installation_revision: int,
+    evidence_digest: str,
+    observed_at: str,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    _mutation_identity(
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
+        required_capability="applications.apply",
+    )
+    return ApplicationRolloutService(_service()).record_health(
+        application_id,
+        release_digest,
+        subscriber_subnet_ref=subnet_ref,
+        outcome=outcome,
+        installation_revision=installation_revision,
+        evidence_digest=evidence_digest,
+        observed_at=observed_at,
+        idempotency_key=idempotency_key,
+    )
 
 
 def issue_trial_access(
@@ -377,6 +470,7 @@ def plan_update_track(
     idempotency_key: str,
     pinned_release_digest: str | None = None,
 ) -> dict[str, Any]:
+    """Plan stable or prerelease Application install/update track selection."""
     actor, subnet, granted, key = _mutation_identity(
         actor_ref,
         subnet_ref,
@@ -484,6 +578,7 @@ __all__ = [
     "get_development_report",
     "get_development_report_status",
     "get_operation",
+    "get_prerelease_rollout",
     "get_runtime_selection",
     "get_subscription",
     "issue_trial_access",
@@ -500,8 +595,10 @@ __all__ = [
     "plan_update",
     "plan_update_track",
     "poll_operation_events",
+    "record_prerelease_health",
     "resolve_trial_link",
     "revoke_trial_access",
     "select_runtime",
+    "set_prerelease_rollout",
     "simulate_removal",
 ]

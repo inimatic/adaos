@@ -169,7 +169,12 @@ class ApplicationService:
         )
         return self.store.save_subscription(value, expected_revision=expected_revision)
 
-    def effective_release(self, application_id: str) -> dict[str, Any]:
+    def effective_release(
+        self,
+        application_id: str,
+        *,
+        subscriber_subnet_ref: str | None = None,
+    ) -> dict[str, Any]:
         channels = dict(self.store.get_channels(application_id).get("channels") or {})
         try:
             subscription = self.store.get_subscription(application_id)
@@ -197,12 +202,34 @@ class ApplicationService:
                 "release_digest": None,
                 "reason": "channel_unavailable",
             }
+        rollout = None
+        if effective_channel == "prerelease":
+            from .rollout import ApplicationRolloutService
+
+            rollout = ApplicationRolloutService(self).assignment(
+                application_id,
+                digest,
+                subscriber_subnet_ref=subscriber_subnet_ref,
+            )
+            if not rollout["eligible"]:
+                digest = str(channels.get("stable") or "")
+                effective_channel = "stable" if digest else None
+        if not digest:
+            return {
+                "application_id": application_id,
+                "update_track": subscription.update_track,
+                "effective_channel": None,
+                "release_digest": None,
+                "reason": "rollout_not_eligible",
+                "rollout": rollout,
+            }
         return {
             "application_id": application_id,
             "update_track": subscription.update_track,
             "effective_channel": effective_channel,
             "release_digest": digest,
-            "reason": "resolved",
+            "reason": "resolved" if rollout is None or rollout["eligible"] else "stable_rollout_fallback",
+            "rollout": rollout,
             "release": self.store.get_release(application_id, digest).to_dict(),
         }
 
@@ -419,7 +446,10 @@ class ApplicationService:
         compatibility: dict[str, Any] = {}
         if operation_kind in {"install", "update"}:
             if not release_digest:
-                effective = self.effective_release(application_id)
+                effective = self.effective_release(
+                    application_id,
+                    subscriber_subnet_ref=subnet_ref,
+                )
                 release_digest = str(effective.get("release_digest") or "")
             if not release_digest:
                 raise ApplicationServiceError("no exact release is available for operation")
@@ -738,7 +768,12 @@ class ApplicationService:
             "data_outcome": data_policy,
         }
 
-    def list_models(self, *, installed_only: bool = False) -> list[dict[str, Any]]:
+    def list_models(
+        self,
+        *,
+        installed_only: bool = False,
+        subscriber_subnet_ref: str | None = None,
+    ) -> list[dict[str, Any]]:
         installations = {item.application_id: item for item in self.store.list_installations() if item.status != "removed"}
         subscriptions = {item.application_id: item for item in self.store.list_subscriptions()}
         operations: dict[str, ApplicationOperation] = {}
@@ -751,7 +786,10 @@ class ApplicationService:
                 continue
             channels = dict(self.store.get_channels(application.application_id).get("channels") or {})
             subscription = subscriptions.get(application.application_id)
-            effective = self.effective_release(application.application_id)
+            effective = self.effective_release(
+                application.application_id,
+                subscriber_subnet_ref=subscriber_subnet_ref,
+            )
             update_available = bool(
                 installation
                 and effective.get("release_digest")

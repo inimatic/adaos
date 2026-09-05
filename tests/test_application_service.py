@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import jsonschema
 import pytest
 
 from adaos.domain.application import (
@@ -16,6 +18,8 @@ from adaos.domain.artifact_release import (
 from adaos.services.applications import (
     ApplicationPlanConflict,
     ApplicationRevisionConflict,
+    ApplicationRolloutError,
+    ApplicationRolloutService,
     ApplicationService,
     ApplicationServiceError,
     ApplicationStore,
@@ -154,6 +158,126 @@ def test_subscription_keeps_prerelease_intent_when_promoted_digest_becomes_stabl
     assert effective["effective_channel"] == "stable"
     assert effective["update_track"] == "prerelease"
     assert effective["release_digest"] == second.release_digest
+
+
+def test_prerelease_rollout_is_sticky_and_falls_back_to_stable(service: ApplicationService) -> None:
+    stable = service.register_release(_release())
+    prerelease = service.register_release(
+        _release(version="1.1.0", package_digest=DIGEST_B, lifecycle="prerelease")
+    )
+    service.move_channel(
+        "app_recipes", "stable", stable.release_digest,
+        publisher_ref="subnet:sn_home", expected_release_digest=None,
+    )
+    service.move_channel(
+        "app_recipes", "prerelease", prerelease.release_digest,
+        publisher_ref="subnet:sn_home", expected_release_digest=None,
+    )
+    service.set_subscription(
+        "app_recipes", update_track="prerelease", update_policy="notify",
+        paused=False, expected_revision=0,
+    )
+    rollout = ApplicationRolloutService(service)
+    rollout.set_policy(
+        "app_recipes", release_digest=prerelease.release_digest,
+        publisher_ref="subnet:sn_home", percentage=50, paused=False,
+        minimum_health_subnets=3, failure_threshold=0.5,
+        expected_revision=0, idempotency_key="stage-half",
+    )
+    assignments = {
+        subnet: rollout.assignment(
+            "app_recipes", prerelease.release_digest,
+            subscriber_subnet_ref=subnet,
+        )
+        for subnet in (f"subnet:guest-{index}" for index in range(100))
+    }
+    selected = next(subnet for subnet, value in assignments.items() if value["eligible"])
+    excluded = next(subnet for subnet, value in assignments.items() if not value["eligible"])
+
+    assert rollout.assignment(
+        "app_recipes", prerelease.release_digest, subscriber_subnet_ref=selected
+    ) == assignments[selected]
+    assert service.effective_release(
+        "app_recipes", subscriber_subnet_ref=selected
+    )["release_digest"] == prerelease.release_digest
+    fallback = service.effective_release("app_recipes", subscriber_subnet_ref=excluded)
+    assert fallback["release_digest"] == stable.release_digest
+    assert fallback["reason"] == "stable_rollout_fallback"
+
+
+def test_rollout_health_counts_distinct_subnets_and_halts(service: ApplicationService) -> None:
+    stable = service.register_release(_release())
+    prerelease = service.register_release(
+        _release(version="1.1.0", package_digest=DIGEST_B, lifecycle="prerelease")
+    )
+    service.move_channel(
+        "app_recipes", "stable", stable.release_digest,
+        publisher_ref="subnet:sn_home", expected_release_digest=None,
+    )
+    service.move_channel(
+        "app_recipes", "prerelease", prerelease.release_digest,
+        publisher_ref="subnet:sn_home", expected_release_digest=None,
+    )
+    rollout = ApplicationRolloutService(service)
+    rollout.set_policy(
+        "app_recipes", release_digest=prerelease.release_digest,
+        publisher_ref="subnet:sn_home", percentage=100, paused=False,
+        minimum_health_subnets=2, failure_threshold=0.5,
+        expected_revision=0, idempotency_key="health-policy",
+    )
+    evidence = "sha256:" + "9" * 64
+    for key, timestamp in (("guest-failed-1", "2026-09-05T12:00:00+00:00"), ("guest-failed-2", "2026-09-05T12:01:00+00:00")):
+        result = rollout.record_health(
+            "app_recipes", prerelease.release_digest,
+            subscriber_subnet_ref="subnet:guest-a", outcome="failed",
+            installation_revision=1, evidence_digest=evidence,
+            observed_at=timestamp, idempotency_key=key,
+        )
+    assert result["summary"]["distinct_subnets"] == 1
+    halted = rollout.record_health(
+        "app_recipes", prerelease.release_digest,
+        subscriber_subnet_ref="subnet:guest-b", outcome="healthy",
+        installation_revision=2, evidence_digest=evidence,
+        observed_at="2026-09-05T12:02:00+00:00", idempotency_key="guest-healthy",
+    )
+    assert halted["halted"] is True
+    assert halted["summary"]["failure_rate"] == 0.5
+    policy = rollout.get_policy("app_recipes")
+    assert policy is not None and policy["status"] == "halted"
+    repeated = rollout.record_health(
+        "app_recipes", prerelease.release_digest,
+        subscriber_subnet_ref="subnet:guest-b", outcome="healthy",
+        installation_revision=2, evidence_digest=evidence,
+        observed_at="2026-09-05T12:02:00Z", idempotency_key="guest-healthy",
+    )
+    assert repeated["event"] == halted["event"]
+    assert repeated["halted"] is True
+    rollout_schema = json.loads(
+        (Path(__file__).parents[1] / "src" / "adaos" / "abi" / "application.prerelease-rollout.v1.schema.json")
+        .read_text(encoding="utf-8")
+    )
+    jsonschema.Draft202012Validator(rollout_schema).validate(policy)
+    assert rollout.set_policy(
+        "app_recipes", release_digest=prerelease.release_digest,
+        publisher_ref="subnet:sn_home", percentage=100, paused=False,
+        minimum_health_subnets=2, failure_threshold=0.5,
+        expected_revision=0, idempotency_key="health-policy",
+    )["revision"] == 1
+    with pytest.raises(ApplicationRolloutError, match="explicit resume"):
+        rollout.set_policy(
+            "app_recipes", release_digest=prerelease.release_digest,
+            publisher_ref="subnet:sn_home", percentage=25, paused=False,
+            minimum_health_subnets=3, failure_threshold=0.5,
+            expected_revision=policy["revision"], idempotency_key="resume-denied",
+        )
+    resumed = rollout.set_policy(
+        "app_recipes", release_digest=prerelease.release_digest,
+        publisher_ref="subnet:sn_home", percentage=25, paused=False,
+        minimum_health_subnets=3, failure_threshold=0.5,
+        expected_revision=policy["revision"], idempotency_key="resume-explicit",
+        resume_after_halt=True,
+    )
+    assert resumed["status"] == "active"
 
 
 def test_runtime_selection_is_webspace_scoped_and_compare_and_swap(service: ApplicationService) -> None:

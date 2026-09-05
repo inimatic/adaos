@@ -218,7 +218,7 @@ Git repository as the artifact store.
   delivered private bytes can be revoked.
 - [ ] `[should]` `APP3-12` Add backup, restore, storage quota, compaction, and
   object-store-compatible diagnostics for the initial on-disk CAS.
-- [ ] `[should]` `APP3-13` Add sticky staged rollout/pause and health-based halt
+- [x] `[should]` `APP3-13` Add sticky staged rollout/pause and health-based halt
   before broad prerelease use without creating multiple visible beta lines.
 - [ ] `[could]` `APP3-14` Retain GitHub projection for explicitly public stable
   source and release notes.
@@ -231,6 +231,14 @@ Git repository as the artifact store.
 link on a clean trusted subnet, bootstraps first stable without digest change,
 then completes one public prerelease-to-stable cycle and survives Root restart
 and upload-response loss.
+
+Implementation note, 2026-09-05: `APP3-13` applies a publisher-owned,
+compare-and-swap policy to the canonical prerelease pointer. Assignment is
+deterministic per subscriber subnet, non-selected prerelease subscribers fall
+back to stable without losing their track intent, and the latest observation
+from each distinct eligible subnet drives an automatic halt. Explicit resume
+and idempotent mutation/health receipts prevent a retry from reopening a halted
+rollout. Signed cross-zone health transport remains part of `APP5-10`.
 
 ## APP4. Applications Builder Dogfood
 

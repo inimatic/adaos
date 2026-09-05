@@ -414,6 +414,24 @@ Public prerelease may exist only after the first stable release. Before that,
 and for private Applications, Trial installation requires a link/grant. The
 Catalog does not provide global prerelease search in the initial architecture.
 
+### Staged prerelease rollout
+
+Staging is a policy over the one canonical prerelease pointer, not another
+release channel. A publisher may set a percentage, pause the policy, or resume
+an automatically halted policy with an explicit compare-and-swap mutation.
+Assignment is sticky for `(application, release, subscriber subnet)` and the
+publisher subnet remains eligible while the policy is active. A prerelease
+subscriber outside the current stage resolves to stable without changing its
+persistent `prerelease` intent.
+
+Health aggregation uses the latest bounded observation from each distinct
+eligible subscriber subnet. Once the configured minimum subnet count and
+failure threshold are both reached, the policy halts and all subscribers fall
+back to stable. Resume is explicit; an old health event or mutation retry is
+idempotent and cannot silently reopen the rollout. These signals are rollout
+evidence, not a substitute for signed installation receipts or the later Root
+Guard admission boundary.
+
 ### Trusted channel metadata
 
 A valid publisher signature over package bytes is insufficient update
