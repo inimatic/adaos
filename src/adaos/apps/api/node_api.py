@@ -539,6 +539,7 @@ def _strip_summary_etag_volatiles(value: Any) -> Any:
                 "lastGoodSyncAt",
                 "lastMaterializationAt",
                 "lastPublishLatencyMs",
+                "lastSeenAgoS",
                 "maxCardBytesObserved",
             }
         }

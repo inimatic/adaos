@@ -4155,6 +4155,27 @@ def test_node_reliability_summary_thin_mode_uses_status_plane_etag(monkeypatch) 
     assert thin_metrics["last_body_bytes"] == 0
 
 
+def test_reliability_summary_etag_ignores_incident_age() -> None:
+    from adaos.apps.api.node_api import _summary_etag
+
+    first = {
+        "runtimeFault": {
+            "state": "degraded",
+            "incidentId": "incident-1",
+            "lastSeenAgoS": 0.125,
+        }
+    }
+    later = {
+        "runtimeFault": {
+            "state": "degraded",
+            "incidentId": "incident-1",
+            "lastSeenAgoS": 4.75,
+        }
+    }
+
+    assert _summary_etag(first) == _summary_etag(later)
+
+
 def test_node_reliability_summary_thin_mode_degrades_state_sync_on_yjs_thread_fault(monkeypatch) -> None:
     from adaos.apps.api import node_api
     from adaos.apps.api.node_api import require_token, router

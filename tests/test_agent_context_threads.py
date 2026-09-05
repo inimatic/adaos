@@ -10,7 +10,7 @@ def test_get_ctx_works_in_worker_thread() -> None:
     FastAPI executes sync dependencies in a worker threadpool. ContextVars do not
     propagate there by default, so get_ctx() must have a process-wide fallback.
     """
-    from adaos.services.agent_context import clear_ctx, get_ctx
+    from adaos.services.agent_context import get_ctx
     from adaos.services.testing.bootstrap import bootstrap_test_ctx
 
     tmp = Path(tempfile.mkdtemp())
@@ -25,5 +25,5 @@ def test_get_ctx_works_in_worker_thread() -> None:
             other = pool.submit(get_ctx).result(timeout=3.0)
         assert other is main_ctx
     finally:
-        clear_ctx()
+        handle.teardown()
 

@@ -23,6 +23,7 @@ if "ypy_websocket" not in sys.modules:
 
 from adaos.apps.api import node_api as node_api_module
 from adaos.apps.cli.commands import node as node_cli_module
+from adaos.services.io_web.desktop import WebDesktopInstalled, WebDesktopSnapshot
 from adaos.services.scenario import webspace_runtime as webspace_runtime_module
 
 
@@ -2587,8 +2588,8 @@ def test_node_yjs_update_desktop_endpoint_uses_granular_updates(monkeypatch) -> 
     class _DesktopService:
         async def get_snapshot_async(self, webspace_id: str | None = None):
             assert webspace_id == "desktop"
-            return node_api_module.WebDesktopSnapshot(
-                installed=node_api_module.WebDesktopInstalled(apps=["scenario:web_desktop"], widgets=["weather"]),
+            return WebDesktopSnapshot(
+                installed=WebDesktopInstalled(apps=["scenario:web_desktop"], widgets=["weather"]),
                 pinned_widgets=[{"id": "infra-status", "type": "visual.metricTile"}],
                 topbar=[{"id": "home", "label": "Home"}],
                 page_schema={"id": "desktop", "layout": {"type": "single", "areas": [{"id": "main", "role": "main"}]}, "widgets": []},

@@ -66,7 +66,7 @@ def test_windows_status_detects_disabled_stale_task(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(autostart, "_is_linux", lambda: False)
     monkeypatch.setattr(autostart, "_is_macos", lambda: False)
     monkeypatch.setattr(autostart, "_run", lambda cmd: _Proc())
-    monkeypatch.setattr(autostart, "_tcp_probe", lambda host, port, timeout=0.6: False)
+    monkeypatch.setattr(autostart, "_discover_live_control_bind", lambda host, port: None)
 
     status = autostart.status(_FakeCtx(tmp_path))
 

@@ -133,7 +133,7 @@ def _print_error(message: str) -> None:
 def _echo_utf8_json(value: object) -> None:
     """Write machine JSON independently of the Windows console code page."""
 
-    rendered = json.dumps(value, ensure_ascii=False, indent=2)
+    rendered = json.dumps(value, ensure_ascii=False)
     binary = getattr(sys.stdout, "buffer", None)
     if binary is None:
         typer.echo(rendered)

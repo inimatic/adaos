@@ -230,6 +230,10 @@ def test_api_serve_skips_runtime_import_preflight_and_sets_background_boot(monke
     def _unexpected_runtime_import_preflight(*_args, **_kwargs):
         raise AssertionError("api serve must not duplicate runtime handler imports in preflight")
 
+    monkeypatch.setenv("ADAOS_SELF_BASE_URL", "http://127.0.0.1:9999")
+    monkeypatch.setenv("ADAOS_RUNTIME_HOST", "localhost")
+    monkeypatch.setenv("ADAOS_RUNTIME_PORT", "9999")
+    monkeypatch.setenv("ADAOS_RUNTIME_LAUNCH_MODE", "stale")
     monkeypatch.delenv("ADAOS_RUNTIME_BACKGROUND_BOOT", raising=False)
     monkeypatch.setitem(sys.modules, "adaos.apps.api.server", fake_server)
     monkeypatch.setattr(api_cmd, "load_config", lambda: conf)
@@ -576,10 +580,10 @@ def test_api_serve_uses_api_launch_mode(monkeypatch):
 
 
 def test_configure_runtime_endpoint_env_uses_actual_api_bind(monkeypatch):
-    monkeypatch.delenv("ADAOS_SELF_BASE_URL", raising=False)
-    monkeypatch.delenv("ADAOS_RUNTIME_HOST", raising=False)
-    monkeypatch.delenv("ADAOS_RUNTIME_PORT", raising=False)
-    monkeypatch.delenv("ADAOS_RUNTIME_LAUNCH_MODE", raising=False)
+    monkeypatch.setenv("ADAOS_SELF_BASE_URL", "http://127.0.0.1:9999")
+    monkeypatch.setenv("ADAOS_RUNTIME_HOST", "localhost")
+    monkeypatch.setenv("ADAOS_RUNTIME_PORT", "9999")
+    monkeypatch.setenv("ADAOS_RUNTIME_LAUNCH_MODE", "stale")
 
     _configure_runtime_endpoint_env(
         advertised_base="http://127.0.0.1:8779",

@@ -687,8 +687,12 @@ def test_new_face_vision_compacts_uploads_into_modal() -> None:
     assert "step_back" in button_ids
     assert "step_forward" in button_ids
     upload_action = next(action for action in controls["actions"] if action.get("on") == "click:upload")
-    assert upload_action["type"] == "openModal"
-    assert upload_action["params"]["modalId"] == "newface_upload_modal"
+    assert upload_action["type"] == "navigate"
+    assert upload_action["params"] == {
+        "to": "new_face_vision_scenario.newface_upload_modal",
+        "surface": "modal",
+        "modalId": "newface_upload_modal",
+    }
 
     upload_widgets = application["modals"]["newface_upload_modal"]["schema"]["widgets"]
     assert [widget["type"] for widget in upload_widgets].count("input.fileUpload") == 4

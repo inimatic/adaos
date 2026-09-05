@@ -5,15 +5,15 @@ import pytest
 async def test_probe_phrase_returns_regex_hit_without_actions():
     from adaos.services.nlu.probe import probe_phrase
 
-    result = await probe_phrase("weather in Berlin", webspace_id="ws-probe", use_rasa=False, emit_trace=False)
+    result = await probe_phrase("what time is it", webspace_id="ws-probe", use_rasa=False, emit_trace=False)
 
     assert result["ok"] is True
     assert result["accepted"] is True
     assert result["via"] == "regex"
-    assert result["intent"] == "desktop.open_weather"
-    assert result["slots"] == {"city": "Berlin"}
-    assert result["entity_resolution"]["normalized_text"] == "weather in berlin"
-    assert result["intent_ranking"] == [{"name": "desktop.open_weather", "confidence": 1.0}]
+    assert result["intent"] == "voice.time.now"
+    assert result["slots"] == {}
+    assert result["entity_resolution"]["normalized_text"] == "what time is it"
+    assert result["intent_ranking"] == [{"name": "voice.time.now", "confidence": 1.0}]
     assert [stage["stage"] for stage in result["stages"]] == ["request", "named_entity", "regex"]
 
 
