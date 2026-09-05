@@ -17,6 +17,13 @@ from .distribution import (
     ApplicationDistributionService,
     DistributionOutcomeUnknown,
 )
+from .trusted_metadata import (
+    MetadataSigner,
+    TrustedMetadataAuthority,
+    TrustedMetadataClient,
+    TrustedMetadataError,
+)
+from .retention import ApplicationRetentionError, ApplicationRetentionService
 
 __all__ = [
     "ApplicationChannelConflict",
@@ -25,13 +32,19 @@ __all__ = [
     "ApplicationDistributionService",
     "ApplicationPlanConflict",
     "ApplicationRevisionConflict",
+    "ApplicationRetentionError",
+    "ApplicationRetentionService",
     "ApplicationService",
     "ApplicationServiceError",
     "ApplicationStore",
     "ApplicationStoreError",
     "DistributionOutcomeUnknown",
+    "MetadataSigner",
     "TrialAccessError",
     "TrialAccessService",
+    "TrustedMetadataAuthority",
+    "TrustedMetadataClient",
+    "TrustedMetadataError",
     "get_application_service",
     "register_application_executor",
 ]

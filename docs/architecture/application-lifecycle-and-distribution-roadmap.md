@@ -191,16 +191,16 @@ Git repository as the artifact store.
   protection.
 - [x] `[must]` `APP3-07` Require link installation before first stable and for
   private Applications; exclude prerelease from global Catalog search.
-- [ ] `[must]` `APP3-08` Implement prerelease retirement, retained tombstones,
+- [x] `[must]` `APP3-08` Implement prerelease retirement, retained tombstones,
   reference/rollback/report holds, grace periods, and fail-closed CAS GC.
-- [ ] `[must]` `APP3-09` Add signed, versioned, expiring Root/target/snapshot/
+- [x] `[must]` `APP3-09` Add signed, versioned, expiring Root/target/snapshot/
   freshness metadata or an equivalent TUF-compatible threat model; persist
   client high-water marks and reject rollback, freeze, mix-and-match, unknown
   publisher, and inconsistent-size/digest responses.
 - [x] `[must]` `APP3-10` Bind every release to immutable source/builder/build
   policy/input/package provenance and verify the attestation set before channel
   movement or install.
-- [ ] `[must]` `APP3-11` Add signed yank, release/key revocation, emergency
+- [x] `[must]` `APP3-11` Add signed yank, release/key revocation, emergency
   disable, and explicit stale-metadata behavior without claiming that already
   delivered private bytes can be revoked.
 - [ ] `[should]` `APP3-12` Add backup, restore, storage quota, compaction, and

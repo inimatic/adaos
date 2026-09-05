@@ -5,7 +5,7 @@ import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from adaos.domain.artifact_release import WorkspaceLock
 from adaos.services.artifact_pipeline.activation import WorkspaceActivationManager
@@ -134,10 +134,12 @@ class ArtifactPipelineRetentionManager:
         state_root: Path,
         workspace_root: Path,
         policy: ArtifactRetentionPolicy | None = None,
+        protected_digests_provider: Callable[[], Iterable[str]] | None = None,
     ) -> None:
         self.state_root = Path(state_root).expanduser().resolve()
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.policy = policy or ArtifactRetentionPolicy()
+        self.protected_digests_provider = protected_digests_provider
         self.package_store = ContentAddressedPackageStore(self.state_root / "packages")
         self.activation = WorkspaceActivationManager(
             workspace_root=self.workspace_root,
@@ -453,6 +455,13 @@ class ArtifactPipelineRetentionManager:
     def _plan_locked(self, *, now: float) -> dict[str, Any]:
         packages = self._package_inventory()
         protected = self._lock_digests(self.activation.load_lock())
+        if self.protected_digests_provider is not None:
+            try:
+                protected.update(str(item) for item in self.protected_digests_provider())
+            except Exception as exc:
+                raise ArtifactRetentionError(
+                    f"Application reference projection failed; CAS GC is blocked: {exc}"
+                ) from exc
         history, actions = self._history_records(now=now)
         for _path, payload in history:
             protected.update(_digests(payload))
@@ -577,10 +586,16 @@ def run_artifact_retention(
     dry_run: bool = True,
     policy: ArtifactRetentionPolicy | None = None,
 ) -> dict[str, Any]:
+    from adaos.services.applications import ApplicationRetentionService, ApplicationService, ApplicationStore
+
+    application_retention = ApplicationRetentionService(
+        ApplicationService(ApplicationStore(Path(ctx.paths.state_dir())))
+    )
     return ArtifactPipelineRetentionManager(
         state_root=Path(ctx.paths.state_dir()) / "artifact_pipeline",
         workspace_root=Path(ctx.paths.workspace_dir()),
         policy=policy,
+        protected_digests_provider=application_retention.protected_digests,
     ).run(dry_run=dry_run)
 
 

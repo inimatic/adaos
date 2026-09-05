@@ -150,6 +150,22 @@ pointer with compare-and-swap. Ordinary install/update planning enforces the
 same boundary, so a raw digest cannot bypass Trial redemption for private,
 link-only, or otherwise undiscoverable releases.
 
+Trusted Application metadata uses separate Ed25519 roles for Root trust,
+release targets, consistent snapshots, and online freshness. Clients pin the
+initial Root key, verify old-and-new Root signatures during rotation, persist
+per-role high-water versions, and reject rollback, freeze, mix-and-match,
+publisher, key, digest, and size inconsistencies. Yank, publisher-key
+revocation, and emergency disable are signed target state. Expired metadata may
+authorize continued use of an already installed runtime only; it cannot
+authorize installation or update.
+
+Application retention projects channels, installations, runtime selections,
+uncertain operations, active grants, redemptions, explicit rollback/report
+holds, and grace tombstones into the existing Artifact Pipeline GC. Protected
+release digests expand to their package and provenance closure. Historical
+release/tombstone metadata is retained without retaining unreferenced package
+bytes forever, and unreadable authoritative reference state blocks GC.
+
 ## Practice Anchors
 
 AdaOS should reuse established security models where their threat boundaries
