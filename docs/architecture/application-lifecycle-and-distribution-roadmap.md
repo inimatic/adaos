@@ -193,6 +193,11 @@ Product release reads are allowlisted: exact release/package/publisher and
 composition-lock identities remain visible, while private source, build paths,
 credentials, and free-form validation/acceptance evidence are omitted or
 reduced to digest/count summaries.
+Application mutations are bound to the local subnet. An active skill must also
+pass manifest/profile capability admission; a caller-supplied capability token
+is not authority. Development and report idempotency replay compares the full
+Application, actor/subnet, capability, revision, action, and normalized intent
+identity, including an atomic in-lock recheck for concurrent submissions.
 
 Local preparation evidence is recorded in
 [Application Preparation Evidence - 2026-09-05](application-preparation-evidence-2026-09-05.md).
@@ -262,6 +267,10 @@ publish anything except the exact current public stable source closure.
 operator command. Quota and streamed digest verification fail before CAS
 visibility; backup/restore and reviewed compaction have immutable receipts, and
 authenticated clients can request ordinary or full-integrity diagnostics.
+`APP3-06` replay returns an existing redemption receipt only after revalidating
+the stored token hash and exact recipient subnet, purpose key, zone, grant, and
+receipt identities. A known redemption ID therefore cannot bypass the
+capability link bearer or its bindings.
 
 ## APP4. Applications Builder Dogfood
 

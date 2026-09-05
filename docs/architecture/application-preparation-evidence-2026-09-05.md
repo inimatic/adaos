@@ -14,6 +14,8 @@ UI or the clean-subnet release proof in `APP6`.
   selection, deployment planning, reference accounting, snapshots, and restore;
 - public `adaos.sdk.applications` and bounded
   `adaos.sdk.builder.applications` facades;
+- local-subnet and active-skill capability admission at every public mutation,
+  with full authority/intent identity checks on idempotent replay;
 - 44 `ApplicationsPlane` contracts, including development recovery,
   Trial/prerelease/stable transitions, operations, access, and reports;
 - Root filesystem CAS, trusted metadata, provenance, retention, backup/restore,
@@ -29,6 +31,7 @@ UI or the clean-subnet release proof in `APP6`.
 | --- | --- |
 | AdaOS complete pytest suite | passed, exit code `0` |
 | Root MCP complete test group | passed, `60/60` |
+| Application and Development Report regression group | passed, `90/90` |
 | Changed Python files | `ruff check` passed |
 | Browser client Karma suite | passed, `1261/1261` |
 | Browser production build | passed, hash `cbb6c2de0c0109b9`; existing `qrcode` CommonJS warning only |
@@ -40,10 +43,11 @@ UI or the clean-subnet release proof in `APP6`.
 | Live mutation guard | create dry-run returned `would_create_application=true` and persisted no Application |
 | Live browser | `http://127.0.0.1:8100` returned `200` with the Angular application root |
 | Runtime layout | `.adaos/trials` present; Workspace Trial paths absent; component DEV runtime present |
+| Builder source recovery | full file passed; the reviewed switch also passed five consecutive retries under a simulated transient Windows lock |
 
-The local source revisions are AdaOS `141e221d3`, client `cedb9e2`, and backend
-`c3db070`. The complete AdaOS preparation series starts at `9257be465` on
-branch `rev2026`.
+The validated implementation revisions are AdaOS `39661e047`, client
+`cedb9e2`, and backend `c3db070`. The complete AdaOS preparation series starts
+at `9257be465` on branch `rev2026`.
 
 ## Open Boundary
 

@@ -1937,6 +1937,9 @@ partial outcomes visible and blocks replay after an uncertain post-Change
 failure; an immutable receipt makes completed replay idempotent. WorkspaceLock
 bytes remain unchanged until the ordinary Candidate, isolated Trial, explicit
 acceptance, and Publication workflow completes.
+Directory switches use the shared bounded filesystem retry primitive, so
+transient Windows handle contention retries only the atomic rename and never
+replays source snapshots, Change creation, or another stateful phase.
 
 - [x] `[must]` Split runtime authority in the Builder product flow: mutable DEV
   source may update only `dev/.runtime`; stable may update only primary

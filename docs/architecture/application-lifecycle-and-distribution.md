@@ -146,6 +146,10 @@ subnet, target Application, `applications.recover` capability, and the exact
 stored intent. The SDK reconstructs only a known lifecycle command from that
 intent; it never accepts a replacement callback or new filesystem/Git
 arguments. Attempts, recovery reason, result, and revision remain durable.
+An idempotent replay must also match the original Application, actor, subnet,
+capability, expected revision, action, and intent digest. Product and Builder
+SDK mutations are bound to the local subnet; calls made from an active skill
+must pass manifest/profile capability admission in addition to Root MCP policy.
 
 Trial capability links are backed by `TrialAccessGrant` records plus private
 credential and redemption records. Links are bound to the recipient subnet,
@@ -153,6 +157,9 @@ purpose-scoped key, zone, expiry, scope, and use limit. Only a token hash is
 stored; redemption is idempotent by a caller-supplied identity and consumes the
 grant atomically. A `follow_prerelease` grant resolves the channel at each new
 semantic redemption, while `exact_release` remains digest-pinned.
+Returning a stored redemption receipt still requires the exact bearer token,
+recipient subnet, recipient key, and zone; receipt lookup is never an
+authentication shortcut.
 
 Application Distribution reuses the Artifact Pipeline package CAS,
 `ReleaseRepository`, accepted Candidate records, and exact attestation-set
