@@ -255,12 +255,12 @@ def test_completed_mutation_advances_project_base_and_requires_explicit_rebase(
     )["workflow"]
     assert completed["project"]["artifact_generation"] == 1
 
-    switched = service.focus_change(
+    service.focus_change(
         "scenario",
         "recipes",
         "CH-search",
         expected_view_generation=completed["project"]["view_generation"],
-    )["workflow"]
+    )
     service.transition(
         "scenario", "recipes", "stabilize_prototype", metadata={"confirmed": True}
     )
