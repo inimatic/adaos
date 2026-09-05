@@ -140,6 +140,16 @@ stored; redemption is idempotent by a caller-supplied identity and consumes the
 grant atomically. A `follow_prerelease` grant resolves the channel at each new
 semantic redemption, while `exact_release` remains digest-pinned.
 
+Application Distribution reuses the Artifact Pipeline package CAS,
+`ReleaseRepository`, accepted Candidate records, and exact attestation-set
+admission. It journals upload, channel movement, and prerelease retirement
+before remote calls. Unknown outcomes require remote observation before a
+retry. Link-only Trial is the only first-stable bootstrap source; later stable
+promotion requires the exact current prerelease digest and clears that remote
+pointer with compare-and-swap. Ordinary install/update planning enforces the
+same boundary, so a raw digest cannot bypass Trial redemption for private,
+link-only, or otherwise undiscoverable releases.
+
 ## Practice Anchors
 
 AdaOS should reuse established security models where their threat boundaries

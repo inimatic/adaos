@@ -151,6 +151,7 @@ def plan_install(
     subnet_ref: str,
     idempotency_key: str,
     data_policy: str = "retain",
+    access_redemption_id: str | None = None,
 ) -> dict[str, Any]:
     actor, subnet, key = _mutation_identity(actor_ref, subnet_ref, idempotency_key)
     return _service().plan_operation(
@@ -162,6 +163,7 @@ def plan_install(
         subnet_ref=subnet,
         idempotency_key=key,
         data_policy=data_policy,
+        access_redemption_id=access_redemption_id,
     ).to_dict()
 
 
@@ -173,6 +175,7 @@ def plan_update(
     actor_ref: str,
     subnet_ref: str,
     idempotency_key: str,
+    access_redemption_id: str | None = None,
 ) -> dict[str, Any]:
     actor, subnet, key = _mutation_identity(actor_ref, subnet_ref, idempotency_key)
     return _service().plan_operation(
@@ -183,6 +186,7 @@ def plan_update(
         actor_ref=actor,
         subnet_ref=subnet,
         idempotency_key=key,
+        access_redemption_id=access_redemption_id,
     ).to_dict()
 
 

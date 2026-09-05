@@ -12,16 +12,24 @@ from .store import (
 )
 from .runtime import get_application_service, register_application_executor
 from .access import TrialAccessError, TrialAccessService
+from .distribution import (
+    ApplicationDistributionError,
+    ApplicationDistributionService,
+    DistributionOutcomeUnknown,
+)
 
 __all__ = [
     "ApplicationChannelConflict",
     "ApplicationExecutor",
+    "ApplicationDistributionError",
+    "ApplicationDistributionService",
     "ApplicationPlanConflict",
     "ApplicationRevisionConflict",
     "ApplicationService",
     "ApplicationServiceError",
     "ApplicationStore",
     "ApplicationStoreError",
+    "DistributionOutcomeUnknown",
     "TrialAccessError",
     "TrialAccessService",
     "get_application_service",

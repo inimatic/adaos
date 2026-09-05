@@ -7,7 +7,13 @@ import pytest
 
 from adaos.domain.application import Application, ApplicationRelease
 from adaos.domain.artifact_release import ArtifactPackageRef, ArtifactSourceRef, ProjectRelease
-from adaos.services.applications import ApplicationService, ApplicationStore, TrialAccessError, TrialAccessService
+from adaos.services.applications import (
+    ApplicationService,
+    ApplicationServiceError,
+    ApplicationStore,
+    TrialAccessError,
+    TrialAccessService,
+)
 
 
 PROVENANCE = "sha256:" + "b" * 64
@@ -185,3 +191,49 @@ def test_follow_prerelease_resolves_current_pointer_without_changing_grant(tmp_p
     )
     assert receipt["release_digest"] == release_digest
     assert issued["grant"]["release_digest"] is None
+
+
+def test_unpublished_release_install_requires_exact_redemption(tmp_path: Path) -> None:
+    service, access, release_digest = _core(tmp_path)
+    with pytest.raises(ApplicationServiceError, match="redemption"):
+        service.plan_operation(
+            "app_recipes",
+            "install",
+            actor_ref="user:guest",
+            subnet_ref="subnet:guest",
+            idempotency_key="install-without-link",
+            expected_revision=0,
+            release_digest=release_digest,
+        )
+    issued = access.issue(
+        "app_recipes",
+        publisher_ref="subnet:publisher",
+        recipient_subnet_ref="subnet:guest",
+        recipient_key_ref="subnet-key:guest-encryption-1",
+        scope="exact_release",
+        release_digest=release_digest,
+        expires_at=_expiry(),
+        allowed_zones=("zone-a",),
+        idempotency_key="install-grant",
+    )
+    receipt = access.resolve(
+        issued["link"],
+        recipient_subnet_ref="subnet:guest",
+        recipient_key_ref="subnet-key:guest-encryption-1",
+        zone="zone-a",
+        redemption_id="install-redemption",
+    )
+    operation = service.plan_operation(
+        "app_recipes",
+        "install",
+        actor_ref="user:guest",
+        subnet_ref="subnet:guest",
+        idempotency_key="install-with-link",
+        expected_revision=0,
+        release_digest=release_digest,
+        access_redemption_id=receipt["redemption_id"],
+    )
+    assert operation.plan["access"] == {
+        "mode": "trial_redemption",
+        "redemption_id": "install-redemption",
+    }

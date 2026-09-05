@@ -316,6 +316,31 @@ class ReleaseRepository:
             raise FileNotFoundError(f"channel not found: {project_id}:{channel}")
         return ChannelPointer.from_mapping(raw)
 
+    def clear_channel(
+        self,
+        project_id: str,
+        channel: str,
+        *,
+        expected_release_digest: str,
+    ) -> ChannelPointer:
+        with mutation_lock(self.mutation_lock_path(project_id)):
+            payload = self._read_channels(project_id)
+            channels = dict(payload.get("channels") or {})
+            raw = channels.get(channel)
+            if not isinstance(raw, Mapping):
+                raise ChannelConflictError(expected=expected_release_digest, observed=None)
+            pointer = ChannelPointer.from_mapping(raw)
+            if pointer.release_digest != expected_release_digest:
+                raise ChannelConflictError(
+                    expected=expected_release_digest,
+                    observed=pointer.release_digest,
+                )
+            channels.pop(channel)
+            payload["channels"] = {key: channels[key] for key in sorted(channels)}
+            payload["updated_at"] = _now_iso()
+            atomic_write_json(self.channel_path(project_id), payload)
+            return pointer
+
     def get_channel_release(self, project_id: str, channel: str = "stable") -> ReleasePlan:
         pointer = self.get_channel(project_id, channel)
         return self.get_release(project_id, pointer.release_digest)

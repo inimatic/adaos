@@ -36,6 +36,8 @@ class ArtifactRegistryClient(Protocol):
 
     def get_artifact_channel(self, **kwargs: Any) -> dict: ...
 
+    def clear_artifact_channel(self, **kwargs: Any) -> dict: ...
+
     def get_draft_source_tree(self, **kwargs: Any) -> dict: ...
 
 
@@ -205,6 +207,27 @@ class RemoteReleaseRepository:
         if not isinstance(pointer, Mapping):
             raise ValueError("artifact registry returned no channel pointer")
         return ChannelPointer.from_mapping(pointer)
+
+    def clear_channel(
+        self,
+        project_id: str,
+        channel: str,
+        *,
+        expected_release_digest: str,
+    ) -> ChannelPointer:
+        response = self.client.clear_artifact_channel(
+            project_id=project_id,
+            channel=channel,
+            expected_release_digest=expected_release_digest,
+            **self._transport(),
+        )
+        pointer = response.get("pointer")
+        if not isinstance(pointer, Mapping):
+            raise ValueError("artifact registry returned no cleared channel pointer")
+        result = ChannelPointer.from_mapping(pointer)
+        if result.release_digest != expected_release_digest:
+            raise ValueError("artifact registry cleared a different channel generation")
+        return result
 
     def tree_revision(self, source_ref: ArtifactSourceRef) -> str:
         if source_ref.forge != "adaos-root":

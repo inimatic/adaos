@@ -54,8 +54,9 @@ def test_sdk_application_mutations_forward_complete_review_context(monkeypatch) 
             "expected_revision": 3,
             "actor_ref": "skill:applications",
             "subnet_ref": "subnet:sn_home",
-            "idempotency_key": "install-4",
-            "data_policy": "retain",
+                "idempotency_key": "install-4",
+                "data_policy": "retain",
+                "access_redemption_id": None,
         },
     )
     assert stub.calls[1][0] == "apply_operation"

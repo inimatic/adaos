@@ -173,23 +173,23 @@ operations, and terminal receipts.
 **Outcome:** trusted publishers can publish one prerelease line without using a
 Git repository as the artifact store.
 
-- [ ] `[must]` `APP3-01` Add Root on-disk content-addressed archive storage and
+- [x] `[must]` `APP3-01` Add Root on-disk content-addressed archive storage and
   durable release/channel metadata behind the existing artifact store ports.
-- [ ] `[must]` `APP3-02` Stream bounded archives, verify digest before
+- [x] `[must]` `APP3-02` Stream bounded archives, verify digest before
   visibility, preserve immutable identity, and reconcile unknown upload
   outcomes without blind replay.
-- [ ] `[must]` `APP3-03` Publish a link-only Trial, or a prerelease after the
+- [x] `[must]` `APP3-03` Publish a link-only Trial, or a prerelease after the
   first stable, only from an accepted exact Trial; bind publisher signature,
   release digest, source/build refs, and acceptance evidence.
-- [ ] `[must]` `APP3-04` Bootstrap first stable from the exact accepted
+- [x] `[must]` `APP3-04` Bootstrap first stable from the exact accepted
   link-only Trial digest; promote later stable releases only from the current
   prerelease digest and never rebuild during promotion.
-- [ ] `[must]` `APP3-05` Implement `stable|prerelease` subscriptions and derive
+- [x] `[must]` `APP3-05` Implement `stable|prerelease` subscriptions and derive
   effective channel/release without mutating persistent user intent.
 - [x] `[must]` `APP3-06` Implement targeted, expiring, revocable
   `exact_release|follow_prerelease` TrialAccessGrant resolution and replay
   protection.
-- [ ] `[must]` `APP3-07` Require link installation before first stable and for
+- [x] `[must]` `APP3-07` Require link installation before first stable and for
   private Applications; exclude prerelease from global Catalog search.
 - [ ] `[must]` `APP3-08` Implement prerelease retirement, retained tombstones,
   reference/rollback/report holds, grace periods, and fail-closed CAS GC.
@@ -197,7 +197,7 @@ Git repository as the artifact store.
   freshness metadata or an equivalent TUF-compatible threat model; persist
   client high-water marks and reject rollback, freeze, mix-and-match, unknown
   publisher, and inconsistent-size/digest responses.
-- [ ] `[must]` `APP3-10` Bind every release to immutable source/builder/build
+- [x] `[must]` `APP3-10` Bind every release to immutable source/builder/build
   policy/input/package provenance and verify the attestation set before channel
   movement or install.
 - [ ] `[must]` `APP3-11` Add signed yank, release/key revocation, emergency

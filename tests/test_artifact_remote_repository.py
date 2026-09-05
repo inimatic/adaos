@@ -129,6 +129,20 @@ class _Client:
     def get_artifact_channel(self, *, project_id: str, channel: str, **kwargs: Any) -> dict:
         return {"ok": True, "pointer": self.channels[(project_id, channel)]}
 
+    def clear_artifact_channel(
+        self,
+        *,
+        project_id: str,
+        channel: str,
+        expected_release_digest: str,
+        **kwargs: Any,
+    ) -> dict:
+        pointer = self.channels[(project_id, channel)]
+        if pointer["release_digest"] != expected_release_digest:
+            raise RuntimeError("channel conflict")
+        del self.channels[(project_id, channel)]
+        return {"ok": True, "pointer": pointer}
+
     def get_draft_source_tree(
         self,
         *,
@@ -209,6 +223,9 @@ def test_remote_repository_upload_fetch_release_and_channel(tmp_path: Path) -> N
     assert remote.get_release("recipes", plan.release.release_digest) == plan
     pointer = remote.set_channel(plan, expected_release_digest=None)
     assert remote.get_channel("recipes") == pointer
+    assert remote.clear_channel(
+        "recipes", "stable", expected_release_digest=str(plan.release.release_digest)
+    ) == pointer
     assert remote.tree_revision(source) == "f" * 40
 
     binary_client = _BinaryClient()

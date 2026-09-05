@@ -337,6 +337,18 @@ class ApplicationStore:
         self.get_application(value.application_id)
         return self._save_revisioned("trial_access_grants", value.grant_id, value, expected_revision=expected_revision, loader=TrialAccessGrant.from_mapping)
 
+    def get_trial_redemption(self, redemption_id: str) -> dict[str, Any]:
+        path = self.root / "trial_access_redemptions" / f"{_key(redemption_id)}.json"
+        if not path.is_file():
+            raise FileNotFoundError(f"Trial access redemption not found: {redemption_id}")
+        payload = _read(path)
+        if (
+            payload.get("schema") != "adaos.application.trial_access_redemption.v1"
+            or payload.get("redemption_id") != redemption_id
+        ):
+            raise ApplicationStoreError("Trial access redemption path identity mismatch")
+        return payload
+
     def put_snapshot_receipt(self, snapshot_ref: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         path = self.root / "snapshots" / f"{_key(snapshot_ref)}.json"
         record = {

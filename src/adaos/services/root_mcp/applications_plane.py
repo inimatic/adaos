@@ -96,6 +96,7 @@ def contracts() -> list[RootMcpToolContract]:
                     "update_policy": {"enum": ["notify", "auto_compatible", "pinned"]},
                     "paused": {"type": "boolean"},
                     "pinned_release_digest": {"type": ["string", "null"]},
+                    "access_redemption_id": {"type": ["string", "null"]},
                 },
                 required=["application_id", "kind", "expected_revision", "idempotency_key"],
             ),
@@ -263,16 +264,18 @@ def _handle_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     }
     sdk = _sdk()
     if kind == "install":
-        operation = sdk.plan_install(
+            operation = sdk.plan_install(
             application_id,
             release_digest=str(arguments.get("release_digest") or "").strip() or None,
             data_policy=str(arguments.get("data_policy") or "retain"),
+            access_redemption_id=str(arguments.get("access_redemption_id") or "").strip() or None,
             **common,
         )
     elif kind == "update":
         operation = sdk.plan_update(
             application_id,
             release_digest=str(arguments.get("release_digest") or "").strip() or None,
+            access_redemption_id=str(arguments.get("access_redemption_id") or "").strip() or None,
             **common,
         )
     elif kind == "remove":

@@ -326,6 +326,7 @@ class ApplicationService:
         update_policy: str = "notify",
         paused: bool = False,
         pinned_release_digest: str | None = None,
+        access_redemption_id: str | None = None,
     ) -> ApplicationOperation:
         operation_kind = str(kind or "").strip().lower()
         if operation_kind not in {"install", "update", "remove", "select_track"}:
@@ -367,6 +368,33 @@ class ApplicationService:
             if not release_digest:
                 raise ApplicationServiceError("no exact release is available for operation")
             release = self.store.get_release(application_id, release_digest)
+            channels = self.store.get_channels(application_id).get("channels") or {}
+            public_release = (
+                application.visibility == "public"
+                and (
+                    channels.get("stable") == release_digest
+                    or (
+                        channels.get("stable") is not None
+                        and channels.get("prerelease") == release_digest
+                    )
+                )
+            )
+            publisher_local = subnet_ref == application.publisher_ref
+            access_receipt = None
+            if not publisher_local and not public_release:
+                if not access_redemption_id:
+                    raise ApplicationServiceError(
+                        "release installation requires a Trial access redemption"
+                    )
+                access_receipt = self.store.get_trial_redemption(access_redemption_id)
+                if (
+                    access_receipt.get("application_id") != application_id
+                    or access_receipt.get("release_digest") != release_digest
+                    or access_receipt.get("recipient_subnet_ref") != subnet_ref
+                ):
+                    raise ApplicationServiceError(
+                        "Trial access redemption does not authorize this installation"
+                    )
             components = self._release_components(release)
             conflicts = self._component_conflicts(application_id, components)
             compatibility = self._compatibility_summary(release)
@@ -407,6 +435,18 @@ class ApplicationService:
             "removal": removal,
             "data_policy": data_policy,
             "subscription_change": subscription_change,
+            "access": {
+                "mode": (
+                    "publisher_local"
+                    if publisher_local
+                    else "public_channel"
+                    if public_release
+                    else "trial_redemption"
+                ),
+                "redemption_id": access_redemption_id,
+            }
+            if operation_kind in {"install", "update"}
+            else None,
         }
         plan_digest = canonical_payload_digest(plan)
         identity = hashlib.sha256(f"{plan_digest}:{idempotency_key}".encode("utf-8")).hexdigest()[:32]

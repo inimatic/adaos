@@ -1187,6 +1187,26 @@ class RootHttpClient:
             )
         )
 
+    def clear_artifact_channel(
+        self,
+        *,
+        project_id: str,
+        channel: str,
+        expected_release_digest: str,
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+    ) -> dict:
+        return dict(
+            self._request(
+                "DELETE",
+                f"/v1/artifacts/projects/{quote(project_id, safe='')}/channels/{quote(channel, safe='')}",
+                json={"expected_release_digest": expected_release_digest},
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=120.0,
+            )
+        )
+
     def hub_core_update_report(
         self,
         *,
