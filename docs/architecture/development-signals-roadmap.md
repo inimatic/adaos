@@ -418,6 +418,16 @@ Ticket and signals, and closes only with evidence.
   current Builder Automation session into its delivery projection so the same
   candidate, lock, and decision controls are discoverable from tickets, CLI,
   and chat without reconstructing identity from mutable DEV state.
+- [ ] `[must]` `DS5-43` Make source-registry publication CI-gated. Either send
+  the exact path-scoped change through a pull request with required checks or
+  run equivalent required checks on the protected publication branch; persist
+  check-suite identity and successful conclusion before the publication
+  receipt becomes terminal. The current registry workflow listens only to
+  `pull_request`, while `adaos dev project publish` pushes `main` directly.
+- [ ] `[should]` `DS5-44` Resolve an exact stable Project Preview/Open command
+  deterministically to the primary Workspace authority. A supported stable
+  command must not fall through to the prototype LLM merely because no Context
+  Packet was supplied.
 
 Implementation note, 2026-09-03: `DS5-32` is deterministic-first. The
 `builder-qualification/language` endpoint calls the Root LLM only after the
@@ -578,14 +588,19 @@ non-Builder project completes the whole path and GitHub CI confirms downstream
 delivery.
 
 Trial Workspace update, 2026-09-05: `a3958e0ed` removes new compatibility
-overlay writes, retains old overlay evidence as non-replayable history, binds
-beta observations to the Candidate digest and isolated WorkspaceLock, and
-migrates legacy Trial roots to `.adaos/trials/<candidate-id>`. A fresh
-chat-created Project reached an accepted exact beta Preview while the primary
-stable WorkspaceLock bytes remained unchanged. `DS5-36` stays open pending the
-final stable promotion and path-scoped registry publication; `DS5-40` remains
-open because operator projection does not yet include disk use and cleanup
-state.
+overlay writes, retains old overlay evidence as non-replayable history, and
+binds beta observations to the Candidate digest and isolated WorkspaceLock.
+`64e898822` moves and reconciles 49 legacy Trial roots to
+`.adaos/trials/<candidate-id>`. Fresh chat-created Project
+`trial_workspace_lifecycle_e2e_20260905_w_5decc38e` reached accepted exact beta
+Preview while the primary stable WorkspaceLock bytes remained unchanged, then
+promoted revision `42 -> 43` with healthy reload evidence. Exact source scope
+was committed and pushed to `inimatic/adaos-registry` as
+`58c5da0cd969a11e98a3ad5181da9e197c1acacc`; the durable receipt records
+repository, branch, commit, and paths. `DS5-36` remains open only for the CI
+proof: the registry has a `pull_request`-only workflow, so direct publication
+created no run or check result. `DS5-40`, `DS5-43`, and `DS5-44` remain open for
+operator diagnostics, CI-gated terminality, and deterministic stable Preview.
 
 ## DS6. Analytics, Campaigns, And Policy Hardening
 

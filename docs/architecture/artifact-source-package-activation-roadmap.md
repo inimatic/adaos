@@ -602,7 +602,7 @@ make the non-recursive Trial layout and migration failure modes explicit.
   Workspace controls from Builder, API, CLI, and Development Ticket paths;
   preserve old receipts as read-only history and route acceptance through an
   immutable TrialActivation.
-- [ ] `[must]` `AP4-16` Prove create-from-chat -> DEV preview -> Candidate ->
+- [x] `[must]` `AP4-16` Prove create-from-chat -> DEV preview -> Candidate ->
   Trial Workspace -> accept -> stable promotion -> release publication on a
   fresh Project, including restart/reconciliation and unchanged stable-runtime
   assertions at the Trial boundary.
@@ -631,12 +631,20 @@ trial Workspaces are atomically detached into rollback history.
 
 Implementation evidence, 2026-09-05: `a3958e0ed` centralizes canonical and
 legacy Trial path resolution, creates a Workspace-compatible directory shape,
-migrates legacy roots under a digest-verified journal, routes exact Candidate
-content and skill declarations into beta Preview, makes rejection detach the
-whole Trial Workspace, and adds terminal retention. Targeted artifact,
-Builder, CLI, and Webspace regressions pass. `AP4-16` remains open until the
-accepted chat-created proof is promoted and published; `AP4-17` remains open
-because disk use and cleanup state are not yet projected to operators.
+routes exact Candidate content and skill declarations into beta Preview, makes
+rejection detach the whole Trial Workspace, and adds terminal retention.
+`64e898822` moves the canonical root to sibling `.adaos/trials`, migrates 49
+existing candidates under a digest-verified journal, reconciles activation
+bindings after restart, and leaves stable Workspace Git excludes untouched.
+Fresh chat-created Project
+`trial_workspace_lifecycle_e2e_20260905_w_5decc38e` reached exact beta Preview,
+was accepted, promoted WorkspaceLock revision `42 -> 43` with healthy reload
+evidence, and published the exact Project/Scenario scope to registry commit
+`58c5da0cd969a11e98a3ad5181da9e197c1acacc`. The stable WorkspaceLock SHA-256
+remained `4C3BB6BF89DA2124DEB313478111F537617F9D808C39F779625393DB1D5E1726`
+through the Trial boundary. Targeted artifact, Builder, CLI, and Webspace
+regressions pass. `AP4-17` remains open because disk use and cleanup state are
+not yet projected to operators.
 
 ## Milestone AP5: Freshness Gate And Stable Promotion
 

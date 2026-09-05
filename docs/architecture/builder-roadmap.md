@@ -1952,6 +1952,10 @@ acceptance, and Publication workflow completes.
   synchronous chat-driven Preview materialization. A successful command must
   exit without the `YDoc ... dropped on another thread` finalizer diagnostic,
   with a clean-shutdown regression on Windows.
+- [ ] `[should]` Add deterministic stable Preview/Open selection by exact
+  Project identity and bind it to primary Workspace authority. Do not route a
+  recognized stable-selection command into prototype generation or require an
+  LLM Context Packet merely to open an already promoted Project.
 - [ ] `[should]` Add Project/Application catalog projections with profiles,
   localized categories, free tags, deployment scopes, and an advanced raw
   component view.
@@ -1962,6 +1966,17 @@ acceptance, and Publication workflow completes.
 - [ ] `[deferred]` Complete remote multi-component Project publication,
   transactional install/remove, and shared-dependency reference accounting in
   the artifact/registry roadmaps; these do not block the local pre-Codex proof.
+
+E2E evidence, 2026-09-05: chat session `builder_session_ab398ace` created
+Project `trial_workspace_lifecycle_e2e_20260905_w_5decc38e`; its immutable
+Candidate was selected through `show trial` from sibling `.adaos/trials`,
+accepted, promoted with healthy WorkspaceLock revision 43, and published to
+registry commit `58c5da0cd969a11e98a3ad5181da9e197c1acacc`. This proves the
+artifact lineage and release boundaries. The phase `must` remains open because
+the out-of-band CLI Candidate was not merged back into one continuous Builder
+Process/Change projection. A `show stable` probe also confirmed the open
+deterministic stable-selection task: it safely stopped at Context Packet
+preflight instead of opening the promoted Project.
 
 ## Phase 13. Context-Compiled Builder Execution
 

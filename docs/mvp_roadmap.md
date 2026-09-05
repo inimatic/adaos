@@ -307,10 +307,10 @@ Checklist:
 
 - [ ] Treat `builder_skill` as the reference conversation-native skill.
 - [ ] Complete Builder apply/release/rollback evidence through Pending Actions.
-- [ ] `[must]` Split Builder DEV preview from stable Workspace activation: DEV
+- [x] `[must]` Split Builder DEV preview from stable Workspace activation: DEV
   source updates only `dev/.runtime`; stable runs only from
   `workspace/.runtime` backed by WorkspaceLock evidence.
-- [ ] `[must]` Materialize beta only as an immutable, Workspace-shaped
+- [x] `[must]` Materialize beta only as an immutable, Workspace-shaped
   `.adaos/trials/<candidate-id>` projection and route the selected Webspace
   to it without changing the stable Workspace runtime.
 - [ ] `[should]` Expose exact DEV/beta/stable provenance and legacy Trial-layout

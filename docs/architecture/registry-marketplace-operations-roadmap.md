@@ -72,7 +72,7 @@ Current MVP priority:
 
 - AdaOS already has a deterministic `registry.json` helper for a workspace in [workspace_registry.py](/d:/git/adaos/src/adaos/services/workspace_registry.py).
 - The current shape is machine-readable and normalized as:
-  - top-level `version`, `updated_at`, `skills`, `scenarios`
+  - top-level `version`, `updated_at`, `skills`, `scenarios`, `projects`
   - per-entry fields such as `kind`, `name`, `version`, `updated_at`, `path`, `manifest`, plus kind-specific metadata
 - `upsert_workspace_registry_entry(...)` already gives us the right local abstraction for create-or-update semantics.
 - Root publish flow already reuses that helper after publish-to-workspace in [service.py](/d:/git/adaos/src/adaos/services/root/service.py#L2370).
@@ -96,8 +96,8 @@ Current MVP priority:
 
 ## What Does Not Exist Yet
 
-- a published `projects` collection and canonical `adaos.project.v1`
-  normalization path
+- complete validation and consumer support for the published `projects`
+  collection and canonical `adaos.project.v1` normalization path
 - independent machine profiles, localized catalog categories, free tags, and
   deployment scopes; those concepts must not be inferred from descriptions
 - product-first Catalog entries/entry points that hide component composition
@@ -107,7 +107,8 @@ Current MVP priority:
 - Project member role/exposure/lifecycle/relations and composition-locked
   ProjectRelease projection
 - exact Project-to-Project release dependency locks
-- a Project-level publish path; current `skill push`/`scenario push` remain
+- a shared SDK/API and CI-gated delivery contract around the existing
+  `adaos dev project publish` path; current `skill push`/`scenario push` remain
   component-first compatibility paths
 - shared remote `adaos-registry` catalog semantics are still not fully
   normalized across every skill/scenario push path
@@ -564,10 +565,23 @@ Make Project publication plus `skill push` and `scenario push` update
   making Project/Application the default catalog read model
 - [ ] `[must]` test idempotent stable/beta create and update, channel isolation,
   receipt replay, moved-candidate rejection, and install-target separation
+- [ ] `[must]` make a successful required registry CI result part of the
+  terminal publication receipt. The current `ci.yml` listens only to
+  `pull_request`, but stable Project publication pushes `main` directly and can
+  currently report `source_registry_published` without any check run.
 - [ ] `[could]` allow one physical registry repository to expose stable and beta
   channels when policy permits, without changing local Trial layout or release
   identity
 - [x] deterministic local workspace registry output ordering
+
+Stable Project publication evidence, 2026-09-05: accepted Candidate
+`trial_workspace_lifecycle_e2e_20260905_w_5decc38e-0-1-1-2f6063b6594b`
+published exactly its Project manifest, Scenario directory, and `registry.json`
+to `inimatic/adaos-registry` commit
+`58c5da0cd969a11e98a3ad5181da9e197c1acacc`. Unrelated dirty Workspace paths
+were not committed. GitHub reported no run or commit status because the only
+workflow is pull-request-only; therefore publication transport is proven, but
+CI-gated terminality remains a `must`.
 
 ### Current anchors
 
