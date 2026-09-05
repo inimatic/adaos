@@ -1269,7 +1269,7 @@ not substitute for this operator path.
   UX before unattended or arbitrary-corpus ingestion.
 - [ ] `[should]` `ARF7.1-22` Add backward-compatible registry Project entries,
   machine profiles/capabilities, localized categories, free tags, and separate
-  deployment scopes; Catalog leads with Projects/Applications and keeps raw
+  deployment scopes; Catalog leads with Applications and keeps raw
   components in advanced view.
 - [ ] `[should]` `ARF7.1-23` Add portable artifact-group export/import and
   verification receipts for research Projects intended for reproduction on

@@ -818,6 +818,49 @@ qualification, replay/eval creation, richer docs/example work queues, saved
 review filters, direct artifact opening, promotion preview, and qualification
 metrics remain open.
 
+## DS10. Cross-Subnet Application Development Reports
+
+Goal: a user of an installed Application can submit a bounded report to its
+publisher and observe public resolution status without obtaining publisher
+source or channel authority.
+
+Architecture and relay sequencing are shared with
+[Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md)
+and tasks `APP5-*` in its roadmap. This phase owns conversion between accepted
+publisher intake and existing local Development Signal/Dev Ticket contracts.
+
+Exit proof: a guest report is delivered while the publisher is initially
+offline, is admitted and explicitly accepted into a publisher-local Dev Ticket,
+is linked to an exact release, and is verified or reopened by the guest after
+installation.
+
+- [ ] `[must]` `DS10-01` Add versioned local `DevelopmentReport`, publisher
+  intake, public status, release-addressing, and guest-verification refs without
+  exposing internal Dev Ticket fields.
+- [ ] `[must]` `DS10-02` Require exact Application, installed release digest,
+  reporter subnet/key, idempotency identity, and bounded evidence metadata.
+- [ ] `[must]` `DS10-03` Keep external intake in quarantine/report state until
+  publisher acceptance; only acceptance may create/link a Development Signal
+  and publisher-local Dev Ticket.
+- [ ] `[must]` `DS10-04` Preserve immutable raw, deterministic normalized, and
+  optional model-classified provenance separately; never insert raw external
+  content into privileged Builder context by default.
+- [ ] `[must]` `DS10-05` Map one report to zero or more internal tickets/tasks
+  while projecting only signed monotonic public status events.
+- [ ] `[must]` `DS10-06` Bind `addresses_report_ids` to an exact prerelease or
+  stable digest and close only after guest-side `verified`; allow
+  `still_reproduces` to reopen the public lifecycle.
+- [ ] `[should]` `DS10-07` Add publisher-side duplicate clustering,
+  accept/decline/duplicate reasons, quotas, and abuse diagnostics without
+  allowing model output to assign priority or ownership.
+- [ ] `[should]` `DS10-08` Add isolated tool-free/network-free/memory-free LLM
+  classification after deterministic admission and evaluate false positive,
+  poisoning, and evasion cases.
+- [ ] `[could]` `DS10-09` Add privacy-preserving reporter reputation and
+  publisher response-time summaries after appeal and retention policy exist.
+- [ ] `[deferred]` `DS10-10` Foreign code proposals, upstream beta variants,
+  automatic contribution merging, and multi-user publisher work queues.
+
 ## Recommended First Slice
 
 The first implementation should be narrow:
@@ -874,6 +917,9 @@ project ticket blocked by missing SDK/API capability
   conversational repair gates.
 - [Builder Roadmap](builder-roadmap.md) owns Builder readiness, repair context,
   and release evidence.
+- [Application Lifecycle and Distribution Roadmap](application-lifecycle-and-distribution-roadmap.md)
+  owns encrypted relay, publisher Application authority, release binding, and
+  cross-subnet end-to-end proof.
 - [Pending Actions](pending-actions.md) owns durable user decisions.
 - Future AdaOS Issue architecture owns accepted support/development work after
   Issue-first repair is admitted.

@@ -32,6 +32,9 @@ The roadmap has two explicit companion slices:
 - `SkillFactoryTaskPlane`
   - task-scoped MCP surface for isolated dev nodes working on one Builder
     realization task
+- `ApplicationsPlane`
+  - bounded Application Catalog, installation, subscription, Trial, release,
+    operation, and Development Report surface shared by Applications and Builder
 
 ## Phase 0. Architectural Fixation
 
@@ -433,3 +436,56 @@ isolated dev node through one lease and one allowed forge branch.
   and cleanup
 - [ ] make User Hub validation consume the result evidence rather than trusting
   dev-node test output alone
+
+## `ApplicationsPlane` Roadmap
+
+`ApplicationsPlane` is a thin MCP adapter over the typed Application SDK. It
+does not parse raw registry files, call Artifact Pipeline internals directly,
+or expose an unrestricted development shell. Canonical semantics and sequence
+are owned by
+[Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md)
+and its [roadmap](application-lifecycle-and-distribution-roadmap.md).
+
+### `Applications-0`. Architecture and capabilities
+
+- [ ] `[must]` define read, install-plan/apply, update-plan/apply,
+  remove-plan/apply, subscription, Trial-link, operation, publisher release,
+  and Development Report capability profiles
+- [ ] `[must]` bind every mutating call to actor, subnet, target Application,
+  expected revision, reviewed plan digest, idempotency key, and audit event
+- [ ] `[must]` require the typed Application SDK as the only business-logic
+  implementation behind the plane
+- [ ] `[deferred]` broad remote publisher automation and third-party
+  administrative MCP clients
+
+### `Applications-1`. Read resources
+
+- [ ] `[must]` expose bounded Application list/detail, Catalog, release,
+  installation, subscription, RuntimeSelection, operation, and public report
+  status resources
+- [ ] `[must]` preserve exact release/package/publisher refs while redacting
+  private source, credentials, internal Dev Tickets, and raw external reports
+- [ ] `[should]` add reconnect-safe operation subscription with polling fallback
+  and structured recovery state
+
+### `Applications-2`. Reviewed mutations
+
+- [ ] `[must]` expose SDK-backed plan/apply tools for install, update, remove,
+  update-track selection, and Trial-link installation
+- [ ] `[must]` expose bounded Builder tools for create, DEV preview,
+  Candidate/Trial, link-only Trial publication, prerelease publication,
+  exact-digest promotion, and stable publication without accepting arbitrary
+  filesystem or Git destinations
+- [ ] `[must]` reject stale plans, capability mismatch, raw registry mutation,
+  and direct Workspace/Trial path writes
+- [ ] `[could]` expose dry-run dependency and retention explain traces
+
+### `Applications-3`. Builder dogfood and proof
+
+- [ ] `[must]` let Builder create and revise the Applications system scenario
+  through this plane and public SDK contracts only
+- [ ] `[must]` prove one non-system Application from chat through prerelease,
+  link-only Trial install, first stable, Development Report, public prerelease,
+  next stable, update, and remove
+- [ ] `[should]` capture MCP audit, operation, release, and recovery evidence in
+  the Application end-to-end report

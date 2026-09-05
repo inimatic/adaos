@@ -5,6 +5,15 @@ operation mechanics.
 
 Last reviewed: 2026-09-05.
 
+Application product identity, full-screen Applications UX, channel semantics,
+subscriptions, publisher authority, Trial access, and Development Reports are
+owned by
+[Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md)
+and its [roadmap](application-lifecycle-and-distribution-roadmap.md). This page
+retains registry normalization, compatibility arrays, and reusable operation
+mechanics. Where older text says Project, it names the current compatibility
+record for one Application definition rather than a separate product kind.
+
 This roadmap owns those mechanics. Their position in the broader managed
 deployment and verified-capability sequence is defined by
 [Governed Evolution](governed-evolution.md) and the
@@ -13,9 +22,11 @@ activation paths are proof cases; they do not redefine registry semantics.
 
 This note fixes the target architecture for four related tracks:
 
-- registry synchronization for published Projects and component skills/scenarios
+- registry synchronization for published Applications and compatibility
+  Project/component entries
 - product-first Catalog UX with advanced component inspection
-- Project install/remove lifecycle over ProjectRelease and shared dependencies
+- Application install/remove lifecycle over ApplicationRelease/legacy
+  ProjectRelease and shared dependencies
 - reusable long-running operation projection for hub-client interaction
 
 It is intentionally evolutionary and tied to the AdaOS codebase as it exists today.
@@ -162,14 +173,15 @@ normalization.
 
 ## 1. Registry Sync
 
-`adaos-registry/registry.json` should be treated as a published catalog snapshot.
-Stable and beta publication are channel/catalog projections over the same
-ProjectRelease and package identities. A future `adaos-registry-beta`
-repository is a registry adapter for the beta channel, not a separate source of
-runtime truth. Stable catalog entries install into Workspace source/runtime;
-beta catalog entries install into isolated
-`.adaos/trials/<candidate-id>` projections with beta provenance. Neither
-catalog may capture mutable DEV source or `dev/.runtime`.
+`adaos-registry/registry.json` should be treated as a published stable Catalog
+snapshot. Stable and prerelease publication are channel projections over the
+same immutable ApplicationRelease/legacy ProjectRelease and package identities.
+Prerelease archives belong in Root content-addressed artifact storage; an
+`adaos-registry-beta` Git repository, if retained during migration, is only a
+temporary adapter and not runtime or retention authority. Stable Catalog
+entries install into Workspace source/runtime; prerelease and link-only Trial
+entries install into isolated `.adaos/trials/<candidate-id>` projections.
+Neither path may capture mutable DEV source or `dev/.runtime`.
 
 It should not become:
 
@@ -222,12 +234,13 @@ Rules:
   `scenarios` arrays while adding a `projects` collection
 - introduce shared normalization code instead of separate skill/scenario serializers
 
-### Target Project entry shape
+### Target Application entry shape
 
 ```json
 {
-  "kind": "project",
-  "id": "tlp_research_implementation",
+  "kind": "application",
+  "application_id": "app_01...",
+  "legacy_project_id": "tlp_research_implementation",
   "version": "0.1.0",
   "profiles": ["adaos.research.implementation.v1"],
   "catalog": {
@@ -245,20 +258,26 @@ Rules:
       "presentation": "scenario:research_workbench"
     }
   ],
+  "publisher": {
+    "publisher_ref": "subnet:sn_...",
+    "release_signing_key_id": "sha256:..."
+  },
   "release": {
-    "project_release_digest": "sha256:...",
+    "application_release_digest": "sha256:...",
+    "legacy_project_release_digest": "sha256:...",
     "project_definition_digest": "sha256:...",
     "composition_digest": "sha256:..."
   },
   "install": {
-    "kind": "project",
-    "id": "tlp_research_implementation"
+    "kind": "application",
+    "id": "app_01..."
   }
 }
 ```
 
-The Project manifest is authoritative. `registry.json` is a deterministic
-published projection and must not become Project runtime state. Profiles and
+The Application definition, currently stored by the Project manifest, is
+authoritative. `registry.json` is a deterministic published projection and
+must not become Application runtime state. Profiles and
 capabilities are machine contracts; catalog categories/tags are discovery
 metadata; deployment scope is placement compatibility. See
 [Project Composition, Presentation, and Development Context](project-composition-and-development-context.md).
@@ -279,25 +298,30 @@ them into `registry.json`.
 
 - extract a typed `registry catalog entry` normalizer from [workspace_registry.py](/d:/git/adaos/src/adaos/services/workspace_registry.py)
 - reuse it both for local workspace registry and remote `adaos-registry` updates
-- make Project publication, `push_skill`, and `push_scenario` call one shared
+- make Application publication, legacy Project publication, `push_skill`, and
+  `push_scenario` call one shared
   `upsert_registry_catalog_entry(kind, source_dir, target_repo)` path after
   artifact/release upload succeeds
 
-## 2. Catalog in InfrastateSkill
+## 2. Catalog in Applications
 
-The Catalog should be modeled as a thin adapter over the registry catalog, not
-as a direct UI binding to raw `registry.json`. Its default surface lists
-Projects/Applications and their entry points. Skills, scenarios, providers,
-capabilities, and dependency versions belong to an advanced Components view.
+The Catalog is a thin Core adapter over stable registry metadata, local
+ApplicationInstallation state, subscriptions, and operation projections. It is
+not a direct UI binding to raw `registry.json`. The full-screen Applications
+scenario owns the product surface. Skills, scenarios, providers, capabilities,
+and dependency versions belong to advanced Application detail or Infrastate
+diagnostics.
 
 ### Target flow
 
 1. hub loads registry catalog from `adaos-registry`
 2. adapter maps raw entries into UI-facing rows
-3. Project rows are compared with installed ProjectRelease/WorkspaceLock state
-4. `InfrastateSkill` exposes a `Catalog` action next to update operations
-5. client opens Projects/Applications by default and Components in advanced mode
-6. Project row action dispatches one Project install operation
+3. Application rows are compared with ApplicationInstallation,
+   ApplicationSubscription, ApplicationRelease, and WorkspaceLock state
+4. Applications opens Installed, Catalog, Updates/Operations, or detail views
+5. Infrastate exposes only technical component/runtime state and optional deep
+   links to Application detail
+6. an Application action dispatches one aggregate Application operation
 
 ### UI model
 
@@ -305,8 +329,8 @@ The UI-facing model should be small and explicit:
 
 ```json
 {
-  "kind": "project",
-  "id": "tlp_research_implementation",
+  "kind": "application",
+  "id": "app_01...",
   "title": "TLP Research Implementation",
   "version": "0.1.0",
   "description": "Governed implementation for bounded TLP research tasks",
@@ -314,29 +338,31 @@ The UI-facing model should be small and explicit:
   "categories": ["research", "machine-learning"],
   "tags": ["tlp", "max-plus"],
   "entrypoints": [{"id": "implementation-diagnostics", "title": "Open diagnostics"}],
-  "publisher": "owner-123",
+  "publisher_ref": "subnet:sn_...",
   "installed": false,
   "install_action": {
-    "target": "infrastate.action",
-    "id": "catalog_install",
+    "target": "applications.install.plan",
+    "id": "application_install",
     "value": {
-      "target_kind": "project",
-      "target_id": "tlp_research"
+      "application_id": "app_01..."
     }
   }
 }
 ```
 
-### Current anchors
+### Compatibility anchors
 
-- installed skills list: `_skills_items()` in [main.py](/d:/git/adaos/.adaos/workspace/skills/infrastate_skill/handlers/main.py)
-- installed scenarios list: `_scenario_items()` in [main.py](/d:/git/adaos/.adaos/workspace/skills/infrastate_skill/handlers/main.py)
+- installed skills list: `_skills_items()` in [main.py](/d:/git/adaos/.adaos/workspace/skills/infrastate_skill/handlers/main.py), to remain diagnostics-only
+- installed scenarios list: `_scenario_items()` in [main.py](/d:/git/adaos/.adaos/workspace/skills/infrastate_skill/handlers/main.py), to remain diagnostics-only
 - modal infrastructure: [page-modal.service.ts](/d:/git/adaos/src/adaos/integrations/adaos-client/src/app/runtime/page-modal.service.ts)
 
 ### Recommended implementation shape
 
-- add a small marketplace catalog service on the hub side
-- have `InfrastateSkill` consume a UI-ready marketplace snapshot instead of parsing registry payload inline
+- add one Application Core catalog/inventory service on the hub side
+- have Applications consume its UI-ready snapshot instead of parsing registry
+  payloads inline
+- remove product inventory ownership from `InfrastateSkill`; retain technical
+  component and runtime diagnostics
 - keep filtering logic as a pure function over:
   - catalog entries
   - installed ProjectRelease/WorkspaceLock identities
@@ -509,23 +535,24 @@ Define stable contracts before wiring UI and background workers.
 
 ### Deliverables
 
-- [ ] `[must]` shared catalog entry model for skill, scenario, and Project
+- [ ] `[must]` shared catalog entry model for skill, scenario, and Application
   registry sync with backward-compatible component arrays
 - [ ] `[must]` keep `kind`, profiles/capabilities, categories/tags, and
   deployment scope as separate validated fields
-- [ ] `[must]` Project entry points/presentations resolve to catalog
-  Applications without making a scenario or skill name the product identity
-- [ ] `[must]` Project member schema separates role, Catalog exposure,
+- [ ] `[must]` Application launch targets resolve presentations without making
+  a scenario, skill, or launch target a separate product identity
+- [ ] `[must]` Application member schema separates role, Catalog exposure,
   bound/shared lifecycle, and semantic relations; `project_only` is a discovery
   rule rather than a security or package-integrity shortcut
-- [ ] `[must]` ProjectRelease catalog identity includes the exact Project
-  definition/composition digest and Project dependency locks, not only the set
+- [ ] `[must]` ApplicationRelease catalog identity includes the exact
+  definition/composition digest and Application dependency locks, not only the set
   of component package digests
-- [ ] `[must]` Project, ProjectRelease, ProjectInstallation, Builder
-  DevelopmentSession, and domain aggregate ids remain distinct in APIs and
-  projections
-- [ ] `[must]` stable and beta entries reference the same immutable
-  ProjectRelease/package identity model while retaining distinct channel,
+- [ ] `[must]` Application, ApplicationRelease, ApplicationInstallation,
+  ApplicationSubscription, RuntimeSelection, Builder DevelopmentSession, and
+  domain aggregate ids remain distinct in APIs and projections; legacy
+  `Project*` records map without digest changes
+- [ ] `[must]` stable and prerelease entries reference the same immutable
+  ApplicationRelease/package identity model while retaining distinct channel,
   publication receipt, install target, and update policy
 - [x] shared operation state model
 - [x] Yjs projection schema for `runtime.operations` and `runtime.notifications`
@@ -541,37 +568,39 @@ Define stable contracts before wiring UI and background workers.
 
 ### Goal
 
-Make Project publication plus `skill push` and `scenario push` update
+Make stable Application publication plus `skill push` and `scenario push` update
 `adaos-registry/registry.json` through one normalizer.
 
 ### Deliverables
 
 - [ ] `[should]` shared upsert helper reused by Project, skill, and scenario
   entries across local and remote registry sync
-- [ ] `[must]` publish deterministic Project entries from accepted
-  ProjectRelease records without scanning live Builder sessions
-- [ ] `[should]` add one Project publication SDK/CLI path and make existing
+- [ ] `[must]` publish deterministic Application entries from accepted
+  ApplicationRelease/legacy ProjectRelease records without scanning live
+  Builder sessions
+- [ ] `[should]` add one Application publication SDK/CLI path and make existing
   component push commands backward-compatible one-component projections; do
   not add domain-specific publication CLIs
-- [ ] `[must]` publish beta only from an immutable accepted Candidate/Trial
-  source closure, persist repository/branch/commit/path/channel receipts, and
-  reject mutable DEV or unproven Trial input
-- [ ] `[must]` install/update beta into an exact
+- [ ] `[must]` publish a link-only Trial, or a prerelease after first stable,
+  only from an immutable accepted Candidate/Trial into Root artifact storage;
+  persist artifact/release/channel receipts and reject mutable DEV or unproven
+  Trial input
+- [ ] `[must]` install/update link-only Trial or prerelease into an exact
   `.adaos/trials/<candidate-id>` projection without mutating stable
   Workspace source, `workspace/.runtime`, WorkspaceLock, or subscription state
-- [ ] `[should]` support `adaos-registry-beta` through the shared normalizer and
-  channel adapter rather than a second lifecycle model
+- [ ] `[deferred]` retain `adaos-registry-beta` only as a temporary compatibility
+  adapter; do not make Git the canonical Trial/prerelease archive
 - [ ] `[should]` preserve raw component discovery for advanced tooling while
-  making Project/Application the default catalog read model
-- [ ] `[must]` test idempotent stable/beta create and update, channel isolation,
-  receipt replay, moved-candidate rejection, and install-target separation
+  making Application the default Catalog read model
+- [ ] `[must]` test idempotent link-only Trial, stable, and prerelease create
+  and update, channel isolation, receipt replay, moved-candidate rejection, and
+  install-target separation
 - [ ] `[must]` make a successful required registry CI result part of the
   terminal publication receipt. The current `ci.yml` listens only to
   `pull_request`, but stable Project publication pushes `main` directly and can
   currently report `source_registry_published` without any check run.
-- [ ] `[could]` allow one physical registry repository to expose stable and beta
-  channels when policy permits, without changing local Trial layout or release
-  identity
+- [ ] `[could]` project public stable source and release notes to Git without
+  changing Root artifact, local Trial, or release identity
 - [x] deterministic local workspace registry output ordering
 
 Stable Project publication evidence, 2026-09-05: accepted Candidate
@@ -592,16 +621,18 @@ CI-gated terminality remains a `must`.
 
 ### Goal
 
-Expose a product-first Catalog in `InfrastateSkill`.
+Expose the product-first Catalog through Application Core and the Applications
+scenario.
 
 ### Deliverables
 
-- [ ] `[deferred]` `Catalog` action next to `Update skills & scenarios`
-- [ ] `[deferred]` catalog adapter service
-- [ ] `[deferred]` default Projects/Applications view plus advanced
-  skills/scenarios/components view
-- [ ] `[deferred]` filtering against installed artifacts
-- [ ] `[deferred]` filters that use profiles for semantic selection,
+- [ ] `[must]` Application Core catalog/inventory adapter service
+- [ ] `[must]` full-screen Applications Installed, Catalog,
+  Updates/Operations, and detail views
+- [ ] `[must]` filtering against ApplicationInstallation and subscription state
+- [ ] `[must]` remove product Inventory from Infrastate and retain deep-linked
+  technical component/runtime diagnostics
+- [ ] `[should]` advanced component detail and filters that use profiles for semantic selection,
   categories/tags for discovery, and deployment scope for compatibility
 
 ## Phase 3: Async Install Operations
@@ -612,15 +643,15 @@ Convert install/update flows from blocking request/response into accepted async 
 
 ### Deliverables
 
-- [ ] `[must]` Project add/update/remove operations resolve one exact
-  ProjectRelease, acquire the ordinary Workspace writer/operation leases, and
+- [ ] `[must]` Application add/update/remove operations resolve one exact
+  ApplicationRelease, acquire the ordinary Workspace writer/operation leases, and
   use the transactional Artifact Pipeline rather than sequencing component
   install endpoints in the client
-- [ ] `[must]` durable ProjectInstallation/reference accounting preserves
+- [ ] `[must]` durable ApplicationInstallation/reference accounting preserves
   shared dependencies, removes bound members only when unreferenced, and keeps
   runtime/domain data under declared retention policy
-- [ ] `[must]` project-only members are materialized and verified as part of
-  their Project but cannot be independently added/removed from ordinary UI
+- [ ] `[must]` application-bound members are materialized and verified as part
+  of their Application but cannot be independently added/removed from ordinary UI
 - [x] `OperationManager`
 - [x] async install command handlers
 - [x] `operation_id` response contract
@@ -638,7 +669,7 @@ Make the client react to projected operations instead of waiting on request comp
 ### Deliverables
 
 - [ ] `[should]` disable install button for same target while active
-- [ ] `[should]` present one Project/Application operation with expandable
+- [ ] `[should]` present one Application operation with expandable
   component/dependency plan instead of unrelated per-skill progress rows
 - [x] show progress and current step through projected operation state
 - [x] show active operations list in infra UI
@@ -659,27 +690,35 @@ Smallest coherent change set:
 - `src/adaos/apps/api/scenarios.py`
   - current install/update endpoints return accepted operation metadata
 - `src/adaos/apps/api/node_api.py`
-  - expose marketplace snapshot and operation-aware infrastate actions
+  - retain compatibility endpoints while routing Application mutations to the
+    typed SDK and reusable operation layer
+- `src/adaos/services/applications/*`
+  - own Application Catalog/inventory normalization, release resolution, and
+    aggregate operation planning behind the public SDK
 - `src/adaos/services/operations/*`
   - new reusable operation runtime layer
 - `.adaos/workspace/skills/infrastate_skill/handlers/main.py`
-  - add product-first Catalog action/snapshot, advanced Components section, and operation projection consumption
-- `src/adaos/integrations/adaos-client/src/app/runtime/page-modal.service.ts`
-  - register marketplace modal
+  - remove product Catalog/inventory actions; retain technical Components,
+    runtime diagnostics, and generic operation projection consumption
+- managed Applications scenario source
+  - implement the full-screen Installed, Catalog, Updates/Operations, and
+    Application Detail views through Builder using Application SDK/MCP
 - `src/adaos/integrations/adaos-client/src/app/runtime/page-action.service.ts`
-  - dispatch install commands and stop assuming immediate completion
+  - dispatch typed Application actions and stop assuming immediate completion
 - `src/adaos/integrations/adaos-client/src/app/runtime/notification-log.service.ts`
   - optionally read new `runtime.notifications` projection in addition to legacy toasts
 
 ## Backward Compatibility and Migration Risks
 
 - Keep `registry.json` backward compatible by preserving `skills` and
-  `scenarios` arrays while adding Project entries additively.
-- Generate Project categories/profiles/deployment fields from canonical
-  manifests; never infer machine semantics from description text.
+  `scenarios` arrays while adding Application entries and legacy Project aliases
+  additively.
+- Generate Application categories/profiles/deployment fields from canonical
+  definitions/manifests; never infer machine semantics from description text.
 - Keep existing sync install APIs working during migration; async operation mode can be introduced behind new response fields first.
 - Keep existing `data/desktop/toasts` projection until the client fully consumes `runtime.notifications`.
-- Keep `infrastate.action` as the UX entry point if desired, but route it internally to reusable operation services instead of embedding install-specific orchestration in the skill handler.
+- Keep `infrastate.action` only as a compatibility/technical-operation path;
+  new product actions originate in Applications and route through the typed SDK.
 
 Main risk areas:
 
@@ -689,7 +728,7 @@ Main risk areas:
 - mixing machine profiles, UI categories, and deployment scope in one
   unvalidated tag list
 - letting operation status become duplicated between runtime memory and Yjs
-- making `InfrastateSkill` parse raw catalog payloads directly instead of using an adapter
+- leaving product Catalog parsing or inventory ownership in `InfrastateSkill`
 - introducing install-specific naming that prevents later reuse for node update, diagnostics, model download, or migrations
 
 ## Architectural Decision Summary
@@ -697,21 +736,22 @@ Main risk areas:
 AdaOS should evolve this area by reusing what already exists:
 
 - local deterministic registry helpers
-- hub-side `InfrastateSkill` snapshot/action composition
-- client modal and notification plumbing
+- hub-side technical `InfrastateSkill` snapshot/action composition where it
+  remains diagnostic
+- client action and notification plumbing
 - Yjs persistence and reconnect behavior
 
 But it should add two explicit layers that do not exist yet:
 
-- a Project/Application catalog adapter over backward-compatible raw component
-  entries and immutable ProjectRelease state
+- an Application Core catalog adapter over backward-compatible raw component
+  entries and immutable ApplicationRelease/ProjectRelease state
 - a reusable operation runtime model whose state is projected into Yjs for visibility, never executed through it
 
 That gives a coherent path from the current implementation to:
 
-- registry-backed Project/Application Catalog discovery with advanced
+- registry-backed Application Catalog discovery with advanced
   component inspection
-- Project-level UI-triggered install/remove flows
+- Application-level UI-triggered install/remove flows
 - non-blocking hub operations
 - reconnect-safe live progress and notifications
 

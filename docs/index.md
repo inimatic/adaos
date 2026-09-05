@@ -59,7 +59,8 @@ long-term direction must be read according to their stated maturity.
 - A **Hub** owns and coordinates a subnet.
 - A **Member** is another runtime node joined to that subnet.
 - A **Webspace** is an access and projection context inside an Assistant.
-- An **Application** is the product-facing projection of a scenario.
+- An **Application** is the installable, versioned product composition exposed
+  through one or more scenario-backed launch targets.
 - A **Skill** provides a focused executable capability.
 - A **Scenario** coordinates multi-step behavior across skills, services,
   people, and nodes.

@@ -258,6 +258,49 @@ The protocol layer must expose:
 
 These metrics are protocol metrics, not transport-only metrics.
 
+## Application Development Report Relay
+
+Cross-subnet Application feedback reuses this protocol rather than creating a
+stateless HTTP callback path. The semantic contract is defined by
+[Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
+
+Development Report payloads are end-to-end encrypted to the publisher subnet's
+purpose-scoped message-encryption key and independently signed by the sender.
+Root can read only the bounded routing header required for delivery. It stores
+ciphertext while a publisher is offline and therefore acts as a durable
+mailbox/relay, not a semantic ticket owner.
+
+Same-zone flow:
+
+```text
+guest Hub outbox -> zone Root inbox/mailbox -> publisher Hub inbox
+```
+
+Cross-zone flow:
+
+```text
+guest Hub
+  -> guest home-zone Root
+  -> publisher home-zone Root
+  -> publisher Hub
+```
+
+Each durable hop requires message and stream identity, TTL, idempotent
+acceptance, bounded retry, destination ACK, dead-letter disposition, and
+backpressure isolation. Cross-zone forwarding additionally carries signed
+directory generation, destination zone, hop limit, and previous-hop receipt.
+Root-to-Root transport is authenticated and a forwarding ACK means durable
+acceptance by the next Root, not delivery to the publisher.
+
+Public report status events use the reverse durable path and a monotonic report
+revision. After a cursor gap, the guest requests an authoritative bounded
+status snapshot instead of inferring terminal state from missing events.
+
+Same-zone durable relay is the first implementation slice. Cross-zone
+store-and-forward is required before inter-zone Application beta testing.
+Multiple independent Root relays inside one zone, automatic failover, and
+subnet home-zone migration remain deferred.
+
 ## Mapping to current code
 
 Current code already contains the transport-oriented pieces:

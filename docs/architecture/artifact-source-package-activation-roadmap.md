@@ -7,6 +7,14 @@ Last reviewed: 2026-09-05.
 
 ## Outcome
 
+Application product identity, Catalog ownership, stable/prerelease track
+semantics, publisher subnet authority, and Development Reports are sequenced by
+the
+[Application Lifecycle and Distribution Roadmap](application-lifecycle-and-distribution-roadmap.md).
+This roadmap owns the package, activation, migration, rollback, retention, and
+distributed placement mechanics used by that product track. `Project*` remains
+compatibility vocabulary until the Application schema migration is proven.
+
 AdaOS moves from path-copy publication and sparse Workspace installation to a
 traceable pipeline:
 
@@ -1048,8 +1056,10 @@ active refactoring:
 - [ ] `[deferred]` `APD-01` Multi-user WorkLog extraction and issue grouping.
 - [ ] `[deferred]` `APD-02` Trusted development groups, delegated capability
   ownership, and proposal feeds.
-- [ ] `[deferred]` `APD-03` Public beta candidate discovery and cross-user trial
-  evidence aggregation.
+- [ ] `[deferred]` `APD-03` Global prerelease search/ranking and cross-user
+  Trial evidence aggregation. Publisher prerelease selection from installed
+  Application detail is owned by the Application roadmap and is not global
+  discovery.
 - [ ] `[deferred]` `APD-04` Multiple simultaneously active versions of one skill
   id.
 - [ ] `[deferred]` `APD-05` Paid, free, organization, and personalized editions.
@@ -1062,6 +1072,13 @@ active refactoring:
   must make it configuration-only when admitted.
 - [ ] `[deferred]` `APD-10` Fully unattended stateful updates and irreversible
   migrations.
+- [ ] `[deferred]` `APD-11` General backward data transformation. The first
+  Application track uses reversible migrations or verified pre-update snapshot
+  restore.
+- [ ] `[deferred]` `APD-12` Root Guard quarantine, malware/SBOM/dependency
+  admission, isolated scanners, and signed guard receipts. Existing artifact
+  signature, digest, path, extraction, permission, and Trial checks remain
+  mandatory.
 
 ## Commit And Evidence Policy
 

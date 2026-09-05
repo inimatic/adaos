@@ -567,6 +567,41 @@ Local verification:
 - [x] profile cross-user denial tests.
 - [ ] memory cross-user denial tests.
 
+## Application Publisher and Relay Key Dependency
+
+Priority: `must` for contract planning and `should` for implementation before
+broad external prerelease use.
+
+Goal: reuse subnet identity for publisher and relay authority without reusing
+one cryptographic key across transport, release signing, and encryption.
+
+- [ ] `[must]` Define a versioned subnet key record with `key_id`, purpose,
+  algorithm, validity window, status, issuer, replacement key, and revocation
+  evidence.
+- [ ] `[must]` Bind current hub RSA/mTLS credentials only to transport auth,
+  existing artifact Ed25519 records to release signing, and a separate key to
+  Development Report encryption.
+- [ ] `[must]` Define loss, compromise, overlapping rotation, purpose-specific
+  revocation, owner-factor recovery, and offline-consumer propagation.
+- [ ] `[must]` Define a signed Root directory projection from `subnet_id` to
+  home zone and active/retiring public keys without giving Root local subnet
+  authorization authority.
+- [ ] `[should]` Implement key publication, rotation, revocation, and lookup
+  APIs plus audit and security regression tests before broad external
+  prerelease use.
+- [ ] `[should]` Retain retiring message-decryption private keys for a bounded
+  mailbox-drain window and reject new envelopes targeting revoked keys.
+- [ ] `[could]` Add hardware-backed storage for release-signing and recovery
+  keys where the host supports it.
+- [ ] `[deferred]` Application ownership transfer, publisher succession,
+  organization principals, threshold release approval, and multi-user
+  development authority.
+
+This dependency is sequenced in the
+[Application Lifecycle and Distribution Roadmap](application-lifecycle-and-distribution-roadmap.md).
+It does not turn optional global user identity into a requirement for a local
+subnet publisher.
+
 ## Phase 10 - Optional Global Identity and Root-Server Trust
 
 Priority: `could`.
@@ -673,6 +708,8 @@ These items should remain visible but should not block phases 0-11:
 - [x] Phase 7 owner/admin user management surface.
 - [ ] Phase 8 privacy-zone enforcement and user data management.
 - [ ] Phase 9 skill, tool, and SDK enforcement.
+- [ ] Subnet publisher/relay key lifecycle contracts: purpose separation,
+  rotation, revocation, recovery, and signed Root directory projection.
 
 ### Should
 
@@ -681,6 +718,8 @@ These items should remain visible but should not block phases 0-11:
 - [ ] More complete policy explanations and user-facing denial messages.
 - [ ] More complete policy simulation before committing grants.
 - [ ] Richer invite, recovery, and denial localization.
+- [ ] Implement and verify subnet publisher/relay key lifecycle before broad
+  external prerelease use.
 
 ### Could
 
@@ -699,6 +738,8 @@ These items should remain visible but should not block phases 0-11:
 - [ ] Cross-subnet federation without local owner/admin grants.
 - [ ] Quorum/hardware-backed high-security administration.
 - [ ] Custom replacement protocols for mature identity standards.
+- [ ] Application ownership transfer, publisher succession, publisher
+  organizations, threshold release approval, and multi-user development.
 
 ## Required security regression matrix
 

@@ -313,6 +313,27 @@ Checklist:
 - [x] `[must]` Materialize beta only as an immutable, Workspace-shaped
   `.adaos/trials/<candidate-id>` projection and route the selected Webspace
   to it without changing the stable Workspace runtime.
+- [ ] `[must]` Freeze the canonical Application, ApplicationRelease,
+  ApplicationInstallation, ApplicationSubscription, RuntimeSelection,
+  TrialAccessGrant, and ApplicationOperation contracts with digest-preserving
+  migration from current `Project*` records.
+- [ ] `[must]` Implement Application Core inventory and aggregate
+  install/update/remove/reference accounting before building product UI.
+- [ ] `[must]` Expose the same Application lifecycle through typed SDK and a
+  capability-scoped `ApplicationsPlane` MCP adapter with reviewed plan/apply
+  mutations.
+- [ ] `[must]` Create the full-screen Applications system scenario through
+  conversational managed Builder development, remove product Inventory from
+  Infrastate, and keep Infrastate as technical diagnostics.
+- [ ] `[must]` Prove chat-created Application -> DEV preview -> link-only Trial
+  archive/install -> exact-digest first stable -> Development Report -> public
+  prerelease repair -> exact-digest next stable -> update/remove.
+- [ ] `[should]` Add same-zone encrypted durable Development Report relay and
+  public status reconciliation; require cross-zone store-and-forward before an
+  inter-zone pilot.
+- [ ] `[deferred]` Add Root Guard quarantine/malware/SBOM admission only after
+  the core trusted-publisher Application track is proven; never disable the
+  existing artifact verification boundary meanwhile.
 - [ ] `[should]` Expose exact DEV/beta/stable provenance and legacy Trial-layout
   migration diagnostics in Builder and operator surfaces.
 - [ ] `[could]` Retain and switch among policy-bounded completed Trial

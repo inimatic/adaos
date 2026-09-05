@@ -114,6 +114,50 @@ The product UI should still distinguish:
 This lets AdaOS start with an honest owner-superuser model while preserving a
 future path toward encrypted private data and stronger separation.
 
+### Subnet service identity and purpose-scoped keys
+
+The subnet itself is also a service principal for Root authentication,
+Application publication, and encrypted cross-subnet delivery. This does not
+create a separate publisher identity. Application publication uses:
+
+```text
+publisher_ref = subnet:<subnet_id>
+```
+
+The identity is reused, but key material is purpose-scoped. The current hub
+RSA/mTLS credential remains transport authentication. Application release
+signing uses the existing detached artifact-signing key contract, and
+Development Reports use a separately registered encryption key. Root maintains
+the public binding:
+
+```yaml
+subnet_key:
+  subnet_id: sn_...
+  key_id: sha256:...
+  purpose: transport_auth | release_signing | message_encryption
+  algorithm: rsa-3072 | ed25519 | hpke-x25519
+  valid_from: ...
+  valid_to: ...
+  status: active | retiring | revoked
+```
+
+Key rotation uses an overlap window so queued encrypted messages and offline
+clients can still resolve the key named by an envelope or release. Revocation
+is purpose-specific and fail-closed. A compromised transport key does not
+silently authorize releases; a release-signing key does not become a message
+decryption key.
+
+Subnet identity lifecycle must cover key loss, compromise, rotation,
+revocation, recovery through an existing owner recovery factor, signed Root
+directory updates, and propagation to offline consumers. Recovery without an
+old key must never become an unauthenticated publisher takeover path.
+
+Application ownership transfer, publisher succession, organization publisher
+principals, threshold release approval, and multi-user development authority
+are deferred. The Application relation remains separate from its immutable ID
+so these can be added later without rewriting release identity. See
+[Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
+
 ### Optional external trust providers
 
 Root-server identity and enterprise SSO are optional trust providers. They can

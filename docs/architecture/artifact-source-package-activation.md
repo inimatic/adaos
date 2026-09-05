@@ -12,6 +12,14 @@ external backend; it is not yet broadly production accepted. Delivery maturity i
 and the exact local/stand result is recorded in
 [Artifact Pipeline Local Evidence — 2026-07-24](artifact-pipeline-local-evidence-2026-07-24.md).
 
+Canonical Application naming, Catalog ownership, stable/prerelease
+subscriptions, publisher subnet authority, remote Trial access, and external
+feedback are defined by
+[Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
+This document owns the underlying package, activation, migration, rollback,
+and retention mechanics. `Project*` names below are current compatibility
+records for the Application aggregate.
+
 ## Purpose
 
 AdaOS currently uses a shared Git workspace, sparse checkout, DEV copies, and
@@ -281,12 +289,14 @@ project:
 ```
 
 The first slice supports one `stable` channel and local candidates. `beta` is
-the target prerelease channel: it may later be represented by a channel in the
-same registry or by a separate `adaos-registry-beta` adapter, but it reuses the
-same ProjectRelease, package, source, admission, and runtime-activation
-contracts. Channel identifiers remain open strings so that integration,
-edition, and group channels can be introduced later without replacing the
-contract.
+the compatibility spelling of the single publisher-owned `prerelease` channel.
+Remote prerelease packages are immutable objects in Root content-addressed
+storage; a separate `adaos-registry-beta` repository, if retained during the
+transition, is only a metadata/source adapter. It reuses the same
+ProjectRelease, package, source, admission, and runtime-activation contracts
+and is not the channel or retention authority. Channel identifiers remain open
+strings so that integration, edition, and group channels can be introduced
+later without replacing the contract.
 
 Promotion changes a channel pointer only after source, package, validation,
 and release records are durable. It never rebuilds the already accepted
@@ -711,8 +721,8 @@ migration:
   backward_readable: false
   trial_data_mode: snapshot
   rollback:
-    supported: true
-    procedure_ref: migration/3-to-2
+    mode: reversible | snapshot_restore | irreversible
+    procedure_ref: migration/3-to-2 | restore/pre-update-snapshot
 ```
 
 Trial data modes are explicit in both TrialEvidence and its WorkspaceLock slot:
@@ -732,6 +742,15 @@ The first slice permits real-data trial only when policy proves one of:
 
 Irreversible migrations cannot use automatic trial or unattended stable
 activation.
+
+General backward transformation is not required for the first Application
+release track. `snapshot_restore` is admissible when activation can establish a
+consistent write boundary, create and verify an immutable pre-update snapshot,
+retain it for the declared rollback horizon, and restore the complete prior
+runtime/data state. Because restore may discard writes accepted after cutover,
+unattended policy must either prevent such writes until acceptance or reject
+snapshot-only rollback. Exact-digest prerelease-to-stable promotion does not
+rerun migration when local data/runtime state is already on that release.
 
 Trial completion records start/end time, computed duration, health and reload
 receipts, observations, and rollback disposition. Rejection atomically detaches
@@ -836,24 +855,56 @@ multi-version resolution is deferred, but conflict detection is mandatory.
 For the MVP, `empty`, `mock`, and proven `read_only` modes are admitted by
 default. `real` writes require an explicit approval plus a tested reversible
 effect/rollback contract; unknown or irreversible effects are blocked. Full
-data-space isolation, simultaneous shared-skill versions, public beta channels,
-and audience rollout policy remain deferred extension seams.
+data-space isolation, simultaneous shared-skill versions, multiple prerelease
+lines, and advanced audience rollout policy remain deferred extension seams.
+The baseline public prerelease subscription described below is not deferred.
 
-### Beta Subscription And Update
+### Prerelease Subscription And Update
 
-Beta installation follows the same package-backed route as stable installation,
-but targets an isolated `.adaos/trials/<candidate-id>` projection with beta
+Prerelease installation follows the same package-backed route as stable
+installation, but targets an isolated `.adaos/trials/<candidate-id>` projection with prerelease
 provenance. It does not write Workspace stable source, replace
 `workspace/.runtime`, move the stable channel, or close user feedback as
-verified. A separate `adaos-registry-beta` repository, if used, is a registry
-adapter for the beta channel rather than a new lifecycle authority.
+verified. Remote prerelease archives are stored by Root as immutable
+content-addressed artifacts. A separate `adaos-registry-beta` repository, if
+temporarily used, is a compatibility metadata/source adapter rather than
+artifact, channel, or retention authority.
 
-When a beta channel moves, AdaOS may update the local Trial source and
+When a prerelease channel moves, AdaOS may update the local Trial source and
 Trial Workspace according to the user's update policy. The update must create
 or atomically replace an exact candidate-scoped Trial root; it cannot mutate the
 stable Workspace in place.
-Promotion from beta to stable is always an explicit governed operation that
-rechecks freshness, admission, activation health, and rollback evidence.
+Promotion from prerelease to stable is always an explicit governed operation
+that rechecks freshness, admission, activation health, and rollback evidence.
+It moves stable metadata to the exact prerelease digest and never rebuilds the
+accepted artifact.
+
+The first stable release is the bootstrap exception to the channel precondition,
+not to artifact identity: it moves stable metadata to the exact accepted
+link-only Trial digest because no public prerelease channel may exist yet. All
+later stable promotions require the current prerelease digest.
+
+The subscription stores `update_track=stable|prerelease`, while effective
+channel and release are derived. A prerelease subscriber observes stable after
+promotion of that exact digest but remains opted in for the publisher's next
+prerelease. There is one current prerelease pointer per Application; retained
+historical releases do not become multiple visible beta lines.
+
+Public prerelease is available only after a first stable release and is selected
+from installed Application detail rather than global Catalog search. Private
+Applications and pre-stable Trials require an expiring, revocable capability
+link scoped to an exact release or to following the publisher prerelease.
+
+Prerelease lifecycle is explicit:
+
+```text
+published -> active -> promoted | superseded | rejected | expired
+          -> retired -> archived -> purged
+```
+
+Root retains metadata/tombstones and package archives while an installation,
+rollback hold, Development Report, uncertain operation, or offline-client grace
+period references them. Removing Git paths is not physical artifact GC.
 
 ## Stable Subscription And Update
 
@@ -861,8 +912,8 @@ Installation creates a minimal stable subscription record:
 
 ```yaml
 subscription:
-  project_id: recipes
-  channel: stable
+  application_id: app_01...
+  update_track: stable
   policy: notify
   installed_release: recipes@2.4.1
   installed_digest: sha256:...
@@ -1037,7 +1088,7 @@ The architecture reserves, but does not implement:
 
 - multiple active versions through context-aware dependency bindings;
 - full Trial data sandboxing and per-Webspace state isolation;
-- public beta candidate channels and audience rollout policy;
+- multiple prerelease lines and advanced audience rollout policy;
 - feature and edition variants through additional channel and release metadata;
 - multi-user extraction from WorkLog into ChangeSets;
 - trusted development groups and zone-specific approvals;

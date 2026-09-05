@@ -1,17 +1,19 @@
 # AdaOS Project Composition, Presentation, and Development Context
 
-Status: target architecture. The local contracts required by the first
-Research Workbench pre-Codex milestone are specified here; a published Project
-catalog and transactional multi-component install/remove flow are follow-on
-work.
+Status: target architecture with legacy `Project*` compatibility vocabulary.
+The local contracts required by the first Research Workbench pre-Codex
+milestone are specified here. Canonical product/distribution naming, channels,
+Applications UI, publisher identity, and external feedback are governed by
+[Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
 
 Last reviewed: 2026-09-05.
 
-This page defines the boundary between distributable AdaOS Projects,
-user-facing Applications, skill/scenario components, Builder development
-sessions, presentation hosts, and model-facing artifact context. It is the
-general architecture extracted from the Research Fabric TLP case; research is
-the first consumer, not a special implementation path in AdaOS core.
+This page defines composition, Builder development sessions, presentation
+hosts, and model-facing artifact context. Existing code and persisted records
+call the distributable definition a Project. The target public model calls the
+same distribution aggregate an Application and treats its entry points as
+launch targets, not separate Application identities. Research is the first
+consumer, not a special implementation path in AdaOS core.
 
 The package, release, activation, and rollback mechanics remain owned by
 [Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md).
@@ -20,17 +22,19 @@ The research-domain workflow remains owned by
 
 ## Decision Summary
 
-1. A **Project** is a versioned declarative distribution definition. It names
-   an arbitrary non-empty set of owned skill/scenario components, external
-   dependencies, entry points, catalog metadata, and lifecycle policy.
-2. A Project is not a chat session, editor tab, Codex prompt, mutable checkout,
-   or runtime state store. Those concerns belong to a **Builder Development
-   Session**.
-3. A **ProjectRelease** is the immutable, dependency-locked release of one
-   Project. A one-skill Project is valid; a Project need not contain a scenario.
-4. An **Application** is a user-facing launchable projection. In the simple
-   case it is backed by one scenario; in the general case a Project entry point
-   binds a scenario presentation to one or more skills.
+1. An **Application** is a versioned declarative distribution and user-facing
+   product identity. It names an arbitrary non-empty set of owned
+   skill/scenario components, external dependencies, launch targets, catalog
+   metadata, and lifecycle policy. `Project` is its current compatibility name.
+2. An Application is not a chat session, editor tab, Codex prompt, mutable
+   checkout, or runtime state store. Those concerns belong to a **Builder
+   Development Session**.
+3. An **ApplicationRelease** is the immutable, dependency-locked release of one
+   Application. `ProjectRelease` is its current compatibility record. A
+   one-skill Application is valid; an Application need not contain a scenario.
+4. A launch target binds a scenario presentation to one or more skills. An
+   Application may have multiple launch targets without creating multiple
+   product or installation identities.
 5. A skill may declare explicit `presentations`. The system resolves an
    explicit Project launch target first, then a skill's default presentation,
    then the generic system skill-preview host. It never reuses an unrelated
@@ -40,7 +44,7 @@ The research-domain workflow remains owned by
    separate verification evidence.
 7. Registry `kind`, machine-readable profiles/capabilities, user-facing
    categories, free-form tags, and deployment scope are separate axes. The
-   main Catalog should lead with Projects/Applications; raw skills and
+   main Catalog should lead with Applications; raw skills and
    scenarios remain available in an advanced component view.
 8. Model-facing source artifacts use a local-first contract. A Project-owned
    target skill may carry `artifacts/<group>/manifest.yaml` and ordinary files.
@@ -269,12 +273,15 @@ therefore exposes the complete gated Project lifecycle:
   copying the accepted Trial source into Workspace source, moving the stable
   ProjectRelease pointer, and materializing the exact package lock in the
   Workspace runtime as stable;
-- `publish --confirm` for stable first rebuilds every owned Workspace
+- `publish --confirm` for stable first verifies every owned Workspace
   component against its accepted package digest, verifies development tests and
   `project.yaml` against the retained Candidate snapshot, then makes one
-  path-scoped Git commit and push to `adaos-registry`. A policy-authorized beta
-  publication uses the Trial source/runtime evidence and targets a beta channel
-  or `adaos-registry-beta` adapter instead. The promotion journal receives an
+  path-scoped Git commit and push to `adaos-registry` when public source policy
+  requires it. A policy-authorized prerelease publication uses the Trial
+  source/runtime evidence and publishes immutable archives plus channel
+  metadata to Root artifact storage. An `adaos-registry-beta` Git path, if
+  temporarily retained, is not artifact or retention authority. The promotion
+  journal receives an
   idempotent source-registry receipt with repository, branch, commit, and
   published paths;
 - the source revision is derived from the canonical Project definition and the
@@ -790,7 +797,7 @@ or public registry descriptions for the word "research". A local direction is
 not added to the public registry merely because its implementation was
 published.
 
-The normal Catalog leads with Projects/Applications. An advanced Components
+The normal Catalog leads with Applications. An advanced Components
 view may expose raw skills, scenarios, providers, capabilities, versions, and
 dependency diagnostics.
 

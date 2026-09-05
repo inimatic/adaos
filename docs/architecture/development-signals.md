@@ -861,6 +861,60 @@ High-risk choices require explicit approval according to policy:
 - broad receiver or data-route expansion;
 - public promotion of private feedback or NLU examples.
 
+## Cross-Subnet Application Development Reports
+
+The local Dev Ticket model is not exposed as a remote write API. A user in a
+guest subnet owns a local `DevelopmentReport` associated with one installed
+Application and exact release. It is delivered to the publisher through the
+Application relay defined by
+[Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
+
+```text
+guest DevelopmentReport
+  -> signed encrypted envelope
+  -> Root durable relay
+  -> publisher report inbox
+  -> deterministic admission and publisher acceptance
+  -> publisher-local Development Signal/Dev Ticket
+```
+
+Only the publisher may accept the report into its local development backlog.
+Relay delivery, model classification, duplicate detection, or a guest-supplied
+priority does not create a Dev Ticket and cannot authorize Builder work.
+
+The guest sees a bounded public lifecycle rather than publisher-internal ticket
+state:
+
+```text
+draft -> queued -> delivered -> received -> triaged
+  -> accepted | declined | duplicate
+  -> planned -> prerelease_available -> released
+  -> awaiting_local_verification -> verified | still_reproduces
+```
+
+The publisher may link one accepted report to several internal Dev Tickets or
+Builder tasks. Those internal refs, comments, priorities, private evidence,
+and work estimates remain local. Public status events are signed, monotonic,
+idempotent, and resynchronizable after an offline interval.
+
+An ApplicationRelease may declare `addresses_report_ids`. This means the
+publisher believes the exact release addresses those reports; it does not
+close them. The guest verifies after installing that digest and may emit
+`verified` or `still_reproduces`.
+
+External report content, attachments, logs, links, and model-generated
+summaries remain untrusted. Deterministic admission enforces schema, byte and
+archive limits, MIME policy, replay identity, installed-release proof, quotas,
+Unicode/URL handling, and secret redaction. Raw content does not enter
+privileged Builder/Codex context by default. Optional LLM preprocessing is a
+tool-free, network-free, memory-free classifier whose output cannot set release
+authority, create a Dev Ticket, or bypass publisher acceptance.
+
+The initial model deliberately excludes code contribution. A guest who wants
+to develop independently creates a new Application with a different identity
+and its own subnet publisher. Upstream beta variants, automatic proposal
+merging, and multi-user publisher development remain deferred.
+
 ## External Issue Trackers
 
 AdaOS should support GitHub Issues and similar systems as optional external
@@ -986,6 +1040,7 @@ runtime contracts, and user education.
 | SDK Understanding Signals and agent-facing SDK/API product UX | SDK/API owners plus Builder Roadmap |
 | Core Dev Tickets, core impact taxonomy, and capability-release events | Core maintainers plus Development Signals Roadmap |
 | Optional GitHub or external issue projection | Development Signals Roadmap plus plugin/integration owner |
+| Cross-subnet Application Development Report, publisher intake, and public status projection | Application Lifecycle architecture/roadmap plus this document for local Signal/Dev Ticket conversion |
 | Durable accepted work and support lifecycle | Future AdaOS Issue architecture |
 | Runtime guard, incident, and operational evidence | Runtime Guarding, Incident Registry, Operational Event Model |
 | Artifact versions, release lineage, and activation | Artifact/source/activation architecture |

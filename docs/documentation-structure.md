@@ -54,6 +54,7 @@ than preserved as a parallel authority.
 | IO, skill, and endpoint routing | [Routing](architecture/routing.md), [Endpoint Infrastructure](architecture/endpoint-infrastructure.md), and transport ownership documents |
 | Managed service skills | [Service Skills](architecture/service-skills.md) |
 | Personalization, identity, and access | [Personalization, Identity, and Access](architecture/personalization-identity-access.md) and its roadmap |
+| Application lifecycle, Catalog, publication, installation, subscriptions, and external feedback | [Application Lifecycle, Distribution, and Feedback](architecture/application-lifecycle-and-distribution.md) and its roadmap |
 | Web client, UI-as-data, and browser connection drafts | [Web UI Architecture](architecture/web-ui-architecture.md), [UI Addressing](architecture/ui-addressing.md), and browser/hub lifecycle architecture |
 | Skill/scenario development stages and code-flow drafts | [Builder](architecture/builder.md), [Skill Factory](architecture/skill-factory.md), [Governed Evolution](architecture/governed-evolution.md), and task-oriented guides |
 | Procedural scenario and first-launch drafts | [Governed Data-Driven Workflow Model](architecture/governed-workflow-runtime.md), [Skill Activation and Scenario Binding](architecture/skill-activation-and-scenario-binding.md), and [Scenarios](scenarios.md) |

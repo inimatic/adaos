@@ -10,9 +10,10 @@ portfolio-level distinction between platform, deployment profile, solution
 pack, solution agent, endpoint, and channel is governed by the
 [AdaOS Product Model](../product/index.md).
 
-The technical boundary between distributable Projects, Applications,
-presentations, and mutable Builder sessions is governed by
-[Project Composition, Presentation, and Development Context](project-composition-and-development-context.md).
+The canonical product and distribution boundary is governed by
+[Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
+[Project Composition, Presentation, and Development Context](project-composition-and-development-context.md)
+retains the current `Project*` implementation vocabulary during migration.
 
 ## Primary Model
 
@@ -42,10 +43,10 @@ Assistant
   -> Catalog
 ```
 
-The Catalog is product-first. It normally presents installable Projects and
-their Application entry points. Skills and scenarios are component-level
-entities available in an advanced/developer view rather than peers that every
-user must understand.
+The Catalog is product-first. It presents installable Applications. Skills,
+scenarios, workflows, providers, and launch targets are component-level
+entities available in an advanced/developer view rather than peer products
+that every user must understand.
 
 A managed deployment may contain one or more Assistant environments. The
 simplest current product shape is one Assistant backed by one subnet. Campus
@@ -85,18 +86,20 @@ Do not introduce separate role names such as `LLM programmer` for this
 capability creation path. If an implementation detail needs to mention LLM
 assistance, describe it as a Builder mode.
 
-Builder opens a distributable Project through a mutable **Development
-Session**. The session records current targets, read-only context, model-facing
-artifacts, and run/checkpoint state; it is not itself installed or published.
-The word Project must not be used for an arbitrary chat tab or Codex process.
+Builder opens an Application through a mutable **Development Session**. The
+session records current targets, read-only context, model-facing artifacts, and
+run/checkpoint state; it is not itself installed or published. Existing
+`Project` commands and records are compatibility implementations of this
+Application-scoped flow. Neither Application nor Project names an arbitrary
+chat tab or Codex process.
 
 ## Domain Workspaces
 
-Domain objects are not automatically Projects or Applications. For Research
+Domain objects are not automatically Applications. For Research
 Fabric, a **Research direction** is a live body of scientific work, a
 **Research task** is one bounded scientific question inside it, and an
 **Implementation track** is one engineering line that realizes a task. A
-portable Project supplies versioned software for one or more tracks; it does
+portable Application supplies versioned software for one or more tracks; it does
 not own the live direction merely because Workbench created both during the
 same user action.
 
@@ -111,20 +114,20 @@ future workbenches whose domain instances outnumber useful launchable apps.
 | --- | --- | --- |
 | `subnet`, `subnet_id` | Assistant, Assistant ID | Show the display name by default. Keep IDs for diagnostics. |
 | `webspace`, `default`, `main` | Webspace, Main | Webspace is an access/projection context, not a folder. |
-| `scenario` | Application host | Scenario remains the implementation/authoring term; a Project entry point may bind one host to different skills, so the mapping is not always one-to-one. |
+| `scenario` | Application host | Scenario remains the implementation/authoring term; an Application launch target may bind one host to different skills, so the mapping is not always one-to-one. |
 | `web_desktop` | Capabilities | Default overview application. Keep `web_desktop` as the stable ID. |
 | `skill` | Skill | Executable capability used by applications and agents. |
-| `project` | Project, package, or application bundle according to UI context | Versioned distributable composition of skills/scenarios, entry points, and lifecycle policy. It is not a Builder session. |
-| `project_release` | Release | Immutable dependency-locked Project version; keep the technical term in diagnostics. |
+| `project` | Application definition (compatibility) | Current internal versioned composition of skills/scenarios, launch targets, and lifecycle policy. New product UI says Application; keep Project only in compatibility diagnostics and APIs. |
+| `project_release` | Application release | Current immutable dependency-locked release record. New public contracts use `ApplicationRelease` while preserving legacy digest identity. |
 | `builder development session` | Development session | Mutable Builder overlay with explicit targets and read-only context. Never shown as an installed application. |
 | `presentation` | Application view or launch target | Explicit scenario host/binding for a skill or Project entry point. |
 | `research direction` | Research direction | Live scientific aggregate presented by Research Workbench; not a Project, skill, or scenario identity. |
 | `research task` | Research task | Bounded scientific question with formulation, protocol, evaluation, and lineage. |
-| `implementation track` | Implementation track | Engineering path and Project/Development Session lineage for one task; do not label its skills as separate research directions. |
+| `implementation track` | Implementation track | Engineering path and Application/Development Session lineage for one task; do not label its skills as separate research directions. |
 | `widget` | Widget, later Panel | Current UI may keep Widget while the broader product model reserves Panel. |
 | `browser`, `member`, `hub`, `subnet endpoint` | Agent | Software participant of the assistant subnet. |
 | `device` | Device | Physical or virtual host. One device may host multiple agents. |
-| `marketplace` | Catalog | Place to add Projects/Applications by default, with skills, scenarios, widgets/panels, interfaces, agents, and integrations available in advanced views. |
+| `marketplace` | Catalog | Place to add Applications, with skills, scenarios, widgets/panels, interfaces, agents, and integrations available in advanced views. Prerelease is selected from Application detail, not global search. |
 | `install` | Add to assistant | Use install/deploy wording only in advanced or developer UI. |
 
 ## UI Rules
@@ -159,8 +162,8 @@ Do not break the current API or Yjs schema while migrating terminology. Add publ
 - `application_id` may alias `scenario_id`.
 - `pinned_panels` may alias `pinned_widgets` if and when Panel becomes the visible term.
 - New product kinds such as Assistant, Application, Agent, and Panel can exist next to older internal/debug kinds.
-- Project/Application catalog entries may be added alongside the existing
-  skill/scenario registry arrays; component APIs remain compatible during the
-  migration.
+- Application catalog entries may be added alongside the existing `projects`,
+  skill, and scenario registry arrays; legacy Project/component APIs remain
+  compatible during the migration.
 
 Device/Agent migration should happen through projections and catalog views before changing connectivity or pairing data structures.
