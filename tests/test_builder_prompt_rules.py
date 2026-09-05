@@ -29,7 +29,7 @@ def test_prompt_rule_registry_is_versioned_and_selects_by_facets() -> None:
         {key: value for key, value in registry.items() if key != "digest"}
     )
     assert registry["schema"] == "adaos.builder.prompt_rule_registry.v1"
-    assert registry["version"] == "0.4.0"
+    assert registry["version"] == "0.4.2"
     assert registry["digest"].startswith("sha256:")
     assert len({item["id"] for item in registry["items"]}) == len(registry["items"])
     assert [
@@ -81,6 +81,7 @@ def test_scenario_always_gets_composition_boundary() -> None:
 
     assert ids == [
         "adaos.builder.execution_boundary.v1",
+        "adaos.skill.sdk_boundary.v1",
         "adaos.scenario.composition_boundary.v1",
     ]
 

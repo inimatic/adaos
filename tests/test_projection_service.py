@@ -181,6 +181,8 @@ async def _allow_primary_doc_write(*_args, **_kwargs) -> bool:
 def _fake_run_detached_with_update_callback(
     state: dict[str, _FakeMap],
     calls: list[dict[str, object]] | None = None,
+    *,
+    update_bytes: int = 96 * 1024,
 ):
     async def _run(_ws: str, mutator, **kwargs):
         if calls is not None:
@@ -191,7 +193,7 @@ def _fake_run_detached_with_update_callback(
             callback(
                 {
                     "webspace_id": "desktop",
-                    "update_bytes": 96 * 1024,
+                    "update_bytes": update_bytes,
                     "source": kwargs.get("write_source") or "projection_service",
                     "owner": kwargs.get("write_owner") or "skill:mediaserver",
                     "channel": kwargs.get("write_channel") or "projection.yjs.detached_worker",
@@ -735,7 +737,7 @@ def test_projection_service_persists_changed_detached_fallback(monkeypatch) -> N
     monkeypatch.setattr(
         projection_service_module,
         "run_detached_ydoc_mutation",
-        _fake_run_detached_with_update_callback(fake_state),
+        _fake_run_detached_with_update_callback(fake_state, update_bytes=128),
     )
     monkeypatch.setattr(projection_service_module, "_persist_detached_projection_store", _persist)
 

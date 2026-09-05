@@ -72,6 +72,8 @@ def test_project_aggregate_is_schema_valid_and_reference_oriented(service: Build
         "stable_id": "recipes",
         "kind": "scenario",
         "project_ref": "scenario:recipes",
+        "title": "recipes",
+        "description": None,
     }
     assert project["focus_by_context"]["default"] == "CH-favorites"
     assert project["changes"][0]["workflow_instance_ref"] == workflow["governed"]["instance_id"]
