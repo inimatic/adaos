@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/application.development-report-appeal.v1.schema.json",
+  "title": "DevelopmentReportAppeal v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "appeal_id", "report_id", "application_id", "publisher_ref", "reporter_subnet_ref", "idempotency_key", "statement", "status", "resolution", "rationale", "revision", "created_at", "updated_at"],
+  "properties": {
+    "schema": {"const": "adaos.application.development_report_appeal.v1"},
+    "appeal_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"},
+    "report_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"},
+    "application_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"},
+    "publisher_ref": {"type": "string", "pattern": "^subnet:[a-z0-9][a-z0-9_.-]{0,127}$"},
+    "reporter_subnet_ref": {"type": "string", "pattern": "^subnet:[a-z0-9][a-z0-9_.-]{0,127}$"},
+    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+    "statement": {"type": "string", "minLength": 1, "maxLength": 4000},
+    "status": {"enum": ["submitted", "received", "resolved"]},
+    "resolution": {"type": ["string", "null"], "enum": ["reopened", "corrected", "upheld", null]},
+    "rationale": {"type": ["string", "null"], "minLength": 1, "maxLength": 4000},
+    "revision": {"type": "integer", "minimum": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "resolved"}}},
+      "then": {"properties": {"resolution": {"type": "string"}, "rationale": {"type": "string"}}},
+      "else": {"properties": {"resolution": {"type": "null"}, "rationale": {"type": "null"}}}
+    }
+  ]
+}

@@ -22,6 +22,33 @@ def contracts() -> list[RootMcpToolContract]:
         "expected_revision": {"type": "integer", "minimum": 0},
         "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 240},
     }
+    evidence_item = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "kind": {"type": "string", "maxLength": 80},
+            "mime_type": {"type": "string", "maxLength": 120},
+            "size_bytes": {"type": "integer", "minimum": 0, "maximum": 10_000_000},
+            "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "artifact_ref": {"type": "string", "minLength": 1, "maxLength": 300},
+            "url": {"type": "string", "maxLength": 2000},
+            "archive": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "expanded_size_bytes": {
+                        "type": "integer", "minimum": 0, "maximum": 50_000_000,
+                    },
+                    "entries": {
+                        "type": "array", "items": {"type": "string", "maxLength": 500},
+                        "maxItems": 1000,
+                    },
+                },
+                "required": ["expanded_size_bytes", "entries"],
+            },
+        },
+        "required": ["mime_type", "size_bytes", "digest", "artifact_ref"],
+    }
     return [
         RootMcpToolContract(
             id="applications.list",
@@ -118,7 +145,7 @@ def contracts() -> list[RootMcpToolContract]:
             summary="List bounded local Development Reports and their public state.",
             input_schema=schema_object(),
             output_schema=response(),
-            required_capability="applications.read",
+            required_capability="applications.report",
             metadata={**published, "handler": "applications_list_development_reports"},
         ),
         RootMcpToolContract(
@@ -130,7 +157,7 @@ def contracts() -> list[RootMcpToolContract]:
                 properties={"report_id": {"type": "string"}}, required=["report_id"]
             ),
             output_schema=response(),
-            required_capability="applications.read",
+            required_capability="applications.report",
             metadata={**published, "handler": "applications_get_development_report_status"},
         ),
         RootMcpToolContract(
@@ -142,6 +169,213 @@ def contracts() -> list[RootMcpToolContract]:
             output_schema=response(),
             required_capability="applications.publisher.read",
             metadata={**published, "handler": "applications_list_development_report_intakes"},
+        ),
+        RootMcpToolContract(
+            id="applications.list_development_report_appeals",
+            title="List Development Report appeals",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="List appeal state for reports created by the local subnet.",
+            input_schema=schema_object(properties={"report_id": {"type": ["string", "null"]}}),
+            output_schema=response(),
+            required_capability="applications.report",
+            metadata={**published, "handler": "applications_list_development_report_appeals"},
+        ),
+        RootMcpToolContract(
+            id="applications.list_publisher_development_report_appeals",
+            title="List publisher Development Report appeals",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="List encrypted appeals received for publisher-local report intakes.",
+            input_schema=schema_object(properties={"report_id": {"type": ["string", "null"]}}),
+            output_schema=response(),
+            required_capability="applications.publisher.read",
+            metadata={**published, "handler": "applications_list_publisher_development_report_appeals"},
+        ),
+        RootMcpToolContract(
+            id="applications.get_development_report_triage",
+            title="Explain Development Report triage",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Return publisher-local duplicate evidence, factual reporter history, and privacy policy.",
+            input_schema=schema_object(
+                properties={
+                    "report_id": {"type": "string"},
+                    "threshold": {"type": "number", "minimum": 0.5, "maximum": 1.0},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 25},
+                },
+                required=["report_id"],
+            ),
+            output_schema=response(),
+            required_capability="applications.publisher.read",
+            metadata={**published, "handler": "applications_get_development_report_triage"},
+        ),
+        RootMcpToolContract(
+            id="applications.submit_development_report",
+            title="Submit Development Report",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Validate, encrypt, and durably queue a report for the Application publisher.",
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "summary": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "details": {"type": "string", "minLength": 1, "maxLength": 16000},
+                    "evidence": {"type": "array", "items": evidence_item, "maxItems": 20},
+                    "installed_release_digest": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+                },
+                required=["application_id", "summary", "details", "idempotency_key"],
+            ),
+            output_schema=response(),
+            required_capability="applications.report",
+            side_effects="write",
+            metadata={**published, "handler": "applications_submit_development_report"},
+        ),
+        RootMcpToolContract(
+            id="applications.sync_development_reports",
+            title="Synchronize Development Reports",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Consume bounded encrypted inbox work and retry the durable report outbox.",
+            input_schema=schema_object(
+                properties={
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+                },
+                required=["idempotency_key"],
+            ),
+            output_schema=response(),
+            required_capability="applications.report",
+            side_effects="write",
+            metadata={**published, "handler": "applications_sync_development_reports"},
+        ),
+        RootMcpToolContract(
+            id="applications.triage_development_report",
+            title="Triage Development Report",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Record an explicit publisher decision without automatically creating a Dev Ticket.",
+            input_schema=schema_object(
+                properties={
+                    "report_id": {"type": "string"},
+                    "outcome": {"enum": ["triaged", "declined", "duplicate"]},
+                    "reason_code": {"type": ["string", "null"]},
+                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+                },
+                required=["report_id", "outcome", "idempotency_key"],
+            ),
+            output_schema=response(),
+            required_capability="applications.publisher.triage",
+            side_effects="write",
+            metadata={**published, "handler": "applications_triage_development_report"},
+        ),
+        RootMcpToolContract(
+            id="applications.accept_development_report",
+            title="Accept Development Report",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Accept a quarantined report and create its publisher-local Dev Ticket exactly once.",
+            input_schema=schema_object(
+                properties={
+                    "report_id": {"type": "string"},
+                    "policy_ref": {"type": ["string", "null"]},
+                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+                },
+                required=["report_id", "idempotency_key"],
+            ),
+            output_schema=response(),
+            required_capability="applications.publisher.triage",
+            side_effects="write",
+            metadata={**published, "handler": "applications_accept_development_report"},
+        ),
+        RootMcpToolContract(
+            id="applications.set_development_report_status",
+            title="Set Development Report work status",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Publish a validated work or exact addressed-release status to the reporter.",
+            input_schema=schema_object(
+                properties={
+                    "report_id": {"type": "string"},
+                    "status": {"enum": ["planned", "prerelease_available", "released"]},
+                    "reason_code": {"type": ["string", "null"]},
+                    "release_digest": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+                },
+                required=["report_id", "status", "idempotency_key"],
+            ),
+            output_schema=response(),
+            required_capability="applications.publisher.triage",
+            side_effects="write",
+            metadata={**published, "handler": "applications_set_development_report_status"},
+        ),
+        RootMcpToolContract(
+            id="applications.submit_development_report_appeal",
+            title="Appeal Development Report decision",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Redact, encrypt, and submit an appeal of a declined or duplicate report.",
+            input_schema=schema_object(
+                properties={
+                    "report_id": {"type": "string"},
+                    "statement": {"type": "string", "minLength": 1, "maxLength": 4000},
+                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+                },
+                required=["report_id", "statement", "idempotency_key"],
+            ),
+            output_schema=response(),
+            required_capability="applications.report",
+            side_effects="write",
+            metadata={**published, "handler": "applications_submit_development_report_appeal"},
+        ),
+        RootMcpToolContract(
+            id="applications.resolve_development_report_appeal",
+            title="Resolve Development Report appeal",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Return a visible encrypted resolution and optionally reopen publisher triage.",
+            input_schema=schema_object(
+                properties={
+                    "appeal_id": {"type": "string"},
+                    "resolution": {"enum": ["reopened", "corrected", "upheld"]},
+                    "rationale": {"type": "string", "minLength": 1, "maxLength": 4000},
+                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+                },
+                required=["appeal_id", "resolution", "rationale", "idempotency_key"],
+            ),
+            output_schema=response(),
+            required_capability="applications.publisher.triage",
+            side_effects="write",
+            metadata={**published, "handler": "applications_resolve_development_report_appeal"},
+        ),
+        RootMcpToolContract(
+            id="applications.verify_development_report_release",
+            title="Verify Development Report release",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Verify whether the exact installed addressed release resolves the report.",
+            input_schema=schema_object(
+                properties={
+                    "report_id": {"type": "string"},
+                    "outcome": {"enum": ["verified", "still_reproduces"]},
+                    "release_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+                },
+                required=["report_id", "outcome", "release_digest", "idempotency_key"],
+            ),
+            output_schema=response(),
+            required_capability="applications.report",
+            side_effects="write",
+            metadata={**published, "handler": "applications_verify_development_report_release"},
+        ),
+        RootMcpToolContract(
+            id="applications.request_development_report_resync",
+            title="Request Development Report resync",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Request a bounded replay of signed report status events after a local cursor.",
+            input_schema=schema_object(
+                properties={
+                    "report_id": {"type": "string"},
+                    "after_revision": {"type": "integer", "minimum": 0},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+                },
+                required=["report_id", "after_revision", "idempotency_key"],
+            ),
+            output_schema=response(),
+            required_capability="applications.report",
+            side_effects="write",
+            metadata={**published, "handler": "applications_request_development_report_resync"},
         ),
         RootMcpToolContract(
             id="applications.plan",
@@ -364,6 +598,21 @@ def _application_id(arguments: Mapping[str, Any]) -> str:
     return value
 
 
+def _report_mutation_context(
+    arguments: Mapping[str, Any], capability: str
+) -> dict[str, str]:
+    actor_ref, subnet_ref = _context(arguments)
+    idempotency_key = str(arguments.get("idempotency_key") or "").strip()
+    if not idempotency_key:
+        raise ValueError("idempotency_key is required")
+    return {
+        "actor_ref": actor_ref,
+        "subnet_ref": subnet_ref,
+        "capability": capability,
+        "idempotency_key": idempotency_key,
+    }
+
+
 def _handle_list(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     return {"applications": _sdk().list_applications(installed_only=bool(arguments.get("installed_only", False)))}
 
@@ -421,6 +670,159 @@ def _handle_development_report_status(arguments: dict[str, Any], *, dry_run: boo
 
 def _handle_development_report_intakes(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     return {"intakes": _sdk().list_development_report_intakes()}
+
+
+def _handle_development_report_appeals(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    report_id = str(arguments.get("report_id") or "").strip() or None
+    return {"appeals": _sdk().list_development_report_appeals(report_id)}
+
+
+def _handle_publisher_development_report_appeals(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    report_id = str(arguments.get("report_id") or "").strip() or None
+    return {"appeals": _sdk().list_publisher_development_report_appeals(report_id)}
+
+
+def _handle_development_report_triage(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    report_id = str(arguments.get("report_id") or "").strip()
+    if not report_id:
+        raise ValueError("report_id is required")
+    return _sdk().get_development_report_triage(
+        report_id,
+        threshold=float(arguments.get("threshold", 0.65)),
+        limit=int(arguments.get("limit", 10)),
+    )
+
+
+def _handle_submit_development_report(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_submit_report": True, "request": request}
+    return _sdk().submit_development_report(
+        _application_id(arguments),
+        summary=str(arguments.get("summary") or ""),
+        details=str(arguments.get("details") or ""),
+        evidence=tuple(arguments.get("evidence") or ()),
+        installed_release_digest=(
+            str(arguments.get("installed_release_digest") or "").strip() or None
+        ),
+        **_report_mutation_context(arguments, "applications.report"),
+    )
+
+
+def _handle_sync_development_reports(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {"would_sync_reports": True, "limit": int(arguments.get("limit", 20))}
+    return _sdk().sync_development_reports(
+        limit=int(arguments.get("limit", 20)),
+        **_report_mutation_context(arguments, "applications.report"),
+    )
+
+
+def _handle_triage_development_report(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_triage_report": True, "request": request}
+    return _sdk().triage_development_report(
+        str(arguments.get("report_id") or ""),
+        outcome=str(arguments.get("outcome") or ""),
+        reason_code=str(arguments.get("reason_code") or "").strip() or None,
+        **_report_mutation_context(arguments, "applications.publisher.triage"),
+    )
+
+
+def _handle_accept_development_report(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_accept_report": True, "request": request}
+    return _sdk().accept_development_report(
+        str(arguments.get("report_id") or ""),
+        policy_ref=str(arguments.get("policy_ref") or "").strip() or None,
+        **_report_mutation_context(arguments, "applications.publisher.triage"),
+    )
+
+
+def _handle_set_development_report_status(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_set_report_status": True, "request": request}
+    return _sdk().set_development_report_status(
+        str(arguments.get("report_id") or ""),
+        status=str(arguments.get("status") or ""),
+        reason_code=str(arguments.get("reason_code") or "").strip() or None,
+        release_digest=str(arguments.get("release_digest") or "").strip() or None,
+        **_report_mutation_context(arguments, "applications.publisher.triage"),
+    )
+
+
+def _handle_submit_development_report_appeal(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_submit_appeal": True, "request": request}
+    return _sdk().submit_development_report_appeal(
+        str(arguments.get("report_id") or ""),
+        statement=str(arguments.get("statement") or ""),
+        **_report_mutation_context(arguments, "applications.report"),
+    )
+
+
+def _handle_resolve_development_report_appeal(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_resolve_appeal": True, "request": request}
+    return _sdk().resolve_development_report_appeal(
+        str(arguments.get("appeal_id") or ""),
+        resolution=str(arguments.get("resolution") or ""),
+        rationale=str(arguments.get("rationale") or ""),
+        **_report_mutation_context(arguments, "applications.publisher.triage"),
+    )
+
+
+def _handle_verify_development_report_release(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_verify_report_release": True, "request": request}
+    return _sdk().verify_development_report_release(
+        str(arguments.get("report_id") or ""),
+        outcome=str(arguments.get("outcome") or ""),
+        release_digest=str(arguments.get("release_digest") or ""),
+        **_report_mutation_context(arguments, "applications.report"),
+    )
+
+
+def _handle_request_development_report_resync(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_request_report_resync": True, "request": request}
+    return _sdk().request_development_report_resync(
+        str(arguments.get("report_id") or ""),
+        after_revision=int(arguments.get("after_revision", 0)),
+        limit=int(arguments.get("limit", 100)),
+        **_report_mutation_context(arguments, "applications.report"),
+    )
 
 
 def _handle_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -644,6 +1046,18 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "applications.list_development_reports": _handle_list_development_reports,
         "applications.get_development_report_status": _handle_development_report_status,
         "applications.list_development_report_intakes": _handle_development_report_intakes,
+        "applications.list_development_report_appeals": _handle_development_report_appeals,
+        "applications.list_publisher_development_report_appeals": _handle_publisher_development_report_appeals,
+        "applications.get_development_report_triage": _handle_development_report_triage,
+        "applications.submit_development_report": _handle_submit_development_report,
+        "applications.sync_development_reports": _handle_sync_development_reports,
+        "applications.triage_development_report": _handle_triage_development_report,
+        "applications.accept_development_report": _handle_accept_development_report,
+        "applications.set_development_report_status": _handle_set_development_report_status,
+        "applications.submit_development_report_appeal": _handle_submit_development_report_appeal,
+        "applications.resolve_development_report_appeal": _handle_resolve_development_report_appeal,
+        "applications.verify_development_report_release": _handle_verify_development_report_release,
+        "applications.request_development_report_resync": _handle_request_development_report_resync,
         "applications.plan": _handle_plan,
         "applications.apply": _handle_apply,
         "applications.explain_plan": _handle_explain,

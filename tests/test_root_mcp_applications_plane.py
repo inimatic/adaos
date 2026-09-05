@@ -29,6 +29,10 @@ class _StubSdk:
         self.calls.append(("resolve_trial_link", args, kwargs))
         return {"application_id": "app_recipes", "release_digest": "sha256:" + "c" * 64}
 
+    def submit_development_report(self, *args, **kwargs):
+        self.calls.append(("submit_development_report", args, kwargs))
+        return {"report": {"report_id": "report.1"}, "duplicate": False}
+
 
 def _context() -> dict:
     return {
@@ -55,6 +59,18 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
         "applications.list_development_reports",
         "applications.get_development_report_status",
         "applications.list_development_report_intakes",
+        "applications.list_development_report_appeals",
+        "applications.list_publisher_development_report_appeals",
+        "applications.get_development_report_triage",
+        "applications.submit_development_report",
+        "applications.sync_development_reports",
+        "applications.triage_development_report",
+        "applications.accept_development_report",
+        "applications.set_development_report_status",
+        "applications.submit_development_report_appeal",
+        "applications.resolve_development_report_appeal",
+        "applications.verify_development_report_release",
+        "applications.request_development_report_resync",
         "applications.plan",
         "applications.apply",
         "applications.explain_plan",
@@ -139,6 +155,27 @@ def test_trial_link_redemption_uses_authenticated_subnet_and_zone(monkeypatch) -
     assert stub.calls[0][2]["zone"] == "local-dev"
 
 
+def test_development_report_submission_uses_bounded_authenticated_context(monkeypatch) -> None:
+    stub = _StubSdk()
+    monkeypatch.setattr(applications_plane, "_sdk", lambda: stub)
+
+    result = applications_plane.handlers()["applications.submit_development_report"](
+        {
+            "application_id": "app_recipes",
+            "summary": "Import fails",
+            "details": "Expected import to complete.",
+            "idempotency_key": "report-1",
+            "_mcp_context": _context(),
+        },
+        dry_run=False,
+    )
+
+    assert result["report"]["report_id"] == "report.1"
+    assert stub.calls[0][2]["actor_ref"] == "user:owner"
+    assert stub.calls[0][2]["subnet_ref"] == "subnet:sn_home"
+    assert stub.calls[0][2]["capability"] == "applications.report"
+
+
 def test_applications_contract_descriptor_and_capability_profile_are_published() -> None:
     descriptor = get_descriptor_set("application_contracts")
     schemas = descriptor["payload"]["schemas"]
@@ -149,11 +186,13 @@ def test_applications_contract_descriptor_and_capability_profile_are_published()
     assert {
         "applications.read", "applications.plan", "applications.apply",
         "applications.trial.install", "applications.publisher.read",
+        "applications.report", "applications.publisher.triage",
         "applications.develop", "applications.publish",
     } <= capabilities
     assert {
         "applications.read", "applications.plan", "applications.apply",
         "applications.trial.install", "applications.publisher.read",
+        "applications.report", "applications.publisher.triage",
     } <= set(
         DEFAULT_CAPABILITY_PROFILES["ApplicationsOperator"]
     )

@@ -125,6 +125,12 @@ def _normalize_and_redact(value: str) -> tuple[str, set[str]]:
     return text, findings
 
 
+def normalize_report_text(value: str) -> tuple[str, tuple[str, ...]]:
+    """Return the same bounded, secret-redacted text used by report admission."""
+    text, findings = _normalize_and_redact(value)
+    return text, tuple(sorted(findings))
+
+
 def _archive_path(value: str) -> str:
     path = str(value or "").replace("\\", "/").strip()
     if not path or path.startswith("/") or re.match(r"^[A-Za-z]:", path) or any(part in {"", ".", ".."} for part in path.split("/")):

@@ -134,6 +134,20 @@ def list_capability_classes() -> list[dict[str, Any]]:
             default_grants=["owner_token"],
         ),
         _capability_entry(
+            "applications.report",
+            surface="operations",
+            risk="medium",
+            summary="Submit, synchronize, appeal, and verify local Application Development Reports.",
+            default_grants=["owner_token"],
+        ),
+        _capability_entry(
+            "applications.publisher.triage",
+            surface="operations",
+            risk="high",
+            summary="Triage or accept publisher-local reports and resolve their appeals.",
+            default_grants=["owner_token"],
+        ),
+        _capability_entry(
             "applications.develop",
             surface="development",
             risk="high",

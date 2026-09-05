@@ -12,6 +12,7 @@ from adaos.services.applications.development_reports import DevelopmentReportSer
 from adaos.services.applications.report_directory import SubnetKeyDirectoryAuthority, SubnetKeyDirectoryClient
 from adaos.services.applications.report_keys import SubnetPurposeKeyStore
 from adaos.services.applications.report_relay import DurableDevelopmentReportRelay
+from adaos.services.applications.report_triage import DevelopmentReportTriageService
 from adaos.services.applications.store import ApplicationStore
 
 
@@ -136,3 +137,108 @@ def test_offline_report_accept_release_verify_round_trip(tmp_path: Path) -> None
     publisher.receive()
     guest.receive()
     assert guest.public_status(report_id)["status"] == "verified"
+
+
+def test_publisher_triage_is_explainable_and_appeal_reopens_without_auto_accept(
+    tmp_path: Path,
+) -> None:
+    clock = [datetime(2026, 9, 5, 12, tzinfo=timezone.utc)]
+    release = _release("1.0.0", DIGEST_A)
+    guest_store = ApplicationStore(tmp_path / "guest")
+    publisher_store = ApplicationStore(tmp_path / "publisher")
+    _prepare_application(guest_store, release, install=True)
+    _prepare_application(publisher_store, release, install=False)
+    guest_keys = SubnetPurposeKeyStore(tmp_path / "guest", now=lambda: clock[0])
+    publisher_keys = SubnetPurposeKeyStore(tmp_path / "publisher", now=lambda: clock[0])
+    for key_store, subnet in (
+        (guest_keys, "subnet:guest"),
+        (publisher_keys, "subnet:publisher"),
+    ):
+        key_store.ensure_key(subnet, "message_signing")
+        key_store.ensure_key(subnet, "message_encryption")
+    authority = SubnetKeyDirectoryAuthority(
+        tmp_path / "directory", zone_id="zone_a", now=lambda: clock[0]
+    )
+    authority.publish_subnet(
+        "subnet:guest", home_zone="zone_a", keys=guest_keys.list_public("subnet:guest")
+    )
+    projection = authority.publish_subnet(
+        "subnet:publisher",
+        home_zone="zone_a",
+        keys=publisher_keys.list_public("subnet:publisher"),
+    )
+    guest_directory = SubnetKeyDirectoryClient()
+    publisher_directory = SubnetKeyDirectoryClient()
+    relay_directory = SubnetKeyDirectoryClient()
+    for client in (guest_directory, publisher_directory, relay_directory):
+        client.update(projection)
+    relay = DurableDevelopmentReportRelay(
+        tmp_path / "root", zone_id="zone_a", directory=relay_directory,
+        now=lambda: clock[0],
+    )
+    guest = DevelopmentReportService(
+        tmp_path / "guest", subnet_ref="subnet:guest", application_store=guest_store,
+        key_store=guest_keys, directory=guest_directory, relay=relay, now=lambda: clock[0],
+    )
+    publisher = DevelopmentReportService(
+        tmp_path / "publisher", subnet_ref="subnet:publisher",
+        application_store=publisher_store, key_store=publisher_keys,
+        directory=publisher_directory, relay=relay, now=lambda: clock[0],
+    )
+
+    first = guest.create_report(
+        application_id="app_recipes", summary="CSV import fails",
+        details="Importing a UTF-8 CSV file fails after selecting the recipe list.",
+        idempotency_key="csv-import-1",
+    )["report"]
+    second = guest.create_report(
+        application_id="app_recipes", summary="CSV import failure",
+        details="Selecting the recipe list and importing a UTF-8 CSV file fails.",
+        idempotency_key="csv-import-2",
+    )["report"]
+    publisher.receive(limit=10)
+    guest.receive(limit=10)
+
+    triage = DevelopmentReportTriageService(publisher, now=lambda: clock[0])
+    policy = triage.privacy_policy()
+    assert policy["scope"] == "publisher_local_same_application"
+    assert policy["automatic_actions"] == []
+    before = publisher._publisher_records(first["report_id"])[1]
+    candidates = triage.duplicate_candidates(first["report_id"], threshold=0.5)
+    assert candidates["authority"] == "advisory_only"
+    assert candidates["candidates"][0]["report_id"] == second["report_id"]
+    assert candidates["candidates"][0]["shared_terms"]
+    assert publisher._publisher_records(first["report_id"])[1] == before
+    history = triage.reporter_history(first["report_id"])
+    assert history["report_count"] == 2
+    assert history["score"] is None and history["rank"] is None
+
+    publisher.triage(first["report_id"], outcome="declined", reason_code="not_reproduced")
+    guest.receive()
+    submitted = guest.submit_appeal(
+        first["report_id"],
+        statement="Bearer abcdefghijklmnopqrstuvwxyz was unrelated; new reproduction attached.",
+        idempotency_key="appeal-csv-1",
+    )
+    assert "abcdefghijklmnopqrstuvwxyz" not in submitted["appeal"]["statement"]
+    assert guest.submit_appeal(
+        first["report_id"], statement=submitted["appeal"]["statement"],
+        idempotency_key="appeal-csv-1",
+    )["duplicate"] is True
+    publisher.receive()
+    publisher_appeal = publisher.list_appeals(first["report_id"])[0]
+    assert publisher_appeal["status"] == "received"
+
+    resolved = publisher.resolve_appeal(
+        publisher_appeal["appeal_id"], resolution="corrected",
+        rationale="The added reproduction corrects the earlier assessment.",
+    )
+    assert resolved["appeal"]["resolution"] == "corrected"
+    assert publisher._publisher_records(first["report_id"])[1].status == "triaged"
+    assert publisher.ticket_service.list_tickets() == []
+    guest.receive(limit=10)
+    assert guest.public_status(first["report_id"])["status"] == "triaged"
+    assert guest.list_appeals(first["report_id"])[0]["status"] == "resolved"
+    assert guest.list_appeals(first["report_id"])[0]["rationale"] == (
+        "The added reproduction corrects the earlier assessment."
+    )

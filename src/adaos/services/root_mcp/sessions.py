@@ -24,6 +24,8 @@ DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
         "applications.apply",
         "applications.trial.install",
         "applications.publisher.read",
+        "applications.report",
+        "applications.publisher.triage",
     ],
     "ContextAgent": [
         *DEFAULT_BEARER_CAPABILITIES,

@@ -12,6 +12,7 @@ DEVELOPMENT_REPORT_INTAKE_SCHEMA = "adaos.application.development_report_intake.
 DEVELOPMENT_REPORT_STATUS_EVENT_SCHEMA = "adaos.application.development_report_status_event.v1"
 DEVELOPMENT_REPORT_ACK_SCHEMA = "adaos.application.development_report_ack.v1"
 DEVELOPMENT_REPORT_RESYNC_SCHEMA = "adaos.application.development_report_resync.v1"
+DEVELOPMENT_REPORT_APPEAL_SCHEMA = "adaos.application.development_report_appeal.v1"
 
 ReportStatus = Literal[
     "draft", "queued", "delivered", "received", "triaged", "accepted",
@@ -295,7 +296,10 @@ class DevelopmentReportEnvelope:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "message_id", _id(self.message_id, "message_id"))
-        if self.message_kind not in {"report", "status", "verification", "resync", "resync_snapshot"}:
+        if self.message_kind not in {
+            "report", "status", "verification", "resync", "resync_snapshot",
+            "appeal", "appeal_response",
+        }:
             raise DevelopmentReportContractError("message_kind is invalid")
         object.__setattr__(self, "sender_subnet_ref", _subnet(self.sender_subnet_ref, "sender_subnet_ref"))
         object.__setattr__(self, "sender_key_id", _key_id(self.sender_key_id, "sender_key_id"))
@@ -452,5 +456,91 @@ class DevelopmentReportResync:
     def from_mapping(cls, value: Mapping[str, Any]) -> "DevelopmentReportResync":
         required = {"schema", "request_id", "report_id", "requester_subnet_ref", "after_revision", "limit", "created_at"}
         payload = _strict(value, schema=DEVELOPMENT_REPORT_RESYNC_SCHEMA, allowed=required, required=required, name="DevelopmentReportResync")
+        payload.pop("schema")
+        return cls(**payload)
+
+
+@dataclass(frozen=True, slots=True)
+class DevelopmentReportAppeal:
+    appeal_id: str
+    report_id: str
+    application_id: str
+    publisher_ref: str
+    reporter_subnet_ref: str
+    idempotency_key: str
+    statement: str
+    status: str = "submitted"
+    resolution: str | None = None
+    rationale: str | None = None
+    revision: int = 1
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "appeal_id", _id(self.appeal_id, "appeal_id"))
+        object.__setattr__(self, "report_id", _id(self.report_id, "report_id"))
+        object.__setattr__(self, "application_id", _id(self.application_id, "application_id"))
+        object.__setattr__(self, "publisher_ref", _subnet(self.publisher_ref, "publisher_ref"))
+        object.__setattr__(
+            self, "reporter_subnet_ref",
+            _subnet(self.reporter_subnet_ref, "reporter_subnet_ref"),
+        )
+        object.__setattr__(
+            self, "idempotency_key", _text(self.idempotency_key, "idempotency_key", 180),
+        )
+        object.__setattr__(self, "statement", _text(self.statement, "statement", 4000))
+        if self.status not in {"submitted", "received", "resolved"}:
+            raise DevelopmentReportContractError("appeal status is invalid")
+        if self.resolution is not None and self.resolution not in {
+            "reopened", "corrected", "upheld",
+        }:
+            raise DevelopmentReportContractError("appeal resolution is invalid")
+        if self.rationale is not None:
+            object.__setattr__(self, "rationale", _text(self.rationale, "rationale", 4000))
+        if self.status == "resolved":
+            if self.resolution is None or self.rationale is None:
+                raise DevelopmentReportContractError(
+                    "resolved appeal requires resolution and rationale"
+                )
+        elif self.resolution is not None or self.rationale is not None:
+            raise DevelopmentReportContractError(
+                "unresolved appeal cannot include resolution or rationale"
+            )
+        object.__setattr__(self, "revision", _revision(self.revision))
+        object.__setattr__(self, "created_at", _timestamp(self.created_at, "created_at"))
+        object.__setattr__(self, "updated_at", _timestamp(self.updated_at, "updated_at"))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema": DEVELOPMENT_REPORT_APPEAL_SCHEMA,
+            "appeal_id": self.appeal_id,
+            "report_id": self.report_id,
+            "application_id": self.application_id,
+            "publisher_ref": self.publisher_ref,
+            "reporter_subnet_ref": self.reporter_subnet_ref,
+            "idempotency_key": self.idempotency_key,
+            "statement": self.statement,
+            "status": self.status,
+            "resolution": self.resolution,
+            "rationale": self.rationale,
+            "revision": self.revision,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "DevelopmentReportAppeal":
+        required = {
+            "schema", "appeal_id", "report_id", "application_id", "publisher_ref",
+            "reporter_subnet_ref", "idempotency_key", "statement", "status",
+            "resolution", "rationale", "revision", "created_at", "updated_at",
+        }
+        payload = _strict(
+            value,
+            schema=DEVELOPMENT_REPORT_APPEAL_SCHEMA,
+            allowed=required,
+            required=required,
+            name="DevelopmentReportAppeal",
+        )
         payload.pop("schema")
         return cls(**payload)

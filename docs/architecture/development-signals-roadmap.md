@@ -850,16 +850,19 @@ installation.
 - [x] `[must]` `DS10-06` Bind `addresses_report_ids` to an exact prerelease or
   stable digest and close only after guest-side `verified`; allow
   `still_reproduces` to reopen the public lifecycle.
-- [ ] `[should]` `DS10-07` Add publisher-side duplicate clustering,
+- [x] `[should]` `DS10-07` Add publisher-side duplicate clustering,
   accept/decline/duplicate reasons, quotas, and abuse diagnostics without
   allowing model output to assign priority or ownership.
-- [ ] `[should]` `DS10-08` Add isolated tool-free/network-free/memory-free LLM
+- [x] `[should]` `DS10-08` Add isolated tool-free/network-free/memory-free LLM
   classification after deterministic admission and evaluate false positive,
   poisoning, and evasion cases.
-- [ ] `[could]` `DS10-09` Add privacy-preserving reporter reputation and
-  publisher response-time summaries after appeal and retention policy exist.
+- [x] `[could]` `DS10-09` Add an encrypted transparent appeal and
+  privacy-preserving, publisher-local factual reporter history without a score,
+  rank, cross-Application aggregation, or automatic decision authority.
 - [ ] `[deferred]` `DS10-10` Foreign code proposals, upstream beta variants,
   automatic contribution merging, and multi-user publisher work queues.
+- [ ] `[could]` `DS10-11` Add publisher response-time summaries after the
+  Applications product establishes a reviewed retention and presentation need.
 
 Implementation note, 2026-09-05: accepted external intake now converts through
 the existing `DevelopmentTicketService` with deterministic report relations and
@@ -867,8 +870,13 @@ deduplication. Raw external payload remains in the report quarantine; only the
 deterministically normalized, redacted representation and advisory model
 provenance can enter the accepted signal/ticket. Public events contain no
 internal ticket identifiers, comments, priority, or Builder refs. `DS10-07`
-and `DS10-08` remain open for abuse operations and an enforceable isolated
-model runner respectively.
+now provides bounded explainable same-Application duplicate evidence, explicit
+outcomes, quota evidence, and no automatic state mutation. `DS10-08` runs only
+in an optional digest-pinned OCI sandbox with no network, tools, secrets, broad
+host mounts, or image pulls; unavailability remains advisory. `DS10-09` uses
+the encrypted report channel for appeals and exposes only a 365-day
+publisher-local factual history with no reputation score. Response-time
+analytics remain `DS10-11` and do not block the Applications preparation gate.
 
 ## Recommended First Slice
 

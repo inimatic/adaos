@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import jsonschema
@@ -8,6 +9,7 @@ import jsonschema
 from adaos.domain.development_report import (
     DevelopmentReport,
     DevelopmentReportAck,
+    DevelopmentReportAppeal,
     DevelopmentReportEnvelope,
     DevelopmentReportIntake,
     DevelopmentReportResync,
@@ -56,6 +58,13 @@ def _contracts() -> list[tuple[str, object]]:
         request_id="resync.example", report_id=report.report_id,
         requester_subnet_ref=report.reporter_subnet_ref, after_revision=2, created_at=NOW,
     )
+    appeal = DevelopmentReportAppeal(
+        appeal_id="appeal.example", report_id=report.report_id,
+        application_id=report.application_id, publisher_ref=report.publisher_ref,
+        reporter_subnet_ref=report.reporter_subnet_ref,
+        idempotency_key="appeal-example", statement="Please reconsider this report.",
+        created_at=NOW, updated_at=NOW,
+    )
     return [
         ("application.development-report.v1.schema.json", report),
         ("application.development-report-envelope.v1.schema.json", envelope),
@@ -63,6 +72,7 @@ def _contracts() -> list[tuple[str, object]]:
         ("application.development-report-status-event.v1.schema.json", event),
         ("application.development-report-ack.v1.schema.json", ack),
         ("application.development-report-resync.v1.schema.json", resync),
+        ("application.development-report-appeal.v1.schema.json", appeal),
     ]
 
 
@@ -73,3 +83,13 @@ def test_development_report_contracts_round_trip_and_validate() -> None:
         jsonschema.Draft202012Validator(schema).validate(payload)
         assert type(contract).from_mapping(payload) == contract
 
+    envelope = _contracts()[1][1]
+    schema = json.loads(
+        (ABI_ROOT / "application.development-report-envelope.v1.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    for message_kind in ("appeal", "appeal_response"):
+        jsonschema.Draft202012Validator(schema).validate(
+            replace(envelope, message_kind=message_kind).to_dict()
+        )

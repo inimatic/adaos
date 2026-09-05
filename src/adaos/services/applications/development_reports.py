@@ -11,6 +11,7 @@ from adaos.domain.artifact_release import canonical_json_bytes
 from adaos.domain.development_report import (
     DevelopmentReport,
     DevelopmentReportAck,
+    DevelopmentReportAppeal,
     DevelopmentReportIntake,
     DevelopmentReportResync,
     DevelopmentReportStatusEvent,
@@ -18,6 +19,7 @@ from adaos.domain.development_report import (
 from adaos.services.applications.report_admission import (
     DevelopmentReportAdmissionService,
     DevelopmentReportClassifier,
+    normalize_report_text,
 )
 from adaos.services.applications.report_crypto import DevelopmentReportEnvelopeCrypto
 from adaos.services.applications.report_directory import SubnetKeyDirectoryClient
@@ -44,6 +46,8 @@ _PUBLISHER_TRANSITIONS = {
     "planned": {"prerelease_available", "released"},
     "prerelease_available": {"prerelease_available", "released"},
     "released": {"released"},
+    "declined": {"triaged"},
+    "duplicate": {"triaged"},
     "still_reproduces": {"planned", "prerelease_available", "released"},
 }
 
@@ -86,6 +90,7 @@ class DevelopmentReportStore:
                 "schema": "adaos.application.development_report_store.v1",
                 "reports": {}, "intakes": {}, "raw_intake": {}, "events": {},
                 "processed_messages": {}, "outbound_messages": {}, "outbox": {},
+                "appeals": {},
             }
         try:
             state = json.loads(self.state_path.read_text(encoding="utf-8"))
@@ -94,7 +99,8 @@ class DevelopmentReportStore:
         if not isinstance(state, dict) or state.get("schema") != "adaos.application.development_report_store.v1":
             raise DevelopmentReportServiceError("Development Report store is invalid")
         state.setdefault("outbox", {})
-        for field in ("reports", "intakes", "raw_intake", "events", "processed_messages", "outbound_messages", "outbox"):
+        state.setdefault("appeals", {})
+        for field in ("reports", "intakes", "raw_intake", "events", "processed_messages", "outbound_messages", "outbox", "appeals"):
             if not isinstance(state.get(field), dict):
                 raise DevelopmentReportServiceError(f"Development Report {field} state is invalid")
         return state
@@ -156,6 +162,30 @@ class DevelopmentReportService:
     def list_publisher_intakes(self) -> list[dict[str, Any]]:
         state = self.store.read()
         return [dict(state["intakes"][key]) for key in sorted(state["intakes"])]
+
+    def list_appeals(self, report_id: str | None = None) -> list[dict[str, Any]]:
+        appeals = self.store.read()["appeals"].values()
+        return [
+            dict(item)
+            for item in sorted(appeals, key=lambda value: str(value.get("appeal_id") or ""))
+            if report_id is None or item.get("report_id") == report_id
+        ]
+
+    def list_local_appeals(self, report_id: str | None = None) -> list[dict[str, Any]]:
+        state = self.store.read()
+        local_report_ids = set(state["reports"])
+        return [
+            item for item in self.list_appeals(report_id)
+            if item.get("report_id") in local_report_ids
+        ]
+
+    def list_publisher_appeals(self, report_id: str | None = None) -> list[dict[str, Any]]:
+        state = self.store.read()
+        intake_report_ids = set(state["intakes"])
+        return [
+            item for item in self.list_appeals(report_id)
+            if item.get("report_id") in intake_report_ids
+        ]
 
     def public_status(self, report_id: str) -> dict[str, Any] | None:
         events = self.store.read()["events"].get(report_id) or []
@@ -392,6 +422,10 @@ class DevelopmentReportService:
             return self._consume_resync(envelope, payload)
         if kind == "resync_snapshot":
             return self._consume_resync_snapshot(envelope, payload)
+        if kind == "appeal":
+            return self._consume_appeal(envelope, payload)
+        if kind == "appeal_response":
+            return self._consume_appeal_response(envelope, payload)
         raise DevelopmentReportServiceError("unsupported report relay message kind")
 
     def _consume_report(self, envelope: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -451,6 +485,18 @@ class DevelopmentReportService:
         if outcome not in {"triaged", "declined", "duplicate"}:
             raise DevelopmentReportServiceError("triage outcome is invalid")
         report, intake = self._publisher_records(report_id)
+        current_event = self.public_status(report_id)
+        if (
+            intake.status == outcome
+            and current_event is not None
+            and current_event.get("status") == outcome
+            and current_event.get("reason_code") == reason_code
+        ):
+            return {
+                "event": dict(current_event),
+                "message_id": _id("msg", report.report_id, "status", current_event["revision"]),
+                "duplicate": True,
+            }
         if intake.status not in {"quarantined", "triaged"}:
             raise DevelopmentReportServiceError("publisher intake cannot be triaged from current state")
         updated = replace(intake, status=outcome, revision=intake.revision + 1, updated_at=_iso(self.now()))
@@ -516,6 +562,17 @@ class DevelopmentReportService:
             raise DevelopmentReportServiceError("only an accepted publisher intake may advance work status")
         current_raw = self.public_status(report_id)
         current = str(current_raw.get("status") if current_raw else "received")
+        if (
+            current_raw is not None
+            and current == status
+            and current_raw.get("reason_code") == reason_code
+            and current_raw.get("release_digest") == release_digest
+        ):
+            return {
+                "event": dict(current_raw),
+                "message_id": _id("msg", report.report_id, "status", current_raw["revision"]),
+                "duplicate": True,
+            }
         if status not in _PUBLISHER_TRANSITIONS.get(current, set()):
             raise DevelopmentReportServiceError(f"invalid public report transition: {current} -> {status}")
         if release_digest is not None:
@@ -657,3 +714,230 @@ class DevelopmentReportService:
                 state["reports"][report.report_id] = replace(current, status=events[-1].status, revision=max(current.revision + 1, events[-1].revision), updated_at=_iso(self.now())).to_dict()
         self.store.mutate(persist)
         return {"ok": True, "report_id": report.report_id, "events_applied": len(events), "has_more": bool(payload["has_more"])}
+
+    def submit_appeal(
+        self,
+        report_id: str,
+        *,
+        statement: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        state = self.store.read()
+        report_raw = state["reports"].get(report_id)
+        if report_raw is None:
+            raise DevelopmentReportServiceError("local DevelopmentReport is unknown")
+        report = DevelopmentReport.from_mapping(report_raw)
+        current = self.public_status(report_id)
+        if current is None or current.get("status") not in {"declined", "duplicate"}:
+            raise DevelopmentReportServiceError(
+                "only a declined or duplicate DevelopmentReport may be appealed"
+            )
+        normalized_statement, _ = normalize_report_text(statement)
+        for raw in state["appeals"].values():
+            if raw.get("reporter_subnet_ref") != self.subnet_ref:
+                continue
+            if raw.get("idempotency_key") != idempotency_key:
+                continue
+            existing = DevelopmentReportAppeal.from_mapping(raw)
+            if existing.report_id != report_id or existing.statement != normalized_statement:
+                raise DevelopmentReportServiceError("appeal idempotency identity collision")
+            return {
+                "appeal": existing.to_dict(),
+                "duplicate": True,
+                "message_id": _id("msg", existing.appeal_id, "appeal", 1),
+            }
+        appeal = DevelopmentReportAppeal(
+            appeal_id=_id("appeal", self.subnet_ref, report_id, idempotency_key),
+            report_id=report_id,
+            application_id=report.application_id,
+            publisher_ref=report.publisher_ref,
+            reporter_subnet_ref=self.subnet_ref,
+            idempotency_key=idempotency_key,
+            statement=normalized_statement,
+            status="submitted",
+            revision=1,
+            created_at=_iso(self.now()),
+            updated_at=_iso(self.now()),
+        )
+        message_id = _id("msg", appeal.appeal_id, "appeal", appeal.revision)
+        envelope = self.crypto.seal(
+            appeal.to_dict(),
+            message_kind="appeal",
+            sender_subnet_ref=self.subnet_ref,
+            recipient_subnet_ref=report.publisher_ref,
+            message_id=message_id,
+        )
+
+        def persist(current_state: dict[str, Any]) -> None:
+            current_state["appeals"][appeal.appeal_id] = appeal.to_dict()
+            current_state["outbox"].setdefault(
+                message_id,
+                {
+                    "kind": "appeal", "envelope": envelope.to_dict(),
+                    "status": "queued", "created_at": _iso(self.now()),
+                },
+            )
+
+        self.store.mutate(persist)
+        return {
+            "appeal": appeal.to_dict(), "duplicate": False, "message_id": message_id,
+            "relay": self._dispatch_outbox(message_id),
+        }
+
+    def _consume_appeal(
+        self, envelope: Mapping[str, Any], payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        submitted = DevelopmentReportAppeal.from_mapping(payload)
+        report, _ = self._publisher_records(submitted.report_id)
+        if (
+            submitted.status != "submitted"
+            or submitted.application_id != report.application_id
+            or submitted.publisher_ref != self.subnet_ref
+            or submitted.reporter_subnet_ref != report.reporter_subnet_ref
+            or envelope["sender_subnet_ref"] != report.reporter_subnet_ref
+        ):
+            raise DevelopmentReportServiceError("appeal identity is invalid")
+        current_status = self.public_status(report.report_id)
+        if current_status is None or current_status.get("status") not in {"declined", "duplicate"}:
+            raise DevelopmentReportServiceError("appeal does not address an adverse decision")
+        normalized_statement, _ = normalize_report_text(submitted.statement)
+        received = replace(
+            submitted,
+            statement=normalized_statement,
+            status="received",
+            revision=submitted.revision + 1,
+            updated_at=_iso(self.now()),
+        )
+
+        def persist(state: dict[str, Any]) -> None:
+            existing = state["appeals"].get(received.appeal_id)
+            if existing is not None:
+                current = DevelopmentReportAppeal.from_mapping(existing)
+                if current.report_id != received.report_id or current.statement != received.statement:
+                    raise DevelopmentReportServiceError("appeal identity collision")
+                return
+            state["appeals"][received.appeal_id] = received.to_dict()
+
+        self.store.mutate(persist)
+        return {"ok": True, "appeal_id": received.appeal_id, "status": "received"}
+
+    def resolve_appeal(
+        self,
+        appeal_id: str,
+        *,
+        resolution: str,
+        rationale: str,
+    ) -> dict[str, Any]:
+        if resolution not in {"reopened", "corrected", "upheld"}:
+            raise DevelopmentReportServiceError("appeal resolution is invalid")
+        state = self.store.read()
+        raw = state["appeals"].get(appeal_id)
+        if raw is None:
+            raise DevelopmentReportServiceError("publisher appeal is unknown")
+        appeal = DevelopmentReportAppeal.from_mapping(raw)
+        normalized_rationale, _ = normalize_report_text(rationale)
+        if appeal.status == "resolved":
+            if appeal.resolution != resolution or appeal.rationale != normalized_rationale:
+                raise DevelopmentReportServiceError("appeal resolution identity collision")
+            return {"appeal": appeal.to_dict(), "duplicate": True}
+        if appeal.status != "received" or appeal.publisher_ref != self.subnet_ref:
+            raise DevelopmentReportServiceError("appeal cannot be resolved from current state")
+        report, intake = self._publisher_records(appeal.report_id)
+        if intake.status not in {"declined", "duplicate"}:
+            raise DevelopmentReportServiceError("appealed intake no longer has an adverse decision")
+        resolved = replace(
+            appeal,
+            status="resolved",
+            resolution=resolution,
+            rationale=normalized_rationale,
+            revision=appeal.revision + 1,
+            updated_at=_iso(self.now()),
+        )
+        response_message_id = _id(
+            "msg", appeal.appeal_id, "appeal_response", resolved.revision
+        )
+        response_envelope = self.crypto.seal(
+            resolved.to_dict(),
+            message_kind="appeal_response",
+            sender_subnet_ref=self.subnet_ref,
+            recipient_subnet_ref=report.reporter_subnet_ref,
+            message_id=response_message_id,
+        )
+        reopen = resolution in {"reopened", "corrected"}
+        event = self._next_event(report, status="triaged", reason_code="appeal_reopened") if reopen else None
+        status_message_id = (
+            _id("msg", report.report_id, "status", event.revision) if event is not None else None
+        )
+        status_envelope = (
+            self.crypto.seal(
+                event.to_dict(),
+                message_kind="status",
+                sender_subnet_ref=self.subnet_ref,
+                recipient_subnet_ref=report.reporter_subnet_ref,
+                message_id=status_message_id,
+            )
+            if event is not None and status_message_id is not None
+            else None
+        )
+
+        def persist(current: dict[str, Any]) -> None:
+            current["appeals"][appeal_id] = resolved.to_dict()
+            if event is not None and status_message_id is not None and status_envelope is not None:
+                current["intakes"][report.report_id] = replace(
+                    intake,
+                    status="triaged",
+                    revision=intake.revision + 1,
+                    updated_at=_iso(self.now()),
+                ).to_dict()
+                self._append_event(current, event)
+                current["outbox"].setdefault(
+                    status_message_id,
+                    {
+                        "kind": "status", "envelope": status_envelope.to_dict(),
+                        "status": "queued", "created_at": _iso(self.now()),
+                    },
+                )
+            current["outbox"].setdefault(
+                response_message_id,
+                {
+                    "kind": "appeal_response", "envelope": response_envelope.to_dict(),
+                    "status": "queued", "created_at": _iso(self.now()),
+                },
+            )
+
+        self.store.mutate(persist)
+        deliveries = []
+        if status_message_id is not None:
+            deliveries.append(self._dispatch_outbox(status_message_id))
+        deliveries.append(self._dispatch_outbox(response_message_id))
+        return {
+            "appeal": resolved.to_dict(), "duplicate": False, "deliveries": deliveries,
+        }
+
+    def _consume_appeal_response(
+        self, envelope: Mapping[str, Any], payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        resolved = DevelopmentReportAppeal.from_mapping(payload)
+        raw = self.store.read()["appeals"].get(resolved.appeal_id)
+        if raw is None:
+            raise DevelopmentReportServiceError("appeal response is unsolicited")
+        current = DevelopmentReportAppeal.from_mapping(raw)
+        if (
+            resolved.status != "resolved"
+            or envelope["sender_subnet_ref"] != current.publisher_ref
+            or resolved.report_id != current.report_id
+            or resolved.application_id != current.application_id
+            or resolved.publisher_ref != current.publisher_ref
+            or resolved.reporter_subnet_ref != self.subnet_ref
+            or resolved.idempotency_key != current.idempotency_key
+            or resolved.statement != current.statement
+            or resolved.revision <= current.revision
+        ):
+            raise DevelopmentReportServiceError("appeal response identity is invalid")
+        self.store.mutate(
+            lambda state: state["appeals"].__setitem__(resolved.appeal_id, resolved.to_dict())
+        )
+        return {
+            "ok": True, "appeal_id": resolved.appeal_id,
+            "status": resolved.status, "resolution": resolved.resolution,
+        }

@@ -448,11 +448,13 @@ and its [roadmap](application-lifecycle-and-distribution-roadmap.md).
 
 ### `Applications-0`. Architecture and capabilities
 
-- [ ] `[must]` define read, install-plan/apply, update-plan/apply,
+- [x] `[must]` define read, install-plan/apply, update-plan/apply,
   remove-plan/apply, subscription, Trial-link, operation, publisher release,
   and Development Report capability profiles
-- [ ] `[must]` bind every mutating call to actor, subnet, target Application,
-  expected revision, reviewed plan digest, idempotency key, and audit event
+- [x] `[must]` bind every mutating call to actor, subnet, target Application,
+  and idempotency key; lifecycle apply additionally requires expected revision
+  and reviewed plan digest, while report mutations use their monotonic domain
+  revisions and encrypted message identities; emit the ordinary MCP audit event
 - [x] `[must]` require the typed Application SDK as the only business-logic
   implementation behind the plane
 - [ ] `[deferred]` broad remote publisher automation and third-party

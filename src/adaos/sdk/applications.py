@@ -7,12 +7,13 @@ filesystem paths, process commands, Git credentials, or raw registry writes.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 from adaos.domain.application import RuntimeSelection
 from adaos.sdk.core._ctx import require_ctx
 from adaos.services.applications import (
     ApplicationRolloutService,
+    DevelopmentReportTriageService,
     TrialAccessService,
     get_application_service,
     get_development_report_service,
@@ -53,6 +54,26 @@ def _mutation_identity(
     if granted != required_capability:
         raise ValueError(f"{required_capability} capability is required")
     return actor, subnet, granted, key
+
+
+def _report_identity(
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+    *,
+    required_capability: str,
+) -> tuple[str, str, str, str]:
+    identity = _mutation_identity(
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
+        required_capability=required_capability,
+    )
+    if identity[1] != _local_subnet_ref():
+        raise ValueError("Development Report subnet does not match local identity")
+    return identity
 
 
 def list_applications(*, installed_only: bool = False) -> list[dict[str, Any]]:
@@ -139,6 +160,214 @@ def get_development_report_status(report_id: str) -> dict[str, Any] | None:
 
 def list_development_report_intakes() -> list[dict[str, Any]]:
     return get_development_report_service().list_publisher_intakes()
+
+
+def list_development_report_appeals(
+    report_id: str | None = None,
+) -> list[dict[str, Any]]:
+    return get_development_report_service().list_local_appeals(report_id)
+
+
+def list_publisher_development_report_appeals(
+    report_id: str | None = None,
+) -> list[dict[str, Any]]:
+    return get_development_report_service().list_publisher_appeals(report_id)
+
+
+def get_development_report_triage(
+    report_id: str,
+    *,
+    threshold: float = 0.65,
+    limit: int = 10,
+) -> dict[str, Any]:
+    triage = DevelopmentReportTriageService(get_development_report_service())
+    return {
+        "policy": triage.privacy_policy(),
+        "duplicates": triage.duplicate_candidates(
+            report_id, threshold=threshold, limit=limit
+        ),
+        "reporter_history": triage.reporter_history(report_id),
+    }
+
+
+def submit_development_report(
+    application_id: str,
+    *,
+    summary: str,
+    details: str,
+    evidence: Sequence[Mapping[str, Any]] = (),
+    installed_release_digest: str | None = None,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    _report_identity(
+        actor_ref, subnet_ref, capability, idempotency_key,
+        required_capability="applications.report",
+    )
+    return get_development_report_service().create_report(
+        application_id=application_id,
+        summary=summary,
+        details=details,
+        evidence=evidence,
+        installed_release_digest=installed_release_digest,
+        idempotency_key=idempotency_key,
+    )
+
+
+def sync_development_reports(
+    *,
+    limit: int = 20,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    _report_identity(
+        actor_ref, subnet_ref, capability, idempotency_key,
+        required_capability="applications.report",
+    )
+    service = get_development_report_service()
+    return {
+        "received": service.receive(limit=max(1, min(int(limit), 100))),
+        "outbox": service.flush_outbox(limit=max(1, min(int(limit), 100))),
+    }
+
+
+def triage_development_report(
+    report_id: str,
+    *,
+    outcome: str,
+    reason_code: str | None,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    _report_identity(
+        actor_ref, subnet_ref, capability, idempotency_key,
+        required_capability="applications.publisher.triage",
+    )
+    return get_development_report_service().triage(
+        report_id, outcome=outcome, reason_code=reason_code
+    )
+
+
+def accept_development_report(
+    report_id: str,
+    *,
+    policy_ref: str | None,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    _report_identity(
+        actor_ref, subnet_ref, capability, idempotency_key,
+        required_capability="applications.publisher.triage",
+    )
+    return get_development_report_service().accept(
+        report_id, actor=actor_ref, policy_ref=policy_ref
+    )
+
+
+def set_development_report_status(
+    report_id: str,
+    *,
+    status: str,
+    reason_code: str | None,
+    release_digest: str | None,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    _report_identity(
+        actor_ref, subnet_ref, capability, idempotency_key,
+        required_capability="applications.publisher.triage",
+    )
+    return get_development_report_service().set_public_status(
+        report_id,
+        status=status,
+        reason_code=reason_code,
+        release_digest=release_digest,
+    )
+
+
+def submit_development_report_appeal(
+    report_id: str,
+    *,
+    statement: str,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    _report_identity(
+        actor_ref, subnet_ref, capability, idempotency_key,
+        required_capability="applications.report",
+    )
+    return get_development_report_service().submit_appeal(
+        report_id, statement=statement, idempotency_key=idempotency_key
+    )
+
+
+def resolve_development_report_appeal(
+    appeal_id: str,
+    *,
+    resolution: str,
+    rationale: str,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    _report_identity(
+        actor_ref, subnet_ref, capability, idempotency_key,
+        required_capability="applications.publisher.triage",
+    )
+    return get_development_report_service().resolve_appeal(
+        appeal_id, resolution=resolution, rationale=rationale
+    )
+
+
+def verify_development_report_release(
+    report_id: str,
+    *,
+    outcome: str,
+    release_digest: str,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    _report_identity(
+        actor_ref, subnet_ref, capability, idempotency_key,
+        required_capability="applications.report",
+    )
+    return get_development_report_service().verify_release(
+        report_id, outcome=outcome, release_digest=release_digest
+    )
+
+
+def request_development_report_resync(
+    report_id: str,
+    *,
+    after_revision: int,
+    limit: int = 100,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    _report_identity(
+        actor_ref, subnet_ref, capability, idempotency_key,
+        required_capability="applications.report",
+    )
+    return get_development_report_service().request_resync(
+        report_id, after_revision=after_revision, limit=limit
+    )
 
 
 def get_operation(operation_id: str) -> dict[str, Any]:
@@ -572,11 +801,13 @@ def explain_plan(operation_id: str) -> dict[str, Any]:
 
 
 __all__ = [
+    "accept_development_report",
     "apply_operation",
     "explain_plan",
     "get_application",
     "get_development_report",
     "get_development_report_status",
+    "get_development_report_triage",
     "get_operation",
     "get_prerelease_rollout",
     "get_runtime_selection",
@@ -585,10 +816,12 @@ __all__ = [
     "list_applications",
     "list_catalog",
     "list_development_report_intakes",
+    "list_development_report_appeals",
     "list_development_reports",
     "list_operations",
     "list_releases",
     "list_trial_access",
+    "list_publisher_development_report_appeals",
     "plan_install",
     "plan_trial_link_install",
     "plan_remove",
@@ -596,9 +829,17 @@ __all__ = [
     "plan_update_track",
     "poll_operation_events",
     "record_prerelease_health",
+    "request_development_report_resync",
+    "resolve_development_report_appeal",
     "resolve_trial_link",
     "revoke_trial_access",
     "select_runtime",
     "set_prerelease_rollout",
+    "set_development_report_status",
+    "submit_development_report",
+    "submit_development_report_appeal",
+    "sync_development_reports",
+    "triage_development_report",
+    "verify_development_report_release",
     "simulate_removal",
 ]

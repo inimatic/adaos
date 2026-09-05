@@ -767,6 +767,29 @@ recorded as advisory `unavailable` after deterministic admission and cannot
 discard a valid report; malformed authority-bearing output is rejected from
 publisher context.
 
+Publisher triage aids are deliberately non-authoritative. Duplicate candidates
+are calculated only from normalized, redacted reports for the same Application
+in the same publisher subnet. The response includes the candidate IDs,
+similarity, and bounded shared terms that explain the suggestion. Looking at a
+suggestion never changes intake state, creates a Dev Ticket, or assigns work.
+
+AdaOS does not maintain a global reporter reputation. The publisher may inspect
+a 365-day, same-Application factual outcome history for the reporting subnet,
+but the contract returns no score or rank and does not share observations across
+Applications or publishers. Small-sample limitations and the publisher-local
+scope are part of the response. Retention follows the local Development Report
+policy rather than creating a second analytics store.
+
+A reporter may appeal a `declined` or `duplicate` decision. The statement and
+publisher rationale use the same deterministic normalization and secret
+redaction as report intake, and travel in the existing end-to-end encrypted,
+signed channel. `reopened` and `corrected` return the intake to `triaged` but do
+not accept it or create a Dev Ticket; `upheld` leaves the decision unchanged.
+The reporter sees the exact resolution and rationale. Report content and local
+appeals require `applications.report`; publisher evidence reads require
+`applications.publisher.read`, and decisions require the narrower
+`applications.publisher.triage` capability.
+
 ## Encrypted Relay and Zones
 
 Development Report content and publisher responses use purpose-scoped subnet
@@ -879,7 +902,11 @@ Application workarounds.
     after a delivery gap.
 11. Root relay cannot decrypt Development Report content without the publisher
     private encryption key.
-12. Root Guard absence is represented as `not_evaluated`, never as `passed`.
+12. Duplicate and reporter-history aids are explainable, publisher-local, and
+    advisory; they cannot change intake or ticket state.
+13. An adverse report decision has an encrypted appeal path with a visible
+    publisher rationale.
+14. Root Guard absence is represented as `not_evaluated`, never as `passed`.
 
 ## Required End-to-End Proof
 

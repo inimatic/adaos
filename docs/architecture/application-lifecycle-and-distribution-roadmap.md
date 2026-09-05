@@ -313,8 +313,9 @@ publisher-controlled resolution without receiving source authority.
   provenance and require publisher acceptance.
 - [x] `[should]` `APP5-10` Implement signed subnet home-zone/key directory and
   Root-to-Root store-and-forward before an inter-zone pilot.
-- [ ] `[could]` `APP5-11` Add publisher-side duplicate clustering and reporter
-  reputation only after transparent appeal and privacy policy exist.
+- [x] `[could]` `APP5-11` Add publisher-side explainable duplicate clustering,
+  an encrypted transparent appeal, and scoped factual reporter history without
+  a global reputation score or automatic intake decisions.
 - [ ] `[deferred]` `APP5-12` Foreign code proposals, upstream beta variants,
   and automatic contribution merging.
 - [ ] `[deferred]` `APP5-13` Multiple independent Root relays within one zone,
@@ -338,6 +339,14 @@ adapter with no pull, network, secrets, AdaOS tools, or broad host mount;
 read-only root, dropped capabilities, resource/output bounds, and exact
 input/output/image provenance are enforced. Classifier unavailability is
 advisory and cannot turn a deterministically valid report into delivery loss.
+`APP5-11` adds a versioned encrypted appeal, visible publisher rationale,
+advisory same-Application duplicate evidence, and a bounded 365-day factual
+reporter history. It exposes neither score nor rank, does not aggregate across
+Applications or publishers, and cannot accept, decline, prioritize, or create a
+Dev Ticket. The complete report flow is now available through capability-scoped
+SDK and `ApplicationsPlane` MCP contracts: `applications.report` for reporter
+actions, `applications.publisher.read` for intake evidence, and
+`applications.publisher.triage` for publisher decisions.
 
 ## APP6. Full End-to-End Release Proof
 

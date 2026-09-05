@@ -50,6 +50,7 @@ from .report_relay import (
     DurableDevelopmentReportRelay,
     HttpDevelopmentReportRelayPeer,
 )
+from .report_triage import DevelopmentReportTriageService
 from .deployment_executor import (
     ApplicationDataSnapshotStore,
     ApplicationDeploymentExecutor,
@@ -93,6 +94,7 @@ __all__ = [
     "DevelopmentReportRelayPeer",
     "DevelopmentReportService",
     "DevelopmentReportServiceError",
+    "DevelopmentReportTriageService",
     "DurableDevelopmentReportRelay",
     "HttpDevelopmentReportRelayPeer",
     "ApplicationService",

@@ -910,6 +910,14 @@ privileged Builder/Codex context by default. Optional LLM preprocessing is a
 tool-free, network-free, memory-free classifier whose output cannot set release
 authority, create a Dev Ticket, or bypass publisher acceptance.
 
+Duplicate detection and reporter history are also advisory. They operate only
+on normalized, redacted reports for one Application in the publisher subnet and
+return inspectable overlap evidence plus factual outcome counts. There is no
+global reputation score, cross-Application ranking, or automatic triage action.
+A `declined` or `duplicate` report has an end-to-end encrypted appeal. The
+publisher returns a visible rationale and may reopen the intake to `triaged`;
+appeal resolution never implies acceptance or Builder authority.
+
 The initial model deliberately excludes code contribution. A guest who wants
 to develop independently creates a new Application with a different identity
 and its own subnet publisher. Upstream beta variants, automatic proposal

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import inspect
 
+import pytest
+
 from adaos.sdk import applications
 from adaos.sdk.core.exporter import export
 from adaos.services.applications import register_development_report_service
@@ -108,10 +110,59 @@ def test_sdk_exposes_development_report_status_without_internal_store_access() -
         def list_publisher_intakes(self):
             return [{"report_id": "report.1", "status": "quarantined"}]
 
+        def list_local_appeals(self, report_id=None):
+            return [{"appeal_id": "appeal.1", "report_id": report_id}]
+
     register_development_report_service(Reports())
     try:
         assert applications.list_development_reports()[0]["report_id"] == "report.1"
         assert applications.get_development_report_status("report.1")["status"] == "accepted"
         assert applications.list_development_report_intakes()[0]["status"] == "quarantined"
+        assert applications.list_development_report_appeals("report.1")[0]["appeal_id"] == "appeal.1"
+    finally:
+        register_development_report_service(None)
+
+
+def test_sdk_report_mutations_require_local_narrow_capability(monkeypatch) -> None:
+    class Reports:
+        def __init__(self):
+            self.calls = []
+
+        def create_report(self, **kwargs):
+            self.calls.append(("create_report", kwargs))
+            return {"report": {"report_id": "report.1"}}
+
+        def triage(self, report_id, **kwargs):
+            self.calls.append(("triage", report_id, kwargs))
+            return {"event": {"status": kwargs["outcome"]}}
+
+    reports = Reports()
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:sn_home")
+    register_development_report_service(reports)
+    try:
+        submitted = applications.submit_development_report(
+            "app_recipes", summary="Failure", details="Expected A, observed B",
+            actor_ref="user:owner", subnet_ref="subnet:sn_home",
+            capability="applications.report", idempotency_key="report-1",
+        )
+        assert submitted["report"]["report_id"] == "report.1"
+        triaged = applications.triage_development_report(
+            "report.1", outcome="declined", reason_code="not_reproduced",
+            actor_ref="user:owner", subnet_ref="subnet:sn_home",
+            capability="applications.publisher.triage", idempotency_key="triage-1",
+        )
+        assert triaged["event"]["status"] == "declined"
+        with pytest.raises(ValueError, match="applications.report"):
+            applications.submit_development_report(
+                "app_recipes", summary="Failure", details="Details",
+                actor_ref="user:owner", subnet_ref="subnet:sn_home",
+                capability="applications.apply", idempotency_key="report-2",
+            )
+        with pytest.raises(ValueError, match="local identity"):
+            applications.submit_development_report(
+                "app_recipes", summary="Failure", details="Details",
+                actor_ref="user:owner", subnet_ref="subnet:foreign",
+                capability="applications.report", idempotency_key="report-3",
+            )
     finally:
         register_development_report_service(None)
