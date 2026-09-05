@@ -23,6 +23,7 @@ from adaos.services.artifact_pipeline import (
     build_artifact_package,
     build_project_release,
 )
+from adaos.services.artifact_pipeline import storage as artifact_storage
 from adaos.services.builder.source_recovery import BuilderSourceRecoveryService
 from adaos.services.builder.workspace import (
     BuilderSourceRecoveryRequired,
@@ -278,6 +279,38 @@ def test_reviewed_recovery_preserves_evidence_materializes_owned_source_and_plan
     )
     assert operation["status"] == "completed"
     assert operation["receipt_digest"] == receipt["receipt_digest"]
+
+
+def test_source_recovery_tree_switch_retries_transient_windows_lock(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "component"
+    staged = tmp_path / ".component.staged"
+    target.mkdir()
+    staged.mkdir()
+    (target / "value.txt").write_text("old", encoding="utf-8")
+    (staged / "value.txt").write_text("new", encoding="utf-8")
+    replace_once = artifact_storage._replace_once
+    failed = False
+
+    def transient_replace(source: Path, destination: Path) -> None:
+        nonlocal failed
+        if Path(source) == staged and not failed:
+            failed = True
+            error = PermissionError("directory handle is settling")
+            error.winerror = 5
+            raise error
+        replace_once(source, destination)
+
+    monkeypatch.setattr(artifact_storage, "_replace_once", transient_replace)
+
+    backup = BuilderSourceRecoveryService._switch_tree(staged, target)
+
+    assert failed is True
+    assert (target / "value.txt").read_text(encoding="utf-8") == "new"
+    assert backup is not None
+    assert (backup / "value.txt").read_text(encoding="utf-8") == "old"
 
 
 def test_reviewed_recovery_rejects_stale_digest_and_missing_conflict_decision(

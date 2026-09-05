@@ -25,6 +25,7 @@ from adaos.services.artifact_pipeline.storage import (
     atomic_write_bytes,
     atomic_write_json,
     mutation_lock,
+    replace_with_retry,
 )
 from adaos.services.builder.sources import BuilderProjectSourceService
 
@@ -619,12 +620,12 @@ class BuilderSourceRecoveryService:
         moved = False
         try:
             if target.exists():
-                target.replace(backup)
+                replace_with_retry(target, backup)
                 moved = True
-            staged.replace(target)
+            replace_with_retry(staged, target)
         except Exception:
             if moved and backup.exists() and not target.exists():
-                backup.replace(target)
+                replace_with_retry(backup, target)
             raise
         return backup if moved else None
 
