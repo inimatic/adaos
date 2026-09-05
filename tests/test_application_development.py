@@ -70,3 +70,41 @@ def test_development_coordinator_requires_action_capability(tmp_path: Path) -> N
             expected_revision=1, idempotency_key="stable-1", intent={},
             callback=lambda: {"ok": True},
         )
+
+
+def test_development_coordinator_recovers_only_for_original_owner(tmp_path: Path) -> None:
+    coordinator = ApplicationDevelopmentCoordinator(tmp_path)
+    with pytest.raises(TimeoutError):
+        coordinator.execute(
+            "preview", "app_test", actor_ref="user:owner",
+            subnet_ref="subnet:home", capability="applications.develop",
+            expected_revision=1, idempotency_key="preview-1",
+            intent={"source_webspace_id": "desktop"},
+            callback=lambda: (_ for _ in ()).throw(TimeoutError("response lost")),
+        )
+
+    with pytest.raises(ApplicationDevelopmentError, match="original actor"):
+        coordinator.recover(
+            coordinator.list()[0]["operation_id"],
+            actor_ref="user:other",
+            subnet_ref="subnet:home",
+            capability="applications.recover",
+            callback=lambda _operation: {"ok": True},
+        )
+
+    recovered = coordinator.recover(
+        coordinator.list()[0]["operation_id"],
+        actor_ref="user:owner",
+        subnet_ref="subnet:home",
+        capability="applications.recover",
+        callback=lambda operation: {
+            "ok": True,
+            "replayed_intent": dict(operation["intent"]),
+        },
+    )
+
+    assert recovered["status"] == "succeeded"
+    assert recovered["recovery_attempt"] == 1
+    assert recovered["result"]["replayed_intent"] == {
+        "source_webspace_id": "desktop"
+    }

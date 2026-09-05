@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -207,6 +208,81 @@ class ApplicationDevelopmentCoordinator:
                 status=status,
                 result=observed,
                 recovery_reason=None if status != "unknown" else str(observed.get("reason") or "observer_inconclusive"),
+                revision=int(current["revision"]) + 1,
+                updated_at=utc_now(),
+            )
+            atomic_write_json(self._path(operation_id), current)
+        return current
+
+    def recover(
+        self,
+        operation_id: str,
+        *,
+        actor_ref: str,
+        subnet_ref: str,
+        capability: str,
+        callback: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Retry one stored intent after its bounded adapter outcome became unknown."""
+
+        actor = self._identity(actor_ref, "actor_ref")
+        subnet = self._identity(subnet_ref, "subnet_ref").lower()
+        if capability != "applications.recover":
+            raise ApplicationDevelopmentError("applications.recover capability is required")
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            operation = self.get(self._identity(operation_id, "operation_id"))
+            if operation["actor_ref"] != actor or operation["subnet_ref"] != subnet:
+                raise ApplicationDevelopmentError(
+                    "only the original actor and publisher subnet may recover this operation"
+                )
+            if operation["status"] not in {"applying", "unknown"}:
+                return operation
+            if operation["status"] == "applying":
+                try:
+                    updated_at = datetime.fromisoformat(
+                        str(operation["updated_at"]).replace("Z", "+00:00")
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ApplicationDevelopmentError(
+                        "applying operation has an invalid recovery timestamp"
+                    ) from exc
+                age_seconds = (datetime.now(timezone.utc) - updated_at).total_seconds()
+                if age_seconds < 300:
+                    raise ApplicationDevelopmentOutcomeUnknown(
+                        "development operation is still within its active recovery lease"
+                    )
+            operation.update(
+                status="applying",
+                recovery_reason="recovery_in_progress",
+                recovery_attempt=int(operation.get("recovery_attempt") or 0) + 1,
+                revision=int(operation["revision"]) + 1,
+                updated_at=utc_now(),
+            )
+            atomic_write_json(self._path(operation_id), operation)
+        try:
+            result = dict(callback(operation))
+        except Exception as exc:
+            with mutation_lock(self.lock_path, timeout_s=30.0):
+                current = self.get(operation_id)
+                current.update(
+                    status="unknown",
+                    recovery_reason=f"recovery_outcome_unknown:{type(exc).__name__}:{exc}"[:1000],
+                    revision=int(current["revision"]) + 1,
+                    updated_at=utc_now(),
+                )
+                atomic_write_json(self._path(operation_id), current)
+            raise
+        terminal = "succeeded" if bool(result.get("ok", True)) and not result.get("error") else "failed"
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            current = self.get(operation_id)
+            current.update(
+                status=terminal,
+                result=result,
+                recovery_reason=(
+                    None
+                    if terminal == "succeeded"
+                    else str(result.get("error") or result.get("status") or "adapter_rejected")
+                ),
                 revision=int(current["revision"]) + 1,
                 updated_at=utc_now(),
             )

@@ -67,6 +67,25 @@ def _builder_contracts() -> list[RootMcpToolContract]:
             metadata={**metadata, "handler": "applications_development_get_operation"},
         ),
         RootMcpToolContract(
+            id="applications.development.reconcile_operation",
+            title="Reconcile Application development operation",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Recover one unknown Builder operation by replaying only its stored bounded intent.",
+            input_schema=schema_object(
+                properties={
+                    "operation_id": {"type": "string", "minLength": 1, "maxLength": 180}
+                },
+                required=["operation_id"],
+            ),
+            output_schema=deepcopy(response),
+            required_capability="applications.recover",
+            side_effects="write",
+            metadata={
+                **metadata,
+                "handler": "applications_development_reconcile_operation",
+            },
+        ),
+        RootMcpToolContract(
             id="applications.development.create",
             title="Create Application through Builder",
             surface=RootMcpSurface.DEVELOPMENT,
@@ -1052,6 +1071,25 @@ def _handle_development_get_operation(
     return {"operation": _builder_sdk().get_development_operation(operation_id)}
 
 
+def _handle_development_reconcile_operation(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    operation_id = str(arguments.get("operation_id") or "").strip()
+    if not operation_id:
+        raise ValueError("operation_id is required")
+    if dry_run:
+        return {"would_reconcile_operation": True, "operation_id": operation_id}
+    actor_ref, subnet_ref = _context(arguments)
+    return {
+        "operation": _builder_sdk().reconcile_development_operation(
+            operation_id,
+            actor_ref=actor_ref,
+            subnet_ref=subnet_ref,
+            capability="applications.recover",
+        )
+    }
+
+
 def _handle_development_create(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
@@ -1426,6 +1464,7 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "applications.record_prerelease_health": _handle_record_prerelease_health,
         "applications.development.list_operations": _handle_development_list_operations,
         "applications.development.get_operation": _handle_development_get_operation,
+        "applications.development.reconcile_operation": _handle_development_reconcile_operation,
         "applications.development.create": _handle_development_create,
         "applications.development.materialize": _handle_development_materialize,
         "applications.development.preview": _handle_development_preview,

@@ -26,6 +26,7 @@ DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
         "applications.publisher.read",
         "applications.report",
         "applications.publisher.triage",
+        "applications.recover",
     ],
     "ContextAgent": [
         *DEFAULT_BEARER_CAPABILITIES,
@@ -52,6 +53,7 @@ DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
         "applications.apply",
         "applications.develop",
         "applications.publish",
+        "applications.recover",
     ],
     "NLUTeacherRead": [
         *DEFAULT_BEARER_CAPABILITIES,

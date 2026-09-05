@@ -585,6 +585,45 @@ class DevelopmentReportService:
                 raise DevelopmentReportServiceError("release lifecycle does not match public status")
         return self._send_status(report, self._next_event(report, status=status, reason_code=reason_code, release_digest=release_digest))
 
+    def validate_release_addresses(
+        self,
+        application_id: str,
+        release_digest: str,
+        report_ids: tuple[str, ...],
+    ) -> dict[str, Any]:
+        bounded = tuple(sorted({str(item).strip() for item in report_ids if str(item).strip()}))
+        if len(bounded) > 200:
+            raise DevelopmentReportServiceError("addressed report set exceeds 200 items")
+        for report_id in bounded:
+            report, intake = self._publisher_records(report_id)
+            if report.application_id != application_id or intake.application_id != application_id:
+                raise DevelopmentReportServiceError(
+                    "addressed report is not an intake for this Application"
+                )
+            if intake.status != "accepted":
+                raise DevelopmentReportServiceError(
+                    "addressed report is not an accepted publisher intake"
+                )
+            current = self.public_status(report_id)
+            status = str(current.get("status") if current else "received")
+            if status in {"planned", "still_reproduces"}:
+                continue
+            if (
+                status in {"prerelease_available", "released"}
+                and current is not None
+                and current.get("release_digest") == release_digest
+            ):
+                continue
+            raise DevelopmentReportServiceError(
+                f"addressed report is not ready for release: {report_id} ({status})"
+            )
+        return {
+            "ok": True,
+            "application_id": application_id,
+            "release_digest": release_digest,
+            "validated_report_ids": list(bounded),
+        }
+
     def announce_release(self, application_id: str, release_digest: str) -> list[dict[str, Any]]:
         release = self.application_store.get_release(application_id, release_digest)
         channels = self.application_store.get_channels(application_id).get("channels") or {}

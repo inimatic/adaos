@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from adaos.sdk.builder import applications
 from adaos.sdk.core.exporter import export
 from adaos.sdk.developer import compositions
+from adaos.domain.application import Application
 from adaos.services.applications import ApplicationDevelopmentCoordinator, ApplicationService, ApplicationStore
 
 
@@ -98,3 +99,84 @@ def test_builder_application_facade_is_discoverable() -> None:
     assert "adaos.sdk.builder.applications.create_application" in names
     assert "adaos.sdk.builder.applications.publish_prerelease" in names
     assert "adaos.sdk.builder.applications.promote_stable" in names
+
+
+def test_builder_application_reconciles_lost_create_response(
+    monkeypatch, tmp_path: Path
+) -> None:
+    service = ApplicationService(ApplicationStore(tmp_path))
+    coordinator = ApplicationDevelopmentCoordinator(tmp_path)
+    publisher = {
+        "publisher_ref": "subnet:home",
+        "display_name": "Home Lab",
+        "subnet_short_ref": "home",
+        "home_zone": "local",
+        "release_key_ref": "artifact-signing:home:key",
+        "release_key_fingerprint": "sha256:" + "f" * 64,
+        "release_key_algorithm": "ed25519",
+        "release_key_issuer": "home",
+        "trust_relation": "local",
+    }
+    service.register(
+        Application(
+            application_id="applications",
+            legacy_project_id="applications",
+            publisher_ref="subnet:home",
+            slug="applications",
+            display={"title": "Applications", "summary": "Application manager"},
+            visibility="private",
+            entrypoints=(
+                {
+                    "entrypoint_id": "main",
+                    "presentation_ref": "scenario:applications",
+                },
+            ),
+            publisher={
+                key: publisher[key]
+                for key in (
+                    "publisher_ref",
+                    "display_name",
+                    "subnet_short_ref",
+                    "release_key_ref",
+                    "release_key_fingerprint",
+                    "home_zone",
+                    "trust_relation",
+                )
+            },
+        )
+    )
+    intent = {
+        "title": "Applications",
+        "summary": "Application manager",
+        "template": "empty",
+        "visibility": "private",
+        "publisher_key_fingerprint": publisher["release_key_fingerprint"],
+        "publisher": publisher,
+    }
+    try:
+        coordinator.execute(
+            "create",
+            "applications",
+            actor_ref="user:owner",
+            subnet_ref="subnet:home",
+            capability="applications.develop",
+            expected_revision=0,
+            idempotency_key="create-applications-lost-response",
+            intent=intent,
+            callback=lambda: (_ for _ in ()).throw(TimeoutError("response lost")),
+        )
+    except TimeoutError:
+        pass
+    monkeypatch.setattr(applications, "_application_service", lambda: service)
+    monkeypatch.setattr(applications, "_coordinator", lambda: coordinator)
+    monkeypatch.setattr(applications, "publisher_context", lambda: publisher)
+
+    operation = applications.reconcile_development_operation(
+        coordinator.list()[0]["operation_id"],
+        actor_ref="user:owner",
+        subnet_ref="subnet:home",
+        capability="applications.recover",
+    )
+
+    assert operation["status"] == "succeeded"
+    assert operation["result"]["duplicate"] is True

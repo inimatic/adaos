@@ -846,6 +846,7 @@ def configure_default_distributed_runtimes(
             GitStableSourcePublisher,
             create_local_development_report_service,
             get_application_service,
+            get_development_report_service,
             register_application_executor,
             register_application_distribution_service_factory,
             register_application_operation_publisher,
@@ -916,6 +917,19 @@ def configure_default_distributed_runtimes(
                 packages=ContentAddressedPackageStore(artifact_root / "packages"),
                 remote=remote_repository,
                 admission=trust.admission,
+                addressed_report_validator=lambda application_id, release_digest, report_ids: (
+                    get_development_report_service().validate_release_addresses(
+                        application_id,
+                        release_digest,
+                        report_ids,
+                    )
+                ),
+                release_announcer=lambda application_id, release_digest: (
+                    get_development_report_service().announce_release(
+                        application_id,
+                        release_digest,
+                    )
+                ),
             )
 
         register_application_distribution_service_factory(application_distribution_service)

@@ -73,6 +73,10 @@ class ApplicationDistributionService:
     packages: ContentAddressedPackageStore
     remote: DistributionRemote
     admission: ProvenanceAdmission
+    addressed_report_validator: Callable[
+        [str, str, tuple[str, ...]], Mapping[str, Any]
+    ] | None = None
+    release_announcer: Callable[[str, str], list[dict[str, Any]]] | None = None
     clock: Callable[[], str] = utc_now
 
     @property
@@ -275,6 +279,82 @@ class ApplicationDistributionService:
         )
         return self.applications.register_release(release)
 
+    def _validate_addressed_reports(
+        self,
+        application_id: str,
+        release_digest: str,
+        report_ids: tuple[str, ...],
+    ) -> dict[str, Any]:
+        if not report_ids:
+            return {"ok": True, "validated_report_ids": []}
+        if self.addressed_report_validator is None or self.release_announcer is None:
+            raise ApplicationDistributionError(
+                "addressed Development Reports require validation and announcement services"
+            )
+        try:
+            return dict(
+                self.addressed_report_validator(application_id, release_digest, report_ids)
+            )
+        except Exception as exc:
+            raise ApplicationDistributionError(
+                f"addressed Development Reports failed preflight: {exc}"
+            ) from exc
+
+    def _announce_addressed_reports(
+        self,
+        operation: dict[str, Any],
+        *,
+        application_id: str,
+        release_digest: str,
+        stage: str,
+        report_ids: tuple[str, ...],
+    ) -> dict[str, Any]:
+        announcements = operation.setdefault("report_announcements", {})
+        current = announcements.get(stage)
+        if isinstance(current, Mapping) and current.get("status") == "completed":
+            return dict(current)
+        if not report_ids:
+            receipt = {
+                "status": "completed",
+                "report_count": 0,
+                "completed_at": self.clock(),
+            }
+            announcements[stage] = receipt
+            self._save_operation(operation)
+            return receipt
+        if self.release_announcer is None:
+            raise ApplicationDistributionError(
+                "addressed Development Reports require an announcement service"
+            )
+        announcements[stage] = {
+            "status": "dispatching",
+            "report_count": len(report_ids),
+            "updated_at": self.clock(),
+        }
+        self._save_operation(operation)
+        try:
+            results = self.release_announcer(application_id, release_digest)
+        except Exception as exc:
+            announcements[stage] = {
+                "status": "unknown",
+                "report_count": len(report_ids),
+                "last_error": f"{type(exc).__name__}: {exc}"[:1024],
+                "updated_at": self.clock(),
+            }
+            self._save_operation(operation)
+            raise DistributionOutcomeUnknown(
+                "Development Report announcement outcome is unknown; retry publication"
+            ) from exc
+        receipt = {
+            "status": "completed",
+            "report_count": len(report_ids),
+            "results": [dict(item) for item in results],
+            "completed_at": self.clock(),
+        }
+        announcements[stage] = receipt
+        self._save_operation(operation)
+        return receipt
+
     def _channel_or_none(self, project_id: str, channel: str) -> ChannelPointer | None:
         try:
             return self.remote.get_channel(project_id, channel)
@@ -433,12 +513,24 @@ class ApplicationDistributionService:
                 if not channels.get("stable"):
                     raise ApplicationDistributionError("public prerelease requires the first stable release")
             candidate, plan = self._candidate_plan(application_id, candidate_id, publisher_ref)
+            bounded_report_ids = tuple(
+                sorted({str(item).strip() for item in addresses_report_ids if str(item).strip()})
+            )
+            if len(bounded_report_ids) > 200:
+                raise ApplicationDistributionError(
+                    "addresses_report_ids exceeds 200 items"
+                )
+            address_validation = self._validate_addressed_reports(
+                application_id,
+                str(plan.release.release_digest),
+                bounded_report_ids,
+            )
             _, binding = self._provenance(plan)
             operation = self._operation(application_id, candidate, binding)
             self._ensure_uploaded(operation, plan)
             release = self._register_release(
                 application_id, publisher_ref, candidate, plan, binding,
-                tuple(sorted(set(addresses_report_ids))),
+                bounded_report_ids,
             )
             publication: dict[str, Any] = {"mode": mode, "release": release.to_dict()}
             if mode == "prerelease":
@@ -457,7 +549,19 @@ class ApplicationDistributionService:
             }
             operation["updated_at"] = self.clock()
             self._save_operation(operation)
-            return {**publication, "operation": operation}
+            announcement = self._announce_addressed_reports(
+                operation,
+                application_id=application_id,
+                release_digest=candidate.release_digest,
+                stage=mode,
+                report_ids=bounded_report_ids,
+            )
+            return {
+                **publication,
+                "address_validation": address_validation,
+                "report_announcement": announcement,
+                "operation": operation,
+            }
 
     def promote_stable(
         self,
@@ -483,11 +587,20 @@ class ApplicationDistributionService:
                 stable_state = (operation.get("publications") or {}).get("stable")
                 if not isinstance(stable_state, Mapping):
                     raise ApplicationDistributionError("stable promotion receipt has no channel state")
+                release = self.applications.store.get_release(
+                    application_id, candidate.release_digest
+                )
+                announcement = self._announce_addressed_reports(
+                    operation,
+                    application_id=application_id,
+                    release_digest=candidate.release_digest,
+                    stage="stable",
+                    report_ids=release.addresses_report_ids,
+                )
                 return {
-                    "release": self.applications.store.get_release(
-                        application_id, candidate.release_digest
-                    ).to_dict(),
+                    "release": release.to_dict(),
                     "channel": dict(stable_state),
+                    "report_announcement": announcement,
                     "operation": operation,
                 }
             if not isinstance(trial, Mapping) or trial.get("status") != "completed":
@@ -511,6 +624,11 @@ class ApplicationDistributionService:
                 addresses_report_ids = existing_release.addresses_report_ids
             except FileNotFoundError:
                 addresses_report_ids = ()
+            address_validation = self._validate_addressed_reports(
+                application_id,
+                candidate.release_digest,
+                addresses_report_ids,
+            )
             release = self._register_release(
                 application_id, publisher_ref, candidate, plan, binding,
                 addresses_report_ids,
@@ -536,7 +654,20 @@ class ApplicationDistributionService:
             }
             operation["updated_at"] = self.clock()
             self._save_operation(operation)
-            return {"release": release.to_dict(), "channel": channel, "operation": operation}
+            announcement = self._announce_addressed_reports(
+                operation,
+                application_id=application_id,
+                release_digest=candidate.release_digest,
+                stage="stable",
+                report_ids=addresses_report_ids,
+            )
+            return {
+                "release": release.to_dict(),
+                "channel": channel,
+                "address_validation": address_validation,
+                "report_announcement": announcement,
+                "operation": operation,
+            }
 
     def reconcile(self, candidate_id: str) -> dict[str, Any]:
         with mutation_lock(self.applications.store.lock_path, timeout_s=30.0):

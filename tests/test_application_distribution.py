@@ -423,3 +423,89 @@ def test_unknown_channel_move_and_retirement_reconcile_without_second_write(tmp_
     assert promoted["release"]["release_digest"] == second.release_digest
     assert replay["operation"]["stable_promotion"]["status"] == "completed"
     assert remote.channel_writes == writes
+
+
+def test_addressed_reports_are_validated_before_remote_publication(tmp_path: Path) -> None:
+    distribution, candidates, releases, packages, remote, admission = _service(tmp_path)
+    candidate, _ = _accepted_candidate(
+        tmp_path,
+        version="1.0.0",
+        base=None,
+        candidates=candidates,
+        releases=releases,
+        packages=packages,
+        admission=admission,
+    )
+    distribution.addressed_report_validator = lambda *_args: (_ for _ in ()).throw(
+        ValueError("report is not accepted")
+    )
+    distribution.release_announcer = lambda *_args: []
+
+    with pytest.raises(ApplicationDistributionError, match="failed preflight"):
+        distribution.publish_trial(
+            "app_recipes",
+            candidate.candidate_id,
+            publisher_ref="subnet:publisher",
+            mode="link_only",
+            addresses_report_ids=("report.unknown",),
+        )
+
+    assert remote.upload_writes == 0
+    with pytest.raises(FileNotFoundError):
+        distribution.applications.store.get_release(
+            "app_recipes", candidate.release_digest
+        )
+
+
+def test_addressed_report_announcements_follow_trial_and_stable(tmp_path: Path) -> None:
+    distribution, candidates, releases, packages, _, admission = _service(tmp_path)
+    candidate, _ = _accepted_candidate(
+        tmp_path,
+        version="1.0.0",
+        base=None,
+        candidates=candidates,
+        releases=releases,
+        packages=packages,
+        admission=admission,
+    )
+    validations: list[tuple[str, str, tuple[str, ...]]] = []
+    announcements: list[tuple[str, str]] = []
+
+    def validate(application_id, release_digest, report_ids):
+        validations.append((application_id, release_digest, report_ids))
+        return {"ok": True, "validated_report_ids": list(report_ids)}
+
+    def announce(application_id, release_digest):
+        announcements.append((application_id, release_digest))
+        return [{"event": {"status": "published", "release_digest": release_digest}}]
+
+    distribution.addressed_report_validator = validate
+    distribution.release_announcer = announce
+    trial = distribution.publish_trial(
+        "app_recipes",
+        candidate.candidate_id,
+        publisher_ref="subnet:publisher",
+        mode="link_only",
+        addresses_report_ids=("report.1",),
+    )
+    stable = distribution.promote_stable(
+        "app_recipes",
+        candidate.candidate_id,
+        publisher_ref="subnet:publisher",
+        expected_stable_digest=None,
+    )
+    replay = distribution.promote_stable(
+        "app_recipes",
+        candidate.candidate_id,
+        publisher_ref="subnet:publisher",
+        expected_stable_digest=None,
+    )
+
+    assert trial["report_announcement"]["status"] == "completed"
+    assert stable["report_announcement"]["status"] == "completed"
+    assert replay["report_announcement"]["status"] == "completed"
+    assert len(validations) == 2
+    assert announcements == [
+        ("app_recipes", candidate.release_digest),
+        ("app_recipes", candidate.release_digest),
+    ]

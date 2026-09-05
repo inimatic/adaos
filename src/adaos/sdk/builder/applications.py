@@ -81,6 +81,96 @@ def publisher_context() -> dict[str, Any]:
     }
 
 
+def _create_application_effect(
+    application_id: str,
+    *,
+    title: str,
+    summary: str,
+    template: str,
+    visibility: str,
+    actor_ref: str,
+    subnet_ref: str,
+    expected_revision: int,
+    publisher: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    from adaos.sdk.developer import compositions
+
+    service = _application_service()
+    try:
+        existing = service.store.get_application(application_id)
+    except FileNotFoundError:
+        existing = None
+    if existing is not None:
+        expected_identity = (
+            existing.revision == 1
+            and expected_revision == 0
+            and existing.legacy_project_id == application_id
+            and existing.publisher_ref == subnet_ref
+            and existing.slug == application_id
+            and existing.visibility == visibility
+            and existing.display.get("title") == title
+            and existing.display.get("summary") == summary
+            and _primary_scenario(existing) == application_id
+        )
+        if not expected_identity:
+            raise ValueError("Application already exists with another identity or revision")
+        return {"ok": True, "duplicate": True, "application": existing.to_dict()}
+    if expected_revision != 0:
+        raise ValueError("new Application expected_revision must be zero")
+    try:
+        project = compositions.get(application_id)
+        component_ref = f"scenario:{application_id}"
+        if component_ref not in {
+            str(item.get("ref") or "") for item in project["components"]["owned"]
+        }:
+            raise ValueError("existing Project does not own the Application scenario")
+        composition = {"ok": True, "project": project, "created_component": False}
+    except compositions.ProjectCompositionNotFound:
+        composition = compositions.create_with_primary_component(
+            application_id,
+            kind="scenario",
+            component_id=application_id,
+            template=template,
+            title=title,
+            description=summary,
+            entrypoints=(
+                {
+                    "id": "main",
+                    "presentation": f"scenario:{application_id}",
+                    "default": True,
+                    "bindings": {},
+                },
+            ),
+            compatibility={"required_entrypoints": ["main"]},
+            actor=actor_ref,
+        )
+    application = Application(
+        application_id=application_id,
+        legacy_project_id=application_id,
+        publisher_ref=subnet_ref,
+        slug=application_id,
+        display={"title": title, "summary": summary},
+        visibility=visibility,  # type: ignore[arg-type]
+        entrypoints=(
+            {"entrypoint_id": "main", "presentation_ref": f"scenario:{application_id}"},
+        ),
+        publisher={
+            key: publisher[key]
+            for key in (
+                "publisher_ref",
+                "display_name",
+                "subnet_short_ref",
+                "release_key_ref",
+                "release_key_fingerprint",
+                "home_zone",
+                "trust_relation",
+            )
+        },
+    )
+    saved = service.register(application, expected_revision=0)
+    return {"ok": True, "application": saved.to_dict(), "composition": composition}
+
+
 def create_application(
     application_id: str,
     *,
@@ -103,74 +193,21 @@ def create_application(
         "template": str(template),
         "visibility": str(visibility),
         "publisher_key_fingerprint": publisher["release_key_fingerprint"],
+        "publisher": dict(publisher),
     }
 
     def execute() -> Mapping[str, Any]:
-        from adaos.sdk.developer import compositions
-
-        service = _application_service()
-        try:
-            existing = service.store.get_application(application_id)
-        except FileNotFoundError:
-            existing = None
-        if existing is not None:
-            if existing.revision != expected_revision or expected_revision == 0:
-                raise ValueError("Application already exists with another revision")
-            return {"ok": True, "duplicate": True, "application": existing.to_dict()}
-        if expected_revision != 0:
-            raise ValueError("new Application expected_revision must be zero")
-        try:
-            project = compositions.get(application_id)
-            component_ref = f"scenario:{application_id}"
-            if component_ref not in {
-                str(item.get("ref") or "") for item in project["components"]["owned"]
-            }:
-                raise ValueError("existing Project does not own the Application scenario")
-            composition = {"ok": True, "project": project, "created_component": False}
-        except compositions.ProjectCompositionNotFound:
-            composition = compositions.create_with_primary_component(
-                application_id,
-                kind="scenario",
-                component_id=application_id,
-                template=template,
-                title=title,
-                description=summary,
-                entrypoints=(
-                    {
-                        "id": "main",
-                        "presentation": f"scenario:{application_id}",
-                        "default": True,
-                        "bindings": {},
-                    },
-                ),
-                compatibility={"required_entrypoints": ["main"]},
-                actor=actor_ref,
-            )
-        application = Application(
-            application_id=application_id,
-            legacy_project_id=application_id,
-            publisher_ref=subnet_ref,
-            slug=application_id,
-            display={"title": title, "summary": summary},
-            visibility=visibility,  # type: ignore[arg-type]
-            entrypoints=(
-                {"entrypoint_id": "main", "presentation_ref": f"scenario:{application_id}"},
-            ),
-            publisher={
-                key: publisher[key]
-                for key in (
-                    "publisher_ref",
-                    "display_name",
-                    "subnet_short_ref",
-                    "release_key_ref",
-                    "release_key_fingerprint",
-                    "home_zone",
-                    "trust_relation",
-                )
-            },
+        return _create_application_effect(
+            application_id,
+            title=title,
+            summary=summary,
+            template=template,
+            visibility=visibility,
+            actor_ref=actor_ref,
+            subnet_ref=subnet_ref,
+            expected_revision=expected_revision,
+            publisher=publisher,
         )
-        saved = service.register(application, expected_revision=0)
-        return {"ok": True, "application": saved.to_dict(), "composition": composition}
 
     return _coordinator().execute(
         "create",
@@ -442,7 +479,9 @@ def publish_stable_source(
     expected_revision: int,
     idempotency_key: str,
 ) -> dict[str, Any]:
-    intent = {"release_digest": release_digest, "release_notes": str(release_notes)[:20_000]}
+    if len(str(release_notes)) > 20_000:
+        raise ValueError("release_notes exceeds 20000 characters")
+    intent = {"release_digest": release_digest, "release_notes": str(release_notes)}
 
     def execute() -> Mapping[str, Any]:
         _application(application_id, expected_revision)
@@ -460,6 +499,154 @@ def publish_stable_source(
         subnet_ref=subnet_ref, capability=capability,
         expected_revision=expected_revision, idempotency_key=idempotency_key,
         intent=intent, callback=execute,
+    )
+
+
+def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, Any]:
+    action = str(operation.get("action") or "")
+    application_id = str(operation.get("application_id") or "")
+    actor_ref = str(operation.get("actor_ref") or "")
+    subnet_ref = str(operation.get("subnet_ref") or "")
+    expected_revision = int(operation.get("expected_revision") or 0)
+    idempotency_key = str(operation.get("idempotency_key") or "")
+    raw_intent = operation.get("intent")
+    if not application_id or not isinstance(raw_intent, Mapping):
+        raise ValueError("stored Application development intent is invalid")
+    intent = dict(raw_intent)
+
+    if action == "create":
+        current_publisher = publisher_context()
+        stored_publisher = intent.get("publisher")
+        publisher = (
+            dict(stored_publisher)
+            if isinstance(stored_publisher, Mapping)
+            else current_publisher
+        )
+        if (
+            publisher.get("publisher_ref") != subnet_ref
+            or publisher.get("release_key_fingerprint")
+            != intent.get("publisher_key_fingerprint")
+        ):
+            raise ValueError("stored publisher identity no longer matches the create intent")
+        return _create_application_effect(
+            application_id,
+            title=str(intent.get("title") or ""),
+            summary=str(intent.get("summary") or ""),
+            template=str(intent.get("template") or "empty"),
+            visibility=str(intent.get("visibility") or "private"),
+            actor_ref=actor_ref,
+            subnet_ref=subnet_ref,
+            expected_revision=expected_revision,
+            publisher=publisher,
+        )
+    if action in {"materialize", "preview"}:
+        from . import preview
+
+        application = _application(application_id, expected_revision)
+        scenario_id = _primary_scenario(application)
+        source_webspace_id = str(intent.get("source_webspace_id") or "desktop")
+        if action == "preview":
+            return preview.select_project(
+                "scenario",
+                scenario_id,
+                source_webspace_id=source_webspace_id,
+                ensure_ready=True,
+                wait_for_rebuild=True,
+            )
+        ready = preview.ensure(
+            source_webspace_id,
+            active_draft_id=scenario_id,
+            runtime_scenario_id=scenario_id,
+            wait_for_rebuild=True,
+        )
+        result = preview.materialize_revision(
+            webspace_id=preview.dev_webspace_id(source_webspace_id),
+            scenario_id=scenario_id,
+            revision=str(intent.get("revision") or "").strip() or None,
+            preview_stage="prototype",
+            preview_label=f"proto: {scenario_id}",
+        )
+        return {
+            "ok": bool(result.get("ok", True)),
+            "preview": ready,
+            "materialization": result,
+        }
+    if action in {"create_trial", "decide_trial"}:
+        from . import lifecycle
+
+        application = _application(application_id, expected_revision)
+        scenario_id = _primary_scenario(application)
+        if action == "create_trial":
+            return lifecycle.prepare_trial(
+                "scenario",
+                scenario_id,
+                actor=actor_ref,
+                idempotency_key=idempotency_key,
+                source_webspace_id=str(intent.get("source_webspace_id") or "desktop"),
+                publication_project_ref=f"project:{application.legacy_project_id}",
+            )
+        return lifecycle.decide_trial(
+            "scenario",
+            scenario_id,
+            accepted=bool(intent.get("accepted")),
+            actor=actor_ref,
+            idempotency_key=idempotency_key,
+        )
+    if action in {"publish_trial", "publish_prerelease", "promote_stable"}:
+        application = _application(application_id, expected_revision)
+        if application.publisher_ref != subnet_ref:
+            raise ValueError("only the local Application publisher may recover publication")
+        distribution = get_application_distribution_service()
+        candidate_id = str(intent.get("candidate_id") or "")
+        try:
+            distribution.reconcile(candidate_id)
+        except FileNotFoundError:
+            pass
+        if action == "promote_stable":
+            return distribution.promote_stable(
+                application_id,
+                candidate_id,
+                publisher_ref=subnet_ref,
+                expected_stable_digest=(
+                    str(intent.get("expected_stable_digest") or "").strip() or None
+                ),
+            )
+        return distribution.publish_trial(
+            application_id,
+            candidate_id,
+            publisher_ref=subnet_ref,
+            mode=str(intent.get("mode") or "link_only"),
+            expected_prerelease_digest=(
+                str(intent.get("expected_prerelease_digest") or "").strip() or None
+            ),
+            addresses_report_ids=tuple(intent.get("addresses_report_ids") or ()),
+        )
+    if action == "publish_stable_source":
+        _application(application_id, expected_revision)
+        return StableSourceProjectionService(
+            _application_service(), publisher=get_stable_source_publisher()
+        ).publish(
+            application_id,
+            str(intent.get("release_digest") or ""),
+            publisher_ref=subnet_ref,
+            release_notes=str(intent.get("release_notes") or ""),
+        )
+    raise ValueError(f"unsupported stored Application development action: {action}")
+
+
+def reconcile_development_operation(
+    operation_id: str,
+    *,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+) -> dict[str, Any]:
+    return _coordinator().recover(
+        operation_id,
+        actor_ref=actor_ref,
+        subnet_ref=subnet_ref,
+        capability=capability,
+        callback=_replay_development_operation,
     )
 
 
@@ -484,4 +671,5 @@ __all__ = [
     "publish_prerelease",
     "publish_stable_source",
     "publisher_context",
+    "reconcile_development_operation",
 ]

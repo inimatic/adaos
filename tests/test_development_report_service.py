@@ -112,12 +112,25 @@ def test_offline_report_accept_release_verify_round_trip(tmp_path: Path) -> None
     guest.receive()
     assert guest.public_status(report_id)["status"] == "accepted"
 
+    with pytest.raises(ValueError, match="not ready for release"):
+        publisher.validate_release_addresses(
+            "app_recipes", DIGEST_B, (report_id,)
+        )
     publisher.set_public_status(report_id, status="planned")
+    validation = publisher.validate_release_addresses(
+        "app_recipes", DIGEST_B, (report_id,)
+    )
+    assert validation["validated_report_ids"] == [report_id]
     guest.receive()
     addressed_release = _release("1.1.0", DIGEST_B, addresses=(report_id,))
     publisher_store.put_release(addressed_release)
     guest_store.put_release(addressed_release)
     publisher.announce_release("app_recipes", addressed_release.release_digest)
+    publisher.validate_release_addresses(
+        "app_recipes", addressed_release.release_digest, (report_id,)
+    )
+    with pytest.raises(ValueError, match="not ready for release"):
+        publisher.validate_release_addresses("app_recipes", DIGEST_C, (report_id,))
     guest.receive()
     assert guest.public_status(report_id)["release_digest"] == addressed_release.release_digest
 

@@ -162,6 +162,13 @@ def list_capability_classes() -> list[dict[str, Any]]:
             default_grants=["owner_token"],
         ),
         _capability_entry(
+            "applications.recover",
+            surface="development",
+            risk="high",
+            summary="Recover an unknown Builder Application operation from its stored bounded intent.",
+            default_grants=["owner_token"],
+        ),
+        _capability_entry(
             "development.read.foundation",
             surface="development",
             risk="low",

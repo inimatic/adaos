@@ -42,6 +42,10 @@ class _StubBuilderSdk:
         self.calls.append(("create_application", args, kwargs))
         return {"operation_id": "appdevop.1", "status": "succeeded"}
 
+    def reconcile_development_operation(self, *args, **kwargs):
+        self.calls.append(("reconcile_development_operation", args, kwargs))
+        return {"operation_id": args[0], "status": "succeeded"}
+
 
 def _context() -> dict:
     return {
@@ -82,6 +86,7 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
         "applications.request_development_report_resync",
         "applications.development.list_operations",
         "applications.development.get_operation",
+        "applications.development.reconcile_operation",
         "applications.development.create",
         "applications.development.materialize",
         "applications.development.preview",
@@ -224,6 +229,17 @@ def test_builder_development_mcp_forwards_narrow_authority(monkeypatch) -> None:
     assert stub.calls[0][2]["subnet_ref"] == "subnet:sn_home"
     assert stub.calls[0][2]["capability"] == "applications.develop"
 
+    recovered = applications_plane.handlers()[
+        "applications.development.reconcile_operation"
+    ](
+        {"operation_id": "appdevop.unknown", "_mcp_context": _context()},
+        dry_run=False,
+    )
+
+    assert recovered["operation"]["status"] == "succeeded"
+    assert stub.calls[1][2]["capability"] == "applications.recover"
+    assert stub.calls[1][2]["subnet_ref"] == "subnet:sn_home"
+
 
 def test_applications_contract_descriptor_and_capability_profile_are_published() -> None:
     descriptor = get_descriptor_set("application_contracts")
@@ -237,11 +253,13 @@ def test_applications_contract_descriptor_and_capability_profile_are_published()
         "applications.trial.install", "applications.publisher.read",
         "applications.report", "applications.publisher.triage",
         "applications.develop", "applications.publish",
+        "applications.recover",
     } <= capabilities
     assert {
         "applications.read", "applications.plan", "applications.apply",
         "applications.trial.install", "applications.publisher.read",
         "applications.report", "applications.publisher.triage",
+        "applications.recover",
     } <= set(
         DEFAULT_CAPABILITY_PROFILES["ApplicationsOperator"]
     )
