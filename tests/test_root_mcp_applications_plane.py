@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 
 from adaos.services.root_mcp import applications_plane
+from adaos.services.root_mcp.model import RootMcpResponseEnvelope, RootMcpSurface
 from adaos.services.root_mcp.policy import list_capability_classes
 from adaos.services.root_mcp.registry import get_descriptor_set
 from adaos.services.root_mcp.service import _execution_adapter_for_tool, list_tool_contracts, plane_registry
@@ -115,6 +116,20 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
         )
         assert contract.metadata["adapter"] == expected_adapter
         assert forbidden.isdisjoint(contract.input_schema["properties"])
+
+
+def test_root_mcp_response_preserves_empty_application_collections() -> None:
+    response = RootMcpResponseEnvelope(
+        request_id="request.empty-applications",
+        trace_id="trace.empty-applications",
+        tool_id="applications.list",
+        surface=RootMcpSurface.OPERATIONS,
+        ok=True,
+        status="ok",
+        result={"applications": [], "page": {}},
+    )
+
+    assert response.to_dict()["result"] == {"applications": [], "page": {}}
 
 
 def test_applications_plane_forwards_mcp_actor_and_subnet_to_sdk(monkeypatch) -> None:

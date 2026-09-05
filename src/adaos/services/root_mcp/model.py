@@ -176,6 +176,28 @@ def _compact_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _jsonify_result(value: Any) -> Any:
+    """Serialize a successful tool result without erasing empty collections."""
+
+    if isinstance(value, Enum):
+        return value.value
+    if is_dataclass(value):
+        return {
+            item.name: _jsonify_result(raw)
+            for item in fields(value)
+            if (raw := getattr(value, item.name)) is not None
+        }
+    if isinstance(value, Mapping):
+        return {
+            str(key): _jsonify_result(item)
+            for key, item in value.items()
+            if item is not None
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [item for item in (_jsonify_result(sub_item) for sub_item in value) if item is not None]
+    return value
+
+
 def _jsonify(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
@@ -184,6 +206,9 @@ def _jsonify(value: Any) -> Any:
         for item in fields(value):
             raw = getattr(value, item.name)
             if raw is None:
+                continue
+            if isinstance(value, RootMcpResponseEnvelope) and item.name == "result":
+                payload[item.name] = _jsonify_result(raw)
                 continue
             if isinstance(raw, Mapping):
                 nested = _compact_mapping(raw)

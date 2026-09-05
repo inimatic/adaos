@@ -44,6 +44,12 @@ until its compatibility vocabulary is retired. Implementation order is owned
 by the
 [Application Lifecycle and Distribution Roadmap](application-lifecycle-and-distribution-roadmap.md).
 
+In this document, `dev/.runtime` is a logical shorthand for the per-subnet,
+component-scoped preview slots, for example
+`.adaos/dev/<subnet-id>/skills/.runtime`; it never means a shared
+`.adaos/dev/.runtime` root. Trial roots remain separate at
+`.adaos/trials/<candidate-id>`.
+
 ## Decision Summary
 
 1. Application is the canonical user-facing and distributable product object.
