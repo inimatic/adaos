@@ -49,6 +49,19 @@ def _plane_registry_payload() -> dict[str, Any]:
         "kind": "mcp_plane_registry",
         "planes": [
             {
+                "plane_id": "applications",
+                "title": "ApplicationsPlane",
+                "enabled": True,
+                "surface": "operations",
+                "mode": "typed_application_lifecycle_adapter",
+                "published_by": "root",
+                "preferred_for": ["applications", "builder", "application_operations"],
+                "descriptor_ids": ["sdk_metadata", "application_contracts"],
+                "tool_prefixes": ["applications."],
+                "capability_profiles": ["ApplicationsOperator"],
+                "backing_store": "Application Core + Artifact Pipeline + ProjectDeployment",
+            },
+            {
                 "plane_id": "adaos_dev",
                 "title": "AdaOSDevPlane",
                 "enabled": True,
@@ -360,6 +373,22 @@ def _skill_factory_schema(name: str) -> dict[str, Any]:
     return _load_json(_package_root() / "abi" / name)
 
 
+def _application_contracts() -> dict[str, Any]:
+    names = (
+        "application.v1.schema.json",
+        "application.release.v1.schema.json",
+        "application.installation.v1.schema.json",
+        "application.subscription.v1.schema.json",
+        "application.runtime-selection.v1.schema.json",
+        "application.trial-access-grant.v1.schema.json",
+        "application.operation.v1.schema.json",
+    )
+    return {
+        "schema": "adaos.application.contract_bundle.v1",
+        "schemas": {name: _skill_factory_schema(name) for name in names},
+    }
+
+
 def _skill_factory_status() -> dict[str, Any]:
     try:
         from adaos.services.skill_factory import SkillFactoryService
@@ -666,6 +695,8 @@ def _descriptor_payload(
         if effective_level not in {"mini", "std", "rich"}:
             effective_level = "std"
         return _sdk_metadata(effective_level, query=query, limit=limit)
+    if token == "application_contracts":
+        return _application_contracts()
     if token == "ui_capability_catalog":
         return ui_capability_catalog()
     if token == "system_model_vocabulary":
@@ -766,6 +797,14 @@ def _descriptor_payload(
 
 def list_descriptor_sets() -> list[dict[str, Any]]:
     return [
+        _descriptor_entry(
+            "application_contracts",
+            title="Application lifecycle contracts",
+            summary="Versioned Application, release, installation, subscription, runtime selection, Trial grant, and operation schemas.",
+            source_kind="application_contract_bundle",
+            descriptor_class="schema",
+            tags=["applications", "lifecycle", "distribution", "schema"],
+        ),
         _descriptor_entry(
             "sdk_metadata",
             title="SDK metadata",

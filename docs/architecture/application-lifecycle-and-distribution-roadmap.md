@@ -151,9 +151,9 @@ imports, raw registry parsing, or filesystem mutation.
 - [ ] `[must]` `APP2-04` Require actor/subnet/capability context, expected
   revision, reviewed plan digest, idempotency key, and durable operation ID for
   every mutation.
-- [ ] `[must]` `APP2-05` Add an `ApplicationsPlane` to Root MCP as a thin adapter
+- [x] `[must]` `APP2-05` Add an `ApplicationsPlane` to Root MCP as a thin adapter
   over the SDK with bounded read resources and reviewed mutation tools.
-- [ ] `[must]` `APP2-06` Deny arbitrary filesystem paths, raw Git credentials,
+- [x] `[must]` `APP2-06` Deny arbitrary filesystem paths, raw Git credentials,
   direct registry writes, and unrestricted process operations through MCP.
 - [ ] `[should]` `APP2-07` Add operation subscriptions plus reconnect-safe
   polling fallback and structured recovery reasons.

@@ -9,6 +9,7 @@ from .targets import get_managed_target
 
 
 DEFAULT_BEARER_CAPABILITIES: list[str] = [
+    "applications.read",
     "development.read.foundation",
     "development.read.contracts",
     "development.read.descriptors",
@@ -89,6 +90,27 @@ def _capability_entry(
 
 def list_capability_classes() -> list[dict[str, Any]]:
     return [
+        _capability_entry(
+            "applications.read",
+            surface="operations",
+            risk="low",
+            summary="Read bounded Application Catalog, installation, release, subscription, and operation state.",
+            default_grants=["owner_token", "bearer"],
+        ),
+        _capability_entry(
+            "applications.plan",
+            surface="operations",
+            risk="medium",
+            summary="Create a durable reviewable Application lifecycle plan without applying it.",
+            default_grants=["owner_token"],
+        ),
+        _capability_entry(
+            "applications.apply",
+            surface="operations",
+            risk="high",
+            summary="Apply one exact reviewed Application plan through the configured lifecycle executor.",
+            default_grants=["owner_token"],
+        ),
         _capability_entry(
             "development.read.foundation",
             surface="development",

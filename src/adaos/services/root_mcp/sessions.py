@@ -17,6 +17,12 @@ DEFAULT_SESSION_TTL_SECONDS = 4 * 60 * 60
 MAX_SESSION_TTL_SECONDS = 24 * 60 * 60
 
 DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
+    "ApplicationsOperator": [
+        *DEFAULT_BEARER_CAPABILITIES,
+        "applications.read",
+        "applications.plan",
+        "applications.apply",
+    ],
     "ContextAgent": [
         *DEFAULT_BEARER_CAPABILITIES,
         "context.read",

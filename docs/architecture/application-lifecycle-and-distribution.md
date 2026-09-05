@@ -126,6 +126,13 @@ perform filesystem/process mutations themselves. A missing executor leaves a
 reviewed operation in `planned`, while an unknown executor outcome moves it to
 `unknown` and requires reconciliation rather than replay.
 
+`ApplicationsPlane` exposes this core through Root MCP as a thin adapter over
+the public SDK. Its mutation contracts accept aggregate identifiers,
+revisions, plan digests, and idempotency keys only; filesystem paths, process
+commands, Git credentials, and direct registry writes are outside the plane.
+Durable operation reads provide the baseline reconnect-safe polling path until
+streaming subscriptions are added.
+
 ## Practice Anchors
 
 AdaOS should reuse established security models where their threat boundaries
