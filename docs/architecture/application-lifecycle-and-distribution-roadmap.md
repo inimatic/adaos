@@ -102,28 +102,28 @@ Project/Application identity collapse.
 
 **Outcome:** one Core service owns installed and catalog Application state.
 
-- [ ] `[must]` `APP1-01` Implement an Application repository/service over the
+- [x] `[must]` `APP1-01` Implement an Application repository/service over the
   existing artifact, WorkspaceLock, Candidate, TrialActivation, placement, and
   operation records.
-- [ ] `[must]` `APP1-02` Implement installed, available, update-available,
+- [x] `[must]` `APP1-02` Implement installed, available, update-available,
   pinned, prerelease-following, retired, and operation-state read models.
-- [ ] `[must]` `APP1-03` Implement compare-and-swap `RuntimeSelection` per
+- [x] `[must]` `APP1-03` Implement compare-and-swap `RuntimeSelection` per
   Webspace and startup reconciliation from immutable release evidence.
 - [ ] `[must]` `APP1-04` Remove Application inventory authority from
   Infrastate; expose a technical deep link from Application detail to component
   and runtime diagnostics.
 - [ ] `[must]` `APP1-05` Implement aggregate install/update/remove planning over
   one exact ApplicationRelease and the transactional Artifact Pipeline.
-- [ ] `[must]` `APP1-06` Add component reference accounting for bound/shared
+- [x] `[must]` `APP1-06` Add component reference accounting for bound/shared
   lifecycle, active runtime leases, rollback holds, uncertain operations, and
   separate data-retention policy.
-- [ ] `[must]` `APP1-07` Reject incompatible active shared component versions
+- [x] `[must]` `APP1-07` Reject incompatible active shared component versions
   with a deterministic conflict plan rather than mutating another Application.
-- [ ] `[must]` `APP1-08` Add pre-update snapshot identity, consistency boundary,
+- [x] `[must]` `APP1-08` Add pre-update snapshot identity, consistency boundary,
   retention, restore receipt, and `snapshot_restore` migration mode.
-- [ ] `[should]` `APP1-09` Add ABI, platform, permission, migration, and release
+- [x] `[should]` `APP1-09` Add ABI, platform, permission, migration, and release
   compatibility summaries to every plan.
-- [ ] `[could]` `APP1-10` Add operator simulation for removal and retention
+- [x] `[could]` `APP1-10` Add operator simulation for removal and retention
   outcomes before apply.
 - [ ] `[deferred]` `APP1-11` General dependency solver and side-by-side versions
   of one shared component.
@@ -159,7 +159,7 @@ imports, raw registry parsing, or filesystem mutation.
   polling fallback and structured recovery reasons.
 - [ ] `[should]` `APP2-08` Add machine-readable SDK/MCP examples and Builder
   context capsules for every supported lifecycle transition.
-- [ ] `[could]` `APP2-09` Add dry-run explain traces for release and dependency
+- [x] `[could]` `APP2-09` Add dry-run explain traces for release and dependency
   resolution.
 - [ ] `[deferred]` `APP2-10` Third-party administrative MCP clients and broad
   remote publisher automation.

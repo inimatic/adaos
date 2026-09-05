@@ -118,6 +118,14 @@ Until APP4 moves the real product workflow, Infrastate Inventory remains an
 unchanged compatibility UI. It must not gain new Application authority, and it
 must not be removed before Applications has equivalent tested behavior.
 
+Application Core persists its product records under
+`state/applications/`. Package archives and legacy release plans remain under
+the Artifact Pipeline roots. Core operations therefore reference exact
+digests and call a registered executor port; they do not copy package bytes or
+perform filesystem/process mutations themselves. A missing executor leaves a
+reviewed operation in `planned`, while an unknown executor outcome moves it to
+`unknown` and requires reconciliation rather than replay.
+
 ## Practice Anchors
 
 AdaOS should reuse established security models where their threat boundaries

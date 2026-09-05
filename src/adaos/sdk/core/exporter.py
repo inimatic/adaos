@@ -18,6 +18,7 @@ from .decorators import emits_map, event_payloads, tools_meta, tools_registry
 _ALLOWED_TOOL_PREFIXES: Tuple[str, ...] = ("manage.", "skills.", "scenarios.", "resources.")
 _DISCOVERY_PACKAGES: Tuple[str, ...] = ("adaos.sdk.manage", "adaos.sdk.data")
 _PUBLIC_FACADE_MODULES: Tuple[str, ...] = (
+    "adaos.sdk.applications",
     "adaos.sdk.control_plane",
     "adaos.sdk.conversation",
     "adaos.sdk.context",
@@ -31,6 +32,7 @@ _PUBLIC_FACADE_MODULES: Tuple[str, ...] = (
     "adaos.sdk.workflow",
 )
 _PUBLIC_FACADE_SUMMARIES: dict[str, str] = {
+    "adaos.sdk.applications": "Inspect Applications and execute reviewed install, update, removal, and track operations.",
     "adaos.sdk.control_plane": "Read canonical node, subnet, reliability, quota, and inventory projections.",
     "adaos.sdk.conversation": "Read and update governed conversational threads and Builder topics.",
     "adaos.sdk.context": "Resolve, compile, inspect, and bind governed agent context.",

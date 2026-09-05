@@ -5,6 +5,7 @@ from __future__ import annotations
 from importlib import import_module
 
 __all__ = [
+    "applications",
     "builder",
     "chat",
     "control_plane",
@@ -29,6 +30,7 @@ __all__ = [
 
 def __getattr__(name: str):
     if name in (
+        "applications",
         "builder",
         "chat",
         "control_plane",
