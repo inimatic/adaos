@@ -10,6 +10,7 @@ from .targets import get_managed_target
 
 DEFAULT_BEARER_CAPABILITIES: list[str] = [
     "applications.read",
+    "applications.trial.redeem",
     "development.read.foundation",
     "development.read.contracts",
     "development.read.descriptors",
@@ -110,6 +111,13 @@ def list_capability_classes() -> list[dict[str, Any]]:
             risk="high",
             summary="Apply one exact reviewed Application plan through the configured lifecycle executor.",
             default_grants=["owner_token"],
+        ),
+        _capability_entry(
+            "applications.trial.redeem",
+            surface="operations",
+            risk="medium",
+            summary="Redeem a targeted Trial capability for the authenticated subnet and key.",
+            default_grants=["owner_token", "bearer"],
         ),
         _capability_entry(
             "development.read.foundation",

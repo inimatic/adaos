@@ -186,7 +186,7 @@ Git repository as the artifact store.
   prerelease digest and never rebuild during promotion.
 - [ ] `[must]` `APP3-05` Implement `stable|prerelease` subscriptions and derive
   effective channel/release without mutating persistent user intent.
-- [ ] `[must]` `APP3-06` Implement targeted, expiring, revocable
+- [x] `[must]` `APP3-06` Implement targeted, expiring, revocable
   `exact_release|follow_prerelease` TrialAccessGrant resolution and replay
   protection.
 - [ ] `[must]` `APP3-07` Require link installation before first stable and for

@@ -133,6 +133,13 @@ commands, Git credentials, and direct registry writes are outside the plane.
 Durable operation reads provide the baseline reconnect-safe polling path until
 streaming subscriptions are added.
 
+Trial capability links are backed by `TrialAccessGrant` records plus private
+credential and redemption records. Links are bound to the recipient subnet,
+purpose-scoped key, zone, expiry, scope, and use limit. Only a token hash is
+stored; redemption is idempotent by a caller-supplied identity and consumes the
+grant atomically. A `follow_prerelease` grant resolves the channel at each new
+semantic redemption, while `exact_release` remains digest-pinned.
+
 ## Practice Anchors
 
 AdaOS should reuse established security models where their threat boundaries

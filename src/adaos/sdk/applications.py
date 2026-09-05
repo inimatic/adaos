@@ -11,7 +11,7 @@ from typing import Any
 
 from adaos.domain.application import RuntimeSelection
 from adaos.sdk.core._ctx import require_ctx
-from adaos.services.applications import get_application_service
+from adaos.services.applications import TrialAccessService, get_application_service
 
 
 def _service():
@@ -79,6 +79,67 @@ def list_operations(application_id: str | None = None) -> list[dict[str, Any]]:
 
 def get_operation(operation_id: str) -> dict[str, Any]:
     return _service().store.get_operation(operation_id).to_dict()
+
+
+def list_trial_access(application_id: str | None = None) -> list[dict[str, Any]]:
+    return [item.to_dict() for item in _service().store.list_grants(application_id)]
+
+
+def issue_trial_access(
+    application_id: str,
+    *,
+    publisher_ref: str,
+    recipient_subnet_ref: str,
+    recipient_key_ref: str,
+    scope: str,
+    expires_at: str,
+    allowed_zones: tuple[str, ...],
+    idempotency_key: str,
+    release_digest: str | None = None,
+    max_uses: int = 1,
+) -> dict[str, Any]:
+    return TrialAccessService(_service()).issue(
+        application_id,
+        publisher_ref=publisher_ref,
+        recipient_subnet_ref=recipient_subnet_ref,
+        recipient_key_ref=recipient_key_ref,
+        scope=scope,
+        expires_at=expires_at,
+        allowed_zones=allowed_zones,
+        idempotency_key=idempotency_key,
+        release_digest=release_digest,
+        max_uses=max_uses,
+    )
+
+
+def resolve_trial_link(
+    link: str,
+    *,
+    recipient_subnet_ref: str,
+    recipient_key_ref: str,
+    zone: str,
+    redemption_id: str,
+) -> dict[str, Any]:
+    return TrialAccessService(_service()).resolve(
+        link,
+        recipient_subnet_ref=recipient_subnet_ref,
+        recipient_key_ref=recipient_key_ref,
+        zone=zone,
+        redemption_id=redemption_id,
+    )
+
+
+def revoke_trial_access(
+    grant_id: str,
+    *,
+    publisher_ref: str,
+    expected_revision: int,
+) -> dict[str, Any]:
+    return TrialAccessService(_service()).revoke(
+        grant_id,
+        publisher_ref=publisher_ref,
+        expected_revision=expected_revision,
+    ).to_dict()
 
 
 def plan_install(
@@ -232,14 +293,18 @@ __all__ = [
     "get_operation",
     "get_runtime_selection",
     "get_subscription",
+    "issue_trial_access",
     "list_applications",
     "list_catalog",
     "list_operations",
     "list_releases",
+    "list_trial_access",
     "plan_install",
     "plan_remove",
     "plan_update",
     "plan_update_track",
+    "resolve_trial_link",
+    "revoke_trial_access",
     "select_runtime",
     "simulate_removal",
 ]

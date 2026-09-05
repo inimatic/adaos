@@ -11,6 +11,7 @@ from .store import (
     ApplicationStoreError,
 )
 from .runtime import get_application_service, register_application_executor
+from .access import TrialAccessError, TrialAccessService
 
 __all__ = [
     "ApplicationChannelConflict",
@@ -21,6 +22,8 @@ __all__ = [
     "ApplicationServiceError",
     "ApplicationStore",
     "ApplicationStoreError",
+    "TrialAccessError",
+    "TrialAccessService",
     "get_application_service",
     "register_application_executor",
 ]

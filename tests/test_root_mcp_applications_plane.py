@@ -25,6 +25,10 @@ class _StubSdk:
         self.calls.append(("apply_operation", args, kwargs))
         return {"operation_id": args[0], "status": "succeeded"}
 
+    def resolve_trial_link(self, *args, **kwargs):
+        self.calls.append(("resolve_trial_link", args, kwargs))
+        return {"application_id": "app_recipes", "release_digest": "sha256:" + "c" * 64}
+
 
 def _context() -> dict:
     return {
@@ -45,9 +49,13 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
         "applications.list_releases",
         "applications.list_operations",
         "applications.get_operation",
+        "applications.list_trial_access",
         "applications.plan",
         "applications.apply",
         "applications.explain_plan",
+        "applications.issue_trial_access",
+        "applications.revoke_trial_access",
+        "applications.resolve_trial_link",
     }
     forbidden = {"path", "command", "process", "git_credentials", "registry_path"}
     for contract in contracts:
@@ -102,6 +110,25 @@ def test_applications_plane_dry_run_does_not_call_sdk(monkeypatch) -> None:
 
     assert result["would_plan"] is True
     assert stub.calls == []
+
+
+def test_trial_link_redemption_uses_authenticated_subnet_and_zone(monkeypatch) -> None:
+    stub = _StubSdk()
+    monkeypatch.setattr(applications_plane, "_sdk", lambda: stub)
+
+    result = applications_plane.handlers()["applications.resolve_trial_link"](
+        {
+            "link": "adaos://applications/trial/grant-1?token=secret",
+            "recipient_key_ref": "subnet-key:encryption-1",
+            "redemption_id": "install-1",
+            "_mcp_context": _context(),
+        },
+        dry_run=False,
+    )
+
+    assert result["redemption"]["application_id"] == "app_recipes"
+    assert stub.calls[0][2]["recipient_subnet_ref"] == "subnet:sn_home"
+    assert stub.calls[0][2]["zone"] == "local-dev"
 
 
 def test_applications_contract_descriptor_and_capability_profile_are_published() -> None:

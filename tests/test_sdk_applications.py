@@ -74,3 +74,4 @@ def test_application_sdk_is_discoverable_for_builder_context() -> None:
 
     assert "adaos.sdk.applications.plan_install" in names
     assert "adaos.sdk.applications.plan_update_track" in names
+    assert "adaos.sdk.applications.resolve_trial_link" in names

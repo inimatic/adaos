@@ -4437,6 +4437,8 @@ def _profile_ops_meta(tool_id: str, *, arguments: dict[str, Any], result: Any) -
 
 def _redactions_for_tool(tool_id: str) -> list[str]:
     token = str(tool_id or "").strip()
+    if token == "applications.issue_trial_access":
+        return ["result.trial_access.link"]
     if token in {"hub.issue_access_token", "root.access_tokens.issue"}:
         return ["result.access_token"]
     if token in {"hub.issue_mcp_session", "root.mcp_sessions.issue"}:

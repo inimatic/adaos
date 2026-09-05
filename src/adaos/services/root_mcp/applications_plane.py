@@ -72,6 +72,16 @@ def contracts() -> list[RootMcpToolContract]:
             metadata={**published, "handler": "applications_get_operation"},
         ),
         RootMcpToolContract(
+            id="applications.list_trial_access",
+            title="List Trial access grants",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="List bounded Trial grant metadata without capability bearer tokens.",
+            input_schema=schema_object(properties={"application_id": {"type": "string"}}),
+            output_schema=response(),
+            required_capability="applications.read",
+            metadata={**published, "handler": "applications_list_trial_access"},
+        ),
+        RootMcpToolContract(
             id="applications.plan",
             title="Plan Application mutation",
             surface=RootMcpSurface.OPERATIONS,
@@ -122,6 +132,68 @@ def contracts() -> list[RootMcpToolContract]:
             required_capability="applications.read",
             metadata={**published, "handler": "applications_explain_plan"},
         ),
+        RootMcpToolContract(
+            id="applications.issue_trial_access",
+            title="Issue Trial access",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Issue one targeted, expiring, bounded Trial capability link.",
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "recipient_subnet_ref": {"type": "string", "pattern": "^subnet:"},
+                    "recipient_key_ref": {"type": "string"},
+                    "scope": {"enum": ["exact_release", "follow_prerelease"]},
+                    "release_digest": {"type": ["string", "null"]},
+                    "expires_at": {"type": "string", "format": "date-time"},
+                    "allowed_zones": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 16},
+                    "max_uses": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 240},
+                },
+                required=[
+                    "application_id", "recipient_subnet_ref", "recipient_key_ref", "scope",
+                    "expires_at", "allowed_zones", "idempotency_key",
+                ],
+            ),
+            output_schema=response(),
+            required_capability="applications.apply",
+            side_effects="write",
+            metadata={**published, "handler": "applications_issue_trial_access", "sensitive_output_paths": ["result.link"]},
+        ),
+        RootMcpToolContract(
+            id="applications.revoke_trial_access",
+            title="Revoke Trial access",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Revoke one Trial capability using optimistic revision control.",
+            input_schema=schema_object(
+                properties={
+                    "grant_id": {"type": "string"},
+                    "expected_revision": {"type": "integer", "minimum": 1},
+                },
+                required=["grant_id", "expected_revision"],
+            ),
+            output_schema=response(),
+            required_capability="applications.apply",
+            side_effects="write",
+            metadata={**published, "handler": "applications_revoke_trial_access"},
+        ),
+        RootMcpToolContract(
+            id="applications.resolve_trial_link",
+            title="Resolve Trial link",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Redeem a capability link for the authenticated subnet, key, and zone.",
+            input_schema=schema_object(
+                properties={
+                    "link": {"type": "string", "pattern": "^adaos://applications/trial/"},
+                    "recipient_key_ref": {"type": "string"},
+                    "redemption_id": {"type": "string", "minLength": 1, "maxLength": 240},
+                },
+                required=["link", "recipient_key_ref", "redemption_id"],
+            ),
+            output_schema=response(),
+            required_capability="applications.trial.redeem",
+            side_effects="write",
+            metadata={**published, "handler": "applications_resolve_trial_link", "sensitive_input_paths": ["link"]},
+        ),
     ]
 
 
@@ -169,6 +241,11 @@ def _handle_get_operation(arguments: dict[str, Any], *, dry_run: bool) -> dict[s
     if not operation_id:
         raise ValueError("operation_id is required")
     return {"operation": _sdk().get_operation(operation_id)}
+
+
+def _handle_list_trial_access(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    application_id = str(arguments.get("application_id") or "").strip() or None
+    return {"grants": _sdk().list_trial_access(application_id)}
 
 
 def _handle_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -238,6 +315,63 @@ def _handle_explain(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, An
     return {"explanation": _sdk().explain_plan(operation_id)}
 
 
+def _handle_issue_trial_access(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_issue": True, "request": request}
+    _, subnet_ref = _context(arguments)
+    return {
+        "trial_access": _sdk().issue_trial_access(
+            _application_id(arguments),
+            publisher_ref=subnet_ref,
+            recipient_subnet_ref=str(arguments.get("recipient_subnet_ref") or ""),
+            recipient_key_ref=str(arguments.get("recipient_key_ref") or ""),
+            scope=str(arguments.get("scope") or ""),
+            release_digest=str(arguments.get("release_digest") or "").strip() or None,
+            expires_at=str(arguments.get("expires_at") or ""),
+            allowed_zones=tuple(arguments.get("allowed_zones") or ()),
+            max_uses=int(arguments.get("max_uses") or 1),
+            idempotency_key=str(arguments.get("idempotency_key") or ""),
+        )
+    }
+
+
+def _handle_revoke_trial_access(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_revoke": True, "request": request}
+    _, subnet_ref = _context(arguments)
+    return {
+        "grant": _sdk().revoke_trial_access(
+            str(arguments.get("grant_id") or ""),
+            publisher_ref=subnet_ref,
+            expected_revision=int(arguments.get("expected_revision") or 0),
+        )
+    }
+
+
+def _handle_resolve_trial_link(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key not in {"_mcp_context", "link"}}
+    if dry_run:
+        return {"would_redeem": True, "request": request}
+    raw = arguments.get("_mcp_context")
+    context = dict(raw) if isinstance(raw, Mapping) else {}
+    scope = context.get("scope") if isinstance(context.get("scope"), Mapping) else {}
+    _, subnet_ref = _context(arguments)
+    zone = str(scope.get("zone") or "").strip()
+    if not zone:
+        raise ValueError("MCP zone context is required")
+    return {
+        "redemption": _sdk().resolve_trial_link(
+            str(arguments.get("link") or ""),
+            recipient_subnet_ref=subnet_ref,
+            recipient_key_ref=str(arguments.get("recipient_key_ref") or ""),
+            zone=zone,
+            redemption_id=str(arguments.get("redemption_id") or ""),
+        )
+    }
+
+
 def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
     return {
         "applications.list": _handle_list,
@@ -245,9 +379,13 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "applications.list_releases": _handle_releases,
         "applications.list_operations": _handle_operations,
         "applications.get_operation": _handle_get_operation,
+        "applications.list_trial_access": _handle_list_trial_access,
         "applications.plan": _handle_plan,
         "applications.apply": _handle_apply,
         "applications.explain_plan": _handle_explain,
+        "applications.issue_trial_access": _handle_issue_trial_access,
+        "applications.revoke_trial_access": _handle_revoke_trial_access,
+        "applications.resolve_trial_link": _handle_resolve_trial_link,
     }
 
 
