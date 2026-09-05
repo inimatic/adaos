@@ -24,6 +24,7 @@ from adaos.services.applications import (
     ApplicationServiceError,
     ApplicationStore,
     ApplicationStoreError,
+    GitStableSourcePublisher,
     StableSourceProjectionService,
 )
 
@@ -577,3 +578,46 @@ def test_public_stable_source_projection_is_exact_and_idempotent(service: Applic
     assert first == repeated
     assert first["source_revision"] == release.project_release.source_ref.revision
     assert len(calls) == 1
+
+
+def test_git_stable_source_publisher_binds_candidate_release_and_registry() -> None:
+    application = _application().to_dict()
+    release = _release().to_dict()
+    calls = []
+
+    def publish_candidate(candidate_id: str, **kwargs):
+        calls.append((candidate_id, kwargs))
+        return {
+            "candidate_id": candidate_id,
+            "release_digest": release["release_digest"],
+            "publication": {
+                "repository": "registry",
+                "branch": "main",
+                "commit": "fedcba9876543210fedcba9876543210fedcba98",
+            },
+        }
+
+    publisher = GitStableSourcePublisher(
+        publish_candidate,
+        repository="https://github.com/inimatic/adaos-registry.git",
+        remote="registry",
+        branch="main",
+    )
+
+    result = publisher(
+        application=application,
+        release=release,
+        release_notes="Stable release notes",
+    )
+
+    assert calls == [
+        (
+            release["accepted_candidate_id"],
+            {"remote": "registry", "branch": "main", "message": "Stable release notes"},
+        )
+    ]
+    assert result == {
+        "repository": "https://github.com/inimatic/adaos-registry.git",
+        "commit": "fedcba9876543210fedcba9876543210fedcba98",
+        "source_revision": release["project_release"]["source_ref"]["revision"],
+    }

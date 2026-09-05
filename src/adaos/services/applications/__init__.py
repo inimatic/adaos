@@ -57,7 +57,11 @@ from .development import (
     ApplicationDevelopmentError,
     ApplicationDevelopmentOutcomeUnknown,
 )
-from .source_projection import StableSourceProjectionError, StableSourceProjectionService
+from .source_projection import (
+    GitStableSourcePublisher,
+    StableSourceProjectionError,
+    StableSourceProjectionService,
+)
 from .rollout import ApplicationRolloutError, ApplicationRolloutService
 
 __all__ = [
@@ -91,6 +95,7 @@ __all__ = [
     "ApplicationStore",
     "ApplicationStoreError",
     "DistributionOutcomeUnknown",
+    "GitStableSourcePublisher",
     "MetadataSigner",
     "SubnetDirectoryError",
     "SubnetKeyDirectoryAuthority",

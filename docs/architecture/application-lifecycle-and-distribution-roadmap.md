@@ -220,7 +220,7 @@ Git repository as the artifact store.
   object-store-compatible diagnostics for the initial on-disk CAS.
 - [x] `[should]` `APP3-13` Add sticky staged rollout/pause and health-based halt
   before broad prerelease use without creating multiple visible beta lines.
-- [ ] `[could]` `APP3-14` Retain GitHub projection for explicitly public stable
+- [x] `[could]` `APP3-14` Retain GitHub projection for explicitly public stable
   source and release notes.
 - [ ] `[deferred]` `APP3-15` Use `adaos-trials` as a canonical prerelease
   repository. The target is Root archive storage; any interim Git adapter must
@@ -239,6 +239,9 @@ back to stable without losing their track intent, and the latest observation
 from each distinct eligible subnet drives an automatic halt. Explicit resume
 and idempotent mutation/health receipts prevent a retry from reopening a halted
 rollout. Signed cross-zone health transport remains part of `APP5-10`.
+`APP3-14` is wired to the production runtime through the configured Workspace
+registry repository, remote, and branch; Builder cannot inject Git controls or
+publish anything except the exact current public stable source closure.
 
 ## APP4. Applications Builder Dogfood
 

@@ -379,6 +379,15 @@ The authorities are intentionally separate:
 `alpha` may be informal UI copy for local DEV preview, but it is not a channel
 and never feeds Workspace runtime.
 
+For an explicitly public stable Application, the runtime exposes a bounded Git
+projection port backed by the existing promoted-candidate source verifier. The
+SDK supplies only Application identity, exact stable release digest, publisher
+authority, and release notes. Repository, remote, branch, Git credentials, and
+filesystem paths remain operator/runtime configuration. The adapter verifies
+the returned candidate and release digest and records the resulting immutable
+commit; retries reconcile the existing publication instead of rebuilding the
+release.
+
 ## Channel and Promotion Semantics
 
 The bootstrap and recurring publication paths are:

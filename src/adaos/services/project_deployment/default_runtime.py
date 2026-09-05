@@ -843,14 +843,17 @@ def configure_default_distributed_runtimes(
         )
         from adaos.services.applications import (
             ApplicationDistributionService,
+            GitStableSourcePublisher,
             create_local_development_report_service,
             get_application_service,
             register_application_executor,
             register_application_distribution_service_factory,
             register_application_operation_publisher,
             register_development_report_service_factory,
+            register_stable_source_publisher,
         )
         from adaos.services.applications.deployment_executor import ApplicationDeploymentExecutor
+        from adaos.services.root.service import RootDeveloperService
 
         register_application_executor(
             ApplicationDeploymentExecutor(runtime=deployment, state_dir=state_dir)
@@ -869,6 +872,22 @@ def configure_default_distributed_runtimes(
                 display_name=str(getattr(conf, "subnet_alias", None) or subnet_id),
             )
         )
+        stable_repository = str(
+            os.getenv(
+                "ADAOS_WORKSPACE_REGISTRY_REPO",
+                "https://github.com/inimatic/adaos-registry.git",
+            )
+        ).strip()
+        stable_remote = str(os.getenv("ADAOS_WORKSPACE_REGISTRY_REMOTE", "registry")).strip()
+        stable_branch = str(os.getenv("ADAOS_WORKSPACE_REGISTRY_BRANCH", "main")).strip()
+        register_stable_source_publisher(
+            GitStableSourcePublisher(
+                RootDeveloperService(ctx=current).publish_project_candidate_source,
+                repository=stable_repository,
+                remote=stable_remote,
+                branch=stable_branch,
+            )
+        )
 
         def application_distribution_service() -> ApplicationDistributionService:
             from adaos.services.artifact_pipeline.candidates import CandidateStore
@@ -877,9 +896,7 @@ def configure_default_distributed_runtimes(
             from adaos.services.artifact_pipeline.runtime_trust import (
                 compose_artifact_trust_runtime,
             )
-            from adaos.services.root.service import RootDeveloperService
-
-            root_service = RootDeveloperService(current)
+            root_service = RootDeveloperService(ctx=current)
             remote_repository = root_service.artifact_release_repository(role="hub")
             artifact_root = state_dir / "artifact_pipeline"
             trust = compose_artifact_trust_runtime(

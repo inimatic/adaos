@@ -599,10 +599,12 @@ def test_default_runtimes_share_durable_store_and_publish_local_inventory(monkey
     assert deployment.releases.fallback is release_fallback
     from adaos.services.applications import (
         get_application_service,
+        get_stable_source_publisher,
         register_application_executor,
         register_application_distribution_service_factory,
         register_application_operation_publisher,
         register_development_report_service_factory,
+        register_stable_source_publisher,
     )
     from adaos.services.applications.deployment_executor import ApplicationDeploymentExecutor
 
@@ -610,11 +612,13 @@ def test_default_runtimes_share_durable_store_and_publish_local_inventory(monkey
         get_application_service(Path(ctx.paths.state_dir())).executor,
         ApplicationDeploymentExecutor,
     )
+    assert callable(get_stable_source_publisher())
 
     register_application_executor(None)
     register_application_operation_publisher(None)
     register_application_distribution_service_factory(None)
     register_development_report_service_factory(None)
+    register_stable_source_publisher(None)
     register_project_deployment_authority(None)
     register_project_deployment_runtime(None)
     register_distributed_runtime(None)
