@@ -1841,8 +1841,10 @@ The dated entries below remain the chronological implementation ledger.
   dogfooding: Builder can discover typed create/materialize/preview/Trial/
   prerelease/exact-stable/source-projection operations; calls are authority,
   revision, and idempotency bound and cannot accept raw paths, processes, Git
-  credentials, registries, or private keys. Lifecycle examples and the prompt
-  capsule define the DEV -> Trial -> prerelease -> stable sequence. This
+  credentials, registries, or private keys. The same operations are published
+  as explicit `applications.development.*` Root MCP tools over the typed Builder
+  SDK. Lifecycle examples and the prompt capsule define the DEV -> Trial ->
+  prerelease -> stable sequence. This
   completes the prerequisite only; it is not evidence that Applications has
   already been generated or released.
 - [ ] `[must]` Build and revise the Applications system scenario through

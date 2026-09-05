@@ -474,7 +474,7 @@ and its [roadmap](application-lifecycle-and-distribution-roadmap.md).
 
 - [x] `[must]` expose SDK-backed plan/apply tools for install, update, remove,
   update-track selection, and Trial-link installation
-- [ ] `[must]` expose bounded Builder tools for create, DEV preview,
+- [x] `[must]` expose bounded Builder tools for create, DEV preview,
   Candidate/Trial, link-only Trial publication, prerelease publication,
   exact-digest promotion, and stable publication without accepting arbitrary
   filesystem or Git destinations

@@ -4508,6 +4508,8 @@ def _execution_adapter_for_tool(tool_id: str) -> str:
         return "adaos_dev.descriptor_registry"
     if token.startswith("builder.source_recovery."):
         return "adaos_dev.builder_source_recovery"
+    if token.startswith("applications.development."):
+        return "sdk.builder.applications"
     if token.startswith("applications."):
         return "sdk.applications"
     if token.startswith("dev_ticket."):

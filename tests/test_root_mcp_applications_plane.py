@@ -34,6 +34,15 @@ class _StubSdk:
         return {"report": {"report_id": "report.1"}, "duplicate": False}
 
 
+class _StubBuilderSdk:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def create_application(self, *args, **kwargs):
+        self.calls.append(("create_application", args, kwargs))
+        return {"operation_id": "appdevop.1", "status": "succeeded"}
+
+
 def _context() -> dict:
     return {
         "actor": "user:owner",
@@ -71,6 +80,17 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
         "applications.resolve_development_report_appeal",
         "applications.verify_development_report_release",
         "applications.request_development_report_resync",
+        "applications.development.list_operations",
+        "applications.development.get_operation",
+        "applications.development.create",
+        "applications.development.materialize",
+        "applications.development.preview",
+        "applications.development.create_trial",
+        "applications.development.decide_trial",
+        "applications.development.publish_link_trial",
+        "applications.development.publish_prerelease",
+        "applications.development.promote_stable",
+        "applications.development.publish_stable_source",
         "applications.plan",
         "applications.apply",
         "applications.explain_plan",
@@ -83,7 +103,12 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
     }
     forbidden = {"path", "command", "process", "git_credentials", "registry_path"}
     for contract in contracts:
-        assert contract.metadata["adapter"] == "adaos.sdk.applications"
+        expected_adapter = (
+            "adaos.sdk.builder.applications"
+            if contract.id.startswith("applications.development.")
+            else "adaos.sdk.applications"
+        )
+        assert contract.metadata["adapter"] == expected_adapter
         assert forbidden.isdisjoint(contract.input_schema["properties"])
 
 
@@ -176,6 +201,30 @@ def test_development_report_submission_uses_bounded_authenticated_context(monkey
     assert stub.calls[0][2]["capability"] == "applications.report"
 
 
+def test_builder_development_mcp_forwards_narrow_authority(monkeypatch) -> None:
+    stub = _StubBuilderSdk()
+    monkeypatch.setattr(applications_plane, "_builder_sdk", lambda: stub)
+
+    result = applications_plane.handlers()["applications.development.create"](
+        {
+            "application_id": "applications",
+            "title": "Applications",
+            "summary": "Application lifecycle manager",
+            "template": "empty",
+            "visibility": "private",
+            "expected_revision": 0,
+            "idempotency_key": "create-applications-1",
+            "_mcp_context": _context(),
+        },
+        dry_run=False,
+    )
+
+    assert result["status"] == "succeeded"
+    assert stub.calls[0][1] == ("applications",)
+    assert stub.calls[0][2]["subnet_ref"] == "subnet:sn_home"
+    assert stub.calls[0][2]["capability"] == "applications.develop"
+
+
 def test_applications_contract_descriptor_and_capability_profile_are_published() -> None:
     descriptor = get_descriptor_set("application_contracts")
     schemas = descriptor["payload"]["schemas"]
@@ -202,4 +251,9 @@ def test_plane_handler_signatures_match_root_mcp_dispatch() -> None:
     for tool_id, handler in applications_plane.handlers().items():
         signature = inspect.signature(handler)
         assert list(signature.parameters) == ["arguments", "dry_run"]
-        assert _execution_adapter_for_tool(tool_id) == "sdk.applications"
+        expected_adapter = (
+            "sdk.builder.applications"
+            if tool_id.startswith("applications.development.")
+            else "sdk.applications"
+        )
+        assert _execution_adapter_for_tool(tool_id) == expected_adapter

@@ -178,8 +178,12 @@ path, process, Git credential, registry, or private-key arguments. Its durable
 coordinator records intent digest, actor, subnet, capability, expected
 Application revision, idempotency identity, outcome, and an explicit
 reconciliation fence for uncertain callbacks. `ApplicationsPlane` remains a
-thin adapter over the product SDK. Full chat-driven use of these rails is the
-`APP4`/`APP6` proof and is not implied by this preparatory completion.
+thin adapter over the product SDK and now publishes eleven explicit
+`applications.development.*` tools over the Builder facade. Those tools accept
+domain IDs, revisions, and intent only; paths, processes, registries, Git
+destinations/credentials, and keys stay inside trusted adapters. Full
+chat-driven use of these rails is the `APP4`/`APP6` proof and is not implied by
+this preparatory completion.
 
 ## APP3. Prerelease Storage, Channels, and Access
 

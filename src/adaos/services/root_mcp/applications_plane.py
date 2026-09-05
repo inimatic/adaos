@@ -12,6 +12,212 @@ def _sdk():
     return applications
 
 
+def _builder_sdk():
+    from adaos.sdk.builder import applications
+
+    return applications
+
+
+def _builder_contracts() -> list[RootMcpToolContract]:
+    response = deepcopy(ROOT_MCP_RESPONSE_SCHEMA)
+    metadata = {
+        "published_by": "plane:applications",
+        "adapter": "adaos.sdk.builder.applications",
+    }
+    application_id = {"application_id": {"type": "string", "minLength": 1, "maxLength": 128}}
+    mutation = {
+        **application_id,
+        "expected_revision": {"type": "integer", "minimum": 0},
+        "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 240},
+    }
+    mutation_required = ["application_id", "expected_revision", "idempotency_key"]
+    source_webspace = {"type": "string", "minLength": 1, "maxLength": 128}
+    candidate_id = {"type": "string", "minLength": 1, "maxLength": 180}
+    digest_or_null = {
+        "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$",
+    }
+    reports = {
+        "type": "array",
+        "items": {"type": "string", "minLength": 1, "maxLength": 128},
+        "maxItems": 200,
+        "uniqueItems": True,
+    }
+    return [
+        RootMcpToolContract(
+            id="applications.development.list_operations",
+            title="List Application development operations",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="List durable bounded Builder lifecycle operations for one Application.",
+            input_schema=schema_object(properties={**application_id}),
+            output_schema=deepcopy(response),
+            required_capability="applications.develop",
+            metadata={**metadata, "handler": "applications_development_list_operations"},
+        ),
+        RootMcpToolContract(
+            id="applications.development.get_operation",
+            title="Get Application development operation",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Read one durable Builder lifecycle operation and recovery state.",
+            input_schema=schema_object(
+                properties={"operation_id": {"type": "string", "minLength": 1, "maxLength": 180}},
+                required=["operation_id"],
+            ),
+            output_schema=deepcopy(response),
+            required_capability="applications.develop",
+            metadata={**metadata, "handler": "applications_development_get_operation"},
+        ),
+        RootMcpToolContract(
+            id="applications.development.create",
+            title="Create Application through Builder",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Create an Application definition and bounded primary composition from a template.",
+            input_schema=schema_object(
+                properties={
+                    **mutation,
+                    "title": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+                    "template": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
+                    "visibility": {"enum": ["private", "public"]},
+                },
+                required=[*mutation_required, "title", "summary"],
+            ),
+            output_schema=deepcopy(response),
+            required_capability="applications.develop",
+            side_effects="write",
+            metadata={**metadata, "handler": "applications_development_create"},
+        ),
+        RootMcpToolContract(
+            id="applications.development.materialize",
+            title="Materialize Application DEV revision",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Materialize one named revision into the isolated DEV runtime.",
+            input_schema=schema_object(
+                properties={
+                    **mutation,
+                    "revision": {"type": "string", "minLength": 1, "maxLength": 180},
+                    "source_webspace_id": source_webspace,
+                },
+                required=[*mutation_required, "revision"],
+            ),
+            output_schema=deepcopy(response),
+            required_capability="applications.develop",
+            side_effects="write",
+            metadata={**metadata, "handler": "applications_development_materialize"},
+        ),
+        RootMcpToolContract(
+            id="applications.development.preview",
+            title="Open Application DEV Preview",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Select the Application in the isolated DEV Preview without Workspace mutation.",
+            input_schema=schema_object(
+                properties={**mutation, "source_webspace_id": source_webspace},
+                required=mutation_required,
+            ),
+            output_schema=deepcopy(response),
+            required_capability="applications.develop",
+            side_effects="write",
+            metadata={**metadata, "handler": "applications_development_preview"},
+        ),
+        RootMcpToolContract(
+            id="applications.development.create_trial",
+            title="Create Application Trial",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Create one immutable Candidate and isolated local Trial from reviewed DEV source.",
+            input_schema=schema_object(
+                properties={**mutation, "source_webspace_id": source_webspace},
+                required=mutation_required,
+            ),
+            output_schema=deepcopy(response),
+            required_capability="applications.develop",
+            side_effects="write",
+            metadata={**metadata, "handler": "applications_development_create_trial"},
+        ),
+        RootMcpToolContract(
+            id="applications.development.decide_trial",
+            title="Decide Application Trial",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Record the human acceptance or rejection of the exact active Trial.",
+            input_schema=schema_object(
+                properties={**mutation, "accepted": {"type": "boolean"}},
+                required=[*mutation_required, "accepted"],
+            ),
+            output_schema=deepcopy(response),
+            required_capability="applications.develop",
+            side_effects="write",
+            metadata={**metadata, "handler": "applications_development_decide_trial"},
+        ),
+        RootMcpToolContract(
+            id="applications.development.publish_link_trial",
+            title="Publish link-only Application Trial",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Publish an accepted Candidate as an exact access-controlled link-only Trial.",
+            input_schema=schema_object(
+                properties={**mutation, "candidate_id": candidate_id, "addresses_report_ids": reports},
+                required=[*mutation_required, "candidate_id"],
+            ),
+            output_schema=deepcopy(response),
+            required_capability="applications.publish",
+            side_effects="write",
+            metadata={**metadata, "handler": "applications_development_publish_link_trial"},
+        ),
+        RootMcpToolContract(
+            id="applications.development.publish_prerelease",
+            title="Publish Application prerelease",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Move the canonical prerelease channel to one accepted immutable Candidate.",
+            input_schema=schema_object(
+                properties={
+                    **mutation,
+                    "candidate_id": candidate_id,
+                    "expected_prerelease_digest": digest_or_null,
+                    "addresses_report_ids": reports,
+                },
+                required=[*mutation_required, "candidate_id", "expected_prerelease_digest"],
+            ),
+            output_schema=deepcopy(response),
+            required_capability="applications.publish",
+            side_effects="write",
+            metadata={**metadata, "handler": "applications_development_publish_prerelease"},
+        ),
+        RootMcpToolContract(
+            id="applications.development.promote_stable",
+            title="Promote Application stable",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Promote the exact accepted Trial or prerelease digest to stable.",
+            input_schema=schema_object(
+                properties={
+                    **mutation,
+                    "candidate_id": candidate_id,
+                    "expected_stable_digest": digest_or_null,
+                },
+                required=[*mutation_required, "candidate_id", "expected_stable_digest"],
+            ),
+            output_schema=deepcopy(response),
+            required_capability="applications.publish",
+            side_effects="write",
+            metadata={**metadata, "handler": "applications_development_promote_stable"},
+        ),
+        RootMcpToolContract(
+            id="applications.development.publish_stable_source",
+            title="Publish stable Application source",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Project the exact public stable source closure to the configured Git destination.",
+            input_schema=schema_object(
+                properties={
+                    **mutation,
+                    "release_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                    "release_notes": {"type": "string", "maxLength": 20000},
+                },
+                required=[*mutation_required, "release_digest", "release_notes"],
+            ),
+            output_schema=deepcopy(response),
+            required_capability="applications.publish",
+            side_effects="write",
+            metadata={**metadata, "handler": "applications_development_publish_stable_source"},
+        ),
+    ]
+
+
 def contracts() -> list[RootMcpToolContract]:
     def response() -> dict[str, Any]:
         return deepcopy(ROOT_MCP_RESPONSE_SCHEMA)
@@ -573,6 +779,7 @@ def contracts() -> list[RootMcpToolContract]:
             side_effects="write",
             metadata={**published, "handler": "applications_record_prerelease_health"},
         ),
+        *_builder_contracts(),
     ]
 
 
@@ -598,7 +805,7 @@ def _application_id(arguments: Mapping[str, Any]) -> str:
     return value
 
 
-def _report_mutation_context(
+def _mcp_mutation_context(
     arguments: Mapping[str, Any], capability: str
 ) -> dict[str, str]:
     actor_ref, subnet_ref = _context(arguments)
@@ -713,7 +920,7 @@ def _handle_submit_development_report(
         installed_release_digest=(
             str(arguments.get("installed_release_digest") or "").strip() or None
         ),
-        **_report_mutation_context(arguments, "applications.report"),
+        **_mcp_mutation_context(arguments, "applications.report"),
     )
 
 
@@ -724,7 +931,7 @@ def _handle_sync_development_reports(
         return {"would_sync_reports": True, "limit": int(arguments.get("limit", 20))}
     return _sdk().sync_development_reports(
         limit=int(arguments.get("limit", 20)),
-        **_report_mutation_context(arguments, "applications.report"),
+        **_mcp_mutation_context(arguments, "applications.report"),
     )
 
 
@@ -738,7 +945,7 @@ def _handle_triage_development_report(
         str(arguments.get("report_id") or ""),
         outcome=str(arguments.get("outcome") or ""),
         reason_code=str(arguments.get("reason_code") or "").strip() or None,
-        **_report_mutation_context(arguments, "applications.publisher.triage"),
+        **_mcp_mutation_context(arguments, "applications.publisher.triage"),
     )
 
 
@@ -751,7 +958,7 @@ def _handle_accept_development_report(
     return _sdk().accept_development_report(
         str(arguments.get("report_id") or ""),
         policy_ref=str(arguments.get("policy_ref") or "").strip() or None,
-        **_report_mutation_context(arguments, "applications.publisher.triage"),
+        **_mcp_mutation_context(arguments, "applications.publisher.triage"),
     )
 
 
@@ -766,7 +973,7 @@ def _handle_set_development_report_status(
         status=str(arguments.get("status") or ""),
         reason_code=str(arguments.get("reason_code") or "").strip() or None,
         release_digest=str(arguments.get("release_digest") or "").strip() or None,
-        **_report_mutation_context(arguments, "applications.publisher.triage"),
+        **_mcp_mutation_context(arguments, "applications.publisher.triage"),
     )
 
 
@@ -779,7 +986,7 @@ def _handle_submit_development_report_appeal(
     return _sdk().submit_development_report_appeal(
         str(arguments.get("report_id") or ""),
         statement=str(arguments.get("statement") or ""),
-        **_report_mutation_context(arguments, "applications.report"),
+        **_mcp_mutation_context(arguments, "applications.report"),
     )
 
 
@@ -793,7 +1000,7 @@ def _handle_resolve_development_report_appeal(
         str(arguments.get("appeal_id") or ""),
         resolution=str(arguments.get("resolution") or ""),
         rationale=str(arguments.get("rationale") or ""),
-        **_report_mutation_context(arguments, "applications.publisher.triage"),
+        **_mcp_mutation_context(arguments, "applications.publisher.triage"),
     )
 
 
@@ -807,7 +1014,7 @@ def _handle_verify_development_report_release(
         str(arguments.get("report_id") or ""),
         outcome=str(arguments.get("outcome") or ""),
         release_digest=str(arguments.get("release_digest") or ""),
-        **_report_mutation_context(arguments, "applications.report"),
+        **_mcp_mutation_context(arguments, "applications.report"),
     )
 
 
@@ -821,7 +1028,157 @@ def _handle_request_development_report_resync(
         str(arguments.get("report_id") or ""),
         after_revision=int(arguments.get("after_revision", 0)),
         limit=int(arguments.get("limit", 100)),
-        **_report_mutation_context(arguments, "applications.report"),
+        **_mcp_mutation_context(arguments, "applications.report"),
+    )
+
+
+def _builder_request(arguments: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in arguments.items() if key != "_mcp_context"}
+
+
+def _handle_development_list_operations(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    application_id = str(arguments.get("application_id") or "").strip() or None
+    return {"operations": _builder_sdk().list_development_operations(application_id)}
+
+
+def _handle_development_get_operation(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    operation_id = str(arguments.get("operation_id") or "").strip()
+    if not operation_id:
+        raise ValueError("operation_id is required")
+    return {"operation": _builder_sdk().get_development_operation(operation_id)}
+
+
+def _handle_development_create(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {"would_create_application": True, "request": _builder_request(arguments)}
+    return _builder_sdk().create_application(
+        _application_id(arguments),
+        title=str(arguments.get("title") or ""),
+        summary=str(arguments.get("summary") or ""),
+        template=str(arguments.get("template") or "empty"),
+        visibility=str(arguments.get("visibility") or "private"),
+        expected_revision=int(arguments.get("expected_revision") or 0),
+        **_mcp_mutation_context(arguments, "applications.develop"),
+    )
+
+
+def _handle_development_materialize(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {"would_materialize_application": True, "request": _builder_request(arguments)}
+    return _builder_sdk().materialize_application(
+        _application_id(arguments),
+        revision=str(arguments.get("revision") or ""),
+        source_webspace_id=str(arguments.get("source_webspace_id") or "desktop"),
+        expected_revision=int(arguments.get("expected_revision") or 0),
+        **_mcp_mutation_context(arguments, "applications.develop"),
+    )
+
+
+def _handle_development_preview(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {"would_preview_application": True, "request": _builder_request(arguments)}
+    return _builder_sdk().preview_development(
+        _application_id(arguments),
+        source_webspace_id=str(arguments.get("source_webspace_id") or "desktop"),
+        expected_revision=int(arguments.get("expected_revision") or 0),
+        **_mcp_mutation_context(arguments, "applications.develop"),
+    )
+
+
+def _handle_development_create_trial(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {"would_create_trial": True, "request": _builder_request(arguments)}
+    return _builder_sdk().create_trial(
+        _application_id(arguments),
+        source_webspace_id=str(arguments.get("source_webspace_id") or "desktop"),
+        expected_revision=int(arguments.get("expected_revision") or 0),
+        **_mcp_mutation_context(arguments, "applications.develop"),
+    )
+
+
+def _handle_development_decide_trial(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {"would_decide_trial": True, "request": _builder_request(arguments)}
+    return _builder_sdk().decide_trial(
+        _application_id(arguments),
+        accepted=bool(arguments.get("accepted")),
+        expected_revision=int(arguments.get("expected_revision") or 0),
+        **_mcp_mutation_context(arguments, "applications.develop"),
+    )
+
+
+def _handle_development_publish_link_trial(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {"would_publish_link_trial": True, "request": _builder_request(arguments)}
+    return _builder_sdk().publish_link_trial(
+        _application_id(arguments),
+        str(arguments.get("candidate_id") or ""),
+        addresses_report_ids=tuple(arguments.get("addresses_report_ids") or ()),
+        expected_revision=int(arguments.get("expected_revision") or 0),
+        **_mcp_mutation_context(arguments, "applications.publish"),
+    )
+
+
+def _handle_development_publish_prerelease(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {"would_publish_prerelease": True, "request": _builder_request(arguments)}
+    return _builder_sdk().publish_prerelease(
+        _application_id(arguments),
+        str(arguments.get("candidate_id") or ""),
+        expected_prerelease_digest=(
+            str(arguments.get("expected_prerelease_digest") or "").strip() or None
+        ),
+        addresses_report_ids=tuple(arguments.get("addresses_report_ids") or ()),
+        expected_revision=int(arguments.get("expected_revision") or 0),
+        **_mcp_mutation_context(arguments, "applications.publish"),
+    )
+
+
+def _handle_development_promote_stable(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {"would_promote_stable": True, "request": _builder_request(arguments)}
+    return _builder_sdk().promote_stable(
+        _application_id(arguments),
+        str(arguments.get("candidate_id") or ""),
+        expected_stable_digest=(
+            str(arguments.get("expected_stable_digest") or "").strip() or None
+        ),
+        expected_revision=int(arguments.get("expected_revision") or 0),
+        **_mcp_mutation_context(arguments, "applications.publish"),
+    )
+
+
+def _handle_development_publish_stable_source(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {"would_publish_stable_source": True, "request": _builder_request(arguments)}
+    return _builder_sdk().publish_stable_source(
+        _application_id(arguments),
+        str(arguments.get("release_digest") or ""),
+        release_notes=str(arguments.get("release_notes") or ""),
+        expected_revision=int(arguments.get("expected_revision") or 0),
+        **_mcp_mutation_context(arguments, "applications.publish"),
     )
 
 
@@ -1067,6 +1424,17 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "applications.plan_trial_link_install": _handle_plan_trial_link_install,
         "applications.set_prerelease_rollout": _handle_set_prerelease_rollout,
         "applications.record_prerelease_health": _handle_record_prerelease_health,
+        "applications.development.list_operations": _handle_development_list_operations,
+        "applications.development.get_operation": _handle_development_get_operation,
+        "applications.development.create": _handle_development_create,
+        "applications.development.materialize": _handle_development_materialize,
+        "applications.development.preview": _handle_development_preview,
+        "applications.development.create_trial": _handle_development_create_trial,
+        "applications.development.decide_trial": _handle_development_decide_trial,
+        "applications.development.publish_link_trial": _handle_development_publish_link_trial,
+        "applications.development.publish_prerelease": _handle_development_publish_prerelease,
+        "applications.development.promote_stable": _handle_development_promote_stable,
+        "applications.development.publish_stable_source": _handle_development_publish_stable_source,
     }
 
 
