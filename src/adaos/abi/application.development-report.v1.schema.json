@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/application.development-report.v1.schema.json",
+  "title": "AdaOS Application Development Report v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "report_id", "application_id", "publisher_ref", "reporter_subnet_ref", "reporter_key_id", "installed_release_digest", "installation_proof", "idempotency_key", "summary", "details", "evidence", "status", "revision", "created_at", "updated_at"],
+  "properties": {
+    "schema": {"const": "adaos.application.development_report.v1"},
+    "report_id": {"$ref": "#/$defs/id"}, "application_id": {"$ref": "#/$defs/id"},
+    "publisher_ref": {"$ref": "#/$defs/subnet"}, "reporter_subnet_ref": {"$ref": "#/$defs/subnet"},
+    "reporter_key_id": {"$ref": "#/$defs/digest"}, "installed_release_digest": {"$ref": "#/$defs/digest"},
+    "installation_proof": {"type": "object", "additionalProperties": false, "required": ["installation_id", "application_id", "release_digest", "installation_revision"], "properties": {"installation_id": {"type": "string", "minLength": 1, "maxLength": 180}, "application_id": {"$ref": "#/$defs/id"}, "release_digest": {"$ref": "#/$defs/digest"}, "installation_revision": {"type": "integer", "minimum": 1}}},
+    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 500}, "details": {"type": "string", "minLength": 1, "maxLength": 16000},
+    "evidence": {"type": "array", "maxItems": 8, "items": {"type": "object"}},
+    "status": {"enum": ["draft", "queued", "delivered", "received", "triaged", "accepted", "declined", "duplicate", "planned", "prerelease_available", "released", "awaiting_local_verification", "verified", "still_reproduces"]},
+    "revision": {"type": "integer", "minimum": 1}, "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {"id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"}, "subnet": {"type": "string", "pattern": "^subnet:[a-z0-9][a-z0-9_.-]{0,127}$"}, "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

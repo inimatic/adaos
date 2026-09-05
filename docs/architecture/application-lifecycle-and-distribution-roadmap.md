@@ -261,24 +261,24 @@ Application operations without Infrastate owning the workflow.
 **Outcome:** a trusted external subnet can report a problem and observe its
 publisher-controlled resolution without receiving source authority.
 
-- [ ] `[must]` `APP5-01` Define local `DevelopmentReport`, encrypted relay
+- [x] `[must]` `APP5-01` Define local `DevelopmentReport`, encrypted relay
   envelope, publisher intake, public status event, ACK, and resync schemas.
-- [ ] `[must]` `APP5-02` Bind sender and recipient to existing subnet identities
+- [x] `[must]` `APP5-02` Bind sender and recipient to existing subnet identities
   and purpose-scoped signing/encryption keys; do not reuse mTLS transport keys
   implicitly.
-- [ ] `[must]` `APP5-03` Implement same-zone durable Root mailbox delivery with
+- [x] `[must]` `APP5-03` Implement same-zone durable Root mailbox delivery with
   at-least-once retry, idempotent dedupe, TTL, dead-letter, backpressure, and
   publisher delivery ACK.
-- [ ] `[must]` `APP5-04` Keep relay content encrypted end to end; expose only
+- [x] `[must]` `APP5-04` Keep relay content encrypted end to end; expose only
   bounded routing metadata to Root and record ciphertext retention/deletion.
-- [ ] `[must]` `APP5-05` Deterministically validate report schema, size, MIME,
+- [x] `[must]` `APP5-05` Deterministically validate report schema, size, MIME,
   attachment/archive policy, replay identity, quotas, installed release proof,
   Unicode, URL policy, and secret redaction before publisher intake.
-- [ ] `[must]` `APP5-06` Require publisher acceptance before creating a local
+- [x] `[must]` `APP5-06` Require publisher acceptance before creating a local
   Dev Ticket or admitting normalized report text to Builder context.
-- [ ] `[must]` `APP5-07` Project only public report states to the guest; keep
+- [x] `[must]` `APP5-07` Project only public report states to the guest; keep
   internal Dev Ticket comments, priorities, evidence, and Builder tasks local.
-- [ ] `[must]` `APP5-08` Bind addressed report IDs to exact prerelease/stable
+- [x] `[must]` `APP5-08` Bind addressed report IDs to exact prerelease/stable
   releases and require guest-side verification before terminal closure.
 - [ ] `[should]` `APP5-09` Add isolated tool-free/network-free LLM
   classification after deterministic admission; preserve raw/normalized/model
@@ -296,6 +296,16 @@ publisher-controlled resolution without receiving source authority.
 the publisher is offline, Root later delivers it exactly once semantically,
 publisher accepts it, a release addresses it, and the guest verifies or reopens
 the report after installing the exact release.
+
+Implementation note, 2026-09-05: `APP5-01` through `APP5-08` are covered by a
+hermetic two-subnet round trip over the durable same-zone mailbox, including
+offline publisher delivery, quarantine, explicit acceptance, local Dev Ticket
+creation, an exact addressed release, guest verification, and status resync.
+The sender outbox and Root mailbox retain unknown/backpressured work without
+blind semantic replay. `APP5-10` has signed directory and authenticated
+store-and-forward primitives, but remains open until the peer adapter is wired
+to the live Root protocol. `APP5-09` remains open because an advisory Python
+interface alone is not an enforceable OS isolation boundary.
 
 ## APP6. Full End-to-End Release Proof
 

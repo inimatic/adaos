@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://adaos.dev/abi/application.development-report-ack.v1.schema.json",
+  "title": "AdaOS Development Report Delivery ACK v1", "type": "object", "additionalProperties": false,
+  "required": ["schema", "message_id", "recipient_subnet_ref", "disposition", "delivery_id", "accepted_at"],
+  "properties": {"schema": {"const": "adaos.application.development_report_ack.v1"}, "message_id": {"$ref": "#/$defs/id"}, "recipient_subnet_ref": {"$ref": "#/$defs/subnet"}, "disposition": {"enum": ["accepted", "duplicate", "rejected", "dead_letter"]}, "delivery_id": {"$ref": "#/$defs/id"}, "accepted_at": {"type": "string", "format": "date-time"}},
+  "$defs": {"id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"}, "subnet": {"type": "string", "pattern": "^subnet:[a-z0-9][a-z0-9_.-]{0,127}$"}}
+}

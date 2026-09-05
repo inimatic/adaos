@@ -834,20 +834,20 @@ offline, is admitted and explicitly accepted into a publisher-local Dev Ticket,
 is linked to an exact release, and is verified or reopened by the guest after
 installation.
 
-- [ ] `[must]` `DS10-01` Add versioned local `DevelopmentReport`, publisher
+- [x] `[must]` `DS10-01` Add versioned local `DevelopmentReport`, publisher
   intake, public status, release-addressing, and guest-verification refs without
   exposing internal Dev Ticket fields.
-- [ ] `[must]` `DS10-02` Require exact Application, installed release digest,
+- [x] `[must]` `DS10-02` Require exact Application, installed release digest,
   reporter subnet/key, idempotency identity, and bounded evidence metadata.
-- [ ] `[must]` `DS10-03` Keep external intake in quarantine/report state until
+- [x] `[must]` `DS10-03` Keep external intake in quarantine/report state until
   publisher acceptance; only acceptance may create/link a Development Signal
   and publisher-local Dev Ticket.
-- [ ] `[must]` `DS10-04` Preserve immutable raw, deterministic normalized, and
+- [x] `[must]` `DS10-04` Preserve immutable raw, deterministic normalized, and
   optional model-classified provenance separately; never insert raw external
   content into privileged Builder context by default.
-- [ ] `[must]` `DS10-05` Map one report to zero or more internal tickets/tasks
+- [x] `[must]` `DS10-05` Map one report to zero or more internal tickets/tasks
   while projecting only signed monotonic public status events.
-- [ ] `[must]` `DS10-06` Bind `addresses_report_ids` to an exact prerelease or
+- [x] `[must]` `DS10-06` Bind `addresses_report_ids` to an exact prerelease or
   stable digest and close only after guest-side `verified`; allow
   `still_reproduces` to reopen the public lifecycle.
 - [ ] `[should]` `DS10-07` Add publisher-side duplicate clustering,
@@ -860,6 +860,15 @@ installation.
   publisher response-time summaries after appeal and retention policy exist.
 - [ ] `[deferred]` `DS10-10` Foreign code proposals, upstream beta variants,
   automatic contribution merging, and multi-user publisher work queues.
+
+Implementation note, 2026-09-05: accepted external intake now converts through
+the existing `DevelopmentTicketService` with deterministic report relations and
+deduplication. Raw external payload remains in the report quarantine; only the
+deterministically normalized, redacted representation and advisory model
+provenance can enter the accepted signal/ticket. Public events contain no
+internal ticket identifiers, comments, priority, or Builder refs. `DS10-07`
+and `DS10-08` remain open for abuse operations and an enforceable isolated
+model runner respectively.
 
 ## Recommended First Slice
 

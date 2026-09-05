@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://adaos.dev/abi/application.development-report-intake.v1.schema.json",
+  "title": "AdaOS Publisher Development Report Intake v1", "type": "object", "additionalProperties": false,
+  "required": ["schema", "intake_id", "report_id", "application_id", "reporter_subnet_ref", "raw_payload_digest", "normalized_summary", "normalized_details", "redaction_findings", "model_classification", "admission", "status", "revision", "internal_ticket_refs", "received_at", "updated_at"],
+  "properties": {
+    "schema": {"const": "adaos.application.development_report_intake.v1"}, "intake_id": {"$ref": "#/$defs/id"}, "report_id": {"$ref": "#/$defs/id"}, "application_id": {"$ref": "#/$defs/id"}, "reporter_subnet_ref": {"$ref": "#/$defs/subnet"}, "raw_payload_digest": {"$ref": "#/$defs/digest"},
+    "normalized_summary": {"type": "string", "minLength": 1, "maxLength": 500}, "normalized_details": {"type": "string", "minLength": 1, "maxLength": 16000}, "redaction_findings": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}, "model_classification": {"type": ["object", "null"]}, "admission": {"type": "object"},
+    "status": {"enum": ["quarantined", "triaged", "accepted", "declined", "duplicate"]}, "revision": {"type": "integer", "minimum": 1}, "internal_ticket_refs": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 180}}, "received_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {"id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"}, "subnet": {"type": "string", "pattern": "^subnet:[a-z0-9][a-z0-9_.-]{0,127}$"}, "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

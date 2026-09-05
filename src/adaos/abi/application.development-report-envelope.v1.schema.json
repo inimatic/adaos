@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://adaos.dev/abi/application.development-report-envelope.v1.schema.json",
+  "title": "AdaOS Development Report Encrypted Envelope v1", "type": "object", "additionalProperties": false,
+  "required": ["schema", "message_id", "message_kind", "sender_subnet_ref", "sender_key_id", "recipient_subnet_ref", "recipient_key_id", "source_zone", "destination_zone", "route_generation", "hop_limit", "ephemeral_public_key_b64", "nonce_b64", "ciphertext_b64", "signature_b64", "created_at", "expires_at"],
+  "properties": {
+    "schema": {"const": "adaos.application.development_report_envelope.v1"}, "message_id": {"$ref": "#/$defs/id"},
+    "message_kind": {"enum": ["report", "status", "verification", "resync", "resync_snapshot"]},
+    "sender_subnet_ref": {"$ref": "#/$defs/subnet"}, "sender_key_id": {"$ref": "#/$defs/digest"}, "recipient_subnet_ref": {"$ref": "#/$defs/subnet"}, "recipient_key_id": {"$ref": "#/$defs/digest"},
+    "source_zone": {"$ref": "#/$defs/id"}, "destination_zone": {"$ref": "#/$defs/id"}, "route_generation": {"type": "integer", "minimum": 1}, "hop_limit": {"type": "integer", "minimum": 1, "maximum": 8},
+    "ephemeral_public_key_b64": {"type": "string", "minLength": 1}, "nonce_b64": {"type": "string", "minLength": 1}, "ciphertext_b64": {"type": "string", "minLength": 1, "maxLength": 4000000}, "signature_b64": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "format": "date-time"}, "expires_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {"id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"}, "subnet": {"type": "string", "pattern": "^subnet:[a-z0-9][a-z0-9_.-]{0,127}$"}, "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

@@ -136,9 +136,10 @@ class ApplicationStore:
         payload = value.to_dict()
         with mutation_lock(self.lock_path, timeout_s=30.0):
             if path.is_file():
-                if _read(path) != payload:
+                existing = ApplicationRelease.from_mapping(_read(path))
+                if existing.to_dict() != payload:
                     raise ApplicationStoreError("immutable ApplicationRelease conflict")
-                return ApplicationRelease.from_mapping(_read(path))
+                return existing
             path.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_json(path, payload)
         return value

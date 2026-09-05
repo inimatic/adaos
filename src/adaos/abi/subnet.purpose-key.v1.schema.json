@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://adaos.dev/abi/subnet.purpose-key.v1.schema.json",
+  "title": "AdaOS Subnet Purpose-Scoped Key v1", "type": "object", "additionalProperties": false,
+  "required": ["schema", "subnet_ref", "key_id", "purpose", "algorithm", "public_key_b64", "valid_from", "valid_to", "status", "issuer", "replacement_key_id", "revocation_evidence"],
+  "properties": {
+    "schema": {"const": "adaos.subnet.purpose_key.v1"}, "subnet_ref": {"type": "string", "pattern": "^subnet:[a-z0-9][a-z0-9_.-]{0,127}$"}, "key_id": {"$ref": "#/$defs/digest"},
+    "purpose": {"enum": ["transport_auth", "release_signing", "message_signing", "message_encryption"]}, "algorithm": {"enum": ["rsa-3072", "ed25519", "x25519-hkdf-sha256-aes256gcm"]},
+    "public_key_b64": {"type": "string", "minLength": 1}, "valid_from": {"type": "string", "format": "date-time"}, "valid_to": {"type": ["string", "null"], "format": "date-time"},
+    "status": {"enum": ["active", "retiring", "revoked"]}, "issuer": {"type": "string", "minLength": 1}, "replacement_key_id": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]}, "revocation_evidence": {"type": ["object", "null"]}
+  }, "$defs": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

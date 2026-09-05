@@ -238,6 +238,7 @@ class ApplicationDistributionService:
         candidate: CandidateRecord,
         plan: ReleasePlan,
         binding: ReleaseAttestationSet,
+        addresses_report_ids: tuple[str, ...],
     ) -> ApplicationRelease:
         try:
             existing = self.applications.store.get_release(application_id, candidate.release_digest)
@@ -248,6 +249,7 @@ class ApplicationDistributionService:
                 existing.publisher_ref != publisher_ref
                 or existing.accepted_candidate_id != candidate.candidate_id
                 or existing.project_release != plan.release
+                or existing.addresses_report_ids != tuple(sorted(set(addresses_report_ids)))
             ):
                 raise ApplicationDistributionError("immutable ApplicationRelease differs from accepted Trial")
             return existing
@@ -267,6 +269,7 @@ class ApplicationDistributionService:
             accepted_candidate_id=candidate.candidate_id,
             acceptance_evidence=tuple([*candidate.validation_evidence, *accepted]),
             provenance_refs=provenance_refs,
+            addresses_report_ids=addresses_report_ids,
             lifecycle="trial",
             published_at=self.clock(),
         )
@@ -415,6 +418,7 @@ class ApplicationDistributionService:
         publisher_ref: str,
         mode: str,
         expected_prerelease_digest: str | None = None,
+        addresses_report_ids: tuple[str, ...] = (),
     ) -> dict[str, Any]:
         if mode not in {"link_only", "prerelease"}:
             raise ApplicationDistributionError("Trial publication mode must be link_only or prerelease")
@@ -432,7 +436,10 @@ class ApplicationDistributionService:
             _, binding = self._provenance(plan)
             operation = self._operation(application_id, candidate, binding)
             self._ensure_uploaded(operation, plan)
-            release = self._register_release(application_id, publisher_ref, candidate, plan, binding)
+            release = self._register_release(
+                application_id, publisher_ref, candidate, plan, binding,
+                tuple(sorted(set(addresses_report_ids))),
+            )
             publication: dict[str, Any] = {"mode": mode, "release": release.to_dict()}
             if mode == "prerelease":
                 publication["channel"] = self._move_channel(
@@ -499,7 +506,15 @@ class ApplicationDistributionService:
                         raise ApplicationDistributionError("later stable must promote the exact current prerelease")
             retire_prerelease = trial.get("mode") == "prerelease"
             self._ensure_uploaded(operation, plan)
-            release = self._register_release(application_id, publisher_ref, candidate, plan, binding)
+            try:
+                existing_release = self.applications.store.get_release(application_id, candidate.release_digest)
+                addresses_report_ids = existing_release.addresses_report_ids
+            except FileNotFoundError:
+                addresses_report_ids = ()
+            release = self._register_release(
+                application_id, publisher_ref, candidate, plan, binding,
+                addresses_report_ids,
+            )
             channel = self._move_channel(
                 operation,
                 application_id=application_id,

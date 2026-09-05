@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://adaos.dev/abi/application.development-report-status-event.v1.schema.json",
+  "title": "AdaOS Development Report Public Status Event v1", "type": "object", "additionalProperties": false,
+  "required": ["schema", "event_id", "report_id", "application_id", "publisher_ref", "reporter_subnet_ref", "status", "revision", "reason_code", "release_digest", "occurred_at"],
+  "properties": {"schema": {"const": "adaos.application.development_report_status_event.v1"}, "event_id": {"$ref": "#/$defs/id"}, "report_id": {"$ref": "#/$defs/id"}, "application_id": {"$ref": "#/$defs/id"}, "publisher_ref": {"$ref": "#/$defs/subnet"}, "reporter_subnet_ref": {"$ref": "#/$defs/subnet"}, "status": {"enum": ["draft", "queued", "delivered", "received", "triaged", "accepted", "declined", "duplicate", "planned", "prerelease_available", "released", "awaiting_local_verification", "verified", "still_reproduces"]}, "revision": {"type": "integer", "minimum": 1}, "reason_code": {"type": ["string", "null"], "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"}, "release_digest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]}, "occurred_at": {"type": "string", "format": "date-time"}},
+  "$defs": {"id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"}, "subnet": {"type": "string", "pattern": "^subnet:[a-z0-9][a-z0-9_.-]{0,127}$"}, "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

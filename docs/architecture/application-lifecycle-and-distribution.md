@@ -166,6 +166,34 @@ release digests expand to their package and provenance closure. Historical
 release/tombstone metadata is retained without retaining unreferenced package
 bytes forever, and unreadable authoritative reference state blocks GC.
 
+Development Reports now have strict ABI contracts for the guest report,
+encrypted envelope, publisher intake, public event, delivery ACK, and resync
+request. Local subnet key rings create separate Ed25519 message-signing and
+X25519 message-encryption keys, support overlapping rotation, purpose-specific
+revocation, and owner-factor recovery, and can project existing transport and
+release-signing public keys without importing their private material. A signed,
+rollback-protected Root directory binds those keys and home zones to the
+existing `subnet:<id>` identity.
+
+The relay core persists opaque ciphertext, verifies the sender signature before
+charging mailbox quota, retries at least once, deduplicates, applies TTL and
+hop limits, dead-letters exhausted messages, and deletes acknowledged
+ciphertext while retaining bounded receipts. Authenticated Root-to-Root
+forwarding receipts and a local durable sender outbox are implemented at the
+service boundary; wiring that peer interface to the live Hub/Root transport is
+still required before an inter-zone pilot.
+
+Publisher intake preserves raw, deterministic normalized, and optional model
+classification provenance separately. Deterministic admission runs before any
+model hook and covers byte, MIME, archive, URL, Unicode, quota, replay,
+installed-release, and secret-redaction policy. Only explicit publisher
+acceptance creates an existing local Development Signal/Dev Ticket. Release
+metadata can immutably carry `addresses_report_ids`, and the public report does
+not close until the guest installs that exact digest and verifies the result.
+The model-classifier contract rejects authority-bearing output, but a hardened
+OS-level tool/network/memory isolation runner remains open; the default is no
+model preprocessing.
+
 ## Practice Anchors
 
 AdaOS should reuse established security models where their threat boundaries
@@ -179,8 +207,10 @@ fit rather than inventing an update or envelope protocol from first principles:
   source, builder, build process, and input lineage for immutable releases.
 - [CycloneDX](https://cyclonedx.org/specification/overview/) is the preferred
   future SBOM representation used by Root Guard and Application detail.
-- [HPKE, RFC 9180](https://www.rfc-editor.org/rfc/rfc9180.html) anchors hybrid
-  public-key encryption for Development Report envelopes.
+- [HPKE, RFC 9180](https://www.rfc-editor.org/rfc/rfc9180.html) anchors a future
+  interoperable envelope profile. The current explicitly versioned profile is
+  X25519 + HKDF-SHA256 + AES-256-GCM with an independent Ed25519 signature; it
+  is not claimed to be an RFC 9180 implementation.
 - [NIST AI 600-1](https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.600-1.pdf)
   anchors treatment of indirect prompt injection and data poisoning in
   optional LLM preprocessing.
@@ -597,8 +627,8 @@ record adds purpose-scoped keys:
 ```yaml
 keys:
   - key_id: sha256:...
-    purpose: transport_auth | release_signing | message_encryption
-    algorithm: rsa-3072 | ed25519 | hpke-x25519
+    purpose: transport_auth | release_signing | message_signing | message_encryption
+    algorithm: rsa-3072 | ed25519 | x25519-hkdf-sha256-aes256gcm
     valid_from: ...
     valid_to: ...
     status: active | retiring | revoked
@@ -667,9 +697,11 @@ Ticket. Human or publisher policy acceptance remains the semantic boundary.
 ## Encrypted Relay and Zones
 
 Development Report content and publisher responses use purpose-scoped subnet
-encryption keys. Envelope encryption uses a standard hybrid public-key scheme;
-the routing header remains minimal plaintext so Root can deliver it. The sender
-signs the envelope independently.
+encryption keys. Envelope v1 uses X25519 + HKDF-SHA256 + AES-256-GCM; the
+routing header is authenticated additional data and remains minimal plaintext
+so Root can deliver it. A distinct Ed25519 message-signing key signs the whole
+envelope independently. Transport RSA/mTLS and artifact release-signing keys
+are never selected implicitly for either purpose.
 
 ```text
 Guest Hub

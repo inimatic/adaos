@@ -277,6 +277,7 @@ class ApplicationRelease:
     accepted_candidate_id: str
     acceptance_evidence: tuple[Mapping[str, Any], ...]
     provenance_refs: tuple[str, ...]
+    addresses_report_ids: tuple[str, ...] = ()
     lifecycle: str = "candidate"
     published_at: str | None = None
 
@@ -296,6 +297,8 @@ class ApplicationRelease:
         if not refs:
             raise ApplicationContractError("ApplicationRelease requires provenance refs")
         object.__setattr__(self, "provenance_refs", refs)
+        report_ids = tuple(sorted({_identifier(item, "addresses_report_id") for item in self.addresses_report_ids}))
+        object.__setattr__(self, "addresses_report_ids", report_ids)
         if self.lifecycle not in {"candidate", "trial", "prerelease", "stable", "superseded", "retired", "archived", "yanked"}:
             raise ApplicationContractError("application release lifecycle is invalid")
         if self.published_at is not None:
@@ -317,6 +320,7 @@ class ApplicationRelease:
             "accepted_candidate_id": self.accepted_candidate_id,
             "acceptance_evidence": [dict(item) for item in self.acceptance_evidence],
             "provenance_refs": list(self.provenance_refs),
+            "addresses_report_ids": list(self.addresses_report_ids),
             "lifecycle": self.lifecycle,
         }
         if self.published_at is not None:
@@ -331,7 +335,7 @@ class ApplicationRelease:
             allowed={
                 "schema", "application_id", "publisher_ref", "legacy_project_id", "version",
                 "release_digest", "project_release", "accepted_candidate_id", "acceptance_evidence",
-                "provenance_refs", "lifecycle", "published_at",
+                "provenance_refs", "addresses_report_ids", "lifecycle", "published_at",
             },
             required={
                 "schema", "application_id", "publisher_ref", "legacy_project_id", "version",
@@ -353,6 +357,7 @@ class ApplicationRelease:
             accepted_candidate_id=payload["accepted_candidate_id"],
             acceptance_evidence=_mapping_tuple(payload["acceptance_evidence"], "acceptance_evidence"),
             provenance_refs=tuple(payload["provenance_refs"]),
+            addresses_report_ids=tuple(payload.get("addresses_report_ids") or ()),
             lifecycle=payload["lifecycle"],
             published_at=payload.get("published_at"),
         )

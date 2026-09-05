@@ -575,21 +575,21 @@ broad external prerelease use.
 Goal: reuse subnet identity for publisher and relay authority without reusing
 one cryptographic key across transport, release signing, and encryption.
 
-- [ ] `[must]` Define a versioned subnet key record with `key_id`, purpose,
+- [x] `[must]` Define a versioned subnet key record with `key_id`, purpose,
   algorithm, validity window, status, issuer, replacement key, and revocation
   evidence.
-- [ ] `[must]` Bind current hub RSA/mTLS credentials only to transport auth,
+- [x] `[must]` Bind current hub RSA/mTLS credentials only to transport auth,
   existing artifact Ed25519 records to release signing, and a separate key to
   Development Report encryption.
-- [ ] `[must]` Define loss, compromise, overlapping rotation, purpose-specific
+- [x] `[must]` Define loss, compromise, overlapping rotation, purpose-specific
   revocation, owner-factor recovery, and offline-consumer propagation.
-- [ ] `[must]` Define a signed Root directory projection from `subnet_id` to
+- [x] `[must]` Define a signed Root directory projection from `subnet_id` to
   home zone and active/retiring public keys without giving Root local subnet
   authorization authority.
-- [ ] `[should]` Implement key publication, rotation, revocation, and lookup
+- [x] `[should]` Implement key publication, rotation, revocation, and lookup
   APIs plus audit and security regression tests before broad external
   prerelease use.
-- [ ] `[should]` Retain retiring message-decryption private keys for a bounded
+- [x] `[should]` Retain retiring message-decryption private keys for a bounded
   mailbox-drain window and reject new envelopes targeting revoked keys.
 - [ ] `[could]` Add hardware-backed storage for release-signing and recovery
   keys where the host supports it.
