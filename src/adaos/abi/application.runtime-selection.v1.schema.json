@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/application.runtime-selection.v1.schema.json",
+  "title": "AdaOS Application Runtime Selection v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "webspace_id", "application_id", "source", "release_digest", "runtime_root_ref", "revision", "updated_at"],
+  "properties": {
+    "schema": {"const": "adaos.application.runtime_selection.v1"}, "webspace_id": {"$ref": "#/$defs/id"}, "application_id": {"$ref": "#/$defs/id"},
+    "source": {"enum": ["stable_installation", "prerelease_trial", "local_trial"]}, "release_digest": {"$ref": "#/$defs/digest"},
+    "runtime_root_ref": {"type": "string", "pattern": "^(workspace|trial:.+)$", "maxLength": 200}, "revision": {"type": "integer", "minimum": 1}, "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {"id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"}, "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/application.trial-access-grant.v1.schema.json",
+  "title": "AdaOS Application Trial Access Grant v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "grant_id", "application_id", "publisher_ref", "scope", "release_digest", "recipient_subnet_ref", "recipient_key_ref", "expires_at", "max_uses", "uses", "nonce", "allowed_zones", "status", "revision", "issued_at"],
+  "properties": {
+    "schema": {"const": "adaos.application.trial_access_grant.v1"}, "grant_id": {"type": "string", "minLength": 1, "maxLength": 180}, "application_id": {"$ref": "#/$defs/id"},
+    "publisher_ref": {"$ref": "#/$defs/publisherRef"}, "scope": {"enum": ["exact_release", "follow_prerelease"]}, "release_digest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+    "recipient_subnet_ref": {"$ref": "#/$defs/publisherRef"}, "recipient_key_ref": {"type": "string", "minLength": 1, "maxLength": 240},
+    "expires_at": {"type": "string", "format": "date-time"}, "max_uses": {"type": "integer", "minimum": 1}, "uses": {"type": "integer", "minimum": 0},
+    "nonce": {"type": "string", "minLength": 1, "maxLength": 240}, "allowed_zones": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+    "status": {"enum": ["active", "consumed", "expired", "revoked"]}, "revision": {"type": "integer", "minimum": 1}, "issued_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {"id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"}, "publisherRef": {"type": "string", "pattern": "^subnet:[a-z0-9][a-z0-9_.-]{0,127}$"}, "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

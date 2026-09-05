@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/application.release.v1.schema.json",
+  "title": "AdaOS Application Release v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "application_id", "publisher_ref", "legacy_project_id", "version", "release_digest", "project_release", "accepted_candidate_id", "acceptance_evidence", "provenance_refs", "lifecycle"],
+  "properties": {
+    "schema": {"const": "adaos.application.release.v1"},
+    "application_id": {"$ref": "#/$defs/id"}, "publisher_ref": {"$ref": "#/$defs/publisherRef"}, "legacy_project_id": {"$ref": "#/$defs/id"},
+    "version": {"type": "string", "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:[-+][0-9A-Za-z.-]+)?$"},
+    "release_digest": {"$ref": "#/$defs/digest"}, "project_release": {"type": "object"},
+    "accepted_candidate_id": {"type": "string", "minLength": 1, "maxLength": 180},
+    "acceptance_evidence": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+    "provenance_refs": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/digest"}},
+    "lifecycle": {"enum": ["candidate", "trial", "prerelease", "stable", "superseded", "retired", "archived", "yanked"]},
+    "published_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"},
+    "publisherRef": {"type": "string", "pattern": "^subnet:[a-z0-9][a-z0-9_.-]{0,127}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

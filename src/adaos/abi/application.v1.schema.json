@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/application.v1.schema.json",
+  "title": "AdaOS Application v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "application_id", "legacy_project_id", "publisher_ref", "slug", "display", "visibility", "entrypoints", "publisher", "lifecycle", "revision", "created_at", "updated_at"],
+  "properties": {
+    "schema": {"const": "adaos.application.v1"},
+    "application_id": {"$ref": "#/$defs/id"},
+    "legacy_project_id": {"$ref": "#/$defs/id"},
+    "publisher_ref": {"$ref": "#/$defs/publisherRef"},
+    "slug": {"$ref": "#/$defs/id"},
+    "display": {
+      "type": "object", "additionalProperties": false, "required": ["title", "summary"],
+      "properties": {"title": {"type": "string", "minLength": 1, "maxLength": 160}, "summary": {"type": ["string", "null"], "maxLength": 500}}
+    },
+    "visibility": {"enum": ["private", "link", "public"]},
+    "entrypoints": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["entrypoint_id", "presentation_ref"],
+        "properties": {"entrypoint_id": {"$ref": "#/$defs/id"}, "presentation_ref": {"type": "string", "pattern": "^(skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"}}
+      }
+    },
+    "publisher": {
+      "type": "object", "additionalProperties": false,
+      "required": ["publisher_ref", "display_name", "subnet_short_ref", "release_key_ref", "release_key_fingerprint", "home_zone", "trust_relation"],
+      "properties": {
+        "publisher_ref": {"$ref": "#/$defs/publisherRef"}, "display_name": {"type": "string", "minLength": 1, "maxLength": 160},
+        "subnet_short_ref": {"type": "string", "minLength": 1, "maxLength": 32}, "release_key_ref": {"type": "string", "minLength": 1, "maxLength": 240},
+        "release_key_fingerprint": {"$ref": "#/$defs/digest"}, "home_zone": {"$ref": "#/$defs/id"},
+        "trust_relation": {"enum": ["local", "trusted", "unverified", "blocked"]}
+      }
+    },
+    "lifecycle": {"enum": ["active", "retired", "archived"]},
+    "derived_from": {
+      "type": "object", "additionalProperties": false, "required": ["application_id", "release_digest", "relationship"],
+      "properties": {"application_id": {"$ref": "#/$defs/id"}, "release_digest": {"$ref": "#/$defs/digest"}, "relationship": {"const": "independent_derivative"}}
+    },
+    "revision": {"type": "integer", "minimum": 1},
+    "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"},
+    "publisherRef": {"type": "string", "pattern": "^subnet:[a-z0-9][a-z0-9_.-]{0,127}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

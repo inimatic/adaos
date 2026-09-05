@@ -115,6 +115,16 @@ from .artifact_release import (
     WorkspaceSlot,
     WorkflowAdapterLock,
 )
+from .application import (
+    Application,
+    ApplicationContractError,
+    ApplicationInstallation,
+    ApplicationOperation,
+    ApplicationRelease,
+    ApplicationSubscription,
+    RuntimeSelection,
+    TrialAccessGrant,
+)
 from .relational_storage import (
     RelationalProviderCapabilities,
     RelationalStorageBinding,
@@ -287,6 +297,14 @@ __all__ = [
     "WorkspaceLock",
     "WorkspaceSlot",
     "WorkflowAdapterLock",
+    "Application",
+    "ApplicationContractError",
+    "ApplicationInstallation",
+    "ApplicationOperation",
+    "ApplicationRelease",
+    "ApplicationSubscription",
+    "RuntimeSelection",
+    "TrialAccessGrant",
     "ContentRef",
     "OwnershipContractError",
     "OwnershipIsolationError",

@@ -18,6 +18,24 @@ migration, one legacy Project definition maps to one Application definition;
 Project entry points become Application launch targets rather than separate
 Application identities.
 
+The compatibility mapping is structural and one-to-one:
+
+| Canonical contract | Compatibility source | Identity rule |
+| --- | --- | --- |
+| `Application` | Project definition | stores `legacy_project_id`; `application_id` remains distinct |
+| `ApplicationRelease` | `ProjectRelease` | embeds the exact legacy record and preserves its `release_digest` |
+| `ApplicationInstallation` | `ProjectDeployment` plus exact package refs | stores `legacy_deployment_id`; placement becomes component state |
+| `ApplicationSubscription` | `StableSubscription` | maps `channel` to `stable|prerelease` update intent |
+| `RuntimeSelection` | Workspace/Trial activation evidence | adds explicit Webspace-scoped compare-and-swap state |
+| `TrialAccessGrant` | no legacy aggregate | introduces bounded capability-link access only |
+| `ApplicationOperation` | activation/deployment/publication journals | provides one reviewed durable operation envelope |
+
+Adapters may read legacy records, but new code must not rewrite a
+`ProjectRelease` into a new digest merely to rename it. Component SDK consumers
+continue to use `skill:*` and `scenario:*` refs inside an ApplicationRelease;
+those refs are composition members and launch targets, not Marketplace product
+identities.
+
 Detailed package construction, activation, and rollback remain owned by
 [Artifact Source, Package, and Activation](artifact-source-package-activation.md).
 Builder session and source-context mechanics remain owned by
@@ -87,6 +105,18 @@ by the
 18. The Applications product is itself created through managed Builder
     development after the Application Core, SDK, and MCP contracts exist. This
     dogfoods the same chat-to-release path that third-party Applications use.
+
+## Current Implementation Boundary
+
+The preparatory implementation covers contracts, Application Core, SDK/MCP,
+remote archive/channel/access rails, Development Report relay, and Builder
+authoring context. It ends when Builder can start Applications using only
+those public contracts. Building the full-screen Applications product and its
+release proof are APP4 and APP6 work.
+
+Until APP4 moves the real product workflow, Infrastate Inventory remains an
+unchanged compatibility UI. It must not gain new Application authority, and it
+must not be removed before Applications has equivalent tested behavior.
 
 ## Practice Anchors
 

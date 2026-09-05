@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/application.subscription.v1.schema.json",
+  "title": "AdaOS Application Subscription v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "application_id", "update_track", "update_policy", "observed_release_digest", "pinned_release_digest", "paused", "revision", "updated_at"],
+  "properties": {
+    "schema": {"const": "adaos.application.subscription.v1"}, "application_id": {"$ref": "#/$defs/id"},
+    "update_track": {"enum": ["stable", "prerelease"]}, "update_policy": {"enum": ["notify", "auto_compatible", "pinned"]},
+    "observed_release_digest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]}, "pinned_release_digest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+    "paused": {"type": "boolean"}, "revision": {"type": "integer", "minimum": 1}, "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {"id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"}, "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

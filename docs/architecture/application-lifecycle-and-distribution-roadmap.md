@@ -62,34 +62,34 @@ Infrastate-owned UX.
 **Outcome:** Application is the canonical product/distribution identity and all
 later implementation shares one object and state model.
 
-- [ ] `[must]` `APP0-01` Define versioned schemas for `Application`,
+- [x] `[must]` `APP0-01` Define versioned schemas for `Application`,
   `ApplicationRelease`, `ApplicationInstallation`,
   `ApplicationSubscription`, `RuntimeSelection`, `TrialAccessGrant`, and
   `ApplicationOperation`.
-- [ ] `[must]` `APP0-02` Define one-to-one compatibility mapping from legacy
+- [x] `[must]` `APP0-02` Define one-to-one compatibility mapping from legacy
   `Project`, `ProjectRelease`, `ProjectInstallation`, and placement records
   without changing existing immutable digests.
-- [ ] `[must]` `APP0-03` Make Application the installed/catalog product; model
+- [x] `[must]` `APP0-03` Make Application the installed/catalog product; model
   scenarios and entry points as Application hosts/launch targets rather than
   separate product identities.
-- [ ] `[must]` `APP0-04` Freeze channel vocabulary: local `DEV`, local/link
+- [x] `[must]` `APP0-04` Freeze channel vocabulary: local `DEV`, local/link
   `Trial`, publisher `prerelease`, and Marketplace `stable`; remove `alpha` as
   a Workspace activation stage.
-- [ ] `[must]` `APP0-05` Define one stable and one prerelease pointer per
+- [x] `[must]` `APP0-05` Define one stable and one prerelease pointer per
   Application, exact-digest promotion, immutable history, and
   supersede/retire/archive/purge states.
-- [ ] `[must]` `APP0-06` Define `publisher_ref = subnet:<id>` and purpose-scoped
+- [x] `[must]` `APP0-06` Define `publisher_ref = subnet:<id>` and purpose-scoped
   release-signing key binding without introducing a separate PublisherIdentity
   aggregate.
-- [ ] `[must]` `APP0-07` Define publisher presentation as a self-declared name
+- [x] `[must]` `APP0-07` Define publisher presentation as a self-declared name
   plus stable short subnet ref, release-key fingerprint, home zone, and local
   trust relationship; never imply global verification from display text.
-- [ ] `[must]` `APP0-08` Assign Application inventory, Catalog, subscription,
+- [x] `[must]` `APP0-08` Assign Application inventory, Catalog, subscription,
   release detail, and Development Report UX to Applications; retain only
   runtime/component diagnostics in Infrastate.
-- [ ] `[should]` `APP0-09` Publish schema examples and compatibility guidance for
+- [x] `[should]` `APP0-09` Publish schema examples and compatibility guidance for
   component/Project SDK consumers.
-- [ ] `[could]` `APP0-10` Add `derived_from` metadata for independently created
+- [x] `[could]` `APP0-10` Add `derived_from` metadata for independently created
   Applications without granting upstream channel authority.
 - [ ] `[deferred]` `APP0-11` Ownership transfer, publisher succession,
   organization publishers, threshold authority, and collaborative development.

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/application.installation.v1.schema.json",
+  "title": "AdaOS Application Installation v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "installation_id", "application_id", "installed_release_digest", "component_refs", "data_policy", "status", "revision", "legacy_deployment_id", "snapshot_ref", "active_runtime_leases", "rollback_holds", "uncertain_operation_refs", "created_at", "updated_at"],
+  "properties": {
+    "schema": {"const": "adaos.application.installation.v1"}, "installation_id": {"type": "string", "minLength": 1, "maxLength": 180},
+    "application_id": {"$ref": "#/$defs/id"}, "installed_release_digest": {"$ref": "#/$defs/digest"},
+    "component_refs": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["component_ref", "package_digest", "lifecycle"], "properties": {"component_ref": {"type": "string", "pattern": "^(skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"}, "package_digest": {"$ref": "#/$defs/digest"}, "lifecycle": {"enum": ["bound", "shared"]}}}},
+    "data_policy": {"enum": ["retain", "delete", "snapshot_then_delete"]},
+    "status": {"enum": ["planned", "installing", "active", "updating", "degraded", "removing", "removed", "failed", "unknown"]},
+    "revision": {"type": "integer", "minimum": 1}, "legacy_deployment_id": {"type": ["string", "null"], "maxLength": 180}, "snapshot_ref": {"type": ["string", "null"], "maxLength": 300},
+    "active_runtime_leases": {"$ref": "#/$defs/stringSet"}, "rollback_holds": {"$ref": "#/$defs/stringSet"}, "uncertain_operation_refs": {"$ref": "#/$defs/stringSet"},
+    "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {"id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"}, "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "stringSet": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 300}}}
+}

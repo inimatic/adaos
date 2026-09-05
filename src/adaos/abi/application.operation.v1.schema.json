@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/application.operation.v1.schema.json",
+  "title": "AdaOS Application Operation v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "operation_id", "application_id", "kind", "status", "actor_ref", "subnet_ref", "plan_digest", "idempotency_key", "expected_revision", "revision", "plan", "result", "recovery_reason", "created_at", "updated_at"],
+  "properties": {
+    "schema": {"const": "adaos.application.operation.v1"}, "operation_id": {"type": "string", "minLength": 1, "maxLength": 200}, "application_id": {"$ref": "#/$defs/id"},
+    "kind": {"enum": ["install", "update", "remove", "select_track", "install_trial", "publish_trial", "publish_prerelease", "promote_stable", "reconcile"]},
+    "status": {"enum": ["planned", "applying", "succeeded", "failed", "unknown", "reconciling", "cancelled"]}, "actor_ref": {"type": "string", "minLength": 1, "maxLength": 200},
+    "subnet_ref": {"$ref": "#/$defs/publisherRef"}, "plan_digest": {"$ref": "#/$defs/digest"}, "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 240},
+    "expected_revision": {"type": "integer", "minimum": 0}, "revision": {"type": "integer", "minimum": 1}, "plan": {"type": "object"}, "result": {"type": "object"},
+    "recovery_reason": {"type": ["string", "null"], "maxLength": 500}, "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {"id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"}, "publisherRef": {"type": "string", "pattern": "^subnet:[a-z0-9][a-z0-9_.-]{0,127}$"}, "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}
