@@ -2304,14 +2304,22 @@ async def admin_root_mcp_logs(
 @app.post("/api/admin/root_mcp/call", dependencies=[Depends(require_token)])
 async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
     allowed_tools = {
-        "development.get_descriptor_item",
-        "development.search_descriptors",
-        "desktop.preview_action",
-        "nlu_authoring.check_phrase",
+        "development.get_descriptor_item": "development.read.descriptors",
+        "development.search_descriptors": "development.read.descriptors",
+        "desktop.preview_action": "development.read.descriptors",
+        "nlu_authoring.check_phrase": "development.read.descriptors",
+        "applications.list": "applications.read",
+        "applications.show": "applications.read",
+        "applications.list_releases": "applications.read",
+        "applications.list_operations": "applications.read",
+        "applications.list_development_reports": "applications.report",
+        "applications.plan": "applications.plan",
+        "applications.apply": "applications.apply",
     }
     tool_id = str(body.tool_id or "").strip()
     if tool_id not in allowed_tools:
         raise HTTPException(status_code=403, detail={"code": "tool_not_allowed", "tool_id": tool_id})
+    required_capability = allowed_tools[tool_id]
 
     conf = get_ctx().config
     scope = dict(body.scope or {})
@@ -2329,7 +2337,7 @@ async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
         auth_context={
             "method": "root_token",
             "actor": "root:route_proxy",
-            "capabilities": ["development.read.descriptors"],
+            "capabilities": [required_capability],
             "allowed_target_ids": [scope.get("target_id")] if scope.get("target_id") else [],
             "subnet_id": scope.get("subnet_id"),
         },

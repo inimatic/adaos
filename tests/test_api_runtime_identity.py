@@ -915,6 +915,51 @@ def test_admin_root_mcp_call_allows_read_only_descriptor_tools(monkeypatch, tool
     assert calls[0]["auth_context"]["capabilities"] == ["development.read.descriptors"]
 
 
+@pytest.mark.parametrize(
+    ("tool_id", "capability"),
+    [
+        ("applications.list", "applications.read"),
+        ("applications.show", "applications.read"),
+        ("applications.list_releases", "applications.read"),
+        ("applications.list_operations", "applications.read"),
+        ("applications.list_development_reports", "applications.report"),
+        ("applications.plan", "applications.plan"),
+        ("applications.apply", "applications.apply"),
+    ],
+)
+def test_admin_root_mcp_call_allows_application_workbench_tools(monkeypatch, tool_id, capability) -> None:
+    calls: list[dict[str, object]] = []
+
+    class _Resp:
+        ok = True
+
+        def to_dict(self) -> dict[str, object]:
+            return {"ok": True, "status": "ok", "result": {}}
+
+    monkeypatch.setattr(
+        api_server,
+        "get_ctx",
+        lambda: types.SimpleNamespace(config=types.SimpleNamespace(subnet_id="sn-test")),
+    )
+    monkeypatch.setattr(
+        api_server,
+        "invoke_root_mcp_tool",
+        lambda requested_tool_id, **kwargs: calls.append(
+            {"tool_id": requested_tool_id, **kwargs}
+        )
+        or _Resp(),
+    )
+
+    payload = asyncio.run(
+        api_server.admin_root_mcp_call(
+            api_server.AdminRootMcpCallRequest(tool_id=tool_id, arguments={})
+        )
+    )
+
+    assert payload["ok"] is True
+    assert calls[0]["auth_context"]["capabilities"] == [capability]
+
+
 def test_admin_root_mcp_call_blocks_non_allowlisted_tool() -> None:
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(

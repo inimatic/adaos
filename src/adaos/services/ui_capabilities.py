@@ -428,6 +428,7 @@ def qualify_ui_request(request: str) -> dict[str, Any]:
                     "applications.list_development_reports",
                 ],
                 "mcp_mutation_tools": ["applications.plan", "applications.apply"],
+                "plan_kinds": ["install", "update", "select_track", "remove"],
                 "tabs": ["overview", "versions", "operations", "reports"],
             }
         )
@@ -760,37 +761,96 @@ def evaluate_ui_request(
             }
         )
     if requirements.get("application_manager"):
+        pages = [page for _, page in _page_schemas(webui)]
         widgets = [
             widget
-            for _, page in _page_schemas(webui)
+            for page in pages
             for widget in page.get("widgets") or []
             if isinstance(widget, Mapping)
         ]
+        def widget_actions(widget: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+            raw = widget.get("actions")
+            if isinstance(raw, Mapping):
+                return [raw]
+            if isinstance(raw, list):
+                return [item for item in raw if isinstance(item, Mapping)]
+            return []
+
+        application_layouts = [
+            layout
+            for page in pages
+            if isinstance((layout := page.get("layout")), Mapping)
+            and layout.get("type") == "split"
+            and layout.get("pattern") == "sidebar-content"
+            and layout.get("sidebarWidth") == 340
+            and {
+                str(area.get("role") or "")
+                for area in layout.get("areas") or []
+                if isinstance(area, Mapping)
+            }
+            == {"sidebar", "main"}
+        ]
+        postconditions.append(
+            {
+                "id": "applications.sidebar_layout",
+                "ok": len(application_layouts) == 1,
+                "expected": "one 340px sidebar-content split with sidebar and main areas",
+                "actual": len(application_layouts),
+            }
+        )
+
         mcp_sources = [
             widget.get("dataSource")
             for widget in widgets
             if isinstance(widget.get("dataSource"), Mapping)
             and str(widget.get("dataSource", {}).get("kind") or "") == "mcp"
         ]
-        read_tools = {
-            str(source.get("toolId") or "")
-            for source in mcp_sources
-            if source.get("dryRun") is True
+        expected_sources = {
+            "applications.list": (
+                "response.result.applications",
+                {"installed_only": "$state.installedOnly"},
+            ),
+            "applications.show": (
+                "response.result.application",
+                {"application_id": "$state.selectedApplicationId"},
+            ),
+            "applications.list_releases": (
+                "response.result.releases",
+                {"application_id": "$state.selectedApplicationId"},
+            ),
+            "applications.list_operations": (
+                "response.result.operations",
+                {"application_id": "$state.selectedApplicationId"},
+            ),
+            "applications.list_development_reports": (
+                "response.result.reports",
+                {},
+            ),
         }
         required_reads = set(requirements.get("mcp_read_tools") or [])
+        exact_reads = {
+            tool_id
+            for tool_id, (result_path, arguments) in expected_sources.items()
+            if any(
+                source.get("dryRun") is True
+                and str(source.get("toolId") or "") == tool_id
+                and str(source.get("resultPath") or "") == result_path
+                and source.get("arguments") == arguments
+                for source in mcp_sources
+            )
+        }
         postconditions.append(
             {
                 "id": "applications.mcp_reads",
-                "ok": required_reads.issubset(read_tools),
+                "ok": required_reads.issubset(exact_reads),
                 "expected": sorted(required_reads),
-                "actual": sorted(read_tools),
+                "actual": sorted(exact_reads),
             }
         )
         actions = [
             action
             for widget in widgets
-            for action in widget.get("actions") or []
-            if isinstance(action, Mapping)
+            for action in widget_actions(widget)
         ]
         plan_actions = [
             action
@@ -804,33 +864,79 @@ def evaluate_ui_request(
             if str(action.get("type") or "") == "callMcp"
             and str(action.get("target") or "") == "applications.apply"
         ]
-        plan_state_keys = {
-            str(action.get("resultStateKey") or "").strip()
-            for action in plan_actions
-            if str(action.get("resultStateKey") or "").strip()
-            and action.get("idempotencyKey") == "auto"
+        required_plan_params = {
+            "install": {
+                "on": "click:install",
+                "expected_revision": "$state.installationRevision",
+                "release_digest": "$state.selectedReleaseDigest",
+                "data_policy": "retain",
+            },
+            "update": {
+                "on": "click:update",
+                "expected_revision": "$state.installationRevision",
+                "release_digest": "$state.selectedReleaseDigest",
+            },
+            "select_track": {
+                "on": "click:select-track",
+                "expected_revision": "$state.subscriptionRevision",
+                "update_track": "$state.updateTrack",
+                "update_policy": "$state.updatePolicy",
+                "paused": False,
+            },
+            "remove": {
+                "on": "click:remove",
+                "expected_revision": "$state.installationRevision",
+                "data_policy": "$state.removeDataPolicy",
+            },
         }
+        valid_plan_kinds: set[str] = set()
+        for action in plan_actions:
+            params = action.get("params") if isinstance(action.get("params"), Mapping) else {}
+            kind = str(params.get("kind") or "")
+            expected = required_plan_params.get(kind)
+            if not expected:
+                continue
+            if (
+                action.get("idempotencyKey") == "auto"
+                and action.get("resultStateKey") == "reviewedPlan"
+                and action.get("on") == expected["on"]
+                and action.get("enabledIf") == "$state.selectedApplicationId"
+                and params.get("application_id") == "$state.selectedApplicationId"
+                and all(
+                    params.get(key) == value
+                    for key, value in expected.items()
+                    if key != "on"
+                )
+            ):
+                valid_plan_kinds.add(kind)
+        required_plan_kinds = set(requirements.get("plan_kinds") or [])
         apply_receipts = {
-            state_key
-            for state_key in plan_state_keys
+            "reviewedPlan"
             if any(
                 action.get("idempotencyKey") == "auto"
-                and f"$state.{state_key}.operation.operation_id"
+                and "$state.reviewedPlan.operation.operation_id"
                 in json.dumps(action.get("params") or {}, sort_keys=True)
-                and f"$state.{state_key}.operation.plan_digest"
+                and "$state.reviewedPlan.operation.plan_digest"
                 in json.dumps(action.get("params") or {}, sort_keys=True)
                 and str(action.get("enabledIf") or "").strip()
                 for action in apply_actions
             )
+            else ""
         }
+        apply_receipts.discard("")
         postconditions.append(
             {
                 "id": "applications.reviewed_plan_apply",
-                "ok": bool(plan_actions and apply_actions and apply_receipts),
-                "expected": "separate idempotent plan and guarded apply bound to one exact stored receipt",
+                "ok": required_plan_kinds == valid_plan_kinds and bool(apply_actions and apply_receipts),
+                "expected": {
+                    "planKinds": sorted(required_plan_kinds),
+                    "receiptStateKey": "reviewedPlan",
+                    "separateApply": True,
+                },
                 "actual": {
                     "planActions": len(plan_actions),
                     "applyActions": len(apply_actions),
+                    "validPlanKinds": sorted(valid_plan_kinds),
                     "boundReceiptStateKeys": sorted(apply_receipts),
                 },
             }
@@ -848,8 +954,14 @@ def evaluate_ui_request(
             if (
                 str(widget.get("type") or "") == "input.commandBar"
                 and inputs.get("variant") == "segmented"
-                and str(inputs.get("selectedStateKey") or "").strip()
+                and inputs.get("selectedStateKey") == "activeTab"
                 and tab_ids.issubset(ids)
+                and any(
+                    action.get("on") == "click"
+                    and action.get("type") == "updateState"
+                    and action.get("params") == {"activeTab": "$event.id"}
+                    for action in widget_actions(widget)
+                )
             ):
                 tab_controls.append(widget)
         postconditions.append(
@@ -860,20 +972,52 @@ def evaluate_ui_request(
                 "actual": len(tab_controls),
             }
         )
+        catalog_inputs = {
+            "variant": "list",
+            "itemIdKey": "application.application_id",
+            "search": True,
+            "titleKey": "application.display.title",
+            "subtitleKey": "application.publisher.display_name",
+            "previewKey": "application.display.summary",
+        }
         selectable_catalogs = [
             widget
             for widget in widgets
             if str(widget.get("type") or "") == "ui.list"
             and isinstance(widget.get("dataSource"), Mapping)
             and widget.get("dataSource", {}).get("toolId") == "applications.list"
+            and all(
+                (widget.get("inputs") or {}).get(key) == value
+                for key, value in catalog_inputs.items()
+            )
             and any(
-                isinstance(action, Mapping)
-                and str(action.get("on") or "") == "select"
-                and str(action.get("type") or "") == "updateState"
-                and "selectedApplicationId" in (action.get("params") or {})
-                for action in widget.get("actions") or []
+                action.get("on") == "select"
+                and action.get("type") == "updateState"
+                and action.get("params") == {
+                    "selectedApplicationId": "$event.application.application_id"
+                }
+                for action in widget_actions(widget)
             )
         ]
+        installed_toggles = [
+            widget
+            for widget in widgets
+            if widget.get("type") == "input.toggle"
+            and any(
+                action.get("on") == "change"
+                and action.get("type") == "updateState"
+                and action.get("params") == {"installedOnly": "$event.checked"}
+                for action in widget_actions(widget)
+            )
+        ]
+        postconditions.append(
+            {
+                "id": "applications.installed_filter",
+                "ok": len(installed_toggles) == 1,
+                "expected": "one boolean toggle writing installedOnly from $event.checked",
+                "actual": len(installed_toggles),
+            }
+        )
         serialized = json.dumps(webui, ensure_ascii=False, sort_keys=True)
         postconditions.append(
             {
@@ -881,6 +1025,214 @@ def evaluate_ui_request(
                 "ok": len(selectable_catalogs) == 1,
                 "expected": "one applications.list master writing selectedApplicationId",
                 "actual": len(selectable_catalogs),
+            }
+        )
+        expected_detail_bindings = {
+            "installationRevision": {"path": "installation.revision", "default": 0},
+            "subscriptionRevision": {"path": "subscription.revision", "default": 0},
+            "applicationInstalled": "installed",
+            "applicationRemovable": "application.protection.active_installation_removable",
+            "effectiveReleaseDigest": {"path": "effective_release.release_digest", "default": ""},
+        }
+        application_detail_sources = [
+            widget
+            for widget in widgets
+            if widget.get("type") == "item.details"
+            and (widget.get("dataSource") or {}).get("toolId") == "applications.show"
+        ]
+        application_details = [
+            widget
+            for widget in application_detail_sources
+            if "$state.selectedApplicationId" in str(widget.get("visibleIf") or "")
+            and (widget.get("inputs") or {}).get("stateBindings") == expected_detail_bindings
+            and (widget.get("inputs") or {}).get("stateOnly") is True
+        ]
+        expected_overview_fields = [
+            {"label": "Summary", "path": "application.display.summary"},
+            {"label": "Publisher", "path": "application.publisher.display_name"},
+            {"label": "Visibility", "path": "application.visibility"},
+            {"label": "Lifecycle", "path": "application.lifecycle"},
+            {"label": "Installed", "path": "installed"},
+            {"label": "Update available", "path": "update_available"},
+            {"label": "Track", "path": "effective_release.update_track"},
+            {"label": "Release status", "path": "effective_release.reason"},
+        ]
+        overview_details = [
+            widget
+            for widget in application_detail_sources
+            if (widget.get("inputs") or {}).get("stateOnly") is not True
+            and (widget.get("inputs") or {}).get("fields") == expected_overview_fields
+            and "$state.activeTab == 'overview'" in str(widget.get("visibleIf") or "")
+            and "$state.selectedApplicationId" in str(widget.get("visibleIf") or "")
+        ]
+        release_selectors = [
+            widget
+            for widget in widgets
+            if widget.get("type") == "ui.list"
+            and (widget.get("dataSource") or {}).get("toolId") == "applications.list_releases"
+            and (widget.get("inputs") or {}).get("itemIdKey") == "release_digest"
+            and (widget.get("inputs") or {}).get("titleKey") == "version"
+            and any(
+                action.get("on") == "select"
+                and action.get("type") == "updateState"
+                and action.get("params") == {"selectedReleaseDigest": "$event.release_digest"}
+                for action in widget_actions(widget)
+            )
+        ]
+        reports = [
+            widget
+            for widget in widgets
+            if (widget.get("dataSource") or {}).get("toolId") == "applications.list_development_reports"
+            and any(
+                item.get("key") == "application_id"
+                and item.get("stateKey") == "selectedApplicationId"
+                for item in (widget.get("inputs") or {}).get("filters") or []
+                if isinstance(item, Mapping)
+            )
+        ]
+        empty_state_tools = {
+            str((widget.get("dataSource") or {}).get("toolId") or "")
+            for widget in widgets
+            if str((widget.get("inputs") or {}).get("emptyText") or "").strip()
+        }
+        required_empty_state_tools = {
+            "applications.list_releases",
+            "applications.list_operations",
+            "applications.list_development_reports",
+        }
+        lifecycle_buttons = {
+            str(button.get("id") or ""): button
+            for widget in widgets
+            if widget.get("type") == "ui.actions"
+            for button in (widget.get("inputs") or {}).get("buttons") or []
+            if isinstance(button, Mapping)
+        }
+        remove_visibility = str(
+            (lifecycle_buttons.get("remove") or {}).get("visibleIf") or ""
+        )
+        install_visibility = str(
+            (lifecycle_buttons.get("install") or {}).get("visibleIf") or ""
+        )
+        lifecycle_widgets = [
+            widget
+            for widget in widgets
+            if widget.get("type") == "ui.actions"
+            and {"install", "update", "select-track", "remove", "apply"}.issubset({
+                str(button.get("id") or "")
+                for button in (widget.get("inputs") or {}).get("buttons") or []
+                if isinstance(button, Mapping)
+            })
+            and "$state.selectedApplicationId" in str(widget.get("visibleIf") or "")
+        ]
+        lifecycle_before_overview = bool(
+            len(lifecycle_widgets) == 1
+            and len(overview_details) == 1
+            and widgets.index(lifecycle_widgets[0]) < widgets.index(overview_details[0])
+        )
+        page_initial_states = [
+            page.get("initialState") if isinstance(page.get("initialState"), Mapping) else {}
+            for _, page in _page_schemas(webui)
+        ]
+        cas_defaults = any(
+            state.get("installationRevision") == 0
+            and state.get("subscriptionRevision") == 0
+            and state.get("selectedReleaseDigest") == ""
+            and state.get("effectiveReleaseDigest") == ""
+            for state in page_initial_states
+        )
+        selector_contracts = {
+            "updateTrack": {"stable", "prerelease"},
+            "updatePolicy": {"notify", "auto_compatible", "pinned"},
+            "removeDataPolicy": {"retain", "delete", "snapshot_then_delete"},
+        }
+        valid_selectors: set[str] = set()
+        for widget in widgets:
+            if widget.get("type") != "input.selector":
+                continue
+            inputs = widget.get("inputs") if isinstance(widget.get("inputs"), Mapping) else {}
+            option_values = {
+                str(option.get("value", option.get("id")) or "")
+                for option in inputs.get("options") or []
+                if isinstance(option, Mapping)
+            }
+            for state_key, expected_values in selector_contracts.items():
+                if option_values != expected_values:
+                    continue
+                if any(
+                    action.get("on") == "change"
+                    and action.get("type") == "updateState"
+                    and action.get("params") == {state_key: "$event.value"}
+                    for action in widget_actions(widget)
+                ):
+                    valid_selectors.add(state_key)
+        review_surfaces = [
+            widget
+            for widget in widgets
+            if widget.get("type") == "item.details"
+            and (widget.get("dataSource") or {}).get("kind") == "static"
+            and (widget.get("dataSource") or {}).get("value") == "$state.reviewedPlan"
+            and "$state.reviewedPlan.operation.operation_id" in str(widget.get("visibleIf") or "")
+        ]
+        postconditions.append(
+            {
+                "id": "applications.concise_operable_detail",
+                "ok": bool(
+                    len(overview_details) == 1
+                    and lifecycle_before_overview
+                    and required_empty_state_tools.issubset(empty_state_tools)
+                ),
+                "expected": "concise Overview, lifecycle actions above it, and explicit empty states",
+                "actual": {
+                    "conciseOverviews": len(overview_details),
+                    "lifecycleBeforeOverview": lifecycle_before_overview,
+                    "emptyStateTools": sorted(empty_state_tools & required_empty_state_tools),
+                },
+            }
+        )
+        postconditions.append(
+            {
+                "id": "applications.detail_lifecycle_binding",
+                "ok": bool(
+                    application_details
+                    and release_selectors
+                    and reports
+                    and "$state.applicationRemovable" in remove_visibility
+                    and "$state.selectedReleaseDigest" in install_visibility
+                    and "$state.effectiveReleaseDigest" in install_visibility
+                    and len(lifecycle_widgets) == 1
+                    and cas_defaults
+                    and set(selector_contracts) == valid_selectors
+                    and len(review_surfaces) == 1
+                ),
+                "expected": "selected detail binds revision/protection; releases and reports stay application-addressed",
+                "actual": {
+                    "details": len(application_details),
+                    "detailSources": len(application_detail_sources),
+                    "detailVisibleOnSelection": sum(
+                        "$state.selectedApplicationId" in str(widget.get("visibleIf") or "")
+                        for widget in application_detail_sources
+                    ),
+                    "detailLifecycleBindings": sum(
+                        (widget.get("inputs") or {}).get("stateBindings")
+                        == expected_detail_bindings
+                        for widget in application_detail_sources
+                    ),
+                    "detailStateOnly": sum(
+                        (widget.get("inputs") or {}).get("stateOnly") is True
+                        for widget in application_detail_sources
+                    ),
+                    "releaseSelectors": len(release_selectors),
+                    "filteredReports": len(reports),
+                    "removeProtected": "$state.applicationRemovable" in remove_visibility,
+                    "installReleaseGuarded": (
+                        "$state.selectedReleaseDigest" in install_visibility
+                        and "$state.effectiveReleaseDigest" in install_visibility
+                    ),
+                    "selectedLifecycleSurface": len(lifecycle_widgets),
+                    "casDefaults": cas_defaults,
+                    "lifecycleSelectors": sorted(valid_selectors),
+                    "reviewSurfaces": len(review_surfaces),
+                },
             }
         )
         postconditions.append(

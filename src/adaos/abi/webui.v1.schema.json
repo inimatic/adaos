@@ -629,6 +629,7 @@
         "input.fileUpload",
         "input.frameSlider",
         "input.text",
+        "input.toggle",
         "input.selector",
         "desktop.widgets",
         "media.videoBrowser",
@@ -905,6 +906,14 @@
           "then": {
             "properties": {
               "inputs": { "$ref": "#/$defs/actionsInputs" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "input.toggle" } } },
+          "then": {
+            "properties": {
+              "inputs": { "$ref": "#/$defs/toggleInputs" }
             }
           }
         }
@@ -1257,6 +1266,14 @@
               "inputs": { "$ref": "#/$defs/actionsInputs" }
             }
           }
+        },
+        {
+          "if": { "properties": { "type": { "const": "input.toggle" } } },
+          "then": {
+            "properties": {
+              "inputs": { "$ref": "#/$defs/toggleInputs" }
+            }
+          }
         }
       ]
     },
@@ -1564,6 +1581,7 @@
       "description": "Inputs for ui.list in rows, grouped rows, or responsive card mode.",
       "properties": {
         "variant": { "type": "string", "enum": ["list", "cards"] },
+        "itemIdKey": { "$ref": "#/$defs/fieldPath" },
         "titleKey": { "$ref": "#/$defs/fieldPath" },
         "subtitleKey": { "$ref": "#/$defs/fieldPath" },
         "previewKey": { "$ref": "#/$defs/fieldPath" },
@@ -1746,6 +1764,11 @@
           "description": "Optional presentation emphasis. Prefer kind over raw colors."
         },
         "disabled": { "type": "boolean" },
+        "visibleIf": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Page-state expression controlling whether this command is rendered."
+        },
         "enabledIf": { "type": "string", "minLength": 1 },
         "value": {},
         "stateKey": { "type": "string", "minLength": 1 },
@@ -1840,6 +1863,22 @@
           "type": "string",
           "pattern": "^[0-9]+(?:\\.[0-9]+)?\\s*\\/\\s*[0-9]+(?:\\.[0-9]+)?$"
         }
+      }
+    },
+
+    "toggleInputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Inputs for one standalone boolean setting.",
+      "properties": {
+        "label": { "type": "string" },
+        "description": { "type": "string" },
+        "value": { "type": "boolean" },
+        "defaultValue": { "type": "boolean" },
+        "disabled": { "type": "boolean" },
+        "loadingText": { "type": "string" },
+        "valuePath": { "$ref": "#/$defs/fieldPath" },
+        "bindField": { "$ref": "#/$defs/fieldPath" }
       }
     },
 
@@ -2643,6 +2682,15 @@
             "required": ["params"],
             "properties": {
               "params": { "$ref": "#/$defs/mutateStateActionParams" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "callMcp" } } },
+          "then": {
+            "required": ["target"],
+            "properties": {
+              "target": { "type": "string", "minLength": 1 }
             }
           }
         },

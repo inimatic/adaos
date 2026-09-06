@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "1.3.0",
+  "catalog_version": "1.3.4",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -204,6 +204,19 @@
       "postconditions": ["Every declared button has an executable or explicitly disabled action contract."]
     },
     {
+      "id": "input.toggle",
+      "kind": "component",
+      "title": "Boolean toggle",
+      "summary": "One explicit binary setting with a boolean change event.",
+      "aliases": { "en": ["toggle", "switch", "checkbox", "boolean"], "ru": ["переключатель", "флаг", "да или нет"] },
+      "manifest": { "widget_type": "input.toggle" },
+      "data_shape": { "kind": "boolean" },
+      "events": ["change"],
+      "responsive": { "desktop": "one bounded setting row", "compact": "one full-width setting row" },
+      "interactions": { "event": "The change event is {value:boolean, checked:boolean}; bind page state with $event.checked." },
+      "postconditions": ["The visible checked state and emitted value are boolean."]
+    },
+    {
       "id": "input.selector",
       "kind": "component",
       "title": "Option selector",
@@ -216,7 +229,7 @@
         "form_field_invalid": "selector"
       },
       "data_shape": { "kind": "options" },
-      "events": ["change", "select"],
+      "events": ["change"],
       "responsive": { "desktop": "anchored popup", "compact": "viewport-bounded popup" },
       "postconditions": ["The selected value maps to one declared option value."]
     },
@@ -341,27 +354,74 @@
       },
       "requires": {
         "layouts": ["layout.split"],
-        "components": ["input.text", "input.selector", "ui.list", "item.details", "input.commandBar", "ui.actions"]
+        "components": ["input.toggle", "input.selector", "ui.list", "item.details", "input.commandBar", "ui.actions"]
       },
       "composition": {
-        "page": "Use a quiet full-surface split layout. The compact variant presents list and details as state-selected full-surface alternatives.",
-        "navigation": "Search and installed-only controls update page state; one ui.list renders applications.list, filters locally by search, and writes selectedApplicationId through a widget-level select action.",
-        "details": "item.details reads applications.show with selectedApplicationId. An input.commandBar with inputs.variant=segmented, inputs.selectedStateKey=activeTab, widget-level click action, and buttons Overview, Versions, Operations, and Reports controls visibleIf content.",
+        "page": "Use a quiet full-surface split layout with pattern=sidebar-content, sidebarWidth=340, the catalog area role=sidebar, and the detail area role=main. The compact renderer exposes the catalog as a drawer.",
+        "navigation": "One input.toggle writes installedOnly from $event.checked. One ui.list renders applications.list, uses its built-in search, projects nested Application read-model fields, and writes selectedApplicationId from $event.application.application_id.",
+        "catalog_widget": {"type": "ui.list", "inputs": {"variant": "list", "itemIdKey": "application.application_id", "search": true, "searchPlaceholder": "Search applications", "titleKey": "application.display.title", "subtitleKey": "application.publisher.display_name", "previewKey": "application.display.summary", "emptyText": "No applications found."}, "action": {"type": "updateState", "on": "select", "params": {"selectedApplicationId": "$event.application.application_id"}}},
+        "installed_filter": {"type": "input.toggle", "inputs": {"label": "Installed only", "defaultValue": false}, "action": {"type": "updateState", "on": "change", "params": {"installedOnly": "$event.checked"}}},
+        "details": "A state-only item.details reads applications.show whenever selectedApplicationId is non-empty and binds installationRevision, subscriptionRevision, applicationInstalled, applicationRemovable, and effectiveReleaseDigest from the read model. Installation/subscription/effective-release records may be absent, so their bindings default to zero or an empty digest. An input.commandBar visible only after selection uses inputs.variant=segmented, inputs.selectedStateKey=activeTab, widget-level click action bound to $event.id, and buttons Overview, Versions, Operations, and Reports controls visibleIf content.",
+        "details_widget": {"type": "item.details", "visibleIf": "$state.selectedApplicationId", "inputs": {"stateOnly": true, "stateBindings": {"installationRevision": {"path": "installation.revision", "default": 0}, "subscriptionRevision": {"path": "subscription.revision", "default": 0}, "applicationInstalled": "installed", "applicationRemovable": "application.protection.active_installation_removable", "effectiveReleaseDigest": {"path": "effective_release.release_digest", "default": ""}}}},
+        "overview_widget": {"type": "item.details", "visibleIf": "$state.activeTab == 'overview' && $state.selectedApplicationId", "inputs": {"fields": [{"label": "Summary", "path": "application.display.summary"}, {"label": "Publisher", "path": "application.publisher.display_name"}, {"label": "Visibility", "path": "application.visibility"}, {"label": "Lifecycle", "path": "application.lifecycle"}, {"label": "Installed", "path": "installed"}, {"label": "Update available", "path": "update_available"}, {"label": "Track", "path": "effective_release.update_track"}, {"label": "Release status", "path": "effective_release.reason"}]}},
+        "ordering": "Within the detail area place the tabs first, lifecycle actions and reviewed-plan receipt next, then settings and the active tab content. Lifecycle actions must stay above the potentially scrolling Overview.",
+        "tab_action": {"type": "updateState", "on": "click", "params": {"activeTab": "$event.id"}},
         "reads": {
-          "catalog": {"kind": "mcp", "toolId": "applications.list", "arguments": {"installed_only": false}, "dryRun": true, "resultPath": "response.result.applications"},
+          "catalog": {"kind": "mcp", "toolId": "applications.list", "arguments": {"installed_only": "$state.installedOnly"}, "dryRun": true, "resultPath": "response.result.applications"},
           "application": {"kind": "mcp", "toolId": "applications.show", "arguments": {"application_id": "$state.selectedApplicationId"}, "dryRun": true, "resultPath": "response.result.application"},
           "releases": {"kind": "mcp", "toolId": "applications.list_releases", "arguments": {"application_id": "$state.selectedApplicationId"}, "dryRun": true, "resultPath": "response.result.releases"},
           "operations": {"kind": "mcp", "toolId": "applications.list_operations", "arguments": {"application_id": "$state.selectedApplicationId"}, "dryRun": true, "resultPath": "response.result.operations"},
           "reports": {"kind": "mcp", "toolId": "applications.list_development_reports", "arguments": {}, "dryRun": true, "resultPath": "response.result.reports"}
         },
-        "mutations": "Use callMcp with idempotencyKey=auto for one explicit applications.plan action with resultStateKey=reviewedPlan and a separate applications.apply action bound to $state.reviewedPlan.operation.operation_id and $state.reviewedPlan.operation.plan_digest. Never chain plan and apply. The apply action must be disabled until reviewedPlan exists.",
+        "release_widget": {"type": "ui.list", "inputs": {"itemIdKey": "release_digest", "titleKey": "version", "subtitleKey": "lifecycle", "previewKey": "release_digest", "emptyText": "No versions available."}, "action": {"type": "updateState", "on": "select", "params": {"selectedReleaseDigest": "$event.release_digest"}}},
+        "operations_widget": {"type": "ui.list", "inputs": {"emptyText": "No operations yet."}},
+        "reports_widget": {"type": "ui.list", "inputs": {"filters": [{"key": "application_id", "stateKey": "selectedApplicationId"}], "emptyText": "No reports yet."}},
+        "release_selection": "The Versions list writes selectedReleaseDigest. Install/update plans may leave this state empty to resolve the effective channel.",
+        "initial_state": {"selectedReleaseDigest": "", "effectiveReleaseDigest": "", "installationRevision": 0, "subscriptionRevision": 0},
+        "lifecycle_settings": {
+          "defaults": {"updateTrack": "stable", "updatePolicy": "notify", "removeDataPolicy": "retain"},
+          "selector_widgets": [
+            {"id": "update-track", "type": "input.selector", "inputs": {"defaultValue": "$state.updateTrack", "options": [{"label": "Stable", "value": "stable"}, {"label": "Prerelease", "value": "prerelease"}]}, "actions": [{"type": "updateState", "on": "change", "params": {"updateTrack": "$event.value"}}], "visibleIf": "$state.applicationInstalled == true"},
+            {"id": "update-policy", "type": "input.selector", "inputs": {"defaultValue": "$state.updatePolicy", "options": [{"label": "Notify", "value": "notify"}, {"label": "Automatic compatible", "value": "auto_compatible"}, {"label": "Pinned", "value": "pinned"}]}, "actions": [{"type": "updateState", "on": "change", "params": {"updatePolicy": "$event.value"}}], "visibleIf": "$state.applicationInstalled == true"},
+            {"id": "remove-data-policy", "type": "input.selector", "inputs": {"defaultValue": "$state.removeDataPolicy", "options": [{"label": "Retain data", "value": "retain"}, {"label": "Delete data", "value": "delete"}, {"label": "Snapshot then delete", "value": "snapshot_then_delete"}]}, "actions": [{"type": "updateState", "on": "change", "params": {"removeDataPolicy": "$event.value"}}], "visibleIf": "$state.applicationInstalled == true && $state.applicationRemovable == true"}
+          ]
+        },
+        "mutations": "Use separate callMcp actions for install, update, select_track, and remove in one ui.actions widget visible only after an Application is selected. Install/update/remove supply $state.installationRevision as expected_revision; select_track supplies $state.subscriptionRevision. Every plan uses idempotencyKey=auto, resultStateKey=reviewedPlan, and an enabledIf selection guard. A separate applications.apply action is bound to the exact stored operation_id and plan_digest. Never chain plan and apply. Hide remove when applicationRemovable is not true and guard apply until a reviewed receipt exists.",
+        "review": "Render one item.details from dataSource {kind:'static', value:'$state.reviewedPlan'} when the stored receipt has an operation id. The user must be able to inspect the exact operation before Apply reviewed plan becomes enabled.",
+        "canonical_commands": {
+          "buttons": [
+            {"id": "install", "label": "Plan install", "kind": "primary", "visibleIf": "$state.applicationInstalled != true && ($state.selectedReleaseDigest || $state.effectiveReleaseDigest)"},
+            {"id": "update", "label": "Plan update", "kind": "primary", "visibleIf": "$state.applicationInstalled == true"},
+            {"id": "select-track", "label": "Plan track change", "kind": "secondary", "visibleIf": "$state.applicationInstalled == true"},
+            {"id": "remove", "label": "Plan removal", "kind": "danger", "visibleIf": "$state.applicationInstalled == true && $state.applicationRemovable == true"},
+            {"id": "apply", "label": "Apply reviewed plan", "kind": "secondary"}
+          ],
+          "plan_actions": [
+            {"type": "callMcp", "on": "click:install", "target": "applications.plan", "idempotencyKey": "auto", "resultStateKey": "reviewedPlan", "enabledIf": "$state.selectedApplicationId", "params": {"application_id": "$state.selectedApplicationId", "kind": "install", "expected_revision": "$state.installationRevision", "release_digest": "$state.selectedReleaseDigest", "data_policy": "retain"}},
+            {"type": "callMcp", "on": "click:update", "target": "applications.plan", "idempotencyKey": "auto", "resultStateKey": "reviewedPlan", "enabledIf": "$state.selectedApplicationId", "params": {"application_id": "$state.selectedApplicationId", "kind": "update", "expected_revision": "$state.installationRevision", "release_digest": "$state.selectedReleaseDigest"}},
+            {"type": "callMcp", "on": "click:select-track", "target": "applications.plan", "idempotencyKey": "auto", "resultStateKey": "reviewedPlan", "enabledIf": "$state.selectedApplicationId", "params": {"application_id": "$state.selectedApplicationId", "kind": "select_track", "expected_revision": "$state.subscriptionRevision", "update_track": "$state.updateTrack", "update_policy": "$state.updatePolicy", "paused": false}},
+            {"type": "callMcp", "on": "click:remove", "target": "applications.plan", "idempotencyKey": "auto", "resultStateKey": "reviewedPlan", "enabledIf": "$state.selectedApplicationId", "params": {"application_id": "$state.selectedApplicationId", "kind": "remove", "expected_revision": "$state.installationRevision", "data_policy": "$state.removeDataPolicy"}}
+          ],
+          "apply_action": {
+            "type": "callMcp",
+            "on": "click:apply",
+            "target": "applications.apply",
+            "idempotencyKey": "auto",
+            "enabledIf": "$state.reviewedPlan.operation.operation_id && $state.reviewedPlan.operation.plan_digest",
+            "params": {
+              "operation_id": "$state.reviewedPlan.operation.operation_id",
+              "plan_digest": "$state.reviewedPlan.operation.plan_digest"
+            }
+          }
+        },
         "protection": "A protected system Application exposes no remove command in its active installation UI; CLI and MCP remain recovery surfaces."
       },
       "postconditions": [
         "Catalog and installed state come from applications.list rather than static prototype records.",
+        "Catalog rows use stable nested Application identity and display projections supported by the renderer.",
         "Selection addresses one exact Application across details, versions, operations, and reports.",
         "Every Root MCP data source is dry-run and mutation-free.",
-        "Plan stores its exact receipt in local state and apply is a separate user-reviewed command bound to that receipt.",
+        "Every plan has an executable operation kind and compare-and-swap revision, stores its exact receipt in visible local review state, and apply is a separate user-reviewed command bound to that receipt.",
         "Compact layouts never display overlapping list and detail surfaces."
       ]
     },

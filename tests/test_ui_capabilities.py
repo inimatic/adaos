@@ -186,14 +186,14 @@ def test_application_manager_selection_exposes_mcp_master_detail_contract() -> N
 
     assert selected["root_item_ids"][0] == "recipe.application_manager"
     assert {
-        "layout.split", "input.text", "input.selector", "ui.list",
+        "layout.split", "input.toggle", "input.selector", "ui.list",
         "item.details", "input.commandBar", "ui.actions",
     } <= selected_ids
     recipe = get_ui_capability("recipe.application_manager")
     assert recipe["composition"]["reads"]["catalog"] == {
         "kind": "mcp",
         "toolId": "applications.list",
-        "arguments": {"installed_only": False},
+        "arguments": {"installed_only": "$state.installedOnly"},
         "dryRun": True,
         "resultPath": "response.result.applications",
     }
@@ -219,31 +219,65 @@ def _application_manager_webui() -> dict:
                         "id": "applications",
                         "initialState": {
                             "selectedApplicationId": "",
+                            "selectedReleaseDigest": "",
+                            "effectiveReleaseDigest": "",
+                            "installationRevision": 0,
+                            "subscriptionRevision": 0,
+                            "applicationInstalled": False,
+                            "applicationRemovable": False,
+                            "installedOnly": False,
+                            "updateTrack": "stable",
+                            "updatePolicy": "notify",
+                            "removeDataPolicy": "retain",
                             "activeTab": "overview",
                             "reviewedPlan": None,
                         },
                         "layout": {
                             "type": "split",
+                            "pattern": "sidebar-content",
+                            "sidebarWidth": 340,
                             "areas": [
-                                {"id": "master", "role": "navigation"},
+                                {"id": "master", "role": "sidebar"},
                                 {"id": "detail", "role": "main"},
                             ],
                         },
                         "widgets": [
+                            {
+                                "id": "installed-only",
+                                "type": "input.toggle",
+                                "area": "master",
+                                "inputs": {"label": "Installed only", "defaultValue": False},
+                                "actions": [
+                                    {
+                                        "on": "change",
+                                        "type": "updateState",
+                                        "params": {"installedOnly": "$event.checked"},
+                                    }
+                                ],
+                            },
                             {
                                 "id": "catalog",
                                 "type": "ui.list",
                                 "area": "master",
                                 "dataSource": {
                                     **source("applications.list", "response.result.applications"),
-                                    "arguments": {"installed_only": False},
+                                    "arguments": {"installed_only": "$state.installedOnly"},
                                 },
-                                "inputs": {"search": True, "titleKey": "display.title"},
+                                "inputs": {
+                                    "variant": "list",
+                                    "itemIdKey": "application.application_id",
+                                    "search": True,
+                                    "titleKey": "application.display.title",
+                                    "subtitleKey": "application.publisher.display_name",
+                                    "previewKey": "application.display.summary",
+                                },
                                 "actions": [
                                     {
                                         "on": "select",
                                         "type": "updateState",
-                                        "params": {"selectedApplicationId": "$event.id"},
+                                        "params": {
+                                            "selectedApplicationId": "$event.application.application_id"
+                                        },
                                     }
                                 ],
                             },
@@ -271,40 +305,225 @@ def _application_manager_webui() -> dict:
                                 "id": "details",
                                 "type": "item.details",
                                 "area": "detail",
+                                "visibleIf": "$state.selectedApplicationId",
                                 "dataSource": source("applications.show", "response.result.application", selected=True),
+                                "inputs": {
+                                    "stateOnly": True,
+                                    "stateBindings": {
+                                        "installationRevision": {
+                                            "path": "installation.revision",
+                                            "default": 0,
+                                        },
+                                        "subscriptionRevision": {
+                                            "path": "subscription.revision",
+                                            "default": 0,
+                                        },
+                                        "applicationInstalled": "installed",
+                                        "applicationRemovable": "application.protection.active_installation_removable",
+                                        "effectiveReleaseDigest": {
+                                            "path": "effective_release.release_digest",
+                                            "default": "",
+                                        },
+                                    }
+                                },
                             },
                             {
                                 "id": "releases",
                                 "type": "ui.list",
                                 "area": "detail",
+                                "visibleIf": "$state.activeTab == 'versions' && $state.selectedApplicationId",
                                 "dataSource": source("applications.list_releases", "response.result.releases", selected=True),
+                                "inputs": {
+                                    "itemIdKey": "release_digest",
+                                    "titleKey": "version",
+                                    "subtitleKey": "lifecycle",
+                                    "previewKey": "release_digest",
+                                    "emptyText": "No versions available.",
+                                },
+                                "actions": [
+                                    {
+                                        "on": "select",
+                                        "type": "updateState",
+                                        "params": {"selectedReleaseDigest": "$event.release_digest"},
+                                    }
+                                ],
                             },
                             {
                                 "id": "operations",
                                 "type": "ui.list",
                                 "area": "detail",
+                                "visibleIf": "$state.activeTab == 'operations' && $state.selectedApplicationId",
                                 "dataSource": source("applications.list_operations", "response.result.operations", selected=True),
+                                "inputs": {"emptyText": "No operations yet."},
                             },
                             {
                                 "id": "reports",
                                 "type": "ui.list",
                                 "area": "detail",
+                                "visibleIf": "$state.activeTab == 'reports' && $state.selectedApplicationId",
                                 "dataSource": source("applications.list_development_reports", "response.result.reports"),
+                                "inputs": {
+                                    "filters": [
+                                        {"key": "application_id", "stateKey": "selectedApplicationId"}
+                                    ],
+                                    "emptyText": "No reports yet.",
+                                },
+                            },
+                            {
+                                "id": "update-track",
+                                "type": "input.selector",
+                                "area": "detail",
+                                "visibleIf": "$state.applicationInstalled == true",
+                                "inputs": {
+                                    "defaultValue": "$state.updateTrack",
+                                    "options": [
+                                        {"label": "Stable", "value": "stable"},
+                                        {"label": "Prerelease", "value": "prerelease"},
+                                    ],
+                                },
+                                "actions": [
+                                    {
+                                        "on": "change",
+                                        "type": "updateState",
+                                        "params": {"updateTrack": "$event.value"},
+                                    }
+                                ],
+                            },
+                            {
+                                "id": "update-policy",
+                                "type": "input.selector",
+                                "area": "detail",
+                                "visibleIf": "$state.applicationInstalled == true",
+                                "inputs": {
+                                    "defaultValue": "$state.updatePolicy",
+                                    "options": [
+                                        {"label": "Notify", "value": "notify"},
+                                        {"label": "Automatic", "value": "auto_compatible"},
+                                        {"label": "Pinned", "value": "pinned"},
+                                    ],
+                                },
+                                "actions": [
+                                    {
+                                        "on": "change",
+                                        "type": "updateState",
+                                        "params": {"updatePolicy": "$event.value"},
+                                    }
+                                ],
+                            },
+                            {
+                                "id": "remove-data-policy",
+                                "type": "input.selector",
+                                "area": "detail",
+                                "visibleIf": "$state.applicationInstalled == true && $state.applicationRemovable == true",
+                                "inputs": {
+                                    "defaultValue": "$state.removeDataPolicy",
+                                    "options": [
+                                        {"label": "Retain data", "value": "retain"},
+                                        {"label": "Delete data", "value": "delete"},
+                                        {"label": "Snapshot and delete", "value": "snapshot_then_delete"},
+                                    ],
+                                },
+                                "actions": [
+                                    {
+                                        "on": "change",
+                                        "type": "updateState",
+                                        "params": {"removeDataPolicy": "$event.value"},
+                                    }
+                                ],
+                            },
+                            {
+                                "id": "reviewed-plan",
+                                "type": "item.details",
+                                "area": "detail",
+                                "title": "Reviewed change",
+                                "visibleIf": "$state.reviewedPlan.operation.operation_id",
+                                "dataSource": {"kind": "static", "value": "$state.reviewedPlan"},
                             },
                             {
                                 "id": "lifecycle-actions",
                                 "type": "ui.actions",
                                 "area": "detail",
-                                "inputs": {"buttons": [{"id": "plan"}, {"id": "apply"}]},
+                                "visibleIf": "$state.selectedApplicationId",
+                                "inputs": {
+                                    "buttons": [
+                                        {
+                                            "id": "install",
+                                            "visibleIf": "$state.applicationInstalled != true && ($state.selectedReleaseDigest || $state.effectiveReleaseDigest)",
+                                        },
+                                        {
+                                            "id": "update",
+                                            "visibleIf": "$state.applicationInstalled == true",
+                                        },
+                                        {
+                                            "id": "select-track",
+                                            "visibleIf": "$state.applicationInstalled == true",
+                                        },
+                                        {
+                                            "id": "remove",
+                                            "visibleIf": "$state.applicationInstalled == true && $state.applicationRemovable == true",
+                                        },
+                                        {"id": "apply"},
+                                    ]
+                                },
                                 "actions": [
                                     {
-                                        "id": "plan",
-                                        "on": "click",
+                                        "on": "click:install",
                                         "type": "callMcp",
                                         "target": "applications.plan",
                                         "idempotencyKey": "auto",
                                         "resultStateKey": "reviewedPlan",
-                                        "params": {"application_id": "$state.selectedApplicationId"},
+                                        "enabledIf": "$state.selectedApplicationId",
+                                        "params": {
+                                            "application_id": "$state.selectedApplicationId",
+                                            "kind": "install",
+                                            "expected_revision": "$state.installationRevision",
+                                            "release_digest": "$state.selectedReleaseDigest",
+                                            "data_policy": "retain",
+                                        },
+                                    },
+                                    {
+                                        "on": "click:update",
+                                        "type": "callMcp",
+                                        "target": "applications.plan",
+                                        "idempotencyKey": "auto",
+                                        "resultStateKey": "reviewedPlan",
+                                        "enabledIf": "$state.selectedApplicationId",
+                                        "params": {
+                                            "application_id": "$state.selectedApplicationId",
+                                            "kind": "update",
+                                            "expected_revision": "$state.installationRevision",
+                                            "release_digest": "$state.selectedReleaseDigest",
+                                        },
+                                    },
+                                    {
+                                        "on": "click:select-track",
+                                        "type": "callMcp",
+                                        "target": "applications.plan",
+                                        "idempotencyKey": "auto",
+                                        "resultStateKey": "reviewedPlan",
+                                        "enabledIf": "$state.selectedApplicationId",
+                                        "params": {
+                                            "application_id": "$state.selectedApplicationId",
+                                            "kind": "select_track",
+                                            "expected_revision": "$state.subscriptionRevision",
+                                            "update_track": "$state.updateTrack",
+                                            "update_policy": "$state.updatePolicy",
+                                            "paused": False,
+                                        },
+                                    },
+                                    {
+                                        "on": "click:remove",
+                                        "type": "callMcp",
+                                        "target": "applications.plan",
+                                        "idempotencyKey": "auto",
+                                        "resultStateKey": "reviewedPlan",
+                                        "enabledIf": "$state.selectedApplicationId",
+                                        "params": {
+                                            "application_id": "$state.selectedApplicationId",
+                                            "kind": "remove",
+                                            "expected_revision": "$state.installationRevision",
+                                            "data_policy": "$state.removeDataPolicy",
+                                        },
                                     },
                                     {
                                         "id": "apply",
@@ -319,6 +538,25 @@ def _application_manager_webui() -> dict:
                                         },
                                     },
                                 ],
+                            },
+                            {
+                                "id": "overview",
+                                "type": "item.details",
+                                "area": "detail",
+                                "visibleIf": "$state.activeTab == 'overview' && $state.selectedApplicationId",
+                                "dataSource": source("applications.show", "response.result.application", selected=True),
+                                "inputs": {
+                                    "fields": [
+                                        {"label": "Summary", "path": "application.display.summary"},
+                                        {"label": "Publisher", "path": "application.publisher.display_name"},
+                                        {"label": "Visibility", "path": "application.visibility"},
+                                        {"label": "Lifecycle", "path": "application.lifecycle"},
+                                        {"label": "Installed", "path": "installed"},
+                                        {"label": "Update available", "path": "update_available"},
+                                        {"label": "Track", "path": "effective_release.update_track"},
+                                        {"label": "Release status", "path": "effective_release.reason"},
+                                    ]
+                                },
                             },
                         ],
                     }
@@ -337,7 +575,8 @@ def test_application_manager_evaluation_enforces_mcp_and_review_boundary() -> No
     assert accepted["ok"] is True
     assert all(item["ok"] for item in accepted["postconditions"])
 
-    actions = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"][-1]["actions"]
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    actions = next(widget for widget in widgets if widget["id"] == "lifecycle-actions")["actions"]
     actions.pop()
     rejected = evaluate_ui_request(request, webui)
 
@@ -347,6 +586,47 @@ def test_application_manager_evaluation_enforces_mcp_and_review_boundary() -> No
         if item["id"] == "applications.reviewed_plan_apply"
     )
     assert boundary["ok"] is False
+
+
+def test_application_manager_evaluation_rejects_non_runtime_event_paths() -> None:
+    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    webui = _application_manager_webui()
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    catalog = next(widget for widget in widgets if widget["id"] == "catalog")
+    catalog["actions"][0]["params"]["selectedApplicationId"] = "$event.item.id"
+    tabs = next(widget for widget in widgets if widget["id"] == "tabs")
+    tabs["actions"][0]["params"]["activeTab"] = "$event.buttonId"
+
+    rejected = evaluate_ui_request(request, webui)
+
+    assert rejected["ok"] is False
+    by_id = {item["id"]: item for item in rejected["postconditions"]}
+    assert by_id["applications.master_selection"]["ok"] is False
+    assert by_id["applications.tabs"]["ok"] is False
+
+
+def test_application_manager_evaluation_rejects_wide_aux_layout_and_unguarded_install() -> None:
+    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    webui = _application_manager_webui()
+    page = webui["ui"]["application"]["desktop"]["pageSchema"]
+    page["layout"] = {
+        "type": "split",
+        "pattern": "split",
+        "areas": [
+            {"id": "master", "role": "main"},
+            {"id": "detail", "role": "aux"},
+        ],
+    }
+    lifecycle = next(widget for widget in page["widgets"] if widget["id"] == "lifecycle-actions")
+    lifecycle["inputs"]["buttons"][0]["visibleIf"] = "$state.applicationInstalled != true"
+
+    rejected = evaluate_ui_request(request, webui)
+
+    assert rejected["ok"] is False
+    by_id = {item["id"]: item for item in rejected["postconditions"]}
+    assert by_id["applications.sidebar_layout"]["ok"] is False
+    assert by_id["applications.detail_lifecycle_binding"]["ok"] is False
+    assert by_id["applications.detail_lifecycle_binding"]["actual"]["installReleaseGuarded"] is False
 
 
 def test_capability_validation_rejects_unknown_layout_and_board_lane() -> None:

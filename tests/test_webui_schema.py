@@ -194,6 +194,45 @@ def test_webui_schema_accepts_singleton_widget_actions_and_tags() -> None:
     Draft202012Validator(schema).validate(payload)
 
 
+def test_webui_schema_requires_call_mcp_target() -> None:
+    schema = _load_schema()
+    payload = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "applications",
+                        "layout": {"type": "single", "areas": [{"id": "main"}]},
+                        "widgets": [
+                            {
+                                "id": "commands",
+                                "type": "ui.actions",
+                                "area": "main",
+                                "inputs": {"buttons": [{"id": "plan", "label": "Plan"}]},
+                                "actions": {
+                                    "on": "click:plan",
+                                    "type": "callMcp",
+                                    "toolId": "applications.plan",
+                                    "arguments": {"application_id": "applications"},
+                                },
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+    }
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(payload)
+
+    action = payload["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["actions"]
+    action["target"] = action.pop("toolId")
+    action["params"] = action.pop("arguments")
+    Draft202012Validator(schema).validate(payload)
+
+
 def test_webui_schema_requires_interval_for_auto_actions() -> None:
     schema = _load_schema()
     payload = {
@@ -1206,6 +1245,53 @@ def test_webui_schema_accepts_state_selected_list_sort_and_conditional_action() 
                     }
                 ],
             }
+        ]
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
+def test_webui_schema_accepts_toggle_and_nested_list_identity() -> None:
+    schema = _load_schema()
+    payload = {
+        "widgets": [
+            {
+                "id": "installed-only",
+                "type": "input.toggle",
+                "area": "main",
+                "inputs": {"label": "Installed only", "defaultValue": False},
+                "actions": [
+                    {
+                        "on": "change",
+                        "type": "updateState",
+                        "params": {"installedOnly": "$event.checked"},
+                    }
+                ],
+            },
+            {
+                "id": "applications",
+                "type": "ui.list",
+                "area": "main",
+                "inputs": {
+                    "itemIdKey": "application.application_id",
+                    "titleKey": "application.display.title",
+                },
+            },
+            {
+                "id": "actions",
+                "type": "ui.actions",
+                "area": "main",
+                "inputs": {
+                    "buttons": [
+                        {
+                            "id": "remove",
+                            "label": "Remove",
+                            "kind": "danger",
+                            "visibleIf": "$state.applicationRemovable == true",
+                        }
+                    ]
+                },
+            },
         ]
     }
 
