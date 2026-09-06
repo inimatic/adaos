@@ -426,6 +426,12 @@ def selected_ui_capabilities(request: str, *, limit: int = 8) -> dict[str, Any]:
     catalog = ui_capability_catalog()
     selected_ids: list[str] = []
     requirements = qualification.get("requirements") or {}
+    normalized_request = _normalized_text(request)
+    if "applications" in normalized_request and _contains_any(
+        normalized_request,
+        {"application", "mcp", "market", "installed", "extensions", "lifecycle"},
+    ):
+        selected_ids.append("recipe.application_manager")
     for key in ("recipe_id", "component_type", "layout_id"):
         value = str(requirements.get(key) or "").strip()
         if value and value not in selected_ids:

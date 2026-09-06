@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "1.1.0",
+  "catalog_version": "1.2.0",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -196,7 +196,7 @@
       "kind": "component",
       "title": "Command surface",
       "summary": "Explicit toolbar, segmented, stack, or compact commands.",
-      "aliases": { "en": ["actions", "toolbar", "buttons", "segmented"], "ru": ["действия", "панель", "кнопки", "переключатель"] },
+      "aliases": { "en": ["actions", "toolbar", "buttons", "segmented", "tabs", "tab bar"], "ru": ["действия", "панель", "кнопки", "переключатель", "вкладки"] },
       "manifest": { "widget_type": "ui.actions" },
       "data_shape": { "kind": "none" },
       "events": ["click", "click:<buttonId>"],
@@ -330,6 +330,39 @@
       "requires": { "layouts": ["layout.split"], "components": ["ui.list", "item.details"] },
       "composition": { "selection": "Master writes selected id; details read the same id." },
       "postconditions": ["Selecting different master records changes the visible detail record."]
+    },
+    {
+      "id": "recipe.application_manager",
+      "title": "Application lifecycle manager",
+      "summary": "A full-screen Extensions-style catalog and installed Application workbench backed by public Root MCP contracts.",
+      "aliases": {
+        "en": ["applications", "application manager", "extensions marketplace", "installed applications", "mcp applications"],
+        "ru": ["applications", "приложения", "управление приложениями", "маркет приложений"]
+      },
+      "requires": {
+        "layouts": ["layout.split"],
+        "components": ["input.text", "input.selector", "ui.list", "item.details", "ui.actions"]
+      },
+      "composition": {
+        "page": "Use a quiet full-surface split layout. The compact variant presents list and details as state-selected full-surface alternatives.",
+        "navigation": "Search and installed-only controls update page state; one list renders applications.list and writes selectedApplicationId.",
+        "details": "item.details reads applications.show with selectedApplicationId. Segmented ui.actions provide Overview, Versions, Operations, and Reports views through state.",
+        "reads": {
+          "catalog": {"kind": "mcp", "toolId": "applications.list", "arguments": {"installed_only": false}, "dryRun": true, "resultPath": "response.result.applications"},
+          "application": {"kind": "mcp", "toolId": "applications.show", "arguments": {"application_id": "$state.selectedApplicationId"}, "dryRun": true, "resultPath": "response.result.application"},
+          "releases": {"kind": "mcp", "toolId": "applications.list_releases", "arguments": {"application_id": "$state.selectedApplicationId"}, "dryRun": true, "resultPath": "response.result.releases"},
+          "operations": {"kind": "mcp", "toolId": "applications.list_operations", "arguments": {"application_id": "$state.selectedApplicationId"}, "dryRun": true, "resultPath": "response.result.operations"}
+        },
+        "mutations": "Use callMcp for one explicit applications.plan action and a separate applications.apply action bound to the exact operation_id and plan_digest returned by the reviewed plan. Never chain plan and apply.",
+        "protection": "A protected system Application exposes no remove command in its active installation UI; CLI and MCP remain recovery surfaces."
+      },
+      "postconditions": [
+        "Catalog and installed state come from applications.list rather than static prototype records.",
+        "Selection addresses one exact Application across details, versions, operations, and reports.",
+        "Every Root MCP data source is dry-run and mutation-free.",
+        "Plan and apply remain separate user-reviewed commands.",
+        "Compact layouts never display overlapping list and detail surfaces."
+      ]
     },
     {
       "id": "recipe.data_entry",

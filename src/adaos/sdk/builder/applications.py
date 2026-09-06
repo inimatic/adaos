@@ -151,6 +151,7 @@ def _create_application_effect(
     subnet_ref: str,
     expected_revision: int,
     publisher: Mapping[str, Any],
+    protection: Mapping[str, Any] | None,
 ) -> Mapping[str, Any]:
     from adaos.sdk.developer import compositions
 
@@ -170,6 +171,20 @@ def _create_application_effect(
             and existing.display.get("title") == title
             and existing.display.get("summary") == summary
             and _primary_scenario(existing) == application_id
+            and dict(existing.protection) == dict(Application(
+                application_id=application_id,
+                legacy_project_id=application_id,
+                publisher_ref=subnet_ref,
+                slug=application_id,
+                display={"title": title, "summary": summary},
+                visibility=visibility,  # type: ignore[arg-type]
+                entrypoints=({"entrypoint_id": "main", "presentation_ref": f"scenario:{application_id}"},),
+                publisher={key: publisher[key] for key in (
+                    "publisher_ref", "display_name", "subnet_short_ref", "release_key_ref",
+                    "release_key_fingerprint", "home_zone", "trust_relation",
+                )},
+                protection=dict(protection or {}),
+            ).protection)
         )
         if not expected_identity:
             raise ValueError("Application already exists with another identity or revision")
@@ -225,6 +240,7 @@ def _create_application_effect(
                 "trust_relation",
             )
         },
+        protection=dict(protection or {}),
     )
     saved = service.register(application, expected_revision=0)
     return {"ok": True, "application": saved.to_dict(), "composition": composition}
@@ -237,6 +253,7 @@ def create_application(
     summary: str,
     template: str = "empty",
     visibility: str = "private",
+    protection: Mapping[str, Any] | None = None,
     actor_ref: str,
     subnet_ref: str,
     capability: str,
@@ -253,6 +270,7 @@ def create_application(
         "visibility": str(visibility),
         "publisher_key_fingerprint": publisher["release_key_fingerprint"],
         "publisher": dict(publisher),
+        "protection": dict(protection or {}),
     }
 
     def execute() -> Mapping[str, Any]:
@@ -266,6 +284,7 @@ def create_application(
             subnet_ref=subnet_ref,
             expected_revision=expected_revision,
             publisher=publisher,
+            protection=protection,
         )
 
     return _execute_development(
@@ -597,6 +616,11 @@ def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, 
             subnet_ref=subnet_ref,
             expected_revision=expected_revision,
             publisher=publisher,
+            protection=(
+                dict(intent["protection"])
+                if isinstance(intent.get("protection"), Mapping)
+                else None
+            ),
         )
     if action in {"materialize", "preview"}:
         from . import preview

@@ -363,6 +363,39 @@ def test_install_update_snapshot_and_remove_are_reviewed_durable_operations(tmp_
     assert removed.result["installation"]["status"] == "removed"
 
 
+def test_protected_system_application_rejects_remove_before_plan(tmp_path: Path) -> None:
+    payload = _application().to_dict()
+    payload["protection"] = {
+        "system_application": True,
+        "bootstrap_capable": True,
+        "active_installation_removable": False,
+        "recovery_surfaces": ["cli", "mcp"],
+    }
+    service = ApplicationService(
+        ApplicationStore(tmp_path),
+        executor=lambda _plan: {"ok": True, "status": "succeeded"},
+    )
+    service.register(Application.from_mapping(payload))
+    release = service.register_release(_release())
+    install = service.plan_operation(
+        "app_recipes", "install", actor_ref="user:owner", subnet_ref="subnet:sn_home",
+        capability="applications.plan", idempotency_key="install-protected",
+        expected_revision=0, release_digest=release.release_digest,
+    )
+    service.apply_operation(
+        install.operation_id, plan_digest=install.plan_digest,
+        idempotency_key="install-protected", actor_ref="user:owner",
+        subnet_ref="subnet:sn_home", capability="applications.apply",
+    )
+
+    with pytest.raises(ApplicationServiceError, match="cannot remove itself"):
+        service.plan_operation(
+            "app_recipes", "remove", actor_ref="user:owner",
+            subnet_ref="subnet:sn_home", capability="applications.plan",
+            idempotency_key="remove-protected", expected_revision=1,
+        )
+
+
 def test_shared_component_conflict_is_reported_before_apply(tmp_path: Path) -> None:
     service = ApplicationService(ApplicationStore(tmp_path), executor=lambda _plan: {"ok": True, "status": "succeeded"})
     service.register(_application())

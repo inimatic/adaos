@@ -51,6 +51,12 @@ def test_builder_application_create_uses_bounded_composition_and_core(monkeypatc
 
     operation = applications.create_application(
         "applications", title="Applications", summary="Application manager",
+        protection={
+            "system_application": True,
+            "bootstrap_capable": True,
+            "active_installation_removable": False,
+            "recovery_surfaces": ["cli", "mcp"],
+        },
         actor_ref="user:owner", subnet_ref="subnet:home",
         capability="applications.develop", expected_revision=0,
         idempotency_key="create-applications-1",
@@ -58,6 +64,7 @@ def test_builder_application_create_uses_bounded_composition_and_core(monkeypatc
 
     assert operation["status"] == "succeeded"
     assert service.store.get_application("applications").legacy_project_id == "applications"
+    assert service.store.get_application("applications").protection["system_application"] is True
     assert created[0][1]["kind"] == "scenario"
     assert created[0][1]["entrypoints"][0]["presentation"] == "scenario:applications"
 

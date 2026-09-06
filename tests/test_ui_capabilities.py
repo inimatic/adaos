@@ -177,6 +177,28 @@ def test_qualification_selects_resource_workbench_for_russian_board_crud() -> No
     } <= set(selected["dependency_closure"])
 
 
+def test_application_manager_selection_exposes_mcp_master_detail_contract() -> None:
+    selected = selected_ui_capabilities(
+        "Create Applications, a full-screen application lifecycle manager with an "
+        "Extensions-style catalog backed by MCP."
+    )
+    selected_ids = {item["id"] for item in selected["items"]}
+
+    assert selected["root_item_ids"][0] == "recipe.application_manager"
+    assert {
+        "layout.split", "input.text", "input.selector", "ui.list",
+        "item.details", "ui.actions",
+    } <= selected_ids
+    recipe = get_ui_capability("recipe.application_manager")
+    assert recipe["composition"]["reads"]["catalog"] == {
+        "kind": "mcp",
+        "toolId": "applications.list",
+        "arguments": {"installed_only": False},
+        "dryRun": True,
+        "resultPath": "response.result.applications",
+    }
+
+
 def test_capability_validation_rejects_unknown_layout_and_board_lane() -> None:
     webui = _board_webui()
     page = webui["ui"]["application"]["desktop"]["pageSchema"]

@@ -97,6 +97,20 @@ def _builder_contracts() -> list[RootMcpToolContract]:
                     "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
                     "template": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
                     "visibility": {"enum": ["private", "public"]},
+                    "protection": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "system_application": {"type": "boolean"},
+                            "bootstrap_capable": {"type": "boolean"},
+                            "active_installation_removable": {"type": "boolean"},
+                            "recovery_surfaces": {
+                                "type": "array",
+                                "uniqueItems": True,
+                                "items": {"enum": ["cli", "mcp"]},
+                            },
+                        },
+                    },
                 },
                 required=[*mutation_required, "title", "summary"],
             ),
@@ -1101,6 +1115,11 @@ def _handle_development_create(
         summary=str(arguments.get("summary") or ""),
         template=str(arguments.get("template") or "empty"),
         visibility=str(arguments.get("visibility") or "private"),
+        protection=(
+            dict(arguments["protection"])
+            if isinstance(arguments.get("protection"), Mapping)
+            else None
+        ),
         expected_revision=int(arguments.get("expected_revision") or 0),
         **_mcp_mutation_context(arguments, "applications.develop"),
     )

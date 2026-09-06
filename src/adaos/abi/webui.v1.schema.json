@@ -1266,7 +1266,7 @@
       "additionalProperties": true,
       "required": ["kind"],
       "properties": {
-        "kind": { "type": "string", "enum": ["skill", "api", "static", "resource", "resourceQuery", "y", "stream"] },
+        "kind": { "type": "string", "enum": ["skill", "api", "mcp", "static", "resource", "resourceQuery", "y", "stream"] },
         "name": {
           "type": "string",
           "description": "Skill data source target in '<skill>.<method>' form."
@@ -1278,6 +1278,25 @@
         },
         "params": { "type": "object", "additionalProperties": true },
         "body": {},
+        "toolId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Public Root MCP tool id. Data-source calls are always submitted with dry_run=true."
+        },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Root MCP tool arguments; values may use declarative state expressions."
+        },
+        "dryRun": {
+          "const": true,
+          "description": "Optional explicit marker for the mandatory read-only data-source mode."
+        },
+        "resultPath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Dot path projected from the Root MCP HTTP envelope; defaults to response.result."
+        },
         "cacheTtlMs": {
           "type": "integer",
           "minimum": 0,
@@ -1353,6 +1372,10 @@
         {
           "if": { "properties": { "kind": { "const": "api" } } },
           "then": { "required": ["url"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "mcp" } } },
+          "then": { "required": ["toolId"] }
         },
         {
           "if": { "properties": { "kind": { "const": "static" } } },
@@ -2506,7 +2529,11 @@
               "uniqueItems": true
             }
           ],
-          "description": "Addressable runtime data-source tags invalidated after a successful callSkill mutation."
+          "description": "Addressable runtime data-source tags invalidated after a successful callSkill or callMcp mutation."
+        },
+        "dryRun": {
+          "type": "boolean",
+          "description": "For callMcp actions, ask Root MCP to validate the call without applying side effects."
         },
         "openResultUrl": {
           "type": "boolean",

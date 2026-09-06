@@ -153,6 +153,7 @@ class Application:
     visibility: ApplicationVisibility
     entrypoints: tuple[Mapping[str, Any], ...]
     publisher: Mapping[str, Any]
+    protection: Mapping[str, Any] = field(default_factory=dict)
     lifecycle: ApplicationLifecycle = "active"
     derived_from: Mapping[str, Any] | None = None
     revision: int = 1
@@ -213,6 +214,64 @@ class Application:
         )
         if self.publisher["trust_relation"] not in {"local", "trusted", "unverified", "blocked"}:
             raise ApplicationContractError("publisher.trust_relation is invalid")
+        protection = _mapping(self.protection, "protection")
+        unknown_protection = set(protection) - {
+            "system_application",
+            "bootstrap_capable",
+            "active_installation_removable",
+            "recovery_surfaces",
+        }
+        if unknown_protection:
+            raise ApplicationContractError(
+                "protection contains unsupported fields: "
+                + ", ".join(sorted(unknown_protection))
+            )
+        recovery_surfaces = protection.get("recovery_surfaces", ())
+        if not isinstance(recovery_surfaces, Sequence) or isinstance(
+            recovery_surfaces, (str, bytes, bytearray)
+        ):
+            raise ApplicationContractError("protection.recovery_surfaces must be an array")
+        normalized_recovery = tuple(
+            _identifier(item, "protection.recovery_surfaces item")
+            for item in recovery_surfaces
+        )
+        if len(set(normalized_recovery)) != len(normalized_recovery):
+            raise ApplicationContractError("protection.recovery_surfaces must be unique")
+        unsupported_recovery = set(normalized_recovery) - {"cli", "mcp"}
+        if unsupported_recovery:
+            raise ApplicationContractError(
+                "protection.recovery_surfaces contains unsupported values"
+            )
+        normalized_protection = {
+            "system_application": bool(protection.get("system_application", False)),
+            "bootstrap_capable": bool(protection.get("bootstrap_capable", False)),
+            "active_installation_removable": bool(
+                protection.get("active_installation_removable", True)
+            ),
+            "recovery_surfaces": list(normalized_recovery),
+        }
+        if (
+            not normalized_protection["active_installation_removable"]
+            and not normalized_protection["system_application"]
+        ):
+            raise ApplicationContractError(
+                "only a system Application may protect its active installation"
+            )
+        if (
+            normalized_protection["bootstrap_capable"]
+            and not normalized_protection["system_application"]
+        ):
+            raise ApplicationContractError(
+                "only a system Application may be bootstrap capable"
+            )
+        if (
+            not normalized_protection["active_installation_removable"]
+            and not normalized_protection["recovery_surfaces"]
+        ):
+            raise ApplicationContractError(
+                "a protected active installation requires a recovery surface"
+            )
+        object.__setattr__(self, "protection", normalized_protection)
         if self.derived_from is not None:
             derived = _mapping(self.derived_from, "derived_from")
             object.__setattr__(
@@ -239,6 +298,7 @@ class Application:
             "visibility": self.visibility,
             "entrypoints": [dict(item) for item in self.entrypoints],
             "publisher": dict(self.publisher),
+            "protection": dict(self.protection),
             "lifecycle": self.lifecycle,
             "revision": self.revision,
             "created_at": self.created_at,
@@ -256,7 +316,7 @@ class Application:
             allowed={
                 "schema", "application_id", "legacy_project_id", "publisher_ref", "slug",
                 "display", "visibility", "entrypoints", "publisher", "lifecycle",
-                "derived_from", "revision", "created_at", "updated_at",
+                "protection", "derived_from", "revision", "created_at", "updated_at",
             },
             required={
                 "schema", "application_id", "legacy_project_id", "publisher_ref", "slug",

@@ -440,6 +440,13 @@ class ApplicationService:
             raise ApplicationServiceError("Application is already installed")
         if operation_kind in {"update", "remove"} and (current is None or current.status == "removed"):
             raise ApplicationServiceError(f"Application must be installed before {operation_kind}")
+        if (
+            operation_kind == "remove"
+            and not bool(application.protection.get("active_installation_removable", True))
+        ):
+            raise ApplicationServiceError(
+                "active protected system Application cannot remove itself; use a declared recovery surface"
+            )
         release: ApplicationRelease | None = None
         components: list[dict[str, Any]] = []
         conflicts: list[dict[str, Any]] = []

@@ -4,7 +4,7 @@
   "title": "AdaOS Application v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "application_id", "legacy_project_id", "publisher_ref", "slug", "display", "visibility", "entrypoints", "publisher", "lifecycle", "revision", "created_at", "updated_at"],
+  "required": ["schema", "application_id", "legacy_project_id", "publisher_ref", "slug", "display", "visibility", "entrypoints", "publisher", "protection", "lifecycle", "revision", "created_at", "updated_at"],
   "properties": {
     "schema": {"const": "adaos.application.v1"},
     "application_id": {"$ref": "#/$defs/id"},
@@ -31,6 +31,19 @@
         "subnet_short_ref": {"type": "string", "minLength": 1, "maxLength": 32}, "release_key_ref": {"type": "string", "minLength": 1, "maxLength": 240},
         "release_key_fingerprint": {"$ref": "#/$defs/digest"}, "home_zone": {"$ref": "#/$defs/id"},
         "trust_relation": {"enum": ["local", "trusted", "unverified", "blocked"]}
+      }
+    },
+    "protection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["system_application", "bootstrap_capable", "active_installation_removable", "recovery_surfaces"],
+      "properties": {
+        "system_application": {"type": "boolean"},
+        "bootstrap_capable": {"type": "boolean"},
+        "active_installation_removable": {"type": "boolean"},
+        "recovery_surfaces": {
+          "type": "array", "uniqueItems": true,
+          "items": {"enum": ["cli", "mcp"]}
+        }
       }
     },
     "lifecycle": {"enum": ["active", "retired", "archived"]},

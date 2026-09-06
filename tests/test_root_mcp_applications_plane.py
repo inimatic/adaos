@@ -232,6 +232,12 @@ def test_builder_development_mcp_forwards_narrow_authority(monkeypatch) -> None:
             "summary": "Application lifecycle manager",
             "template": "empty",
             "visibility": "private",
+            "protection": {
+                "system_application": True,
+                "bootstrap_capable": True,
+                "active_installation_removable": False,
+                "recovery_surfaces": ["cli", "mcp"],
+            },
             "expected_revision": 0,
             "idempotency_key": "create-applications-1",
             "_mcp_context": _context(),
@@ -243,6 +249,7 @@ def test_builder_development_mcp_forwards_narrow_authority(monkeypatch) -> None:
     assert stub.calls[0][1] == ("applications",)
     assert stub.calls[0][2]["subnet_ref"] == "subnet:sn_home"
     assert stub.calls[0][2]["capability"] == "applications.develop"
+    assert stub.calls[0][2]["protection"]["system_application"] is True
 
     recovered = applications_plane.handlers()[
         "applications.development.reconcile_operation"

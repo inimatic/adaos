@@ -230,3 +230,26 @@ def test_application_identity_does_not_collapse_into_legacy_project_id() -> None
 
     with pytest.raises(ApplicationContractError, match="publisher_ref"):
         Application.from_mapping(payload)
+
+
+def test_system_application_protection_is_explicit_and_recoverable() -> None:
+    payload = _application().to_dict()
+    payload["protection"] = {
+        "system_application": True,
+        "bootstrap_capable": True,
+        "active_installation_removable": False,
+        "recovery_surfaces": ["cli", "mcp"],
+    }
+
+    application = Application.from_mapping(payload)
+
+    assert application.protection["system_application"] is True
+    assert application.protection["active_installation_removable"] is False
+
+
+def test_non_removable_application_requires_system_identity_and_recovery() -> None:
+    payload = _application().to_dict()
+    payload["protection"]["active_installation_removable"] = False
+
+    with pytest.raises(ApplicationContractError, match="only a system Application"):
+        Application.from_mapping(payload)
