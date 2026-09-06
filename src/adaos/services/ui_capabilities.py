@@ -351,6 +351,10 @@ def _count_exact_scalar(value: Any, expected: str) -> int:
 def qualify_ui_request(request: str) -> dict[str, Any]:
     text = _normalized_text(request)
     literal_text_change = _literal_text_change(request)
+    application_manager = "applications" in text and _contains_any(
+        text,
+        {"application", "mcp", "market", "installed", "extensions", "lifecycle"},
+    )
     board = _contains_any(text, _BOARD_TERMS) or bool(
         literal_text_change and literal_text_change.get("target_kind") == "column"
     )
@@ -391,6 +395,8 @@ def qualify_ui_request(request: str) -> dict[str, Any]:
         concepts.append("resource_crud")
     if literal_text_change:
         concepts.append("ui_text_rename")
+    if application_manager:
+        concepts.append("application_manager")
     requirements: dict[str, Any] = {}
     if board:
         requirements.update(
@@ -409,11 +415,27 @@ def qualify_ui_request(request: str) -> dict[str, Any]:
         )
     if literal_text_change:
         requirements["literal_text_change"] = literal_text_change
+    if application_manager:
+        requirements.update(
+            {
+                "application_manager": True,
+                "recipe_id": "recipe.application_manager",
+                "mcp_read_tools": [
+                    "applications.list",
+                    "applications.show",
+                    "applications.list_releases",
+                    "applications.list_operations",
+                    "applications.list_development_reports",
+                ],
+                "mcp_mutation_tools": ["applications.plan", "applications.apply"],
+                "tabs": ["overview", "versions", "operations", "reports"],
+            }
+        )
     gaps: list[dict[str, Any]] = []
     return {
         "schema": QUALIFICATION_SCHEMA,
         "request_digest": _digest({"request": request}),
-        "surface_kind": "board" if board else "ui" if literal_text_change else "unspecified",
+        "surface_kind": "application_manager" if application_manager else "board" if board else "ui" if literal_text_change else "unspecified",
         "concepts": concepts,
         "requirements": requirements,
         "capability_gaps": gaps,
@@ -427,10 +449,7 @@ def selected_ui_capabilities(request: str, *, limit: int = 8) -> dict[str, Any]:
     selected_ids: list[str] = []
     requirements = qualification.get("requirements") or {}
     normalized_request = _normalized_text(request)
-    if "applications" in normalized_request and _contains_any(
-        normalized_request,
-        {"application", "mcp", "market", "installed", "extensions", "lifecycle"},
-    ):
+    if requirements.get("application_manager"):
         selected_ids.append("recipe.application_manager")
     for key in ("recipe_id", "component_type", "layout_id"):
         value = str(requirements.get(key) or "").strip()
@@ -738,6 +757,138 @@ def evaluate_ui_request(
                     "sourceCount": source_count,
                     "targetCount": target_count,
                 },
+            }
+        )
+    if requirements.get("application_manager"):
+        widgets = [
+            widget
+            for _, page in _page_schemas(webui)
+            for widget in page.get("widgets") or []
+            if isinstance(widget, Mapping)
+        ]
+        mcp_sources = [
+            widget.get("dataSource")
+            for widget in widgets
+            if isinstance(widget.get("dataSource"), Mapping)
+            and str(widget.get("dataSource", {}).get("kind") or "") == "mcp"
+        ]
+        read_tools = {
+            str(source.get("toolId") or "")
+            for source in mcp_sources
+            if source.get("dryRun") is True
+        }
+        required_reads = set(requirements.get("mcp_read_tools") or [])
+        postconditions.append(
+            {
+                "id": "applications.mcp_reads",
+                "ok": required_reads.issubset(read_tools),
+                "expected": sorted(required_reads),
+                "actual": sorted(read_tools),
+            }
+        )
+        actions = [
+            action
+            for widget in widgets
+            for action in widget.get("actions") or []
+            if isinstance(action, Mapping)
+        ]
+        plan_actions = [
+            action
+            for action in actions
+            if str(action.get("type") or "") == "callMcp"
+            and str(action.get("target") or "") == "applications.plan"
+        ]
+        apply_actions = [
+            action
+            for action in actions
+            if str(action.get("type") or "") == "callMcp"
+            and str(action.get("target") or "") == "applications.apply"
+        ]
+        plan_state_keys = {
+            str(action.get("resultStateKey") or "").strip()
+            for action in plan_actions
+            if str(action.get("resultStateKey") or "").strip()
+            and action.get("idempotencyKey") == "auto"
+        }
+        apply_receipts = {
+            state_key
+            for state_key in plan_state_keys
+            if any(
+                action.get("idempotencyKey") == "auto"
+                and f"$state.{state_key}.operation.operation_id"
+                in json.dumps(action.get("params") or {}, sort_keys=True)
+                and f"$state.{state_key}.operation.plan_digest"
+                in json.dumps(action.get("params") or {}, sort_keys=True)
+                and str(action.get("enabledIf") or "").strip()
+                for action in apply_actions
+            )
+        }
+        postconditions.append(
+            {
+                "id": "applications.reviewed_plan_apply",
+                "ok": bool(plan_actions and apply_actions and apply_receipts),
+                "expected": "separate idempotent plan and guarded apply bound to one exact stored receipt",
+                "actual": {
+                    "planActions": len(plan_actions),
+                    "applyActions": len(apply_actions),
+                    "boundReceiptStateKeys": sorted(apply_receipts),
+                },
+            }
+        )
+        tab_ids = set(requirements.get("tabs") or [])
+        tab_controls = []
+        for widget in widgets:
+            inputs = widget.get("inputs") if isinstance(widget.get("inputs"), Mapping) else {}
+            buttons = inputs.get("buttons") if isinstance(inputs.get("buttons"), list) else []
+            ids = {
+                str(button.get("id") or "").strip()
+                for button in buttons
+                if isinstance(button, Mapping)
+            }
+            if (
+                str(widget.get("type") or "") == "input.commandBar"
+                and inputs.get("variant") == "segmented"
+                and str(inputs.get("selectedStateKey") or "").strip()
+                and tab_ids.issubset(ids)
+            ):
+                tab_controls.append(widget)
+        postconditions.append(
+            {
+                "id": "applications.tabs",
+                "ok": len(tab_controls) == 1,
+                "expected": sorted(tab_ids),
+                "actual": len(tab_controls),
+            }
+        )
+        selectable_catalogs = [
+            widget
+            for widget in widgets
+            if str(widget.get("type") or "") == "ui.list"
+            and isinstance(widget.get("dataSource"), Mapping)
+            and widget.get("dataSource", {}).get("toolId") == "applications.list"
+            and any(
+                isinstance(action, Mapping)
+                and str(action.get("on") or "") == "select"
+                and str(action.get("type") or "") == "updateState"
+                and "selectedApplicationId" in (action.get("params") or {})
+                for action in widget.get("actions") or []
+            )
+        ]
+        serialized = json.dumps(webui, ensure_ascii=False, sort_keys=True)
+        postconditions.append(
+            {
+                "id": "applications.master_selection",
+                "ok": len(selectable_catalogs) == 1,
+                "expected": "one applications.list master writing selectedApplicationId",
+                "actual": len(selectable_catalogs),
+            }
+        )
+        postconditions.append(
+            {
+                "id": "applications.no_prototype_store",
+                "ok": "prototype_items" not in serialized,
+                "expected": "no generic prototype datasource",
+                "actual": "prototype_items" in serialized,
             }
         )
     if requirements.get("component_type") == "collection.board":

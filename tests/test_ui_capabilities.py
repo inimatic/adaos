@@ -187,7 +187,7 @@ def test_application_manager_selection_exposes_mcp_master_detail_contract() -> N
     assert selected["root_item_ids"][0] == "recipe.application_manager"
     assert {
         "layout.split", "input.text", "input.selector", "ui.list",
-        "item.details", "ui.actions",
+        "item.details", "input.commandBar", "ui.actions",
     } <= selected_ids
     recipe = get_ui_capability("recipe.application_manager")
     assert recipe["composition"]["reads"]["catalog"] == {
@@ -197,6 +197,156 @@ def test_application_manager_selection_exposes_mcp_master_detail_contract() -> N
         "dryRun": True,
         "resultPath": "response.result.applications",
     }
+    assert selected["qualification"]["requirements"]["application_manager"] is True
+
+
+def _application_manager_webui() -> dict:
+    def source(tool_id: str, result_path: str, *, selected: bool = False) -> dict:
+        return {
+            "kind": "mcp",
+            "toolId": tool_id,
+            "arguments": {"application_id": "$state.selectedApplicationId"} if selected else {},
+            "dryRun": True,
+            "resultPath": result_path,
+        }
+
+    return {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "applications",
+                        "initialState": {
+                            "selectedApplicationId": "",
+                            "activeTab": "overview",
+                            "reviewedPlan": None,
+                        },
+                        "layout": {
+                            "type": "split",
+                            "areas": [
+                                {"id": "master", "role": "navigation"},
+                                {"id": "detail", "role": "main"},
+                            ],
+                        },
+                        "widgets": [
+                            {
+                                "id": "catalog",
+                                "type": "ui.list",
+                                "area": "master",
+                                "dataSource": {
+                                    **source("applications.list", "response.result.applications"),
+                                    "arguments": {"installed_only": False},
+                                },
+                                "inputs": {"search": True, "titleKey": "display.title"},
+                                "actions": [
+                                    {
+                                        "on": "select",
+                                        "type": "updateState",
+                                        "params": {"selectedApplicationId": "$event.id"},
+                                    }
+                                ],
+                            },
+                            {
+                                "id": "tabs",
+                                "type": "input.commandBar",
+                                "area": "detail",
+                                "inputs": {
+                                    "variant": "segmented",
+                                    "selectedStateKey": "activeTab",
+                                    "buttons": [
+                                        {"id": value, "label": value.title()}
+                                        for value in ("overview", "versions", "operations", "reports")
+                                    ],
+                                },
+                                "actions": [
+                                    {
+                                        "on": "click",
+                                        "type": "updateState",
+                                        "params": {"activeTab": "$event.id"},
+                                    }
+                                ],
+                            },
+                            {
+                                "id": "details",
+                                "type": "item.details",
+                                "area": "detail",
+                                "dataSource": source("applications.show", "response.result.application", selected=True),
+                            },
+                            {
+                                "id": "releases",
+                                "type": "ui.list",
+                                "area": "detail",
+                                "dataSource": source("applications.list_releases", "response.result.releases", selected=True),
+                            },
+                            {
+                                "id": "operations",
+                                "type": "ui.list",
+                                "area": "detail",
+                                "dataSource": source("applications.list_operations", "response.result.operations", selected=True),
+                            },
+                            {
+                                "id": "reports",
+                                "type": "ui.list",
+                                "area": "detail",
+                                "dataSource": source("applications.list_development_reports", "response.result.reports"),
+                            },
+                            {
+                                "id": "lifecycle-actions",
+                                "type": "ui.actions",
+                                "area": "detail",
+                                "inputs": {"buttons": [{"id": "plan"}, {"id": "apply"}]},
+                                "actions": [
+                                    {
+                                        "id": "plan",
+                                        "on": "click",
+                                        "type": "callMcp",
+                                        "target": "applications.plan",
+                                        "idempotencyKey": "auto",
+                                        "resultStateKey": "reviewedPlan",
+                                        "params": {"application_id": "$state.selectedApplicationId"},
+                                    },
+                                    {
+                                        "id": "apply",
+                                        "on": "click",
+                                        "type": "callMcp",
+                                        "target": "applications.apply",
+                                        "idempotencyKey": "auto",
+                                        "enabledIf": "$state.reviewedPlan.operation.plan_digest",
+                                        "params": {
+                                            "operation_id": "$state.reviewedPlan.operation.operation_id",
+                                            "plan_digest": "$state.reviewedPlan.operation.plan_digest",
+                                        },
+                                    },
+                                ],
+                            },
+                        ],
+                    }
+                }
+            }
+        },
+    }
+
+
+def test_application_manager_evaluation_enforces_mcp_and_review_boundary() -> None:
+    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    webui = _application_manager_webui()
+
+    accepted = evaluate_ui_request(request, webui)
+
+    assert accepted["ok"] is True
+    assert all(item["ok"] for item in accepted["postconditions"])
+
+    actions = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"][-1]["actions"]
+    actions.pop()
+    rejected = evaluate_ui_request(request, webui)
+
+    assert rejected["ok"] is False
+    boundary = next(
+        item for item in rejected["postconditions"]
+        if item["id"] == "applications.reviewed_plan_apply"
+    )
+    assert boundary["ok"] is False
 
 
 def test_capability_validation_rejects_unknown_layout_and_board_lane() -> None:

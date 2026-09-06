@@ -2535,6 +2535,19 @@
           "type": "boolean",
           "description": "For callMcp actions, ask Root MCP to validate the call without applying side effects."
         },
+        "idempotencyKey": {
+          "const": "auto",
+          "description": "Generate a fresh idempotency key when a callMcp command does not provide params.idempotency_key."
+        },
+        "resultStateKey": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Local page-state key that receives the successful callSkill or callMcp result."
+        },
+        "resultPath": {
+          "type": "string",
+          "description": "Dot path within the remote response envelope stored in resultStateKey. callMcp defaults to response.result."
+        },
         "openResultUrl": {
           "type": "boolean",
           "description": "For callSkill actions, open a URL returned by the successful skill result."
