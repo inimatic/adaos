@@ -247,6 +247,36 @@ def _application_manager_webui() -> dict:
             "prototypeFixture": f"$state.prototypeFixtures.{fixture_key or inferred_fixture}",
         }
 
+    development_fixtures = [
+        {
+            "prototype_state_id": "local-development",
+            "application": {
+                "application_id": f"development-{index}",
+                "display": {"summary": "Representative development"},
+            },
+            "local_development": {
+                "exists": True,
+                "phase": phase,
+                "status": status,
+                "publication_status": publication,
+                "builder": {
+                    "selected_object_type": "scenario",
+                    "selected_object_id": f"development-{index}",
+                    "source_webspace_id": "desktop",
+                    "preview_webspace_id": "desktop-dev",
+                },
+            },
+        }
+        for index, (phase, status, publication) in enumerate(
+            (
+                ("prototype", "working", "not_started"),
+                ("automation", "working", "not_started"),
+                ("automation", "completed", "published"),
+            ),
+            start=1,
+        )
+    ]
+
     return {
         "schema": "adaos.webui.v1",
         "ui": {
@@ -279,52 +309,35 @@ def _application_manager_webui() -> dict:
                             "reviewedPlan": {},
                             "prototypeFixtures": {
                                 "applications": {"result": []},
-                                "developments": {
-                                    "result": [
-                                        {
-                                            "prototype_state_id": "local-development",
-                                            "application": {
-                                                "application_id": f"development-{index}",
-                                                "display": {"summary": "Representative development"},
-                                            },
-                                            "local_development": {
-                                                "exists": True,
-                                                "phase": phase,
-                                                "status": status,
-                                                "publication_status": publication,
-                                                "builder": {
-                                                    "selected_object_type": "scenario",
-                                                    "selected_object_id": f"development-{index}",
-                                                    "source_webspace_id": "desktop",
-                                                    "preview_webspace_id": "desktop-dev",
-                                                },
-                                            },
-                                        }
-                                        for index, (phase, status, publication) in enumerate(
-                                            (
-                                                ("prototype", "working", "not_started"),
-                                                ("automation", "working", "not_started"),
-                                                ("automation", "completed", "published"),
-                                            ),
-                                            start=1,
-                                        )
-                                    ]
-                                },
+                                "developments": {"result": development_fixtures},
                                 "application": {
                                     "cases": [
-                                        {
-                                            "when": {"application_id": f"sample-{state_id}"},
-                                            "result": {"prototype_state_id": state_id},
-                                        }
-                                        for state_id in (
-                                            "marketplace-uninstalled",
-                                            "installed-current",
-                                            "installed-update",
-                                            "prerelease-following",
-                                            "local-development",
-                                            "protected-system",
-                                            "operation-recovery",
-                                        )
+                                        *[
+                                            {
+                                                "when": {
+                                                    "application_id": fixture["application"]["application_id"]
+                                                },
+                                                "result": fixture,
+                                            }
+                                            for fixture in development_fixtures
+                                        ],
+                                        *[
+                                            {
+                                                "when": {
+                                                    "application_id": f"sample-{state_id}"
+                                                },
+                                                "result": {"prototype_state_id": state_id},
+                                            }
+                                            for state_id in (
+                                                "marketplace-uninstalled",
+                                                "installed-current",
+                                                "installed-update",
+                                                "prerelease-following",
+                                                "local-development",
+                                                "protected-system",
+                                                "operation-recovery",
+                                            )
+                                        ],
                                     ]
                                 },
                                 "releases": {"result": []},
@@ -1010,6 +1023,29 @@ def test_application_manager_evaluation_requires_fixture_on_every_mcp_widget() -
             "actual": "",
         }
     ]
+
+
+def test_application_manager_evaluation_requires_detail_case_for_every_selectable_fixture() -> None:
+    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    webui = _application_manager_webui()
+    fixtures = webui["ui"]["application"]["desktop"]["pageSchema"]["initialState"][
+        "prototypeFixtures"
+    ]
+    fixtures["application"]["cases"] = [
+        case
+        for case in fixtures["application"]["cases"]
+        if case["when"]["application_id"] != "development-2"
+    ]
+
+    rejected = evaluate_ui_request(request, webui)
+
+    fixture_check = next(
+        item
+        for item in rejected["postconditions"]
+        if item["id"] == "applications.prototype_fixtures"
+    )
+    assert fixture_check["ok"] is False
+    assert fixture_check["actual"]["uncoveredApplicationIds"] == ["development-2"]
 
 
 def test_application_manager_evaluation_rejects_stale_review_context() -> None:

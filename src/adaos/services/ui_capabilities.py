@@ -1055,6 +1055,74 @@ def evaluate_ui_request(
                     collect_development_examples(nested)
 
         collect_development_examples(prototype_fixtures)
+        samples = (
+            prototype_fixtures.get("samples")
+            if isinstance(prototype_fixtures.get("samples"), Mapping)
+            else {}
+        )
+        sample_ref_prefix = "$state.prototypeFixtures.samples."
+        invalid_selectable_fixture_refs: set[str] = set()
+
+        def resolve_sample_ref(value: Any) -> Any:
+            if not isinstance(value, str) or not value.startswith(sample_ref_prefix):
+                return value
+            sample_key = value[len(sample_ref_prefix) :]
+            if sample_key in samples:
+                return samples[sample_key]
+            invalid_selectable_fixture_refs.add(value)
+            return None
+
+        def collect_application_ids(value: Any, target: set[str]) -> None:
+            resolved = resolve_sample_ref(value)
+            if isinstance(resolved, Mapping):
+                application = resolved.get("application")
+                if isinstance(application, Mapping):
+                    application_id = str(application.get("application_id") or "").strip()
+                    if application_id:
+                        target.add(application_id)
+            elif isinstance(resolved, list):
+                for nested in resolved:
+                    collect_application_ids(nested, target)
+
+        selectable_application_ids: set[str] = set()
+        for profile_name in ("applications", "developments"):
+            profile = prototype_fixtures.get(profile_name)
+            if not isinstance(profile, Mapping):
+                continue
+            collect_application_ids(profile.get("result"), selectable_application_ids)
+            for case in profile.get("cases") if isinstance(profile.get("cases"), list) else []:
+                if isinstance(case, Mapping):
+                    collect_application_ids(case.get("result"), selectable_application_ids)
+
+        application_fixture = prototype_fixtures.get("application")
+        covered_application_ids: set[str] = set()
+        mismatched_application_cases: list[dict[str, str]] = []
+        for case in (
+            application_fixture.get("cases")
+            if isinstance(application_fixture, Mapping)
+            and isinstance(application_fixture.get("cases"), list)
+            else []
+        ):
+            if not isinstance(case, Mapping) or not isinstance(case.get("when"), Mapping):
+                continue
+            expected_id = str(case.get("when", {}).get("application_id") or "").strip()
+            if not expected_id:
+                continue
+            resolved_result = resolve_sample_ref(case.get("result"))
+            application = (
+                resolved_result.get("application")
+                if isinstance(resolved_result, Mapping)
+                and isinstance(resolved_result.get("application"), Mapping)
+                else {}
+            )
+            actual_id = str(application.get("application_id") or "").strip()
+            if actual_id == expected_id:
+                covered_application_ids.add(expected_id)
+            elif expected_id in selectable_application_ids:
+                mismatched_application_cases.append(
+                    {"expectedApplicationId": expected_id, "actualApplicationId": actual_id}
+                )
+        uncovered_application_ids = selectable_application_ids - covered_application_ids
         required_development_states = {
             ("prototype", "working", "not_started"),
             ("automation", "working", "not_started"),
@@ -1147,6 +1215,9 @@ def evaluate_ui_request(
                     and len(valid_development_examples) >= 3
                     and required_development_states.issubset(actual_development_states)
                     and not source_fixture_diagnostics
+                    and not invalid_selectable_fixture_refs
+                    and not uncovered_application_ids
+                    and not mismatched_application_cases
                     and required_plan_kinds.issubset(valid_plan_fixture_kinds)
                 ),
                 "expected": {
@@ -1155,6 +1226,7 @@ def evaluate_ui_request(
                     "stateIds": sorted(required_representative_states),
                     "developmentExampleCount": 3,
                     "developmentStates": sorted(required_development_states),
+                    "selectableDetailCoverage": "all",
                     "scope": "development Webspace only",
                 },
                 "actual": {
@@ -1166,6 +1238,11 @@ def evaluate_ui_request(
                     "developmentExamples": sorted(valid_development_examples),
                     "developmentStates": sorted(actual_development_states),
                     "invalidSourceFixtures": source_fixture_diagnostics,
+                    "invalidSelectableFixtureRefs": sorted(invalid_selectable_fixture_refs),
+                    "selectableApplicationIds": sorted(selectable_application_ids),
+                    "coveredApplicationIds": sorted(covered_application_ids),
+                    "uncoveredApplicationIds": sorted(uncovered_application_ids),
+                    "mismatchedApplicationCases": mismatched_application_cases,
                     "planKinds": sorted(valid_plan_fixture_kinds),
                 },
             }

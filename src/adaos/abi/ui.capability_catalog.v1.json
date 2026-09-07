@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "1.3.19",
+  "catalog_version": "1.3.20",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -482,7 +482,7 @@
         "prototype_fixture_model": {
           "scope": "development Webspaces only; stable Webspaces ignore every prototypeFixture and execute the declared Root MCP contract",
           "storage": "Put one bounded prototypeFixtures object in page initialState. Every MCP read and applications.plan/apply action references its named fixture through prototypeFixture=$state.prototypeFixtures.<name>; do not duplicate fixtures inside widgets.",
-          "matching": "Every required profile value is an object, never a string label. Use fixture cases with exact when argument subsets and projected result values. A result may reference one object under prototypeFixtures.samples so representative data is stored once. Cover every selectable fixture application across applications.show, releases, operations, and reports. Never fall through to a remote MCP call for a synthetic fixture record.",
+          "matching": "Every required profile value is an object, never a string label. Use fixture cases with exact when argument subsets and projected result values. A result may reference one object under prototypeFixtures.samples so representative data is stored once. Every Application id exposed by either applications or developments must have an exact applications.show case whose result resolves to the same Application id. Cover every selectable fixture application across releases, operations, and reports. Never fall through to a remote MCP call for a synthetic fixture record.",
           "required_profiles": ["applications", "developments", "application", "releases", "operations", "reports", "plan", "apply"],
           "required_state_ids": ["marketplace-uninstalled", "installed-current", "installed-update", "prerelease-following", "local-development", "protected-system", "operation-recovery"],
           "canonical_shape": {
@@ -508,7 +508,7 @@
           },
           "requirements": [
             "Use recognizable sample titles and summaries, mark synthetic records as Prototype examples in their summaries without adding explanatory page copy, and put the exact workflow state id in prototype_state_id on every applications.show fixture result.",
-            "My developments contains at least three development-only Prototype examples covering prototype/working/not_started, automation/working/not_started, and automation/completed/published. Every example has a non-empty summary and addresses an existing Builder source object without creating one.",
+            "My developments contains at least three development-only Prototype examples covering prototype/working/not_started, automation/working/not_started, and automation/completed/published. Every example has a non-empty summary, addresses an existing Builder source object without creating one, and has an exact applications.show case so selecting it renders its own detail and development actions without a remote fallback.",
             "Versions, Operations, and Reports each contain representative non-empty rows for the selected examples, including one failed or reconciling operation.",
             "Fixture plan returns a visible operation_id, plan_digest, kind, application_id, and review summary; fixture apply returns a successful Prototype-only receipt.",
             "The protected-system example never exposes uninstall; the uninstalled, update, prerelease, and development examples expose only commands allowed by workflow_model."
