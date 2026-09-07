@@ -800,12 +800,13 @@ def evaluate_ui_request(
             }
         )
 
-        mcp_sources = [
-            widget.get("dataSource")
+        mcp_widgets = [
+            widget
             for widget in widgets
             if isinstance(widget.get("dataSource"), Mapping)
             and str(widget.get("dataSource", {}).get("kind") or "") == "mcp"
         ]
+        mcp_sources = [widget.get("dataSource") for widget in mcp_widgets]
         expected_sources = {
             "applications.show": (
                 "response.result.application",
@@ -931,6 +932,7 @@ def evaluate_ui_request(
             "reviewedPlan"
             if any(
                 action.get("idempotencyKey") == "auto"
+                and action.get("resultStateKey") == "reviewedPlan"
                 and "$state.reviewedPlan.operation.operation_id"
                 in json.dumps(action.get("params") or {}, sort_keys=True)
                 and "$state.reviewedPlan.operation.plan_digest"
@@ -991,6 +993,33 @@ def evaluate_ui_request(
             for action in [*plan_actions, *apply_actions]
             if str(action.get("prototypeFixture") or "")
         }
+        expected_source_fixture_refs = {
+            "applications.show": "$state.prototypeFixtures.application",
+            "applications.list_releases": "$state.prototypeFixtures.releases",
+            "applications.list_operations": "$state.prototypeFixtures.operations",
+            "applications.list_development_reports": "$state.prototypeFixtures.reports",
+        }
+        source_fixture_diagnostics: list[dict[str, Any]] = []
+        for widget in mcp_widgets:
+            source = widget.get("dataSource") or {}
+            tool_id = str(source.get("toolId") or "")
+            expected_ref = expected_source_fixture_refs.get(tool_id, "")
+            if tool_id == "applications.list":
+                expected_ref = (
+                    "$state.prototypeFixtures.developments"
+                    if source.get("arguments") == {"developed_only": True}
+                    else "$state.prototypeFixtures.applications"
+                )
+            actual_ref = str(source.get("prototypeFixture") or "")
+            if expected_ref and actual_ref != expected_ref:
+                source_fixture_diagnostics.append(
+                    {
+                        "widgetId": str(widget.get("id") or ""),
+                        "toolId": tool_id,
+                        "expected": expected_ref,
+                        "actual": actual_ref,
+                    }
+                )
         representative_state_ids: set[str] = set()
 
         def collect_representative_state_ids(value: Any) -> None:
@@ -1024,6 +1053,28 @@ def evaluate_ui_request(
             and isinstance(value, Mapping)
             and ("result" in value or isinstance(value.get("cases"), list))
         }
+        plan_fixture = prototype_fixtures.get("plan")
+        valid_plan_fixture_kinds = {
+            str((case.get("when") or {}).get("kind") or "")
+            for case in (
+                plan_fixture.get("cases")
+                if isinstance(plan_fixture, Mapping)
+                and isinstance(plan_fixture.get("cases"), list)
+                else []
+            )
+            if isinstance(case, Mapping)
+            and isinstance(case.get("when"), Mapping)
+            and isinstance(case.get("result"), Mapping)
+            and isinstance(case.get("result", {}).get("operation"), Mapping)
+            and case.get("result", {}).get("operation", {}).get("kind")
+            == case.get("when", {}).get("kind")
+            and str(
+                case.get("result", {}).get("operation", {}).get("operation_id") or ""
+            ).strip()
+            and str(
+                case.get("result", {}).get("operation", {}).get("plan_digest") or ""
+            ).strip()
+        }
         postconditions.append(
             {
                 "id": "applications.prototype_fixtures",
@@ -1036,6 +1087,8 @@ def evaluate_ui_request(
                     and "$state.prototypeFixtures.plan" in action_fixture_refs
                     and "$state.prototypeFixtures.apply" in action_fixture_refs
                     and required_representative_states.issubset(representative_state_ids)
+                    and not source_fixture_diagnostics
+                    and required_plan_kinds.issubset(valid_plan_fixture_kinds)
                 ),
                 "expected": {
                     "profiles": sorted(required_fixture_profiles),
@@ -1049,6 +1102,8 @@ def evaluate_ui_request(
                     "sourceRefs": sorted(source_fixture_refs),
                     "actionRefs": sorted(action_fixture_refs),
                     "stateIds": sorted(representative_state_ids),
+                    "invalidSourceFixtures": source_fixture_diagnostics,
+                    "planKinds": sorted(valid_plan_fixture_kinds),
                 },
             }
         )
@@ -1165,7 +1220,9 @@ def evaluate_ui_request(
                     action.get("on") == "select"
                     and action.get("type") == "updateState"
                     and action.get("params") == {
-                        "selectedApplicationId": "$event.application.application_id"
+                        "selectedApplicationId": "$event.application.application_id",
+                        "selectedReleaseDigest": "",
+                        "reviewedPlan": {},
                     }
                     for action in widget_actions(widget)
                 ):
@@ -1365,14 +1422,47 @@ def evaluate_ui_request(
             and any(
                 action.get("on") == "select"
                 and action.get("type") == "updateState"
-                and action.get("params") == {"selectedReleaseDigest": "$event.release_digest"}
+                and action.get("params") == {
+                    "selectedReleaseDigest": "$event.release_digest",
+                    "reviewedPlan": {},
+                }
                 for action in widget_actions(widget)
             )
         ]
+        expected_operation_inputs = {
+            "itemIdKey": "operation_id",
+            "titleKey": "summary",
+            "subtitleKey": "status",
+            "previewKey": "kind",
+            "emptyText": "No operations yet.",
+        }
+        operation_lists = [
+            widget
+            for widget in widgets
+            if widget.get("type") == "ui.list"
+            and (widget.get("dataSource") or {}).get("toolId")
+            == "applications.list_operations"
+            and all(
+                (widget.get("inputs") or {}).get(key) == value
+                for key, value in expected_operation_inputs.items()
+            )
+        ]
+        expected_report_inputs = {
+            "itemIdKey": "report_id",
+            "titleKey": "title",
+            "subtitleKey": "status",
+            "previewKey": "summary",
+            "emptyText": "No reports yet.",
+        }
         reports = [
             widget
             for widget in widgets
-            if (widget.get("dataSource") or {}).get("toolId") == "applications.list_development_reports"
+            if widget.get("type") == "ui.list"
+            and (widget.get("dataSource") or {}).get("toolId") == "applications.list_development_reports"
+            and all(
+                (widget.get("inputs") or {}).get(key) == value
+                for key, value in expected_report_inputs.items()
+            )
             and any(
                 item.get("key") == "application_id"
                 and item.get("stateKey") == "selectedApplicationId"
@@ -1467,6 +1557,7 @@ def evaluate_ui_request(
             and state.get("updateTrack") == "stable"
             and state.get("updatePolicy") == "notify"
             and state.get("removeDataPolicy") == "retain"
+            and state.get("reviewedPlan") == {}
             for state in page_initial_states
         )
         selector_contracts = {
@@ -1492,7 +1583,10 @@ def evaluate_ui_request(
                 if any(
                     action.get("on") == "change"
                     and action.get("type") == "updateState"
-                    and action.get("params") == {state_key: "$event.value"}
+                    and action.get("params") == {
+                        state_key: "$event.value",
+                        "reviewedPlan": {},
+                    }
                     for action in widget_actions(widget)
                 ):
                     valid_selectors.add(state_key)
@@ -1525,6 +1619,7 @@ def evaluate_ui_request(
                         "then": contract["then"],
                         "else": contract["else"],
                     },
+                    "reviewedPlan": {},
                 }
                 if (
                     source.get("kind") == "static"
@@ -1587,6 +1682,7 @@ def evaluate_ui_request(
             and (widget.get("dataSource") or {}).get("kind") == "static"
             and (widget.get("dataSource") or {}).get("value") == "$state.reviewedPlan"
             and "$state.reviewedPlan.operation.operation_id" in str(widget.get("visibleIf") or "")
+            and "$state.reviewedPlan.status" in str(widget.get("visibleIf") or "")
         ]
         postconditions.append(
             {
@@ -1612,6 +1708,7 @@ def evaluate_ui_request(
                 "ok": bool(
                     application_details
                     and release_selectors
+                    and operation_lists
                     and reports
                     and "$state.applicationRemovable" in remove_visibility
                     and "$state.selectedReleaseDigest" in install_visibility
@@ -1651,6 +1748,7 @@ def evaluate_ui_request(
                         for widget in application_detail_sources
                     ),
                     "releaseSelectors": len(release_selectors),
+                    "operationLists": len(operation_lists),
                     "filteredReports": len(reports),
                     "removeProtected": "$state.applicationRemovable" in remove_visibility,
                     "installReleaseGuarded": (

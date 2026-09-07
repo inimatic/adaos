@@ -273,7 +273,7 @@ def _application_manager_webui() -> dict:
                             "updatePolicy": "notify",
                             "removeDataPolicy": "retain",
                             "activeTab": "details",
-                            "reviewedPlan": None,
+                            "reviewedPlan": {},
                             "prototypeFixtures": {
                                 "applications": {"result": []},
                                 "developments": {"result": []},
@@ -297,7 +297,21 @@ def _application_manager_webui() -> dict:
                                 "releases": {"result": []},
                                 "operations": {"result": []},
                                 "reports": {"result": []},
-                                "plan": {"result": {"operation": {"operation_id": "prototype.plan", "plan_digest": "sha256:fixture"}}},
+                                "plan": {
+                                    "cases": [
+                                        {
+                                            "when": {"kind": kind},
+                                            "result": {
+                                                "operation": {
+                                                    "operation_id": f"prototype.plan.{kind}",
+                                                    "plan_digest": f"sha256:fixture-{kind}",
+                                                    "kind": kind,
+                                                }
+                                            },
+                                        }
+                                        for kind in ("install", "update", "select_track", "remove")
+                                    ]
+                                },
                                 "apply": {"result": {"status": "succeeded"}},
                             },
                         },
@@ -389,9 +403,11 @@ def _application_manager_webui() -> dict:
                                         {
                                             "on": "select",
                                             "type": "updateState",
-                                            "params": {
-                                                "selectedApplicationId": "$event.application.application_id"
-                                            },
+                                        "params": {
+                                            "selectedApplicationId": "$event.application.application_id",
+                                            "selectedReleaseDigest": "",
+                                            "reviewedPlan": {},
+                                        },
                                         }
                                     ],
                                 }
@@ -521,7 +537,10 @@ def _application_manager_webui() -> dict:
                                     {
                                         "on": "select",
                                         "type": "updateState",
-                                        "params": {"selectedReleaseDigest": "$event.release_digest"},
+                                        "params": {
+                                            "selectedReleaseDigest": "$event.release_digest",
+                                            "reviewedPlan": {},
+                                        },
                                     }
                                 ],
                             },
@@ -531,7 +550,13 @@ def _application_manager_webui() -> dict:
                                 "area": "detail",
                                 "visibleIf": "$state.activeTab == 'operations' && $state.selectedApplicationId",
                                 "dataSource": source("applications.list_operations", "response.result.operations", selected=True),
-                                "inputs": {"emptyText": "No operations yet."},
+                                "inputs": {
+                                    "itemIdKey": "operation_id",
+                                    "titleKey": "summary",
+                                    "subtitleKey": "status",
+                                    "previewKey": "kind",
+                                    "emptyText": "No operations yet.",
+                                },
                             },
                             {
                                 "id": "reports",
@@ -540,6 +565,10 @@ def _application_manager_webui() -> dict:
                                 "visibleIf": "$state.activeTab == 'reports' && $state.selectedApplicationId",
                                 "dataSource": source("applications.list_development_reports", "response.result.reports"),
                                 "inputs": {
+                                    "itemIdKey": "report_id",
+                                    "titleKey": "title",
+                                    "subtitleKey": "status",
+                                    "previewKey": "summary",
                                     "filters": [
                                         {"key": "application_id", "stateKey": "selectedApplicationId"}
                                     ],
@@ -569,6 +598,7 @@ def _application_manager_webui() -> dict:
                                                 "then": "prerelease",
                                                 "else": "stable",
                                             },
+                                            "reviewedPlan": {},
                                         },
                                     }
                                 ],
@@ -596,6 +626,7 @@ def _application_manager_webui() -> dict:
                                                 "then": "auto_compatible",
                                                 "else": "notify",
                                             },
+                                            "reviewedPlan": {},
                                         },
                                     }
                                 ],
@@ -618,7 +649,10 @@ def _application_manager_webui() -> dict:
                                     {
                                         "on": "change",
                                         "type": "updateState",
-                                        "params": {"removeDataPolicy": "$event.value"},
+                                        "params": {
+                                            "removeDataPolicy": "$event.value",
+                                            "reviewedPlan": {},
+                                        },
                                     }
                                 ],
                             },
@@ -627,7 +661,7 @@ def _application_manager_webui() -> dict:
                                 "type": "item.details",
                                 "area": "detail",
                                 "title": "Reviewed change",
-                                "visibleIf": "$state.reviewedPlan.operation.operation_id",
+                                "visibleIf": "$state.reviewedPlan.operation.operation_id || $state.reviewedPlan.status",
                                 "dataSource": {"kind": "static", "value": "$state.reviewedPlan"},
                             },
                             {
@@ -760,13 +794,13 @@ def _application_manager_webui() -> dict:
                                         },
                                     },
                                     {
-                                        "id": "apply",
-                                        "on": "click",
+                                        "on": "click:apply",
                                         "type": "callMcp",
                                         "target": "applications.apply",
                                         "idempotencyKey": "auto",
                                         "prototypeFixture": "$state.prototypeFixtures.apply",
-                                        "enabledIf": "$state.reviewedPlan.operation.plan_digest",
+                                        "resultStateKey": "reviewedPlan",
+                                        "enabledIf": "$state.reviewedPlan.operation.operation_id && $state.reviewedPlan.operation.plan_digest",
                                         "params": {
                                             "operation_id": "$state.reviewedPlan.operation.operation_id",
                                             "plan_digest": "$state.reviewedPlan.operation.plan_digest",
@@ -905,6 +939,50 @@ def test_application_manager_evaluation_rejects_named_fixture_placeholders() -> 
     )
     assert fixture_check["ok"] is False
     assert fixture_check["actual"]["executableProfiles"] == []
+
+
+def test_application_manager_evaluation_requires_fixture_on_every_mcp_widget() -> None:
+    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    webui = _application_manager_webui()
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    metadata = next(widget for widget in widgets if widget["id"] == "marketplace-section")
+    metadata["dataSource"].pop("prototypeFixture")
+
+    rejected = evaluate_ui_request(request, webui)
+
+    fixture_check = next(
+        item for item in rejected["postconditions"]
+        if item["id"] == "applications.prototype_fixtures"
+    )
+    assert fixture_check["ok"] is False
+    assert fixture_check["actual"]["invalidSourceFixtures"] == [
+        {
+            "widgetId": "marketplace-section",
+            "toolId": "applications.show",
+            "expected": "$state.prototypeFixtures.application",
+            "actual": "",
+        }
+    ]
+
+
+def test_application_manager_evaluation_rejects_stale_review_context() -> None:
+    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    webui = _application_manager_webui()
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    catalog = next(widget for widget in widgets if widget["id"] == "catalog-applications")
+    catalog["actions"][0]["params"].pop("reviewedPlan")
+    operations = next(widget for widget in widgets if widget["id"] == "operations")
+    operations["inputs"].pop("titleKey")
+    lifecycle = next(widget for widget in widgets if widget["id"] == "lifecycle-actions")
+    apply = next(action for action in lifecycle["actions"] if action["on"] == "click:apply")
+    apply.pop("resultStateKey")
+
+    rejected = evaluate_ui_request(request, webui)
+
+    by_id = {item["id"]: item for item in rejected["postconditions"]}
+    assert by_id["applications.master_selection"]["ok"] is False
+    assert by_id["applications.reviewed_plan_apply"]["ok"] is False
+    assert by_id["applications.detail_lifecycle_binding"]["ok"] is False
 
 
 def test_application_manager_evaluation_rejects_non_runtime_event_paths() -> None:
