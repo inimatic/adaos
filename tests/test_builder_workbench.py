@@ -513,6 +513,54 @@ def test_selected_project_is_persisted_without_changing_runtime_scenario(tmp_pat
     assert service.get_workspace_binding("desktop")["selection"] == binding["selection"]
 
 
+def test_existing_builder_source_lookup_is_read_only_and_selection_scoped(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    bindings = state_dir / "builder" / "workbench" / "bindings"
+    bindings.mkdir(parents=True)
+    (bindings / "older.json").write_text(
+        json.dumps(
+            {
+                "source_webspace_id": "builder-old",
+                "updated_at": 1,
+                "selection": {"object_type": "scenario", "object_id": "applications"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (bindings / "newer.json").write_text(
+        json.dumps(
+            {
+                "source_webspace_id": "builder-current",
+                "updated_at": 2,
+                "selection": {"object_type": "scenario", "object_id": "applications"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (bindings / "invalid.json").write_text(
+        json.dumps(
+            {
+                "source_webspace_id": "../invalid",
+                "updated_at": 3,
+                "selection": {"object_type": "scenario", "object_id": "applications"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    before = {path: path.read_bytes() for path in bindings.iterdir()}
+
+    service = BuilderWorkbenchService(state_dir=state_dir)
+    assert service.find_existing_source_for_selection(
+        object_type="scenario",
+        object_id="applications",
+    ) == "builder-current"
+    assert service.find_existing_source_for_selection(
+        object_type="scenario",
+        object_id="missing",
+    ) is None
+    assert {path: path.read_bytes() for path in bindings.iterdir()} == before
+
+
 def test_workspace_binding_rejects_legacy_project_selection(tmp_path: Path) -> None:
     service = BuilderWorkbenchService(state_dir=tmp_path / "state")
     binding_path = service.binding_path("desktop")
@@ -792,6 +840,23 @@ def test_builder_api_exposes_workbench_endpoints(tmp_path: Path) -> None:
     assert response.json()["url"] == f"http://localhost:8100/?webspace={preview_id}"
     assert response.json()["binding"]["runtime_scenario_id"] == "demo_scenario"
     assert service.webspace_service.items[preview_id].home_scenario == "web_desktop"
+
+    response = client.get(
+        "/api/builder/workbench/open",
+        params={
+            "webspace_id": preview_id,
+            "surface": "authoring",
+            "selected_object_type": "scenario",
+            "selected_object_id": "applications",
+            "base_url": "http://localhost:8100",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["surface"] == "authoring"
+    assert response.json()["webspace_id"] == "desktop"
+    assert response.json()["scenario_id"] == "builder"
+    assert response.json()["url"] == "http://localhost:8100/?webspace=desktop"
+    assert response.json()["binding"]["selection"]["object_id"] == "applications"
 
     response = client.get("/api/builder/workbench/dialog-widget", params={"webspace_id": "desktop"})
     assert response.status_code == 200

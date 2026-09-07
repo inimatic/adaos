@@ -793,6 +793,51 @@ class BuilderWorkbenchService:
             bindings.append(self.get_workspace_binding(relation.source_webspace_id))
         return bindings
 
+    def find_existing_source_for_selection(
+        self,
+        *,
+        object_type: str,
+        object_id: str,
+    ) -> str | None:
+        """Find a persisted Builder owner without creating or repairing topology."""
+
+        selected_type = str(object_type or "").strip()
+        selected_id = str(object_id or "").strip()
+        if not selected_type or not selected_id:
+            return None
+        bindings_root = (
+            Path(self.state_dir or current_state_dir())
+            / "builder"
+            / "workbench"
+            / "bindings"
+        )
+        matches: list[tuple[float, str]] = []
+        for path in bindings_root.glob("*.json") if bindings_root.is_dir() else ():
+            raw = _read_json(path)
+            selection = raw.get("selection") if isinstance(raw.get("selection"), Mapping) else {}
+            if (
+                str(selection.get("object_type") or "").strip() != selected_type
+                or str(selection.get("object_id") or "").strip() != selected_id
+            ):
+                continue
+            try:
+                updated_at = float(raw.get("updated_at") or 0.0)
+            except (TypeError, ValueError):
+                updated_at = 0.0
+            try:
+                raw_source_id = str(
+                    raw.get("source_webspace_id") or path.stem
+                ).strip()
+                source_id = safe_source_webspace_id(raw_source_id)
+            except ValueError:
+                continue
+            if source_id != raw_source_id:
+                continue
+            matches.append((updated_at, source_id))
+        if not matches:
+            return None
+        return max(matches, key=lambda item: (item[0], item[1]))[1]
+
     def _webspace_inventory(self) -> dict[str, dict[str, Any]]:
         """Return the operational Webspace inventory without changing topology."""
 
@@ -1446,7 +1491,38 @@ class BuilderWorkbenchService:
         dev_id = str(binding.get("dev_webspace_id") or "").strip()
         base = str(base_url or "").strip().rstrip("/")
         url = f"{base}/?webspace={dev_id}" if base else f"/?webspace={dev_id}"
-        return {"ok": True, "url": url, "webspace_id": dev_id, "binding": binding}
+        return {
+            "ok": True,
+            "surface": "preview",
+            "url": url,
+            "webspace_id": dev_id,
+            "scenario_id": str(binding.get("runtime_scenario_id") or "").strip() or None,
+            "binding": binding,
+        }
+
+    def open_authoring_webspace(
+        self,
+        source_webspace_id: str | None = None,
+        *,
+        base_url: str | None = None,
+        binding: Mapping[str, Any] | None = None,
+        runtime: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        resolved = dict(binding or self.get_workspace_binding(source_webspace_id))
+        source_id = self.resolve_source_webspace_id(
+            resolved.get("source_webspace_id") or source_webspace_id
+        )
+        base = str(base_url or "").strip().rstrip("/")
+        url = f"{base}/?webspace={source_id}" if base else f"/?webspace={source_id}"
+        return {
+            "ok": True,
+            "surface": "authoring",
+            "url": url,
+            "webspace_id": source_id,
+            "scenario_id": BUILDER_HOST_SCENARIO_ID,
+            "runtime": dict(runtime or {}),
+            "binding": resolved,
+        }
 
     async def open_dev_webspace_ready(
         self,
@@ -1476,6 +1552,98 @@ class BuilderWorkbenchService:
             )
         return {
             **self.open_dev_webspace(source_webspace_id, base_url=base_url),
+            "binding": binding,
+        }
+
+    async def open_workbench_ready(
+        self,
+        source_webspace_id: str | None = None,
+        *,
+        surface: str = "preview",
+        base_url: str | None = None,
+        active_draft_id: str | None = None,
+        runtime_scenario_id: str | None = None,
+        ticket_id: str | None = None,
+        selected_object_type: str | None = None,
+        selected_object_id: str | None = None,
+    ) -> dict[str, Any]:
+        target_surface = str(surface or "preview").strip().lower()
+        if target_surface not in {"preview", "authoring"}:
+            raise ValueError("surface must be preview or authoring")
+        selected_type = str(selected_object_type or "").strip()
+        selected_id = str(selected_object_id or "").strip()
+        if bool(selected_type) != bool(selected_id):
+            raise ValueError("selected_object_type and selected_object_id must be provided together")
+
+        existing = self.get_workspace_binding(source_webspace_id)
+        binding = await self.ensure_dev_webspace(
+            source_webspace_id,
+            active_draft_id=(
+                active_draft_id
+                if active_draft_id is not None
+                else existing.get("active_draft_id")
+            ),
+            runtime_scenario_id=(
+                runtime_scenario_id or existing.get("runtime_scenario_id")
+            ),
+        )
+        source_id = self.resolve_source_webspace_id(
+            binding.get("source_webspace_id") or source_webspace_id
+        )
+        ticket_token = str(ticket_id or "").strip()
+        if ticket_token:
+            binding = self.select_development_ticket(
+                source_webspace_id=source_id,
+                ticket_id=ticket_token,
+                object_type=selected_type or None,
+                object_id=selected_id or None,
+                persist_projection=False,
+            )
+        elif selected_type and selected_id:
+            binding = self.set_selected_project(
+                source_webspace_id=source_id,
+                object_type=selected_type,
+                object_id=selected_id,
+                persist_projection=False,
+            )
+
+        runtime: dict[str, Any] = {}
+        if target_surface == "authoring":
+            if self.webspace_service is None:
+                from adaos.services.scenario.webspace_runtime import switch_webspace_scenario
+
+                runtime = await switch_webspace_scenario(
+                    source_id,
+                    BUILDER_HOST_SCENARIO_ID,
+                    set_home=False,
+                    wait_for_rebuild=True,
+                    request_source="builder.workbench.open_authoring",
+                )
+                if runtime.get("ok") is False or runtime.get("accepted") is False:
+                    raise ValueError(
+                        str(runtime.get("error") or "builder authoring surface is unavailable")
+                    )
+            else:
+                runtime = {
+                    "ok": True,
+                    "accepted": True,
+                    "skipped": "injected_webspace_service",
+                    "webspace_id": source_id,
+                    "scenario_id": BUILDER_HOST_SCENARIO_ID,
+                }
+
+        # Selection is runtime-owned and must be restored after an authoring
+        # scenario materialization, which replaces scenario-owned branches.
+        await self.publish_projection(source_id)
+        if target_surface == "authoring":
+            return self.open_authoring_webspace(
+                source_id,
+                base_url=base_url,
+                binding=binding,
+                runtime=runtime,
+            )
+        return {
+            **self.open_dev_webspace(source_id, base_url=base_url),
             "binding": binding,
         }
 

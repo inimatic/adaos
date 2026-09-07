@@ -608,6 +608,7 @@ async def list_workbench_projects(
 async def open_workbench_dev_webspace(
     webspace_id: str | None = None,
     base_url: str | None = None,
+    surface: str = "preview",
     runtime_scenario_id: str | None = None,
     ticket_id: str | None = None,
     selected_object_type: str | None = None,
@@ -615,9 +616,10 @@ async def open_workbench_dev_webspace(
     service: BuilderWorkbenchService = Depends(_get_workbench_service),
 ) -> dict[str, Any]:
     try:
-        return await service.open_dev_webspace_ready(
+        return await service.open_workbench_ready(
             webspace_id,
             base_url=base_url,
+            surface=surface,
             runtime_scenario_id=runtime_scenario_id,
             ticket_id=ticket_id,
             selected_object_type=selected_object_type,
