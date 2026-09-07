@@ -2223,12 +2223,14 @@ class BuilderWorkflowService:
         active_phase = str(workflow.get("active_phase") or "prototype")
         phase = _mapping(workflow.get(active_phase))
         prototype = _mapping(workflow.get("prototype"))
+        publication = _mapping(workflow.get("publication"))
         return {
             "phase": active_phase,
             "status": str(phase.get("status") or "unknown"),
             "revision": prototype.get("head_revision"),
             "stable": bool(prototype.get("stable")),
             "accepted": bool(prototype.get("acceptance")),
+            "publication_status": str(publication.get("status") or "not_started"),
             "updated_at": str(state.get("updated_at") or "").strip() or None,
         }
 

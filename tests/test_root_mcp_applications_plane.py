@@ -176,6 +176,7 @@ def test_applications_plane_forwards_catalog_and_development_filters(monkeypatch
         {
             "installed_only": False,
             "catalog_only": True,
+            "available_only": True,
             "developed_only": True,
         },
         dry_run=True,
@@ -188,6 +189,7 @@ def test_applications_plane_forwards_catalog_and_development_filters(monkeypatch
             {
                 "installed_only": False,
                 "catalog_only": True,
+                "available_only": True,
                 "developed_only": True,
             },
         )

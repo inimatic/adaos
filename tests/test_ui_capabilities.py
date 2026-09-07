@@ -196,18 +196,43 @@ def test_application_manager_selection_exposes_mcp_master_detail_contract() -> N
         "arguments": {"developed_only": True},
         "dryRun": True,
         "resultPath": "response.result.applications",
+        "prototypeFixture": "$state.prototypeFixtures.developments",
+    }
+    workflow = recipe["composition"]["workflow_model"]
+    assert workflow["status_vocabularies"]["operation"] == [
+        "planned", "applying", "succeeded", "failed", "unknown", "reconciling", "cancelled"
+    ]
+    assert {item["id"] for item in workflow["representative_states"]} >= {
+        "marketplace-uninstalled",
+        "installed-update",
+        "local-development",
+        "protected-system",
     }
     assert selected["qualification"]["requirements"]["application_manager"] is True
 
 
 def _application_manager_webui() -> dict:
-    def source(tool_id: str, result_path: str, *, selected: bool = False) -> dict:
+    def source(
+        tool_id: str,
+        result_path: str,
+        *,
+        selected: bool = False,
+        fixture_key: str | None = None,
+    ) -> dict:
+        inferred_fixture = {
+            "applications.list": "applications",
+            "applications.show": "application",
+            "applications.list_releases": "releases",
+            "applications.list_operations": "operations",
+            "applications.list_development_reports": "reports",
+        }[tool_id]
         return {
             "kind": "mcp",
             "toolId": tool_id,
             "arguments": {"application_id": "$state.selectedApplicationId"} if selected else {},
             "dryRun": True,
             "resultPath": result_path,
+            "prototypeFixture": f"$state.prototypeFixtures.{fixture_key or inferred_fixture}",
         }
 
     return {
@@ -232,12 +257,40 @@ def _application_manager_webui() -> dict:
                             "developmentObjectType": "",
                             "developmentObjectId": "",
                             "developmentSourceWebspaceId": "",
-                            "catalogSection": "marketplace",
+                            "developmentPreviewWebspaceId": "",
+                            "catalogSection": "applications",
+                            "installedOnly": False,
                             "updateTrack": "stable",
                             "updatePolicy": "notify",
                             "removeDataPolicy": "retain",
                             "activeTab": "details",
                             "reviewedPlan": None,
+                            "prototypeFixtures": {
+                                "applications": {"result": []},
+                                "developments": {"result": []},
+                                "application": {
+                                    "cases": [
+                                        {
+                                            "when": {"application_id": f"sample-{state_id}"},
+                                            "result": {"prototype_state_id": state_id},
+                                        }
+                                        for state_id in (
+                                            "marketplace-uninstalled",
+                                            "installed-current",
+                                            "installed-update",
+                                            "prerelease-following",
+                                            "local-development",
+                                            "protected-system",
+                                            "operation-recovery",
+                                        )
+                                    ]
+                                },
+                                "releases": {"result": []},
+                                "operations": {"result": []},
+                                "reports": {"result": []},
+                                "plan": {"result": {"operation": {"operation_id": "prototype.plan", "plan_digest": "sha256:fixture"}}},
+                                "apply": {"result": {"status": "succeeded"}},
+                            },
                         },
                         "layout": {
                             "type": "split",
@@ -261,8 +314,7 @@ def _application_manager_webui() -> dict:
                                     "stretch": True,
                                     "selectedStateKey": "catalogSection",
                                     "buttons": [
-                                        {"id": "installed", "label": "Installed"},
-                                        {"id": "marketplace", "label": "Marketplace"},
+                                        {"id": "applications", "label": "Applications"},
                                         {"id": "developments", "label": "My developments"},
                                     ],
                                 },
@@ -271,6 +323,21 @@ def _application_manager_webui() -> dict:
                                         "on": "click",
                                         "type": "updateState",
                                         "params": {"catalogSection": "$event.id"},
+                                    }
+                                ],
+                            },
+                            {
+                                "id": "installed-only",
+                                "type": "input.toggle",
+                                "area": "master",
+                                "visibleIf": "$state.catalogSection == 'applications'",
+                                "dataSource": {"kind": "static", "value": "$state.installedOnly"},
+                                "inputs": {"label": "Installed only"},
+                                "actions": [
+                                    {
+                                        "on": "change",
+                                        "type": "updateState",
+                                        "params": {"installedOnly": "$event.checked"},
                                     }
                                 ],
                             },
@@ -284,6 +351,7 @@ def _application_manager_webui() -> dict:
                                         **source(
                                             "applications.list",
                                             "response.result.applications",
+                                            fixture_key=section,
                                         ),
                                         "arguments": arguments,
                                     },
@@ -292,15 +360,19 @@ def _application_manager_webui() -> dict:
                                         "itemIdKey": "application.application_id",
                                         "search": True,
                                         "titleKey": "application.display.title",
-                                        "subtitleKey": (
-                                            "local_development.phase"
+                                        "subtitleKey": "application.publisher.display_name",
+                                        "previewKey": "application.display.summary",
+                                        "meta": (
+                                            [
+                                                {"key": "local_development.phase", "label": "Phase", "kind": "badge"},
+                                                {"key": "local_development.status", "label": "Status", "kind": "badge"},
+                                                {"key": "local_development.publication_status", "label": "Publication", "kind": "badge"},
+                                            ]
                                             if section == "developments"
-                                            else "application.publisher.display_name"
-                                        ),
-                                        "previewKey": (
-                                            "local_development.status"
-                                            if section == "developments"
-                                            else "application.display.summary"
+                                            else [
+                                                {"key": "installed", "label": "Installation", "kind": "boolean", "trueLabel": "Installed", "falseLabel": "Not installed"},
+                                                {"key": "update_available", "label": "Update", "kind": "boolean", "trueLabel": "Update available", "falseLabel": "Current"},
+                                            ]
                                         ),
                                         "emptyText": "No applications found.",
                                     },
@@ -315,8 +387,13 @@ def _application_manager_webui() -> dict:
                                     ],
                                 }
                                 for section, arguments in (
-                                    ("installed", {"installed_only": True}),
-                                    ("marketplace", {"catalog_only": True}),
+                                    (
+                                        "applications",
+                                        {
+                                            "available_only": True,
+                                            "installed_only": "$state.installedOnly",
+                                        },
+                                    ),
                                     ("developments", {"developed_only": True}),
                                 )
                             ],
@@ -388,6 +465,10 @@ def _application_manager_webui() -> dict:
                                         },
                                         "developmentSourceWebspaceId": {
                                             "path": "local_development.builder.source_webspace_id",
+                                            "default": "",
+                                        },
+                                        "developmentPreviewWebspaceId": {
+                                            "path": "local_development.builder.preview_webspace_id",
                                             "default": "",
                                         },
                                     }
@@ -569,6 +650,11 @@ def _application_manager_webui() -> dict:
                                             "visibleIf": "$state.applicationInstalled == true && $state.applicationRemovable == true",
                                         },
                                         {
+                                            "id": "preview",
+                                            "icon": "open-outline",
+                                            "visibleIf": "$state.localDevelopmentAvailable == true && $state.developmentPreviewWebspaceId && $state.developmentObjectId",
+                                        },
+                                        {
                                             "id": "open-builder",
                                             "icon": "construct-outline",
                                             "visibleIf": "$state.localDevelopmentAvailable == true && $state.developmentObjectId",
@@ -587,6 +673,7 @@ def _application_manager_webui() -> dict:
                                         "target": "applications.plan",
                                         "idempotencyKey": "auto",
                                         "resultStateKey": "reviewedPlan",
+                                        "prototypeFixture": "$state.prototypeFixtures.plan",
                                         "enabledIf": "$state.selectedApplicationId",
                                         "params": {
                                             "application_id": "$state.selectedApplicationId",
@@ -602,6 +689,7 @@ def _application_manager_webui() -> dict:
                                         "target": "applications.plan",
                                         "idempotencyKey": "auto",
                                         "resultStateKey": "reviewedPlan",
+                                        "prototypeFixture": "$state.prototypeFixtures.plan",
                                         "enabledIf": "$state.selectedApplicationId",
                                         "params": {
                                             "application_id": "$state.selectedApplicationId",
@@ -616,6 +704,7 @@ def _application_manager_webui() -> dict:
                                         "target": "applications.plan",
                                         "idempotencyKey": "auto",
                                         "resultStateKey": "reviewedPlan",
+                                        "prototypeFixture": "$state.prototypeFixtures.plan",
                                         "enabledIf": "$state.selectedApplicationId",
                                         "params": {
                                             "application_id": "$state.selectedApplicationId",
@@ -632,12 +721,22 @@ def _application_manager_webui() -> dict:
                                         "target": "applications.plan",
                                         "idempotencyKey": "auto",
                                         "resultStateKey": "reviewedPlan",
+                                        "prototypeFixture": "$state.prototypeFixtures.plan",
                                         "enabledIf": "$state.selectedApplicationId",
                                         "params": {
                                             "application_id": "$state.selectedApplicationId",
                                             "kind": "remove",
                                             "expected_revision": "$state.installationRevision",
                                             "data_policy": "$state.removeDataPolicy",
+                                        },
+                                    },
+                                    {
+                                        "on": "click:preview",
+                                        "type": "openWorkspace",
+                                        "params": {
+                                            "newWindow": True,
+                                            "workspaceId": "$state.developmentPreviewWebspaceId",
+                                            "expectedScenarioId": "$state.developmentObjectId",
                                         },
                                     },
                                     {
@@ -657,6 +756,7 @@ def _application_manager_webui() -> dict:
                                         "type": "callMcp",
                                         "target": "applications.apply",
                                         "idempotencyKey": "auto",
+                                        "prototypeFixture": "$state.prototypeFixtures.apply",
                                         "enabledIf": "$state.reviewedPlan.operation.plan_digest",
                                         "params": {
                                             "operation_id": "$state.reviewedPlan.operation.operation_id",
@@ -710,7 +810,7 @@ def _application_manager_webui() -> dict:
                                         [
                                             {"label": "Installed version", "path": "installed_release.version"},
                                             {"label": "Status", "path": "installation.status"},
-                                            {"label": "Updated", "path": "installation.updated_at"},
+                                            {"label": "Updated", "path": "installation.updated_at", "format": "datetime"},
                                             {"label": "Update track", "path": "subscription.update_track"},
                                             {"label": "Update policy", "path": "subscription.update_policy"},
                                         ],
@@ -722,7 +822,7 @@ def _application_manager_webui() -> dict:
                                         [
                                             {"label": "Stable version", "path": "marketplace_release.version"},
                                             {"label": "Pre-release version", "path": "prerelease_release.version"},
-                                            {"label": "Last released", "path": "marketplace_release.published_at"},
+                                            {"label": "Last released", "path": "marketplace_release.published_at", "format": "datetime"},
                                             {"label": "Visibility", "path": "application.visibility"},
                                         ],
                                         "",
@@ -741,8 +841,9 @@ def _application_manager_webui() -> dict:
                                         [
                                             {"label": "Phase", "path": "local_development.phase"},
                                             {"label": "Status", "path": "local_development.status"},
+                                            {"label": "Publication", "path": "local_development.publication_status"},
                                             {"label": "Revision", "path": "local_development.revision"},
-                                            {"label": "Updated", "path": "local_development.updated_at"},
+                                            {"label": "Updated", "path": "local_development.updated_at", "format": "datetime"},
                                         ],
                                         " && $state.localDevelopmentAvailable == true",
                                     ),
@@ -782,7 +883,7 @@ def test_application_manager_evaluation_rejects_non_runtime_event_paths() -> Non
     request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
     webui = _application_manager_webui()
     widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
-    catalog = next(widget for widget in widgets if widget["id"] == "catalog-marketplace")
+    catalog = next(widget for widget in widgets if widget["id"] == "catalog-applications")
     catalog["actions"][0]["params"]["selectedApplicationId"] = "$event.item.id"
     tabs = next(widget for widget in widgets if widget["id"] == "tabs")
     tabs["actions"][0]["params"]["activeTab"] = "$event.buttonId"

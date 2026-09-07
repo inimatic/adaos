@@ -148,6 +148,7 @@ def test_application_reads_project_only_existing_local_developments(
                             }
                         ],
                     },
+                    "installed": True,
                     "channels": {},
                 },
                 {
@@ -161,6 +162,7 @@ def test_application_reads_project_only_existing_local_developments(
                             }
                         ],
                     },
+                    "installed": False,
                     "channels": {"stable": "sha256:" + "a" * 64},
                 },
             ]
@@ -175,6 +177,7 @@ def test_application_reads_project_only_existing_local_developments(
             "revision": "010",
             "stable": False,
             "accepted": False,
+            "publication_status": "not_started",
             "updated_at": None,
         }
         if (object_type, object_id) == ("scenario", "applications")
@@ -183,6 +186,7 @@ def test_application_reads_project_only_existing_local_developments(
 
     developed = applications.list_applications(developed_only=True)
     catalog = applications.list_applications(catalog_only=True)
+    available = applications.list_applications(available_only=True)
 
     assert [item["application"]["application_id"] for item in developed] == [
         "applications"
@@ -202,10 +206,16 @@ def test_application_reads_project_only_existing_local_developments(
             "selected_object_type": "scenario",
             "selected_object_id": "applications",
             "source_webspace_id": "desktop",
+            "preview_webspace_id": "desktop-dev",
         },
+        "publication_status": "not_started",
     }
     assert [item["application"]["application_id"] for item in catalog] == ["foreign"]
     assert catalog[0]["local_development"] is None
+    assert [item["application"]["application_id"] for item in available] == [
+        "applications",
+        "foreign",
+    ]
 
 
 def test_sdk_exposes_development_report_status_without_internal_store_access() -> None:

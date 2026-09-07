@@ -845,8 +845,13 @@ def evaluate_ui_request(
             == "response.result.applications"
         }
         expected_catalog_arguments = {
-            json.dumps({"installed_only": True}, sort_keys=True),
-            json.dumps({"catalog_only": True}, sort_keys=True),
+            json.dumps(
+                {
+                    "available_only": True,
+                    "installed_only": "$state.installedOnly",
+                },
+                sort_keys=True,
+            ),
             json.dumps({"developed_only": True}, sort_keys=True),
         }
         if catalog_arguments == expected_catalog_arguments:
@@ -953,6 +958,94 @@ def evaluate_ui_request(
                 },
             }
         )
+        prototype_fixtures = next(
+            (
+                page.get("initialState", {}).get("prototypeFixtures")
+                for page in pages
+                if isinstance(page.get("initialState"), Mapping)
+                and isinstance(page.get("initialState", {}).get("prototypeFixtures"), Mapping)
+            ),
+            {},
+        )
+        required_fixture_profiles = {
+            "applications",
+            "developments",
+            "application",
+            "releases",
+            "operations",
+            "reports",
+            "plan",
+            "apply",
+        }
+        required_fixture_refs = {
+            f"$state.prototypeFixtures.{profile}"
+            for profile in required_fixture_profiles
+        }
+        source_fixture_refs = {
+            str(source.get("prototypeFixture") or "")
+            for source in mcp_sources
+            if str(source.get("prototypeFixture") or "")
+        }
+        action_fixture_refs = {
+            str(action.get("prototypeFixture") or "")
+            for action in [*plan_actions, *apply_actions]
+            if str(action.get("prototypeFixture") or "")
+        }
+        representative_state_ids: set[str] = set()
+
+        def collect_representative_state_ids(value: Any) -> None:
+            if isinstance(value, Mapping):
+                state_id = str(value.get("prototype_state_id") or "").strip()
+                if state_id:
+                    representative_state_ids.add(state_id)
+                for nested in value.values():
+                    collect_representative_state_ids(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    collect_representative_state_ids(nested)
+
+        collect_representative_state_ids(prototype_fixtures)
+        required_representative_states = {
+            "marketplace-uninstalled",
+            "installed-current",
+            "installed-update",
+            "prerelease-following",
+            "local-development",
+            "protected-system",
+            "operation-recovery",
+        }
+        actual_fixture_profiles = {
+            str(key) for key in prototype_fixtures if str(key).strip()
+        }
+        postconditions.append(
+            {
+                "id": "applications.prototype_fixtures",
+                "ok": (
+                    required_fixture_profiles.issubset(actual_fixture_profiles)
+                    and all(
+                        str(source.get("prototypeFixture") or "").startswith(
+                            "$state.prototypeFixtures."
+                        )
+                        for source in mcp_sources
+                    )
+                    and "$state.prototypeFixtures.plan" in action_fixture_refs
+                    and "$state.prototypeFixtures.apply" in action_fixture_refs
+                    and required_representative_states.issubset(representative_state_ids)
+                ),
+                "expected": {
+                    "profiles": sorted(required_fixture_profiles),
+                    "refs": sorted(required_fixture_refs),
+                    "stateIds": sorted(required_representative_states),
+                    "scope": "development Webspace only",
+                },
+                "actual": {
+                    "profiles": sorted(actual_fixture_profiles),
+                    "sourceRefs": sorted(source_fixture_refs),
+                    "actionRefs": sorted(action_fixture_refs),
+                    "stateIds": sorted(representative_state_ids),
+                },
+            }
+        )
         tab_ids = set(requirements.get("tabs") or [])
         tab_controls = []
         for widget in widgets:
@@ -991,23 +1084,46 @@ def evaluate_ui_request(
             "titleKey": "application.display.title",
         }
         catalog_row_inputs = {
-            "installed": {
+            "applications": {
                 "subtitleKey": "application.publisher.display_name",
                 "previewKey": "application.display.summary",
-            },
-            "marketplace": {
-                "subtitleKey": "application.publisher.display_name",
-                "previewKey": "application.display.summary",
+                "meta": [
+                    {
+                        "key": "installed",
+                        "label": "Installation",
+                        "kind": "boolean",
+                        "trueLabel": "Installed",
+                        "falseLabel": "Not installed",
+                    },
+                    {
+                        "key": "update_available",
+                        "label": "Update",
+                        "kind": "boolean",
+                        "trueLabel": "Update available",
+                        "falseLabel": "Current",
+                    },
+                ],
             },
             "developments": {
-                "subtitleKey": "local_development.phase",
-                "previewKey": "local_development.status",
+                "subtitleKey": "application.publisher.display_name",
+                "previewKey": "application.display.summary",
+                "meta": [
+                    {"key": "local_development.phase", "label": "Phase", "kind": "badge"},
+                    {"key": "local_development.status", "label": "Status", "kind": "badge"},
+                    {
+                        "key": "local_development.publication_status",
+                        "label": "Publication",
+                        "kind": "badge",
+                    },
+                ],
             },
         }
         selectable_catalogs: dict[str, Mapping[str, Any]] = {}
         catalog_sections = {
-            "installed": {"installed_only": True},
-            "marketplace": {"catalog_only": True},
+            "applications": {
+                "available_only": True,
+                "installed_only": "$state.installedOnly",
+            },
             "developments": {"developed_only": True},
         }
         for section, arguments in catalog_sections.items():
@@ -1077,8 +1193,8 @@ def evaluate_ui_request(
         postconditions.append(
             {
                 "id": "applications.master_selection",
-                "ok": len(selectable_catalogs) == 3,
-                "expected": "Installed, Marketplace, and My developments masters write selectedApplicationId",
+                "ok": len(selectable_catalogs) == 2,
+                "expected": "Applications and My developments masters write selectedApplicationId",
                 "actual": sorted(selectable_catalogs),
             }
         )
@@ -1104,6 +1220,9 @@ def evaluate_ui_request(
             },
             "developmentSourceWebspaceId": {
                 "path": "local_development.builder.source_webspace_id", "default": "",
+            },
+            "developmentPreviewWebspaceId": {
+                "path": "local_development.builder.preview_webspace_id", "default": "",
             },
         }
         application_detail_sources = [
@@ -1149,14 +1268,14 @@ def evaluate_ui_request(
             "Installation": [
                 {"label": "Installed version", "path": "installed_release.version"},
                 {"label": "Status", "path": "installation.status"},
-                {"label": "Updated", "path": "installation.updated_at"},
+                {"label": "Updated", "path": "installation.updated_at", "format": "datetime"},
                 {"label": "Update track", "path": "subscription.update_track"},
                 {"label": "Update policy", "path": "subscription.update_policy"},
             ],
             "Marketplace": [
                 {"label": "Stable version", "path": "marketplace_release.version"},
                 {"label": "Pre-release version", "path": "prerelease_release.version"},
-                {"label": "Last released", "path": "marketplace_release.published_at"},
+                {"label": "Last released", "path": "marketplace_release.published_at", "format": "datetime"},
                 {"label": "Visibility", "path": "application.visibility"},
             ],
             "Categories": [
@@ -1165,8 +1284,9 @@ def evaluate_ui_request(
             "My development": [
                 {"label": "Phase", "path": "local_development.phase"},
                 {"label": "Status", "path": "local_development.status"},
+                {"label": "Publication", "path": "local_development.publication_status"},
                 {"label": "Revision", "path": "local_development.revision"},
-                {"label": "Updated", "path": "local_development.updated_at"},
+                {"label": "Updated", "path": "local_development.updated_at", "format": "datetime"},
             ],
         }
         expected_detail_roles = {
@@ -1256,6 +1376,9 @@ def evaluate_ui_request(
         builder_visibility = str(
             (lifecycle_buttons.get("open-builder") or {}).get("visibleIf") or ""
         )
+        preview_visibility = str(
+            (lifecycle_buttons.get("preview") or {}).get("visibleIf") or ""
+        )
         apply_visibility = str(
             (lifecycle_buttons.get("apply") or {}).get("visibleIf") or ""
         )
@@ -1264,6 +1387,7 @@ def evaluate_ui_request(
             "update": "refresh-outline",
             "select-track": "options-outline",
             "remove": "trash-outline",
+            "preview": "open-outline",
             "open-builder": "construct-outline",
             "apply": "checkmark-outline",
         }
@@ -1272,7 +1396,7 @@ def evaluate_ui_request(
             for widget in widgets
             if widget.get("type") == "ui.actions"
             and {
-                "install", "update", "select-track", "remove", "open-builder", "apply"
+                "install", "update", "select-track", "remove", "preview", "open-builder", "apply"
             }.issubset({
                 str(button.get("id") or "")
                 for button in (widget.get("inputs") or {}).get("buttons") or []
@@ -1304,7 +1428,8 @@ def evaluate_ui_request(
             and state.get("subscriptionRevision") == 0
             and state.get("selectedReleaseDigest") == ""
             and state.get("effectiveReleaseDigest") == ""
-            and state.get("catalogSection") == "marketplace"
+            and state.get("catalogSection") == "applications"
+            and state.get("installedOnly") is False
             and state.get("activeTab") == "details"
             and state.get("updateTrack") == "stable"
             and state.get("updatePolicy") == "notify"
@@ -1381,6 +1506,21 @@ def evaluate_ui_request(
                     )
                 ):
                     valid_toggles.add(state_key)
+        installed_filters = [
+            widget
+            for widget in widgets
+            if widget.get("type") == "input.toggle"
+            and (widget.get("dataSource") or {}).get("kind") == "static"
+            and (widget.get("dataSource") or {}).get("value") == "$state.installedOnly"
+            and (widget.get("inputs") or {}).get("label") == "Installed only"
+            and "$state.catalogSection == 'applications'" in str(widget.get("visibleIf") or "")
+            and any(
+                action.get("on") == "change"
+                and action.get("type") == "updateState"
+                and action.get("params") == {"installedOnly": "$event.checked"}
+                for action in widget_actions(widget)
+            )
+        ]
         builder_actions = [
             action
             for action in actions
@@ -1393,6 +1533,18 @@ def evaluate_ui_request(
                 "selectedObjectType": "$state.developmentObjectType",
                 "selectedObjectId": "$state.developmentObjectId",
                 "sourceWebspaceId": "$state.developmentSourceWebspaceId",
+            }
+        ]
+        preview_actions = [
+            action
+            for action in actions
+            if action.get("type") == "openWorkspace"
+            and action.get("on") == "click:preview"
+            and action.get("params")
+            == {
+                "newWindow": True,
+                "workspaceId": "$state.developmentPreviewWebspaceId",
+                "expectedScenarioId": "$state.developmentObjectId",
             }
         ]
         review_surfaces = [
@@ -1436,9 +1588,14 @@ def evaluate_ui_request(
                     and cas_defaults
                     and set(selector_contracts) == valid_selectors
                     and set(expected_toggles) == valid_toggles
+                    and len(installed_filters) == 1
                     and len(builder_actions) == 1
+                    and len(preview_actions) == 1
                     and "$state.localDevelopmentAvailable" in builder_visibility
                     and "$state.developmentObjectId" in builder_visibility
+                    and "$state.localDevelopmentAvailable" in preview_visibility
+                    and "$state.developmentPreviewWebspaceId" in preview_visibility
+                    and "$state.developmentObjectId" in preview_visibility
                     and "$state.reviewedPlan.operation.operation_id" in apply_visibility
                     and "$state.reviewedPlan.operation.plan_digest" in apply_visibility
                     and len(review_surfaces) == 1
@@ -1472,7 +1629,9 @@ def evaluate_ui_request(
                     "casDefaults": cas_defaults,
                     "lifecycleSelectors": sorted(valid_selectors),
                     "lifecycleToggles": sorted(valid_toggles),
+                    "installedFilters": len(installed_filters),
                     "builderActions": len(builder_actions),
+                    "previewActions": len(preview_actions),
                     "builderExistingDevelopmentGuarded": (
                         "$state.localDevelopmentAvailable" in builder_visibility
                         and "$state.developmentObjectId" in builder_visibility

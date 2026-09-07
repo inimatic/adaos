@@ -245,6 +245,7 @@ def list_applications(
     *,
     installed_only: bool = False,
     catalog_only: bool = False,
+    available_only: bool = False,
     developed_only: bool = False,
 ) -> list[dict[str, Any]]:
     development = _local_development_index()
@@ -280,6 +281,13 @@ def list_applications(
                 "selected_object_type": object_type,
                 "selected_object_id": object_id,
                 "source_webspace_id": source_webspace_id or None,
+                "preview_webspace_id": (
+                    source_webspace_id
+                    if source_webspace_id.endswith("-dev")
+                    else f"{source_webspace_id}-dev"
+                )
+                if source_webspace_id
+                else None,
             }
             if object_type and object_id:
                 workflow = _development_workflow_summary(object_type, object_id)
@@ -290,8 +298,19 @@ def list_applications(
                     local["revision"] = workflow["revision"]
                     local["stable"] = workflow["stable"]
                     local["accepted"] = workflow["accepted"]
+                    local["publication_status"] = workflow["publication_status"]
                     local["updated_at"] = workflow["updated_at"] or local["updated_at"]
         model["local_development"] = local
+    if available_only:
+        models = [
+            item
+            for item in models
+            if bool(item.get("installed"))
+            or (
+                item["application"]["visibility"] == "public"
+                and bool(item.get("channels", {}).get("stable"))
+            )
+        ]
     if catalog_only:
         models = [
             item

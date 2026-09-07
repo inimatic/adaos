@@ -325,6 +325,7 @@ def contracts() -> list[RootMcpToolContract]:
                 properties={
                     "installed_only": {"type": "boolean"},
                     "catalog_only": {"type": "boolean"},
+                    "available_only": {"type": "boolean"},
                     "developed_only": {"type": "boolean"},
                 }
             ),
@@ -891,6 +892,7 @@ def _handle_list(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
         "applications": _sdk().list_applications(
             installed_only=bool(arguments.get("installed_only", False)),
             catalog_only=bool(arguments.get("catalog_only", False)),
+            available_only=bool(arguments.get("available_only", False)),
             developed_only=bool(arguments.get("developed_only", False)),
         )
     }

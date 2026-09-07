@@ -1278,6 +1278,42 @@
       ]
     },
 
+    "prototypeMcpFixture": {
+      "description": "A bounded projected MCP result used only in a development Webspace. A stable Webspace always calls the declared MCP tool.",
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^\\$state\\.[A-Za-z0-9_.]+$"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "profile": { "type": "string", "minLength": 1, "maxLength": 160 },
+            "result": {},
+            "cases": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["when", "result"],
+                "properties": {
+                  "when": { "type": "object", "additionalProperties": true },
+                  "result": {}
+                }
+              }
+            }
+          },
+          "anyOf": [
+            { "required": ["result"] },
+            { "required": ["cases"] }
+          ]
+        }
+      ]
+    },
+
     "dataSource": {
       "type": "object",
       "additionalProperties": true,
@@ -1314,6 +1350,7 @@
           "minLength": 1,
           "description": "Dot path projected from the Root MCP HTTP envelope; defaults to response.result."
         },
+        "prototypeFixture": { "$ref": "#/$defs/prototypeMcpFixture" },
         "cacheTtlMs": {
           "type": "integer",
           "minimum": 0,
@@ -2587,6 +2624,7 @@
           "type": "string",
           "description": "Dot path within the remote response envelope stored in resultStateKey. callMcp defaults to response.result."
         },
+        "prototypeFixture": { "$ref": "#/$defs/prototypeMcpFixture" },
         "openResultUrl": {
           "type": "boolean",
           "description": "For callSkill actions, open a URL returned by the successful skill result."
