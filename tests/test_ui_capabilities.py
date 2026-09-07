@@ -229,6 +229,22 @@ def test_application_manager_selection_exposes_mcp_master_detail_contract() -> N
     assert selected["qualification"]["requirements"]["application_manager"] is True
 
 
+def test_explicit_application_manager_recipe_is_a_typed_selection_hint() -> None:
+    request = (
+        "Add every canonical valueI18nPrefix required by "
+        "recipe.application_manager and change nothing else."
+    )
+
+    selected = selected_ui_capabilities(request)
+
+    assert selected["qualification"]["surface_kind"] == "application_manager"
+    assert selected["qualification"]["requirements"]["application_manager"] is True
+    assert selected["root_item_ids"] == ["recipe.application_manager"]
+    assert "recipe.kanban_board" not in {
+        item["id"] for item in selected["items"]
+    }
+
+
 def _application_manager_webui() -> dict:
     def source(
         tool_id: str,
@@ -1239,6 +1255,30 @@ def test_application_manager_evaluation_enforces_update_defaults() -> None:
     assert by_id["applications.prototype_fixtures"]["actual"][
         "nonDefaultInstalledApplications"
     ] == ["development-1"]
+
+
+def test_application_manager_evaluation_requires_permissions_for_every_plan_kind() -> None:
+    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    webui = _application_manager_webui()
+    cases = webui["ui"]["application"]["desktop"]["pageSchema"]["initialState"][
+        "prototypeFixtures"
+    ]["plan"]["cases"]
+    remove = next(case for case in cases if case["when"]["kind"] == "remove")
+    remove["result"]["operation"]["plan"]["permissions"] = []
+
+    rejected = evaluate_ui_request(request, webui)
+
+    fixture_check = next(
+        item
+        for item in rejected["postconditions"]
+        if item["id"] == "applications.prototype_fixtures"
+    )
+    assert fixture_check["ok"] is False
+    assert fixture_check["actual"]["planKinds"] == [
+        "install",
+        "select_track",
+        "update",
+    ]
 
 
 def test_application_manager_evaluation_rejects_named_fixture_placeholders() -> None:

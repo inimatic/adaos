@@ -53,6 +53,32 @@ def test_dev_skill_run_rejects_ambiguous_inline_and_file_payloads(tmp_path: Path
         dev.dev_skill_run("demo", "inspect", "{}", None, None, payload_file)
 
 
+def test_compact_dev_tool_result_omits_ui_host_state() -> None:
+    result = {
+        "ok": True,
+        "message": "updated",
+        "patch": {"revision": "025"},
+        "preview_state": {"page_schema": {"widgets": [1, 2, 3]}},
+        "workbench": {"projection": {"snapshot": {"large": True}}},
+        "developer_evidence": {"workbench": {"large": True}},
+        "dialog": {"state": "active"},
+    }
+
+    compact = dev._compact_dev_tool_result(result)
+
+    assert compact == {
+        "ok": True,
+        "message": "updated",
+        "patch": {"revision": "025"},
+        "omitted": [
+            "preview_state",
+            "workbench",
+            "developer_evidence",
+            "dialog",
+        ],
+    }
+
+
 def test_dev_skill_run_writes_machine_json_as_utf8_bytes(monkeypatch) -> None:
     raw = io.BytesIO()
     console = io.TextIOWrapper(raw, encoding="cp1251")

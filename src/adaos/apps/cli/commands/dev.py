@@ -142,6 +142,26 @@ def _echo_utf8_json(value: object) -> None:
     binary.flush()
 
 
+def _compact_dev_tool_result(value: object) -> object:
+    if not isinstance(value, Mapping):
+        return value
+    omitted_keys = (
+        "preview_state",
+        "workbench",
+        "developer_evidence",
+        "dialog",
+    )
+    compact = {
+        str(key): item
+        for key, item in value.items()
+        if str(key) not in omitted_keys
+    }
+    omitted = [key for key in omitted_keys if key in value]
+    if omitted:
+        compact["omitted"] = omitted
+    return compact
+
+
 def _parse_metadata(pairs: List[str]) -> Dict[str, str]:
     result: Dict[str, str] = {}
     for item in pairs:
@@ -2277,6 +2297,11 @@ def dev_skill_run(
         readable=True,
         resolve_path=True,
     ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help="Omit bulky UI host state from the printed result",
+    ),
 ) -> None:
     if payload is not None and payload_file is not None:
         typer.secho("invalid payload: use either --json or --json-file, not both", fg=typer.colors.RED)
@@ -2307,7 +2332,7 @@ def dev_skill_run(
         typer.secho(f"run failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(1) from exc
 
-    _echo_utf8_json(result)
+    _echo_utf8_json(_compact_dev_tool_result(result) if compact is True else result)
 
 
 @_run_safe

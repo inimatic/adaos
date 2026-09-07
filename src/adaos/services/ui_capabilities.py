@@ -370,9 +370,12 @@ def _contains_shape(actual: Any, expected: Any) -> bool:
 def qualify_ui_request(request: str) -> dict[str, Any]:
     text = _normalized_text(request)
     literal_text_change = _literal_text_change(request)
-    application_manager = "applications" in text and _contains_any(
-        text,
-        {"application", "mcp", "market", "installed", "extensions", "lifecycle"},
+    application_manager = "recipe.application_manager" in text or (
+        "applications" in text
+        and _contains_any(
+            text,
+            {"application", "mcp", "market", "installed", "extensions", "lifecycle"},
+        )
     )
     board = _contains_any(text, _BOARD_TERMS) or bool(
         literal_text_change and literal_text_change.get("target_kind") == "column"
@@ -466,6 +469,12 @@ def qualify_ui_request(request: str) -> dict[str, Any]:
 def selected_ui_capabilities(request: str, *, limit: int = 8) -> dict[str, Any]:
     qualification = qualify_ui_request(request)
     catalog = ui_capability_catalog()
+    index = {
+        str(item.get("id") or ""): item
+        for key in ("layouts", "components", "recipes")
+        for item in catalog.get(key) or []
+        if isinstance(item, Mapping) and str(item.get("id") or "")
+    }
     selected_ids: list[str] = []
     requirements = qualification.get("requirements") or {}
     if requirements.get("application_manager"):
@@ -479,6 +488,14 @@ def selected_ui_capabilities(request: str, *, limit: int = 8) -> dict[str, Any]:
         or requirements.get("operation_kinds")
     ) and "recipe.resource_board_workbench" not in selected_ids:
         selected_ids.append("recipe.resource_board_workbench")
+    request_text = str(request or "")
+    for item_id in index:
+        if re.search(
+            rf"(?<![\w.-]){re.escape(item_id)}(?![\w.-])",
+            request_text,
+            flags=re.IGNORECASE,
+        ) and item_id not in selected_ids:
+            selected_ids.append(item_id)
     if not selected_ids and str(request or "").strip():
         selected_ids.extend(
             str(item.get("id") or "")
@@ -487,12 +504,6 @@ def selected_ui_capabilities(request: str, *, limit: int = 8) -> dict[str, Any]:
         )
     root_ids = selected_ids[: max(1, limit)]
     expanded_ids = list(root_ids)
-    index = {
-        str(item.get("id") or ""): item
-        for key in ("layouts", "components", "recipes")
-        for item in catalog.get(key) or []
-        if isinstance(item, Mapping) and str(item.get("id") or "")
-    }
     cursor = 0
     while cursor < len(expanded_ids) and len(expanded_ids) < 24:
         item = index.get(expanded_ids[cursor])
@@ -1679,6 +1690,14 @@ def evaluate_ui_request(
                 ).get("permissions"),
                 list,
             )
+            and bool(
+                (
+                    case.get("result", {})
+                    .get("operation", {})
+                    .get("plan", {})
+                    or {}
+                ).get("permissions")
+            )
         }
         representative_plan_permissions = any(
             bool(
@@ -1730,7 +1749,7 @@ def evaluate_ui_request(
                     "planReview": {
                         "applicationId": True,
                         "summary": True,
-                        "permissions": "representative non-empty list",
+                        "permissions": "non-empty list for every plan kind",
                     },
                     "scope": "development Webspace only",
                 },
