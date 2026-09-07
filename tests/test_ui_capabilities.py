@@ -1164,7 +1164,7 @@ def test_application_manager_evaluation_requires_bilingual_prototype_text() -> N
     ]
 
 
-def test_application_manager_evaluation_accepts_shared_prototype_dictionaries() -> None:
+def test_application_manager_evaluation_accepts_scenario_locale_assets() -> None:
     request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
     webui = _application_manager_webui()
     application = webui["ui"]["application"]
@@ -1176,17 +1176,24 @@ def test_application_manager_evaluation_accepts_shared_prototype_dictionaries() 
             "kind": "data",
             "role": "i18n",
             "locale": "en",
-            "dictionary": {"applications.navigation.applications": "Applications"},
+            "path": "assets/i18n/en.json",
         },
         "applications.i18n.ru": {
             "kind": "data",
             "role": "i18n",
             "locale": "ru",
-            "dictionary": {"applications.navigation.applications": "Приложения"},
+            "path": "assets/i18n/ru.json",
         },
     }
 
-    accepted = evaluate_ui_request(request, webui)
+    accepted = evaluate_ui_request(
+        request,
+        webui,
+        locale_dictionaries={
+            "en": {"applications.navigation.applications": "Applications"},
+            "ru": {"applications.navigation.applications": "Приложения"},
+        },
+    )
 
     localization = next(
         item

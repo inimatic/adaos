@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "1.3.23",
+  "catalog_version": "1.3.24",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -366,8 +366,8 @@
         "localization": {
           "locales": ["en", "ru"],
           "fallback_locale": "en",
-          "prototype": "The Prototype is bilingual evidence, not an English wireframe. Declare applications.i18n.en and applications.i18n.ru resources under ui.application.resources with kind=data, role=i18n, the matching locale, and an inline dictionary. Keep English text as fallback and add an adjacent <field>_i18n stable applications.* key reference for every fixed user-facing title, label, search/empty text, boolean/option label, and every fixture title, summary, review summary, and receipt summary. A descriptor with inline en/ru translations is equivalent. Keep status, phase, publication_status, lifecycle, visibility, update_track, update_policy, kind, and category values as locale-independent codes; localize them at every visible list/detail projection with the exact valueI18nPrefix from value_prefixes. Product ids, versions, digests, timestamps, permission ids, and publisher proper names remain locale-independent.",
-          "automation": "Automation preserves the same stable keys and value prefixes, compiles the Prototype dictionaries into en and ru locale assets, and adds successful locale stories for both locales before completion. Missing locale resources, missing keys, or missing en/ru story coverage block Automation completion; they are not deferred until release.",
+          "prototype": "The Prototype is bilingual evidence, not an English wireframe. Store authoritative dictionaries in the scenario package at assets/i18n/en.json and assets/i18n/ru.json. Declare applications.i18n.en and applications.i18n.ru under ui.application.resources with kind=data, role=i18n, matching locale, path=assets/i18n/<locale>.json, mime=application/json, and delivery=core; do not duplicate dictionaries in webui.json or prototypeFixtures. Keep English text as fallback and add an adjacent <field>_i18n stable applications.* key reference for every fixed user-facing title, label, search/empty text, boolean/option label, and every fixture title, summary, review summary, and receipt summary. Builder's complete.locale_dictionaries output supplies both files atomically with the WebUI revision. Keep status, phase, publication_status, lifecycle, visibility, update_track, update_policy, kind, and category values as locale-independent codes; localize them at every visible list/detail projection with the exact valueI18nPrefix from value_prefixes. Product ids, versions, digests, timestamps, permission ids, and publisher proper names remain locale-independent.",
+          "automation": "Automation preserves the same scenario-owned en/ru assets, stable keys, and value prefixes, then adds successful locale stories for both locales before completion. Missing locale assets, missing keys, or missing en/ru story coverage block Automation completion; they are not deferred until release.",
           "value_prefixes": {
             "application.lifecycle": "applications.lifecycle.",
             "application.visibility": "applications.visibility.",

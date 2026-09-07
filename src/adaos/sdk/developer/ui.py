@@ -40,8 +40,14 @@ def evaluate(
     webui: Mapping[str, Any],
     *,
     prototype_records: Sequence[Mapping[str, Any]] | None = None,
+    locale_dictionaries: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    return _evaluate_ui_request(request, webui, prototype_records=prototype_records)
+    return _evaluate_ui_request(
+        request,
+        webui,
+        prototype_records=prototype_records,
+        locale_dictionaries=locale_dictionaries,
+    )
 
 
 __all__ = ["evaluate", "get", "qualify", "search", "select", "validate"]

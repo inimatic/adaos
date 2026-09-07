@@ -749,6 +749,7 @@ def evaluate_ui_request(
     webui: Mapping[str, Any],
     *,
     prototype_records: Sequence[Mapping[str, Any]] | None = None,
+    locale_dictionaries: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     qualification = qualify_ui_request(request)
     capability_validation = validate_webui_capabilities(webui)
@@ -799,7 +800,23 @@ def evaluate_ui_request(
             "moveItemLabel",
         }
         fixture_text_fields = {"title", "summary", "review_summary"}
-        locale_dictionaries: dict[str, dict[str, str]] = {"en": {}, "ru": {}}
+        resolved_locale_dictionaries: dict[str, dict[str, str]] = {
+            "en": {},
+            "ru": {},
+        }
+        for locale, dictionary in (locale_dictionaries or {}).items():
+            normalized_locale = str(locale).strip().lower()
+            if normalized_locale not in resolved_locale_dictionaries or not isinstance(
+                dictionary, Mapping
+            ):
+                continue
+            resolved_locale_dictionaries[normalized_locale].update(
+                {
+                    str(key): str(value)
+                    for key, value in dictionary.items()
+                    if str(key).strip() and str(value).strip()
+                }
+            )
         application = (
             webui.get("ui", {}).get("application", {})
             if isinstance(webui.get("ui"), Mapping)
@@ -815,7 +832,7 @@ def evaluate_ui_request(
                 if not isinstance(descriptor, Mapping):
                     continue
                 locale = str(descriptor.get("locale") or "").strip().lower()
-                if locale not in locale_dictionaries:
+                if locale not in resolved_locale_dictionaries:
                     continue
                 if str(descriptor.get("role") or "").strip().lower() != "i18n":
                     continue
@@ -826,7 +843,7 @@ def evaluate_ui_request(
                 )
                 if not isinstance(dictionary, Mapping):
                     continue
-                locale_dictionaries[locale].update(
+                resolved_locale_dictionaries[locale].update(
                     {
                         str(key): str(value)
                         for key, value in dictionary.items()
@@ -838,7 +855,7 @@ def evaluate_ui_request(
 
         def localized_text(spec: Any, locale: str) -> str:
             if isinstance(spec, str):
-                return locale_dictionaries[locale].get(spec.strip(), "").strip()
+                return resolved_locale_dictionaries[locale].get(spec.strip(), "").strip()
             if not isinstance(spec, Mapping):
                 return ""
             translations = spec.get("translations") or spec.get("locales")
@@ -850,7 +867,7 @@ def evaluate_ui_request(
             if inline:
                 return inline
             key_value = str(spec.get("key") or "").strip()
-            return locale_dictionaries[locale].get(key_value, "").strip()
+            return resolved_locale_dictionaries[locale].get(key_value, "").strip()
 
         def localization_key(spec: Any) -> str:
             if isinstance(spec, str):

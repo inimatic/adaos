@@ -120,12 +120,18 @@ def build_prototype_acceptance(
     visual_checks: Sequence[Mapping[str, Any]],
     prototype_records: Sequence[Mapping[str, Any]] | None = None,
     prototype_resources: Sequence[Mapping[str, Any]] | None = None,
+    locale_dictionaries: Mapping[str, Mapping[str, Any]] | None = None,
     accepted_at: str | None = None,
 ) -> dict[str, Any]:
     """Build acceptance only after deterministic, behavioral, and visual checks pass."""
 
     _validate("webui.v1.schema.json", webui, label="prototype WebUI")
-    evaluation = evaluate_ui_request(request, webui, prototype_records=prototype_records)
+    evaluation = evaluate_ui_request(
+        request,
+        webui,
+        prototype_records=prototype_records,
+        locale_dictionaries=locale_dictionaries,
+    )
     if not bool(evaluation.get("ok")):
         failures = [
             str(item.get("id") or item.get("code") or "unknown")
