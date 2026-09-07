@@ -924,6 +924,33 @@ def test_application_manager_evaluation_rejects_non_runtime_event_paths() -> Non
     assert by_id["applications.tabs"]["ok"] is False
 
 
+def test_application_manager_evaluation_reports_catalog_widget_mismatches() -> None:
+    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    webui = _application_manager_webui()
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    catalog = next(widget for widget in widgets if widget["id"] == "catalog-applications")
+    catalog["inputs"].pop("meta")
+
+    rejected = evaluate_ui_request(request, webui)
+
+    catalog_check = next(
+        item for item in rejected["postconditions"]
+        if item["id"] == "applications.catalog_sections"
+    )
+    applications = catalog_check["actual"]["sectionCandidates"]["applications"]
+    assert applications == [
+        {"widgetId": "catalog-applications", "mismatches": ["inputs.meta"]},
+        {
+            "widgetId": "catalog-developments",
+            "mismatches": [
+                "dataSource.arguments",
+                "visibleIf",
+                "inputs.meta",
+            ],
+        },
+    ]
+
+
 def test_application_manager_evaluation_rejects_wide_aux_layout_and_unguarded_install() -> None:
     request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
     webui = _application_manager_webui()

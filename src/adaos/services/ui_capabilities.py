@@ -1125,6 +1125,7 @@ def evaluate_ui_request(
             },
         }
         selectable_catalogs: dict[str, Mapping[str, Any]] = {}
+        catalog_diagnostics: dict[str, list[dict[str, Any]]] = {}
         catalog_sections = {
             "applications": {
                 "available_only": True,
@@ -1133,30 +1134,55 @@ def evaluate_ui_request(
             "developments": {"developed_only": True},
         }
         for section, arguments in catalog_sections.items():
-            matches = [
+            candidates = [
                 widget
                 for widget in widgets
                 if str(widget.get("type") or "") == "ui.list"
                 and isinstance(widget.get("dataSource"), Mapping)
                 and widget.get("dataSource", {}).get("toolId") == "applications.list"
-                and widget.get("dataSource", {}).get("arguments") == arguments
-                and str(widget.get("visibleIf") or "")
-                == f"$state.catalogSection == '{section}'"
-                and all(
-                    (widget.get("inputs") or {}).get(key) == value
+            ]
+            catalog_diagnostics[section] = []
+            for widget in candidates:
+                inputs = widget.get("inputs") or {}
+                mismatches: list[str] = []
+                if widget.get("dataSource", {}).get("arguments") != arguments:
+                    mismatches.append("dataSource.arguments")
+                if str(widget.get("visibleIf") or "") != (
+                    f"$state.catalogSection == '{section}'"
+                ):
+                    mismatches.append("visibleIf")
+                mismatches.extend(
+                    f"inputs.{key}"
                     for key, value in catalog_inputs.items()
+                    if inputs.get(key) != value
                 )
-                and all(
-                    (widget.get("inputs") or {}).get(key) == value
+                mismatches.extend(
+                    f"inputs.{key}"
                     for key, value in catalog_row_inputs[section].items()
+                    if inputs.get(key) != value
                 )
-                and any(
+                if not any(
                     action.get("on") == "select"
                     and action.get("type") == "updateState"
                     and action.get("params") == {
                         "selectedApplicationId": "$event.application.application_id"
                     }
                     for action in widget_actions(widget)
+                ):
+                    mismatches.append("actions.select.selectedApplicationId")
+                catalog_diagnostics[section].append(
+                    {
+                        "widgetId": str(widget.get("id") or ""),
+                        "mismatches": mismatches,
+                    }
+                )
+            matches = [
+                widget
+                for widget in candidates
+                if not next(
+                    item["mismatches"]
+                    for item in catalog_diagnostics[section]
+                    if item["widgetId"] == str(widget.get("id") or "")
                 )
             ]
             if len(matches) == 1:
@@ -1192,6 +1218,7 @@ def evaluate_ui_request(
                 "actual": {
                     "controls": len(catalog_section_controls),
                     "selectableSections": sorted(selectable_catalogs),
+                    "sectionCandidates": catalog_diagnostics,
                 },
             }
         )

@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "1.3.15",
+  "catalog_version": "1.3.16",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -460,6 +460,21 @@
             {"id": "local-development", "facts": ["local_development.exists", "phase/status/publication/revision known"], "commands": ["preview", "open-builder"]},
             {"id": "protected-system", "facts": ["active installation removable=false"], "commands": ["never remove"]},
             {"id": "operation-recovery", "facts": ["failed, unknown, or reconciling operation"], "commands": ["inspect status and recovery evidence"]}
+          ],
+          "prototype_decision_table": [
+            {"state": "marketplace-uninstalled", "primary": "Install", "secondary": [], "settings": [], "evidence": ["stable marketplace version", "publisher", "categories"]},
+            {"state": "installed-current", "primary": null, "secondary": ["Uninstall when removable"], "settings": ["Use pre-release version", "Auto update"], "evidence": ["installed version", "stable marketplace version", "update track", "update policy"]},
+            {"state": "installed-update", "primary": "Update", "secondary": ["Uninstall when removable"], "settings": ["Use pre-release version", "Auto update"], "evidence": ["installed version", "effective newer version"]},
+            {"state": "prerelease-following", "primary": "Update when available", "secondary": ["Uninstall when removable"], "settings": ["Use pre-release version on", "Auto update"], "evidence": ["installed version", "front pre-release version", "stable fallback"]},
+            {"state": "local-development", "primary": "Preview", "secondary": ["Open in Builder"], "settings": [], "evidence": ["phase", "workflow status", "publication status", "revision", "updated time"]},
+            {"state": "protected-system", "primary": null, "secondary": [], "settings": ["Use pre-release version", "Auto update"], "forbidden": ["Uninstall"], "evidence": ["protected installation"]},
+            {"state": "operation-recovery", "primary": null, "secondary": [], "settings": [], "evidence": ["operation kind", "failed, unknown, or reconciling status", "recovery summary"]}
+          ],
+          "interaction_rules": [
+            "Install, Update, Uninstall, and track changes create a reviewed plan first; Apply remains hidden or disabled until operation_id and plan_digest exist.",
+            "Selecting either catalog master writes one selectedApplicationId used by header, Details, Versions, Operations, and Reports.",
+            "My developments is observational: Preview and Open in Builder address only an existing local_development.builder target and never create one.",
+            "The prototype stays in Builder phase=prototype and prototype status=working until explicit human acceptance; generation must not freeze, automate, deliver, or publish it."
           ]
         },
         "prototype_fixture_model": {
