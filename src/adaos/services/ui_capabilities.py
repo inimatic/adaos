@@ -449,7 +449,6 @@ def selected_ui_capabilities(request: str, *, limit: int = 8) -> dict[str, Any]:
     catalog = ui_capability_catalog()
     selected_ids: list[str] = []
     requirements = qualification.get("requirements") or {}
-    normalized_request = _normalized_text(request)
     if requirements.get("application_manager"):
         selected_ids.append("recipe.application_manager")
     for key in ("recipe_id", "component_type", "layout_id"):
@@ -1034,6 +1033,64 @@ def evaluate_ui_request(
                     collect_representative_state_ids(nested)
 
         collect_representative_state_ids(prototype_fixtures)
+        development_examples: dict[str, Mapping[str, Any]] = {}
+
+        def collect_development_examples(value: Any) -> None:
+            if isinstance(value, Mapping):
+                development = value.get("local_development")
+                application = value.get("application")
+                if (
+                    value.get("prototype_state_id") == "local-development"
+                    and isinstance(development, Mapping)
+                    and development.get("exists") is True
+                    and isinstance(application, Mapping)
+                ):
+                    application_id = str(application.get("application_id") or "").strip()
+                    if application_id:
+                        development_examples[application_id] = value
+                for nested in value.values():
+                    collect_development_examples(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    collect_development_examples(nested)
+
+        collect_development_examples(prototype_fixtures)
+        required_development_states = {
+            ("prototype", "working", "not_started"),
+            ("automation", "working", "not_started"),
+            ("automation", "completed", "published"),
+        }
+        actual_development_states = {
+            (
+                str((value.get("local_development") or {}).get("phase") or ""),
+                str((value.get("local_development") or {}).get("status") or ""),
+                str(
+                    (value.get("local_development") or {}).get("publication_status")
+                    or ""
+                ),
+            )
+            for value in development_examples.values()
+        }
+        valid_development_examples = {
+            application_id
+            for application_id, value in development_examples.items()
+            if str(
+                ((value.get("application") or {}).get("display") or {}).get("summary")
+                or ""
+            ).strip()
+            and all(
+                str(
+                    ((value.get("local_development") or {}).get("builder") or {}).get(key)
+                    or ""
+                ).strip()
+                for key in (
+                    "selected_object_type",
+                    "selected_object_id",
+                    "source_webspace_id",
+                    "preview_webspace_id",
+                )
+            )
+        }
         required_representative_states = {
             "marketplace-uninstalled",
             "installed-current",
@@ -1087,6 +1144,8 @@ def evaluate_ui_request(
                     and "$state.prototypeFixtures.plan" in action_fixture_refs
                     and "$state.prototypeFixtures.apply" in action_fixture_refs
                     and required_representative_states.issubset(representative_state_ids)
+                    and len(valid_development_examples) >= 3
+                    and required_development_states.issubset(actual_development_states)
                     and not source_fixture_diagnostics
                     and required_plan_kinds.issubset(valid_plan_fixture_kinds)
                 ),
@@ -1094,6 +1153,8 @@ def evaluate_ui_request(
                     "profiles": sorted(required_fixture_profiles),
                     "refs": sorted(required_fixture_refs),
                     "stateIds": sorted(required_representative_states),
+                    "developmentExampleCount": 3,
+                    "developmentStates": sorted(required_development_states),
                     "scope": "development Webspace only",
                 },
                 "actual": {
@@ -1102,6 +1163,8 @@ def evaluate_ui_request(
                     "sourceRefs": sorted(source_fixture_refs),
                     "actionRefs": sorted(action_fixture_refs),
                     "stateIds": sorted(representative_state_ids),
+                    "developmentExamples": sorted(valid_development_examples),
+                    "developmentStates": sorted(actual_development_states),
                     "invalidSourceFixtures": source_fixture_diagnostics,
                     "planKinds": sorted(valid_plan_fixture_kinds),
                 },
@@ -1166,8 +1229,8 @@ def evaluate_ui_request(
                 ],
             },
             "developments": {
-                "subtitleKey": "application.publisher.display_name",
-                "previewKey": "application.display.summary",
+                "subtitleKey": "application.display.summary",
+                "previewKey": "application.publisher.display_name",
                 "meta": [
                     {"key": "local_development.phase", "label": "Phase", "kind": "badge"},
                     {"key": "local_development.status", "label": "Status", "kind": "badge"},

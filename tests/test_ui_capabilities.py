@@ -209,7 +209,10 @@ def test_application_manager_selection_exposes_mcp_master_detail_contract() -> N
         "protected-system",
     }
     fixture_model = recipe["composition"]["prototype_fixture_model"]
+    development_widget = recipe["composition"]["development_catalog_widget"]
+    assert development_widget["inputs"]["subtitleKey"] == "application.display.summary"
     assert fixture_model["canonical_shape"]["applications"]["profile"] == "applications"
+    assert len(fixture_model["canonical_shape"]["developments"]["result"]) >= 3
     assert fixture_model["canonical_shape"]["application"]["cases"][0]["result"].startswith(
         "$state.prototypeFixtures.samples."
     )
@@ -276,7 +279,37 @@ def _application_manager_webui() -> dict:
                             "reviewedPlan": {},
                             "prototypeFixtures": {
                                 "applications": {"result": []},
-                                "developments": {"result": []},
+                                "developments": {
+                                    "result": [
+                                        {
+                                            "prototype_state_id": "local-development",
+                                            "application": {
+                                                "application_id": f"development-{index}",
+                                                "display": {"summary": "Representative development"},
+                                            },
+                                            "local_development": {
+                                                "exists": True,
+                                                "phase": phase,
+                                                "status": status,
+                                                "publication_status": publication,
+                                                "builder": {
+                                                    "selected_object_type": "scenario",
+                                                    "selected_object_id": f"development-{index}",
+                                                    "source_webspace_id": "desktop",
+                                                    "preview_webspace_id": "desktop-dev",
+                                                },
+                                            },
+                                        }
+                                        for index, (phase, status, publication) in enumerate(
+                                            (
+                                                ("prototype", "working", "not_started"),
+                                                ("automation", "working", "not_started"),
+                                                ("automation", "completed", "published"),
+                                            ),
+                                            start=1,
+                                        )
+                                    ]
+                                },
                                 "application": {
                                     "cases": [
                                         {
@@ -383,8 +416,16 @@ def _application_manager_webui() -> dict:
                                         "itemIdKey": "application.application_id",
                                         "search": True,
                                         "titleKey": "application.display.title",
-                                        "subtitleKey": "application.publisher.display_name",
-                                        "previewKey": "application.display.summary",
+                                        "subtitleKey": (
+                                            "application.display.summary"
+                                            if section == "developments"
+                                            else "application.publisher.display_name"
+                                        ),
+                                        "previewKey": (
+                                            "application.publisher.display_name"
+                                            if section == "developments"
+                                            else "application.display.summary"
+                                        ),
                                         "meta": (
                                             [
                                                 {"key": "local_development.phase", "label": "Phase", "kind": "badge"},
@@ -1029,6 +1070,8 @@ def test_application_manager_evaluation_reports_catalog_widget_mismatches() -> N
             "mismatches": [
                 "dataSource.arguments",
                 "visibleIf",
+                "inputs.subtitleKey",
+                "inputs.previewKey",
                 "inputs.meta",
             ],
         },
