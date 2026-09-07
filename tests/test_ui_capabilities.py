@@ -209,6 +209,7 @@ def test_application_manager_selection_exposes_mcp_master_detail_contract() -> N
         "protected-system",
     }
     fixture_model = recipe["composition"]["prototype_fixture_model"]
+    localization = recipe["composition"]["localization"]
     development_widget = recipe["composition"]["development_catalog_widget"]
     assert development_widget["inputs"]["subtitleKey"] == "application.display.summary"
     assert fixture_model["canonical_shape"]["applications"]["profile"] == "applications"
@@ -220,6 +221,11 @@ def test_application_manager_selection_exposes_mcp_master_detail_contract() -> N
         value["prototype_state_id"]
         for value in fixture_model["canonical_shape"]["samples"].values()
     } == set(fixture_model["required_state_ids"])
+    assert localization["locales"] == ["en", "ru"]
+    assert localization["fallback_locale"] == "en"
+    assert recipe["composition"]["initial_state"]["automaticUpdates"] is True
+    assert recipe["composition"]["initial_state"]["prereleaseFollowing"] is False
+    assert recipe["composition"]["initial_state"]["updatePolicy"] == "auto_compatible"
     assert selected["qualification"]["requirements"]["application_manager"] is True
 
 
@@ -254,6 +260,14 @@ def _application_manager_webui() -> dict:
                 "application_id": f"development-{index}",
                 "display": {"summary": "Representative development"},
             },
+            "installed": True,
+            "prerelease_following": False,
+            "auto_update_enabled": True,
+            "subscription": {
+                "revision": index,
+                "update_track": "stable",
+                "update_policy": "auto_compatible",
+            },
             "local_development": {
                 "exists": True,
                 "phase": phase,
@@ -277,7 +291,7 @@ def _application_manager_webui() -> dict:
         )
     ]
 
-    return {
+    webui = {
         "schema": "adaos.webui.v1",
         "ui": {
             "application": {
@@ -294,7 +308,7 @@ def _application_manager_webui() -> dict:
                             "applicationRemovable": False,
                             "updateAvailable": False,
                             "prereleaseFollowing": False,
-                            "automaticUpdates": False,
+                            "automaticUpdates": True,
                             "localDevelopmentAvailable": False,
                             "developmentObjectType": "",
                             "developmentObjectId": "",
@@ -303,7 +317,7 @@ def _application_manager_webui() -> dict:
                             "catalogSection": "applications",
                             "installedOnly": False,
                             "updateTrack": "stable",
-                            "updatePolicy": "notify",
+                            "updatePolicy": "auto_compatible",
                             "removeDataPolicy": "retain",
                             "activeTab": "details",
                             "reviewedPlan": {},
@@ -516,15 +530,21 @@ def _application_manager_webui() -> dict:
                                         "applicationInstalled": "installed",
                                         "applicationRemovable": "application.protection.active_installation_removable",
                                         "updateAvailable": "update_available",
-                                        "prereleaseFollowing": "prerelease_following",
-                                        "automaticUpdates": "auto_update_enabled",
+                                        "prereleaseFollowing": {
+                                            "path": "prerelease_following",
+                                            "default": False,
+                                        },
+                                        "automaticUpdates": {
+                                            "path": "auto_update_enabled",
+                                            "default": True,
+                                        },
                                         "updateTrack": {
                                             "path": "subscription.update_track",
                                             "default": "stable",
                                         },
                                         "updatePolicy": {
                                             "path": "subscription.update_policy",
-                                            "default": "notify",
+                                            "default": "auto_compatible",
                                         },
                                         "effectiveReleaseDigest": {
                                             "path": "effective_release.release_digest",
@@ -959,6 +979,82 @@ def _application_manager_webui() -> dict:
         },
     }
 
+    fixed_fields = {
+        "title",
+        "label",
+        "searchPlaceholder",
+        "emptyText",
+        "loadingText",
+        "trueLabel",
+        "falseLabel",
+        "addItemLabel",
+        "moveItemLabel",
+    }
+    fixture_fields = {
+        "title",
+        "summary",
+        "review_summary",
+        "status",
+        "phase",
+        "publication_status",
+        "lifecycle",
+        "visibility",
+        "update_track",
+        "update_policy",
+        "kind",
+        "categories",
+    }
+
+    def add_localizations(
+        value: object,
+        *,
+        path: tuple[str, ...] = (),
+        inside_fixtures: bool = False,
+    ) -> None:
+        if isinstance(value, dict):
+            nested_inside_fixtures = inside_fixtures or (
+                bool(path) and path[-1] == "prototypeFixtures"
+            )
+            additions: dict[str, object] = {}
+            for key, raw in value.items():
+                add_localizations(
+                    raw,
+                    path=(*path, key),
+                    inside_fixtures=nested_inside_fixtures,
+                )
+                required = key in fixed_fields or (
+                    nested_inside_fixtures
+                    and "when" not in path
+                    and key in fixture_fields
+                )
+                if not required or key.endswith("_i18n"):
+                    continue
+                if isinstance(raw, str):
+                    fallback = raw.strip()
+                elif key == "categories" and isinstance(raw, list):
+                    fallback = ", ".join(str(item).strip() for item in raw)
+                else:
+                    continue
+                if not fallback or fallback.startswith("$state.") or (
+                    fallback.startswith("{") and fallback.endswith("}")
+                ):
+                    continue
+                additions[f"{key}_i18n"] = {
+                    "key": "test.applications." + ".".join((*path, key)),
+                    "translations": {"en": fallback, "ru": f"ru: {fallback}"},
+                }
+            value.update(additions)
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                add_localizations(
+                    item,
+                    path=(*path, str(index)),
+                    inside_fixtures=inside_fixtures,
+                )
+
+    add_localizations(webui)
+    return webui
+
 
 def test_application_manager_evaluation_enforces_mcp_and_review_boundary() -> None:
     request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
@@ -980,6 +1076,44 @@ def test_application_manager_evaluation_enforces_mcp_and_review_boundary() -> No
         if item["id"] == "applications.reviewed_plan_apply"
     )
     assert boundary["ok"] is False
+
+
+def test_application_manager_evaluation_requires_bilingual_prototype_text() -> None:
+    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    webui = _application_manager_webui()
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    sections = next(widget for widget in widgets if widget["id"] == "catalog-sections")
+    sections["inputs"]["buttons"][0].pop("label_i18n")
+
+    rejected = evaluate_ui_request(request, webui)
+
+    localization = next(
+        item
+        for item in rejected["postconditions"]
+        if item["id"] == "applications.localization"
+    )
+    assert localization["ok"] is False
+    assert localization["actual"]["missing"] == [
+        "pages.0.widgets.0.inputs.buttons.0.label"
+    ]
+
+
+def test_application_manager_evaluation_enforces_update_defaults() -> None:
+    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    webui = _application_manager_webui()
+    page = webui["ui"]["application"]["desktop"]["pageSchema"]
+    page["initialState"]["automaticUpdates"] = False
+    fixture = page["initialState"]["prototypeFixtures"]["developments"]["result"][0]
+    fixture["auto_update_enabled"] = False
+
+    rejected = evaluate_ui_request(request, webui)
+
+    by_id = {item["id"]: item for item in rejected["postconditions"]}
+    assert by_id["applications.detail_lifecycle_binding"]["ok"] is False
+    assert by_id["applications.prototype_fixtures"]["ok"] is False
+    assert by_id["applications.prototype_fixtures"]["actual"][
+        "nonDefaultInstalledApplications"
+    ] == ["development-1"]
 
 
 def test_application_manager_evaluation_rejects_named_fixture_placeholders() -> None:

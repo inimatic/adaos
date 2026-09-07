@@ -182,7 +182,7 @@ class ApplicationService:
             subscription = ApplicationSubscription(
                 application_id=application_id,
                 update_track="stable",
-                update_policy="notify",
+                update_policy="auto_compatible",
                 revision=1,
             )
         if subscription.update_policy == "pinned" and subscription.pinned_release_digest:
@@ -400,7 +400,7 @@ class ApplicationService:
         release_digest: str | None = None,
         data_policy: str = "retain",
         update_track: str | None = None,
-        update_policy: str = "notify",
+        update_policy: str = "auto_compatible",
         paused: bool = False,
         pinned_release_digest: str | None = None,
         access_redemption_id: str | None = None,
@@ -419,11 +419,11 @@ class ApplicationService:
         if data_policy not in {"retain", "delete", "snapshot_then_delete"}:
             raise ApplicationServiceError("data_policy is invalid")
         application = self.store.get_application(application_id)
+        try:
+            current_subscription = self.store.get_subscription(application_id)
+        except FileNotFoundError:
+            current_subscription = None
         if operation_kind == "select_track":
-            try:
-                current_subscription = self.store.get_subscription(application_id)
-            except FileNotFoundError:
-                current_subscription = None
             current = None
             observed_revision = current_subscription.revision if current_subscription is not None else 0
         else:
@@ -507,6 +507,14 @@ class ApplicationService:
                 paused=paused,
                 revision=expected_revision + 1,
             ).to_dict()
+        subscription_default = None
+        if operation_kind == "install" and current_subscription is None:
+            subscription_default = {
+                "update_track": "stable",
+                "update_policy": "auto_compatible",
+                "observed_release_digest": release_digest,
+                "paused": False,
+            }
         snapshot = {
             "required": operation_kind == "update",
             "mode": "snapshot_restore" if operation_kind == "update" else "none",
@@ -532,6 +540,7 @@ class ApplicationService:
             "removal": removal,
             "data_policy": data_policy,
             "subscription_change": subscription_change,
+            "subscription_default": subscription_default,
             "access": {
                 "mode": (
                     "publisher_local"
@@ -720,7 +729,41 @@ class ApplicationService:
                 updated_at=utc_now(),
             )
         self.store.save_installation(installation, expected_revision=observed_revision)
-        return self._transition_operation(applying, "succeeded", result={**result, "installation": installation.to_dict()})
+        subscription_result = None
+        raw_subscription_default = operation.plan.get("subscription_default")
+        if operation.kind == "install" and isinstance(raw_subscription_default, Mapping):
+            try:
+                subscription_result = self.store.get_subscription(
+                    operation.application_id
+                )
+            except FileNotFoundError:
+                subscription_result = self.store.save_subscription(
+                    ApplicationSubscription(
+                        application_id=operation.application_id,
+                        update_track=str(
+                            raw_subscription_default.get("update_track") or "stable"
+                        ),  # type: ignore[arg-type]
+                        update_policy=str(
+                            raw_subscription_default.get("update_policy")
+                            or "auto_compatible"
+                        ),  # type: ignore[arg-type]
+                        observed_release_digest=str(
+                            raw_subscription_default.get("observed_release_digest") or ""
+                        )
+                        or None,
+                        paused=bool(raw_subscription_default.get("paused", False)),
+                        revision=1,
+                    ),
+                    expected_revision=0,
+                )
+        operation_result = {**result, "installation": installation.to_dict()}
+        if subscription_result is not None:
+            operation_result["subscription"] = subscription_result.to_dict()
+        return self._transition_operation(
+            applying,
+            "succeeded",
+            result=operation_result,
+        )
 
     def reconcile_operation(
         self,
@@ -821,7 +864,9 @@ class ApplicationService:
                     "pinned": bool(subscription and subscription.update_policy == "pinned"),
                     "prerelease_following": bool(subscription and subscription.update_track == "prerelease"),
                     "auto_update_enabled": bool(
-                        subscription and subscription.update_policy == "auto_compatible"
+                        subscription.update_policy == "auto_compatible"
+                        if subscription is not None
+                        else installation is not None
                     ),
                     "retired": application.lifecycle in {"retired", "archived"},
                     "subscription": subscription.to_dict() if subscription else None,

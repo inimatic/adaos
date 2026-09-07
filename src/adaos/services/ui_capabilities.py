@@ -348,6 +348,25 @@ def _count_exact_scalar(value: Any, expected: str) -> int:
     return 0
 
 
+def _contains_shape(actual: Any, expected: Any) -> bool:
+    """Compare a required declarative shape while allowing adjacent metadata."""
+    if isinstance(expected, Mapping):
+        return isinstance(actual, Mapping) and all(
+            key in actual and _contains_shape(actual[key], value)
+            for key, value in expected.items()
+        )
+    if isinstance(expected, list):
+        return (
+            isinstance(actual, list)
+            and len(actual) == len(expected)
+            and all(
+                _contains_shape(actual_value, expected_value)
+                for actual_value, expected_value in zip(actual, expected, strict=True)
+            )
+        )
+    return actual == expected
+
+
 def qualify_ui_request(request: str) -> dict[str, Any]:
     text = _normalized_text(request)
     literal_text_change = _literal_text_change(request)
@@ -767,6 +786,126 @@ def evaluate_ui_request(
             for widget in page.get("widgets") or []
             if isinstance(widget, Mapping)
         ]
+
+        fixed_text_fields = {
+            "title",
+            "label",
+            "searchPlaceholder",
+            "emptyText",
+            "loadingText",
+            "trueLabel",
+            "falseLabel",
+            "addItemLabel",
+            "moveItemLabel",
+        }
+        fixture_text_fields = {
+            "title",
+            "summary",
+            "review_summary",
+            "status",
+            "phase",
+            "publication_status",
+            "lifecycle",
+            "visibility",
+            "update_track",
+            "update_policy",
+            "kind",
+            "categories",
+        }
+        missing_localizations: list[str] = []
+        invalid_localizations: list[dict[str, Any]] = []
+
+        def inspect_localizations(
+            value: Any,
+            *,
+            path: tuple[str, ...],
+            inside_fixtures: bool = False,
+        ) -> None:
+            if isinstance(value, Mapping):
+                nested_inside_fixtures = inside_fixtures or (
+                    bool(path) and path[-1] == "prototypeFixtures"
+                )
+                for key, raw in value.items():
+                    key_text = str(key)
+                    child_path = (*path, key_text)
+                    inspect_localizations(
+                        raw,
+                        path=child_path,
+                        inside_fixtures=nested_inside_fixtures,
+                    )
+                    required = key_text in fixed_text_fields or (
+                        nested_inside_fixtures
+                        and "when" not in path
+                        and key_text in fixture_text_fields
+                    )
+                    if not required or key_text.endswith("_i18n"):
+                        continue
+                    if isinstance(raw, str):
+                        fallback = raw.strip()
+                    elif key_text == "categories" and isinstance(raw, list):
+                        fallback = ", ".join(
+                            str(item).strip() for item in raw if str(item).strip()
+                        )
+                    else:
+                        continue
+                    if not fallback or fallback.startswith("$state.") or (
+                        fallback.startswith("{") and fallback.endswith("}")
+                    ):
+                        continue
+                    sibling = value.get(f"{key_text}_i18n")
+                    location = ".".join(child_path)
+                    if not isinstance(sibling, Mapping):
+                        missing_localizations.append(location)
+                        continue
+                    translations = sibling.get("translations")
+                    key_value = str(sibling.get("key") or "").strip()
+                    missing_locales = [
+                        locale
+                        for locale in ("en", "ru")
+                        if not isinstance(translations, Mapping)
+                        or not str(translations.get(locale) or "").strip()
+                    ]
+                    english = (
+                        str(translations.get("en") or "").strip()
+                        if isinstance(translations, Mapping)
+                        else ""
+                    )
+                    if not key_value or missing_locales or english != fallback:
+                        invalid_localizations.append(
+                            {
+                                "path": location,
+                                "key": key_value,
+                                "missingLocales": missing_locales,
+                                "englishMatchesFallback": english == fallback,
+                            }
+                        )
+            elif isinstance(value, list):
+                for index, item in enumerate(value):
+                    inspect_localizations(
+                        item,
+                        path=(*path, str(index)),
+                        inside_fixtures=inside_fixtures,
+                    )
+
+        for index, page in enumerate(pages):
+            inspect_localizations(page, path=("pages", str(index)))
+        postconditions.append(
+            {
+                "id": "applications.localization",
+                "ok": not missing_localizations and not invalid_localizations,
+                "expected": {
+                    "locales": ["en", "ru"],
+                    "fallbackLocale": "en",
+                    "stableKeys": True,
+                    "inlinePrototypeTranslations": True,
+                },
+                "actual": {
+                    "missing": sorted(missing_localizations),
+                    "invalid": invalid_localizations,
+                },
+            }
+        )
+
         def widget_actions(widget: Mapping[str, Any]) -> list[Mapping[str, Any]]:
             raw = widget.get("actions")
             if isinstance(raw, Mapping):
@@ -1060,6 +1199,40 @@ def evaluate_ui_request(
             if isinstance(prototype_fixtures.get("samples"), Mapping)
             else {}
         )
+        non_default_installed_fixtures: set[str] = set()
+
+        def inspect_installed_fixture_defaults(value: Any) -> None:
+            if isinstance(value, Mapping):
+                if value.get("installed") is True:
+                    application = value.get("application")
+                    application_id = str(
+                        application.get("application_id")
+                        if isinstance(application, Mapping)
+                        else ""
+                    ).strip() or "<unknown>"
+                    subscription = (
+                        value.get("subscription")
+                        if isinstance(value.get("subscription"), Mapping)
+                        else {}
+                    )
+                    expected_track = (
+                        "prerelease"
+                        if value.get("prerelease_following") is True
+                        else "stable"
+                    )
+                    if (
+                        value.get("auto_update_enabled") is not True
+                        or subscription.get("update_policy") != "auto_compatible"
+                        or subscription.get("update_track") != expected_track
+                    ):
+                        non_default_installed_fixtures.add(application_id)
+                for nested in value.values():
+                    inspect_installed_fixture_defaults(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    inspect_installed_fixture_defaults(nested)
+
+        inspect_installed_fixture_defaults(prototype_fixtures)
         sample_ref_prefix = "$state.prototypeFixtures.samples."
         invalid_selectable_fixture_refs: set[str] = set()
 
@@ -1218,6 +1391,7 @@ def evaluate_ui_request(
                     and not invalid_selectable_fixture_refs
                     and not uncovered_application_ids
                     and not mismatched_application_cases
+                    and not non_default_installed_fixtures
                     and required_plan_kinds.issubset(valid_plan_fixture_kinds)
                 ),
                 "expected": {
@@ -1227,6 +1401,12 @@ def evaluate_ui_request(
                     "developmentExampleCount": 3,
                     "developmentStates": sorted(required_development_states),
                     "selectableDetailCoverage": "all",
+                    "installedDefaults": {
+                        "prereleaseFollowing": False,
+                        "automaticUpdates": True,
+                        "updateTrack": "stable",
+                        "updatePolicy": "auto_compatible",
+                    },
                     "scope": "development Webspace only",
                 },
                 "actual": {
@@ -1243,6 +1423,9 @@ def evaluate_ui_request(
                     "coveredApplicationIds": sorted(covered_application_ids),
                     "uncoveredApplicationIds": sorted(uncovered_application_ids),
                     "mismatchedApplicationCases": mismatched_application_cases,
+                    "nonDefaultInstalledApplications": sorted(
+                        non_default_installed_fixtures
+                    ),
                     "planKinds": sorted(valid_plan_fixture_kinds),
                 },
             }
@@ -1354,7 +1537,7 @@ def evaluate_ui_request(
                 mismatches.extend(
                     f"inputs.{key}"
                     for key, value in catalog_row_inputs[section].items()
-                    if inputs.get(key) != value
+                    if not _contains_shape(inputs.get(key), value)
                 )
                 if not any(
                     action.get("on") == "select"
@@ -1434,10 +1617,13 @@ def evaluate_ui_request(
             "applicationInstalled": "installed",
             "applicationRemovable": "application.protection.active_installation_removable",
             "updateAvailable": "update_available",
-            "prereleaseFollowing": "prerelease_following",
-            "automaticUpdates": "auto_update_enabled",
+            "prereleaseFollowing": {"path": "prerelease_following", "default": False},
+            "automaticUpdates": {"path": "auto_update_enabled", "default": True},
             "updateTrack": {"path": "subscription.update_track", "default": "stable"},
-            "updatePolicy": {"path": "subscription.update_policy", "default": "notify"},
+            "updatePolicy": {
+                "path": "subscription.update_policy",
+                "default": "auto_compatible",
+            },
             "effectiveReleaseDigest": {"path": "effective_release.release_digest", "default": ""},
             "localDevelopmentAvailable": {
                 "path": "local_development.exists", "default": False,
@@ -1465,7 +1651,10 @@ def evaluate_ui_request(
             widget
             for widget in application_detail_sources
             if "$state.selectedApplicationId" in str(widget.get("visibleIf") or "")
-            and (widget.get("inputs") or {}).get("stateBindings") == expected_detail_bindings
+            and _contains_shape(
+                (widget.get("inputs") or {}).get("stateBindings"),
+                expected_detail_bindings,
+            )
             and (widget.get("inputs") or {}).get("stateOnly") is True
         ]
         area_roles = {
@@ -1485,7 +1674,9 @@ def evaluate_ui_request(
             for widget in application_detail_sources
             if str(widget.get("title") or "") == "{application.display.title}"
             and (widget.get("inputs") or {}).get("presentation") == "header"
-            and (widget.get("inputs") or {}).get("fields") == expected_header_fields
+            and _contains_shape(
+                (widget.get("inputs") or {}).get("fields"), expected_header_fields
+            )
             and area_roles.get(str(widget.get("area") or "")) == "main"
             and "$state.selectedApplicationId" in str(widget.get("visibleIf") or "")
         ]
@@ -1535,7 +1726,7 @@ def evaluate_ui_request(
                 if str(widget.get("title") or "") == title
                 and (widget.get("inputs") or {}).get("stateOnly") is not True
                 and (widget.get("inputs") or {}).get("presentation") == "section"
-                and (widget.get("inputs") or {}).get("fields") == fields
+                and _contains_shape((widget.get("inputs") or {}).get("fields"), fields)
                 and area_roles.get(str(widget.get("area") or ""))
                 == expected_detail_roles[title]
                 and (
@@ -1586,7 +1777,7 @@ def evaluate_ui_request(
             and (widget.get("dataSource") or {}).get("toolId")
             == "applications.list_operations"
             and all(
-                (widget.get("inputs") or {}).get(key) == value
+                _contains_shape((widget.get("inputs") or {}).get(key), value)
                 for key, value in expected_operation_inputs.items()
             )
         ]
@@ -1606,7 +1797,7 @@ def evaluate_ui_request(
             if widget.get("type") == "ui.list"
             and (widget.get("dataSource") or {}).get("toolId") == "applications.list_development_reports"
             and all(
-                (widget.get("inputs") or {}).get(key) == value
+                _contains_shape((widget.get("inputs") or {}).get(key), value)
                 for key, value in expected_report_inputs.items()
             )
             and any(
@@ -1700,8 +1891,10 @@ def evaluate_ui_request(
             and state.get("catalogSection") == "applications"
             and state.get("installedOnly") is False
             and state.get("activeTab") == "details"
+            and state.get("prereleaseFollowing") is False
+            and state.get("automaticUpdates") is True
             and state.get("updateTrack") == "stable"
-            and state.get("updatePolicy") == "notify"
+            and state.get("updatePolicy") == "auto_compatible"
             and state.get("removeDataPolicy") == "retain"
             and state.get("reviewedPlan") == {}
             for state in page_initial_states
@@ -1885,8 +2078,10 @@ def evaluate_ui_request(
                         for widget in application_detail_sources
                     ),
                     "detailLifecycleBindings": sum(
-                        (widget.get("inputs") or {}).get("stateBindings")
-                        == expected_detail_bindings
+                        _contains_shape(
+                            (widget.get("inputs") or {}).get("stateBindings"),
+                            expected_detail_bindings,
+                        )
                         for widget in application_detail_sources
                     ),
                     "detailStateOnly": sum(

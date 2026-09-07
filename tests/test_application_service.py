@@ -330,11 +330,22 @@ def test_install_update_snapshot_and_remove_are_reviewed_durable_operations(tmp_
         capability="applications.plan",
         idempotency_key="install-1", expected_revision=0, release_digest=first.release_digest,
     )
+    replay = service.plan_operation(
+        "app_recipes", "install", actor_ref="user:owner", subnet_ref="subnet:sn_home",
+        capability="applications.plan", idempotency_key="install-1",
+        expected_revision=0, release_digest=first.release_digest,
+    )
+    assert replay.operation_id == install.operation_id
     installed = service.apply_operation(
         install.operation_id, plan_digest=install.plan_digest, idempotency_key="install-1",
         actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply",
     )
     assert installed.status == "succeeded"
+    assert install.plan["subscription_default"]["update_track"] == "stable"
+    assert install.plan["subscription_default"]["update_policy"] == "auto_compatible"
+    assert installed.result["subscription"]["update_track"] == "stable"
+    assert installed.result["subscription"]["update_policy"] == "auto_compatible"
+    assert service.store.get_subscription("app_recipes").update_policy == "auto_compatible"
 
     update = service.plan_operation(
         "app_recipes", "update", actor_ref="user:owner", subnet_ref="subnet:sn_home",
@@ -394,6 +405,47 @@ def test_protected_system_application_rejects_remove_before_plan(tmp_path: Path)
             subnet_ref="subnet:sn_home", capability="applications.plan",
             idempotency_key="remove-protected", expected_revision=1,
         )
+
+
+def test_install_default_does_not_replace_an_explicit_subscription(tmp_path: Path) -> None:
+    service = ApplicationService(
+        ApplicationStore(tmp_path),
+        executor=lambda _plan: {"ok": True, "status": "succeeded"},
+    )
+    service.register(_application())
+    release = service.register_release(_release())
+    service.set_subscription(
+        "app_recipes",
+        update_track="prerelease",
+        update_policy="notify",
+        paused=False,
+        expected_revision=0,
+    )
+
+    install = service.plan_operation(
+        "app_recipes",
+        "install",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="install-explicit-subscription",
+        expected_revision=0,
+        release_digest=release.release_digest,
+    )
+    result = service.apply_operation(
+        install.operation_id,
+        plan_digest=install.plan_digest,
+        idempotency_key="install-explicit-subscription",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+
+    assert install.plan["subscription_default"] is None
+    assert "subscription" not in result.result
+    subscription = service.store.get_subscription("app_recipes")
+    assert subscription.update_track == "prerelease"
+    assert subscription.update_policy == "notify"
 
 
 def test_shared_component_conflict_is_reported_before_apply(tmp_path: Path) -> None:

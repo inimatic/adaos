@@ -114,16 +114,26 @@
       "description": "Identifier; may include ':' for synthetic ids (e.g. 'scenario:<id>')."
     },
     "i18nTextSpec": {
-      "description": "Locale-independent text reference resolved by the browser with the sibling field as fallback.",
+      "description": "Locale-independent text reference resolved by the browser. Prototype surfaces may carry bounded inline translations; automated packages may resolve the same key from locale resources.",
       "oneOf": [
         { "type": "string", "minLength": 1 },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["key"],
+          "anyOf": [
+            { "required": ["key"] },
+            { "required": ["translations"] }
+          ],
           "properties": {
             "key": { "type": "string", "minLength": 1 },
-            "params": { "type": "object", "additionalProperties": true }
+            "fallback": { "type": "string" },
+            "params": { "type": "object", "additionalProperties": true },
+            "translations": {
+              "type": "object",
+              "minProperties": 1,
+              "propertyNames": { "type": "string", "minLength": 2 },
+              "additionalProperties": { "type": "string", "minLength": 1 }
+            }
           }
         }
       ]

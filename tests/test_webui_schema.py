@@ -12,6 +12,37 @@ def _load_schema() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def test_i18n_text_spec_accepts_bounded_inline_translations() -> None:
+    schema = _load_schema()["$defs"]["i18nTextSpec"]
+
+    Draft202012Validator(schema).validate(
+        {
+            "key": "scenario.applications.actions.auto_update",
+            "fallback": "Auto update",
+            "translations": {"en": "Auto update", "ru": "Автообновление"},
+        }
+    )
+    Draft202012Validator(schema).validate(
+        {"translations": {"en": "Applications", "ru": "Приложения"}}
+    )
+
+
+@pytest.mark.parametrize(
+    "spec",
+    (
+        {},
+        {"fallback": "Applications"},
+        {"translations": {}},
+        {"translations": {"en": ""}},
+    ),
+)
+def test_i18n_text_spec_rejects_unresolvable_inline_translations(spec: dict) -> None:
+    schema = _load_schema()["$defs"]["i18nTextSpec"]
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(spec)
+
+
 def test_webui_schema_accepts_grouped_filterable_image_cards() -> None:
     schema = _load_schema()
     payload = {

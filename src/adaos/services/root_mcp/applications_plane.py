@@ -1338,7 +1338,7 @@ def _handle_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
         operation = sdk.plan_update_track(
             application_id,
             update_track=str(arguments.get("update_track") or "stable"),
-            update_policy=str(arguments.get("update_policy") or "notify"),
+            update_policy=str(arguments.get("update_policy") or "auto_compatible"),
             paused=bool(arguments.get("paused", False)),
             pinned_release_digest=str(arguments.get("pinned_release_digest") or "").strip() or None,
             **common,
