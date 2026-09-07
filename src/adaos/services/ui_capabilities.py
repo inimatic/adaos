@@ -429,7 +429,7 @@ def qualify_ui_request(request: str) -> dict[str, Any]:
                 ],
                 "mcp_mutation_tools": ["applications.plan", "applications.apply"],
                 "plan_kinds": ["install", "update", "select_track", "remove"],
-                "tabs": ["overview", "versions", "operations", "reports"],
+                "tabs": ["details", "versions", "operations", "reports"],
             }
         )
     gaps: list[dict[str, Any]] = []
@@ -782,19 +782,20 @@ def evaluate_ui_request(
             if isinstance((layout := page.get("layout")), Mapping)
             and layout.get("type") == "split"
             and layout.get("pattern") == "sidebar-content"
-            and layout.get("sidebarWidth") == 340
+            and layout.get("sidebarWidth") == 380
+            and layout.get("auxWidth") == 300
             and {
                 str(area.get("role") or "")
                 for area in layout.get("areas") or []
                 if isinstance(area, Mapping)
             }
-            == {"sidebar", "main"}
+            == {"sidebar", "main", "aux"}
         ]
         postconditions.append(
             {
                 "id": "applications.sidebar_layout",
                 "ok": len(application_layouts) == 1,
-                "expected": "one 340px sidebar-content split with sidebar and main areas",
+                "expected": "one 380px/300px sidebar-content split with sidebar, main, and metadata areas",
                 "actual": len(application_layouts),
             }
         )
@@ -806,10 +807,6 @@ def evaluate_ui_request(
             and str(widget.get("dataSource", {}).get("kind") or "") == "mcp"
         ]
         expected_sources = {
-            "applications.list": (
-                "response.result.applications",
-                {"installed_only": "$state.installedOnly"},
-            ),
             "applications.show": (
                 "response.result.application",
                 {"application_id": "$state.selectedApplicationId"},
@@ -839,6 +836,21 @@ def evaluate_ui_request(
                 for source in mcp_sources
             )
         }
+        catalog_arguments = {
+            json.dumps(source.get("arguments") or {}, sort_keys=True)
+            for source in mcp_sources
+            if source.get("dryRun") is True
+            and str(source.get("toolId") or "") == "applications.list"
+            and str(source.get("resultPath") or "")
+            == "response.result.applications"
+        }
+        expected_catalog_arguments = {
+            json.dumps({"installed_only": True}, sort_keys=True),
+            json.dumps({"catalog_only": True}, sort_keys=True),
+            json.dumps({"developed_only": True}, sort_keys=True),
+        }
+        if catalog_arguments == expected_catalog_arguments:
+            exact_reads.add("applications.list")
         postconditions.append(
             {
                 "id": "applications.mcp_reads",
@@ -977,54 +989,97 @@ def evaluate_ui_request(
             "itemIdKey": "application.application_id",
             "search": True,
             "titleKey": "application.display.title",
-            "subtitleKey": "application.publisher.display_name",
-            "previewKey": "application.display.summary",
         }
-        selectable_catalogs = [
+        catalog_row_inputs = {
+            "installed": {
+                "subtitleKey": "application.publisher.display_name",
+                "previewKey": "application.display.summary",
+            },
+            "marketplace": {
+                "subtitleKey": "application.publisher.display_name",
+                "previewKey": "application.display.summary",
+            },
+            "developments": {
+                "subtitleKey": "local_development.phase",
+                "previewKey": "local_development.status",
+            },
+        }
+        selectable_catalogs: dict[str, Mapping[str, Any]] = {}
+        catalog_sections = {
+            "installed": {"installed_only": True},
+            "marketplace": {"catalog_only": True},
+            "developments": {"developed_only": True},
+        }
+        for section, arguments in catalog_sections.items():
+            matches = [
+                widget
+                for widget in widgets
+                if str(widget.get("type") or "") == "ui.list"
+                and isinstance(widget.get("dataSource"), Mapping)
+                and widget.get("dataSource", {}).get("toolId") == "applications.list"
+                and widget.get("dataSource", {}).get("arguments") == arguments
+                and str(widget.get("visibleIf") or "")
+                == f"$state.catalogSection == '{section}'"
+                and all(
+                    (widget.get("inputs") or {}).get(key) == value
+                    for key, value in catalog_inputs.items()
+                )
+                and all(
+                    (widget.get("inputs") or {}).get(key) == value
+                    for key, value in catalog_row_inputs[section].items()
+                )
+                and any(
+                    action.get("on") == "select"
+                    and action.get("type") == "updateState"
+                    and action.get("params") == {
+                        "selectedApplicationId": "$event.application.application_id"
+                    }
+                    for action in widget_actions(widget)
+                )
+            ]
+            if len(matches) == 1:
+                selectable_catalogs[section] = matches[0]
+        catalog_section_controls = [
             widget
             for widget in widgets
-            if str(widget.get("type") or "") == "ui.list"
-            and isinstance(widget.get("dataSource"), Mapping)
-            and widget.get("dataSource", {}).get("toolId") == "applications.list"
-            and all(
-                (widget.get("inputs") or {}).get(key) == value
-                for key, value in catalog_inputs.items()
-            )
+            if widget.get("type") == "input.commandBar"
+            and (widget.get("inputs") or {}).get("variant") == "segmented"
+            and (widget.get("inputs") or {}).get("size") == "small"
+            and (widget.get("inputs") or {}).get("stretch") is True
+            and (widget.get("inputs") or {}).get("selectedStateKey")
+            == "catalogSection"
+            and {
+                str(button.get("id") or "")
+                for button in (widget.get("inputs") or {}).get("buttons") or []
+                if isinstance(button, Mapping)
+            }
+            == set(catalog_sections)
             and any(
-                action.get("on") == "select"
+                action.get("on") == "click"
                 and action.get("type") == "updateState"
-                and action.get("params") == {
-                    "selectedApplicationId": "$event.application.application_id"
-                }
-                for action in widget_actions(widget)
-            )
-        ]
-        installed_toggles = [
-            widget
-            for widget in widgets
-            if widget.get("type") == "input.toggle"
-            and any(
-                action.get("on") == "change"
-                and action.get("type") == "updateState"
-                and action.get("params") == {"installedOnly": "$event.checked"}
+                and action.get("params") == {"catalogSection": "$event.id"}
                 for action in widget_actions(widget)
             )
         ]
         postconditions.append(
             {
-                "id": "applications.installed_filter",
-                "ok": len(installed_toggles) == 1,
-                "expected": "one boolean toggle writing installedOnly from $event.checked",
-                "actual": len(installed_toggles),
+                "id": "applications.catalog_sections",
+                "ok": len(catalog_section_controls) == 1
+                and set(selectable_catalogs) == set(catalog_sections),
+                "expected": sorted(catalog_sections),
+                "actual": {
+                    "controls": len(catalog_section_controls),
+                    "selectableSections": sorted(selectable_catalogs),
+                },
             }
         )
         serialized = json.dumps(webui, ensure_ascii=False, sort_keys=True)
         postconditions.append(
             {
                 "id": "applications.master_selection",
-                "ok": len(selectable_catalogs) == 1,
-                "expected": "one applications.list master writing selectedApplicationId",
-                "actual": len(selectable_catalogs),
+                "ok": len(selectable_catalogs) == 3,
+                "expected": "Installed, Marketplace, and My developments masters write selectedApplicationId",
+                "actual": sorted(selectable_catalogs),
             }
         )
         expected_detail_bindings = {
@@ -1032,7 +1087,24 @@ def evaluate_ui_request(
             "subscriptionRevision": {"path": "subscription.revision", "default": 0},
             "applicationInstalled": "installed",
             "applicationRemovable": "application.protection.active_installation_removable",
+            "updateAvailable": "update_available",
+            "prereleaseFollowing": "prerelease_following",
+            "automaticUpdates": "auto_update_enabled",
+            "updateTrack": {"path": "subscription.update_track", "default": "stable"},
+            "updatePolicy": {"path": "subscription.update_policy", "default": "notify"},
             "effectiveReleaseDigest": {"path": "effective_release.release_digest", "default": ""},
+            "localDevelopmentAvailable": {
+                "path": "local_development.exists", "default": False,
+            },
+            "developmentObjectType": {
+                "path": "local_development.builder.selected_object_type", "default": "",
+            },
+            "developmentObjectId": {
+                "path": "local_development.builder.selected_object_id", "default": "",
+            },
+            "developmentSourceWebspaceId": {
+                "path": "local_development.builder.source_webspace_id", "default": "",
+            },
         }
         application_detail_sources = [
             widget
@@ -1047,24 +1119,89 @@ def evaluate_ui_request(
             and (widget.get("inputs") or {}).get("stateBindings") == expected_detail_bindings
             and (widget.get("inputs") or {}).get("stateOnly") is True
         ]
-        expected_overview_fields = [
+        area_roles = {
+            str(area.get("id") or ""): str(area.get("role") or "")
+            for layout in application_layouts
+            for area in layout.get("areas") or []
+            if isinstance(area, Mapping)
+        }
+        expected_header_fields = [
             {"label": "Summary", "path": "application.display.summary"},
             {"label": "Publisher", "path": "application.publisher.display_name"},
-            {"label": "Visibility", "path": "application.visibility"},
-            {"label": "Lifecycle", "path": "application.lifecycle"},
-            {"label": "Installed", "path": "installed"},
-            {"label": "Update available", "path": "update_available"},
-            {"label": "Track", "path": "effective_release.update_track"},
-            {"label": "Release status", "path": "effective_release.reason"},
+            {"label": "Installed", "path": "installed_release.version"},
+            {"label": "Marketplace", "path": "marketplace_release.version"},
         ]
-        overview_details = [
+        application_headers = [
             widget
             for widget in application_detail_sources
-            if (widget.get("inputs") or {}).get("stateOnly") is not True
-            and (widget.get("inputs") or {}).get("fields") == expected_overview_fields
-            and "$state.activeTab == 'overview'" in str(widget.get("visibleIf") or "")
+            if str(widget.get("title") or "") == "{application.display.title}"
+            and (widget.get("inputs") or {}).get("presentation") == "header"
+            and (widget.get("inputs") or {}).get("fields") == expected_header_fields
+            and area_roles.get(str(widget.get("area") or "")) == "main"
             and "$state.selectedApplicationId" in str(widget.get("visibleIf") or "")
         ]
+        expected_detail_sections = {
+            "Details": [
+                {"label": "Identifier", "path": "application.application_id"},
+                {"label": "Publisher", "path": "application.publisher.display_name"},
+                {"label": "Lifecycle", "path": "application.lifecycle"},
+            ],
+            "Installation": [
+                {"label": "Installed version", "path": "installed_release.version"},
+                {"label": "Status", "path": "installation.status"},
+                {"label": "Updated", "path": "installation.updated_at"},
+                {"label": "Update track", "path": "subscription.update_track"},
+                {"label": "Update policy", "path": "subscription.update_policy"},
+            ],
+            "Marketplace": [
+                {"label": "Stable version", "path": "marketplace_release.version"},
+                {"label": "Pre-release version", "path": "prerelease_release.version"},
+                {"label": "Last released", "path": "marketplace_release.published_at"},
+                {"label": "Visibility", "path": "application.visibility"},
+            ],
+            "Categories": [
+                {"label": "Categories", "path": "application.display.categories"},
+            ],
+            "My development": [
+                {"label": "Phase", "path": "local_development.phase"},
+                {"label": "Status", "path": "local_development.status"},
+                {"label": "Revision", "path": "local_development.revision"},
+                {"label": "Updated", "path": "local_development.updated_at"},
+            ],
+        }
+        expected_detail_roles = {
+            "Details": "main",
+            "Installation": "aux",
+            "Marketplace": "aux",
+            "Categories": "aux",
+            "My development": "aux",
+        }
+        detail_sections: dict[str, Mapping[str, Any]] = {}
+        expected_detail_empty_titles = {"Installation", "Categories"}
+        for title, fields in expected_detail_sections.items():
+            matches = [
+                widget
+                for widget in application_detail_sources
+                if str(widget.get("title") or "") == title
+                and (widget.get("inputs") or {}).get("stateOnly") is not True
+                and (widget.get("inputs") or {}).get("presentation") == "section"
+                and (widget.get("inputs") or {}).get("fields") == fields
+                and area_roles.get(str(widget.get("area") or ""))
+                == expected_detail_roles[title]
+                and (
+                    title not in expected_detail_empty_titles
+                    or bool(str((widget.get("inputs") or {}).get("emptyText") or "").strip())
+                )
+                and "$state.activeTab == 'details'" in str(widget.get("visibleIf") or "")
+                and "$state.selectedApplicationId" in str(widget.get("visibleIf") or "")
+                and (
+                    title != "My development"
+                    or "$state.localDevelopmentAvailable == true"
+                    in str(widget.get("visibleIf") or "")
+                )
+            ]
+            if len(matches) == 1:
+                detail_sections[title] = matches[0]
         release_selectors = [
             widget
             for widget in widgets
@@ -1113,21 +1250,50 @@ def evaluate_ui_request(
         install_visibility = str(
             (lifecycle_buttons.get("install") or {}).get("visibleIf") or ""
         )
+        update_visibility = str(
+            (lifecycle_buttons.get("update") or {}).get("visibleIf") or ""
+        )
+        builder_visibility = str(
+            (lifecycle_buttons.get("open-builder") or {}).get("visibleIf") or ""
+        )
+        apply_visibility = str(
+            (lifecycle_buttons.get("apply") or {}).get("visibleIf") or ""
+        )
+        expected_lifecycle_icons = {
+            "install": "download-outline",
+            "update": "refresh-outline",
+            "select-track": "options-outline",
+            "remove": "trash-outline",
+            "open-builder": "construct-outline",
+            "apply": "checkmark-outline",
+        }
         lifecycle_widgets = [
             widget
             for widget in widgets
             if widget.get("type") == "ui.actions"
-            and {"install", "update", "select-track", "remove", "apply"}.issubset({
+            and {
+                "install", "update", "select-track", "remove", "open-builder", "apply"
+            }.issubset({
                 str(button.get("id") or "")
                 for button in (widget.get("inputs") or {}).get("buttons") or []
                 if isinstance(button, Mapping)
             })
+            and (widget.get("inputs") or {}).get("variant") == "toolbar"
+            and all(
+                (lifecycle_buttons.get(button_id) or {}).get("icon") == icon
+                for button_id, icon in expected_lifecycle_icons.items()
+            )
             and "$state.selectedApplicationId" in str(widget.get("visibleIf") or "")
         ]
-        lifecycle_before_overview = bool(
+        lifecycle_before_details = bool(
             len(lifecycle_widgets) == 1
-            and len(overview_details) == 1
-            and widgets.index(lifecycle_widgets[0]) < widgets.index(overview_details[0])
+            and len(application_headers) == 1
+            and len(detail_sections) == len(expected_detail_sections)
+            and widgets.index(application_headers[0]) < widgets.index(lifecycle_widgets[0])
+            and all(
+                widgets.index(lifecycle_widgets[0]) < widgets.index(section)
+                for section in detail_sections.values()
+            )
         )
         page_initial_states = [
             page.get("initialState") if isinstance(page.get("initialState"), Mapping) else {}
@@ -1138,11 +1304,14 @@ def evaluate_ui_request(
             and state.get("subscriptionRevision") == 0
             and state.get("selectedReleaseDigest") == ""
             and state.get("effectiveReleaseDigest") == ""
+            and state.get("catalogSection") == "marketplace"
+            and state.get("activeTab") == "details"
+            and state.get("updateTrack") == "stable"
+            and state.get("updatePolicy") == "notify"
+            and state.get("removeDataPolicy") == "retain"
             for state in page_initial_states
         )
         selector_contracts = {
-            "updateTrack": {"stable", "prerelease"},
-            "updatePolicy": {"notify", "auto_compatible", "pinned"},
             "removeDataPolicy": {"retain", "delete", "snapshot_then_delete"},
         }
         valid_selectors: set[str] = set()
@@ -1158,6 +1327,10 @@ def evaluate_ui_request(
             for state_key, expected_values in selector_contracts.items():
                 if option_values != expected_values:
                     continue
+                if inputs.get("label") != "Data on uninstall":
+                    continue
+                if area_roles.get(str(widget.get("area") or "")) != "aux":
+                    continue
                 if any(
                     action.get("on") == "change"
                     and action.get("type") == "updateState"
@@ -1165,6 +1338,63 @@ def evaluate_ui_request(
                     for action in widget_actions(widget)
                 ):
                     valid_selectors.add(state_key)
+        expected_toggles = {
+            "prereleaseFollowing": {
+                "state_value": "$state.prereleaseFollowing",
+                "state_key": "updateTrack",
+                "then": "prerelease",
+                "else": "stable",
+            },
+            "automaticUpdates": {
+                "state_value": "$state.automaticUpdates",
+                "state_key": "updatePolicy",
+                "then": "auto_compatible",
+                "else": "notify",
+            },
+        }
+        valid_toggles: set[str] = set()
+        for widget in widgets:
+            if widget.get("type") != "input.toggle":
+                continue
+            source = widget.get("dataSource") or {}
+            for state_key, contract in expected_toggles.items():
+                expected_params = {
+                    state_key: "$event.checked",
+                    contract["state_key"]: {
+                        "kind": "expression",
+                        "op": "if",
+                        "condition": "$event.checked",
+                        "then": contract["then"],
+                        "else": contract["else"],
+                    },
+                }
+                if (
+                    source.get("kind") == "static"
+                    and source.get("value") == contract["state_value"]
+                    and "$state.applicationInstalled == true"
+                    in str(widget.get("visibleIf") or "")
+                    and any(
+                        action.get("on") == "change"
+                        and action.get("type") == "updateState"
+                        and action.get("params") == expected_params
+                        for action in widget_actions(widget)
+                    )
+                ):
+                    valid_toggles.add(state_key)
+        builder_actions = [
+            action
+            for action in actions
+            if action.get("type") == "openWorkspace"
+            and action.get("on") == "click:open-builder"
+            and action.get("params")
+            == {
+                "ensureBuilderWorkbench": True,
+                "newWindow": True,
+                "selectedObjectType": "$state.developmentObjectType",
+                "selectedObjectId": "$state.developmentObjectId",
+                "sourceWebspaceId": "$state.developmentSourceWebspaceId",
+            }
+        ]
         review_surfaces = [
             widget
             for widget in widgets
@@ -1177,14 +1407,16 @@ def evaluate_ui_request(
             {
                 "id": "applications.concise_operable_detail",
                 "ok": bool(
-                    len(overview_details) == 1
-                    and lifecycle_before_overview
+                    len(application_headers) == 1
+                    and len(detail_sections) == len(expected_detail_sections)
+                    and lifecycle_before_details
                     and required_empty_state_tools.issubset(empty_state_tools)
                 ),
-                "expected": "concise Overview, lifecycle actions above it, and explicit empty states",
+                "expected": "one visible Application header, main Details, and unframed Installation, Marketplace, Categories, and My development metadata sections",
                 "actual": {
-                    "conciseOverviews": len(overview_details),
-                    "lifecycleBeforeOverview": lifecycle_before_overview,
+                    "headers": len(application_headers),
+                    "detailSections": sorted(detail_sections),
+                    "lifecycleBeforeDetails": lifecycle_before_details,
                     "emptyStateTools": sorted(empty_state_tools & required_empty_state_tools),
                 },
             }
@@ -1199,12 +1431,19 @@ def evaluate_ui_request(
                     and "$state.applicationRemovable" in remove_visibility
                     and "$state.selectedReleaseDigest" in install_visibility
                     and "$state.effectiveReleaseDigest" in install_visibility
+                    and "$state.updateAvailable" in update_visibility
                     and len(lifecycle_widgets) == 1
                     and cas_defaults
                     and set(selector_contracts) == valid_selectors
+                    and set(expected_toggles) == valid_toggles
+                    and len(builder_actions) == 1
+                    and "$state.localDevelopmentAvailable" in builder_visibility
+                    and "$state.developmentObjectId" in builder_visibility
+                    and "$state.reviewedPlan.operation.operation_id" in apply_visibility
+                    and "$state.reviewedPlan.operation.plan_digest" in apply_visibility
                     and len(review_surfaces) == 1
                 ),
-                "expected": "selected detail binds revision/protection; releases and reports stay application-addressed",
+                "expected": "selected detail binds exact lifecycle state, reviewed toggles, and existing local development",
                 "actual": {
                     "details": len(application_details),
                     "detailSources": len(application_detail_sources),
@@ -1228,9 +1467,21 @@ def evaluate_ui_request(
                         "$state.selectedReleaseDigest" in install_visibility
                         and "$state.effectiveReleaseDigest" in install_visibility
                     ),
+                    "updateAvailableGuarded": "$state.updateAvailable" in update_visibility,
                     "selectedLifecycleSurface": len(lifecycle_widgets),
                     "casDefaults": cas_defaults,
                     "lifecycleSelectors": sorted(valid_selectors),
+                    "lifecycleToggles": sorted(valid_toggles),
+                    "builderActions": len(builder_actions),
+                    "builderExistingDevelopmentGuarded": (
+                        "$state.localDevelopmentAvailable" in builder_visibility
+                        and "$state.developmentObjectId" in builder_visibility
+                    ),
+                    "lifecycleToolbar": len(lifecycle_widgets) == 1,
+                    "applyHiddenWithoutReceipt": (
+                        "$state.reviewedPlan.operation.operation_id" in apply_visibility
+                        and "$state.reviewedPlan.operation.plan_digest" in apply_visibility
+                    ),
                     "reviewSurfaces": len(review_surfaces),
                 },
             }

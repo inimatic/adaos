@@ -190,10 +190,10 @@ def test_application_manager_selection_exposes_mcp_master_detail_contract() -> N
         "item.details", "input.commandBar", "ui.actions",
     } <= selected_ids
     recipe = get_ui_capability("recipe.application_manager")
-    assert recipe["composition"]["reads"]["catalog"] == {
+    assert recipe["composition"]["reads"]["developments"] == {
         "kind": "mcp",
         "toolId": "applications.list",
-        "arguments": {"installed_only": "$state.installedOnly"},
+        "arguments": {"developed_only": True},
         "dryRun": True,
         "resultPath": "response.result.applications",
     }
@@ -225,62 +225,101 @@ def _application_manager_webui() -> dict:
                             "subscriptionRevision": 0,
                             "applicationInstalled": False,
                             "applicationRemovable": False,
-                            "installedOnly": False,
+                            "updateAvailable": False,
+                            "prereleaseFollowing": False,
+                            "automaticUpdates": False,
+                            "localDevelopmentAvailable": False,
+                            "developmentObjectType": "",
+                            "developmentObjectId": "",
+                            "developmentSourceWebspaceId": "",
+                            "catalogSection": "marketplace",
                             "updateTrack": "stable",
                             "updatePolicy": "notify",
                             "removeDataPolicy": "retain",
-                            "activeTab": "overview",
+                            "activeTab": "details",
                             "reviewedPlan": None,
                         },
                         "layout": {
                             "type": "split",
                             "pattern": "sidebar-content",
-                            "sidebarWidth": 340,
+                            "sidebarWidth": 380,
+                            "auxWidth": 300,
                             "areas": [
                                 {"id": "master", "role": "sidebar"},
                                 {"id": "detail", "role": "main"},
+                                {"id": "metadata", "role": "aux"},
                             ],
                         },
                         "widgets": [
                             {
-                                "id": "installed-only",
-                                "type": "input.toggle",
+                                "id": "catalog-sections",
+                                "type": "input.commandBar",
                                 "area": "master",
-                                "inputs": {"label": "Installed only", "defaultValue": False},
-                                "actions": [
-                                    {
-                                        "on": "change",
-                                        "type": "updateState",
-                                        "params": {"installedOnly": "$event.checked"},
-                                    }
-                                ],
-                            },
-                            {
-                                "id": "catalog",
-                                "type": "ui.list",
-                                "area": "master",
-                                "dataSource": {
-                                    **source("applications.list", "response.result.applications"),
-                                    "arguments": {"installed_only": "$state.installedOnly"},
-                                },
                                 "inputs": {
-                                    "variant": "list",
-                                    "itemIdKey": "application.application_id",
-                                    "search": True,
-                                    "titleKey": "application.display.title",
-                                    "subtitleKey": "application.publisher.display_name",
-                                    "previewKey": "application.display.summary",
+                                    "variant": "segmented",
+                                    "size": "small",
+                                    "stretch": True,
+                                    "selectedStateKey": "catalogSection",
+                                    "buttons": [
+                                        {"id": "installed", "label": "Installed"},
+                                        {"id": "marketplace", "label": "Marketplace"},
+                                        {"id": "developments", "label": "My developments"},
+                                    ],
                                 },
                                 "actions": [
                                     {
-                                        "on": "select",
+                                        "on": "click",
                                         "type": "updateState",
-                                        "params": {
-                                            "selectedApplicationId": "$event.application.application_id"
-                                        },
+                                        "params": {"catalogSection": "$event.id"},
                                     }
                                 ],
                             },
+                            *[
+                                {
+                                    "id": f"catalog-{section}",
+                                    "type": "ui.list",
+                                    "area": "master",
+                                    "visibleIf": f"$state.catalogSection == '{section}'",
+                                    "dataSource": {
+                                        **source(
+                                            "applications.list",
+                                            "response.result.applications",
+                                        ),
+                                        "arguments": arguments,
+                                    },
+                                    "inputs": {
+                                        "variant": "list",
+                                        "itemIdKey": "application.application_id",
+                                        "search": True,
+                                        "titleKey": "application.display.title",
+                                        "subtitleKey": (
+                                            "local_development.phase"
+                                            if section == "developments"
+                                            else "application.publisher.display_name"
+                                        ),
+                                        "previewKey": (
+                                            "local_development.status"
+                                            if section == "developments"
+                                            else "application.display.summary"
+                                        ),
+                                        "emptyText": "No applications found.",
+                                    },
+                                    "actions": [
+                                        {
+                                            "on": "select",
+                                            "type": "updateState",
+                                            "params": {
+                                                "selectedApplicationId": "$event.application.application_id"
+                                            },
+                                        }
+                                    ],
+                                }
+                                for section, arguments in (
+                                    ("installed", {"installed_only": True}),
+                                    ("marketplace", {"catalog_only": True}),
+                                    ("developments", {"developed_only": True}),
+                                )
+                            ],
                             {
                                 "id": "tabs",
                                 "type": "input.commandBar",
@@ -290,7 +329,7 @@ def _application_manager_webui() -> dict:
                                     "selectedStateKey": "activeTab",
                                     "buttons": [
                                         {"id": value, "label": value.title()}
-                                        for value in ("overview", "versions", "operations", "reports")
+                                        for value in ("details", "versions", "operations", "reports")
                                     ],
                                 },
                                 "actions": [
@@ -320,11 +359,59 @@ def _application_manager_webui() -> dict:
                                         },
                                         "applicationInstalled": "installed",
                                         "applicationRemovable": "application.protection.active_installation_removable",
+                                        "updateAvailable": "update_available",
+                                        "prereleaseFollowing": "prerelease_following",
+                                        "automaticUpdates": "auto_update_enabled",
+                                        "updateTrack": {
+                                            "path": "subscription.update_track",
+                                            "default": "stable",
+                                        },
+                                        "updatePolicy": {
+                                            "path": "subscription.update_policy",
+                                            "default": "notify",
+                                        },
                                         "effectiveReleaseDigest": {
                                             "path": "effective_release.release_digest",
                                             "default": "",
                                         },
+                                        "localDevelopmentAvailable": {
+                                            "path": "local_development.exists",
+                                            "default": False,
+                                        },
+                                        "developmentObjectType": {
+                                            "path": "local_development.builder.selected_object_type",
+                                            "default": "",
+                                        },
+                                        "developmentObjectId": {
+                                            "path": "local_development.builder.selected_object_id",
+                                            "default": "",
+                                        },
+                                        "developmentSourceWebspaceId": {
+                                            "path": "local_development.builder.source_webspace_id",
+                                            "default": "",
+                                        },
                                     }
+                                },
+                            },
+                            {
+                                "id": "application-header",
+                                "type": "item.details",
+                                "area": "detail",
+                                "title": "{application.display.title}",
+                                "visibleIf": "$state.selectedApplicationId",
+                                "dataSource": source(
+                                    "applications.show",
+                                    "response.result.application",
+                                    selected=True,
+                                ),
+                                "inputs": {
+                                    "presentation": "header",
+                                    "fields": [
+                                        {"label": "Summary", "path": "application.display.summary"},
+                                        {"label": "Publisher", "path": "application.publisher.display_name"},
+                                        {"label": "Installed", "path": "installed_release.version"},
+                                        {"label": "Marketplace", "path": "marketplace_release.version"},
+                                    ],
                                 },
                             },
                             {
@@ -370,52 +457,66 @@ def _application_manager_webui() -> dict:
                                 },
                             },
                             {
-                                "id": "update-track",
-                                "type": "input.selector",
+                                "id": "prerelease-following",
+                                "type": "input.toggle",
                                 "area": "detail",
                                 "visibleIf": "$state.applicationInstalled == true",
-                                "inputs": {
-                                    "defaultValue": "$state.updateTrack",
-                                    "options": [
-                                        {"label": "Stable", "value": "stable"},
-                                        {"label": "Prerelease", "value": "prerelease"},
-                                    ],
+                                "dataSource": {
+                                    "kind": "static",
+                                    "value": "$state.prereleaseFollowing",
                                 },
+                                "inputs": {"label": "Use pre-release version"},
                                 "actions": [
                                     {
                                         "on": "change",
                                         "type": "updateState",
-                                        "params": {"updateTrack": "$event.value"},
+                                        "params": {
+                                            "prereleaseFollowing": "$event.checked",
+                                            "updateTrack": {
+                                                "kind": "expression",
+                                                "op": "if",
+                                                "condition": "$event.checked",
+                                                "then": "prerelease",
+                                                "else": "stable",
+                                            },
+                                        },
                                     }
                                 ],
                             },
                             {
-                                "id": "update-policy",
-                                "type": "input.selector",
+                                "id": "automatic-updates",
+                                "type": "input.toggle",
                                 "area": "detail",
                                 "visibleIf": "$state.applicationInstalled == true",
-                                "inputs": {
-                                    "defaultValue": "$state.updatePolicy",
-                                    "options": [
-                                        {"label": "Notify", "value": "notify"},
-                                        {"label": "Automatic", "value": "auto_compatible"},
-                                        {"label": "Pinned", "value": "pinned"},
-                                    ],
+                                "dataSource": {
+                                    "kind": "static",
+                                    "value": "$state.automaticUpdates",
                                 },
+                                "inputs": {"label": "Auto update"},
                                 "actions": [
                                     {
                                         "on": "change",
                                         "type": "updateState",
-                                        "params": {"updatePolicy": "$event.value"},
+                                        "params": {
+                                            "automaticUpdates": "$event.checked",
+                                            "updatePolicy": {
+                                                "kind": "expression",
+                                                "op": "if",
+                                                "condition": "$event.checked",
+                                                "then": "auto_compatible",
+                                                "else": "notify",
+                                            },
+                                        },
                                     }
                                 ],
                             },
                             {
                                 "id": "remove-data-policy",
                                 "type": "input.selector",
-                                "area": "detail",
+                                "area": "metadata",
                                 "visibleIf": "$state.applicationInstalled == true && $state.applicationRemovable == true",
                                 "inputs": {
+                                    "label": "Data on uninstall",
                                     "defaultValue": "$state.removeDataPolicy",
                                     "options": [
                                         {"label": "Retain data", "value": "retain"},
@@ -445,24 +546,38 @@ def _application_manager_webui() -> dict:
                                 "area": "detail",
                                 "visibleIf": "$state.selectedApplicationId",
                                 "inputs": {
+                                    "variant": "toolbar",
                                     "buttons": [
                                         {
                                             "id": "install",
+                                            "icon": "download-outline",
                                             "visibleIf": "$state.applicationInstalled != true && ($state.selectedReleaseDigest || $state.effectiveReleaseDigest)",
                                         },
                                         {
                                             "id": "update",
-                                            "visibleIf": "$state.applicationInstalled == true",
+                                            "icon": "refresh-outline",
+                                            "visibleIf": "$state.applicationInstalled == true && ($state.updateAvailable == true || $state.selectedReleaseDigest)",
                                         },
                                         {
                                             "id": "select-track",
+                                            "icon": "options-outline",
                                             "visibleIf": "$state.applicationInstalled == true",
                                         },
                                         {
                                             "id": "remove",
+                                            "icon": "trash-outline",
                                             "visibleIf": "$state.applicationInstalled == true && $state.applicationRemovable == true",
                                         },
-                                        {"id": "apply"},
+                                        {
+                                            "id": "open-builder",
+                                            "icon": "construct-outline",
+                                            "visibleIf": "$state.localDevelopmentAvailable == true && $state.developmentObjectId",
+                                        },
+                                        {
+                                            "id": "apply",
+                                            "icon": "checkmark-outline",
+                                            "visibleIf": "$state.reviewedPlan.operation.operation_id && $state.reviewedPlan.operation.plan_digest",
+                                        },
                                     ]
                                 },
                                 "actions": [
@@ -526,6 +641,17 @@ def _application_manager_webui() -> dict:
                                         },
                                     },
                                     {
+                                        "on": "click:open-builder",
+                                        "type": "openWorkspace",
+                                        "params": {
+                                            "ensureBuilderWorkbench": True,
+                                            "newWindow": True,
+                                            "selectedObjectType": "$state.developmentObjectType",
+                                            "selectedObjectId": "$state.developmentObjectId",
+                                            "sourceWebspaceId": "$state.developmentSourceWebspaceId",
+                                        },
+                                    },
+                                    {
                                         "id": "apply",
                                         "on": "click",
                                         "type": "callMcp",
@@ -539,25 +665,89 @@ def _application_manager_webui() -> dict:
                                     },
                                 ],
                             },
-                            {
-                                "id": "overview",
-                                "type": "item.details",
-                                "area": "detail",
-                                "visibleIf": "$state.activeTab == 'overview' && $state.selectedApplicationId",
-                                "dataSource": source("applications.show", "response.result.application", selected=True),
-                                "inputs": {
-                                    "fields": [
-                                        {"label": "Summary", "path": "application.display.summary"},
-                                        {"label": "Publisher", "path": "application.publisher.display_name"},
-                                        {"label": "Visibility", "path": "application.visibility"},
-                                        {"label": "Lifecycle", "path": "application.lifecycle"},
-                                        {"label": "Installed", "path": "installed"},
-                                        {"label": "Update available", "path": "update_available"},
-                                        {"label": "Track", "path": "effective_release.update_track"},
-                                        {"label": "Release status", "path": "effective_release.reason"},
-                                    ]
-                                },
-                            },
+                            *[
+                                {
+                                    "id": section_id,
+                                    "type": "item.details",
+                                    "area": "detail" if title == "Details" else "metadata",
+                                    "title": title,
+                                    "visibleIf": (
+                                        "$state.activeTab == 'details' && "
+                                        "$state.selectedApplicationId"
+                                        + extra_visibility
+                                    ),
+                                    "dataSource": source(
+                                        "applications.show",
+                                        "response.result.application",
+                                        selected=True,
+                                    ),
+                                    "inputs": {
+                                        "presentation": "section",
+                                        "fields": fields,
+                                        **(
+                                            {"emptyText": "Not installed."}
+                                            if title == "Installation"
+                                            else {"emptyText": "No categories."}
+                                            if title == "Categories"
+                                            else {}
+                                        ),
+                                    },
+                                }
+                                for section_id, title, fields, extra_visibility in (
+                                    (
+                                        "application-section",
+                                        "Details",
+                                        [
+                                            {"label": "Identifier", "path": "application.application_id"},
+                                            {"label": "Publisher", "path": "application.publisher.display_name"},
+                                            {"label": "Lifecycle", "path": "application.lifecycle"},
+                                        ],
+                                        "",
+                                    ),
+                                    (
+                                        "installation-section",
+                                        "Installation",
+                                        [
+                                            {"label": "Installed version", "path": "installed_release.version"},
+                                            {"label": "Status", "path": "installation.status"},
+                                            {"label": "Updated", "path": "installation.updated_at"},
+                                            {"label": "Update track", "path": "subscription.update_track"},
+                                            {"label": "Update policy", "path": "subscription.update_policy"},
+                                        ],
+                                        "",
+                                    ),
+                                    (
+                                        "marketplace-section",
+                                        "Marketplace",
+                                        [
+                                            {"label": "Stable version", "path": "marketplace_release.version"},
+                                            {"label": "Pre-release version", "path": "prerelease_release.version"},
+                                            {"label": "Last released", "path": "marketplace_release.published_at"},
+                                            {"label": "Visibility", "path": "application.visibility"},
+                                        ],
+                                        "",
+                                    ),
+                                    (
+                                        "categories-section",
+                                        "Categories",
+                                        [
+                                            {"label": "Categories", "path": "application.display.categories"},
+                                        ],
+                                        "",
+                                    ),
+                                    (
+                                        "development-section",
+                                        "My development",
+                                        [
+                                            {"label": "Phase", "path": "local_development.phase"},
+                                            {"label": "Status", "path": "local_development.status"},
+                                            {"label": "Revision", "path": "local_development.revision"},
+                                            {"label": "Updated", "path": "local_development.updated_at"},
+                                        ],
+                                        " && $state.localDevelopmentAvailable == true",
+                                    ),
+                                )
+                            ],
                         ],
                     }
                 }
@@ -592,7 +782,7 @@ def test_application_manager_evaluation_rejects_non_runtime_event_paths() -> Non
     request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
     webui = _application_manager_webui()
     widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
-    catalog = next(widget for widget in widgets if widget["id"] == "catalog")
+    catalog = next(widget for widget in widgets if widget["id"] == "catalog-marketplace")
     catalog["actions"][0]["params"]["selectedApplicationId"] = "$event.item.id"
     tabs = next(widget for widget in widgets if widget["id"] == "tabs")
     tabs["actions"][0]["params"]["activeTab"] = "$event.buttonId"
