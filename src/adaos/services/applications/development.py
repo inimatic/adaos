@@ -24,6 +24,7 @@ class ApplicationDevelopmentCoordinator:
 
     _CAPABILITIES = {
         "create": "applications.develop",
+        "update_metadata": "applications.develop",
         "materialize": "applications.develop",
         "preview": "applications.develop",
         "create_trial": "applications.develop",

@@ -117,6 +117,7 @@ _LOCAL_WRITE_TOOL_NAMES: tuple[str, ...] = (
     "prompt_engineer_skill:prompt_create_dev_project",
     "builder_skill:chat",
     "builder_skill:create_scenario_draft",
+    "builder_skill:update_application_metadata",
     "builder_skill:update_current_scenario",
     "builder_skill:set_ui_revision_current",
     "builder_skill:set_active_draft",

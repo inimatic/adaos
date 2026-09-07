@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from adaos.domain.application import Application
+from adaos.domain.application import Application, utc_now
 from adaos.sdk.core._ctx import require_ctx
 from adaos.services.applications import (
     ApplicationDevelopmentCoordinator,
@@ -20,6 +21,7 @@ from adaos.services.policy.skill_capabilities import require_skill_capability
 
 _ACTION_CAPABILITIES = {
     "create": "applications.develop",
+    "update_metadata": "applications.develop",
     "materialize": "applications.develop",
     "preview": "applications.develop",
     "create_trial": "applications.develop",
@@ -291,6 +293,81 @@ def create_application(
 
     return _execute_development(
         "create",
+        application_id,
+        actor_ref=actor_ref,
+        subnet_ref=subnet_ref,
+        capability=capability,
+        expected_revision=expected_revision,
+        idempotency_key=idempotency_key,
+        intent=intent,
+        callback=execute,
+    )
+
+
+def _update_application_metadata_effect(
+    application_id: str,
+    *,
+    title: str,
+    summary: str,
+    categories: Sequence[str],
+    expected_revision: int,
+) -> Mapping[str, Any]:
+    service = _application_service()
+    application = service.store.get_application(application_id)
+    updated = replace(
+        application,
+        display={
+            "title": str(title),
+            "summary": str(summary),
+            "categories": [str(item) for item in categories],
+        },
+        revision=application.revision + 1,
+        updated_at=utc_now(),
+    )
+    if application.revision == expected_revision + 1:
+        if dict(application.display) != dict(updated.display):
+            raise ValueError(
+                "Application revision advanced with different catalog metadata"
+            )
+        return {"ok": True, "duplicate": True, "application": application.to_dict()}
+    if application.revision != expected_revision:
+        raise ValueError(
+            f"Application revision conflict: expected {expected_revision}, "
+            f"observed {application.revision}"
+        )
+    saved = service.register(updated, expected_revision=expected_revision)
+    return {"ok": True, "application": saved.to_dict()}
+
+
+def update_application_metadata(
+    application_id: str,
+    *,
+    title: str,
+    summary: str,
+    categories: Sequence[str] = (),
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    expected_revision: int,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    intent = {
+        "title": str(title),
+        "summary": str(summary),
+        "categories": [str(item) for item in categories],
+    }
+
+    def execute() -> Mapping[str, Any]:
+        return _update_application_metadata_effect(
+            application_id,
+            title=str(intent["title"]),
+            summary=str(intent["summary"]),
+            categories=tuple(intent["categories"]),
+            expected_revision=expected_revision,
+        )
+
+    return _execute_development(
+        "update_metadata",
         application_id,
         actor_ref=actor_ref,
         subnet_ref=subnet_ref,
@@ -624,6 +701,14 @@ def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, 
                 else None
             ),
         )
+    if action == "update_metadata":
+        return _update_application_metadata_effect(
+            application_id,
+            title=str(intent.get("title") or ""),
+            summary=str(intent.get("summary") or ""),
+            categories=tuple(intent.get("categories") or ()),
+            expected_revision=expected_revision,
+        )
     if action in {"materialize", "preview"}:
         from . import preview
 
@@ -765,4 +850,5 @@ __all__ = [
     "publish_stable_source",
     "publisher_context",
     "reconcile_development_operation",
+    "update_application_metadata",
 ]

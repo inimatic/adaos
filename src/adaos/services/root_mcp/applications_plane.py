@@ -120,6 +120,33 @@ def _builder_contracts() -> list[RootMcpToolContract]:
             metadata={**metadata, "handler": "applications_development_create"},
         ),
         RootMcpToolContract(
+            id="applications.development.update_metadata",
+            title="Update Application metadata through Builder",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Replace bounded catalog metadata for an existing publisher-owned Application.",
+            input_schema=schema_object(
+                properties={
+                    **mutation,
+                    "title": {"type": "string", "minLength": 1, "maxLength": 160},
+                    "summary": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "categories": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1, "maxLength": 64},
+                        "maxItems": 12,
+                        "uniqueItems": True,
+                    },
+                },
+                required=[*mutation_required, "title", "summary", "categories"],
+            ),
+            output_schema=deepcopy(response),
+            required_capability="applications.develop",
+            side_effects="write",
+            metadata={
+                **metadata,
+                "handler": "applications_development_update_metadata",
+            },
+        ),
+        RootMcpToolContract(
             id="applications.development.materialize",
             title="Materialize Application DEV revision",
             surface=RootMcpSurface.DEVELOPMENT,
@@ -1151,6 +1178,24 @@ def _handle_development_materialize(
     )
 
 
+def _handle_development_update_metadata(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {
+            "would_update_application_metadata": True,
+            "request": _builder_request(arguments),
+        }
+    return _builder_sdk().update_application_metadata(
+        _application_id(arguments),
+        title=str(arguments.get("title") or ""),
+        summary=str(arguments.get("summary") or ""),
+        categories=tuple(arguments.get("categories") or ()),
+        expected_revision=int(arguments.get("expected_revision") or 0),
+        **_mcp_mutation_context(arguments, "applications.develop"),
+    )
+
+
 def _handle_development_preview(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
@@ -1497,6 +1542,7 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "applications.development.get_operation": _handle_development_get_operation,
         "applications.development.reconcile_operation": _handle_development_reconcile_operation,
         "applications.development.create": _handle_development_create,
+        "applications.development.update_metadata": _handle_development_update_metadata,
         "applications.development.materialize": _handle_development_materialize,
         "applications.development.preview": _handle_development_preview,
         "applications.development.create_trial": _handle_development_create_trial,

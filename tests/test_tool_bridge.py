@@ -1046,6 +1046,29 @@ def test_runtime_action_risk_allows_builder_email_field_request() -> None:
     assert risk["approval_required"] is False
 
 
+def test_runtime_action_risk_allows_bounded_builder_application_metadata() -> None:
+    body = tool_bridge_module.ToolCall(
+        tool="builder_skill:update_application_metadata",
+        arguments={
+            "title": "Applications",
+            "summary": "Manage installed applications and available releases.",
+            "categories": ["System", "Management"],
+            "webspace_id": "desktop",
+        },
+    )
+
+    risk = tool_bridge_module._runtime_action_risk(
+        body=body,
+        skill_name="builder_skill",
+        public_tool="update_application_metadata",
+        payload=dict(body.arguments or {}),
+        local_node_id="hub-1",
+    )
+
+    assert risk["risk_class"] == "local_write"
+    assert risk["approval_required"] is False
+
+
 def test_runtime_action_risk_allows_notebook_upload_attachment_paths() -> None:
     body = tool_bridge_module.ToolCall(
         tool="notebook_skill:attach_note_upload",

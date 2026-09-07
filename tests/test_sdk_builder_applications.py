@@ -79,6 +79,144 @@ def test_builder_application_sdk_has_no_raw_authority_parameters() -> None:
         assert forbidden.isdisjoint(inspect.signature(function).parameters), name
 
 
+def test_builder_updates_application_metadata_through_durable_operation(
+    monkeypatch, tmp_path: Path
+) -> None:
+    service = ApplicationService(ApplicationStore(tmp_path))
+    coordinator = ApplicationDevelopmentCoordinator(tmp_path)
+    publisher = {
+        "publisher_ref": "subnet:home",
+        "display_name": "Home Lab",
+        "subnet_short_ref": "home",
+        "home_zone": "local",
+        "release_key_ref": "artifact-signing:home:key",
+        "release_key_fingerprint": "sha256:" + "f" * 64,
+        "trust_relation": "local",
+    }
+    service.register(
+        Application(
+            application_id="applications",
+            legacy_project_id="applications",
+            publisher_ref="subnet:home",
+            slug="applications",
+            display={"title": "Applications", "summary": "Creation prompt"},
+            visibility="private",
+            entrypoints=(
+                {
+                    "entrypoint_id": "main",
+                    "presentation_ref": "scenario:applications",
+                },
+            ),
+            publisher=publisher,
+        )
+    )
+    monkeypatch.setattr(applications, "_application_service", lambda: service)
+    monkeypatch.setattr(applications, "_coordinator", lambda: coordinator)
+    monkeypatch.setattr(
+        applications, "_admit_builder_mutation", lambda *args, **kwargs: None
+    )
+
+    operation = applications.update_application_metadata(
+        "applications",
+        title="Applications",
+        summary="Manage installed applications and available releases.",
+        categories=("System", "Management"),
+        actor_ref="builder.chat",
+        subnet_ref="subnet:home",
+        capability="applications.develop",
+        expected_revision=1,
+        idempotency_key="applications-metadata-1",
+    )
+
+    assert operation["status"] == "succeeded"
+    assert operation["action"] == "update_metadata"
+    updated = service.store.get_application("applications")
+    assert updated.revision == 2
+    assert updated.display == {
+        "title": "Applications",
+        "summary": "Manage installed applications and available releases.",
+        "categories": ["System", "Management"],
+    }
+
+
+def test_builder_recovers_lost_application_metadata_response(
+    monkeypatch, tmp_path: Path
+) -> None:
+    service = ApplicationService(ApplicationStore(tmp_path))
+    coordinator = ApplicationDevelopmentCoordinator(tmp_path)
+    publisher = {
+        "publisher_ref": "subnet:home",
+        "display_name": "Home Lab",
+        "subnet_short_ref": "home",
+        "home_zone": "local",
+        "release_key_ref": "artifact-signing:home:key",
+        "release_key_fingerprint": "sha256:" + "f" * 64,
+        "trust_relation": "local",
+    }
+    service.register(
+        Application(
+            application_id="applications",
+            legacy_project_id="applications",
+            publisher_ref="subnet:home",
+            slug="applications",
+            display={"title": "Applications", "summary": "Creation prompt"},
+            visibility="private",
+            entrypoints=(
+                {
+                    "entrypoint_id": "main",
+                    "presentation_ref": "scenario:applications",
+                },
+            ),
+            publisher=publisher,
+        )
+    )
+    monkeypatch.setattr(applications, "_application_service", lambda: service)
+    monkeypatch.setattr(applications, "_coordinator", lambda: coordinator)
+    monkeypatch.setattr(
+        applications, "_admit_builder_mutation", lambda *args, **kwargs: None
+    )
+    intent = {
+        "title": "Applications",
+        "summary": "Manage installed applications and available releases.",
+        "categories": ["System", "Management"],
+    }
+
+    def apply_then_lose_response():
+        applications._update_application_metadata_effect(
+            "applications",
+            title=intent["title"],
+            summary=intent["summary"],
+            categories=intent["categories"],
+            expected_revision=1,
+        )
+        raise RuntimeError("response lost")
+
+    with pytest.raises(RuntimeError, match="response lost"):
+        coordinator.execute(
+            "update_metadata",
+            "applications",
+            actor_ref="builder.lifecycle",
+            subnet_ref="subnet:home",
+            capability="applications.develop",
+            expected_revision=1,
+            idempotency_key="applications-metadata-lost-response",
+            intent=intent,
+            callback=apply_then_lose_response,
+        )
+
+    operation = coordinator.list("applications")[0]
+    recovered = applications.reconcile_development_operation(
+        operation["operation_id"],
+        actor_ref="builder.lifecycle",
+        subnet_ref="subnet:home",
+        capability="applications.recover",
+    )
+
+    assert recovered["status"] == "succeeded"
+    assert recovered["result"]["duplicate"] is True
+    assert service.store.get_application("applications").revision == 2
+
+
 def test_publisher_context_exposes_only_public_signing_identity(monkeypatch, tmp_path: Path) -> None:
     key = tmp_path / "publisher.ed25519"
     key.write_bytes(b"a" * 32)
