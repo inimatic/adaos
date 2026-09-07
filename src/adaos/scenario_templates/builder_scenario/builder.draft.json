@@ -1,5 +1,5 @@
 {
-  "$schema": "../../abi/builder.draft.v1.schema.json",
+  "$schema": "adaos://abi/builder.draft.v1.schema.json",
   "draft_id": "template.builder_scenario",
   "schema": "adaos.builder.draft.v1",
   "status": "template",

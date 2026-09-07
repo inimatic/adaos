@@ -70,7 +70,7 @@
         "template_id": { "type": "string", "minLength": 1 },
         "draft_root": {
           "type": "string",
-          "description": "Workspace-relative or package-relative root for draft files."
+          "description": "Portable root for draft files, normally anchored to an AdaOS core path variable such as ${ADAOS_DEV_SCENARIOS_DIR}."
         },
         "files": {
           "type": "array",

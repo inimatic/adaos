@@ -348,6 +348,40 @@ def test_builder_skill_default_rewrites_conversation_manifest_refs(tmp_path: Pat
     assert manifest["data_routes"][0]["path"] == "node_conversation_store:memory.skill_user.demo_companion"
 
 
+def test_builder_draft_uses_portable_core_paths_and_survives_dev_root_move(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    result = service.create_draft(
+        kind="scenario",
+        artifact_id="portable_scene",
+        source_idea="Show a portable Builder draft.",
+    )
+    draft = result["draft"]
+
+    assert draft["$schema"] == "adaos://abi/builder.draft.v1.schema.json"
+    assert draft["artifact"]["draft_root"] == "${ADAOS_DEV_SCENARIOS_DIR}/portable_scene"
+    assert str(tmp_path) not in json.dumps(draft["artifact"])
+
+    original_root = Path(result["artifact_root"])
+    moved_scenarios = tmp_path / "relocated" / "scenarios"
+    moved_scenarios.mkdir(parents=True)
+    shutil.move(str(original_root), str(moved_scenarios / "portable_scene"))
+    service.dev_scenarios_root = moved_scenarios
+
+    preview = service.preview(draft_id=draft["draft_id"])["preview"]
+
+    assert preview["artifact"]["id"] == "portable_scene"
+    assert preview["summary"]["schema_ok"] is True
+
+
+def test_builder_draft_rejects_unknown_or_escaping_core_path_refs(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+
+    with pytest.raises(ValueError, match="variable is unavailable"):
+        service._resolve_core_path_ref("${ADAOS_UNKNOWN_DIR}/scenario")
+    with pytest.raises(ValueError, match="escapes"):
+        service._resolve_core_path_ref("${ADAOS_DEV_SCENARIOS_DIR}/../outside")
+
+
 def test_descriptor_fix_draft_materializes_manifest_webui_and_nlu_files(tmp_path: Path) -> None:
     _write_demo_skill(tmp_path)
     service = _service(tmp_path)

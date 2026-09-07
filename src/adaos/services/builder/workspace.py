@@ -110,6 +110,8 @@ _EXTERNAL_IO_RE = re.compile(r"^\+\s*(import|from)\s+(requests|httpx|aiohttp|soc
 _PROCESS_RE = re.compile(r"^\+\s*(import|from)\s+(subprocess|multiprocessing)\b|Popen\(|run\(", re.I | re.M)
 _ENDPOINT_RE = re.compile(r"(endpoint|websocket|tunnel|route[_-]?reset|browser[_-]?route|control[_-]?plane)", re.I)
 _DESTRUCTIVE_ACTION_RE = re.compile(r"(delete|remove|purge|drop|format|shutdown|restart|reset|rollback|deactivate|kill)", re.I)
+_CORE_PATH_REF_RE = re.compile(r"^\$\{([A-Z][A-Z0-9_]*)\}(?:[\\/](.*))?$")
+_BUILDER_DRAFT_SCHEMA_REF = "adaos://abi/builder.draft.v1.schema.json"
 
 
 class BuilderSourceRecoveryRequired(RuntimeError):
@@ -1493,6 +1495,10 @@ class BuilderWorkspaceService:
             else developer_service.create_scenario(artifact_id, template=template_id)
         )
         artifact_root = Path(getattr(created, "path", "")).expanduser().resolve()
+        if kind == "skill" and self.dev_skills_root is None:
+            self.dev_skills_root = artifact_root.parent
+        if kind == "scenario" and self.dev_scenarios_root is None:
+            self.dev_scenarios_root = artifact_root.parent
         if expected_artifact_root is not None and artifact_root != expected_artifact_root:
             raise RuntimeError(
                 f"Core developer service created {kind} at unexpected path {artifact_root}; "
@@ -1995,7 +2001,7 @@ class BuilderWorkspaceService:
         if conversation_ref:
             merged_links.setdefault("conversation", {k: v for k, v in conversation_ref.items() if k != "stored"})
         return {
-            "$schema": "../../../src/adaos/abi/builder.draft.v1.schema.json",
+            "$schema": _BUILDER_DRAFT_SCHEMA_REF,
             "draft_id": draft_id,
             "task_id": task_id,
             "status": status,
@@ -2004,7 +2010,7 @@ class BuilderWorkspaceService:
                 "kind": artifact_kind,
                 "id": artifact_id,
                 "template_id": template_id,
-                "draft_root": str(artifact_root),
+                "draft_root": self._portable_core_path_ref(artifact_root),
                 "files": file_refs,
             },
             "metadata": {
@@ -2089,9 +2095,59 @@ class BuilderWorkspaceService:
         if artifact_root.exists():
             _write_json(artifact_root / "builder.draft.json", draft)
 
+    def _core_path_roots(self) -> dict[str, Path]:
+        candidates = {
+            "ADAOS_DEV_SKILLS_DIR": self.dev_skills_root,
+            "ADAOS_DEV_SCENARIOS_DIR": self.dev_scenarios_root,
+            "ADAOS_WORKSPACE_DIR": self.workspace_root,
+            "ADAOS_BUILDER_DIR": self.root,
+            "ADAOS_REPO_ROOT": self.repo_root,
+        }
+        return {
+            name: Path(value).expanduser().resolve()
+            for name, value in candidates.items()
+            if value is not None
+        }
+
+    def _portable_core_path_ref(self, path: Path) -> str:
+        target = Path(path).expanduser().resolve()
+        matches: list[tuple[int, str, Path, Path]] = []
+        for name, root in self._core_path_roots().items():
+            try:
+                relative = target.relative_to(root)
+            except ValueError:
+                continue
+            matches.append((len(root.parts), name, root, relative))
+        if not matches:
+            raise ValueError(f"Builder draft path is outside configured AdaOS roots: {target}")
+        _depth, name, _root, relative = max(matches, key=lambda item: item[0])
+        suffix = relative.as_posix()
+        return f"${{{name}}}/{suffix}" if suffix and suffix != "." else f"${{{name}}}"
+
+    def _resolve_core_path_ref(self, value: str) -> Path | None:
+        match = _CORE_PATH_REF_RE.fullmatch(str(value or "").strip())
+        if match is None:
+            return None
+        name, suffix = match.groups()
+        root = self._core_path_roots().get(name)
+        if root is None:
+            raise ValueError(f"Builder draft core path variable is unavailable: {name}")
+        relative = Path(str(suffix or "").replace("\\", "/"))
+        if relative.is_absolute() or any(part == ".." for part in relative.parts):
+            raise ValueError("Builder draft core path reference escapes its configured root")
+        target = (root / relative).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("Builder draft core path reference escapes its configured root") from exc
+        return target
+
     def _draft_artifact_root(self, draft_dir: Path, artifact: dict[str, Any]) -> Path:
         raw = str(artifact.get("draft_root") or "").strip()
         if raw:
+            core_path = self._resolve_core_path_ref(raw)
+            if core_path is not None:
+                return core_path
             path = Path(raw).expanduser()
             if path.is_absolute():
                 return path.resolve()
