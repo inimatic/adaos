@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "1.3.17",
+  "catalog_version": "1.3.18",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -385,8 +385,8 @@
           "reports": {"kind": "mcp", "toolId": "applications.list_development_reports", "arguments": {}, "dryRun": true, "resultPath": "response.result.reports", "prototypeFixture": "$state.prototypeFixtures.reports"}
         },
         "release_widget": {"type": "ui.list", "inputs": {"itemIdKey": "release_digest", "titleKey": "version", "subtitleKey": "lifecycle", "previewKey": "release_digest", "emptyText": "No versions available."}, "action": {"type": "updateState", "on": "select", "params": {"selectedReleaseDigest": "$event.release_digest", "reviewedPlan": {}}}},
-        "operations_widget": {"type": "ui.list", "inputs": {"itemIdKey": "operation_id", "titleKey": "summary", "subtitleKey": "status", "previewKey": "kind", "emptyText": "No operations yet."}},
-        "reports_widget": {"type": "ui.list", "inputs": {"itemIdKey": "report_id", "titleKey": "title", "subtitleKey": "status", "previewKey": "summary", "filters": [{"key": "application_id", "stateKey": "selectedApplicationId"}], "emptyText": "No reports yet."}},
+        "operations_widget": {"type": "ui.list", "inputs": {"itemIdKey": "operation_id", "titleKey": "summary", "subtitleKey": "kind", "previewKey": "kind", "meta": [{"key": "status", "label": "Status", "kind": "badge"}], "emptyText": "No operations yet."}},
+        "reports_widget": {"type": "ui.list", "inputs": {"itemIdKey": "report_id", "titleKey": "title", "subtitleKey": "summary", "previewKey": "summary", "meta": [{"key": "status", "label": "Status", "kind": "badge"}], "filters": [{"key": "application_id", "stateKey": "selectedApplicationId"}], "emptyText": "No reports yet."}},
         "release_selection": "The Versions list writes selectedReleaseDigest and clears reviewedPlan because a receipt is valid only for its original release selection. Install/update plans may leave this state empty to resolve the effective channel.",
         "initial_state": {"selectedApplicationId": "", "catalogSection": "applications", "installedOnly": false, "activeTab": "details", "selectedReleaseDigest": "", "effectiveReleaseDigest": "", "installationRevision": 0, "subscriptionRevision": 0, "updateTrack": "stable", "updatePolicy": "notify", "removeDataPolicy": "retain", "reviewedPlan": {}},
         "lifecycle_settings": {

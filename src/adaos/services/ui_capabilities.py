@@ -1432,8 +1432,11 @@ def evaluate_ui_request(
         expected_operation_inputs = {
             "itemIdKey": "operation_id",
             "titleKey": "summary",
-            "subtitleKey": "status",
+            "subtitleKey": "kind",
             "previewKey": "kind",
+            "meta": [
+                {"key": "status", "label": "Status", "kind": "badge"},
+            ],
             "emptyText": "No operations yet.",
         }
         operation_lists = [
@@ -1450,8 +1453,11 @@ def evaluate_ui_request(
         expected_report_inputs = {
             "itemIdKey": "report_id",
             "titleKey": "title",
-            "subtitleKey": "status",
+            "subtitleKey": "summary",
             "previewKey": "summary",
+            "meta": [
+                {"key": "status", "label": "Status", "kind": "badge"},
+            ],
             "emptyText": "No reports yet.",
         }
         reports = [

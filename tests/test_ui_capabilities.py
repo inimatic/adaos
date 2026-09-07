@@ -553,8 +553,11 @@ def _application_manager_webui() -> dict:
                                 "inputs": {
                                     "itemIdKey": "operation_id",
                                     "titleKey": "summary",
-                                    "subtitleKey": "status",
+                                    "subtitleKey": "kind",
                                     "previewKey": "kind",
+                                    "meta": [
+                                        {"key": "status", "label": "Status", "kind": "badge"},
+                                    ],
                                     "emptyText": "No operations yet.",
                                 },
                             },
@@ -567,8 +570,11 @@ def _application_manager_webui() -> dict:
                                 "inputs": {
                                     "itemIdKey": "report_id",
                                     "titleKey": "title",
-                                    "subtitleKey": "status",
+                                    "subtitleKey": "summary",
                                     "previewKey": "summary",
+                                    "meta": [
+                                        {"key": "status", "label": "Status", "kind": "badge"},
+                                    ],
                                     "filters": [
                                         {"key": "application_id", "stateKey": "selectedApplicationId"}
                                     ],
