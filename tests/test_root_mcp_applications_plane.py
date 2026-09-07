@@ -163,6 +163,32 @@ def test_applications_plane_forwards_mcp_actor_and_subnet_to_sdk(monkeypatch) ->
     assert stub.calls[0][2]["subnet_ref"] == "subnet:sn_home"
 
 
+def test_applications_plane_forwards_catalog_and_development_filters(monkeypatch) -> None:
+    stub = _StubSdk()
+    monkeypatch.setattr(applications_plane, "_sdk", lambda: stub)
+
+    applications_plane.handlers()["applications.list"](
+        {
+            "installed_only": False,
+            "catalog_only": True,
+            "developed_only": True,
+        },
+        dry_run=True,
+    )
+
+    assert stub.calls == [
+        (
+            "list_applications",
+            (),
+            {
+                "installed_only": False,
+                "catalog_only": True,
+                "developed_only": True,
+            },
+        )
+    ]
+
+
 def test_applications_plane_dry_run_does_not_call_sdk(monkeypatch) -> None:
     stub = _StubSdk()
     monkeypatch.setattr(applications_plane, "_sdk", lambda: stub)

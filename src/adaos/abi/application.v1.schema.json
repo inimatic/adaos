@@ -13,7 +13,14 @@
     "slug": {"$ref": "#/$defs/id"},
     "display": {
       "type": "object", "additionalProperties": false, "required": ["title", "summary"],
-      "properties": {"title": {"type": "string", "minLength": 1, "maxLength": 160}, "summary": {"type": ["string", "null"], "maxLength": 500}}
+      "properties": {
+        "title": {"type": "string", "minLength": 1, "maxLength": 160},
+        "summary": {"type": ["string", "null"], "maxLength": 500},
+        "categories": {
+          "type": "array", "maxItems": 12, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 64}
+        }
+      }
     },
     "visibility": {"enum": ["private", "link", "public"]},
     "entrypoints": {

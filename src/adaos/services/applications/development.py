@@ -38,8 +38,12 @@ class ApplicationDevelopmentCoordinator:
         self.state_dir = Path(state_dir).expanduser().resolve()
 
     @property
+    def root_path(self) -> Path:
+        return self.state_dir / "applications" / "development_operations"
+
+    @property
     def root(self) -> Path:
-        path = self.state_dir / "applications" / "development_operations"
+        path = self.root_path
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -56,11 +60,11 @@ class ApplicationDevelopmentCoordinator:
 
     def _path(self, operation_id: str) -> Path:
         digest = hashlib.sha256(operation_id.encode("utf-8")).hexdigest()
-        return self.root / "operations" / f"{digest}.json"
+        return self.root_path / "operations" / f"{digest}.json"
 
     def _idempotency_path(self, idempotency_key: str) -> Path:
         digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
-        return self.root / "idempotency" / f"{digest}.json"
+        return self.root_path / "idempotency" / f"{digest}.json"
 
     @staticmethod
     def _read(path: Path) -> dict[str, Any]:
@@ -82,7 +86,7 @@ class ApplicationDevelopmentCoordinator:
         return operation
 
     def list(self, application_id: str | None = None) -> list[dict[str, Any]]:
-        parent = self.root / "operations"
+        parent = self.root_path / "operations"
         values = [self._read(path) for path in parent.glob("*.json")] if parent.is_dir() else []
         if application_id is not None:
             values = [item for item in values if item.get("application_id") == application_id]

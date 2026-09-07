@@ -508,6 +508,10 @@ def test_read_models_separate_catalog_and_installed_state(service: ApplicationSe
     assert model["available"] is True
     assert model["installed"] is False
     assert model["effective_release"]["release_digest"] == release.release_digest
+    assert model["installed_release"] is None
+    assert model["marketplace_release"]["version"] == "1.0.0"
+    assert model["prerelease_release"] is None
+    assert model["auto_update_enabled"] is False
     assert service.list_models(installed_only=True) == []
 
 

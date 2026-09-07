@@ -13,12 +13,15 @@ from typing import Any, Mapping, Sequence
 from adaos.domain.application import RuntimeSelection
 from adaos.sdk.core._ctx import require_ctx
 from adaos.services.applications import (
+    ApplicationDevelopmentCoordinator,
     ApplicationRolloutService,
     DevelopmentReportTriageService,
     TrialAccessService,
     get_application_service,
     get_development_report_service,
 )
+from adaos.services.builder.workbench import BuilderWorkbenchService
+from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService
 from adaos.services.policy.skill_capabilities import require_skill_capability
 
 
@@ -169,20 +172,136 @@ def _release_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
 
 def _application_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
     model = deepcopy(dict(value))
+    for field in ("installed_release", "marketplace_release", "prerelease_release"):
+        if isinstance(model.get(field), Mapping):
+            model[field] = _release_read_model(model[field])
     effective = model.get("effective_release")
     if isinstance(effective, dict) and isinstance(effective.get("release"), Mapping):
         effective["release"] = _release_read_model(effective["release"])
     return model
 
 
-def list_applications(*, installed_only: bool = False) -> list[dict[str, Any]]:
-    return [
+def _local_development_index() -> dict[str, dict[str, Any]]:
+    ctx = require_ctx("sdk.applications")
+    operations = ApplicationDevelopmentCoordinator(Path(ctx.paths.state_dir())).list()
+    local_subnet = _local_subnet_ref().lower()
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for operation in operations:
+        if str(operation.get("subnet_ref") or "").lower() != local_subnet:
+            continue
+        application_id = str(operation.get("application_id") or "").strip()
+        if application_id:
+            grouped.setdefault(application_id, []).append(operation)
+    projections: dict[str, dict[str, Any]] = {}
+    for application_id, values in grouped.items():
+        latest = max(
+            values,
+            key=lambda item: (
+                str(item.get("updated_at") or ""),
+                str(item.get("operation_id") or ""),
+            ),
+        )
+        source_webspace_id = next(
+            (
+                str((item.get("intent") or {}).get("source_webspace_id") or "").strip()
+                for item in sorted(
+                    values,
+                    key=lambda item: (
+                        str(item.get("updated_at") or ""),
+                        str(item.get("operation_id") or ""),
+                    ),
+                    reverse=True,
+                )
+                if isinstance(item.get("intent"), Mapping)
+                and str((item.get("intent") or {}).get("source_webspace_id") or "").strip()
+            ),
+            "",
+        )
+        projections[application_id] = {
+            "exists": True,
+            "status": str(latest.get("status") or "unknown"),
+            "latest_action": str(latest.get("action") or "unknown"),
+            "updated_at": str(latest.get("updated_at") or ""),
+            "operation_count": len(values),
+            "source_webspace_id": source_webspace_id or None,
+        }
+    return projections
+
+
+def _development_workflow_summary(
+    object_type: str,
+    object_id: str,
+) -> dict[str, Any] | None:
+    try:
+        return BuilderWorkflowService.from_context().development_summary(
+            object_type,
+            object_id,
+        )
+    except (AttributeError, FileNotFoundError, BuilderWorkflowError, OSError, ValueError):
+        return None
+
+
+def list_applications(
+    *,
+    installed_only: bool = False,
+    catalog_only: bool = False,
+    developed_only: bool = False,
+) -> list[dict[str, Any]]:
+    development = _local_development_index()
+    models = [
         _application_read_model(item)
         for item in _service().list_models(
             installed_only=installed_only,
             subscriber_subnet_ref=_local_subnet_ref(),
         )
     ]
+    for model in models:
+        application = model.get("application") or {}
+        application_id = str(application.get("application_id") or "")
+        local = development.get(application_id)
+        if local is not None:
+            entrypoints = application.get("entrypoints") or []
+            presentation_ref = str(
+                (entrypoints[0] if entrypoints else {}).get("presentation_ref") or ""
+            )
+            object_type, _, object_id = presentation_ref.partition(":")
+            source_webspace_id = str(local.pop("source_webspace_id", None) or "").strip()
+            if not source_webspace_id and object_type and object_id:
+                source_webspace_id = str(
+                    BuilderWorkbenchService(
+                        state_dir=Path(require_ctx("sdk.applications").paths.state_dir())
+                    ).find_existing_source_for_selection(
+                        object_type=object_type,
+                        object_id=object_id,
+                    )
+                    or ""
+                ).strip()
+            local["builder"] = {
+                "selected_object_type": object_type,
+                "selected_object_id": object_id,
+                "source_webspace_id": source_webspace_id or None,
+            }
+            if object_type and object_id:
+                workflow = _development_workflow_summary(object_type, object_id)
+                if workflow is not None:
+                    local["transport_status"] = local["status"]
+                    local["status"] = workflow["status"]
+                    local["phase"] = workflow["phase"]
+                    local["revision"] = workflow["revision"]
+                    local["stable"] = workflow["stable"]
+                    local["accepted"] = workflow["accepted"]
+                    local["updated_at"] = workflow["updated_at"] or local["updated_at"]
+        model["local_development"] = local
+    if catalog_only:
+        models = [
+            item
+            for item in models
+            if item["application"]["visibility"] == "public"
+            and bool(item.get("channels", {}).get("stable"))
+        ]
+    if developed_only:
+        models = [item for item in models if item.get("local_development") is not None]
+    return models
 
 
 def get_application(application_id: str) -> dict[str, Any]:
@@ -196,12 +315,7 @@ def get_application(application_id: str) -> dict[str, Any]:
 
 
 def list_catalog() -> list[dict[str, Any]]:
-    return [
-        item
-        for item in list_applications()
-        if item["application"]["visibility"] == "public"
-        and item["channels"].get("stable")
-    ]
+    return list_applications(catalog_only=True)
 
 
 def list_releases(application_id: str) -> list[dict[str, Any]]:

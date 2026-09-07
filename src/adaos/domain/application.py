@@ -166,11 +166,28 @@ class Application:
         object.__setattr__(self, "publisher_ref", _publisher_ref(self.publisher_ref))
         object.__setattr__(self, "slug", _identifier(self.slug, "slug"))
         display = _mapping(self.display, "display")
-        display = {
+        normalized_display: dict[str, Any] = {
             "title": _text(display.get("title"), "display.title", maximum=160),
             "summary": _optional_text(display.get("summary"), maximum=500),
         }
-        object.__setattr__(self, "display", display)
+        if "categories" in display:
+            categories = display.get("categories")
+            if not isinstance(categories, Sequence) or isinstance(
+                categories, (str, bytes, bytearray)
+            ):
+                raise ApplicationContractError("display.categories must be an array")
+            normalized_categories = [
+                _text(item, "display.categories item", maximum=64)
+                for item in categories
+            ]
+            if len(normalized_categories) > 12:
+                raise ApplicationContractError("display.categories supports at most 12 items")
+            if len({item.casefold() for item in normalized_categories}) != len(
+                normalized_categories
+            ):
+                raise ApplicationContractError("display.categories must be unique")
+            normalized_display["categories"] = normalized_categories
+        object.__setattr__(self, "display", normalized_display)
         if self.visibility not in {"private", "link", "public"}:
             raise ApplicationContractError("visibility must be private, link, or public")
         if self.lifecycle not in {"active", "retired", "archived"}:

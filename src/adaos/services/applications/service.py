@@ -802,6 +802,15 @@ class ApplicationService:
                 and effective.get("release_digest")
                 and effective["release_digest"] != installation.installed_release_digest
             )
+
+            def release_for(digest: str | None) -> dict[str, Any] | None:
+                if not digest:
+                    return None
+                try:
+                    return self.store.get_release(application.application_id, digest).to_dict()
+                except FileNotFoundError:
+                    return None
+
             models.append(
                 {
                     "application": application.to_dict(),
@@ -811,9 +820,17 @@ class ApplicationService:
                     "update_available": update_available,
                     "pinned": bool(subscription and subscription.update_policy == "pinned"),
                     "prerelease_following": bool(subscription and subscription.update_track == "prerelease"),
+                    "auto_update_enabled": bool(
+                        subscription and subscription.update_policy == "auto_compatible"
+                    ),
                     "retired": application.lifecycle in {"retired", "archived"},
                     "subscription": subscription.to_dict() if subscription else None,
                     "channels": channels,
+                    "installed_release": release_for(
+                        installation.installed_release_digest if installation else None
+                    ),
+                    "marketplace_release": release_for(channels.get("stable")),
+                    "prerelease_release": release_for(channels.get("prerelease")),
                     "effective_release": effective,
                     "operation": operations.get(application.application_id).to_dict() if operations.get(application.application_id) else None,
                 }

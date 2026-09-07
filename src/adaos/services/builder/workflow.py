@@ -2208,6 +2208,30 @@ class BuilderWorkflowService:
         )
         return projection
 
+    def development_summary(self, object_type: str, object_id: str) -> dict[str, Any]:
+        """Return the bounded, read-only Builder state needed by application catalogs."""
+
+        kind = _kind(object_type)
+        project_id = _project_id(object_id)
+        with _LOCK:
+            state = self._read_state(kind, project_id)
+            workflow = self._normalized_workflow(
+                state,
+                object_type=kind,
+                object_id=project_id,
+            )
+        active_phase = str(workflow.get("active_phase") or "prototype")
+        phase = _mapping(workflow.get(active_phase))
+        prototype = _mapping(workflow.get("prototype"))
+        return {
+            "phase": active_phase,
+            "status": str(phase.get("status") or "unknown"),
+            "revision": prototype.get("head_revision"),
+            "stable": bool(prototype.get("stable")),
+            "accepted": bool(prototype.get("acceptance")),
+            "updated_at": str(state.get("updated_at") or "").strip() or None,
+        }
+
     @staticmethod
     def _compact_explanation(projection: Mapping[str, Any]) -> dict[str, Any]:
         description = _mapping(projection.get("workflow_description"))

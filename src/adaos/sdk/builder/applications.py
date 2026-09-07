@@ -254,6 +254,7 @@ def create_application(
     template: str = "empty",
     visibility: str = "private",
     protection: Mapping[str, Any] | None = None,
+    source_webspace_id: str = "desktop",
     actor_ref: str,
     subnet_ref: str,
     capability: str,
@@ -271,6 +272,7 @@ def create_application(
         "publisher_key_fingerprint": publisher["release_key_fingerprint"],
         "publisher": dict(publisher),
         "protection": dict(protection or {}),
+        "source_webspace_id": str(source_webspace_id or "").strip() or "desktop",
     }
 
     def execute() -> Mapping[str, Any]:

@@ -294,7 +294,13 @@ def contracts() -> list[RootMcpToolContract]:
             title="List Applications",
             surface=RootMcpSurface.OPERATIONS,
             summary="List bounded installed and Catalog Application models.",
-            input_schema=schema_object(properties={"installed_only": {"type": "boolean"}}),
+            input_schema=schema_object(
+                properties={
+                    "installed_only": {"type": "boolean"},
+                    "catalog_only": {"type": "boolean"},
+                    "developed_only": {"type": "boolean"},
+                }
+            ),
             output_schema=response(),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_list"},
@@ -854,7 +860,13 @@ def _mcp_mutation_context(
 
 
 def _handle_list(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    return {"applications": _sdk().list_applications(installed_only=bool(arguments.get("installed_only", False)))}
+    return {
+        "applications": _sdk().list_applications(
+            installed_only=bool(arguments.get("installed_only", False)),
+            catalog_only=bool(arguments.get("catalog_only", False)),
+            developed_only=bool(arguments.get("developed_only", False)),
+        )
+    }
 
 
 def _handle_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from adaos.sdk import applications
 from adaos.sdk.core.exporter import export
 from adaos.services.applications import register_development_report_service
+from adaos.services.applications import ApplicationDevelopmentCoordinator
 
 
 class _StubService:
@@ -97,6 +99,113 @@ def test_application_sdk_is_discoverable_for_builder_context() -> None:
     assert "adaos.sdk.applications.plan_install" in names
     assert "adaos.sdk.applications.plan_update_track" in names
     assert "adaos.sdk.applications.resolve_trial_link" in names
+
+
+def test_application_reads_project_only_existing_local_developments(
+    monkeypatch, tmp_path: Path
+) -> None:
+    context = SimpleNamespace(
+        paths=SimpleNamespace(state_dir=lambda: tmp_path),
+        config=SimpleNamespace(subnet_id_value="sn_home"),
+    )
+    monkeypatch.setattr(applications, "require_ctx", lambda _reason: context)
+
+    coordinator = ApplicationDevelopmentCoordinator(tmp_path)
+    coordinator.execute(
+        "create",
+        "applications",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.develop",
+        expected_revision=0,
+        idempotency_key="create-applications",
+        intent={"template": "empty", "source_webspace_id": "desktop"},
+        callback=lambda: {"ok": True},
+    )
+    coordinator.execute(
+        "create",
+        "foreign",
+        actor_ref="user:guest",
+        subnet_ref="subnet:foreign",
+        capability="applications.develop",
+        expected_revision=0,
+        idempotency_key="create-foreign",
+        intent={"template": "empty"},
+        callback=lambda: {"ok": True},
+    )
+
+    class Service:
+        def list_models(self, **_kwargs):
+            return [
+                {
+                    "application": {
+                        "application_id": "applications",
+                        "visibility": "private",
+                        "entrypoints": [
+                            {
+                                "entrypoint_id": "main",
+                                "presentation_ref": "scenario:applications",
+                            }
+                        ],
+                    },
+                    "channels": {},
+                },
+                {
+                    "application": {
+                        "application_id": "foreign",
+                        "visibility": "public",
+                        "entrypoints": [
+                            {
+                                "entrypoint_id": "main",
+                                "presentation_ref": "scenario:foreign",
+                            }
+                        ],
+                    },
+                    "channels": {"stable": "sha256:" + "a" * 64},
+                },
+            ]
+
+    monkeypatch.setattr(applications, "_service", lambda: Service())
+    monkeypatch.setattr(
+        applications,
+        "_development_workflow_summary",
+        lambda object_type, object_id: {
+            "phase": "prototype",
+            "status": "working",
+            "revision": "010",
+            "stable": False,
+            "accepted": False,
+            "updated_at": None,
+        }
+        if (object_type, object_id) == ("scenario", "applications")
+        else None,
+    )
+
+    developed = applications.list_applications(developed_only=True)
+    catalog = applications.list_applications(catalog_only=True)
+
+    assert [item["application"]["application_id"] for item in developed] == [
+        "applications"
+    ]
+    assert developed[0]["local_development"] == {
+        "exists": True,
+        "status": "working",
+        "latest_action": "create",
+        "updated_at": developed[0]["local_development"]["updated_at"],
+        "operation_count": 1,
+        "transport_status": "succeeded",
+        "phase": "prototype",
+        "revision": "010",
+        "stable": False,
+        "accepted": False,
+        "builder": {
+            "selected_object_type": "scenario",
+            "selected_object_id": "applications",
+            "source_webspace_id": "desktop",
+        },
+    }
+    assert [item["application"]["application_id"] for item in catalog] == ["foreign"]
+    assert catalog[0]["local_development"] is None
 
 
 def test_sdk_exposes_development_report_status_without_internal_store_access() -> None:

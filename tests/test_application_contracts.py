@@ -64,7 +64,11 @@ def _application() -> Application:
         legacy_project_id="recipes",
         publisher_ref="subnet:sn_home",
         slug="recipes",
-        display={"title": "Recipes", "summary": "Shared recipes"},
+        display={
+            "title": "Recipes",
+            "summary": "Shared recipes",
+            "categories": ["Productivity", "Collaboration"],
+        },
         visibility="public",
         entrypoints=({"entrypoint_id": "main", "presentation_ref": "scenario:recipes"},),
         publisher={

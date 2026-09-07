@@ -253,6 +253,33 @@ def test_workflow_migrates_legacy_state_without_mutating_it(
     assert "workflow" not in json.loads((root / "prompt_state.json").read_text(encoding="utf-8"))
 
 
+def test_development_summary_is_bounded_and_read_only(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    state = {
+        "updated_at": "2026-09-07T12:00:00Z",
+        "workflow": {
+            "active_phase": "prototype",
+            "prototype": {"status": "working", "stable": False},
+        },
+    }
+    path = root / "prompt_state.json"
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    summary = service.development_summary("scenario", "recipes")
+
+    assert summary == {
+        "phase": "prototype",
+        "status": "working",
+        "revision": "001",
+        "stable": False,
+        "accepted": False,
+        "updated_at": "2026-09-07T12:00:00Z",
+    }
+    assert json.loads(path.read_text(encoding="utf-8")) == state
+
+
 def test_scenario_without_ui_revision_uses_current_content_not_manifest_version(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
