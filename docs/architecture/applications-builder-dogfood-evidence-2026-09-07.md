@@ -14,15 +14,17 @@ Infrastate Inventory.
   `dticket.01M1X1X4F3JB8QSYHHBFNYDQYM`, evidence `commit:98bf72e83`.
 - Application development operation:
   `appdevop.d80be62139d3cc53fd11282bf907aae2`.
+- Governed catalog-metadata operation:
+  `appdevop.340c4106a5e15c171f2c5e2a5676d702`, `succeeded`.
 - Builder session: `builder_session_f50dcf8e`.
 - Source/authoring destination: Webspace `desktop`, scenario `builder`.
 - Prototype destination: Webspace `desktop-dev`, scenario `applications`.
 - Current UI revision: `011`; workflow `prototype/working`, stable `false`,
   acceptance absent, Automation `not_started`.
 
-Only the original managed create operation exists. Catalog reads and
-`Open in Builder` do not create Applications, Builder sessions, or development
-operations.
+The Application aggregate is at revision `2`: create plus the bounded metadata
+correction. Catalog reads and `Open in Builder` do not create Applications,
+Builder sessions, or development operations.
 
 ## Prototype Result
 
@@ -58,12 +60,15 @@ contract-explicit corrections are materially cheaper and more reliable.
 | Wide browser layout | passed; 380px catalog, flexible detail, 300px metadata |
 | Compact browser layout | passed; no document horizontal overflow |
 | Existing-development navigation | passed; new window targets `desktop/builder` with Applications selected |
+| Catalog metadata | passed; concise summary plus `System` and `Management`, original creation prompt absent |
+| Metadata recovery | passed; a lost response replays as `succeeded/duplicate` without a second revision |
 | Installed fixture | passed; installed `1.2.0`, stable `1.3.0`, prerelease `1.4.0-beta.2` |
 | Installed controls | update, settings, uninstall, prerelease, and auto-update visible; apply hidden before receipt |
 | Browser runtime errors | none; expected local config/probe/fallback transport noise only |
 
 Relevant implementation commits are client `508972a` and AdaOS `225bd5231`,
-`aa6c02eba`, and `564cf9f12`. No remote push was performed for this checkpoint.
+`aa6c02eba`, `564cf9f12`, and `ba148679f`. No remote push was performed for
+this checkpoint.
 
 ## Critical Backlog
 
@@ -71,9 +76,6 @@ Relevant implementation commits are client `508972a` and AdaOS `225bd5231`,
 
 - obtain explicit human acceptance of one exact Prototype revision before
   Automation starts;
-- replace the imperative creation prompt stored as `display.summary` with a
-  concise publisher-reviewed product summary through a governed Builder
-  metadata operation;
 - run real browser plan, receipt review, and apply operations for install,
   update, track selection, and remove; cover stale revisions, failed apply,
   restart, and reconnect recovery;
@@ -109,7 +111,8 @@ Relevant implementation commits are client `508972a` and AdaOS `225bd5231`,
 
 ## Handoff Boundary
 
-The next valid action is human review of revision `011` or another Builder chat
-correction. Prototype acceptance, Codex/Automation handoff, Trial creation, and
-publication are intentionally blocked until the Must items that belong before
-handoff are satisfied. Infrastate Inventory is intentionally unchanged.
+The next valid action is human review of revision `011`, execution of the real
+Application operation proof, or another Builder chat correction. Prototype
+acceptance, Codex/Automation handoff, Trial creation, and publication remain
+blocked until their explicit gates are satisfied. Infrastate Inventory is
+intentionally unchanged.

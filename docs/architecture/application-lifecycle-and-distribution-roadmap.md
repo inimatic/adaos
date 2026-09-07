@@ -145,9 +145,9 @@ imports, raw registry parsing, or filesystem mutation.
 - [x] `[must]` `APP2-02` Add SDK `plan/apply` mutations for install, update,
   remove, update-track selection, and Trial-link resolution/install.
 - [x] `[must]` `APP2-03` Add bounded Builder SDK operations for create,
-  materialize, DEV preview, Candidate/Trial, link-only Trial publication,
-  prerelease publication, exact-digest stable promotion, and stable source
-  publication.
+  catalog metadata, materialize, DEV preview, Candidate/Trial, link-only Trial
+  publication, prerelease publication, exact-digest stable promotion, and
+  stable source publication.
 - [x] `[must]` `APP2-04` Require actor/subnet/capability context, expected
   state identity, and idempotency identity at every public mutation boundary;
   require a reviewed plan digest and durable `ApplicationOperation` for
@@ -305,10 +305,13 @@ Builder development and consumes only public contracts.
 - [x] `[must]` `APP4-12` Project existing local development without creating it,
   show Builder phase/status/revision, and open the exact persisted source
   Webspace and object. Browser proof confirms `desktop/builder` navigation and
-  one unchanged Application development operation.
-- [ ] `[must]` `APP4-13` Replace creation-prompt text in Application metadata
+  no read-side Application development operation.
+- [x] `[must]` `APP4-13` Replace creation-prompt text in Application metadata
   with a concise publisher-reviewed product summary through a governed Builder
-  metadata operation; do not patch the Application store manually.
+  metadata operation; do not patch the Application store manually. Builder
+  operation `appdevop.340c4106a5e15c171f2c5e2a5676d702` advanced the aggregate
+  to revision `2`, and browser evidence confirms the summary/categories while
+  hiding the original prompt. Lost-response recovery is idempotent.
 - [ ] `[must]` `APP4-14` Exercise real browser `plan -> review -> apply` for
   install/update/track/remove, including stale revision, failed apply, restart,
   and operation-state recovery before Prototype acceptance.
@@ -465,9 +468,10 @@ These tasks remain visible but do not block APP0-APP6.
 ## Readiness Boundary (2026-09-07)
 
 The preparatory Core, SDK, MCP, artifact, channel, recovery, and Development
-Report rails are implemented and locally testable. `APP4-01`, `APP4-07`, and
-`APP4-12` are complete; Applications revision `011` is the current unaccepted
-Prototype. The preparation gate remains in
+Report rails are implemented and locally testable. `APP4-01`, `APP4-07`,
+`APP4-12`, and `APP4-13` are complete; Applications revision `011` is the
+current unaccepted Prototype and its Application aggregate is revision `2`.
+The preparation gate remains in
 [Application Preparation Evidence - 2026-09-05](application-preparation-evidence-2026-09-05.md),
 and current dogfood evidence is in
 [Applications Builder Dogfood Evidence - 2026-09-07](applications-builder-dogfood-evidence-2026-09-07.md).

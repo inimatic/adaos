@@ -1853,7 +1853,10 @@ The dated entries below remain the chronological implementation ledger.
   `ApplicationsPlane` MCP contracts. Session `builder_session_f50dcf8e`
   produced revisions through `011`; the current recipe qualification is `9/9`,
   exact `Open in Builder` navigation and wide/compact browser rendering pass,
-  and no manual scenario skeleton or UI patch was used.
+  and no manual scenario skeleton or UI patch was used. A separate bounded
+  `update_application_metadata` Builder operation removed the creation prompt
+  from catalog presentation, advanced the aggregate to revision `2`, and has
+  idempotent lost-response recovery.
 - [ ] `[must]` Obtain human acceptance of the exact current Applications
   Prototype, then prove Automation, prerelease, and stable publication through
   the Application roadmap. Do not use the qualified Prototype alone as handoff

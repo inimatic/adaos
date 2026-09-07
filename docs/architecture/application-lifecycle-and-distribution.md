@@ -635,7 +635,7 @@ applications.operations.get/cancel/retry
 Builder development uses a separate bounded surface:
 
 ```text
-application_development.create/materialize
+application_development.create/update_metadata/materialize
 application_development.preview
 application_development.create_trial
 application_development.publish_trial
@@ -655,9 +655,10 @@ registry locations, or private signing keys. Publisher metadata is derived
 from the local subnet and the configured public release-signing identity.
 Recovery is capability-separated as `applications.recover`, preserves the
 original actor/subnet authority, and replays only the exact persisted intent
-through the SDK's closed command dispatcher. An `applying` operation has a
-five-minute lease before takeover; `unknown` may be observed and reconciled
-immediately.
+through the SDK's closed command dispatcher. Metadata recovery recognizes an
+already-applied exact aggregate revision as an idempotent duplicate. An
+`applying` operation has a five-minute lease before takeover; `unknown` may be
+observed and reconciled immediately.
 
 Product install/update/remove/track changes use reviewed
 `ApplicationOperation` records. Short compare-and-swap mutations such as a
@@ -949,9 +950,11 @@ Application workarounds.
 Current dogfood checkpoint, 2026-09-07: Applications was created from Builder
 chat and revised through UI revision `011`. The current Prototype satisfies the
 Application-manager capability checks and browser layout checks, including an
-installed/prerelease fixture and exact existing-development navigation. It is
-not human-accepted, has not entered Automation, and is not Trial or stable
-evidence. See
+installed/prerelease fixture and exact existing-development navigation. Its
+catalog summary and categories were corrected through a durable, recoverable
+Builder metadata operation rather than a direct store edit. It is not
+human-accepted, has not entered Automation, and is not Trial or stable evidence.
+See
 [Applications Builder Dogfood Evidence - 2026-09-07](applications-builder-dogfood-evidence-2026-09-07.md).
 
 ## Required Invariants
