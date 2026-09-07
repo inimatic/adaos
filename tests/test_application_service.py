@@ -82,6 +82,7 @@ def _release(
         version=version,
         source_ref=source,
         components=(package,),
+        permissions=("workspace.read", "workspace.write"),
         validation_evidence=({"status": "passed"},),
     ).seal()
     return ApplicationRelease(
@@ -343,6 +344,8 @@ def test_install_update_snapshot_and_remove_are_reviewed_durable_operations(tmp_
     assert installed.status == "succeeded"
     assert install.plan["subscription_default"]["update_track"] == "stable"
     assert install.plan["subscription_default"]["update_policy"] == "auto_compatible"
+    assert install.plan["review_summary"] == "Review install for Application app_recipes."
+    assert install.plan["permissions"] == ["workspace.read", "workspace.write"]
     assert installed.result["subscription"]["update_track"] == "stable"
     assert installed.result["subscription"]["update_policy"] == "auto_compatible"
     assert service.store.get_subscription("app_recipes").update_policy == "auto_compatible"

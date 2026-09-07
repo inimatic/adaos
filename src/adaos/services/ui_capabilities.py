@@ -1066,9 +1066,10 @@ def evaluate_ui_request(
             ):
                 valid_plan_kinds.add(kind)
         required_plan_kinds = set(requirements.get("plan_kinds") or [])
-        apply_receipts = {
-            "reviewedPlan"
-            if any(
+        valid_apply_actions = [
+            action
+            for action in apply_actions
+            if (
                 action.get("idempotencyKey") == "auto"
                 and action.get("resultStateKey") == "reviewedPlan"
                 and "$state.reviewedPlan.operation.operation_id"
@@ -1076,15 +1077,27 @@ def evaluate_ui_request(
                 and "$state.reviewedPlan.operation.plan_digest"
                 in json.dumps(action.get("params") or {}, sort_keys=True)
                 and str(action.get("enabledIf") or "").strip()
-                for action in apply_actions
             )
-            else ""
+        ]
+        valid_apply_kinds = {
+            match.group(1)
+            for action in valid_apply_actions
+            if (
+                match := re.search(
+                    r"reviewedPlan\.operation\.kind\s*={2,3}\s*['\"]([^'\"]+)['\"]",
+                    str(action.get("enabledIf") or ""),
+                )
+            )
         }
-        apply_receipts.discard("")
+        apply_receipts = {"reviewedPlan"} if valid_apply_actions else set()
         postconditions.append(
             {
                 "id": "applications.reviewed_plan_apply",
-                "ok": required_plan_kinds == valid_plan_kinds and bool(apply_actions and apply_receipts),
+                "ok": (
+                    required_plan_kinds == valid_plan_kinds
+                    and len(valid_apply_actions) == len(apply_actions) == len(required_plan_kinds)
+                    and valid_apply_kinds == required_plan_kinds
+                ),
                 "expected": {
                     "planKinds": sorted(required_plan_kinds),
                     "receiptStateKey": "reviewedPlan",
@@ -1093,8 +1106,144 @@ def evaluate_ui_request(
                 "actual": {
                     "planActions": len(plan_actions),
                     "applyActions": len(apply_actions),
+                    "validApplyActions": len(valid_apply_actions),
+                    "validApplyKinds": sorted(valid_apply_kinds),
                     "validPlanKinds": sorted(valid_plan_kinds),
                     "boundReceiptStateKeys": sorted(apply_receipts),
+                },
+            }
+        )
+        lifecycle_widget = next(
+            (
+                widget
+                for widget in widgets
+                if any(action in plan_actions for action in widget_actions(widget))
+            ),
+            {},
+        )
+        lifecycle_inputs = (
+            lifecycle_widget.get("inputs")
+            if isinstance(lifecycle_widget, Mapping)
+            and isinstance(lifecycle_widget.get("inputs"), Mapping)
+            else {}
+        )
+        lifecycle_buttons = {
+            str(button.get("id") or ""): str(button.get("label") or "")
+            for button in lifecycle_inputs.get("buttons", [])
+            if isinstance(button, Mapping) and str(button.get("id") or "")
+        }
+        expected_lifecycle_labels = {
+            "install": "Install",
+            "update": "Update",
+            "select-track": "Save update settings",
+            "remove": "Uninstall",
+        }
+        lifecycle_labels_ok = all(
+            lifecycle_buttons.get(button_id) == label
+            for button_id, label in expected_lifecycle_labels.items()
+        )
+        technical_lifecycle_labels = sorted(
+            label
+            for label in lifecycle_buttons.values()
+            if re.search(r"\b(?:plan|apply)\b", label, flags=re.IGNORECASE)
+        )
+        apply_widgets = [
+            widget
+            for widget in widgets
+            if any(action in apply_actions for action in widget_actions(widget))
+        ]
+        apply_separate = bool(apply_widgets) and all(
+            widget is not lifecycle_widget for widget in apply_widgets
+        )
+        expected_confirmation_labels = {
+            "install": "Install",
+            "update": "Update",
+            "select_track": "Save settings",
+            "remove": "Uninstall",
+        }
+        valid_confirmation_kinds: set[str] = set()
+        cancel_review = False
+        for widget in apply_widgets:
+            inputs = widget.get("inputs") if isinstance(widget.get("inputs"), Mapping) else {}
+            buttons = {
+                str(button.get("id") or ""): str(button.get("label") or "")
+                for button in inputs.get("buttons", [])
+                if isinstance(button, Mapping) and str(button.get("id") or "")
+            }
+            for action in widget_actions(widget):
+                event = str(action.get("on") or "")
+                button_id = event.split(":", 1)[1] if event.startswith("click:") else ""
+                if (
+                    str(action.get("type") or "") == "updateState"
+                    and action.get("params") == {"reviewedPlan": {}}
+                    and buttons.get(button_id) == "Cancel"
+                ):
+                    cancel_review = True
+                if action not in apply_actions:
+                    continue
+                enabled = str(action.get("enabledIf") or "")
+                kind_match = re.search(
+                    r"reviewedPlan\.operation\.kind\s*={2,3}\s*['\"]([^'\"]+)['\"]",
+                    enabled,
+                )
+                if not kind_match:
+                    continue
+                kind = kind_match.group(1)
+                if buttons.get(button_id) == expected_confirmation_labels.get(kind):
+                    valid_confirmation_kinds.add(kind)
+        review_widget = next(
+            (
+                widget
+                for widget in widgets
+                if str(widget.get("id") or "") == "reviewed-plan"
+            ),
+            {},
+        )
+        review_inputs = (
+            review_widget.get("inputs")
+            if isinstance(review_widget, Mapping)
+            and isinstance(review_widget.get("inputs"), Mapping)
+            else {}
+        )
+        review_paths = {
+            str(field.get("path") or "")
+            for field in review_inputs.get("fields", [])
+            if isinstance(field, Mapping)
+        }
+        review_visible = (
+            str(review_widget.get("title") or "") == "Review"
+            and "operation.plan.review_summary" in review_paths
+            and "operation.plan.permissions" in review_paths
+        )
+        review_composition_ok = (
+            lifecycle_labels_ok
+            and not technical_lifecycle_labels
+            and apply_separate
+            and valid_confirmation_kinds == set(expected_confirmation_labels)
+            and cancel_review
+            and review_visible
+        )
+        postconditions.append(
+            {
+                "id": "applications.review_composition",
+                "ok": review_composition_ok,
+                "expected": {
+                    "lifecycleLabels": expected_lifecycle_labels,
+                    "technicalLabels": [],
+                    "reviewTitle": "Review",
+                    "reviewPermissionPath": "operation.plan.permissions",
+                    "confirmationKinds": sorted(expected_confirmation_labels),
+                    "confirmationSeparated": True,
+                    "cancelReview": True,
+                },
+                "actual": {
+                    "lifecycleLabels": lifecycle_buttons,
+                    "technicalLabels": technical_lifecycle_labels,
+                    "reviewTitle": str(review_widget.get("title") or ""),
+                    "reviewPaths": sorted(review_paths),
+                    "confirmationKinds": sorted(valid_confirmation_kinds),
+                    "confirmationSeparated": apply_separate,
+                    "cancelReview": cancel_review,
                 },
             }
         )
@@ -1352,14 +1501,15 @@ def evaluate_ui_request(
             and ("result" in value or isinstance(value.get("cases"), list))
         }
         plan_fixture = prototype_fixtures.get("plan")
+        plan_fixture_cases = (
+            plan_fixture.get("cases")
+            if isinstance(plan_fixture, Mapping)
+            and isinstance(plan_fixture.get("cases"), list)
+            else []
+        )
         valid_plan_fixture_kinds = {
             str((case.get("when") or {}).get("kind") or "")
-            for case in (
-                plan_fixture.get("cases")
-                if isinstance(plan_fixture, Mapping)
-                and isinstance(plan_fixture.get("cases"), list)
-                else []
-            )
+            for case in plan_fixture_cases
             if isinstance(case, Mapping)
             and isinstance(case.get("when"), Mapping)
             and isinstance(case.get("result"), Mapping)
@@ -1372,7 +1522,43 @@ def evaluate_ui_request(
             and str(
                 case.get("result", {}).get("operation", {}).get("plan_digest") or ""
             ).strip()
+            and str(
+                case.get("result", {})
+                .get("operation", {})
+                .get("application_id")
+                or ""
+            ).strip()
+            and str(
+                (
+                    case.get("result", {})
+                    .get("operation", {})
+                    .get("plan", {})
+                    or {}
+                ).get("review_summary")
+                or ""
+            ).strip()
+            and isinstance(
+                (
+                    case.get("result", {})
+                    .get("operation", {})
+                    .get("plan", {})
+                    or {}
+                ).get("permissions"),
+                list,
+            )
         }
+        representative_plan_permissions = any(
+            bool(
+                (
+                    case.get("result", {})
+                    .get("operation", {})
+                    .get("plan", {})
+                    or {}
+                ).get("permissions")
+            )
+            for case in plan_fixture_cases
+            if isinstance(case, Mapping)
+        )
         postconditions.append(
             {
                 "id": "applications.prototype_fixtures",
@@ -1393,6 +1579,7 @@ def evaluate_ui_request(
                     and not mismatched_application_cases
                     and not non_default_installed_fixtures
                     and required_plan_kinds.issubset(valid_plan_fixture_kinds)
+                    and representative_plan_permissions
                 ),
                 "expected": {
                     "profiles": sorted(required_fixture_profiles),
@@ -1406,6 +1593,11 @@ def evaluate_ui_request(
                         "automaticUpdates": True,
                         "updateTrack": "stable",
                         "updatePolicy": "auto_compatible",
+                    },
+                    "planReview": {
+                        "applicationId": True,
+                        "summary": True,
+                        "permissions": "representative non-empty list",
                     },
                     "scope": "development Webspace only",
                 },
@@ -1427,6 +1619,7 @@ def evaluate_ui_request(
                         non_default_installed_fixtures
                     ),
                     "planKinds": sorted(valid_plan_fixture_kinds),
+                    "representativePlanPermissions": representative_plan_permissions,
                 },
             }
         )
@@ -1839,8 +2032,8 @@ def evaluate_ui_request(
         preview_visibility = str(
             (lifecycle_buttons.get("preview") or {}).get("visibleIf") or ""
         )
-        apply_visibility = str(
-            (lifecycle_buttons.get("apply") or {}).get("visibleIf") or ""
+        review_action_visibility = " ".join(
+            str(widget.get("visibleIf") or "") for widget in apply_widgets
         )
         expected_lifecycle_icons = {
             "install": "download-outline",
@@ -1849,19 +2042,17 @@ def evaluate_ui_request(
             "remove": "trash-outline",
             "preview": "open-outline",
             "open-builder": "construct-outline",
-            "apply": "checkmark-outline",
         }
         lifecycle_widgets = [
             widget
             for widget in widgets
             if widget.get("type") == "ui.actions"
-            and {
-                "install", "update", "select-track", "remove", "preview", "open-builder", "apply"
-            }.issubset({
+            and set(expected_lifecycle_icons).issubset({
                 str(button.get("id") or "")
                 for button in (widget.get("inputs") or {}).get("buttons") or []
                 if isinstance(button, Mapping)
             })
+            and any(action in plan_actions for action in widget_actions(widget))
             and (widget.get("inputs") or {}).get("variant") == "toolbar"
             and all(
                 (lifecycle_buttons.get(button_id) or {}).get("icon") == icon
@@ -2065,8 +2256,11 @@ def evaluate_ui_request(
                     and "$state.localDevelopmentAvailable" in preview_visibility
                     and "$state.developmentPreviewWebspaceId" in preview_visibility
                     and "$state.developmentObjectId" in preview_visibility
-                    and "$state.reviewedPlan.operation.operation_id" in apply_visibility
-                    and "$state.reviewedPlan.operation.plan_digest" in apply_visibility
+                    and len(apply_widgets) == 1
+                    and "$state.reviewedPlan.operation.operation_id"
+                    in review_action_visibility
+                    and "$state.reviewedPlan.operation.plan_digest"
+                    in review_action_visibility
                     and len(review_surfaces) == 1
                 ),
                 "expected": "selected detail binds exact lifecycle state, reviewed toggles, and existing local development",
@@ -2110,8 +2304,10 @@ def evaluate_ui_request(
                     ),
                     "lifecycleToolbar": len(lifecycle_widgets) == 1,
                     "applyHiddenWithoutReceipt": (
-                        "$state.reviewedPlan.operation.operation_id" in apply_visibility
-                        and "$state.reviewedPlan.operation.plan_digest" in apply_visibility
+                        "$state.reviewedPlan.operation.operation_id"
+                        in review_action_visibility
+                        and "$state.reviewedPlan.operation.plan_digest"
+                        in review_action_visibility
                     ),
                     "reviewSurfaces": len(review_surfaces),
                 },

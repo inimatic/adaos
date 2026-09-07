@@ -533,6 +533,14 @@ class ApplicationService:
             "kind": operation_kind,
             "expected_revision": expected_revision,
             "release_digest": release_digest,
+            "review_summary": (
+                f"Review {operation_kind} for Application {application_id}."
+            ),
+            "permissions": (
+                list(release.project_release.permissions)
+                if release is not None
+                else []
+            ),
             "components": components,
             "conflicts": conflicts,
             "compatibility": compatibility,

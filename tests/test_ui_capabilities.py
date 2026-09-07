@@ -365,7 +365,12 @@ def _application_manager_webui() -> dict:
                                                 "operation": {
                                                     "operation_id": f"prototype.plan.{kind}",
                                                     "plan_digest": f"sha256:fixture-{kind}",
+                                                    "application_id": "sample-application",
                                                     "kind": kind,
+                                                    "plan": {
+                                                        "review_summary": f"Review {kind}",
+                                                        "permissions": ["workspace.read"],
+                                                    },
                                                 }
                                             },
                                         }
@@ -740,9 +745,17 @@ def _application_manager_webui() -> dict:
                                 "id": "reviewed-plan",
                                 "type": "item.details",
                                 "area": "detail",
-                                "title": "Reviewed change",
+                                "title": "Review",
                                 "visibleIf": "$state.reviewedPlan.operation.operation_id || $state.reviewedPlan.status",
                                 "dataSource": {"kind": "static", "value": "$state.reviewedPlan"},
+                                "inputs": {
+                                    "presentation": "section",
+                                    "fields": [
+                                        {"label": "Operation", "path": "operation.kind"},
+                                        {"label": "Summary", "path": "operation.plan.review_summary"},
+                                        {"label": "Requested permissions", "path": "operation.plan.permissions"},
+                                    ],
+                                },
                             },
                             {
                                 "id": "lifecycle-actions",
@@ -754,38 +767,39 @@ def _application_manager_webui() -> dict:
                                     "buttons": [
                                         {
                                             "id": "install",
+                                            "label": "Install",
                                             "icon": "download-outline",
                                             "visibleIf": "$state.applicationInstalled != true && ($state.selectedReleaseDigest || $state.effectiveReleaseDigest)",
                                         },
                                         {
                                             "id": "update",
+                                            "label": "Update",
                                             "icon": "refresh-outline",
                                             "visibleIf": "$state.applicationInstalled == true && ($state.updateAvailable == true || $state.selectedReleaseDigest)",
                                         },
                                         {
                                             "id": "select-track",
+                                            "label": "Save update settings",
                                             "icon": "options-outline",
                                             "visibleIf": "$state.applicationInstalled == true",
                                         },
                                         {
                                             "id": "remove",
+                                            "label": "Uninstall",
                                             "icon": "trash-outline",
                                             "visibleIf": "$state.applicationInstalled == true && $state.applicationRemovable == true",
                                         },
                                         {
                                             "id": "preview",
+                                            "label": "Preview",
                                             "icon": "open-outline",
                                             "visibleIf": "$state.localDevelopmentAvailable == true && $state.developmentPreviewWebspaceId && $state.developmentObjectId",
                                         },
                                         {
                                             "id": "open-builder",
+                                            "label": "Open in Builder",
                                             "icon": "construct-outline",
                                             "visibleIf": "$state.localDevelopmentAvailable == true && $state.developmentObjectId",
-                                        },
-                                        {
-                                            "id": "apply",
-                                            "icon": "checkmark-outline",
-                                            "visibleIf": "$state.reviewedPlan.operation.operation_id && $state.reviewedPlan.operation.plan_digest",
                                         },
                                     ]
                                 },
@@ -873,18 +887,49 @@ def _application_manager_webui() -> dict:
                                             "sourceWebspaceId": "$state.developmentSourceWebspaceId",
                                         },
                                     },
+                                ],
+                            },
+                            {
+                                "id": "review-actions",
+                                "type": "ui.actions",
+                                "area": "detail",
+                                "visibleIf": "$state.reviewedPlan.operation.operation_id && $state.reviewedPlan.operation.plan_digest",
+                                "inputs": {
+                                    "variant": "toolbar",
+                                    "buttons": [
+                                        {"id": "confirm-install", "label": "Install", "icon": "download-outline", "visibleIf": "$state.reviewedPlan.operation.kind == 'install'"},
+                                        {"id": "confirm-update", "label": "Update", "icon": "refresh-outline", "visibleIf": "$state.reviewedPlan.operation.kind == 'update'"},
+                                        {"id": "confirm-select-track", "label": "Save settings", "icon": "checkmark-outline", "visibleIf": "$state.reviewedPlan.operation.kind == 'select_track'"},
+                                        {"id": "confirm-remove", "label": "Uninstall", "icon": "trash-outline", "visibleIf": "$state.reviewedPlan.operation.kind == 'remove'"},
+                                        {"id": "cancel-review", "label": "Cancel", "icon": "close-outline"},
+                                    ],
+                                },
+                                "actions": [
+                                    *[
+                                        {
+                                            "on": f"click:confirm-{button_kind}",
+                                            "type": "callMcp",
+                                            "target": "applications.apply",
+                                            "idempotencyKey": "auto",
+                                            "prototypeFixture": "$state.prototypeFixtures.apply",
+                                            "resultStateKey": "reviewedPlan",
+                                            "enabledIf": f"$state.reviewedPlan.operation.kind == '{operation_kind}' && $state.reviewedPlan.operation.operation_id && $state.reviewedPlan.operation.plan_digest",
+                                            "params": {
+                                                "operation_id": "$state.reviewedPlan.operation.operation_id",
+                                                "plan_digest": "$state.reviewedPlan.operation.plan_digest",
+                                            },
+                                        }
+                                        for button_kind, operation_kind in (
+                                            ("install", "install"),
+                                            ("update", "update"),
+                                            ("select-track", "select_track"),
+                                            ("remove", "remove"),
+                                        )
+                                    ],
                                     {
-                                        "on": "click:apply",
-                                        "type": "callMcp",
-                                        "target": "applications.apply",
-                                        "idempotencyKey": "auto",
-                                        "prototypeFixture": "$state.prototypeFixtures.apply",
-                                        "resultStateKey": "reviewedPlan",
-                                        "enabledIf": "$state.reviewedPlan.operation.operation_id && $state.reviewedPlan.operation.plan_digest",
-                                        "params": {
-                                            "operation_id": "$state.reviewedPlan.operation.operation_id",
-                                            "plan_digest": "$state.reviewedPlan.operation.plan_digest",
-                                        },
+                                        "on": "click:cancel-review",
+                                        "type": "updateState",
+                                        "params": {"reviewedPlan": {}},
                                     },
                                 ],
                             },
@@ -1066,8 +1111,8 @@ def test_application_manager_evaluation_enforces_mcp_and_review_boundary() -> No
     assert all(item["ok"] for item in accepted["postconditions"])
 
     widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
-    actions = next(widget for widget in widgets if widget["id"] == "lifecycle-actions")["actions"]
-    actions.pop()
+    actions = next(widget for widget in widgets if widget["id"] == "review-actions")["actions"]
+    actions.pop(0)
     rejected = evaluate_ui_request(request, webui)
 
     assert rejected["ok"] is False
@@ -1190,8 +1235,12 @@ def test_application_manager_evaluation_rejects_stale_review_context() -> None:
     catalog["actions"][0]["params"].pop("reviewedPlan")
     operations = next(widget for widget in widgets if widget["id"] == "operations")
     operations["inputs"].pop("titleKey")
-    lifecycle = next(widget for widget in widgets if widget["id"] == "lifecycle-actions")
-    apply = next(action for action in lifecycle["actions"] if action["on"] == "click:apply")
+    review_actions = next(widget for widget in widgets if widget["id"] == "review-actions")
+    apply = next(
+        action
+        for action in review_actions["actions"]
+        if action.get("target") == "applications.apply"
+    )
     apply.pop("resultStateKey")
 
     rejected = evaluate_ui_request(request, webui)
@@ -1270,6 +1319,33 @@ def test_application_manager_evaluation_rejects_wide_aux_layout_and_unguarded_in
     assert by_id["applications.sidebar_layout"]["ok"] is False
     assert by_id["applications.detail_lifecycle_binding"]["ok"] is False
     assert by_id["applications.detail_lifecycle_binding"]["actual"]["installReleaseGuarded"] is False
+
+
+def test_application_manager_evaluation_rejects_technical_lifecycle_commands() -> None:
+    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    webui = _application_manager_webui()
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    lifecycle = next(widget for widget in widgets if widget["id"] == "lifecycle-actions")
+    lifecycle["inputs"]["buttons"][0]["label"] = "Plan install"
+    review_actions = next(widget for widget in widgets if widget["id"] == "review-actions")
+    lifecycle["inputs"]["buttons"].append(
+        {"id": "apply", "label": "Apply reviewed plan", "icon": "checkmark-outline"}
+    )
+    lifecycle["actions"].append(review_actions["actions"][0])
+
+    rejected = evaluate_ui_request(request, webui)
+
+    review = next(
+        item
+        for item in rejected["postconditions"]
+        if item["id"] == "applications.review_composition"
+    )
+    assert review["ok"] is False
+    assert review["actual"]["technicalLabels"] == [
+        "Apply reviewed plan",
+        "Plan install",
+    ]
+    assert review["actual"]["confirmationSeparated"] is False
 
 
 def test_capability_validation_rejects_unknown_layout_and_board_lane() -> None:
