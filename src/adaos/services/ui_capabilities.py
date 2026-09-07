@@ -798,22 +798,66 @@ def evaluate_ui_request(
             "addItemLabel",
             "moveItemLabel",
         }
-        fixture_text_fields = {
-            "title",
-            "summary",
-            "review_summary",
-            "status",
-            "phase",
-            "publication_status",
-            "lifecycle",
-            "visibility",
-            "update_track",
-            "update_policy",
-            "kind",
-            "categories",
-        }
+        fixture_text_fields = {"title", "summary", "review_summary"}
+        locale_dictionaries: dict[str, dict[str, str]] = {"en": {}, "ru": {}}
+        application = (
+            webui.get("ui", {}).get("application", {})
+            if isinstance(webui.get("ui"), Mapping)
+            else {}
+        )
+        resource_collections = [webui.get("resources")]
+        if isinstance(application, Mapping):
+            resource_collections.append(application.get("resources"))
+        for collection in resource_collections:
+            if not isinstance(collection, Mapping):
+                continue
+            for descriptor in collection.values():
+                if not isinstance(descriptor, Mapping):
+                    continue
+                locale = str(descriptor.get("locale") or "").strip().lower()
+                if locale not in locale_dictionaries:
+                    continue
+                if str(descriptor.get("role") or "").strip().lower() != "i18n":
+                    continue
+                dictionary = (
+                    descriptor.get("dictionary")
+                    or descriptor.get("messages")
+                    or descriptor.get("value")
+                )
+                if not isinstance(dictionary, Mapping):
+                    continue
+                locale_dictionaries[locale].update(
+                    {
+                        str(key): str(value)
+                        for key, value in dictionary.items()
+                        if str(key).strip() and str(value).strip()
+                    }
+                )
         missing_localizations: list[str] = []
         invalid_localizations: list[dict[str, Any]] = []
+
+        def localized_text(spec: Any, locale: str) -> str:
+            if isinstance(spec, str):
+                return locale_dictionaries[locale].get(spec.strip(), "").strip()
+            if not isinstance(spec, Mapping):
+                return ""
+            translations = spec.get("translations") or spec.get("locales")
+            if isinstance(translations, Mapping):
+                inline = str(translations.get(locale) or "").strip()
+                if inline:
+                    return inline
+            inline = str(spec.get(locale) or "").strip()
+            if inline:
+                return inline
+            key_value = str(spec.get("key") or "").strip()
+            return locale_dictionaries[locale].get(key_value, "").strip()
+
+        def localization_key(spec: Any) -> str:
+            if isinstance(spec, str):
+                return spec.strip()
+            if isinstance(spec, Mapping):
+                return str(spec.get("key") or "").strip()
+            return ""
 
         def inspect_localizations(
             value: Any,
@@ -854,22 +898,20 @@ def evaluate_ui_request(
                         continue
                     sibling = value.get(f"{key_text}_i18n")
                     location = ".".join(child_path)
-                    if not isinstance(sibling, Mapping):
+                    if not isinstance(sibling, (str, Mapping)):
                         missing_localizations.append(location)
                         continue
-                    translations = sibling.get("translations")
-                    key_value = str(sibling.get("key") or "").strip()
+                    key_value = localization_key(sibling)
+                    localized = {
+                        locale: localized_text(sibling, locale)
+                        for locale in ("en", "ru")
+                    }
                     missing_locales = [
                         locale
                         for locale in ("en", "ru")
-                        if not isinstance(translations, Mapping)
-                        or not str(translations.get(locale) or "").strip()
+                        if not localized[locale]
                     ]
-                    english = (
-                        str(translations.get("en") or "").strip()
-                        if isinstance(translations, Mapping)
-                        else ""
-                    )
+                    english = localized["en"]
                     if not key_value or missing_locales or english != fallback:
                         invalid_localizations.append(
                             {
@@ -889,19 +931,93 @@ def evaluate_ui_request(
 
         for index, page in enumerate(pages):
             inspect_localizations(page, path=("pages", str(index)))
+
+        expected_value_prefixes = {
+            "application.lifecycle": "applications.lifecycle.",
+            "application.visibility": "applications.visibility.",
+            "application.display.categories": "applications.category.",
+            "installation.status": "applications.installation.status.",
+            "subscription.update_track": "applications.update_track.",
+            "subscription.update_policy": "applications.update_policy.",
+            "local_development.phase": "applications.development.phase.",
+            "local_development.status": "applications.development.status.",
+            "local_development.publication_status": (
+                "applications.development.publication_status."
+            ),
+            "operation.kind": "applications.operation.kind.",
+            "operation.status": "applications.operation.status.",
+            "lifecycle": "applications.release.lifecycle.",
+            "kind": "applications.operation.kind.",
+            "status": "applications.operation.status.",
+        }
+        missing_value_prefixes: list[dict[str, str]] = []
+        for widget_index, widget in enumerate(widgets):
+            inputs = widget.get("inputs")
+            if not isinstance(inputs, Mapping):
+                continue
+            for key_name, prefix_name in (
+                ("titleKey", "titleI18nPrefix"),
+                ("subtitleKey", "subtitleI18nPrefix"),
+                ("previewKey", "previewI18nPrefix"),
+                ("badgeKey", "badgeI18nPrefix"),
+            ):
+                path_value = str(inputs.get(key_name) or "").strip()
+                expected_prefix = expected_value_prefixes.get(path_value)
+                if not expected_prefix:
+                    continue
+                actual_prefix = str(inputs.get(prefix_name) or "").strip()
+                if actual_prefix != expected_prefix:
+                    missing_value_prefixes.append(
+                        {
+                            "path": f"pages.0.widgets.{widget_index}.inputs.{prefix_name}",
+                            "field": path_value,
+                            "expected": expected_prefix,
+                            "actual": actual_prefix,
+                        }
+                    )
+            for collection_name in ("meta", "fields"):
+                values = inputs.get(collection_name)
+                if not isinstance(values, list):
+                    continue
+                for value_index, field in enumerate(values):
+                    if not isinstance(field, Mapping):
+                        continue
+                    path_value = str(field.get("path") or field.get("key") or "").strip()
+                    expected_prefix = expected_value_prefixes.get(path_value)
+                    if not expected_prefix:
+                        continue
+                    actual_prefix = str(field.get("valueI18nPrefix") or "").strip()
+                    if actual_prefix != expected_prefix:
+                        missing_value_prefixes.append(
+                            {
+                                "path": (
+                                    f"pages.0.widgets.{widget_index}.inputs."
+                                    f"{collection_name}.{value_index}.valueI18nPrefix"
+                                ),
+                                "field": path_value,
+                                "expected": expected_prefix,
+                                "actual": actual_prefix,
+                            }
+                        )
         postconditions.append(
             {
                 "id": "applications.localization",
-                "ok": not missing_localizations and not invalid_localizations,
+                "ok": (
+                    not missing_localizations
+                    and not invalid_localizations
+                    and not missing_value_prefixes
+                ),
                 "expected": {
                     "locales": ["en", "ru"],
                     "fallbackLocale": "en",
                     "stableKeys": True,
-                    "inlinePrototypeTranslations": True,
+                    "prototypeDictionariesOrInlineTranslations": True,
+                    "canonicalValuePrefixes": True,
                 },
                 "actual": {
                     "missing": sorted(missing_localizations),
                     "invalid": invalid_localizations,
+                    "missingValuePrefixes": missing_value_prefixes,
                 },
             }
         )

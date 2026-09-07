@@ -1024,6 +1024,40 @@ def _application_manager_webui() -> dict:
         },
     }
 
+    value_prefixes = {
+        "application.lifecycle": "applications.lifecycle.",
+        "application.visibility": "applications.visibility.",
+        "application.display.categories": "applications.category.",
+        "installation.status": "applications.installation.status.",
+        "subscription.update_track": "applications.update_track.",
+        "subscription.update_policy": "applications.update_policy.",
+        "local_development.phase": "applications.development.phase.",
+        "local_development.status": "applications.development.status.",
+        "local_development.publication_status": "applications.development.publication_status.",
+        "operation.kind": "applications.operation.kind.",
+        "operation.status": "applications.operation.status.",
+        "lifecycle": "applications.release.lifecycle.",
+        "kind": "applications.operation.kind.",
+        "status": "applications.operation.status.",
+    }
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    for widget in widgets:
+        inputs = widget.get("inputs") or {}
+        for key_name, prefix_name in (
+            ("titleKey", "titleI18nPrefix"),
+            ("subtitleKey", "subtitleI18nPrefix"),
+            ("previewKey", "previewI18nPrefix"),
+            ("badgeKey", "badgeI18nPrefix"),
+        ):
+            path_value = str(inputs.get(key_name) or "")
+            if path_value in value_prefixes:
+                inputs[prefix_name] = value_prefixes[path_value]
+        for collection_name in ("meta", "fields"):
+            for field in inputs.get(collection_name) or []:
+                path_value = str(field.get("path") or field.get("key") or "")
+                if path_value in value_prefixes:
+                    field["valueI18nPrefix"] = value_prefixes[path_value]
+
     fixed_fields = {
         "title",
         "label",
@@ -1035,20 +1069,7 @@ def _application_manager_webui() -> dict:
         "addItemLabel",
         "moveItemLabel",
     }
-    fixture_fields = {
-        "title",
-        "summary",
-        "review_summary",
-        "status",
-        "phase",
-        "publication_status",
-        "lifecycle",
-        "visibility",
-        "update_track",
-        "update_policy",
-        "kind",
-        "categories",
-    }
+    fixture_fields = {"title", "summary", "review_summary"}
 
     def add_localizations(
         value: object,
@@ -1141,6 +1162,58 @@ def test_application_manager_evaluation_requires_bilingual_prototype_text() -> N
     assert localization["actual"]["missing"] == [
         "pages.0.widgets.0.inputs.buttons.0.label"
     ]
+
+
+def test_application_manager_evaluation_accepts_shared_prototype_dictionaries() -> None:
+    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    webui = _application_manager_webui()
+    application = webui["ui"]["application"]
+    page = application["desktop"]["pageSchema"]
+    sections = next(widget for widget in page["widgets"] if widget["id"] == "catalog-sections")
+    sections["inputs"]["buttons"][0]["label_i18n"] = "applications.navigation.applications"
+    application["resources"] = {
+        "applications.i18n.en": {
+            "kind": "data",
+            "role": "i18n",
+            "locale": "en",
+            "dictionary": {"applications.navigation.applications": "Applications"},
+        },
+        "applications.i18n.ru": {
+            "kind": "data",
+            "role": "i18n",
+            "locale": "ru",
+            "dictionary": {"applications.navigation.applications": "Приложения"},
+        },
+    }
+
+    accepted = evaluate_ui_request(request, webui)
+
+    localization = next(
+        item
+        for item in accepted["postconditions"]
+        if item["id"] == "applications.localization"
+    )
+    assert localization["ok"] is True
+
+
+def test_application_manager_evaluation_requires_canonical_value_prefixes() -> None:
+    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    webui = _application_manager_webui()
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    developments = next(widget for widget in widgets if widget["id"] == "catalog-developments")
+    developments["inputs"]["meta"][0].pop("valueI18nPrefix")
+
+    rejected = evaluate_ui_request(request, webui)
+
+    localization = next(
+        item
+        for item in rejected["postconditions"]
+        if item["id"] == "applications.localization"
+    )
+    assert localization["ok"] is False
+    assert localization["actual"]["missingValuePrefixes"][0]["field"] == (
+        "local_development.phase"
+    )
 
 
 def test_application_manager_evaluation_enforces_update_defaults() -> None:
