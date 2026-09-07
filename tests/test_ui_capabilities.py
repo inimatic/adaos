@@ -208,6 +208,15 @@ def test_application_manager_selection_exposes_mcp_master_detail_contract() -> N
         "local-development",
         "protected-system",
     }
+    fixture_model = recipe["composition"]["prototype_fixture_model"]
+    assert fixture_model["canonical_shape"]["applications"]["profile"] == "applications"
+    assert fixture_model["canonical_shape"]["application"]["cases"][0]["result"].startswith(
+        "$state.prototypeFixtures.samples."
+    )
+    assert {
+        value["prototype_state_id"]
+        for value in fixture_model["canonical_shape"]["samples"].values()
+    } == set(fixture_model["required_state_ids"])
     assert selected["qualification"]["requirements"]["application_manager"] is True
 
 
@@ -877,6 +886,25 @@ def test_application_manager_evaluation_enforces_mcp_and_review_boundary() -> No
         if item["id"] == "applications.reviewed_plan_apply"
     )
     assert boundary["ok"] is False
+
+
+def test_application_manager_evaluation_rejects_named_fixture_placeholders() -> None:
+    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    webui = _application_manager_webui()
+    fixtures = webui["ui"]["application"]["desktop"]["pageSchema"]["initialState"]["prototypeFixtures"]
+    fixtures.update({key: f"{key}-fixture" for key in (
+        "applications", "developments", "application", "releases",
+        "operations", "reports", "plan", "apply",
+    )})
+
+    rejected = evaluate_ui_request(request, webui)
+
+    fixture_check = next(
+        item for item in rejected["postconditions"]
+        if item["id"] == "applications.prototype_fixtures"
+    )
+    assert fixture_check["ok"] is False
+    assert fixture_check["actual"]["executableProfiles"] == []
 
 
 def test_application_manager_evaluation_rejects_non_runtime_event_paths() -> None:

@@ -1017,17 +1017,22 @@ def evaluate_ui_request(
         actual_fixture_profiles = {
             str(key) for key in prototype_fixtures if str(key).strip()
         }
+        executable_fixture_profiles = {
+            str(key)
+            for key, value in prototype_fixtures.items()
+            if key in required_fixture_profiles
+            and isinstance(value, Mapping)
+            and ("result" in value or isinstance(value.get("cases"), list))
+        }
         postconditions.append(
             {
                 "id": "applications.prototype_fixtures",
                 "ok": (
-                    required_fixture_profiles.issubset(actual_fixture_profiles)
-                    and all(
-                        str(source.get("prototypeFixture") or "").startswith(
-                            "$state.prototypeFixtures."
-                        )
-                        for source in mcp_sources
-                    )
+                    required_fixture_profiles.issubset(executable_fixture_profiles)
+                    and (required_fixture_refs - {
+                        "$state.prototypeFixtures.plan",
+                        "$state.prototypeFixtures.apply",
+                    }).issubset(source_fixture_refs)
                     and "$state.prototypeFixtures.plan" in action_fixture_refs
                     and "$state.prototypeFixtures.apply" in action_fixture_refs
                     and required_representative_states.issubset(representative_state_ids)
@@ -1040,6 +1045,7 @@ def evaluate_ui_request(
                 },
                 "actual": {
                     "profiles": sorted(actual_fixture_profiles),
+                    "executableProfiles": sorted(executable_fixture_profiles),
                     "sourceRefs": sorted(source_fixture_refs),
                     "actionRefs": sorted(action_fixture_refs),
                     "stateIds": sorted(representative_state_ids),
