@@ -3,7 +3,7 @@
 Status: domain roadmap for registry, publication, installation, and durable
 operation mechanics.
 
-Last reviewed: 2026-09-05.
+Last reviewed: 2026-09-07.
 
 Application product identity, full-screen Applications UX, channel semantics,
 subscriptions, publisher authority, Trial access, and Development Reports are
@@ -634,6 +634,13 @@ scenario.
   technical component/runtime diagnostics
 - [ ] `[should]` advanced component detail and filters that use profiles for semantic selection,
   categories/tags for discovery, and deployment scope for compatibility
+
+Builder dogfood checkpoint, 2026-09-07: Applications revision `011` implements
+the three-zone `Marketplace` / `Installed` / `My developments` candidate and
+selected-detail lifecycle surface over Root MCP. Qualification and wide/compact
+browser checks pass, including an installed stable/prerelease fixture. The
+full-screen UI deliverable remains open until human acceptance and real
+plan/apply/recovery evidence; Infrastate Inventory therefore remains unchanged.
 
 ## Phase 3: Async Install Operations
 

@@ -2,7 +2,7 @@
 
 Status: high-level sequencing for the AdaOS Builder vertical slice.
 
-Last reviewed: 2026-09-05.
+Last reviewed: 2026-09-07.
 
 This roadmap tracks how AdaOS evolves from separate skill/scenario/runtime
 surfaces into a coherent Builder workflow: idea -> governed artifact -> preview
@@ -1845,13 +1845,20 @@ The dated entries below remain the chronological implementation ledger.
   as explicit `applications.development.*` Root MCP tools over the typed Builder
   SDK. Lifecycle examples and the prompt capsule define the DEV -> Trial ->
   prerelease -> stable sequence. This
-  completes the prerequisite only; it is not evidence that Applications has
+  completed the prerequisite only; it was not evidence that Applications had
   already been generated or released. The local gate is captured in
   [Application Preparation Evidence - 2026-09-05](application-preparation-evidence-2026-09-05.md).
-- [ ] `[must]` Build and revise the Applications system scenario through
+- [x] `[must]` Build and revise the Applications system scenario through
   conversational managed development using only the typed Application SDK and
-  `ApplicationsPlane` MCP contracts, then prove its prerelease and stable
-  publication through the Application roadmap.
+  `ApplicationsPlane` MCP contracts. Session `builder_session_f50dcf8e`
+  produced revisions through `011`; the current recipe qualification is `9/9`,
+  exact `Open in Builder` navigation and wide/compact browser rendering pass,
+  and no manual scenario skeleton or UI patch was used.
+- [ ] `[must]` Obtain human acceptance of the exact current Applications
+  Prototype, then prove Automation, prerelease, and stable publication through
+  the Application roadmap. Do not use the qualified Prototype alone as handoff
+  evidence. Current scope, costs, failures, and blockers are recorded in
+  [Applications Builder Dogfood Evidence - 2026-09-07](applications-builder-dogfood-evidence-2026-09-07.md).
 - [ ] `[deferred]` Add full Trial data sandboxing and simultaneous versions of
   a shared skill. A Trial/prerelease badge cannot claim a channel promotion
   without an exact publication receipt.

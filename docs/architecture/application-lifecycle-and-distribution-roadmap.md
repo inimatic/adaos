@@ -2,7 +2,7 @@
 
 Status: target implementation roadmap.
 
-Last reviewed: 2026-09-05.
+Last reviewed: 2026-09-07.
 
 Target architecture:
 [Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
@@ -277,11 +277,15 @@ capability link bearer or its bindings.
 **Outcome:** the full-screen Applications product is created through managed
 Builder development and consumes only public contracts.
 
-- [ ] `[must]` `APP4-01` Start Applications from a conversational Builder
-  request with no manually created scenario/application skeleton.
+- [x] `[must]` `APP4-01` Start Applications from a conversational Builder
+  request with no manually created scenario/application skeleton. The managed
+  operation is `appdevop.d80be62139d3cc53fd11282bf907aae2`; Builder session
+  `builder_session_f50dcf8e` owns the resulting scenario.
 - [ ] `[must]` `APP4-02` Build Installed, Catalog, Updates/Operations, and
-  Application Detail views with an installed filter and exact release/track
-  state.
+  Application Detail views with explicit `Marketplace`, `Installed`, and
+  read-only `My developments` sections, exact release/track state, and human
+  acceptance of the current Prototype. Revision `011` is a qualified candidate,
+  not accepted evidence.
 - [ ] `[must]` `APP4-03` Expose install, update, remove, stable/prerelease track,
   Trial-link install, pause/pin, and operation recovery through SDK/MCP-backed
   actions.
@@ -293,9 +297,21 @@ Builder development and consumes only public contracts.
 - [ ] `[must]` `APP4-06` Mark Applications as a protected system Application:
   bootstrap-capable, ordinary-release updatable, unable to remove its active
   installation, and recoverable through CLI/MCP.
-- [ ] `[must]` `APP4-07` Perform subsequent UI corrections through Builder and
+- [x] `[must]` `APP4-07` Perform subsequent UI corrections through Builder and
   route missing Core/SDK behavior to Core Dev Tickets instead of internal
-  imports or workarounds.
+  imports or workarounds. Revisions `002` through `011` were produced by
+  Builder chat; renderer, SDK, MCP, and authoring-navigation gaps were fixed in
+  their owning layers.
+- [x] `[must]` `APP4-12` Project existing local development without creating it,
+  show Builder phase/status/revision, and open the exact persisted source
+  Webspace and object. Browser proof confirms `desktop/builder` navigation and
+  one unchanged Application development operation.
+- [ ] `[must]` `APP4-13` Replace creation-prompt text in Application metadata
+  with a concise publisher-reviewed product summary through a governed Builder
+  metadata operation; do not patch the Application store manually.
+- [ ] `[must]` `APP4-14` Exercise real browser `plan -> review -> apply` for
+  install/update/track/remove, including stale revision, failed apply, restart,
+  and operation-state recovery before Prototype acceptance.
 - [ ] `[should]` `APP4-08` Add responsive wide/compact layouts, keyboard and
   accessibility checks, long-text fixtures, and reconnect-safe operation state.
 - [ ] `[should]` `APP4-09` Add advanced component/runtime drill-down without
@@ -446,13 +462,16 @@ These tasks remain visible but do not block APP0-APP6.
   triggering remote CI until the full local verification for that slice has
   passed.
 
-## Readiness Boundary (2026-09-05)
+## Readiness Boundary (2026-09-07)
 
 The preparatory Core, SDK, MCP, artifact, channel, recovery, and Development
-Report rails are implemented and locally testable. The repository is ready to
-start `APP4-01`: creating the Applications system product through Builder chat.
-The exact local gate is captured in
-[Application Preparation Evidence - 2026-09-05](application-preparation-evidence-2026-09-05.md).
-This is not release readiness. `APP1-04`, all of `APP4`, and all of `APP6`
-remain open until the real UI replaces Infrastate Inventory and the complete
-clean-subnet chain is captured without manual state edits.
+Report rails are implemented and locally testable. `APP4-01`, `APP4-07`, and
+`APP4-12` are complete; Applications revision `011` is the current unaccepted
+Prototype. The preparation gate remains in
+[Application Preparation Evidence - 2026-09-05](application-preparation-evidence-2026-09-05.md),
+and current dogfood evidence is in
+[Applications Builder Dogfood Evidence - 2026-09-07](applications-builder-dogfood-evidence-2026-09-07.md).
+This is not release readiness. `APP1-04`, the remaining `APP4` acceptance and
+operation gates, and all of `APP6` remain open until the real UI replaces
+Infrastate Inventory and the complete clean-subnet chain is captured without
+manual state edits.

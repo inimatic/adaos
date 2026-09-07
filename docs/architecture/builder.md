@@ -727,21 +727,23 @@ recovery remains available only to that bounded reconciliation path; it is not
 an implicit source update. Recovered messages are marked
 `source=forge_recovery`, are idempotent, and never replace existing chat.
 
-## Prompt IDE And Dev Webspace
+## Builder Workbench And Dev Webspace
 
 The rapid-prototyping Builder experience uses two cooperating surfaces:
 
 - `builder_skill` owns dialogue, draft lifecycle, LLM planning, `webui.json`
   patching, validation, preview evidence, and apply/review handoffs.
-- `prompt_engineer_scenario` is the Builder Workbench UI. It renders active
-  draft state, mockup preview, validation output, file/status views, and
-  actions, but it is not the LLM brain.
-- Prompt IDE does not own a separate chat implementation. It embeds the shared
+- the dedicated `builder` scenario is the Builder Workbench UI in the source
+  Webspace. It renders active development state, validation and revision
+  evidence, process controls, and actions, but it is not the LLM brain.
+- `prompt_engineer_scenario` is a compatibility surface only. It is not the
+  canonical authoring destination for new navigation.
+- Builder Workbench does not own a separate chat implementation. It embeds the shared
   Voice/global-dialog widget configured for the `builder` channel, so voice
   input, typed input, channel selection, transcript rendering, STT/TTS state,
   and browser recovery stay in one reusable dialog component.
 
-Prompt IDE may be loaded in any Builder host webspace. Each host owns one
+Builder Workbench may be loaded in any Builder source Webspace. Each host owns one
 explicit `builder_project_preview` relation to its preview webspace. Neither
 side of the relation is inferred from an id suffix; ids are opaque and legacy
 names such as `dev1-dev` are adopted only as relation targets during migration.
@@ -806,8 +808,9 @@ for project and lifecycle labels; the browser resolves them after loading the
 data source. Tool handlers therefore return one stable payload shape rather
 than locale-specific response schemas.
 
-The source webspace owns the user's conversation and requirements context. The
-paired dev webspace owns the visual workbench and live mockup projection. The
+The source Webspace owns the user's conversation, requirements context, and
+the `builder` authoring scenario. The paired DEV Webspace owns only the selected
+Application/scenario Prototype preview and its live projection. The
 binding is explicit service state, for example:
 
 ```yaml
@@ -816,8 +819,8 @@ builder_workspace_binding:
   preview_webspace_id: dev1-dev
   relationship:
     purpose: builder_project_preview
-  scenario_id: prompt_engineer_scenario
-  purpose: builder_prompt_ide
+  scenario_id: builder
+  purpose: builder_workbench
   selection:
     object_type: scenario
     object_id: shopping_list
@@ -855,13 +858,17 @@ Acceptance checks for project selection are:
 The workbench-facing control surface should include:
 
 - `builder.ensure_dev_webspace`: create or reuse the paired dev webspace and
-  load `prompt_engineer_scenario`.
+  materialize the explicitly selected Prototype there.
 - `builder.attach_dialog_widget`: configure the embedded Voice/global-dialog
   widget for the source conversation and the `builder` channel.
 - `builder.get_workspace_binding`: return source/dev webspace ids, workbench
   scenario id, and active draft.
 - `builder.open_dev_webspace`: return the browser/open URL for the paired
-  dev webspace.
+  DEV preview Webspace.
+- `builder.open_authoring_webspace`: return the source Webspace with the exact
+  `builder` scenario destination.
+- `builder.find_existing_source_for_selection`: read persisted bindings to
+  resolve an existing object's source without creating or repairing topology.
 - `builder.set_active_draft`: switch the paired dev webspace to another draft
   without creating another workbench.
 - `builder.list_development_skills`: list drafts and development skills
@@ -877,9 +884,9 @@ The first-turn flow is:
    the request to `builder_skill`.
 3. `builder_skill` creates or selects a draft, ensures the paired dev webspace,
    sets the active draft binding, and writes an initial `webui.json` draft.
-4. Prompt IDE renders the active draft preview in the paired dev webspace and
-   shows the embedded Voice/global-dialog widget bound to the source Builder
-   conversation.
+4. Builder Workbench remains in the source Webspace and shows the embedded
+   Voice/global-dialog widget bound to the Builder conversation; the paired
+   DEV Webspace renders the active Prototype preview.
 5. Follow-up comments are processed as patches against the current draft and
    current `webui.json`, preserving conversation history and validation
    evidence.

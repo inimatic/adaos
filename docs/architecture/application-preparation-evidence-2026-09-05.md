@@ -67,3 +67,9 @@ at `9257be465` on branch `rev2026`.
 The next allowed product step is `APP4-01`: ask Builder through the chat
 interface to create Applications, then keep every correction on the governed
 Builder path and turn missing platform contracts into Core Dev Tickets.
+
+## Successor Evidence
+
+This record remains the historical preparation gate. `APP4-01` has since been
+completed; current Prototype and dogfood status are recorded in
+[Applications Builder Dogfood Evidence - 2026-09-07](applications-builder-dogfood-evidence-2026-09-07.md).

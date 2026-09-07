@@ -2,7 +2,7 @@
 
 Status: target architecture.
 
-Last reviewed: 2026-09-05.
+Last reviewed: 2026-09-07.
 
 This document defines the canonical AdaOS model for creating, testing,
 publishing, discovering, installing, updating, removing, and improving an
@@ -553,17 +553,37 @@ Applications is a full-screen scenario modeled after the information density
 and navigation ergonomics of a mature extension manager, without copying an
 IDE-specific information architecture.
 
-The primary views are:
+The wide layout has three stable information zones:
 
-- Installed Applications;
-- Catalog, with an `installed` filter;
-- updates and active operations;
-- Application detail.
+- a catalog sidebar with `Marketplace`, `Installed`, and `My developments`;
+- the selected Application identity, lifecycle commands, settings, and tab
+  content in the main area;
+- compact `Installation`, `Marketplace`, `Categories`, and conditional
+  `My development` metadata in an auxiliary rail.
 
-Application detail includes publisher identity, visibility, installed and
-available versions, current update track, exact effective release, permissions,
-component/dependency detail, release notes, Trial access where authorized,
-Development Reports, and operation history.
+Compact layouts expose the catalog as a drawer, keep the selected Application
+as the primary surface, and stack metadata after the main detail. Marketplace
+is the default discovery section and contains public stable Applications only;
+the initial product does not search prereleases globally. Installed is an
+explicit projection rather than a client-side guess. `My developments` is a
+read-only list of development records that already exist for the local
+publisher. Merely opening or filtering that list never creates an Application,
+Project, Builder session, or preview topology.
+
+The selected detail starts with product identity, bounded summary, publisher,
+installed version, and current Marketplace version. A compact lifecycle bar
+then exposes only commands valid for the current state: install or update,
+review update settings, uninstall when policy permits it, open an existing
+local development in Builder, and apply only an exact reviewed receipt.
+Pre-release following and automatic update are explicit toggles. `Details`,
+`Versions`, `Operations`, and `Reports` are peer tabs.
+
+Application detail also includes visibility, exact effective release,
+permissions, component/dependency detail, release notes, Trial access where
+authorized, Development Reports, and operation history. `My development`
+projects the current Builder phase, workflow status, UI revision, and update
+time. `Open in Builder` targets the persisted source Webspace and exact
+existing object; it must not route to the DEV preview or invoke create.
 
 The default surface never exposes raw skill/scenario inventory as peer product
 items. Advanced diagnostics may reveal the resolved composition and deep-link
@@ -925,6 +945,14 @@ chat request
 Application UI corrections discovered during the proof should also pass
 through Builder. Core/SDK defects become Core Dev Tickets rather than hidden
 Application workarounds.
+
+Current dogfood checkpoint, 2026-09-07: Applications was created from Builder
+chat and revised through UI revision `011`. The current Prototype satisfies the
+Application-manager capability checks and browser layout checks, including an
+installed/prerelease fixture and exact existing-development navigation. It is
+not human-accepted, has not entered Automation, and is not Trial or stable
+evidence. See
+[Applications Builder Dogfood Evidence - 2026-09-07](applications-builder-dogfood-evidence-2026-09-07.md).
 
 ## Required Invariants
 
