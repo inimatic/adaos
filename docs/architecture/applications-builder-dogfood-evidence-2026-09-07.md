@@ -104,7 +104,7 @@ chat response. The full state remains available through existing reads, and a
 regression fixture keeps the receipt below 10 KiB even when stored state exceeds
 100 KiB. Builder skill `0.3.125` moves atomic project selection behind the
 public Builder SDK boundary. The qualified experiment currently uses DEV
-Builder `0.3.144`.
+Builder `0.3.145`.
 
 An earlier deleted diagnostic, `applications_minimal_experiment_20260908`, left
 a stale Builder selection and previously surfaced as `The installed skill
@@ -203,17 +203,38 @@ from the normal edit loop. The legacy `angular-eslint 17` builder remains
 incompatible with Angular 19 (`Workspaces is not a constructor`) and needs a
 separate tooling upgrade before lint can be a qualification gate.
 
-The registry checkpoint ran `adaos project push` for every one of the 25
-project manifests at the prior `adaos-registry/main` revision. Their immutable
-releases are present at Root, and the source revisions are reachable from the
-new registry head `3184787c`. Product DEV projects, including Applications and
-Builder, were independently checkpointed through `adaos dev project push`.
-Historical generated TLP calibration fixtures remain excluded from this
-product checkpoint because they reference the retired dependency identity
-`project:adaos_research_platform`; repairing or explicitly classifying those
-fixtures is separate research-data migration work.
-That debt is tracked as non-blocking
+The final registry checkpoint ran `adaos project push` for all 26 Workspace
+project manifests. Five releases were accepted from revision `17f4d6fd`; the
+remaining 21 were accepted from `acd0c893` after advancing versions that were
+already occupied at Root. All 26 immutable releases are now present at Root,
+and both source revisions are ancestors of the final registry head. The sweep
+also exposed that local release-cache occupancy is not sufficient to predict a
+Root version conflict; a future batch publisher should preflight remote version
+occupancy before building archives.
+
+The DEV sweep discovered 177 projects and successfully checkpointed 34 viable
+product and experiment projects through `adaos dev project push`, including
+Applications, all three Applications prototype experiments, and Builder. The
+remaining 143 projects are not silently omitted: 137 generated TLP calibration
+fixtures and six older research projects all reference the retired dependency
+identity `project:adaos_research_platform`. An automatic rename would be
+incorrect because some require `^0.2` while the successor
+`project:research_platform` has only `0.1.x` releases. Repair or archival is
+separate research-data migration work tracked as non-blocking
 `dticket.01M1ZDCH5A8J4RCHQ9TR4S8A9E`.
+
+The final Builder release rehearsal used the complete Project lifecycle. The
+owned scenario and two skills were checkpointed under
+`builder_change_applications_dogfood_20260908`, ProjectRelease `builder@0.2.104`
+was pushed, candidate `builder-0-2-104-73769a3f3733` was materialized under
+`.adaos/trials`, explicitly accepted, and promoted into Workspace lock revision
+`44`. DEV and Workspace then reported the same source revision
+`sha256:d3112b55aad6f4187936cc1b50bb128deaeaeb21f8a2d1d33778616c78ef6118`;
+runtime health confirmed `builder_skill@0.3.145` and
+`builder_sdk_control_skill@0.1.105`. An initial `push -> trial` attempt failed
+correctly because the primary Forge checkpoint was stale. The required order is
+`checkpoint -> push -> trial -> trial-decide -> promote`; the CLI should expose
+that stale-checkpoint precondition before spending work on a release push.
 
 Builder DEV revision `059` also replaces the old `push -> stabilize` Prototype
 approval chain with one evidence-bearing `accept_prototype` command. Its modal
@@ -252,7 +273,8 @@ the governed transition.
 | Browser runtime errors | none; expected local config/probe/fallback transport noise only |
 | Root draft transport | passed at 50, 150, 500, 244, and 805 KiB through `ru.api.inimatic.com` |
 | Root release canonicalization | passed unchanged retry of `research_platform@0.1.6` after RU/EU deployment |
-| Registry project checkpoint | passed; 25/25 manifests published and reachable from `adaos-registry@3184787c` |
+| Registry project checkpoint | passed; 26/26 manifests published from `17f4d6fd` or `acd0c893`, both reachable from the final registry head |
+| DEV project checkpoint | 34/177 pushed; 143 historical research/calibration projects blocked by retired `project:adaos_research_platform`, explicitly classified for migration or archival |
 
 Relevant final ownership repairs are client `92f61f2` and `2c24867`, and AdaOS
 `1d853f613` and `d5cb2e2d1`; the earlier revision history remains in the same

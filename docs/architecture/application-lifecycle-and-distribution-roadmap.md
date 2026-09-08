@@ -424,6 +424,15 @@ Builder development and consumes only public contracts.
   service readiness and make workflow projection incremental. Keep exact
   readiness semantics for routes that need the hydrated state and publish p50,
   p95, and cold-start budgets.
+- [ ] `[should]` `APP4-39` Expose the exact-checkpoint precondition before a
+  Project release operation does expensive work. Report the required
+  `checkpoint -> push -> trial` order, the stale component ref, and the last
+  confirmed Change id; offer an explicit composed command without collapsing
+  the review boundary between component checkpoint and ProjectRelease.
+- [ ] `[should]` `APP4-40` Preflight immutable Project versions against Root
+  before building or uploading a registry batch. Reserve or advance every
+  conflicting version first, then checkpoint the batch under one reachable
+  Forge revision and report per-project build, upload, and retry timings.
 - [ ] `[could]` `APP4-10` Add saved Catalog filters and locally pinned
   Application detail sections.
 - [ ] `[could]` `APP4-38` Store UI revisions as base plus content-addressed
@@ -593,8 +602,11 @@ longer rebuild during tool preflight. Semantic-delta repair optimization, cold
 startup reduction, Client dependency-graph splitting, and the formal Client ABI
 impact gate remain open SHOULD work. Root
 ingress and cross-language release canonicalization were production-verified
-while checkpointing all 25 existing registry project manifests through
-`adaos project push`.
+while checkpointing all 26 registry project manifests through
+`adaos project push`. The independent DEV sweep checkpointed 34 of 177
+projects; all 143 blocked entries are historical research/calibration fixtures
+that retain `project:adaos_research_platform` and require explicit migration or
+archival rather than an unsafe identity rewrite.
 The preparation gate remains in
 [Application Preparation Evidence - 2026-09-05](application-preparation-evidence-2026-09-05.md),
 and current dogfood evidence is in
