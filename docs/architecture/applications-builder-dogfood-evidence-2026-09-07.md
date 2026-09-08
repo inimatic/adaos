@@ -204,13 +204,16 @@ incompatible with Angular 19 (`Workspaces is not a constructor`) and needs a
 separate tooling upgrade before lint can be a qualification gate.
 
 The final registry checkpoint ran `adaos project push` for all 26 Workspace
-project manifests. Five releases were accepted from revision `17f4d6fd`; the
-remaining 21 were accepted from `acd0c893` after advancing versions that were
-already occupied at Root. All 26 immutable releases are now present at Root,
-and both source revisions are ancestors of the final registry head. The sweep
-also exposed that local release-cache occupancy is not sufficient to predict a
-Root version conflict; a future batch publisher should preflight remote version
-occupancy before building archives.
+project manifests. Five releases were initially accepted from revision
+`17f4d6fd`; the remaining 21 were accepted from `acd0c893` after advancing
+versions that were already occupied at Root. Merging 39 pre-existing remote
+checkpoint commits then showed that `research_platform@0.1.6` was newer than
+the local manifest, so the merged registry advanced it to `0.1.7` and published
+that release from `49f554b1`. The current 26 immutable releases are present at
+Root, and all three source revisions are ancestors of the final registry head.
+The sweep also exposed that local release-cache occupancy is not sufficient to
+predict a Root version conflict; a future batch publisher should preflight
+remote version occupancy before building archives.
 
 The DEV sweep discovered 177 projects and successfully checkpointed 34 viable
 product and experiment projects through `adaos dev project push`, including
@@ -273,7 +276,7 @@ the governed transition.
 | Browser runtime errors | none; expected local config/probe/fallback transport noise only |
 | Root draft transport | passed at 50, 150, 500, 244, and 805 KiB through `ru.api.inimatic.com` |
 | Root release canonicalization | passed unchanged retry of `research_platform@0.1.6` after RU/EU deployment |
-| Registry project checkpoint | passed; 26/26 manifests published from `17f4d6fd` or `acd0c893`, both reachable from the final registry head |
+| Registry project checkpoint | passed; 26/26 current manifests published from `17f4d6fd`, `acd0c893`, or merge revision `49f554b1`, all reachable from the final registry head |
 | DEV project checkpoint | 34/177 pushed; 143 historical research/calibration projects blocked by retired `project:adaos_research_platform`, explicitly classified for migration or archival |
 
 Relevant final ownership repairs are client `92f61f2` and `2c24867`, and AdaOS
