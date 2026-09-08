@@ -2,7 +2,7 @@
 
 Status: target implementation roadmap.
 
-Last reviewed: 2026-09-07.
+Last reviewed: 2026-09-08.
 
 Target architecture:
 [Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
@@ -281,11 +281,11 @@ Builder development and consumes only public contracts.
   request with no manually created scenario/application skeleton. The managed
   operation is `appdevop.d80be62139d3cc53fd11282bf907aae2`; Builder session
   `builder_session_f50dcf8e` owns the resulting scenario.
-- [ ] `[must]` `APP4-02` Build Installed, Catalog, Updates/Operations, and
+- [x] `[must]` `APP4-02` Build Installed, Catalog, Updates/Operations, and
   Application Detail views with explicit `Marketplace`, `Installed`, and
   read-only `My developments` sections, exact release/track state, and human
-  acceptance of the current Prototype. Revision `011` is a qualified candidate,
-  not accepted evidence.
+  acceptance of the current Prototype. Revision `027` is accepted with exact
+  UI and locale-resource evidence; governed state is `automation_ready`.
 - [ ] `[must]` `APP4-03` Expose install, update, remove, stable/prerelease track,
   Trial-link install, pause/pin, and operation recovery through SDK/MCP-backed
   actions.
@@ -299,7 +299,7 @@ Builder development and consumes only public contracts.
   installation, and recoverable through CLI/MCP.
 - [x] `[must]` `APP4-07` Perform subsequent UI corrections through Builder and
   route missing Core/SDK behavior to Core Dev Tickets instead of internal
-  imports or workarounds. Revisions `002` through `011` were produced by
+  imports or workarounds. Revisions `002` through `027` were produced by
   Builder chat; renderer, SDK, MCP, and authoring-navigation gaps were fixed in
   their owning layers.
 - [x] `[must]` `APP4-12` Project existing local development without creating it,
@@ -314,11 +314,22 @@ Builder development and consumes only public contracts.
   hiding the original prompt. Lost-response recovery is idempotent.
 - [ ] `[must]` `APP4-14` Exercise real browser `plan -> review -> apply` for
   install/update/track/remove, including stale revision, failed apply, restart,
-  and operation-state recovery before Prototype acceptance.
+  and operation-state recovery before the Automation/Trial exit gate.
+- [x] `[must]` `APP4-15` Store scenario-owned EN/RU dictionaries as declared
+  Prototype resources, verify both locales during qualification, bind their
+  exact digest into acceptance, and invalidate acceptance after locale changes.
+- [x] `[must]` `APP4-16` Present direct lifecycle intent (`Install`, `Update`,
+  `Save update settings`, `Uninstall`) while retaining plan digest and apply as
+  the internal reviewed protocol. Default auto-update to `true` and
+  prerelease-following to `false`.
 - [ ] `[should]` `APP4-08` Add responsive wide/compact layouts, keyboard and
   accessibility checks, long-text fixtures, and reconnect-safe operation state.
 - [ ] `[should]` `APP4-09` Add advanced component/runtime drill-down without
   exposing it as the default product model.
+- [ ] `[should]` `APP4-17` Add an opt-in bounded screenshot review after
+  deterministic qualification: compact plus wide capture, no more than two
+  model repair iterations, and a structured Development Ticket when a renderer
+  or declarative-ABI gap remains.
 - [ ] `[could]` `APP4-10` Add saved Catalog filters and locally pinned
   Application detail sections.
 - [ ] `[deferred]` `APP4-11` Multi-user publisher collaboration UI and proposal
@@ -456,7 +467,7 @@ These tasks remain visible but do not block APP0-APP6.
 
 ## Documentation and Commit Gate
 
-- [ ] `[must]` Keep the target architecture, this roadmap, Product Terminology,
+- [x] `[must]` Keep the target architecture, this roadmap, Product Terminology,
   Roadmap Inventory, Artifact Pipeline, Development Signals, Identity, Root
   MCP, and MVP roadmap synchronized when a contract changes.
 - [ ] `[must]` Do not mark a task complete without evidence matching its exit

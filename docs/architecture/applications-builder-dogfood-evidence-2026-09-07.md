@@ -1,12 +1,12 @@
-# Applications Builder Dogfood Evidence - 2026-09-07
+# Applications Builder Dogfood Evidence - 2026-09-08
 
-Status: `prototype-candidate`, not accepted.
+Status: Prototype `027` accepted; Automation not started.
 
 This record covers creation and iterative UI development of the protected
 Applications system Application through the managed Builder path. It proves a
-usable Prototype and exposes the remaining product and lifecycle work. It does
-not prove Automation, Trial, prerelease, stable publication, or replacement of
-Infrastate Inventory.
+an accepted executable Prototype and exposes the remaining product and lifecycle
+work. It does not prove Automation, Trial, prerelease, stable publication, or
+replacement of Infrastate Inventory.
 
 ## Managed Identities
 
@@ -19,8 +19,13 @@ Infrastate Inventory.
 - Builder session: `builder_session_f50dcf8e`.
 - Source/authoring destination: Webspace `desktop`, scenario `builder`.
 - Prototype destination: Webspace `desktop-dev`, scenario `applications`.
-- Current UI revision: `011`; workflow `prototype/working`, stable `false`,
-  acceptance absent, Automation `not_started`.
+- Current UI revision: `027`; workflow generation `48`, governed state
+  `automation_ready`, stable `false`, Automation `not_started`.
+- Prototype acceptance:
+  `acceptance:builder_change_96bd953f:027:324b392f85df8477`, digest
+  `sha256:395776dcc9f9e0713d5ce0deebc6f56cdf913cee1be4a304fd82a37cd56e956d`.
+- Externalized context packet:
+  `sha256:391b5b7b3b32af7c657f79c1dc93844403402864cbfcc35ad9647c69f6d42c9a`.
 
 The Application aggregate is at revision `2`: create plus the bounded metadata
 correction. Catalog reads and `Open in Builder` do not create Applications,
@@ -28,55 +33,84 @@ Builder sessions, or development operations.
 
 ## Prototype Result
 
-Revision `011` provides:
+Revision `027` provides:
 
 - a wide three-zone workbench and compact drawer/stacked rendering;
 - `Marketplace`, `Installed`, and existing-only `My developments` catalogs;
 - selected Application identity and bounded detail instead of raw payloads;
-- install/update/update-settings/uninstall commands with separate reviewed
-  plan and apply boundaries;
-- prerelease-following and automatic-update toggles;
+- direct user commands `Install`, `Update`, `Save update settings`, and
+  `Uninstall`; planning and the exact reviewed receipt remain an internal
+  safety boundary rather than user-facing command terminology;
+- prerelease-following and automatic-update toggles, defaulting respectively
+  to `false` and `true` for a new installation intent;
 - `Details`, `Versions`, `Operations`, and `Reports` tabs;
 - `Installation`, `Marketplace`, `Categories`, and conditional
   `My development` metadata;
-- current Builder phase, status, revision, and exact existing-source link.
+- current Builder phase, status, revision, and exact existing-source link;
+- scenario-owned `assets/i18n/en.json` and `assets/i18n/ru.json` dictionaries,
+  including lifecycle controls and representative fixtures in both locales;
+- install, update, prerelease-following, protected-system, and reviewed-install
+  representative states without claiming that the SDK operation has executed.
 
-The application-manager capability catalog version is `1.3.12`. All nine
-postconditions pass. The final r011 correction completed on the primary
-`gpt-5` attempt without repair: response
-`resp_00473e1d9452a416006a9e64e68c7087d18fc355fe54453e59`, `12,062` total
-tokens. Earlier broad revisions showed a recurring cost/risk: r009 and r010
-needed qualification repair and consumed about `29k` tokens each. Narrow,
-contract-explicit corrections are materially cheaper and more reliable.
+The application-manager capability catalog version is `1.3.24`. All twelve
+postconditions pass. Acceptance binds the exact `webui.json` digest and the
+two-locale resource bundle digest
+`sha256:142ddffd7fc9db3e8bcb85a15c7773ee92ab151580ba6334a3c4ceed544222bc`.
+Changing a declared locale dictionary now makes acceptance stale.
+
+The dogfood revisions exposed four reusable platform defects rather than
+Applications-local workarounds:
+
+- Required Actions truncated submitted Review text before it became a Dev
+  Ticket; the client now preserves and copies the complete submitted note;
+- the details renderer unwrapped a one-object operation envelope even when
+  configured paths targeted that envelope;
+- canonical materialization may reduce a one-widget modal array to a singleton
+  object, which the modal renderer previously discarded;
+- full acceptance plus repeated context/history exceeded the workflow state
+  bound; history now stores acceptance identity only and a large digest-bound
+  context packet is stored outside `prompt_state.json` and verified on load.
+
+Builder DEV revision `059` also replaces the old `push -> stabilize` Prototype
+approval chain with one evidence-bearing `accept_prototype` command. Its modal
+collects behavior, compact screenshot, and wide screenshot references before
+the governed transition.
 
 ## Verification Ledger
 
 | Gate | Result |
 | --- | --- |
 | Application/Builder/UI Python regression group | passed |
-| Complete browser-client Karma suite | passed, `1270/1270` |
-| Capability qualification | passed, `9/9`, catalog `1.3.12` |
-| Real local development projection | `prototype`, `working`, revision `011` |
+| Complete browser-client Karma suite | passed, `1279/1279` |
+| Capability qualification | passed, `12/12`, catalog `1.3.24` |
+| Formal Prototype acceptance | passed, revision `027`, governed `automation_ready` |
+| Locale resource binding | passed, exact EN/RU bundle is acceptance evidence |
 | Wide browser layout | passed; 380px catalog, flexible detail, 300px metadata |
 | Compact browser layout | passed; no document horizontal overflow |
+| EN/RU browser rendering | passed at 1440x1000 and 390x844; no document or control overflow |
 | Existing-development navigation | passed; new window targets `desktop/builder` with Applications selected |
 | Catalog metadata | passed; concise summary plus `System` and `Management`, original creation prompt absent |
 | Metadata recovery | passed; a lost response replays as `succeeded/duplicate` without a second revision |
 | Installed fixture | passed; installed `1.2.0`, stable `1.3.0`, prerelease `1.4.0-beta.2` |
-| Installed controls | update, settings, uninstall, prerelease, and auto-update visible; apply hidden before receipt |
+| Installed controls | direct update, settings, uninstall, prerelease, and auto-update controls follow exact fixture state |
+| Review detail | passed; exact operation, summary, and entitlement/permission snapshot remain visible |
+| Builder acceptance modal | passed; canonical singleton form renders all three evidence fields |
+| Workflow persistence | passed; `prompt_state.json` is 313,115 bytes and the 182,541-byte context packet is digest-addressed |
+| Applications Dev Tickets | reconciled; no nonterminal ticket remains in the Applications scope |
 | Browser runtime errors | none; expected local config/probe/fallback transport noise only |
 
-Relevant implementation commits are client `508972a` and AdaOS `225bd5231`,
-`aa6c02eba`, `564cf9f12`, and `ba148679f`. No remote push was performed for
-this checkpoint.
+Relevant final ownership repairs are client `92f61f2` and `2c24867`, and AdaOS
+`1d853f613` and `d5cb2e2d1`; the earlier revision history remains in the same
+branches. Remote push is deferred until the complete final verification and
+Forge checkpoints finish.
 
 ## Critical Backlog
 
 ### Must
 
-- obtain explicit human acceptance of one exact Prototype revision before
-  Automation starts;
-- run real browser plan, receipt review, and apply operations for install,
+- start Automation only from the exact accepted revision and locale/resource
+  evidence; reject any stale UI, data, or locale digest;
+- run real browser intent, receipt review, and apply operations for install,
   update, track selection, and remove; cover stale revisions, failed apply,
   restart, and reconnect recovery;
 - complete the immutable Trial, link install, exact-digest stable publication,
@@ -93,7 +127,11 @@ this checkpoint.
   publisher fingerprint, and report status without making components the
   default product model;
 - reduce full-recipe repair frequency and token cost with smaller semantic
-  patch contracts and deterministic postcondition hints.
+  patch contracts and deterministic postcondition hints;
+- add an opt-in, bounded visual revision gate after deterministic checks:
+  capture compact and wide browser screenshots, permit at most two model repair
+  attempts, and emit a targeted Core/client/ABI Development Ticket if the
+  result still fails.
 
 ### Could
 
@@ -111,8 +149,8 @@ this checkpoint.
 
 ## Handoff Boundary
 
-The next valid action is human review of revision `011`, execution of the real
-Application operation proof, or another Builder chat correction. Prototype
-acceptance, Codex/Automation handoff, Trial creation, and publication remain
-blocked until their explicit gates are satisfied. Infrastate Inventory is
-intentionally unchanged.
+Prototype work is complete at exact revision `027`. The next valid phase is
+Automation from its accepted handoff, followed by real SDK/MCP operation proof,
+Candidate, isolated Trial, and release gates. No Trial or publication claim is
+made by this record. Infrastate Inventory is intentionally unchanged until the
+implemented Applications flow reaches its separate replacement gate.

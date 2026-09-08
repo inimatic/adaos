@@ -808,6 +808,13 @@ for project and lifecycle labels; the browser resolves them after loading the
 data source. Tool handlers therefore return one stable payload shape rather
 than locale-specific response schemas.
 
+Prototype acceptance loads manifest-declared scenario locale resources from
+`assets/i18n/<locale>.json`, evaluates the required locales, and binds the
+resource definitions plus dictionary content as exact acceptance evidence.
+Changing a declared dictionary makes the acceptance stale. Locales therefore
+remain part of the scenario source and Automation handoff instead of becoming
+Builder-owned UI text or an out-of-band client catalogue.
+
 The source Webspace owns the user's conversation, requirements context, and
 the `builder` authoring scenario. The paired DEV Webspace owns only the selected
 Application/scenario Prototype preview and its live projection. The
@@ -835,6 +842,14 @@ than being copied into every YDoc update. The projection is written only to the
 Builder host; the preview owns its scenario data. Legacy `data/prompt/*` paths
 may be read only for migration or compatibility, not as canonical Builder
 state.
+
+`prompt_state.json` remains a bounded control record. When its hydrated Builder
+context would exceed the inline threshold, the context packet is stored by
+kind, object id, and digest under `state/builder/context_packets/`; the state
+keeps only a typed digest reference. Reads enforce the packet size, schema,
+reference identity, and recomputed canonical digest before hydration. Workflow
+history retains acceptance identity and digest, not a second copy of the full
+acceptance record.
 
 An HTTP `403` from a Builder data source means that the authenticated caller is
 forbidden or that an approval is required. It is a local source failure and

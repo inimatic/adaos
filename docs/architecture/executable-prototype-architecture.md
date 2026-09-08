@@ -32,9 +32,10 @@ behavior:
 - Automation replaces mock activity bindings with implementations while
   preserving accepted UI, data, conversational, and outcome contracts.
 
-Screenshot input, general visual workflow design, full workflow round trips,
-and automatic reverse engineering are explicitly deferred. Their contracts are
-retained below so the MVP does not close the extension seam.
+Screenshots remain outside the default context and never replace structural
+evidence. A bounded opt-in compact/wide revision gate is a post-MVP `should`;
+general screenshot-derived layout inference, visual workflow design, full
+workflow round trips, and automatic reverse engineering remain deferred.
 
 ## Implemented MVP Baseline
 
@@ -414,7 +415,15 @@ implementation convenience.
 - legacy workflow inference from code and traces;
 - visual workflow editor or graph studio;
 - parallel/nested/long-running workflow prototype execution;
-- screenshot/multimodal composition context and visual-diff acceptance.
+- general screenshot-derived composition inference and unbounded visual-diff
+  acceptance.
+
+The first bounded extension is narrower than general screenshot inference: run
+deterministic checks first, capture the declared compact and wide viewports,
+permit at most two visual repair iterations, and retain the exact source digest
+and screenshots. An unresolved mismatch becomes a Development Ticket against
+the owning renderer/Core/ABI surface. Sanitized first-render failures may feed
+an evaluation corpus, but never become runtime authority or implicit context.
 
 ## MVP Invariants
 
@@ -432,7 +441,8 @@ implementation convenience.
 8. Automation handoff fails on missing required mappings.
 9. Prototype experiments remain outside the accepted line until adopted.
 10. Screenshot input and general workflow projection remain off by default and
-    cannot become implicit context or authority.
+    cannot become implicit context or authority; an explicitly requested,
+    bounded post-deterministic visual gate may contribute review evidence.
 
 ## MVP Acceptance Evidence
 

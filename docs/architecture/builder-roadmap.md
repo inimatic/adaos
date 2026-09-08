@@ -355,6 +355,11 @@ Open work:
   authoritative post-push commit/tree receipt. Scenario timeout reconciliation
   proves that one accepted request produces one durable Forge write and current
   metadata; archive parity alone does not satisfy the gate.
+- [x] `[must]` Admit bounded production-size draft archives consistently at
+  every Root HTTP layer. Draft VCS routes use a `70 MiB` nginx body limit and
+  install their route-specific JSON parser before the default Express parser;
+  50 KiB, 150 KiB, 500 KiB probes and real 244 KiB/805 KiB Builder pushes pass
+  without `413` or early truncation.
 - [x] `[must]` Remove worker-owned DEV scaffolding. Builder chat and automation
   create missing scenarios, skills, and companion skills through the core
   developer service; workers only modify artifacts already created in DEV.
@@ -1322,10 +1327,18 @@ The same package passed workflow/validation/adapter lock admission and was
 uploaded through the ordinary Scenario Forge path as version `0.1.1`, Forge
 commit `a6ff3ac226427fb9679557ef1aa32bc28dd33304`, payload SHA-256
 `fcbb16fff49e636e6cfd1e3c0641c83059bddefef53524b4910efd04e4384b4d`.
-- [x] `[deferred]` Keep screenshots out of the default context packet. Defer
-  capture, multimodal target resolution, screenshot-derived layout inference,
-  and visual-diff acceptance until structured composition evidence is shown
-  insufficient for a named class of defects.
+- [x] `[must]` Keep screenshots out of the default context packet and require
+  deterministic composition/behavior checks before any visual model call.
+- [ ] `[should]` Add an opt-in bounded visual-revision gate for compact and wide
+  browser layouts. Allow at most two model repair iterations; retain exact
+  revision/digest/screenshots and convert an unresolved renderer, Core, or ABI
+  mismatch into a targeted Development Ticket instead of widening Prototype
+  context indefinitely. The Applications dogfood proved the need by exposing
+  singleton-modal and details-envelope renderer defects that passed structural
+  source validation.
+- [ ] `[could]` Aggregate sanitized first-render visual failures and their
+  owning-layer resolutions into an evaluation corpus used to improve UI ABI
+  descriptions, representative fixtures, and deterministic postconditions.
 - [x] `[deferred]` Defer general UI-driven/mixed-channel Workflow Prototype
   Slices, full semantic workflow round trips, boundary expansion/rebase,
   reverse projection from stable applications, protected automated-node
@@ -1857,10 +1870,14 @@ The dated entries below remain the chronological implementation ledger.
   `update_application_metadata` Builder operation removed the creation prompt
   from catalog presentation, advanced the aggregate to revision `2`, and has
   idempotent lost-response recovery.
-- [ ] `[must]` Obtain human acceptance of the exact current Applications
-  Prototype, then prove Automation, prerelease, and stable publication through
-  the Application roadmap. Do not use the qualified Prototype alone as handoff
-  evidence. Current scope, costs, failures, and blockers are recorded in
+- [x] `[must]` Obtain human acceptance of the exact current Applications
+  Prototype. Revision `027` is accepted with deterministic qualification,
+  EN/RU resource digests, five behavior checks, and compact/wide browser
+  evidence; the workflow is `automation_ready`.
+- [ ] `[must]` Prove Applications Automation, prerelease, and stable publication
+  through the Application roadmap. Do not use accepted Prototype evidence as
+  Automation, Trial, or Release evidence. Current scope, costs, failures, and
+  remaining blockers are recorded in
   [Applications Builder Dogfood Evidence - 2026-09-07](applications-builder-dogfood-evidence-2026-09-07.md).
 - [ ] `[deferred]` Add full Trial data sandboxing and simultaneous versions of
   a shared skill. A Trial/prerelease badge cannot claim a channel promotion

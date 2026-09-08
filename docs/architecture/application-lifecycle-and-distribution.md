@@ -572,11 +572,21 @@ Project, Builder session, or preview topology.
 
 The selected detail starts with product identity, bounded summary, publisher,
 installed version, and current Marketplace version. A compact lifecycle bar
-then exposes only commands valid for the current state: install or update,
-review update settings, uninstall when policy permits it, open an existing
-local development in Builder, and apply only an exact reviewed receipt.
-Pre-release following and automatic update are explicit toggles. `Details`,
-`Versions`, `Operations`, and `Reports` are peer tabs.
+then exposes only commands valid for the current state: `Install`, `Update`,
+`Save update settings`, `Uninstall` when policy permits it, and `Open in
+Builder` for an existing local development. `Plan install`, `Plan update`, and
+`Apply reviewed plan` are protocol concepts, not primary user commands. A
+direct command obtains a bounded plan and opens `Review`; confirmation applies
+that exact plan digest. Pre-release following and automatic update are explicit
+toggles. New intent defaults to prerelease following `false` and automatic
+update `true`. `Details`, `Versions`, `Operations`, and `Reports` are peer tabs.
+
+Static scenario localization is owned by the scenario package. The scenario
+declares locale resources in `webui.json` and stores string dictionaries under
+`assets/i18n/<locale>.json`; Applications initially requires `en` and `ru`.
+Prototype qualification renders both locales, and Prototype acceptance binds a
+digest of the declared resource definitions and dictionaries. A locale edit
+therefore invalidates the acceptance just as a `webui.json` edit does.
 
 Application detail also includes visibility, exact effective release,
 permissions, component/dependency detail, release notes, Trial access where
@@ -947,13 +957,14 @@ Application UI corrections discovered during the proof should also pass
 through Builder. Core/SDK defects become Core Dev Tickets rather than hidden
 Application workarounds.
 
-Current dogfood checkpoint, 2026-09-07: Applications was created from Builder
-chat and revised through UI revision `011`. The current Prototype satisfies the
-Application-manager capability checks and browser layout checks, including an
-installed/prerelease fixture and exact existing-development navigation. Its
-catalog summary and categories were corrected through a durable, recoverable
-Builder metadata operation rather than a direct store edit. It is not
-human-accepted, has not entered Automation, and is not Trial or stable evidence.
+Current dogfood checkpoint, 2026-09-08: Applications was created from Builder
+chat and revised through UI revision `027`. The exact Prototype is accepted and
+the governed workflow is `automation_ready`. It satisfies the Application-
+manager capability checks, direct lifecycle intent/review composition, EN/RU
+resource checks, representative lifecycle states, and compact/wide browser
+checks. Its catalog metadata was corrected through a durable, recoverable
+Builder operation rather than a direct store edit. Automation has not started,
+so this remains neither Trial nor stable evidence.
 See
 [Applications Builder Dogfood Evidence - 2026-09-07](applications-builder-dogfood-evidence-2026-09-07.md).
 
