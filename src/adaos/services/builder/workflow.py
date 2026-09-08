@@ -132,7 +132,9 @@ BUILDER_INTERACTION_FRAME_SCHEMA = "adaos.builder.interaction_frame.v1"
 BUILDER_WORKFLOW_EVENT = "builder.workflow.changed"
 _LOCK = threading.RLock()
 _MAX_STATE_BYTES = 512 * 1024
+_MAX_INLINE_STATE_BYTES = 384 * 1024
 _MAX_PORTFOLIO_RECORD_BYTES = 512 * 1024
+_MAX_CONTEXT_PACKET_BYTES = 512 * 1024
 _MAX_HISTORY = 50
 _MAX_CHANGE_ISSUES = 50
 _MAX_CHANGE_RUNS = 100
@@ -1309,6 +1311,57 @@ class BuilderWorkflowService:
             / _project_id(object_id)
         )
 
+    def _context_packet_path(
+        self,
+        object_type: str,
+        object_id: str,
+        digest: str,
+    ) -> Path:
+        token = str(digest or "").strip().lower()
+        if not token.startswith("sha256:") or len(token) != 71 or any(
+            char not in "0123456789abcdef" for char in token[7:]
+        ):
+            raise BuilderWorkflowError("Builder context packet digest is invalid")
+        return (
+            Path(self.state_dir)
+            / "builder"
+            / "context_packets"
+            / _kind(object_type)
+            / _project_id(object_id)
+            / f"{token[7:]}.json"
+        )
+
+    def _load_external_context_packet(
+        self,
+        object_type: str,
+        object_id: str,
+        workflow: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        external = _mapping(workflow.get("context_packet_external"))
+        if external.get("schema") != "adaos.builder.context_packet_external.v1":
+            return None
+        digest = str(external.get("digest") or "").strip().lower()
+        path = self._context_packet_path(object_type, object_id, digest)
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError as exc:
+            raise BuilderWorkflowError("Builder context packet is missing") from exc
+        if len(raw) > _MAX_CONTEXT_PACKET_BYTES:
+            raise BuilderWorkflowError("Builder context packet exceeds the bounded size")
+        try:
+            value = json.loads(raw.decode("utf-8-sig"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise BuilderWorkflowError("Builder context packet is invalid") from exc
+        if not isinstance(value, Mapping) or value.get("schema") != BUILDER_CONTEXT_PACKET_SCHEMA:
+            raise BuilderWorkflowError("Builder context packet is invalid")
+        supplied_digest = str(value.get("digest") or "").strip().lower()
+        unsigned = dict(value)
+        unsigned.pop("digest", None)
+        unsigned.pop("built_at", None)
+        if supplied_digest != digest or _stable_digest(unsigned) != digest:
+            raise BuilderWorkflowError("Builder context packet identity differs from its reference")
+        return dict(value)
+
     def _portfolio_record_path(
         self,
         object_type: str,
@@ -1386,6 +1439,32 @@ class BuilderWorkflowService:
             "schema": "adaos.builder.change_portfolio_external.v1",
             "change_ids": change_ids[-100:],
         }
+        payload["workflow"] = workflow
+        context_packet = _mapping(workflow.get("context_packet"))
+        estimated = len(
+            (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        )
+        external_context = _mapping(workflow.get("context_packet_external"))
+        if context_packet and (
+            estimated > _MAX_INLINE_STATE_BYTES
+            or external_context.get("schema") == "adaos.builder.context_packet_external.v1"
+        ):
+            digest = str(context_packet.get("digest") or "").strip().lower()
+            path = self._context_packet_path(object_type, object_id, digest)
+            raw = (json.dumps(context_packet, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            if len(raw) > _MAX_CONTEXT_PACKET_BYTES:
+                raise BuilderWorkflowError("Builder context packet exceeds the bounded size")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name(f".{path.name}.tmp")
+            temporary.write_bytes(raw)
+            _replace_path(temporary, path)
+            workflow["context_packet"] = None
+            workflow["context_packet_external"] = {
+                "schema": "adaos.builder.context_packet_external.v1",
+                "digest": digest,
+            }
+        elif not context_packet:
+            workflow.pop("context_packet_external", None)
         # ``change_set`` is a deterministic compatibility projection rebuilt
         # from the canonical Change by ``_normalized_workflow``.
         if isinstance(workflow.get("change"), Mapping):
@@ -1405,11 +1484,14 @@ class BuilderWorkflowService:
             raise BuilderWorkflowError(f"invalid prompt_state.json: {exc}") from exc
         state = dict(value) if isinstance(value, Mapping) else {}
         workflow = _mapping(state.get("workflow"))
+        external_context = self._load_external_context_packet(object_type, object_id, workflow)
+        if external_context is not None:
+            workflow["context_packet"] = external_context
         external = self._load_external_portfolio(object_type, object_id, workflow)
         if external:
             inline = _mapping(workflow.get("change_portfolio"))
             workflow["change_portfolio"] = {**external, **inline}
-            state["workflow"] = workflow
+        state["workflow"] = workflow
         return state
 
     def _write_state(self, object_type: str, object_id: str, state: Mapping[str, Any]) -> None:
@@ -1681,19 +1763,9 @@ class BuilderWorkflowService:
         object_type: str,
         object_id: str,
     ) -> tuple[dict[str, Any], str, str]:
+        root = self._prototype_source_root(object_type, object_id)
         kind = _kind(object_type)
         project_id = _project_id(object_id)
-        source_kind = kind
-        source_id = project_id
-        if kind == "project":
-            presentation = self._project_presentation(kind, project_id)
-            source_id = str((presentation or {}).get("scenario_id") or "").strip()
-            if not source_id:
-                raise BuilderWorkflowError(
-                    "project Prototype acceptance requires a primary presentation scenario"
-                )
-            source_kind = "scenario"
-        root = self.project_root(source_kind, source_id)
         path = root / "webui.json"
         try:
             webui = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -1708,6 +1780,93 @@ class BuilderWorkflowService:
 
         normalized = copy.deepcopy(dict(webui))
         return normalized, revision, prototype_webui_digest(normalized)
+
+    def _prototype_source_root(self, object_type: str, object_id: str) -> Path:
+        kind = _kind(object_type)
+        project_id = _project_id(object_id)
+        source_kind = kind
+        source_id = project_id
+        if kind == "project":
+            presentation = self._project_presentation(kind, project_id)
+            source_id = str((presentation or {}).get("scenario_id") or "").strip()
+            if not source_id:
+                raise BuilderWorkflowError(
+                    "project Prototype acceptance requires a primary presentation scenario"
+                )
+            source_kind = "scenario"
+        return self.project_root(source_kind, source_id)
+
+    def _prototype_locale_snapshot(
+        self,
+        object_type: str,
+        object_id: str,
+        webui: Mapping[str, Any],
+        revision: str,
+    ) -> tuple[dict[str, dict[str, str]], dict[str, Any] | None]:
+        application = _mapping(_mapping(webui.get("ui")).get("application"))
+        resources = _mapping(application.get("resources"))
+        root = self._prototype_source_root(object_type, object_id).resolve()
+        dictionaries: dict[str, dict[str, str]] = {}
+        definitions: list[dict[str, str]] = []
+        for resource_id, raw in sorted(resources.items(), key=lambda item: str(item[0])):
+            resource = _mapping(raw)
+            if str(resource.get("role") or "").strip().lower() != "i18n":
+                continue
+            locale = str(resource.get("locale") or "").strip().lower().replace("_", "-")
+            relative_path = str(resource.get("path") or "").strip()
+            if not locale or not relative_path:
+                raise BuilderWorkflowError(
+                    f"prototype i18n resource {resource_id!s} requires locale and path"
+                )
+            candidate = (root / relative_path).resolve()
+            try:
+                candidate.relative_to(root)
+            except ValueError as exc:
+                raise BuilderWorkflowError(
+                    f"prototype i18n resource {resource_id!s} escapes the project root"
+                ) from exc
+            try:
+                loaded = json.loads(candidate.read_text(encoding="utf-8-sig"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise BuilderWorkflowError(
+                    f"cannot load prototype i18n resource {resource_id!s}: {exc}"
+                ) from exc
+            if not isinstance(loaded, Mapping) or any(
+                not isinstance(value, str) for value in loaded.values()
+            ):
+                raise BuilderWorkflowError(
+                    f"prototype i18n resource {resource_id!s} must be a string dictionary"
+                )
+            if locale in dictionaries:
+                raise BuilderWorkflowError(
+                    f"prototype declares more than one i18n resource for locale {locale}"
+                )
+            dictionaries[locale] = {
+                str(key): str(value)
+                for key, value in sorted(loaded.items(), key=lambda item: str(item[0]))
+            }
+            definitions.append(
+                {
+                    "resource_id": str(resource_id),
+                    "locale": locale,
+                    "path": relative_path.replace("\\", "/"),
+                    "mime": str(resource.get("mime") or "application/json"),
+                    "delivery": str(resource.get("delivery") or "core"),
+                }
+            )
+        if not dictionaries:
+            return {}, None
+        snapshot = {
+            "resource_type": "prototype.locale_dictionaries",
+            "bundle_digest": canonical_payload_digest(
+                {"definitions": definitions, "dictionaries": dictionaries}
+            ),
+            "definition_digest": canonical_payload_digest(definitions),
+            "generation": int(revision) if revision.isdigit() else 0,
+            "record_count": len(dictionaries),
+            "records_digest": canonical_payload_digest(dictionaries),
+        }
+        return dictionaries, snapshot
 
     @staticmethod
     def _prototype_resource_types(webui: Mapping[str, Any]) -> list[str]:
@@ -1804,6 +1963,11 @@ class BuilderWorkflowService:
             webui=webui,
             webui_digest=webui_digest,
         )
+        _, locale_snapshot = self._prototype_locale_snapshot(
+            object_type, object_id, webui, revision
+        )
+        if locale_snapshot is not None:
+            snapshots.append(locale_snapshot)
         acceptance = value if isinstance(value, Mapping) else _mapping(
             _mapping(workflow.get("prototype")).get("acceptance")
         )
@@ -1849,6 +2013,11 @@ class BuilderWorkflowService:
             webui=webui,
             webui_digest=webui_digest,
         )
+        locale_dictionaries, locale_snapshot = self._prototype_locale_snapshot(
+            object_type, object_id, webui, revision
+        )
+        if locale_snapshot is not None:
+            snapshots.append(locale_snapshot)
         prototype_records = [
             dict(record)
             for snapshot in snapshots
@@ -1870,6 +2039,7 @@ class BuilderWorkflowService:
             visual_checks=visual_checks,
             prototype_records=prototype_records,
             prototype_resources=self._prototype_resource_evidence(snapshots),
+            locale_dictionaries=locale_dictionaries,
         )
         governed_state = str(_mapping(current.get("governed")).get("state") or "").strip()
         if governed_state == "automation_ready":
@@ -3978,6 +4148,14 @@ class BuilderWorkflowService:
                 "change_set_status": (workflow.get("change_set") or {}).get("status"),
                 "change_set_gate": (workflow.get("change_set") or {}).get("gate"),
             }
+            history_details = copy.deepcopy(details)
+            acceptance = _mapping(history_details.get("acceptance"))
+            if acceptance:
+                history_details["acceptance"] = {
+                    "acceptance_id": acceptance.get("acceptance_id"),
+                    "revision": acceptance.get("revision"),
+                    "digest": acceptance.get("digest"),
+                }
             history = list(workflow.get("history") or [])
             history.append(
                 {
@@ -3988,7 +4166,7 @@ class BuilderWorkflowService:
                     "at": changed_at,
                     "before": before,
                     "after": after,
-                    "metadata": details,
+                    "metadata": history_details,
                     "canonical": {
                         "command": governed_decision.get("command"),
                         "transition_id": governed_decision.get("transition_id"),

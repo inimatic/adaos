@@ -7,7 +7,12 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from adaos.services.builder.governed import builder_change_definition
-from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService, _replace_path
+from adaos.services.builder.workflow import (
+    BuilderWorkflowError,
+    BuilderWorkflowService,
+    _replace_path,
+    _stable_digest,
+)
 
 
 ABI_ROOT = Path(__file__).resolve().parents[1] / "src" / "adaos" / "abi"
@@ -275,6 +280,7 @@ def test_development_summary_is_bounded_and_read_only(
         "revision": "001",
         "stable": False,
         "accepted": False,
+        "publication_status": "not_started",
         "updated_at": "2026-09-07T12:00:00Z",
     }
     assert json.loads(path.read_text(encoding="utf-8")) == state
@@ -846,6 +852,123 @@ def test_strict_prototype_acceptance_requires_current_behavior_and_visual_eviden
         service.transition("scenario", "recipes", "automation_started")
 
 
+def test_prototype_acceptance_loads_and_binds_declared_locale_assets(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, root = workflow_project
+    webui = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "resources": {
+                    "recipes.i18n.en": {
+                        "kind": "data",
+                        "role": "i18n",
+                        "locale": "en",
+                        "path": "assets/i18n/en.json",
+                    },
+                    "recipes.i18n.ru": {
+                        "kind": "data",
+                        "role": "i18n",
+                        "locale": "ru",
+                        "path": "assets/i18n/ru.json",
+                    },
+                },
+                "desktop": {
+                    "pageSchema": {
+                        "id": "recipes",
+                        "layout": {
+                            "type": "single",
+                            "areas": [{"id": "main", "role": "main"}],
+                        },
+                        "widgets": [],
+                    }
+                },
+            }
+        },
+    }
+    (root / "webui.json").write_text(json.dumps(webui), encoding="utf-8")
+    locales = root / "assets" / "i18n"
+    locales.mkdir(parents=True)
+    (locales / "en.json").write_text(json.dumps({"recipes.title": "Recipes"}), encoding="utf-8")
+    (locales / "ru.json").write_text(
+        json.dumps({"recipes.title": "Рецепты"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    observed: dict[str, object] = {}
+
+    def evaluate(*args: object, **kwargs: object) -> dict[str, object]:
+        observed["locale_dictionaries"] = kwargs.get("locale_dictionaries")
+        return {"ok": True, "qualification": {"requirements": {}}, "postconditions": []}
+
+    monkeypatch.setattr(
+        "adaos.services.builder.prototype_acceptance.evaluate_ui_request",
+        evaluate,
+    )
+    planned = service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-localized-prototype",
+            "request": "Show the recipe workspace.",
+            "prototype_acceptance_required": True,
+            "issues": [
+                {
+                    "issue_id": "localized-prototype",
+                    "title": "Provide the localized prototype",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["English and Russian resources are present."],
+                }
+            ],
+        },
+    )["workflow"]
+    accepted = service.accept_prototype(
+        "scenario",
+        "recipes",
+        reviewer={"id": "agent:codex", "kind": "agent", "delegated_by": "user:owner"},
+        behavior_checks=[
+            {
+                "id": "render.ready",
+                "status": "passed",
+                "evidence_refs": ["test:prototype-render"],
+            }
+        ],
+        visual_checks=[
+            {
+                "breakpoint": "compact",
+                "viewport": {"width": 390, "height": 844},
+                "status": "passed",
+                "evidence_ref": "screenshot:recipes-compact.png",
+            },
+            {
+                "breakpoint": "wide",
+                "viewport": {"width": 1440, "height": 900},
+                "status": "passed",
+                "evidence_ref": "screenshot:recipes-wide.png",
+            },
+        ],
+        expected_generation=planned["generation"],
+    )
+
+    assert observed["locale_dictionaries"] == {
+        "en": {"recipes.title": "Recipes"},
+        "ru": {"recipes.title": "Рецепты"},
+    }
+    resources = accepted["workflow"]["prototype"]["acceptance"]["prototype_resources"]
+    assert resources[0]["resource_type"] == "prototype.locale_dictionaries"
+    history_acceptance = accepted["workflow"]["history"][-1]["metadata"]["acceptance"]
+    assert set(history_acceptance) == {"acceptance_id", "revision", "digest"}
+
+    (locales / "ru.json").write_text(
+        json.dumps({"recipes.title": "Каталог рецептов"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    with pytest.raises(BuilderWorkflowError, match="stale: prototype_resources"):
+        service.transition("scenario", "recipes", "automation_started")
+
+
 def test_optional_prototype_acceptance_is_preserved_for_automation(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
@@ -1063,6 +1186,41 @@ def test_context_packet_is_bounded_stable_and_persistable(
     persisted = json.loads((root / "prompt_state.json").read_text(encoding="utf-8"))
     assert persisted["workflow"]["context_packet"]["digest"] == first["digest"]
     assert persisted["workflow"]["change"]["context_packet_digest"] == first["digest"]
+
+
+def test_large_context_packet_is_externalized_and_hydrated(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    packet_body = {
+        "schema": "adaos.builder.context_packet.v1",
+        "payload": "x" * (400 * 1024),
+    }
+    packet = {
+        **packet_body,
+        "digest": _stable_digest(packet_body),
+        "built_at": "2026-09-08T00:00:00+00:00",
+    }
+    service._write_state(
+        "scenario",
+        "recipes",
+        {"workflow": {"context_packet": packet}},
+    )
+
+    persisted = json.loads((root / "prompt_state.json").read_text(encoding="utf-8"))
+    workflow = persisted["workflow"]
+    assert workflow["context_packet"] is None
+    assert workflow["context_packet_external"] == {
+        "schema": "adaos.builder.context_packet_external.v1",
+        "digest": packet["digest"],
+    }
+    assert service._read_state("scenario", "recipes")["workflow"]["context_packet"] == packet
+
+    packet_path = service._context_packet_path("scenario", "recipes", packet["digest"])
+    tampered = {**packet, "payload": "y" + packet["payload"][1:]}
+    packet_path.write_text(json.dumps(tampered), encoding="utf-8")
+    with pytest.raises(BuilderWorkflowError, match="identity differs"):
+        service._read_state("scenario", "recipes")
 
 
 def test_context_packet_execution_scope_excludes_unrelated_change_history(
