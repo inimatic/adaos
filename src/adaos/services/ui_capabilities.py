@@ -1282,10 +1282,51 @@ def evaluate_ui_request(
             "select-track": "Save update settings",
             "remove": "Uninstall",
         }
+        expected_ru_lifecycle_labels = {
+            "install": "Установить",
+            "update": "Обновить",
+            "select-track": "Сохранить настройки обновлений",
+            "remove": "Удалить",
+            "preview": "Предпросмотр",
+            "open-builder": "Открыть в Builder",
+        }
         lifecycle_labels_ok = all(
             lifecycle_buttons.get(button_id) == label
             for button_id, label in expected_lifecycle_labels.items()
         )
+        localized_lifecycle_buttons: dict[str, str] = {}
+        locale_value_mismatches: list[dict[str, str]] = []
+        lifecycle_widget_index = next(
+            (
+                index
+                for index, widget in enumerate(widgets)
+                if widget is lifecycle_widget
+            ),
+            -1,
+        )
+        for button_index, button in enumerate(lifecycle_inputs.get("buttons", [])):
+            if not isinstance(button, Mapping):
+                continue
+            button_id = str(button.get("id") or "").strip()
+            expected_ru = expected_ru_lifecycle_labels.get(button_id)
+            if not expected_ru:
+                continue
+            descriptor = button.get("label_i18n")
+            actual_ru = localized_text(descriptor, "ru")
+            localized_lifecycle_buttons[button_id] = actual_ru
+            if actual_ru != expected_ru:
+                locale_value_mismatches.append(
+                    {
+                        "path": (
+                            f"pages.0.widgets.{lifecycle_widget_index}.inputs."
+                            f"buttons.{button_index}.label"
+                        ),
+                        "key": localization_key(descriptor),
+                        "locale": "ru",
+                        "expected": expected_ru,
+                        "actual": actual_ru,
+                    }
+                )
         technical_lifecycle_labels = sorted(
             label
             for label in lifecycle_buttons.values()
@@ -1361,6 +1402,7 @@ def evaluate_ui_request(
         )
         review_composition_ok = (
             lifecycle_labels_ok
+            and not locale_value_mismatches
             and not technical_lifecycle_labels
             and apply_separate
             and valid_confirmation_kinds == set(expected_confirmation_labels)
@@ -1373,6 +1415,9 @@ def evaluate_ui_request(
                 "ok": review_composition_ok,
                 "expected": {
                     "lifecycleLabels": expected_lifecycle_labels,
+                    "localizedLifecycleLabels": {
+                        "ru": expected_ru_lifecycle_labels,
+                    },
                     "technicalLabels": [],
                     "reviewTitle": "Review",
                     "reviewPermissionPath": "operation.plan.permissions",
@@ -1382,6 +1427,10 @@ def evaluate_ui_request(
                 },
                 "actual": {
                     "lifecycleLabels": lifecycle_buttons,
+                    "localizedLifecycleLabels": {
+                        "ru": localized_lifecycle_buttons,
+                    },
+                    "localeValueMismatches": locale_value_mismatches,
                     "technicalLabels": technical_lifecycle_labels,
                     "reviewTitle": str(review_widget.get("title") or ""),
                     "reviewPaths": sorted(review_paths),

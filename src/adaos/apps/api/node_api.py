@@ -82,6 +82,7 @@ from adaos.services.operations import submit_marketplace_install_action
 from adaos.services.runtime_topology import supervisor_base_from_env
 from adaos.services.scenario.webspace_runtime import (
     WebspaceService,
+    apply_builder_revision_materialization,
     describe_webspace_operational_state,
     describe_webspace_validation_state,
     describe_webspace_overlay_state,
@@ -3463,6 +3464,18 @@ class WebspaceYjsActionRequest(BaseModel):
     request_source: str | None = None
 
 
+class BuilderRevisionMaterializationRequest(BaseModel):
+    scenario_id: str = Field(..., min_length=1, max_length=256)
+    revision: str | None = Field(default=None, max_length=128)
+    source_fingerprint: str | None = Field(default=None, max_length=256)
+    user_id: str = Field(default="guest", min_length=1, max_length=256)
+    roles: list[str] = Field(default_factory=list, max_length=64)
+    policy_fingerprint: str | None = Field(default=None, max_length=256)
+    source_webspace_id: str | None = Field(default=None, max_length=256)
+    draft_id: str | None = Field(default=None, max_length=256)
+    request_id: str | None = Field(default=None, max_length=256)
+
+
 class WebspaceMaterializationRepairRequest(BaseModel):
     expected_scenario: str | None = Field(default=None, max_length=256)
     missing_branches: list[str] = Field(default_factory=list, max_length=32)
@@ -6100,6 +6113,67 @@ async def node_yjs_reload(webspace_id: str, payload: WebspaceYjsActionRequest, r
         scenario_id=scenario_id,
     )
     return result
+
+
+@router.post(
+    "/yjs/webspaces/{webspace_id}/builder-materialize",
+    dependencies=[Depends(require_token)],
+)
+async def node_yjs_builder_materialize(
+    webspace_id: str,
+    payload: BuilderRevisionMaterializationRequest,
+    request: Request,
+) -> dict[str, Any]:
+    conf = load_config()
+    target_webspace_id = _coerce_node_webspace_id(webspace_id)
+    if str(getattr(conf, "role", "") or "").strip().lower() != "hub":
+        return {
+            "ok": False,
+            "accepted": False,
+            "webspace_id": target_webspace_id,
+            "error": "hub_role_required",
+        }
+    scenario_id = str(payload.scenario_id or "").strip()
+    event_payload = _trace_yjs_control_ingress(
+        request=request,
+        kind="builder.ui_revision.materialize",
+        webspace_id=target_webspace_id,
+        scenario_id=scenario_id,
+    )
+    event_payload.update(
+        {
+            "_event_type": "builder.ui_revision.materialize",
+            "source": "builder_skill",
+            "reason": "builder_ui_revision_written",
+            "source_webspace_id": str(payload.source_webspace_id or "").strip() or None,
+            "draft_id": str(payload.draft_id or "").strip() or None,
+            "revision": str(payload.revision or "").strip() or None,
+            "ui_revision": str(payload.revision or "").strip() or None,
+        }
+    )
+    meta = event_payload.get("_meta") if isinstance(event_payload.get("_meta"), dict) else {}
+    if payload.request_id:
+        meta["cmd_id"] = str(payload.request_id)
+        meta["trace_id"] = str(payload.request_id)
+    event_payload["_meta"] = meta
+    result = await apply_builder_revision_materialization(
+        target_webspace_id,
+        scenario_id=scenario_id,
+        revision=str(payload.revision or "").strip() or None,
+        source_fingerprint=str(payload.source_fingerprint or "").strip() or None,
+        user_id=str(payload.user_id or "guest").strip() or "guest",
+        roles=[str(role) for role in payload.roles if str(role).strip()],
+        policy_fingerprint=str(payload.policy_fingerprint or "").strip() or None,
+        event_payload=event_payload,
+    )
+    response = dict(result) if isinstance(result, Mapping) else {}
+    response.setdefault("ok", True)
+    response["accepted"] = bool(response.get("ok"))
+    response.setdefault("webspace_id", target_webspace_id)
+    response.setdefault("scenario_id", scenario_id)
+    response.setdefault("revision", str(payload.revision or "").strip() or None)
+    response["delivery"] = "owner_control_api"
+    return response
 
 
 @router.post("/yjs/webspaces/{webspace_id}/toggle-install", dependencies=[Depends(require_token)])

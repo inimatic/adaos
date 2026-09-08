@@ -945,6 +945,57 @@ def materialize_revision(**kwargs: Any) -> dict[str, Any]:
     return {"ok": True, "scheduled": True} if scheduled else _plain(result)
 
 
+def materialize_revision_via_owner(
+    webspace_id: str,
+    *,
+    scenario_id: str,
+    revision: str | None = None,
+    source_fingerprint: str | None = None,
+    user_id: str = "guest",
+    roles: list[str] | None = None,
+    policy_fingerprint: str | None = None,
+    event_payload: Mapping[str, Any] | None = None,
+    timeout_s: float = 30.0,
+) -> dict[str, Any]:
+    """Materialize through the running owner runtime from a one-shot tool process."""
+
+    import requests
+
+    from adaos.apps.cli.active_control import resolve_control_base_url, resolve_control_token
+
+    base_url = resolve_control_base_url(prefer_local=True)
+    token = resolve_control_token(base_url=base_url)
+    source_event = event_payload if isinstance(event_payload, Mapping) else {}
+    meta = source_event.get("_meta") if isinstance(source_event.get("_meta"), Mapping) else {}
+    body = {
+        "scenario_id": str(scenario_id or "").strip(),
+        "revision": str(revision or "").strip() or None,
+        "source_fingerprint": str(source_fingerprint or "").strip() or None,
+        "user_id": str(user_id or "guest").strip() or "guest",
+        "roles": [str(role) for role in (roles or []) if str(role).strip()],
+        "policy_fingerprint": str(policy_fingerprint or "").strip() or None,
+        "source_webspace_id": str(source_event.get("source_webspace_id") or "").strip() or None,
+        "draft_id": str(source_event.get("draft_id") or "").strip() or None,
+        "request_id": str(meta.get("cmd_id") or "").strip() or None,
+    }
+    session = requests.Session()
+    session.trust_env = False
+    try:
+        response = session.post(
+            f"{base_url.rstrip('/')}/api/node/yjs/webspaces/{webspace_id}/builder-materialize",
+            headers={"X-AdaOS-Token": token, "Accept": "application/json"},
+            json=body,
+            timeout=max(1.0, min(float(timeout_s), 120.0)),
+        )
+        response.raise_for_status()
+        result = response.json()
+    finally:
+        session.close()
+    if not isinstance(result, Mapping):
+        raise RuntimeError("builder_materialization_owner_response_invalid")
+    return dict(result)
+
+
 async def materialize_revision_async(webspace_id: str, **kwargs: Any) -> dict[str, Any]:
     from adaos.services.scenario.webspace_runtime import apply_builder_revision_materialization
 
@@ -978,6 +1029,7 @@ __all__ = [
     "list_builder_hosts",
     "list_development_skills",
     "materialize_revision",
+    "materialize_revision_via_owner",
     "materialize_revision_async",
     "navigation_link",
     "open_workspace",

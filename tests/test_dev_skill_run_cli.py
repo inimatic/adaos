@@ -79,6 +79,38 @@ def test_compact_dev_tool_result_omits_ui_host_state() -> None:
     }
 
 
+def test_compact_dev_tool_result_reduces_embedded_workflows() -> None:
+    compact = dev._compact_dev_tool_result(
+        {
+            "ok": True,
+            "workflow_revision": {
+                "ok": True,
+                "workflow": {
+                    "schema": "adaos.builder.workflow.v1",
+                    "generation": 44,
+                    "active_phase": "prototype",
+                    "prototype": {"head_revision": "027", "status": "working"},
+                    "change": {"issues": [{"description": "large" * 1000}]},
+                    "history": [{"payload": "large" * 1000}],
+                },
+            },
+        }
+    )
+
+    assert compact == {
+        "ok": True,
+        "workflow_revision": {
+            "ok": True,
+            "workflow": {
+                "schema": "adaos.builder.workflow.v1",
+                "generation": 44,
+                "active_phase": "prototype",
+                "prototype": {"head_revision": "027", "status": "working"},
+                "detail": "available_via_skill_workflow_inspection",
+            },
+        },
+    }
+
 def test_dev_skill_run_writes_machine_json_as_utf8_bytes(monkeypatch) -> None:
     raw = io.BytesIO()
     console = io.TextIOWrapper(raw, encoding="cp1251")

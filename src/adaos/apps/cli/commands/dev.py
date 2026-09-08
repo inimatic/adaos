@@ -156,6 +156,27 @@ def _compact_dev_tool_result(value: object) -> object:
         for key, item in value.items()
         if str(key) not in omitted_keys
     }
+    for key in ("workflow_revision", "review_constraints"):
+        item = compact.get(key)
+        if not isinstance(item, Mapping) or not isinstance(item.get("workflow"), Mapping):
+            continue
+        workflow = item["workflow"]
+        receipt = {
+            name: workflow.get(name)
+            for name in ("schema", "generation", "active_phase", "updated_at")
+            if workflow.get(name) is not None
+        }
+        for phase in ("prototype", "automation", "delivery", "publication"):
+            phase_value = workflow.get(phase)
+            if not isinstance(phase_value, Mapping):
+                continue
+            receipt[phase] = {
+                str(name): phase_item
+                for name, phase_item in phase_value.items()
+                if phase_item is None or isinstance(phase_item, (str, int, float, bool))
+            }
+        receipt["detail"] = "available_via_skill_workflow_inspection"
+        compact[key] = {**dict(item), "workflow": receipt}
     omitted = [key for key in omitted_keys if key in value]
     if omitted:
         compact["omitted"] = omitted

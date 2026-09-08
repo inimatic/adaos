@@ -582,6 +582,54 @@ def test_node_yjs_reload_clears_yws_guard_backoff_before_runtime_snapshot(monkey
     assert published == [("reload", "desktop", True)]
 
 
+def test_node_yjs_builder_materialize_runs_in_owner_runtime(monkeypatch) -> None:
+    captured: list[dict[str, object]] = []
+
+    async def _fake_materialize(webspace_id: str, **kwargs) -> dict[str, object]:
+        captured.append({"webspace_id": webspace_id, **kwargs})
+        return {
+            "ok": True,
+            "webspace_id": webspace_id,
+            "materialization_identity": {"revision": kwargs.get("revision")},
+        }
+
+    request = SimpleNamespace(
+        url=SimpleNamespace(path="/api/node/yjs/webspaces/desktop-dev/builder-materialize"),
+        headers={"x-request-id": "builder.ui.applications.027"},
+        client=SimpleNamespace(host="127.0.0.1", port=53301),
+    )
+    monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setattr(
+        node_api_module,
+        "apply_builder_revision_materialization",
+        _fake_materialize,
+    )
+
+    result = asyncio.run(
+        node_api_module.node_yjs_builder_materialize(
+            "desktop-dev",
+            node_api_module.BuilderRevisionMaterializationRequest(
+                scenario_id="applications",
+                revision="027",
+                source_fingerprint="fp-027",
+                source_webspace_id="desktop",
+                draft_id="draft.applications",
+            ),
+            request,
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["accepted"] is True
+    assert result["delivery"] == "owner_control_api"
+    assert result["materialization_identity"]["revision"] == "027"
+    assert captured[0]["webspace_id"] == "desktop-dev"
+    assert captured[0]["scenario_id"] == "applications"
+    assert captured[0]["revision"] == "027"
+    assert captured[0]["event_payload"]["source_webspace_id"] == "desktop"
+    assert captured[0]["event_payload"]["_meta"]["cmd_id"] == "builder.ui.applications.027"
+
+
 def test_node_yjs_go_home_endpoint_uses_helper(monkeypatch) -> None:
     captured: list[str] = []
     published: list[tuple[str, str, str | None]] = []

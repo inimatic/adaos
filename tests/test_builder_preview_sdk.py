@@ -61,6 +61,63 @@ class _Workbench:
         return {"selection": dict(self.selection)}
 
 
+def test_materialize_revision_via_owner_uses_active_local_control(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {"ok": True, "delivery": "owner_control_api"}
+
+    class _Session:
+        trust_env = True
+
+        def post(self, url, **kwargs):
+            captured.update({"url": url, **kwargs, "trust_env": self.trust_env})
+            return _Response()
+
+        def close(self) -> None:
+            captured["closed"] = True
+
+    monkeypatch.setattr("requests.Session", _Session)
+    monkeypatch.setattr(
+        "adaos.apps.cli.active_control.resolve_control_base_url",
+        lambda **_kwargs: "http://127.0.0.1:8778",
+    )
+    monkeypatch.setattr(
+        "adaos.apps.cli.active_control.resolve_control_token",
+        lambda **_kwargs: "local-token",
+    )
+
+    result = preview.materialize_revision_via_owner(
+        "desktop-dev",
+        scenario_id="applications",
+        revision="027",
+        source_fingerprint="fp-027",
+        event_payload={
+            "source_webspace_id": "desktop",
+            "draft_id": "draft.applications",
+            "_meta": {"cmd_id": "builder.ui.applications.027"},
+        },
+    )
+
+    assert result == {"ok": True, "delivery": "owner_control_api"}
+    assert captured["url"] == (
+        "http://127.0.0.1:8778/api/node/yjs/webspaces/desktop-dev/builder-materialize"
+    )
+    assert captured["headers"] == {
+        "X-AdaOS-Token": "local-token",
+        "Accept": "application/json",
+    }
+    assert captured["json"]["scenario_id"] == "applications"
+    assert captured["json"]["revision"] == "027"
+    assert captured["json"]["request_id"] == "builder.ui.applications.027"
+    assert captured["trust_env"] is False
+    assert captured["closed"] is True
+
+
 def test_refresh_follow_active_target_updates_metadata_without_materializing(monkeypatch) -> None:
     service = _Workbench()
     monkeypatch.setattr(preview, "_service", lambda: service)

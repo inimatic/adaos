@@ -1135,6 +1135,21 @@ def _application_manager_webui() -> dict:
                 )
 
     add_localizations(webui)
+    lifecycle = next(
+        widget
+        for widget in webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+        if widget["id"] == "lifecycle-actions"
+    )
+    expected_ru = {
+        "install": "Установить",
+        "update": "Обновить",
+        "select-track": "Сохранить настройки обновлений",
+        "remove": "Удалить",
+        "preview": "Предпросмотр",
+        "open-builder": "Открыть в Builder",
+    }
+    for button in lifecycle["inputs"]["buttons"]:
+        button["label_i18n"]["translations"]["ru"] = expected_ru[button["id"]]
     return webui
 
 
@@ -1466,6 +1481,33 @@ def test_application_manager_evaluation_rejects_technical_lifecycle_commands() -
         "Plan install",
     ]
     assert review["actual"]["confirmationSeparated"] is False
+
+
+def test_application_manager_evaluation_rejects_technical_russian_lifecycle_commands() -> None:
+    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    webui = _application_manager_webui()
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    lifecycle = next(widget for widget in widgets if widget["id"] == "lifecycle-actions")
+    install = next(button for button in lifecycle["inputs"]["buttons"] if button["id"] == "install")
+    install["label_i18n"]["translations"]["ru"] = "Спланировать установку"
+
+    rejected = evaluate_ui_request(request, webui)
+
+    review = next(
+        item
+        for item in rejected["postconditions"]
+        if item["id"] == "applications.review_composition"
+    )
+    assert review["ok"] is False
+    assert review["actual"]["localeValueMismatches"] == [
+        {
+            "path": "pages.0.widgets.14.inputs.buttons.0.label",
+            "key": "test.applications.ui.application.desktop.pageSchema.widgets.14.inputs.buttons.0.label",
+            "locale": "ru",
+            "expected": "Установить",
+            "actual": "Спланировать установку",
+        }
+    ]
 
 
 def test_capability_validation_rejects_unknown_layout_and_board_lane() -> None:
