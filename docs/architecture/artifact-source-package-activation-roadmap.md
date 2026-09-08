@@ -192,7 +192,7 @@ proof is not silently promoted to stand or production acceptance.
 
 | Milestone | Closed | Maturity | Validated task slices | Remaining broader gates |
 | --- | ---: | --- | --- | --- |
-| AP0 | 8/9 | validated-local (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility, deterministic historical registry/manifest migration fixtures, and read-only identity diagnostics | publisher namespaces and ownership transfer remain deferred |
+| AP0 | 8/9 | validated-local plus cross-language Root regression (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility, deterministic historical registry/manifest migration fixtures, read-only identity diagnostics, and code-point-stable release lock ordering | publisher namespaces and ownership transfer remain deferred |
 | AP1 | 12/14 | validated-stand plus local workflow gate (bounded, single-zone) | deterministic package build/store/verify, CAS deduplication and bounded retention diagnostics, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission, single-pass verified extraction, deployed binary transport, detached Ed25519 trust/admission, deterministic no-replay publication journal, immutable release binding, strict workflow/validation/adapter/role locks, separately provisioned signer/trust, and clean required-mode activation | streamed/object-store transport, multi-zone durability, publisher namespaces, and commercial entitlements remain open/deferred |
 | AP2 | 10/16 | validated-local (bounded) | exact component/dependency, project composition/dependency, permission, schema, migration, validation, and workflow adapter-binding locks; complete-set fixed-point selection; consistent bindings and reverse consumers | physical bound/shared activation semantics, lock explain UI, plan cache, publication compatibility, and stand validation |
 | AP3 | 13/14 | validated-stand plus local workflow generation proof (bounded, isolated same-host) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, terminal lock-history states, complete workflow/code generation admission, and clean package-only activation | unattended irreversible migrations remain deferred |
@@ -237,6 +237,12 @@ v1/v2 compatibility in `tests/test_workspace_registry.py`.
 `AP0-02` was reclosed after local and backend regressions proved that an
 idempotent version repeat is accepted and the same project/version with a
 different release digest is rejected before visibility.
+The 2026-09-08 registry checkpoint found that JavaScript `localeCompare`
+ordered dotted and underscored schema-lock IDs differently from Python's
+canonical code-point ordering. Backend commit `132d5a8` replaced locale-aware
+sorting with an explicit comparator and added a three-lock regression fixture.
+After infra run `34179192169` deployed the fix to both zones, the unchanged
+`research_platform@0.1.6` release was accepted by Root.
 `AP0-07` is closed by checked-in v1 Workspace fixtures containing path aliases,
 missing canonical YAML versions, and a conflicting derived `scenario.json`.
 Migration keeps the install alias separate from canonical identity, derives a
@@ -356,6 +362,11 @@ and rejected a mismatched digest before visibility. Unknown upload outcomes do
 not fall back or replay the mutation. `AP1-12` remains open because the current
 route deliberately buffers a bounded body and the durable filesystem is local
 to one deployment zone.
+Production draft publication also verifies the configured buffered boundary:
+the authenticated Root draft route installs a 70 MiB parser before Express's
+default parser, nginx admits the same class, and 50/150/500 KiB probes plus
+244/805 KiB real project pushes pass through `ru.api.inimatic.com`. This is a
+bounded transport fix, not streamed/object-store closure of `AP1-12`.
 `AP1-13` is closed locally by `tests/test_artifact_attestations.py` and the full
 `test_artifact*.py` regression. Detached signatures bind
 the exact subject and provenance predicate digests without changing existing

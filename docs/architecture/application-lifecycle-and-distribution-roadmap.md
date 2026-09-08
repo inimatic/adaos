@@ -476,17 +476,21 @@ These tasks remain visible but do not block APP0-APP6.
   triggering remote CI until the full local verification for that slice has
   passed.
 
-## Readiness Boundary (2026-09-07)
+## Readiness Boundary (2026-09-08)
 
 The preparatory Core, SDK, MCP, artifact, channel, recovery, and Development
-Report rails are implemented and locally testable. `APP4-01`, `APP4-07`,
-`APP4-12`, and `APP4-13` are complete; Applications revision `011` is the
-current unaccepted Prototype and its Application aggregate is revision `2`.
+Report rails are implemented and locally testable. Applications revision `027`
+is the accepted EN/RU Prototype, its Application aggregate is revision `2`, and
+the governed workflow is `automation_ready`. `APP4-01`, `APP4-02`, `APP4-07`,
+`APP4-12`, `APP4-13`, `APP4-15`, and `APP4-16` are complete. Root ingress and
+cross-language release canonicalization were production-verified while
+checkpointing all 25 existing registry project manifests through
+`adaos project push`.
 The preparation gate remains in
 [Application Preparation Evidence - 2026-09-05](application-preparation-evidence-2026-09-05.md),
 and current dogfood evidence is in
 [Applications Builder Dogfood Evidence - 2026-09-07](applications-builder-dogfood-evidence-2026-09-07.md).
-This is not release readiness. `APP1-04`, the remaining `APP4` acceptance and
+This is not release readiness. Automation, `APP1-04`, the remaining `APP4`
 operation gates, and all of `APP6` remain open until the real UI replaces
 Infrastate Inventory and the complete clean-subnet chain is captured without
 manual state edits.

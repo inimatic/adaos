@@ -3,8 +3,8 @@
 Status: Prototype `027` accepted; Automation not started.
 
 This record covers creation and iterative UI development of the protected
-Applications system Application through the managed Builder path. It proves a
-an accepted executable Prototype and exposes the remaining product and lifecycle
+Applications system Application through the managed Builder path. It proves an
+accepted executable Prototype and exposes the remaining product and lifecycle
 work. It does not prove Automation, Trial, prerelease, stable publication, or
 replacement of Infrastate Inventory.
 
@@ -71,6 +71,29 @@ Applications-local workarounds:
   bound; history now stores acceptance identity only and a large digest-bound
   context packet is stored outside `prompt_state.json` and verified on load.
 
+Final publication checks exposed two independent Root defects rather than an
+LLM generation delay. Draft VCS requests first met the default Express JSON
+body limit and then the proxy limit. The authenticated route now installs its
+70 MiB parser before the default parser, and nginx admits the same bounded
+payload class. A separate release failure came from JavaScript `localeCompare`
+ordering schema-lock IDs differently from Python code-point sorting; Root now
+uses an explicit code-point comparator. Backend commits `84e4494`, `2887cdf`,
+and `132d5a8` cover the fixes. Infra run `34179192169` deployed
+`backend-132d5a8` healthy to both RU and EU, after which the unchanged
+`research_platform@0.1.6` release received `201 Created`.
+
+The registry checkpoint ran `adaos project push` for every one of the 25
+project manifests at the prior `adaos-registry/main` revision. Their immutable
+releases are present at Root, and the source revisions are reachable from the
+new registry head `3184787c`. Product DEV projects, including Applications and
+Builder, were independently checkpointed through `adaos dev project push`.
+Historical generated TLP calibration fixtures remain excluded from this
+product checkpoint because they reference the retired dependency identity
+`project:adaos_research_platform`; repairing or explicitly classifying those
+fixtures is separate research-data migration work.
+That debt is tracked as non-blocking
+`dticket.01M1ZDCH5A8J4RCHQ9TR4S8A9E`.
+
 Builder DEV revision `059` also replaces the old `push -> stabilize` Prototype
 approval chain with one evidence-bearing `accept_prototype` command. Its modal
 collects behavior, compact screenshot, and wide screenshot references before
@@ -96,13 +119,17 @@ the governed transition.
 | Review detail | passed; exact operation, summary, and entitlement/permission snapshot remain visible |
 | Builder acceptance modal | passed; canonical singleton form renders all three evidence fields |
 | Workflow persistence | passed; `prompt_state.json` is 313,115 bytes and the 182,541-byte context packet is digest-addressed |
-| Applications Dev Tickets | reconciled; no nonterminal ticket remains in the Applications scope |
+| Applications Dev Tickets | no unresolved/in-progress ticket remains; seven addressed tickets are `verified` and await normal user closure |
 | Browser runtime errors | none; expected local config/probe/fallback transport noise only |
+| Root draft transport | passed at 50, 150, 500, 244, and 805 KiB through `ru.api.inimatic.com` |
+| Root release canonicalization | passed unchanged retry of `research_platform@0.1.6` after RU/EU deployment |
+| Registry project checkpoint | passed; 25/25 manifests published and reachable from `adaos-registry@3184787c` |
 
 Relevant final ownership repairs are client `92f61f2` and `2c24867`, and AdaOS
 `1d853f613` and `d5cb2e2d1`; the earlier revision history remains in the same
-branches. Remote push is deferred until the complete final verification and
-Forge checkpoints finish.
+branches. Root/backend and registry changes were pushed only after their local
+regressions and publication probes passed; client and AdaOS follow the same
+final gate.
 
 ## Critical Backlog
 
@@ -128,6 +155,10 @@ Forge checkpoints finish.
   default product model;
 - reduce full-recipe repair frequency and token cost with smaller semantic
   patch contracts and deterministic postcondition hints;
+- migrate or explicitly classify historical generated TLP calibration
+  projects that still depend on `project:adaos_research_platform`, so bulk DEV
+  checkpoint reports distinguish product sources from retained experiment
+  fixtures;
 - add an opt-in, bounded visual revision gate after deterministic checks:
   capture compact and wide browser screenshots, permit at most two model repair
   attempts, and emit a targeted Core/client/ABI Development Ticket if the
