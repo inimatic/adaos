@@ -663,6 +663,7 @@ def test_supervisor_manager_samples_memory_telemetry_and_marks_suspicion(monkeyp
     monkeypatch.setattr(supervisor, "_available_memory_bytes", lambda: 1024)
     monkeypatch.setattr(supervisor.time, "time", lambda: next(times, 999.0))
     monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+    monkeypatch.setattr(manager, "_memory_policy_auto_profile_guard", lambda *, now: (True, None))
 
     first = manager._sample_memory_telemetry()
     second = manager._sample_memory_telemetry()
@@ -716,7 +717,6 @@ def test_supervisor_manager_marks_plateaued_growth_as_suspected(monkeypatch, tmp
     monkeypatch.setattr(supervisor, "_available_memory_bytes", lambda: 1024)
     monkeypatch.setattr(supervisor.time, "time", lambda: next(times, 999.0))
     monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
-
     first = manager._sample_memory_telemetry()
     second = manager._sample_memory_telemetry()
 

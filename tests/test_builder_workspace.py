@@ -931,7 +931,10 @@ def test_root_dev_scenario_create_rewrites_the_complete_default_template(tmp_pat
         / "scenario_default"
     )
     service = object.__new__(RootDeveloperService)
-    service._load_config = lambda: object()
+    service._load_config = lambda: SimpleNamespace(
+        node_settings=SimpleNamespace(id="node-1"),
+        node_id="node-1",
+    )
     service._owner_workspace = lambda _cfg: ("owner-1", tmp_path / "dev")
     service._resolve_template = lambda _kind, _template: (template, "default")
 

@@ -322,6 +322,67 @@ Builder development and consumes only public contracts.
   `Save update settings`, `Uninstall`) while retaining plan digest and apply as
   the internal reviewed protocol. Default auto-update to `true` and
   prerelease-following to `false`.
+- [x] `[must]` `APP4-18` Keep scenario creation subject-neutral. Builder starts
+  Applications from the universal `scenario_default`; `recipe.application_manager`
+  supplies only versioned capability compositions, phase dependencies, and
+  machine postconditions. No Applications UI or locale dictionary is bundled
+  as a scenario template or zero-model materializer.
+- [x] `[must]` `APP4-19` Measure a governed Prototype path from a fresh generic
+  Project. `applications_phased_prototype_experiment_c118d053` reached qualified
+  revision `018` through six cumulative phases, bounded candidate replay, one
+  locale-quality correction, structured review, and repeated performance
+  probes. It remains unaccepted and did not enter Automation, Trial, or
+  publication.
+- [x] `[must]` `APP4-20` Make recipe execution phase-aware and cumulative.
+  Builder selects the current phase from a versioned workflow, supplies only
+  that phase's composition keys and required postconditions, and preserves all
+  previously qualified phases. Narrow requests need not execute the full graph.
+- [x] `[should]` `APP4-21` Return a bounded Builder creation receipt instead of
+  embedding complete Preview, workbench, and Application state. Keep full state
+  behind explicit read operations and enforce a sub-10-KiB receipt with
+  oversized stored-state regression fixtures. Builder skill `0.3.124` provides
+  the bounded receipt.
+- [x] `[must]` `APP4-22` Create and materialize a fresh Preview Webspace through
+  its owning AdaOS process, require the exact requested DEV scenario, and fail
+  closed instead of accepting an unrelated workspace fallback.
+- [x] `[must]` `APP4-23` Treat a removed Project, skill, or scenario as a
+  terminal availability state rather than a data-source reconnect or tool
+  manifest mismatch. Scenario removal moves every affected Webspace to its
+  valid current/home scenario or the built-in `web_desktop` fallback. Direct
+  navigation to a missing scenario keeps the valid home visible and presents a
+  localized system-level choice of available scenarios; the same chooser is
+  the no-home 404 surface.
+- [x] `[must]` `APP4-24` Journal the exact model request and generation options,
+  normalized primary/repair candidate, candidate digest, validation findings,
+  and provider job identity before activation. Retry validates scenario,
+  revision, and digest and replays a valid candidate without another model
+  call. Builder chat owns the single persistent result emit for nested updates.
+- [x] `[must]` `APP4-25` Make context composition stage-sensitive. Builder sends
+  one deterministic cacheable ABI/capability/recipe prefix and one dynamic
+  current-phase request containing the current WebUI, latest semantic delta,
+  bounded history, runtime context, and only the active cumulative
+  postconditions. Exact request artifacts and provider telemetry preserve
+  input, cached-input, output, and latency evidence for each job.
+- [ ] `[should]` `APP4-26` Require an ABI impact declaration whenever WebUI or the
+  capability catalog changes. The gate names affected Client renderers,
+  supported catalog/schema ranges, migration behavior, shared conformance
+  fixtures, component tests, and EN/RU wide/compact browser evidence.
+- [x] `[must]` `APP4-27` Recognize canonical `preview-<12 hex>` Builder
+  Webspaces as development-only Prototype surfaces in the Client while
+  rejecting preview-like arbitrary names and all stable Webspaces. Verify MCP
+  fixtures in Client contract tests and in the Applications browser matrix.
+- [x] `[must]` `APP4-31` Apply exact Prototype review moves through stable
+  component references and structured operations before considering model
+  inference. Preserve the complete submitted note as ticket evidence, dedupe
+  repeated captures, and resolve the canonical ticket against the resulting UI
+  revision.
+- [x] `[must]` `APP4-32` Keep iterative Prototype checkpoints local and
+  content-addressed. Do not synchronously publish the growing `ui_revisions`
+  history to Forge after every edit; remote `adaos dev project push` remains an
+  explicit milestone/finalization operation.
+- [x] `[must]` `APP4-33` Run DEV runtime synchronization only when source is
+  newer than the active runtime receipt. A tool call must not rebuild an
+  unchanged skill merely because a wall-clock throttle expired.
 - [ ] `[should]` `APP4-08` Add responsive wide/compact layouts, keyboard and
   accessibility checks, long-text fixtures, and reconnect-safe operation state.
 - [ ] `[should]` `APP4-09` Add advanced component/runtime drill-down without
@@ -330,8 +391,44 @@ Builder development and consumes only public contracts.
   deterministic qualification: compact plus wide capture, no more than two
   model repair iterations, and a structured Development Ticket when a renderer
   or declarative-ABI gap remains.
+- [ ] `[should]` `APP4-28` Define a reusable chat IO-route contract and policy
+  surface before adding Telegram mirroring to Builder, Voice Chat, Research
+  Workbench, and Dev Tickets. Route identity, authorization, loop prevention,
+  delivery receipts, redaction, and replay behavior must be shared rather than
+  implemented as Builder-only UI.
+- [ ] `[should]` `APP4-29` Add a declarative compact-sidebar interaction policy
+  (`close on select|click|never`) and Client conformance tests so a drawer does
+  not hide the result of a Process or catalog selection.
+- [ ] `[should]` `APP4-30` Reduce repair cost without weakening evidence. Prefer
+  the latest semantic delta plus a digest-bound candidate reference over
+  repeating the complete WebUI and candidate when the provider can retrieve
+  the exact journaled artifacts. The 2026-09-08 run showed 56-70k aggregate
+  input-token repair paths despite successful prefix caching.
+- [ ] `[should]` `APP4-34` Enforce performance budgets per development stage.
+  Record cold and warm Client build, focused and complete browser tests, AdaOS
+  readiness, DEV skill activation, Builder preflight, handler, validation,
+  workflow projection, and checkpoint timing. Use a fast affected-test gate on
+  ordinary changes and reserve the complete sequential SDK/browser suites for
+  qualification, scheduled runs, or an explicit full-validation request.
+- [ ] `[should]` `APP4-35` Split the Client root dependency graph at capability
+  boundaries. Load optional CV/TensorFlow and heavyweight widgets only when a
+  scenario requires them, preserve shared ABI fixtures for every lazy
+  component, and keep unknown declarative icons on the on-demand static asset
+  path rather than importing the complete Ionicons barrel. The icon and
+  CV/TensorFlow slices are complete; continue only with component-level ABI
+  regression coverage so a loader change cannot silently break a widget type.
+- [ ] `[should]` `APP4-36` Cache Builder source analysis, ABI selection, and
+  validation indexes by content digest. Invalidate by the exact source/catalog
+  digest and expose cache hit/miss timing in the generation receipt.
+- [ ] `[should]` `APP4-37` Move noncritical AdaOS catalog/status hydration after
+  service readiness and make workflow projection incremental. Keep exact
+  readiness semantics for routes that need the hydrated state and publish p50,
+  p95, and cold-start budgets.
 - [ ] `[could]` `APP4-10` Add saved Catalog filters and locally pinned
   Application detail sections.
+- [ ] `[could]` `APP4-38` Store UI revisions as base plus content-addressed
+  semantic deltas with periodic compact snapshots. Retain deterministic replay
+  and evidence export without copying the complete UI for every local edit.
 - [ ] `[deferred]` `APP4-11` Multi-user publisher collaboration UI and proposal
   review.
 
@@ -475,16 +572,28 @@ These tasks remain visible but do not block APP0-APP6.
 - [ ] `[should]` Commit coherent implementation slices independently and avoid
   triggering remote CI until the full local verification for that slice has
   passed.
+- [ ] `[should]` For every ABI/catalog revision, update the Client impact matrix,
+  affected component contract tests, compatibility range, and browser fixture;
+  a catalog-only green validator is insufficient.
 
 ## Readiness Boundary (2026-09-08)
 
 The preparatory Core, SDK, MCP, artifact, channel, recovery, and Development
 Report rails are implemented and locally testable. Applications revision `027`
 is the accepted EN/RU Prototype, its Application aggregate is revision `2`, and
-the governed workflow is `automation_ready`. `APP4-01`, `APP4-02`, `APP4-07`,
-`APP4-12`, `APP4-13`, `APP4-15`, and `APP4-16` are complete. Root ingress and
-cross-language release canonicalization were production-verified while
-checkpointing all 25 existing registry project manifests through
+the governed workflow is `automation_ready`. The separate generic-template
+experiment `applications_phased_prototype_experiment_c118d053` is qualified at
+revision `018` across all cumulative recipe postconditions and the EN/RU
+wide/compact browser matrix; it is deliberately not recorded as human accepted.
+Exact request/candidate journaling, candidate replay, one-result chat ownership,
+canonical Builder preview fixtures, and stage-sensitive context composition are
+implemented. Structured review now avoids model inference, local Prototype
+checkpoints avoid synchronous Forge publication, and unchanged DEV runtimes no
+longer rebuild during tool preflight. Semantic-delta repair optimization, cold
+startup reduction, Client dependency-graph splitting, and the formal Client ABI
+impact gate remain open SHOULD work. Root
+ingress and cross-language release canonicalization were production-verified
+while checkpointing all 25 existing registry project manifests through
 `adaos project push`.
 The preparation gate remains in
 [Application Preparation Evidence - 2026-09-05](application-preparation-evidence-2026-09-05.md),

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+
 from adaos.services.ui_capabilities import (
     evaluate_ui_request,
     get_ui_capability,
@@ -186,8 +188,13 @@ def test_application_manager_selection_exposes_mcp_master_detail_contract() -> N
 
     assert selected["root_item_ids"][0] == "recipe.application_manager"
     assert {
-        "layout.split", "input.toggle", "input.selector", "ui.list",
-        "item.details", "input.commandBar", "ui.actions",
+        "layout.split",
+        "input.toggle",
+        "input.selector",
+        "ui.list",
+        "item.details",
+        "input.commandBar",
+        "ui.actions",
     } <= selected_ids
     recipe = get_ui_capability("recipe.application_manager")
     assert recipe["composition"]["reads"]["developments"] == {
@@ -200,7 +207,13 @@ def test_application_manager_selection_exposes_mcp_master_detail_contract() -> N
     }
     workflow = recipe["composition"]["workflow_model"]
     assert workflow["status_vocabularies"]["operation"] == [
-        "planned", "applying", "succeeded", "failed", "unknown", "reconciling", "cancelled"
+        "planned",
+        "applying",
+        "succeeded",
+        "failed",
+        "unknown",
+        "reconciling",
+        "cancelled",
     ]
     assert {item["id"] for item in workflow["representative_states"]} >= {
         "marketplace-uninstalled",
@@ -214,9 +227,9 @@ def test_application_manager_selection_exposes_mcp_master_detail_contract() -> N
     assert development_widget["inputs"]["subtitleKey"] == "application.display.summary"
     assert fixture_model["canonical_shape"]["applications"]["profile"] == "applications"
     assert len(fixture_model["canonical_shape"]["developments"]["result"]) >= 3
-    assert fixture_model["canonical_shape"]["application"]["cases"][0]["result"].startswith(
-        "$state.prototypeFixtures.samples."
-    )
+    assert fixture_model["canonical_shape"]["application"]["cases"][0][
+        "result"
+    ].startswith("$state.prototypeFixtures.samples.")
     assert {
         value["prototype_state_id"]
         for value in fixture_model["canonical_shape"]["samples"].values()
@@ -240,9 +253,171 @@ def test_explicit_application_manager_recipe_is_a_typed_selection_hint() -> None
     assert selected["qualification"]["surface_kind"] == "application_manager"
     assert selected["qualification"]["requirements"]["application_manager"] is True
     assert selected["root_item_ids"] == ["recipe.application_manager"]
-    assert "recipe.kanban_board" not in {
-        item["id"] for item in selected["items"]
+    assert "recipe.kanban_board" not in {item["id"] for item in selected["items"]}
+
+
+def test_application_manager_iteration_focuses_the_selected_recipe() -> None:
+    request = (
+        "Prototype phase 2/6: build Applications as an Extensions-style "
+        "application lifecycle manager backed by MCP."
+    )
+
+    selected = selected_ui_capabilities(request)
+    qualification = selected["qualification"]
+    recipe = next(
+        item for item in selected["items"] if item["id"] == "recipe.application_manager"
+    )
+
+    assert qualification["requirements"]["prototype_iteration"] == {
+        "index": 2,
+        "total": 6,
+        "completion_required": False,
     }
+    assert recipe["active_implementation_phase"]["id"] == "application_detail"
+    assert set(recipe["composition"]) == {
+        "details",
+        "details_widget",
+        "application_header",
+        "detail_sections",
+        "detail_section_requirement",
+        "ordering",
+        "tab_action",
+        "reads",
+        "release_widget",
+        "operations_widget",
+        "reports_widget",
+        "release_selection",
+    }
+    assert recipe["implementation_workflow"]["current_phase_index"] == 2
+    assert recipe["implementation_workflow"]["total_phases"] == 6
+
+
+def test_application_manager_iteration_defers_later_postconditions() -> None:
+    webui = _application_manager_webui()
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    sections = next(widget for widget in widgets if widget["id"] == "catalog-sections")
+    sections["inputs"]["buttons"][0].pop("label_i18n")
+
+    intermediate = evaluate_ui_request(
+        "Prototype phase 1/6: build Applications with its MCP catalog shell.",
+        webui,
+    )
+    final = evaluate_ui_request(
+        "Prototype phase 6/6: complete Applications with MCP and localization.",
+        webui,
+    )
+
+    intermediate_by_id = {item["id"]: item for item in intermediate["postconditions"]}
+    assert intermediate["ok"] is True
+    assert intermediate_by_id["applications.localization"]["required"] is False
+    assert "applications.localization" in intermediate["outstanding_postconditions"]
+    assert final["ok"] is False
+
+
+def test_application_manager_iteration_enforces_accumulated_postconditions() -> None:
+    webui = _application_manager_webui()
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    applications = next(
+        widget for widget in widgets if widget["id"] == "catalog-applications"
+    )
+    applications["dataSource"]["kind"] = "static"
+
+    result = evaluate_ui_request(
+        "Prototype phase 2/6: build Applications with MCP and its details.",
+        webui,
+    )
+
+    mcp_reads = next(
+        item
+        for item in result["postconditions"]
+        if item["id"] == "applications.mcp_reads"
+    )
+    assert result["ok"] is False
+    assert mcp_reads["required"] is True
+    assert "applications.mcp_reads" not in result["outstanding_postconditions"]
+
+
+def test_application_manager_detail_phase_requires_the_state_resolver() -> None:
+    webui = _application_manager_webui()
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    details = next(widget for widget in widgets if widget["id"] == "details")
+    details["inputs"].pop("stateBindings")
+
+    result = evaluate_ui_request(
+        "Prototype phase 2/6: build Applications with MCP and its details.",
+        webui,
+    )
+
+    by_id = {item["id"]: item for item in result["postconditions"]}
+    assert result["ok"] is False
+    assert by_id["applications.concise_operable_detail"]["ok"] is True
+    assert by_id["applications.concise_operable_detail"]["required"] is True
+    assert by_id["applications.detail_state_binding"]["ok"] is False
+    assert by_id["applications.detail_state_binding"]["required"] is True
+    assert by_id["applications.detail_lifecycle_binding"]["required"] is False
+
+
+def test_application_manager_lifecycle_phase_defers_review_operations() -> None:
+    webui = _application_manager_webui()
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    widgets.remove(next(widget for widget in widgets if widget["id"] == "review-actions"))
+    lifecycle = next(widget for widget in widgets if widget["id"] == "lifecycle-actions")
+    lifecycle["actions"] = [
+        action
+        for action in lifecycle["actions"]
+        if action.get("target") != "applications.plan"
+    ]
+
+    lifecycle_result = evaluate_ui_request(
+        "Prototype phase 3/6: build Applications lifecycle controls with MCP.",
+        webui,
+    )
+    reviewed = evaluate_ui_request(
+        "Prototype phase 4/6: build Applications reviewed operations with MCP.",
+        webui,
+    )
+
+    lifecycle_by_id = {
+        item["id"]: item for item in lifecycle_result["postconditions"]
+    }
+    reviewed_by_id = {item["id"]: item for item in reviewed["postconditions"]}
+    assert lifecycle_result["ok"] is True
+    assert lifecycle_by_id["applications.lifecycle_controls"]["required"] is True
+    assert lifecycle_by_id["applications.reviewed_plan_apply"]["required"] is False
+    assert reviewed["ok"] is False
+    assert reviewed_by_id["applications.reviewed_plan_apply"]["required"] is True
+
+
+def test_application_manager_lifecycle_phase_rejects_shadow_state_and_late_toolbar() -> None:
+    webui = _application_manager_webui()
+    page = webui["ui"]["application"]["desktop"]["pageSchema"]
+    page["state"] = copy.deepcopy(page["initialState"])
+    widgets = page["widgets"]
+    lifecycle = next(widget for widget in widgets if widget["id"] == "lifecycle-actions")
+    widgets.remove(lifecycle)
+    tabs_index = next(
+        index for index, widget in enumerate(widgets) if widget["id"] == "tabs"
+    )
+    widgets.insert(tabs_index + 1, lifecycle)
+
+    result = evaluate_ui_request(
+        "Prototype phase 3/6: build Applications lifecycle controls with MCP.",
+        webui,
+    )
+
+    lifecycle_result = next(
+        item
+        for item in result["postconditions"]
+        if item["id"] == "applications.lifecycle_controls"
+    )
+    assert lifecycle_result["ok"] is False
+    assert lifecycle_result["actual"]["lifecycleBeforeDetails"] is False
+    assert lifecycle_result["actual"]["casDefaults"] is False
+    assert lifecycle_result["actual"]["shadowStatePages"]
+    assert any(
+        "pageSchema.state" in item
+        for item in lifecycle_result["actual"]["missingRequirements"]
+    )
 
 
 def _application_manager_webui() -> dict:
@@ -263,7 +438,9 @@ def _application_manager_webui() -> dict:
         return {
             "kind": "mcp",
             "toolId": tool_id,
-            "arguments": {"application_id": "$state.selectedApplicationId"} if selected else {},
+            "arguments": {"application_id": "$state.selectedApplicationId"}
+            if selected
+            else {},
             "dryRun": True,
             "resultPath": result_path,
             "prototypeFixture": f"$state.prototypeFixtures.{fixture_key or inferred_fixture}",
@@ -345,7 +522,9 @@ def _application_manager_webui() -> dict:
                                         *[
                                             {
                                                 "when": {
-                                                    "application_id": fixture["application"]["application_id"]
+                                                    "application_id": fixture[
+                                                        "application"
+                                                    ]["application_id"]
                                                 },
                                                 "result": fixture,
                                             }
@@ -356,7 +535,9 @@ def _application_manager_webui() -> dict:
                                                 "when": {
                                                     "application_id": f"sample-{state_id}"
                                                 },
-                                                "result": {"prototype_state_id": state_id},
+                                                "result": {
+                                                    "prototype_state_id": state_id
+                                                },
                                             }
                                             for state_id in (
                                                 "marketplace-uninstalled",
@@ -385,12 +566,19 @@ def _application_manager_webui() -> dict:
                                                     "kind": kind,
                                                     "plan": {
                                                         "review_summary": f"Review {kind}",
-                                                        "permissions": ["workspace.read"],
+                                                        "permissions": [
+                                                            "workspace.read"
+                                                        ],
                                                     },
                                                 }
                                             },
                                         }
-                                        for kind in ("install", "update", "select_track", "remove")
+                                        for kind in (
+                                            "install",
+                                            "update",
+                                            "select_track",
+                                            "remove",
+                                        )
                                     ]
                                 },
                                 "apply": {"result": {"status": "succeeded"}},
@@ -419,7 +607,10 @@ def _application_manager_webui() -> dict:
                                     "selectedStateKey": "catalogSection",
                                     "buttons": [
                                         {"id": "applications", "label": "Applications"},
-                                        {"id": "developments", "label": "My developments"},
+                                        {
+                                            "id": "developments",
+                                            "label": "My developments",
+                                        },
                                     ],
                                 },
                                 "actions": [
@@ -435,7 +626,10 @@ def _application_manager_webui() -> dict:
                                 "type": "input.toggle",
                                 "area": "master",
                                 "visibleIf": "$state.catalogSection == 'applications'",
-                                "dataSource": {"kind": "static", "value": "$state.installedOnly"},
+                                "dataSource": {
+                                    "kind": "static",
+                                    "value": "$state.installedOnly",
+                                },
                                 "inputs": {"label": "Installed only"},
                                 "actions": [
                                     {
@@ -476,14 +670,38 @@ def _application_manager_webui() -> dict:
                                         ),
                                         "meta": (
                                             [
-                                                {"key": "local_development.phase", "label": "Phase", "kind": "badge"},
-                                                {"key": "local_development.status", "label": "Status", "kind": "badge"},
-                                                {"key": "local_development.publication_status", "label": "Publication", "kind": "badge"},
+                                                {
+                                                    "key": "local_development.phase",
+                                                    "label": "Phase",
+                                                    "kind": "badge",
+                                                },
+                                                {
+                                                    "key": "local_development.status",
+                                                    "label": "Status",
+                                                    "kind": "badge",
+                                                },
+                                                {
+                                                    "key": "local_development.publication_status",
+                                                    "label": "Publication",
+                                                    "kind": "badge",
+                                                },
                                             ]
                                             if section == "developments"
                                             else [
-                                                {"key": "installed", "label": "Installation", "kind": "boolean", "trueLabel": "Installed", "falseLabel": "Not installed"},
-                                                {"key": "update_available", "label": "Update", "kind": "boolean", "trueLabel": "Update available", "falseLabel": "Current"},
+                                                {
+                                                    "key": "installed",
+                                                    "label": "Installation",
+                                                    "kind": "boolean",
+                                                    "trueLabel": "Installed",
+                                                    "falseLabel": "Not installed",
+                                                },
+                                                {
+                                                    "key": "update_available",
+                                                    "label": "Update",
+                                                    "kind": "boolean",
+                                                    "trueLabel": "Update available",
+                                                    "falseLabel": "Current",
+                                                },
                                             ]
                                         ),
                                         "emptyText": "No applications found.",
@@ -492,11 +710,11 @@ def _application_manager_webui() -> dict:
                                         {
                                             "on": "select",
                                             "type": "updateState",
-                                        "params": {
-                                            "selectedApplicationId": "$event.application.application_id",
-                                            "selectedReleaseDigest": "",
-                                            "reviewedPlan": {},
-                                        },
+                                            "params": {
+                                                "selectedApplicationId": "$event.application.application_id",
+                                                "selectedReleaseDigest": "",
+                                                "reviewedPlan": {},
+                                            },
                                         }
                                     ],
                                 }
@@ -520,7 +738,12 @@ def _application_manager_webui() -> dict:
                                     "selectedStateKey": "activeTab",
                                     "buttons": [
                                         {"id": value, "label": value.title()}
-                                        for value in ("details", "versions", "operations", "reports")
+                                        for value in (
+                                            "details",
+                                            "versions",
+                                            "operations",
+                                            "reports",
+                                        )
                                     ],
                                 },
                                 "actions": [
@@ -536,7 +759,11 @@ def _application_manager_webui() -> dict:
                                 "type": "item.details",
                                 "area": "detail",
                                 "visibleIf": "$state.selectedApplicationId",
-                                "dataSource": source("applications.show", "response.result.application", selected=True),
+                                "dataSource": source(
+                                    "applications.show",
+                                    "response.result.application",
+                                    selected=True,
+                                ),
                                 "inputs": {
                                     "stateOnly": True,
                                     "stateBindings": {
@@ -591,7 +818,7 @@ def _application_manager_webui() -> dict:
                                             "path": "local_development.builder.preview_webspace_id",
                                             "default": "",
                                         },
-                                    }
+                                    },
                                 },
                             },
                             {
@@ -608,10 +835,22 @@ def _application_manager_webui() -> dict:
                                 "inputs": {
                                     "presentation": "header",
                                     "fields": [
-                                        {"label": "Summary", "path": "application.display.summary"},
-                                        {"label": "Publisher", "path": "application.publisher.display_name"},
-                                        {"label": "Installed", "path": "installed_release.version"},
-                                        {"label": "Marketplace", "path": "marketplace_release.version"},
+                                        {
+                                            "label": "Summary",
+                                            "path": "application.display.summary",
+                                        },
+                                        {
+                                            "label": "Publisher",
+                                            "path": "application.publisher.display_name",
+                                        },
+                                        {
+                                            "label": "Installed",
+                                            "path": "installed_release.version",
+                                        },
+                                        {
+                                            "label": "Marketplace",
+                                            "path": "marketplace_release.version",
+                                        },
                                     ],
                                 },
                             },
@@ -620,7 +859,11 @@ def _application_manager_webui() -> dict:
                                 "type": "ui.list",
                                 "area": "detail",
                                 "visibleIf": "$state.activeTab == 'versions' && $state.selectedApplicationId",
-                                "dataSource": source("applications.list_releases", "response.result.releases", selected=True),
+                                "dataSource": source(
+                                    "applications.list_releases",
+                                    "response.result.releases",
+                                    selected=True,
+                                ),
                                 "inputs": {
                                     "itemIdKey": "release_digest",
                                     "titleKey": "version",
@@ -644,14 +887,22 @@ def _application_manager_webui() -> dict:
                                 "type": "ui.list",
                                 "area": "detail",
                                 "visibleIf": "$state.activeTab == 'operations' && $state.selectedApplicationId",
-                                "dataSource": source("applications.list_operations", "response.result.operations", selected=True),
+                                "dataSource": source(
+                                    "applications.list_operations",
+                                    "response.result.operations",
+                                    selected=True,
+                                ),
                                 "inputs": {
                                     "itemIdKey": "operation_id",
                                     "titleKey": "summary",
                                     "subtitleKey": "kind",
                                     "previewKey": "kind",
                                     "meta": [
-                                        {"key": "status", "label": "Status", "kind": "badge"},
+                                        {
+                                            "key": "status",
+                                            "label": "Status",
+                                            "kind": "badge",
+                                        },
                                     ],
                                     "emptyText": "No operations yet.",
                                 },
@@ -661,17 +912,27 @@ def _application_manager_webui() -> dict:
                                 "type": "ui.list",
                                 "area": "detail",
                                 "visibleIf": "$state.activeTab == 'reports' && $state.selectedApplicationId",
-                                "dataSource": source("applications.list_development_reports", "response.result.reports"),
+                                "dataSource": source(
+                                    "applications.list_development_reports",
+                                    "response.result.reports",
+                                ),
                                 "inputs": {
                                     "itemIdKey": "report_id",
                                     "titleKey": "title",
                                     "subtitleKey": "summary",
                                     "previewKey": "summary",
                                     "meta": [
-                                        {"key": "status", "label": "Status", "kind": "badge"},
+                                        {
+                                            "key": "status",
+                                            "label": "Status",
+                                            "kind": "badge",
+                                        },
                                     ],
                                     "filters": [
-                                        {"key": "application_id", "stateKey": "selectedApplicationId"}
+                                        {
+                                            "key": "application_id",
+                                            "stateKey": "selectedApplicationId",
+                                        }
                                     ],
                                     "emptyText": "No reports yet.",
                                 },
@@ -743,7 +1004,10 @@ def _application_manager_webui() -> dict:
                                     "options": [
                                         {"label": "Retain data", "value": "retain"},
                                         {"label": "Delete data", "value": "delete"},
-                                        {"label": "Snapshot and delete", "value": "snapshot_then_delete"},
+                                        {
+                                            "label": "Snapshot and delete",
+                                            "value": "snapshot_then_delete",
+                                        },
                                     ],
                                 },
                                 "actions": [
@@ -763,13 +1027,25 @@ def _application_manager_webui() -> dict:
                                 "area": "detail",
                                 "title": "Review",
                                 "visibleIf": "$state.reviewedPlan.operation.operation_id || $state.reviewedPlan.status",
-                                "dataSource": {"kind": "static", "value": "$state.reviewedPlan"},
+                                "dataSource": {
+                                    "kind": "static",
+                                    "value": "$state.reviewedPlan",
+                                },
                                 "inputs": {
                                     "presentation": "section",
                                     "fields": [
-                                        {"label": "Operation", "path": "operation.kind"},
-                                        {"label": "Summary", "path": "operation.plan.review_summary"},
-                                        {"label": "Requested permissions", "path": "operation.plan.permissions"},
+                                        {
+                                            "label": "Operation",
+                                            "path": "operation.kind",
+                                        },
+                                        {
+                                            "label": "Summary",
+                                            "path": "operation.plan.review_summary",
+                                        },
+                                        {
+                                            "label": "Requested permissions",
+                                            "path": "operation.plan.permissions",
+                                        },
                                     ],
                                 },
                             },
@@ -817,7 +1093,7 @@ def _application_manager_webui() -> dict:
                                             "icon": "construct-outline",
                                             "visibleIf": "$state.localDevelopmentAvailable == true && $state.developmentObjectId",
                                         },
-                                    ]
+                                    ],
                                 },
                                 "actions": [
                                     {
@@ -913,11 +1189,35 @@ def _application_manager_webui() -> dict:
                                 "inputs": {
                                     "variant": "toolbar",
                                     "buttons": [
-                                        {"id": "confirm-install", "label": "Install", "icon": "download-outline", "visibleIf": "$state.reviewedPlan.operation.kind == 'install'"},
-                                        {"id": "confirm-update", "label": "Update", "icon": "refresh-outline", "visibleIf": "$state.reviewedPlan.operation.kind == 'update'"},
-                                        {"id": "confirm-select-track", "label": "Save settings", "icon": "checkmark-outline", "visibleIf": "$state.reviewedPlan.operation.kind == 'select_track'"},
-                                        {"id": "confirm-remove", "label": "Uninstall", "icon": "trash-outline", "visibleIf": "$state.reviewedPlan.operation.kind == 'remove'"},
-                                        {"id": "cancel-review", "label": "Cancel", "icon": "close-outline"},
+                                        {
+                                            "id": "confirm-install",
+                                            "label": "Install",
+                                            "icon": "download-outline",
+                                            "visibleIf": "$state.reviewedPlan.operation.kind == 'install'",
+                                        },
+                                        {
+                                            "id": "confirm-update",
+                                            "label": "Update",
+                                            "icon": "refresh-outline",
+                                            "visibleIf": "$state.reviewedPlan.operation.kind == 'update'",
+                                        },
+                                        {
+                                            "id": "confirm-select-track",
+                                            "label": "Save settings",
+                                            "icon": "checkmark-outline",
+                                            "visibleIf": "$state.reviewedPlan.operation.kind == 'select_track'",
+                                        },
+                                        {
+                                            "id": "confirm-remove",
+                                            "label": "Uninstall",
+                                            "icon": "trash-outline",
+                                            "visibleIf": "$state.reviewedPlan.operation.kind == 'remove'",
+                                        },
+                                        {
+                                            "id": "cancel-review",
+                                            "label": "Cancel",
+                                            "icon": "close-outline",
+                                        },
                                     ],
                                 },
                                 "actions": [
@@ -953,7 +1253,9 @@ def _application_manager_webui() -> dict:
                                 {
                                     "id": section_id,
                                     "type": "item.details",
-                                    "area": "detail" if title == "Details" else "metadata",
+                                    "area": "detail"
+                                    if title == "Details"
+                                    else "metadata",
                                     "title": title,
                                     "visibleIf": (
                                         "$state.activeTab == 'details' && "
@@ -982,9 +1284,18 @@ def _application_manager_webui() -> dict:
                                         "application-section",
                                         "Details",
                                         [
-                                            {"label": "Identifier", "path": "application.application_id"},
-                                            {"label": "Publisher", "path": "application.publisher.display_name"},
-                                            {"label": "Lifecycle", "path": "application.lifecycle"},
+                                            {
+                                                "label": "Identifier",
+                                                "path": "application.application_id",
+                                            },
+                                            {
+                                                "label": "Publisher",
+                                                "path": "application.publisher.display_name",
+                                            },
+                                            {
+                                                "label": "Lifecycle",
+                                                "path": "application.lifecycle",
+                                            },
                                         ],
                                         "",
                                     ),
@@ -992,11 +1303,27 @@ def _application_manager_webui() -> dict:
                                         "installation-section",
                                         "Installation",
                                         [
-                                            {"label": "Installed version", "path": "installed_release.version"},
-                                            {"label": "Status", "path": "installation.status"},
-                                            {"label": "Updated", "path": "installation.updated_at", "format": "datetime"},
-                                            {"label": "Update track", "path": "subscription.update_track"},
-                                            {"label": "Update policy", "path": "subscription.update_policy"},
+                                            {
+                                                "label": "Installed version",
+                                                "path": "installed_release.version",
+                                            },
+                                            {
+                                                "label": "Status",
+                                                "path": "installation.status",
+                                            },
+                                            {
+                                                "label": "Updated",
+                                                "path": "installation.updated_at",
+                                                "format": "datetime",
+                                            },
+                                            {
+                                                "label": "Update track",
+                                                "path": "subscription.update_track",
+                                            },
+                                            {
+                                                "label": "Update policy",
+                                                "path": "subscription.update_policy",
+                                            },
                                         ],
                                         "",
                                     ),
@@ -1004,10 +1331,23 @@ def _application_manager_webui() -> dict:
                                         "marketplace-section",
                                         "Marketplace",
                                         [
-                                            {"label": "Stable version", "path": "marketplace_release.version"},
-                                            {"label": "Pre-release version", "path": "prerelease_release.version"},
-                                            {"label": "Last released", "path": "marketplace_release.published_at", "format": "datetime"},
-                                            {"label": "Visibility", "path": "application.visibility"},
+                                            {
+                                                "label": "Stable version",
+                                                "path": "marketplace_release.version",
+                                            },
+                                            {
+                                                "label": "Pre-release version",
+                                                "path": "prerelease_release.version",
+                                            },
+                                            {
+                                                "label": "Last released",
+                                                "path": "marketplace_release.published_at",
+                                                "format": "datetime",
+                                            },
+                                            {
+                                                "label": "Visibility",
+                                                "path": "application.visibility",
+                                            },
                                         ],
                                         "",
                                     ),
@@ -1015,7 +1355,10 @@ def _application_manager_webui() -> dict:
                                         "categories-section",
                                         "Categories",
                                         [
-                                            {"label": "Categories", "path": "application.display.categories"},
+                                            {
+                                                "label": "Categories",
+                                                "path": "application.display.categories",
+                                            },
                                         ],
                                         "",
                                     ),
@@ -1023,11 +1366,27 @@ def _application_manager_webui() -> dict:
                                         "development-section",
                                         "My development",
                                         [
-                                            {"label": "Phase", "path": "local_development.phase"},
-                                            {"label": "Status", "path": "local_development.status"},
-                                            {"label": "Publication", "path": "local_development.publication_status"},
-                                            {"label": "Revision", "path": "local_development.revision"},
-                                            {"label": "Updated", "path": "local_development.updated_at", "format": "datetime"},
+                                            {
+                                                "label": "Phase",
+                                                "path": "local_development.phase",
+                                            },
+                                            {
+                                                "label": "Status",
+                                                "path": "local_development.status",
+                                            },
+                                            {
+                                                "label": "Publication",
+                                                "path": "local_development.publication_status",
+                                            },
+                                            {
+                                                "label": "Revision",
+                                                "path": "local_development.revision",
+                                            },
+                                            {
+                                                "label": "Updated",
+                                                "path": "local_development.updated_at",
+                                                "format": "datetime",
+                                            },
                                         ],
                                         " && $state.localDevelopmentAvailable == true",
                                     ),
@@ -1086,6 +1445,12 @@ def _application_manager_webui() -> dict:
         "moveItemLabel",
     }
     fixture_fields = {"title", "summary", "review_summary"}
+    application_recipe = next(
+        item
+        for item in ui_capability_catalog()["recipes"]
+        if item["id"] == "recipe.application_manager"
+    )
+    canonical_russian = application_recipe["composition"]["localization"]["glossary"]
 
     def add_localizations(
         value: object,
@@ -1117,13 +1482,18 @@ def _application_manager_webui() -> dict:
                     fallback = ", ".join(str(item).strip() for item in raw)
                 else:
                     continue
-                if not fallback or fallback.startswith("$state.") or (
-                    fallback.startswith("{") and fallback.endswith("}")
+                if (
+                    not fallback
+                    or fallback.startswith("$state.")
+                    or (fallback.startswith("{") and fallback.endswith("}"))
                 ):
                     continue
                 additions[f"{key}_i18n"] = {
                     "key": "test.applications." + ".".join((*path, key)),
-                    "translations": {"en": fallback, "ru": f"ru: {fallback}"},
+                    "translations": {
+                        "en": fallback,
+                        "ru": canonical_russian.get(fallback, f"ru: {fallback}"),
+                    },
                 }
             value.update(additions)
         elif isinstance(value, list):
@@ -1133,6 +1503,18 @@ def _application_manager_webui() -> dict:
                     path=(*path, str(index)),
                     inside_fixtures=inside_fixtures,
                 )
+
+    page = webui["ui"]["application"]["desktop"]["pageSchema"]
+    widgets = page["widgets"]
+    lifecycle = next(widget for widget in widgets if widget["id"] == "lifecycle-actions")
+    tabs = next(widget for widget in widgets if widget["id"] == "tabs")
+    widgets.remove(lifecycle)
+    widgets.remove(tabs)
+    header_index = next(
+        index for index, widget in enumerate(widgets) if widget["id"] == "application-header"
+    )
+    widgets.insert(header_index + 1, lifecycle)
+    widgets.insert(header_index + 2, tabs)
 
     add_localizations(webui)
     lifecycle = next(
@@ -1154,7 +1536,9 @@ def _application_manager_webui() -> dict:
 
 
 def test_application_manager_evaluation_enforces_mcp_and_review_boundary() -> None:
-    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    request = (
+        "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    )
     webui = _application_manager_webui()
 
     accepted = evaluate_ui_request(request, webui)
@@ -1163,20 +1547,25 @@ def test_application_manager_evaluation_enforces_mcp_and_review_boundary() -> No
     assert all(item["ok"] for item in accepted["postconditions"])
 
     widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
-    actions = next(widget for widget in widgets if widget["id"] == "review-actions")["actions"]
+    actions = next(widget for widget in widgets if widget["id"] == "review-actions")[
+        "actions"
+    ]
     actions.pop(0)
     rejected = evaluate_ui_request(request, webui)
 
     assert rejected["ok"] is False
     boundary = next(
-        item for item in rejected["postconditions"]
+        item
+        for item in rejected["postconditions"]
         if item["id"] == "applications.reviewed_plan_apply"
     )
     assert boundary["ok"] is False
 
 
 def test_application_manager_evaluation_requires_bilingual_prototype_text() -> None:
-    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    request = (
+        "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    )
     webui = _application_manager_webui()
     widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
     sections = next(widget for widget in widgets if widget["id"] == "catalog-sections")
@@ -1195,13 +1584,74 @@ def test_application_manager_evaluation_requires_bilingual_prototype_text() -> N
     ]
 
 
+def test_application_manager_evaluation_requires_canonical_russian_glossary() -> None:
+    request = (
+        "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    )
+    webui = _application_manager_webui()
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    sections = next(widget for widget in widgets if widget["id"] == "catalog-sections")
+    descriptor = sections["inputs"]["buttons"][0]["label_i18n"]
+    descriptor["translations"]["ru"] = "Applications"
+
+    rejected = evaluate_ui_request(request, webui)
+
+    localization = next(
+        item
+        for item in rejected["postconditions"]
+        if item["id"] == "applications.localization"
+    )
+    assert localization["ok"] is False
+    assert localization["actual"]["localeValueMismatches"] == [
+        {
+            "path": "pages.0.widgets.0.inputs.buttons.0.label",
+            "key": descriptor["key"],
+            "locale": "ru",
+            "expected": "Приложения",
+            "actual": "Applications",
+        }
+    ]
+
+
+def test_application_manager_evaluation_rejects_placeholder_locale_entries() -> None:
+    request = (
+        "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    )
+    webui = _application_manager_webui()
+
+    rejected = evaluate_ui_request(
+        request,
+        webui,
+        locale_dictionaries={
+            "en": {"applications.unused.placeholder": "placeholder"},
+            "ru": {"applications.unused.placeholder": "placeholder"},
+        },
+    )
+
+    localization = next(
+        item
+        for item in rejected["postconditions"]
+        if item["id"] == "applications.localization"
+    )
+    assert localization["ok"] is False
+    assert localization["actual"]["invalidLocaleEntries"] == [
+        {"key": "applications.unused.placeholder", "locales": ["en", "ru"]}
+    ]
+
+
 def test_application_manager_evaluation_accepts_scenario_locale_assets() -> None:
-    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    request = (
+        "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    )
     webui = _application_manager_webui()
     application = webui["ui"]["application"]
     page = application["desktop"]["pageSchema"]
-    sections = next(widget for widget in page["widgets"] if widget["id"] == "catalog-sections")
-    sections["inputs"]["buttons"][0]["label_i18n"] = "applications.navigation.applications"
+    sections = next(
+        widget for widget in page["widgets"] if widget["id"] == "catalog-sections"
+    )
+    sections["inputs"]["buttons"][0]["label_i18n"] = (
+        "applications.navigation.applications"
+    )
     application["resources"] = {
         "applications.i18n.en": {
             "kind": "data",
@@ -1235,10 +1685,14 @@ def test_application_manager_evaluation_accepts_scenario_locale_assets() -> None
 
 
 def test_application_manager_evaluation_requires_canonical_value_prefixes() -> None:
-    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    request = (
+        "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    )
     webui = _application_manager_webui()
     widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
-    developments = next(widget for widget in widgets if widget["id"] == "catalog-developments")
+    developments = next(
+        widget for widget in widgets if widget["id"] == "catalog-developments"
+    )
     developments["inputs"]["meta"][0].pop("valueI18nPrefix")
 
     rejected = evaluate_ui_request(request, webui)
@@ -1255,7 +1709,9 @@ def test_application_manager_evaluation_requires_canonical_value_prefixes() -> N
 
 
 def test_application_manager_evaluation_enforces_update_defaults() -> None:
-    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    request = (
+        "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    )
     webui = _application_manager_webui()
     page = webui["ui"]["application"]["desktop"]["pageSchema"]
     page["initialState"]["automaticUpdates"] = False
@@ -1272,8 +1728,12 @@ def test_application_manager_evaluation_enforces_update_defaults() -> None:
     ] == ["development-1"]
 
 
-def test_application_manager_evaluation_requires_permissions_for_every_plan_kind() -> None:
-    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+def test_application_manager_evaluation_requires_permissions_for_every_plan_kind() -> (
+    None
+):
+    request = (
+        "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    )
     webui = _application_manager_webui()
     cases = webui["ui"]["application"]["desktop"]["pageSchema"]["initialState"][
         "prototypeFixtures"
@@ -1294,21 +1754,43 @@ def test_application_manager_evaluation_requires_permissions_for_every_plan_kind
         "select_track",
         "update",
     ]
+    assert fixture_check["actual"]["invalidPlanCases"] == [
+        {"kind": "remove", "missing": ["non-empty plan.permissions"]}
+    ]
+    assert "non-empty plan.permissions" in fixture_check["actual"][
+        "missingRequirements"
+    ][0]
 
 
 def test_application_manager_evaluation_rejects_named_fixture_placeholders() -> None:
-    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    request = (
+        "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    )
     webui = _application_manager_webui()
-    fixtures = webui["ui"]["application"]["desktop"]["pageSchema"]["initialState"]["prototypeFixtures"]
-    fixtures.update({key: f"{key}-fixture" for key in (
-        "applications", "developments", "application", "releases",
-        "operations", "reports", "plan", "apply",
-    )})
+    fixtures = webui["ui"]["application"]["desktop"]["pageSchema"]["initialState"][
+        "prototypeFixtures"
+    ]
+    fixtures.update(
+        {
+            key: f"{key}-fixture"
+            for key in (
+                "applications",
+                "developments",
+                "application",
+                "releases",
+                "operations",
+                "reports",
+                "plan",
+                "apply",
+            )
+        }
+    )
 
     rejected = evaluate_ui_request(request, webui)
 
     fixture_check = next(
-        item for item in rejected["postconditions"]
+        item
+        for item in rejected["postconditions"]
         if item["id"] == "applications.prototype_fixtures"
     )
     assert fixture_check["ok"] is False
@@ -1316,16 +1798,21 @@ def test_application_manager_evaluation_rejects_named_fixture_placeholders() -> 
 
 
 def test_application_manager_evaluation_requires_fixture_on_every_mcp_widget() -> None:
-    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    request = (
+        "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    )
     webui = _application_manager_webui()
     widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
-    metadata = next(widget for widget in widgets if widget["id"] == "marketplace-section")
+    metadata = next(
+        widget for widget in widgets if widget["id"] == "marketplace-section"
+    )
     metadata["dataSource"].pop("prototypeFixture")
 
     rejected = evaluate_ui_request(request, webui)
 
     fixture_check = next(
-        item for item in rejected["postconditions"]
+        item
+        for item in rejected["postconditions"]
         if item["id"] == "applications.prototype_fixtures"
     )
     assert fixture_check["ok"] is False
@@ -1339,8 +1826,12 @@ def test_application_manager_evaluation_requires_fixture_on_every_mcp_widget() -
     ]
 
 
-def test_application_manager_evaluation_requires_detail_case_for_every_selectable_fixture() -> None:
-    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+def test_application_manager_evaluation_requires_detail_case_for_every_selectable_fixture() -> (
+    None
+):
+    request = (
+        "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    )
     webui = _application_manager_webui()
     fixtures = webui["ui"]["application"]["desktop"]["pageSchema"]["initialState"][
         "prototypeFixtures"
@@ -1363,14 +1854,20 @@ def test_application_manager_evaluation_requires_detail_case_for_every_selectabl
 
 
 def test_application_manager_evaluation_rejects_stale_review_context() -> None:
-    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    request = (
+        "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    )
     webui = _application_manager_webui()
     widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
-    catalog = next(widget for widget in widgets if widget["id"] == "catalog-applications")
+    catalog = next(
+        widget for widget in widgets if widget["id"] == "catalog-applications"
+    )
     catalog["actions"][0]["params"].pop("reviewedPlan")
     operations = next(widget for widget in widgets if widget["id"] == "operations")
     operations["inputs"].pop("titleKey")
-    review_actions = next(widget for widget in widgets if widget["id"] == "review-actions")
+    review_actions = next(
+        widget for widget in widgets if widget["id"] == "review-actions"
+    )
     apply = next(
         action
         for action in review_actions["actions"]
@@ -1386,11 +1883,33 @@ def test_application_manager_evaluation_rejects_stale_review_context() -> None:
     assert by_id["applications.detail_lifecycle_binding"]["ok"] is False
 
 
-def test_application_manager_evaluation_rejects_non_runtime_event_paths() -> None:
-    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+def test_application_manager_accepts_canonical_context_reset_actions() -> None:
+    request = (
+        "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    )
     webui = _application_manager_webui()
     widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
-    catalog = next(widget for widget in widgets if widget["id"] == "catalog-applications")
+    for widget_id in ("catalog-sections", "installed-only"):
+        widget = next(widget for widget in widgets if widget["id"] == widget_id)
+        widget["actions"][0]["params"]["reviewedPlan"] = {}
+
+    evaluated = evaluate_ui_request(request, webui)
+
+    by_id = {item["id"]: item for item in evaluated["postconditions"]}
+    assert by_id["applications.catalog_sections"]["ok"] is True
+    assert by_id["applications.detail_state_binding"]["ok"] is True
+    assert by_id["applications.detail_lifecycle_binding"]["ok"] is True
+
+
+def test_application_manager_evaluation_rejects_non_runtime_event_paths() -> None:
+    request = (
+        "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    )
+    webui = _application_manager_webui()
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    catalog = next(
+        widget for widget in widgets if widget["id"] == "catalog-applications"
+    )
     catalog["actions"][0]["params"]["selectedApplicationId"] = "$event.item.id"
     tabs = next(widget for widget in widgets if widget["id"] == "tabs")
     tabs["actions"][0]["params"]["activeTab"] = "$event.buttonId"
@@ -1404,16 +1923,21 @@ def test_application_manager_evaluation_rejects_non_runtime_event_paths() -> Non
 
 
 def test_application_manager_evaluation_reports_catalog_widget_mismatches() -> None:
-    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    request = (
+        "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    )
     webui = _application_manager_webui()
     widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
-    catalog = next(widget for widget in widgets if widget["id"] == "catalog-applications")
+    catalog = next(
+        widget for widget in widgets if widget["id"] == "catalog-applications"
+    )
     catalog["inputs"].pop("meta")
 
     rejected = evaluate_ui_request(request, webui)
 
     catalog_check = next(
-        item for item in rejected["postconditions"]
+        item
+        for item in rejected["postconditions"]
         if item["id"] == "applications.catalog_sections"
     )
     applications = catalog_check["actual"]["sectionCandidates"]["applications"]
@@ -1432,8 +1956,12 @@ def test_application_manager_evaluation_reports_catalog_widget_mismatches() -> N
     ]
 
 
-def test_application_manager_evaluation_rejects_wide_aux_layout_and_unguarded_install() -> None:
-    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+def test_application_manager_evaluation_rejects_wide_aux_layout_and_unguarded_install() -> (
+    None
+):
+    request = (
+        "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    )
     webui = _application_manager_webui()
     page = webui["ui"]["application"]["desktop"]["pageSchema"]
     page["layout"] = {
@@ -1444,8 +1972,12 @@ def test_application_manager_evaluation_rejects_wide_aux_layout_and_unguarded_in
             {"id": "detail", "role": "aux"},
         ],
     }
-    lifecycle = next(widget for widget in page["widgets"] if widget["id"] == "lifecycle-actions")
-    lifecycle["inputs"]["buttons"][0]["visibleIf"] = "$state.applicationInstalled != true"
+    lifecycle = next(
+        widget for widget in page["widgets"] if widget["id"] == "lifecycle-actions"
+    )
+    lifecycle["inputs"]["buttons"][0]["visibleIf"] = (
+        "$state.applicationInstalled != true"
+    )
 
     rejected = evaluate_ui_request(request, webui)
 
@@ -1453,16 +1985,27 @@ def test_application_manager_evaluation_rejects_wide_aux_layout_and_unguarded_in
     by_id = {item["id"]: item for item in rejected["postconditions"]}
     assert by_id["applications.sidebar_layout"]["ok"] is False
     assert by_id["applications.detail_lifecycle_binding"]["ok"] is False
-    assert by_id["applications.detail_lifecycle_binding"]["actual"]["installReleaseGuarded"] is False
+    assert (
+        by_id["applications.detail_lifecycle_binding"]["actual"][
+            "installReleaseGuarded"
+        ]
+        is False
+    )
 
 
 def test_application_manager_evaluation_rejects_technical_lifecycle_commands() -> None:
-    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    request = (
+        "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    )
     webui = _application_manager_webui()
     widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
-    lifecycle = next(widget for widget in widgets if widget["id"] == "lifecycle-actions")
+    lifecycle = next(
+        widget for widget in widgets if widget["id"] == "lifecycle-actions"
+    )
     lifecycle["inputs"]["buttons"][0]["label"] = "Plan install"
-    review_actions = next(widget for widget in widgets if widget["id"] == "review-actions")
+    review_actions = next(
+        widget for widget in widgets if widget["id"] == "review-actions"
+    )
     lifecycle["inputs"]["buttons"].append(
         {"id": "apply", "label": "Apply reviewed plan", "icon": "checkmark-outline"}
     )
@@ -1483,12 +2026,20 @@ def test_application_manager_evaluation_rejects_technical_lifecycle_commands() -
     assert review["actual"]["confirmationSeparated"] is False
 
 
-def test_application_manager_evaluation_rejects_technical_russian_lifecycle_commands() -> None:
-    request = "Build Applications lifecycle manager with Extensions, installed, and MCP."
+def test_application_manager_evaluation_rejects_technical_russian_lifecycle_commands() -> (
+    None
+):
+    request = (
+        "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    )
     webui = _application_manager_webui()
     widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
-    lifecycle = next(widget for widget in widgets if widget["id"] == "lifecycle-actions")
-    install = next(button for button in lifecycle["inputs"]["buttons"] if button["id"] == "install")
+    lifecycle = next(
+        widget for widget in widgets if widget["id"] == "lifecycle-actions"
+    )
+    install = next(
+        button for button in lifecycle["inputs"]["buttons"] if button["id"] == "install"
+    )
     install["label_i18n"]["translations"]["ru"] = "Спланировать установку"
 
     rejected = evaluate_ui_request(request, webui)
@@ -1501,8 +2052,8 @@ def test_application_manager_evaluation_rejects_technical_russian_lifecycle_comm
     assert review["ok"] is False
     assert review["actual"]["localeValueMismatches"] == [
         {
-            "path": "pages.0.widgets.14.inputs.buttons.0.label",
-            "key": "test.applications.ui.application.desktop.pageSchema.widgets.14.inputs.buttons.0.label",
+            "path": f"pages.0.widgets.{widgets.index(lifecycle)}.inputs.buttons.0.label",
+            "key": f"test.applications.ui.application.desktop.pageSchema.widgets.{widgets.index(lifecycle)}.inputs.buttons.0.label",
             "locale": "ru",
             "expected": "Установить",
             "actual": "Спланировать установку",
@@ -1642,7 +2193,10 @@ def _resource_board_webui() -> dict:
                         "on": "submit",
                         "type": "resourceOperation",
                         "target": "prototype.work_items",
-                        "params": {"operation_id": "create", "payload": "$event.values"},
+                        "params": {
+                            "operation_id": "create",
+                            "payload": "$event.values",
+                        },
                     }
                 ],
             },
@@ -1702,10 +2256,16 @@ def test_resource_board_evaluation_requires_executable_query_and_crud_flows() ->
 
     rejected = evaluate_ui_request(request, webui, prototype_records=records)
     failed_ids = {item["id"] for item in rejected["postconditions"] if not item["ok"]}
-    finding_codes = {item["code"] for item in rejected["capability_validation"]["findings"]}
+    finding_codes = {
+        item["code"] for item in rejected["capability_validation"]["findings"]
+    }
 
     assert rejected["ok"] is False
-    assert {"kanban.query_binding", "kanban.create_form", "kanban.edit_form"} <= failed_ids
+    assert {
+        "kanban.query_binding",
+        "kanban.create_form",
+        "kanban.edit_form",
+    } <= failed_ids
     assert "ui.board.create_event_invalid" in finding_codes
 
 
@@ -1713,9 +2273,7 @@ def test_resource_board_query_binding_rejects_nested_event_object() -> None:
     webui = _resource_board_webui()
     page = webui["ui"]["application"]["desktop"]["pageSchema"]
     search = next(widget for widget in page["widgets"] if widget.get("id") == "search")
-    search["actions"][0]["params"] = {
-        "searchQuery": {"search": "$event.value"}
-    }
+    search["actions"][0]["params"] = {"searchQuery": {"search": "$event.value"}}
 
     result = evaluate_ui_request(
         "Show a kanban board with search, create, edit, delete, and drag and drop.",
@@ -1724,7 +2282,9 @@ def test_resource_board_query_binding_rejects_nested_event_object() -> None:
     )
 
     query_binding = next(
-        item for item in result["postconditions"] if item["id"] == "kanban.query_binding"
+        item
+        for item in result["postconditions"]
+        if item["id"] == "kanban.query_binding"
     )
     assert query_binding["ok"] is False
     assert query_binding["actual"]["executableRefs"] == []
@@ -1751,7 +2311,9 @@ def test_modal_board_editor_selects_record_on_the_opening_event() -> None:
     application = webui["ui"]["application"]
     page = application["desktop"]["pageSchema"]
     edit_form = next(widget for widget in page["widgets"] if widget.get("id") == "edit")
-    page["widgets"] = [widget for widget in page["widgets"] if widget.get("id") != "edit"]
+    page["widgets"] = [
+        widget for widget in page["widgets"] if widget.get("id") != "edit"
+    ]
     application["modals"] = {
         "edit-item": {
             "id": "edit-item",
@@ -1773,11 +2335,15 @@ def test_modal_board_editor_selects_record_on_the_opening_event() -> None:
             "params": {"modalId": "edit-item"},
         }
     )
-    request = "Show a kanban board with search, create, edit, delete, and drag and drop."
+    request = (
+        "Show a kanban board with search, create, edit, delete, and drag and drop."
+    )
 
     rejected = evaluate_ui_request(request, webui, prototype_records=[])
     rejected_selection = next(
-        item for item in rejected["postconditions"] if item["id"] == "kanban.edit_selection"
+        item
+        for item in rejected["postconditions"]
+        if item["id"] == "kanban.edit_selection"
     )
     assert rejected_selection["ok"] is False
 
@@ -1791,6 +2357,8 @@ def test_modal_board_editor_selects_record_on_the_opening_event() -> None:
     )
     accepted = evaluate_ui_request(request, webui, prototype_records=[])
     accepted_selection = next(
-        item for item in accepted["postconditions"] if item["id"] == "kanban.edit_selection"
+        item
+        for item in accepted["postconditions"]
+        if item["id"] == "kanban.edit_selection"
     )
     assert accepted_selection["ok"] is True

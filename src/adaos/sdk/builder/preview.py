@@ -147,6 +147,27 @@ def set_active_draft(
     )
 
 
+def set_selected_project(
+    object_type: str,
+    object_id: str,
+    *,
+    source_webspace_id: str = "desktop",
+    title: str | None = None,
+    description: str | None = None,
+    persist_projection: bool = False,
+) -> dict[str, Any]:
+    return _plain(
+        _service().set_selected_project(
+            source_webspace_id=canonical_source_webspace_id(source_webspace_id),
+            object_type=object_type,
+            object_id=object_id,
+            title=title,
+            description=description,
+            persist_projection=persist_projection,
+        )
+    )
+
+
 def ensure(
     source_webspace_id: str | None = None,
     *,
@@ -996,6 +1017,44 @@ def materialize_revision_via_owner(
     return dict(result)
 
 
+def ensure_dev_webspace_via_owner(
+    scenario_id: str,
+    *,
+    requested_id: str,
+    title: str | None = None,
+    timeout_s: float = 30.0,
+) -> dict[str, Any]:
+    """Create the Preview Webspace through the process that owns Yjs state."""
+
+    import requests
+
+    from adaos.apps.cli.active_control import resolve_control_base_url, resolve_control_token
+
+    base_url = resolve_control_base_url(prefer_local=True)
+    token = resolve_control_token(base_url=base_url)
+    body = {
+        "scenario_id": str(scenario_id or "").strip(),
+        "requested_id": str(requested_id or "").strip(),
+        "title": str(title or "").strip() or None,
+    }
+    session = requests.Session()
+    session.trust_env = False
+    try:
+        response = session.post(
+            f"{base_url.rstrip('/')}/api/node/yjs/dev-webspaces/ensure",
+            headers={"X-AdaOS-Token": token, "Accept": "application/json"},
+            json=body,
+            timeout=max(1.0, min(float(timeout_s), 120.0)),
+        )
+        response.raise_for_status()
+        result = response.json()
+    finally:
+        session.close()
+    if not isinstance(result, Mapping):
+        raise RuntimeError("builder_dev_webspace_owner_response_invalid")
+    return dict(result)
+
+
 async def materialize_revision_async(webspace_id: str, **kwargs: Any) -> dict[str, Any]:
     from adaos.services.scenario.webspace_runtime import apply_builder_revision_materialization
 
@@ -1030,6 +1089,7 @@ __all__ = [
     "list_development_skills",
     "materialize_revision",
     "materialize_revision_via_owner",
+    "ensure_dev_webspace_via_owner",
     "materialize_revision_async",
     "navigation_link",
     "open_workspace",
@@ -1042,6 +1102,7 @@ __all__ = [
     "select_project",
     "select_target",
     "set_active_draft",
+    "set_selected_project",
     "snapshot",
     "canonical_source_webspace_id",
     "action_source_webspace_id",

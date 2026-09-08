@@ -5301,6 +5301,53 @@ def test_builder_revision_apply_persists_dev_home_without_listing_sync(monkeypat
     assert result["webspace_identity_update"]["home_scenario_before"] == "prompt_engineer_scenario"
 
 
+def test_builder_revision_apply_rejects_workspace_fallback(monkeypatch) -> None:
+    webspace_id = "phase2-builder-missing-preview"
+    ensure_workspace(webspace_id)
+    rebuild_calls: list[str] = []
+
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_preflight_validated_scenario",
+        lambda scenario_id, **kwargs: (
+            "web_desktop",
+            f"{kwargs.get('resolution')}_fallback",
+            {
+                "requested_scenario_id": scenario_id,
+                "resolved_scenario_id": "web_desktop",
+                "requested_scenario_exists": False,
+                "fallback_applied": True,
+                "reason": "scenario_missing",
+            },
+        ),
+    )
+
+    async def _fake_rebuild(*args, **kwargs):  # noqa: ARG001
+        rebuild_calls.append(str(kwargs.get("scenario_id")))
+        return {"ok": True, "accepted": True}
+
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "rebuild_webspace_from_sources",
+        _fake_rebuild,
+    )
+
+    result = asyncio.run(
+        webspace_runtime_module.apply_builder_revision_materialization(
+            webspace_id,
+            scenario_id="applications_new",
+            revision="001",
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["accepted"] is False
+    assert result["error"] == "scenario_not_found"
+    assert result["scenario_id"] == "applications_new"
+    assert result["validation"]["fallback_applied"] is True
+    assert rebuild_calls == []
+
+
 def test_builder_preview_sources_exact_prototype_and_retained_automation(monkeypatch, tmp_path: Path) -> None:
     scenario_root = tmp_path / "dev" / "scenarios" / "recipes"
     revisions = scenario_root / "ui_revisions"

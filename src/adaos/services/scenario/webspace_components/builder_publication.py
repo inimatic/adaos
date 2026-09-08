@@ -528,13 +528,24 @@ class WebspaceBuilderPublicationService:
                     resolution=scenario_resolution or "builder_revision",
                 )
             )
-        if not resolved_scenario_id:
+        # A general workspace reload may recover through its configured
+        # fallback scenario. A Builder revision is an exact source operation:
+        # applying a fallback here would acknowledge the requested revision
+        # while rendering unrelated content in the Preview Webspace.
+        exact_scenario_available = (
+            preview_stage_token == "trial"
+            or (
+                resolved_scenario_id == requested_scenario
+                and not bool(preflight.get("fallback_applied"))
+            )
+        )
+        if not resolved_scenario_id or not exact_scenario_available:
             return {
                 "ok": False,
                 "accepted": False,
                 "action": "builder_revision_apply",
                 "webspace_id": webspace_id,
-                "scenario_id": None,
+                "scenario_id": requested_scenario or None,
                 "scenario_resolution": scenario_resolution,
                 "kind": state.kind,
                 "source_mode": state.source_mode,

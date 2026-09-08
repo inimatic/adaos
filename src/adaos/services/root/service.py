@@ -3238,6 +3238,28 @@ class RootDeveloperService:
         if kind == "scenarios":
             _sync_scenario_content_metadata(target, name, manifest_meta)
 
+        try:
+            cfg = self._load_config()
+            node_id = cfg.node_settings.id or cfg.node_id
+            upsert_workspace_registry_entry(
+                workspace,
+                kind,
+                target,
+                version=(manifest_meta or {}).get("version"),
+                updated_at=(manifest_meta or {}).get("updated_at"),
+                extra={
+                    "publisher": {
+                        "owner_id": owner,
+                        "node_id": node_id,
+                    }
+                },
+            )
+        except Exception as exc:
+            shutil.rmtree(target, ignore_errors=True)
+            raise RootServiceError(
+                f"Failed to register newly created {kind[:-1]} '{name}' in DEV registry"
+            ) from exc
+
         return ArtifactCreateResult(
             kind=kind.rstrip("s"),
             name=name,

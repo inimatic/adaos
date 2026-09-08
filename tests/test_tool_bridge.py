@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import threading
 import types
@@ -891,6 +892,53 @@ def test_call_tool_syncs_dev_runtime_before_read_contract_preflight(monkeypatch,
     assert calls.count("update:research_orchestrator_skill:dev:False") == 1
     assert calls.count("run:research_orchestrator_skill:list_directions") == 2
     assert worker_thread_ids and all(thread_id != owner_thread_id for thread_id in worker_thread_ids)
+
+
+def test_dev_runtime_sync_skips_source_older_than_active_marker(tmp_path) -> None:
+    updates: list[str] = []
+    dev_root = tmp_path / "dev"
+    skill_root = dev_root / "builder_skill"
+    skill_root.mkdir(parents=True)
+    source = skill_root / "skill.yaml"
+    source.write_text("name: builder_skill\nversion: 0.3.0\n", encoding="utf-8")
+    marker = dev_root / ".runtime" / "builder_skill" / "current_runtime.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text('{"version":"0.3.0"}', encoding="utf-8")
+    marker_time = source.stat().st_mtime + 10.0
+    os.utime(marker, (marker_time, marker_time))
+    ctx = SimpleNamespace(paths=SimpleNamespace(dev_skills_dir=lambda: dev_root))
+    manager = SimpleNamespace(
+        runtime_update=lambda name, **_kwargs: updates.append(name) or {"ok": True}
+    )
+
+    tool_bridge_module._maybe_sync_dev_runtime(ctx, manager, "builder_skill")
+
+    assert updates == []
+
+
+def test_dev_runtime_sync_updates_source_newer_than_active_marker(tmp_path) -> None:
+    updates: list[str] = []
+    dev_root = tmp_path / "dev"
+    skill_root = dev_root / "builder_skill"
+    skill_root.mkdir(parents=True)
+    source = skill_root / "skill.yaml"
+    source.write_text("name: builder_skill\nversion: 0.3.0\n", encoding="utf-8")
+    marker = dev_root / ".runtime" / "builder_skill" / "current_runtime.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text('{"version":"0.3.0"}', encoding="utf-8")
+    source_time = marker.stat().st_mtime + 10.0
+    os.utime(source, (source_time, source_time))
+    ctx = SimpleNamespace(paths=SimpleNamespace(dev_skills_dir=lambda: dev_root))
+    manager = SimpleNamespace(
+        runtime_update=lambda name, **kwargs: updates.append(
+            f"{name}:{kwargs.get('space')}:{kwargs.get('notify_unchanged')}"
+        )
+        or {"ok": True, "changed": True}
+    )
+
+    tool_bridge_module._maybe_sync_dev_runtime(ctx, manager, "builder_skill")
+
+    assert updates == ["builder_skill:dev:False"]
 
 
 def test_call_tool_uses_installed_runtime_for_dev_webspace_without_dev_skill(monkeypatch) -> None:

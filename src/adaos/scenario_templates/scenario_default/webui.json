@@ -7,6 +7,10 @@
         "pageSchema": {
           "id": "template-id",
           "title": "New Scenario",
+          "title_i18n": {
+            "key": "scenario.template-id.title",
+            "fallback": "New Scenario"
+          },
           "layout": {
             "type": "single",
             "pattern": "stack",
@@ -39,6 +43,24 @@
               "empty_canvas": true
             }
           }
+        }
+      },
+      "resources": {
+        "template-id.i18n.en": {
+          "kind": "data",
+          "role": "i18n",
+          "locale": "en",
+          "path": "assets/i18n/en.json",
+          "mime": "application/json",
+          "delivery": "core"
+        },
+        "template-id.i18n.ru": {
+          "kind": "data",
+          "role": "i18n",
+          "locale": "ru",
+          "path": "assets/i18n/ru.json",
+          "mime": "application/json",
+          "delivery": "core"
         }
       }
     }

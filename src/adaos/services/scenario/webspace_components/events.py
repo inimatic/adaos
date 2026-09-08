@@ -10,6 +10,7 @@ class WebspaceEventOperations:
     rebuild_webspace: Callable[..., Awaitable[Any]]
     schedule_skill_runtime_rebuild: Callable[..., Any]
     reload_publication_webspaces: Callable[[str, str], Awaitable[Any]]
+    recover_removed_scenario: Callable[[str, Mapping[str, Any]], Awaitable[Any]] | None = None
 
 
 class WebspaceEventService:
@@ -47,6 +48,10 @@ class WebspaceEventService:
         )
 
     async def scenario_removed(self, event: Mapping[str, Any], operations: WebspaceEventOperations) -> None:
+        scenario_id = str(event.get("id") or event.get("scenario_id") or event.get("name") or "").strip()
+        if scenario_id and operations.recover_removed_scenario is not None:
+            await operations.recover_removed_scenario(scenario_id, event)
+            return
         webspace_id = str(event.get("webspace_id") or operations.default_webspace_id())
         await operations.rebuild_webspace(
             webspace_id,

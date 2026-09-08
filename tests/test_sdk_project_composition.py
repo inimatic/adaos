@@ -23,9 +23,19 @@ def project_space(monkeypatch, tmp_path: Path) -> dict[str, Path]:
     for root in roots.values():
         root.mkdir(parents=True)
     monkeypatch.setattr(compositions, "_root_parent", lambda: roots["projects"])
-    monkeypatch.setattr(projects, "_roots", lambda: (roots["skills"], roots["scenarios"]))
-    monkeypatch.setattr(development_sessions, "_state_root", lambda: roots["state"] / "builder" / "development_sessions")
-    monkeypatch.setattr(artifact_context, "_context_view_root", lambda: roots["state"] / "artifact_context" / "views")
+    monkeypatch.setattr(
+        projects, "_roots", lambda: (roots["skills"], roots["scenarios"])
+    )
+    monkeypatch.setattr(
+        development_sessions,
+        "_state_root",
+        lambda: roots["state"] / "builder" / "development_sessions",
+    )
+    monkeypatch.setattr(
+        artifact_context,
+        "_context_view_root",
+        lambda: roots["state"] / "artifact_context" / "views",
+    )
     return roots
 
 
@@ -48,7 +58,9 @@ def _skill(root: Path, skill_id: str, *, presentation: bool = True) -> Path:
                 "bindings": {"direction_ref": "skill:self"},
             }
         ]
-    (skill_root / "skill.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    (skill_root / "skill.yaml").write_text(
+        yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
+    )
     return skill_root
 
 
@@ -80,7 +92,9 @@ def _project(project_id: str, skill_id: str) -> dict:
         "profiles": ["adaos.research.direction.v1"],
         "components": {
             "owned": [{"ref": f"skill:{skill_id}", "role": "primary"}],
-            "dependencies": [{"ref": "project:adaos_research_platform", "version": "^0.1"}],
+            "dependencies": [
+                {"ref": "project:adaos_research_platform", "version": "^0.1"}
+            ],
         },
         "entrypoints": [
             {
@@ -106,7 +120,9 @@ def _project(project_id: str, skill_id: str) -> dict:
     }
 
 
-def test_project_manifest_lists_by_profile_and_resolves_entrypoint(project_space) -> None:
+def test_project_manifest_lists_by_profile_and_resolves_entrypoint(
+    project_space,
+) -> None:
     _skill(project_space["skills"], "tlp_direction")
     created = compositions.create(_project("tlp_research", "tlp_direction"))
 
@@ -133,7 +149,9 @@ def test_project_requires_one_primary_component(project_space) -> None:
     value = _project("invalid", "one")
     value["components"]["owned"].append({"ref": "skill:two", "role": "primary"})
 
-    with pytest.raises(compositions.ProjectCompositionError, match="exactly one primary"):
+    with pytest.raises(
+        compositions.ProjectCompositionError, match="exactly one primary"
+    ):
         compositions.create(value)
 
 
@@ -182,10 +200,40 @@ def test_project_can_adopt_an_existing_unowned_builder_component(project_space) 
         }
     ]
     assert project["publication"]["stage"] == "alpha"
-    assert compositions.project_for_component("scenario:kanban_demo")["ref"] == project["ref"]
+    assert (
+        compositions.project_for_component("scenario:kanban_demo")["ref"]
+        == project["ref"]
+    )
 
 
-def test_project_adoption_rejects_a_component_owned_by_another_project(project_space) -> None:
+def test_standard_project_creation_persists_optional_development_origin(
+    project_space,
+) -> None:
+    _scenario(project_space["scenarios"], "research_result")
+
+    result = compositions.create_for_existing_component(
+        "research_result",
+        kind="scenario",
+        component_id="research_result",
+        development={"initiator_ref": "scenario:research_workbench"},
+    )
+
+    assert result["project"]["development"] == {
+        "initiator_ref": "scenario:research_workbench"
+    }
+
+
+def test_project_rejects_invalid_development_origin(project_space) -> None:
+    value = _project("invalid_origin", "one")
+    value["development"] = {"initiator_ref": "webspace:desktop"}
+
+    with pytest.raises(compositions.ProjectCompositionError, match="initiator_ref"):
+        compositions.create(value)
+
+
+def test_project_adoption_rejects_a_component_owned_by_another_project(
+    project_space,
+) -> None:
     _scenario(project_space["scenarios"], "kanban_demo")
     compositions.create_for_existing_component(
         "kanban_one",
@@ -201,7 +249,9 @@ def test_project_adoption_rejects_a_component_owned_by_another_project(project_s
         )
 
 
-def test_project_can_idempotently_attach_a_created_companion_skill(project_space) -> None:
+def test_project_can_idempotently_attach_a_created_companion_skill(
+    project_space,
+) -> None:
     _scenario(project_space["scenarios"], "kanban_demo")
     _skill(project_space["skills"], "kanban_demo_skill")
     compositions.create_for_existing_component(
@@ -221,9 +271,10 @@ def test_project_can_idempotently_attach_a_created_companion_skill(project_space
 
     assert first["idempotent"] is False
     assert second["idempotent"] is True
-    assert [
-        item["ref"] for item in second["project"]["components"]["owned"]
-    ] == ["scenario:kanban_demo", "skill:kanban_demo_skill"]
+    assert [item["ref"] for item in second["project"]["components"]["owned"]] == [
+        "scenario:kanban_demo",
+        "skill:kanban_demo_skill",
+    ]
 
 
 def test_project_can_idempotently_declare_a_shared_dependency(project_space) -> None:
@@ -258,7 +309,9 @@ def test_project_can_idempotently_declare_a_shared_dependency(project_space) -> 
     ]
 
 
-def test_project_composition_expands_release_defaults_without_rewriting_source(project_space) -> None:
+def test_project_composition_expands_release_defaults_without_rewriting_source(
+    project_space,
+) -> None:
     _skill(project_space["skills"], "candidate_skill")
     value = _project("candidate_project", "candidate_skill")
     value["components"]["owned"][0].update(
@@ -288,15 +341,24 @@ def test_project_composition_expands_release_defaults_without_rewriting_source(p
         "visibility": "listed",
         "channel": "beta",
     }
-    value["catalog"]["title_i18n"] = {"en": "Candidate Project", "ru": "\u041a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u043d\u044b\u0439 \u043f\u0440\u043e\u0435\u043a\u0442"}
-    value["catalog"]["description_i18n"] = {"en": "Candidate description", "ru": "\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430"}
+    value["catalog"]["title_i18n"] = {
+        "en": "Candidate Project",
+        "ru": "\u041a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u043d\u044b\u0439 \u043f\u0440\u043e\u0435\u043a\u0442",
+    }
+    value["catalog"]["description_i18n"] = {
+        "en": "Candidate description",
+        "ru": "\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430",
+    }
     value["install"] = {
         "default": True,
         "features": [
             {
                 "id": "research-console",
                 "title": "Research console",
-                "title_i18n": {"en": "Research console", "ru": "\u0418\u0441\u0441\u043b\u0435\u0434\u043e\u0432\u0430\u0442\u0435\u043b\u044c\u0441\u043a\u0430\u044f \u043a\u043e\u043d\u0441\u043e\u043b\u044c"},
+                "title_i18n": {
+                    "en": "Research console",
+                    "ru": "\u0418\u0441\u0441\u043b\u0435\u0434\u043e\u0432\u0430\u0442\u0435\u043b\u044c\u0441\u043a\u0430\u044f \u043a\u043e\u043d\u0441\u043e\u043b\u044c",
+                },
                 "default": True,
                 "optional": False,
                 "components": ["scenario:research_console", "skill:candidate_skill"],
@@ -326,20 +388,35 @@ def test_project_composition_expands_release_defaults_without_rewriting_source(p
         {
             "id": "research-console",
             "title": "Research console",
-            "title_i18n": {"en": "Research console", "ru": "\u0418\u0441\u0441\u043b\u0435\u0434\u043e\u0432\u0430\u0442\u0435\u043b\u044c\u0441\u043a\u0430\u044f \u043a\u043e\u043d\u0441\u043e\u043b\u044c"},
+            "title_i18n": {
+                "en": "Research console",
+                "ru": "\u0418\u0441\u0441\u043b\u0435\u0434\u043e\u0432\u0430\u0442\u0435\u043b\u044c\u0441\u043a\u0430\u044f \u043a\u043e\u043d\u0441\u043e\u043b\u044c",
+            },
             "default": True,
             "optional": False,
             "components": ["scenario:research_console", "skill:candidate_skill"],
         }
     ]
-    assert normalized["catalog"]["title_i18n"] == {"en": "Candidate Project", "ru": "\u041a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u043d\u044b\u0439 \u043f\u0440\u043e\u0435\u043a\u0442"}
-    assert normalized["catalog"]["description_i18n"] == {"en": "Candidate description", "ru": "\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430"}
+    assert normalized["catalog"]["title_i18n"] == {
+        "en": "Candidate Project",
+        "ru": "\u041a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u043d\u044b\u0439 \u043f\u0440\u043e\u0435\u043a\u0442",
+    }
+    assert normalized["catalog"]["description_i18n"] == {
+        "en": "Candidate description",
+        "ru": "\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430",
+    }
     assert normalized["compatibility"]["required_entrypoints"] == ["research"]
     assert listed[0]["stage"] == "beta"
     assert listed[0]["visibility"] == "listed"
     assert listed[0]["default_install"] is True
-    assert listed[0]["title_i18n"] == {"en": "Candidate Project", "ru": "\u041a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u043d\u044b\u0439 \u043f\u0440\u043e\u0435\u043a\u0442"}
-    assert listed[0]["description_i18n"] == {"en": "Candidate description", "ru": "\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430"}
+    assert listed[0]["title_i18n"] == {
+        "en": "Candidate Project",
+        "ru": "\u041a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u043d\u044b\u0439 \u043f\u0440\u043e\u0435\u043a\u0442",
+    }
+    assert listed[0]["description_i18n"] == {
+        "en": "Candidate description",
+        "ru": "\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430",
+    }
 
 
 def test_project_rejects_install_feature_for_non_owned_component(project_space) -> None:
@@ -462,29 +539,43 @@ def test_project_release_versions_uses_authoritative_release_store(
     }
 
 
-def test_local_artifact_group_copies_files_and_detects_tampering(project_space, tmp_path: Path) -> None:
+def test_local_artifact_group_copies_files_and_detects_tampering(
+    project_space, tmp_path: Path
+) -> None:
     skill_root = _skill(project_space["skills"], "tlp_direction")
     source = tmp_path / "review.md"
     source.write_text("A careful review", encoding="utf-8")
 
     first = artifact_context.add_path("tlp_direction", "part0", source, role="review")
     second = artifact_context.add_path("tlp_direction", "part0", source, role="review")
-    resolved = artifact_context.resolve("tlp_direction", "part0", first["artifact"]["artifact_id"])
+    resolved = artifact_context.resolve(
+        "tlp_direction", "part0", first["artifact"]["artifact_id"]
+    )
     bundle = artifact_context.source_bundle("tlp_direction")
 
     assert first["idempotent"] is False
     assert second["idempotent"] is True
     assert first["artifact"]["media_type"] == "text/markdown"
-    assert Path(resolved["native_path"]).read_text(encoding="utf-8") == "A careful review"
-    assert bundle["sources"][0]["artifact_ref"].startswith("artifact://skill/tlp_direction/part0/")
+    assert (
+        Path(resolved["native_path"]).read_text(encoding="utf-8") == "A careful review"
+    )
+    assert bundle["sources"][0]["artifact_ref"].startswith(
+        "artifact://skill/tlp_direction/part0/"
+    )
     assert (skill_root / "artifacts" / "part0" / "manifest.yaml").is_file()
 
     Path(resolved["native_path"]).write_text("tampered", encoding="utf-8")
-    with pytest.raises(artifact_context.ArtifactContextError, match="no longer matches"):
-        artifact_context.resolve("tlp_direction", "part0", first["artifact"]["artifact_id"])
+    with pytest.raises(
+        artifact_context.ArtifactContextError, match="no longer matches"
+    ):
+        artifact_context.resolve(
+            "tlp_direction", "part0", first["artifact"]["artifact_id"]
+        )
 
 
-def test_artifact_context_materializes_digest_bound_audience_views(project_space, tmp_path: Path) -> None:
+def test_artifact_context_materializes_digest_bound_audience_views(
+    project_space, tmp_path: Path
+) -> None:
     _skill(project_space["skills"], "tlp_direction")
     notebook = tmp_path / "experiment.ipynb"
     notebook.write_text('{"cells": []}', encoding="utf-8")
@@ -516,30 +607,40 @@ def test_artifact_context_materializes_digest_bound_audience_views(project_space
         "tlp_direction", "part0", "research.evaluation"
     )
 
-    assert sorted(path.name for path in Path(implementation["root_path"]).iterdir()) == [
-        "experiment.ipynb"
-    ]
+    assert sorted(
+        path.name for path in Path(implementation["root_path"]).iterdir()
+    ) == ["experiment.ipynb"]
     assert sorted(path.name for path in Path(evaluation["root_path"]).iterdir()) == [
         "experiment.ipynb",
         "initial-review.md",
     ]
     assert implementation["excluded"] == [
-        {"artifact_id": hidden["artifact"]["artifact_id"], "reason": "hidden evaluator oracle"}
+        {
+            "artifact_id": hidden["artifact"]["artifact_id"],
+            "reason": "hidden evaluator oracle",
+        }
     ]
     assert implementation["digest"] != evaluation["digest"]
-    assert Path(implementation["manifest_path"]).parent != Path(implementation["root_path"])
+    assert Path(implementation["manifest_path"]).parent != Path(
+        implementation["root_path"]
+    )
     formulation_bundle = artifact_context.source_bundle(
         "tlp_direction", audience="research.formulation"
     )
     evaluation_bundle = artifact_context.source_bundle(
         "tlp_direction", audience="research.evaluation"
     )
-    assert [item["name"] for item in formulation_bundle["sources"]] == ["experiment.ipynb"]
+    assert [item["name"] for item in formulation_bundle["sources"]] == [
+        "experiment.ipynb"
+    ]
     assert sorted(item["name"] for item in evaluation_bundle["sources"]) == [
         "experiment.ipynb",
         "initial-review.md",
     ]
-    assert formulation_bundle["excluded"][0]["artifact_id"] == hidden["artifact"]["artifact_id"]
+    assert (
+        formulation_bundle["excluded"][0]["artifact_id"]
+        == hidden["artifact"]["artifact_id"]
+    )
     formulation_digest = formulation_bundle["digest"]
     review.write_text("Changed evaluator-only oracle", encoding="utf-8")
     artifact_context.add_path(
@@ -554,12 +655,17 @@ def test_artifact_context_materializes_digest_bound_audience_views(project_space
         },
         replace_existing=True,
     )
-    assert artifact_context.source_bundle(
-        "tlp_direction", audience="research.formulation"
-    )["digest"] == formulation_digest
+    assert (
+        artifact_context.source_bundle(
+            "tlp_direction", audience="research.formulation"
+        )["digest"]
+        == formulation_digest
+    )
 
 
-def test_artifact_context_policy_can_be_revised_without_replacing_content(project_space, tmp_path: Path) -> None:
+def test_artifact_context_policy_can_be_revised_without_replacing_content(
+    project_space, tmp_path: Path
+) -> None:
     _skill(project_space["skills"], "tlp_direction")
     source = tmp_path / "review.md"
     source.write_text("A careful review", encoding="utf-8")
@@ -577,17 +683,26 @@ def test_artifact_context_policy_can_be_revised_without_replacing_content(projec
     assert revised["artifact"]["context_policy"]["allow"] == ["evaluator"]
 
 
-def test_artifact_context_builds_a_semantic_notebook_digest_and_bounds_untrusted_outputs(project_space, tmp_path: Path) -> None:
+def test_artifact_context_builds_a_semantic_notebook_digest_and_bounds_untrusted_outputs(
+    project_space, tmp_path: Path
+) -> None:
     _skill(project_space["skills"], "tlp_direction")
     source = tmp_path / "experiment.ipynb"
     source.write_text(
         json.dumps(
             {
                 "cells": [
-                    {"cell_type": "markdown", "source": ["# Hypothesis\n", "TLP is unconfirmed."], "metadata": {}},
+                    {
+                        "cell_type": "markdown",
+                        "source": ["# Hypothesis\n", "TLP is unconfirmed."],
+                        "metadata": {},
+                    },
                     {
                         "cell_type": "code",
-                        "source": ["def tropical_pool(x, w):\n", "    return (x + w).amax((-1, -2))\n"],
+                        "source": [
+                            "def tropical_pool(x, w):\n",
+                            "    return (x + w).amax((-1, -2))\n",
+                        ],
                         "outputs": [{"output_type": "stream", "text": ["x" * 100_000]}],
                         "metadata": {},
                         "execution_count": 1,
@@ -603,7 +718,10 @@ def test_artifact_context_builds_a_semantic_notebook_digest_and_bounds_untrusted
     added = artifact_context.add_path("tlp_direction", "part0", source)
 
     extracted = artifact_context.extract_text(
-        "tlp_direction", "part0", added["artifact"]["artifact_id"], max_characters=10_000
+        "tlp_direction",
+        "part0",
+        added["artifact"]["artifact_id"],
+        max_characters=10_000,
     )
 
     assert "TLP is unconfirmed" in extracted["content"]
@@ -617,16 +735,22 @@ def test_artifact_context_builds_a_semantic_notebook_digest_and_bounds_untrusted
     assert coverage["selected_units"] == 3
     assert coverage["truncated"] is False
     assert coverage["output_items"] == 1
-    assert coverage["outputs_classification"] == "exploratory_untrusted_not_confirmatory"
+    assert (
+        coverage["outputs_classification"] == "exploratory_untrusted_not_confirmatory"
+    )
     assert coverage["selection_strategy"] == "source_order"
     assert extracted["provenance"][0]["ref"].endswith("#inventory")
     assert extracted["provenance"][2]["ref"].endswith("#cell=1")
 
 
-def test_artifact_context_reports_line_level_coverage_for_bounded_text(project_space, tmp_path: Path) -> None:
+def test_artifact_context_reports_line_level_coverage_for_bounded_text(
+    project_space, tmp_path: Path
+) -> None:
     _skill(project_space["skills"], "tlp_direction")
     source = tmp_path / "review.md"
-    source.write_text("first evidence\n" + "second interpretation\n" * 500, encoding="utf-8")
+    source.write_text(
+        "first evidence\n" + "second interpretation\n" * 500, encoding="utf-8"
+    )
     added = artifact_context.add_path("tlp_direction", "part0", source)
 
     extracted = artifact_context.extract_text(
@@ -635,20 +759,39 @@ def test_artifact_context_reports_line_level_coverage_for_bounded_text(project_s
 
     assert extracted["coverage"]["truncated"] is True
     assert extracted["coverage"]["selected_characters"] == 500
-    assert extracted["provenance"][0]["ref"].startswith("artifact://skill/tlp_direction/part0/")
+    assert extracted["provenance"][0]["ref"].startswith(
+        "artifact://skill/tlp_direction/part0/"
+    )
     assert "#lines=" in extracted["provenance"][0]["ref"]
 
 
-def test_notebook_query_selection_reaches_relevant_late_cells_instead_of_prefix_truncation(project_space, tmp_path: Path) -> None:
+def test_notebook_query_selection_reaches_relevant_late_cells_instead_of_prefix_truncation(
+    project_space, tmp_path: Path
+) -> None:
     _skill(project_space["skills"], "tlp_direction")
     source = tmp_path / "long.ipynb"
     source.write_text(
         json.dumps(
             {
                 "cells": [
-                    {"cell_type": "markdown", "source": ["unrelated introduction " * 500], "metadata": {}},
-                    {"cell_type": "code", "source": ["noise = 'x' * 10000\n"], "outputs": [], "metadata": {}},
-                    {"cell_type": "markdown", "source": ["# Paired shift sensitivity\nCompare TropicalMaxPool with MaxPool using paired seeds."], "metadata": {}},
+                    {
+                        "cell_type": "markdown",
+                        "source": ["unrelated introduction " * 500],
+                        "metadata": {},
+                    },
+                    {
+                        "cell_type": "code",
+                        "source": ["noise = 'x' * 10000\n"],
+                        "outputs": [],
+                        "metadata": {},
+                    },
+                    {
+                        "cell_type": "markdown",
+                        "source": [
+                            "# Paired shift sensitivity\nCompare TropicalMaxPool with MaxPool using paired seeds."
+                        ],
+                        "metadata": {},
+                    },
                 ],
                 "metadata": {},
                 "nbformat": 4,
@@ -668,12 +811,17 @@ def test_notebook_query_selection_reaches_relevant_late_cells_instead_of_prefix_
     )
 
     assert "Paired shift sensitivity" in extracted["content"]
-    assert extracted["coverage"]["selection_strategy"] == "query_relevance_then_source_order"
+    assert (
+        extracted["coverage"]["selection_strategy"]
+        == "query_relevance_then_source_order"
+    )
     assert "cell-2" in extracted["coverage"]["selected_unit_ids"]
     assert "cell-0" in extracted["coverage"]["omitted_unit_ids"]
 
 
-def test_local_artifact_group_explicitly_replaces_an_unlocked_intake_path(project_space, tmp_path: Path) -> None:
+def test_local_artifact_group_explicitly_replaces_an_unlocked_intake_path(
+    project_space, tmp_path: Path
+) -> None:
     _skill(project_space["skills"], "tlp_direction")
     source = tmp_path / "review.md"
     source.write_text("{}", encoding="utf-8")
@@ -693,10 +841,15 @@ def test_local_artifact_group_explicitly_replaces_an_unlocked_intake_path(projec
     assert replaced["previous_artifact"]["digest"] == first["artifact"]["digest"]
     assert len(group["items"]) == 1
     assert group["items"][0]["digest"] == replaced["artifact"]["digest"]
-    assert Path(group["root_path"], "review.md").read_text(encoding="utf-8") == "Complete critical review"
+    assert (
+        Path(group["root_path"], "review.md").read_text(encoding="utf-8")
+        == "Complete critical review"
+    )
 
 
-def test_private_local_checkpoint_binds_code_and_keeps_artifacts_separate(project_space, tmp_path: Path, monkeypatch) -> None:
+def test_private_local_checkpoint_binds_code_and_keeps_artifacts_separate(
+    project_space, tmp_path: Path, monkeypatch
+) -> None:
     skill_root = _skill(project_space["skills"], "tlp_direction")
     (skill_root / "handlers").mkdir()
     (skill_root / "handlers" / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
@@ -706,26 +859,69 @@ def test_private_local_checkpoint_binds_code_and_keeps_artifacts_separate(projec
     monkeypatch.setattr(
         builder_artifacts,
         "require_ctx",
-        lambda _feature=None: SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: project_space["state"])),
+        lambda _feature=None: SimpleNamespace(
+            paths=SimpleNamespace(state_dir=lambda: project_space["state"])
+        ),
     )
 
-    first = builder_artifacts.local_checkpoint(kind="skill", artifact_id="tlp_direction")
-    Path(added["group"]["root_path"], "review.md").write_text("changed private source", encoding="utf-8")
-    second = builder_artifacts.local_checkpoint(kind="skill", artifact_id="tlp_direction")
+    first = builder_artifacts.local_checkpoint(
+        kind="skill", artifact_id="tlp_direction"
+    )
+    Path(added["group"]["root_path"], "review.md").write_text(
+        "changed private source", encoding="utf-8"
+    )
+    second = builder_artifacts.local_checkpoint(
+        kind="skill", artifact_id="tlp_direction"
+    )
     (skill_root / "handlers" / "main.py").write_text("VALUE = 2\n", encoding="utf-8")
-    third = builder_artifacts.local_checkpoint(kind="skill", artifact_id="tlp_direction")
+    third = builder_artifacts.local_checkpoint(
+        kind="skill", artifact_id="tlp_direction"
+    )
 
     assert first["scope"] == "local"
     assert first["bytes_uploaded"] == 0
     assert first["source_tree"] == second["source_tree"]
     assert third["source_tree"] != second["source_tree"]
     checkpoint = json.loads(Path(first["stored_path"]).read_text(encoding="utf-8"))
-    assert all(not item["path"].startswith("artifacts/") for item in checkpoint["files"])
+    assert all(
+        not item["path"].startswith("artifacts/") for item in checkpoint["files"]
+    )
 
 
-def test_development_session_separates_write_targets_and_readonly_context(project_space, tmp_path: Path) -> None:
+def test_private_local_checkpoint_excludes_builder_ui_revision_history(
+    project_space, monkeypatch
+) -> None:
+    skill_root = _skill(project_space["skills"], "prototype_skill")
+    (skill_root / "handlers").mkdir()
+    (skill_root / "handlers" / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+    revisions = skill_root / "ui_revisions"
+    revisions.mkdir()
+    (revisions / "001.json").write_text('{"revision":"001"}', encoding="utf-8")
+    monkeypatch.setattr(
+        builder_artifacts,
+        "require_ctx",
+        lambda _feature=None: SimpleNamespace(
+            paths=SimpleNamespace(state_dir=lambda: project_space["state"])
+        ),
+    )
+
+    result = builder_artifacts.local_checkpoint(
+        kind="skill", artifact_id="prototype_skill"
+    )
+    checkpoint = json.loads(Path(result["stored_path"]).read_text(encoding="utf-8"))
+
+    assert all(
+        not item["path"].startswith("ui_revisions/") for item in checkpoint["files"]
+    )
+
+
+def test_development_session_separates_write_targets_and_readonly_context(
+    project_space, tmp_path: Path
+) -> None:
     _skill(project_space["skills"], "tlp_direction")
-    compositions.create(_project("tlp_research", "tlp_direction"))
+    project_definition = _project("tlp_research", "tlp_direction")
+    project_definition["development"] = {"initiator_ref": "scenario:research_workbench"}
+    compositions.create(project_definition)
     source = tmp_path / "review.md"
     source.write_text("A careful review", encoding="utf-8")
     artifact_context.add_path("tlp_direction", "part0", source)
@@ -767,7 +963,11 @@ def test_development_session_separates_write_targets_and_readonly_context(projec
     assert session["base_release"]["scope"] == "local"
     assert repeated["idempotent"] is True
 
-    brief = {"schema": "example.automation_brief.v1", "digest": digest, "objective": "Build it"}
+    brief = {
+        "schema": "example.automation_brief.v1",
+        "digest": digest,
+        "objective": "Build it",
+    }
     attached = development_sessions.attach_instruction(
         session["session_id"],
         "automation_brief",
@@ -792,13 +992,49 @@ def test_development_session_separates_write_targets_and_readonly_context(projec
     restored = development_sessions.binding_for("desktop")
     assert bound["binding"]["focus_ref"] == "skill:tlp_direction"
     assert restored == bound["binding"]
+    assert (
+        development_sessions.binding_for_selection("desktop", "project:tlp_research")[
+            "session"
+        ]["session_id"]
+        == session["session_id"]
+    )
+    assert (
+        development_sessions.binding_for_selection("desktop", "skill:tlp_direction")[
+            "session"
+        ]["session_id"]
+        == session["session_id"]
+    )
+    assert (
+        development_sessions.binding_for_selection("desktop", "scenario:applications")
+        is None
+    )
+    project = compositions.get("tlp_research")
+    without_origin = {
+        key: value
+        for key, value in project.items()
+        if key not in {"development", "ref", "manifest_digest", "source_path"}
+    }
+    compositions.replace(
+        "tlp_research",
+        without_origin,
+        expected_manifest_digest=project["manifest_digest"],
+    )
+    assert (
+        development_sessions.binding_for_selection("desktop", "skill:tlp_direction")
+        is None
+    )
 
     target_file = project_space["skills"] / "tlp_direction" / "handlers" / "main.py"
     target_file.parent.mkdir()
     artifact_file = Path(session["artifact_inputs"][0]["root_path"]) / "review.md"
     review = development_sessions.review_changes(
         session["session_id"],
-        [str(target_file), str(artifact_file), str(tmp_path / "outside.py"), "relative.py"],
+        [
+            str(target_file),
+            str(artifact_file),
+            str(tmp_path / "outside.py"),
+            "relative.py",
+        ],
     )
     assert review["ok"] is False
     assert review["admitted"] == [str(target_file.resolve())]
@@ -821,7 +1057,10 @@ def test_development_session_separates_write_targets_and_readonly_context(projec
         "skill:shared_metrics",
         "The accepted metric is not available through the current contract.",
     )
-    assert repeated_expansion["request"]["request_id"] == expansion["request"]["request_id"]
+    assert (
+        repeated_expansion["request"]["request_id"]
+        == expansion["request"]["request_id"]
+    )
 
     feedback = development_sessions.record_feedback(
         session["session_id"],
@@ -829,7 +1068,13 @@ def test_development_session_separates_write_targets_and_readonly_context(projec
         "The accepted paired runner requires a deterministic seed injection point.",
         affected_refs=["skill:tlp_direction"],
         constraints=["Do not replace the accepted paired estimator."],
-        evidence=[{"kind": "contract", "ref": "instruction://automation_brief", "digest": digest}],
+        evidence=[
+            {
+                "kind": "contract",
+                "ref": "instruction://automation_brief",
+                "digest": digest,
+            }
+        ],
         proposed_action="revise_engineering_contract",
         protocol_digest=prototype,
     )
@@ -839,15 +1084,25 @@ def test_development_session_separates_write_targets_and_readonly_context(projec
         "The accepted paired runner requires a deterministic seed injection point.",
         affected_refs=["skill:tlp_direction"],
         constraints=["Do not replace the accepted paired estimator."],
-        evidence=[{"kind": "contract", "ref": "instruction://automation_brief", "digest": digest}],
+        evidence=[
+            {
+                "kind": "contract",
+                "ref": "instruction://automation_brief",
+                "digest": digest,
+            }
+        ],
         proposed_action="revise_engineering_contract",
         protocol_digest=prototype,
     )
     assert feedback["feedback"]["status"] == "open"
     assert repeated_feedback["idempotent"] is True
-    assert development_sessions.list_feedback(session["session_id"], blocking=True) == [feedback["feedback"]]
+    assert development_sessions.list_feedback(session["session_id"], blocking=True) == [
+        feedback["feedback"]
+    ]
 
-    with pytest.raises(development_sessions.DevelopmentSessionError, match="outside session context"):
+    with pytest.raises(
+        development_sessions.DevelopmentSessionError, match="outside session context"
+    ):
         development_sessions.record_feedback(
             session["session_id"],
             "capability_gap",
@@ -861,14 +1116,21 @@ def test_development_session_separates_write_targets_and_readonly_context(projec
         automation_brief_digest="sha256:" + "4" * 64,
         research_prototype_digest="sha256:" + "5" * 64,
         artifact_groups=["part0"],
-        context_members=[{"ref": "scenario:research_workbench", "relation": "presentation"}],
+        context_members=[
+            {"ref": "scenario:research_workbench", "relation": "presentation"}
+        ],
         prohibited_actions=["Do not run experiments."],
         session_id="dev_0000_lexically_earlier",
     )
-    assert development_sessions.list_sessions(project_id="tlp_research")[-1]["session_id"] == later["session"]["session_id"]
+    assert (
+        development_sessions.list_sessions(project_id="tlp_research")[-1]["session_id"]
+        == later["session"]["session_id"]
+    )
 
 
-def test_development_session_supports_domain_neutral_contract_handoff(project_space) -> None:
+def test_development_session_supports_domain_neutral_contract_handoff(
+    project_space,
+) -> None:
     _skill(project_space["skills"], "candidate_skill")
     compositions.create(_project("candidate_project", "candidate_skill"))
     digest = "sha256:" + "8" * 64
@@ -913,7 +1175,9 @@ def test_development_session_supports_domain_neutral_contract_handoff(project_sp
     assert session["handoff"]["agent_profile"]["provider"] == "local-agent-provider"
 
 
-def test_development_session_binds_executable_acceptance_to_admitted_consumer(project_space) -> None:
+def test_development_session_binds_executable_acceptance_to_admitted_consumer(
+    project_space,
+) -> None:
     _skill(project_space["skills"], "candidate_skill")
     compositions.create(_project("candidate_project", "candidate_skill"))
     requirement = {
@@ -952,7 +1216,9 @@ def test_development_session_binds_executable_acceptance_to_admitted_consumer(pr
         )
 
 
-def test_development_session_uses_filtered_artifact_view_for_agent_audience(project_space, tmp_path: Path) -> None:
+def test_development_session_uses_filtered_artifact_view_for_agent_audience(
+    project_space, tmp_path: Path
+) -> None:
     _skill(project_space["skills"], "tlp_direction")
     compositions.create(_project("tlp_research", "tlp_direction"))
     visible = tmp_path / "notebook.md"
@@ -964,7 +1230,11 @@ def test_development_session_uses_filtered_artifact_view_for_agent_audience(proj
         "tlp_direction",
         "part0",
         hidden,
-        context_policy={"default": "deny", "allow": ["research.evaluation"], "deny": []},
+        context_policy={
+            "default": "deny",
+            "allow": ["research.evaluation"],
+            "deny": [],
+        },
     )
 
     created = development_sessions.create(
@@ -979,10 +1249,14 @@ def test_development_session_uses_filtered_artifact_view_for_agent_audience(proj
     artifact_input = created["session"]["artifact_inputs"][0]
     assert artifact_input["audience"] == "research.implementation"
     assert artifact_input["context_digest"].startswith("sha256:")
-    assert sorted(path.name for path in Path(artifact_input["root_path"]).iterdir()) == ["notebook.md"]
+    assert sorted(
+        path.name for path in Path(artifact_input["root_path"]).iterdir()
+    ) == ["notebook.md"]
 
 
-def test_development_session_rejects_instruction_digest_drift(project_space, tmp_path: Path) -> None:
+def test_development_session_rejects_instruction_digest_drift(
+    project_space, tmp_path: Path
+) -> None:
     _skill(project_space["skills"], "tlp_direction")
     compositions.create(_project("tlp_research", "tlp_direction"))
     source = tmp_path / "review.md"
@@ -997,7 +1271,9 @@ def test_development_session_rejects_instruction_digest_drift(project_space, tmp
         prohibited_actions=["No execution"],
     )
 
-    with pytest.raises(development_sessions.DevelopmentSessionError, match="declared digest"):
+    with pytest.raises(
+        development_sessions.DevelopmentSessionError, match="declared digest"
+    ):
         development_sessions.attach_instruction(
             created["session"]["session_id"],
             "automation_brief",
@@ -1006,14 +1282,20 @@ def test_development_session_rejects_instruction_digest_drift(project_space, tmp
         )
 
 
-def test_development_session_copies_digest_bound_text_instruction(project_space, tmp_path: Path) -> None:
+def test_development_session_copies_digest_bound_text_instruction(
+    project_space, tmp_path: Path
+) -> None:
     _skill(project_space["skills"], "candidate_skill")
     compositions.create(_project("candidate_project", "candidate_skill"))
     source = tmp_path / "source.md"
-    source.write_text("# Reviewed evidence\n\nNo confirmatory claim.\n", encoding="utf-8")
+    source.write_text(
+        "# Reviewed evidence\n\nNo confirmatory claim.\n", encoding="utf-8"
+    )
     artifact_context.add_path("candidate_skill", "part0", source)
     instruction = tmp_path / "review.md"
-    instruction.write_text("# Expert review\n\nTreat notebook output as exploratory.\n", encoding="utf-8")
+    instruction.write_text(
+        "# Expert review\n\nTreat notebook output as exploratory.\n", encoding="utf-8"
+    )
     expected = "sha256:" + hashlib.sha256(instruction.read_bytes()).hexdigest()
     created = development_sessions.create(
         "candidate_project",
@@ -1039,7 +1321,9 @@ def test_development_session_copies_digest_bound_text_instruction(project_space,
     assert Path(attached["instruction"]["path"]).parent != instruction.parent
 
 
-def test_development_session_admits_external_owner_artifact_view(project_space, tmp_path: Path) -> None:
+def test_development_session_admits_external_owner_artifact_view(
+    project_space, tmp_path: Path
+) -> None:
     _skill(project_space["skills"], "candidate_skill")
     _skill(project_space["skills"], "source_direction")
     compositions.create(_project("candidate_project", "candidate_skill"))
@@ -1052,7 +1336,11 @@ def test_development_session_admits_external_owner_artifact_view(project_space, 
         "source_direction",
         "part0",
         hidden,
-        context_policy={"default": "deny", "allow": ["research.evaluation"], "deny": []},
+        context_policy={
+            "default": "deny",
+            "allow": ["research.evaluation"],
+            "deny": [],
+        },
     )
 
     created = development_sessions.create(
@@ -1094,10 +1382,14 @@ def test_development_session_admits_external_owner_artifact_view(project_space, 
         "execution_max_wall_seconds": 7200,
     }
     assert created["session"]["handoff"]["agent_profile"]["model"] == "gpt-5.4"
-    assert [path.name for path in Path(admitted["root_path"]).iterdir()] == ["notebook.ipynb"]
+    assert [path.name for path in Path(admitted["root_path"]).iterdir()] == [
+        "notebook.ipynb"
+    ]
 
 
-def test_development_session_rejects_non_owned_write_target(project_space, tmp_path: Path) -> None:
+def test_development_session_rejects_non_owned_write_target(
+    project_space, tmp_path: Path
+) -> None:
     _skill(project_space["skills"], "tlp_direction")
     _skill(project_space["skills"], "shared_dependency")
     compositions.create(_project("tlp_research", "tlp_direction"))

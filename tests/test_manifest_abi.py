@@ -65,12 +65,16 @@ def _load_service_skill_schema() -> dict:
         "builder.prototype_handoff.v1.schema.json",
     ],
 )
-def test_conversational_and_builder_schemas_are_valid_draft_2020_12(schema_name: str) -> None:
+def test_conversational_and_builder_schemas_are_valid_draft_2020_12(
+    schema_name: str,
+) -> None:
     Draft202012Validator.check_schema(_load_schema(schema_name))
 
 
 def test_workflow_validation_report_schema_is_valid_draft_2020_12() -> None:
-    Draft202012Validator.check_schema(_load_schema("workflow.validation_report.v1.schema.json"))
+    Draft202012Validator.check_schema(
+        _load_schema("workflow.validation_report.v1.schema.json")
+    )
 
 
 def test_workflow_definition_schema_resolves_transition_refs_from_abi_files() -> None:
@@ -256,7 +260,13 @@ def test_skill_schema_accepts_builder_authoring_hints() -> None:
         },
         "nlu": {
             "nlu_hints": {
-                "examples": [{"text": "погода в Москве", "locale": "ru", "intent": "weather.current"}],
+                "examples": [
+                    {
+                        "text": "погода в Москве",
+                        "locale": "ru",
+                        "intent": "weather.current",
+                    }
+                ],
                 "side_effect_class": "read_only",
             }
         },
@@ -639,7 +649,11 @@ def test_builder_draft_schema_accepts_draft_workspace_metadata() -> None:
             "files": [
                 {"path": "skill.yaml", "role": "manifest", "required": True},
                 {"path": "handlers/main.py", "role": "handler", "required": True},
-                {"path": "tests/test_module_integrity.py", "role": "test", "required": True},
+                {
+                    "path": "tests/test_module_integrity.py",
+                    "role": "test",
+                    "required": True,
+                },
             ],
         },
         "metadata": {
@@ -682,15 +696,25 @@ def test_scenario_schema_accepts_default_builder_template_manifest() -> None:
     schema = _load_schema("scenario.schema.json")
     root = Path(__file__).resolve().parents[1] / "src" / "adaos"
     payload = yaml.safe_load(
-        (root / "scenario_templates" / "scenario_default" / "scenario.yaml").read_text(encoding="utf-8")
+        (root / "scenario_templates" / "scenario_default" / "scenario.yaml").read_text(
+            encoding="utf-8"
+        )
     )
 
     Draft7Validator(schema).validate(payload)
 
 
 def test_skill_and_scenario_schemas_accept_single_workflow_manifest() -> None:
-    skill = {"name": "demo_skill", "version": "0.1.0", "workflow": {"manifest": "workflow.json"}}
-    scenario = {"id": "demo_scenario", "version": "0.1.0", "workflow": {"manifest": "workflow.json"}}
+    skill = {
+        "name": "demo_skill",
+        "version": "0.1.0",
+        "workflow": {"manifest": "workflow.json"},
+    }
+    scenario = {
+        "id": "demo_scenario",
+        "version": "0.1.0",
+        "workflow": {"manifest": "workflow.json"},
+    }
 
     Draft7Validator(_load_schema("skill.schema.json")).validate(skill)
     Draft202012Validator(_load_service_skill_schema()).validate(skill)
@@ -728,9 +752,15 @@ def test_scenario_schema_accepts_channel_neutral_workflow_guidance() -> None:
     Draft7Validator(_load_schema("scenario.schema.json")).validate(scenario)
 
 
-@pytest.mark.parametrize("manifest", ["workflows/main.json", "workflow.yaml", "WORKFLOW.json"])
+@pytest.mark.parametrize(
+    "manifest", ["workflows/main.json", "workflow.yaml", "WORKFLOW.json"]
+)
 def test_manifest_schemas_reject_noncanonical_workflow_path(manifest: str) -> None:
-    payload = {"name": "demo_skill", "version": "0.1.0", "workflow": {"manifest": manifest}}
+    payload = {
+        "name": "demo_skill",
+        "version": "0.1.0",
+        "workflow": {"manifest": manifest},
+    }
 
     with pytest.raises(ValidationError):
         Draft7Validator(_load_schema("skill.schema.json")).validate(payload)
@@ -751,7 +781,16 @@ def test_default_scenario_template_exposes_a_valid_empty_builder_canvas() -> Non
     assert page["id"] == "template-id"
     assert [item["id"] for item in page["widgets"]] == ["builder-empty-canvas"]
     assert page["widgets"][0]["type"] == "ui.form"
-    assert {"scenario.yaml", "scenario.json", "webui.json"}.issubset(declared_files)
+    assert {
+        "scenario.yaml",
+        "scenario.json",
+        "webui.json",
+        "assets/i18n/en.json",
+        "assets/i18n/ru.json",
+    }.issubset(declared_files)
+    assert page["title_i18n"]["key"] == "scenario.template-id.title"
+    resources = webui["ui"]["application"]["resources"]
+    assert {item["locale"] for item in resources.values()} == {"en", "ru"}
 
 
 def test_nlu_teacher_schema_accepts_contract_bundle() -> None:
@@ -859,7 +898,11 @@ def test_nlu_teacher_schema_accepts_contract_bundle() -> None:
         "mcp_capability_profile": {
             "profile_id": "NLUTeacherDryRun",
             "mode": "dry_run_preview",
-            "tools": ["nlu_authoring.get_context", "nlu_authoring.check_phrase", "desktop.preview_action"],
+            "tools": [
+                "nlu_authoring.get_context",
+                "nlu_authoring.check_phrase",
+                "desktop.preview_action",
+            ],
             "dispatch_allowed": False,
             "training_mutation_allowed": False,
             "requires_operator_approval": True,

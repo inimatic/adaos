@@ -112,6 +112,7 @@ def _event_operations() -> WebspaceEventOperations:
         rebuild_webspace=rebuild_webspace_from_sources,
         schedule_skill_runtime_rebuild=schedule_skill_runtime_rebuild,
         reload_publication_webspaces=reload_workspace_webspaces_for_publication,
+        recover_removed_scenario=_recover_webspaces_after_scenario_removed,
     )
 
 
@@ -6928,6 +6929,87 @@ async def _on_skill_uninstalled(evt: Dict[str, Any]) -> None:
         topic="skill.uninstalled",
         allow_defer=False,
     )
+
+
+async def _recover_webspaces_after_scenario_removed(
+    scenario_id: str,
+    event: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Move every affected Webspace to a valid scenario after source removal."""
+
+    removed_id = str(scenario_id or "").strip()
+    if not removed_id:
+        return {"ok": False, "error": "scenario_id_required", "recovered": []}
+    try:
+        rows = await asyncio.to_thread(workspace_index.list_workspaces)
+    except Exception:
+        rows = []
+    recovered: list[dict[str, Any]] = []
+    recovered_webspaces: set[str] = set()
+    for row in rows:
+        webspace_id = str(getattr(row, "workspace_id", "") or "").strip()
+        if not webspace_id:
+            continue
+        state = await describe_webspace_operational_state(webspace_id)
+        current_id = str(state.current_scenario or "").strip()
+        home_id = str(state.effective_home_scenario or "").strip()
+        if removed_id not in {current_id, home_id}:
+            continue
+        loader_space = _scenario_loader_space(state.source_mode)
+        candidates = [
+            candidate
+            for candidate in (current_id, home_id, "web_desktop")
+            if candidate and candidate != removed_id
+        ]
+        fallback_id = next(
+            (
+                candidate
+                for candidate in dict.fromkeys(candidates)
+                if _scenario_exists_for_switch(candidate, space=loader_space)
+            ),
+            "web_desktop",
+        )
+        home_replaced = home_id == removed_id
+        if home_replaced:
+            await asyncio.to_thread(
+                workspace_index.set_workspace_manifest,
+                webspace_id,
+                home_scenario=fallback_id,
+            )
+        switch_result = await switch_webspace_scenario(
+            webspace_id,
+            fallback_id,
+            set_home=False,
+            wait_for_rebuild=True,
+            request_source="scenario.removed",
+        )
+        recovered_webspaces.add(webspace_id)
+        recovered.append(
+            {
+                "webspace_id": webspace_id,
+                "removed_scenario_id": removed_id,
+                "fallback_scenario_id": fallback_id,
+                "home_replaced": home_replaced,
+                "accepted": bool(switch_result.get("accepted")),
+                "error": switch_result.get("error"),
+            }
+        )
+
+    refresh_webspace = str(event.get("webspace_id") or default_webspace_id()).strip()
+    if refresh_webspace and refresh_webspace not in recovered_webspaces:
+        await rebuild_webspace_from_sources(
+            refresh_webspace,
+            action="scenario_uninstall_sync",
+            source_of_truth="scenario_projection",
+        )
+    return {
+        "ok": all(bool(item.get("accepted")) for item in recovered),
+        "removed_scenario_id": removed_id,
+        "recovered": recovered,
+        "catalog_refresh_webspace_id": (
+            refresh_webspace if refresh_webspace not in recovered_webspaces else None
+        ),
+    }
 
 
 @subscribe("scenario.removed")

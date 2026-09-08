@@ -1,8 +1,7 @@
 """Policy-scoped Builder Development Sessions.
 
-A session is mutable workflow state, deliberately separate from the
-distributable Project declaration.  This first implementation materializes the
-pre-Codex session and its exact filesystem scope; execution is a later gate.
+Project records the durable initiating component. The session separately holds
+mutable handoff state and its exact filesystem scope; execution is a later gate.
 """
 
 from __future__ import annotations
@@ -38,51 +37,89 @@ class DevelopmentSessionError(SdkError):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _state_root() -> Path:
     ctx = require_ctx("sdk.builder.development_sessions")
-    return (Path(ctx.paths.state_dir()).resolve() / "builder" / "development_sessions").resolve()
+    return (
+        Path(ctx.paths.state_dir()).resolve() / "builder" / "development_sessions"
+    ).resolve()
 
 
 def _schema_path() -> Path:
-    return Path(__file__).resolve().parents[2] / "abi" / "builder.development_session.v1.schema.json"
+    return (
+        Path(__file__).resolve().parents[2]
+        / "abi"
+        / "builder.development_session.v1.schema.json"
+    )
 
 
 def _feedback_schema_path() -> Path:
-    return Path(__file__).resolve().parents[2] / "abi" / "builder.development_feedback.v1.schema.json"
+    return (
+        Path(__file__).resolve().parents[2]
+        / "abi"
+        / "builder.development_feedback.v1.schema.json"
+    )
 
 
 def validate(value: Mapping[str, Any]) -> dict[str, Any]:
     payload = dict(value)
     schema = json.loads(_schema_path().read_text(encoding="utf-8"))
-    errors = sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda item: list(item.absolute_path))
+    errors = sorted(
+        Draft202012Validator(schema).iter_errors(payload),
+        key=lambda item: list(item.absolute_path),
+    )
     if errors:
         error = errors[0]
         location = ".".join(str(part) for part in error.absolute_path) or "$"
-        raise DevelopmentSessionError(f"development session invalid at {location}: {error.message}")
-    target_refs = [str(item["ref"]) for group in payload["targets"].values() for item in group]
+        raise DevelopmentSessionError(
+            f"development session invalid at {location}: {error.message}"
+        )
+    target_refs = [
+        str(item["ref"]) for group in payload["targets"].values() for item in group
+    ]
     if len(target_refs) != len(set(target_refs)):
         raise DevelopmentSessionError("development target refs must be unique")
-    if payload["focus"]["ref"] not in set(target_refs) | {str(item["ref"]) for item in payload["context_members"]}:
-        raise DevelopmentSessionError("focus must reference an admitted target or context member")
+    if payload["focus"]["ref"] not in set(target_refs) | {
+        str(item["ref"]) for item in payload["context_members"]
+    }:
+        raise DevelopmentSessionError(
+            "focus must reference an admitted target or context member"
+        )
     return payload
 
 
 def validate_feedback(value: Mapping[str, Any]) -> dict[str, Any]:
     payload = dict(value)
     schema = json.loads(_feedback_schema_path().read_text(encoding="utf-8"))
-    errors = sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda item: list(item.absolute_path))
+    errors = sorted(
+        Draft202012Validator(schema).iter_errors(payload),
+        key=lambda item: list(item.absolute_path),
+    )
     if errors:
         error = errors[0]
         location = ".".join(str(part) for part in error.absolute_path) or "$"
-        raise DevelopmentSessionError(f"development feedback invalid at {location}: {error.message}")
-    expected = "sha256:" + hashlib.sha256(
-        _canonical_bytes({key: item for key, item in payload.items() if key != "digest"})
-    ).hexdigest()
+        raise DevelopmentSessionError(
+            f"development feedback invalid at {location}: {error.message}"
+        )
+    expected = (
+        "sha256:"
+        + hashlib.sha256(
+            _canonical_bytes(
+                {key: item for key, item in payload.items() if key != "digest"}
+            )
+        ).hexdigest()
+    )
     if payload["digest"] != expected:
-        raise DevelopmentSessionError("development feedback digest does not match its content")
+        raise DevelopmentSessionError(
+            "development feedback digest does not match its content"
+        )
     return payload
 
 
@@ -105,14 +142,18 @@ def _path(session_id: str) -> Path:
 def get(session_id: str) -> dict[str, Any]:
     path = _path(session_id)
     if not path.is_file():
-        raise DevelopmentSessionError(f"development session {session_id!r} was not found")
+        raise DevelopmentSessionError(
+            f"development session {session_id!r} was not found"
+        )
     value = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(value, Mapping):
         raise DevelopmentSessionError("development session state must be an object")
     return {**validate(value), "state_path": str(path)}
 
 
-def list_sessions(*, project_id: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
+def list_sessions(
+    *, project_id: str | None = None, limit: int = 500
+) -> list[dict[str, Any]]:
     root = _state_root()
     if not root.is_dir():
         return []
@@ -168,6 +209,63 @@ def binding_for(builder_webspace_id: str) -> dict[str, Any] | None:
     return dict(value) if isinstance(value, Mapping) else None
 
 
+def binding_for_selection(
+    builder_webspace_id: str,
+    selected_ref: str,
+) -> dict[str, Any] | None:
+    """Resolve a host binding only for the Project scope that created it."""
+
+    selected = str(selected_ref or "").strip()
+    if not selected:
+        return None
+    binding = binding_for(builder_webspace_id)
+    if not binding:
+        return None
+    if selected.startswith("project:"):
+        try:
+            project = compositions.get(selected.partition(":")[2])
+        except compositions.ProjectCompositionError:
+            return None
+    else:
+        project = compositions.project_for_component(selected)
+    if not project:
+        return None
+    project_ref = str(
+        project.get("ref") or f"project:{project.get('id') or ''}"
+    ).strip()
+    development = (
+        project.get("development")
+        if isinstance(project.get("development"), Mapping)
+        else {}
+    )
+    initiator_ref = str(development.get("initiator_ref") or "").strip()
+    if not initiator_ref:
+        return None
+    try:
+        session = get(str(binding.get("session_id") or ""))
+    except DevelopmentSessionError:
+        return None
+    if (
+        project_ref != str(binding.get("project_ref") or "").strip()
+        or project_ref != str(session.get("project_ref") or "").strip()
+    ):
+        return None
+    context_refs = {
+        str(item.get("ref") or "").strip()
+        for item in session.get("context_members") or []
+        if isinstance(item, Mapping)
+    }
+    if initiator_ref not in context_refs:
+        return None
+    return {
+        "binding": binding,
+        "session": session,
+        "selected_ref": selected,
+        "project_ref": project_ref,
+        "initiator_ref": initiator_ref,
+    }
+
+
 def _within(root: Path, candidate: Path) -> bool:
     return candidate == root or root in candidate.parents
 
@@ -175,7 +273,9 @@ def _within(root: Path, candidate: Path) -> bool:
 def _instruction_kind(value: str) -> str:
     token = str(value or "").strip().lower()
     if not _INSTRUCTION_KIND_RE.fullmatch(token):
-        raise DevelopmentSessionError("instruction kind contains unsupported characters")
+        raise DevelopmentSessionError(
+            "instruction kind contains unsupported characters"
+        )
     return token
 
 
@@ -214,9 +314,13 @@ def attach_instruction(
         )
     content_digest = "sha256:" + hashlib.sha256(_canonical_bytes(payload)).hexdigest()
     session_path = _path(token)
-    instruction_path = (session_path.parent / "instructions" / f"{instruction_kind}.json").resolve()
+    instruction_path = (
+        session_path.parent / "instructions" / f"{instruction_kind}.json"
+    ).resolve()
     if not _within(session_path.parent, instruction_path):
-        raise DevelopmentSessionError("instruction path escapes Development Session root")
+        raise DevelopmentSessionError(
+            "instruction path escapes Development Session root"
+        )
     ref = f"instruction://builder/{token}/{instruction_kind}"
     descriptor = {
         "ref": ref,
@@ -243,12 +347,18 @@ def attach_instruction(
             )
         if instruction_path.is_file():
             current = json.loads(instruction_path.read_text(encoding="utf-8-sig"))
-            if not isinstance(current, Mapping) or _canonical_bytes(current) != _canonical_bytes(payload):
-                raise DevelopmentSessionError("persisted instruction content does not match its descriptor")
+            if not isinstance(current, Mapping) or _canonical_bytes(
+                current
+            ) != _canonical_bytes(payload):
+                raise DevelopmentSessionError(
+                    "persisted instruction content does not match its descriptor"
+                )
         else:
             atomic_write_json(instruction_path, payload)
         if not existing:
-            persisted = {key: item for key, item in session.items() if key != "state_path"}
+            persisted = {
+                key: item for key, item in session.items() if key != "state_path"
+            }
             persisted["instruction_inputs"] = [
                 *list(persisted.get("instruction_inputs") or []),
                 descriptor,
@@ -288,7 +398,9 @@ def attach_instruction_file(
     content_digest = "sha256:" + hashlib.sha256(payload).hexdigest()
     required_digest = str(expected_digest or "").strip().lower()
     if required_digest != content_digest:
-        raise DevelopmentSessionError("instruction file digest does not match expected_digest")
+        raise DevelopmentSessionError(
+            "instruction file digest does not match expected_digest"
+        )
     suffix = source.suffix.lower()
     if not suffix or len(suffix) > 12 or not re.fullmatch(r"[.][a-z0-9]+", suffix):
         suffix = ".bin"
@@ -297,7 +409,9 @@ def attach_instruction_file(
         session_path.parent / "instructions" / f"{instruction_kind}{suffix}"
     ).resolve()
     if not _within(session_path.parent, instruction_path):
-        raise DevelopmentSessionError("instruction path escapes Development Session root")
+        raise DevelopmentSessionError(
+            "instruction path escapes Development Session root"
+        )
     descriptor = {
         "ref": f"instruction://builder/{token}/{instruction_kind}",
         "kind": instruction_kind,
@@ -323,11 +437,15 @@ def attach_instruction_file(
             )
         if instruction_path.is_file():
             if instruction_path.read_bytes() != payload:
-                raise DevelopmentSessionError("persisted instruction content does not match its descriptor")
+                raise DevelopmentSessionError(
+                    "persisted instruction content does not match its descriptor"
+                )
         else:
             atomic_write_bytes(instruction_path, payload)
         if not existing:
-            persisted = {key: item for key, item in session.items() if key != "state_path"}
+            persisted = {
+                key: item for key, item in session.items() if key != "state_path"
+            }
             persisted["instruction_inputs"] = [
                 *list(persisted.get("instruction_inputs") or []),
                 descriptor,
@@ -363,7 +481,9 @@ def get_instruction(session_id: str, kind: str) -> dict[str, Any]:
     session_root = _path(token).parent
     path = Path(str(descriptor["path"])).resolve()
     if not _within(session_root, path) or not path.is_file():
-        raise DevelopmentSessionError("instruction path is unavailable or escapes its session root")
+        raise DevelopmentSessionError(
+            "instruction path is unavailable or escapes its session root"
+        )
     payload = path.read_bytes()
     media_type = str(descriptor.get("media_type") or "").lower()
     digest_mode = str(descriptor.get("digest_mode") or "").strip() or (
@@ -378,7 +498,9 @@ def get_instruction(session_id: str, kind: str) -> dict[str, Any]:
         value = None
         actual_digest = "sha256:" + hashlib.sha256(payload).hexdigest()
     if actual_digest != str(descriptor["content_digest"]):
-        raise DevelopmentSessionError("instruction content digest does not match its descriptor")
+        raise DevelopmentSessionError(
+            "instruction content digest does not match its descriptor"
+        )
     result: dict[str, Any] = {"ok": True, "instruction": descriptor}
     if value is not None:
         result["value"] = dict(value)
@@ -386,7 +508,9 @@ def get_instruction(session_id: str, kind: str) -> dict[str, Any]:
         try:
             result["content"] = payload.decode("utf-8-sig")
         except UnicodeDecodeError as exc:
-            raise DevelopmentSessionError("text instruction is not valid UTF-8") from exc
+            raise DevelopmentSessionError(
+                "text instruction is not valid UTF-8"
+            ) from exc
     return result
 
 
@@ -401,14 +525,18 @@ def review_changes(session_id: str, paths: Sequence[str]) -> dict[str, Any]:
     session = get(session_id)
     values = [str(item or "").strip() for item in paths]
     if not values or len(values) > 5000:
-        raise DevelopmentSessionError("changed paths must contain between 1 and 5000 items")
+        raise DevelopmentSessionError(
+            "changed paths must contain between 1 and 5000 items"
+        )
     target_roots = [
         Path(str(item["source_path"])).resolve()
         for group in session["targets"].values()
         for item in group
     ]
     scratch_root = Path(str(session["scratch"]["path"])).resolve()
-    artifact_roots = [Path(str(item["root_path"])).resolve() for item in session["artifact_inputs"]]
+    artifact_roots = [
+        Path(str(item["root_path"])).resolve() for item in session["artifact_inputs"]
+    ]
     admitted: list[str] = []
     violations: list[dict[str, str]] = []
     for raw in values:
@@ -418,11 +546,17 @@ def review_changes(session_id: str, paths: Sequence[str]) -> dict[str, Any]:
             continue
         resolved = candidate.resolve()
         if any(_within(root, resolved) for root in artifact_roots):
-            violations.append({"path": str(resolved), "reason": "read_only_artifact_input"})
-        elif _within(scratch_root, resolved) or any(_within(root, resolved) for root in target_roots):
+            violations.append(
+                {"path": str(resolved), "reason": "read_only_artifact_input"}
+            )
+        elif _within(scratch_root, resolved) or any(
+            _within(root, resolved) for root in target_roots
+        ):
             admitted.append(str(resolved))
         else:
-            violations.append({"path": str(resolved), "reason": "outside_development_session_scope"})
+            violations.append(
+                {"path": str(resolved), "reason": "outside_development_session_scope"}
+            )
     return {
         "ok": not violations,
         "session_id": session["session_id"],
@@ -445,26 +579,34 @@ def request_scope_expansion(
     match = _COMPONENT_REF_RE.fullmatch(normalized_ref)
     explanation = " ".join(str(reason or "").split()).strip()
     if not match:
-        raise DevelopmentSessionError("target_ref must be a skill: or scenario: component ref")
+        raise DevelopmentSessionError(
+            "target_ref must be a skill: or scenario: component ref"
+        )
     if not explanation:
         raise DevelopmentSessionError("scope-expansion reason is required")
     existing = {
-        str(item["ref"])
-        for group in session["targets"].values()
-        for item in group
+        str(item["ref"]) for group in session["targets"].values() for item in group
     }
     if normalized_ref in existing:
-        raise DevelopmentSessionError(f"{normalized_ref} is already an admitted write target")
+        raise DevelopmentSessionError(
+            f"{normalized_ref} is already an admitted write target"
+        )
     kind, component_id = match.groups()
     source_path = str(projects.resolve_root(kind, component_id))
     identity = json.dumps(
-        {"session_id": session["session_id"], "target_ref": normalized_ref, "reason": explanation},
+        {
+            "session_id": session["session_id"],
+            "target_ref": normalized_ref,
+            "reason": explanation,
+        },
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
     request_id = f"scope_{hashlib.sha256(identity).hexdigest()[:20]}"
-    path = (_path(session["session_id"]).parent / "scope_requests" / f"{request_id}.json").resolve()
+    path = (
+        _path(session["session_id"]).parent / "scope_requests" / f"{request_id}.json"
+    ).resolve()
     payload = {
         "schema": "adaos.builder.scope_expansion_request.v1",
         "request_id": request_id,
@@ -506,15 +648,17 @@ def record_feedback(
     """
 
     session = get(session_id)
-    normalized_refs = sorted({str(item).strip() for item in affected_refs if str(item).strip()})
+    normalized_refs = sorted(
+        {str(item).strip() for item in affected_refs if str(item).strip()}
+    )
     admitted_refs = {
-        str(item["ref"])
-        for group in session["targets"].values()
-        for item in group
+        str(item["ref"]) for group in session["targets"].values() for item in group
     } | {str(item["ref"]) for item in session["context_members"]}
     outside = sorted(set(normalized_refs) - admitted_refs)
     if outside:
-        raise DevelopmentSessionError(f"feedback affected_refs are outside session context: {outside}")
+        raise DevelopmentSessionError(
+            f"feedback affected_refs are outside session context: {outside}"
+        )
     normalized_summary = " ".join(str(summary or "").split()).strip()
     identity = {
         "session_id": session["session_id"],
@@ -523,7 +667,11 @@ def record_feedback(
         "blocking": bool(blocking),
         "summary": normalized_summary,
         "affected_refs": normalized_refs,
-        "constraints": [" ".join(str(item).split()).strip() for item in constraints if str(item).strip()],
+        "constraints": [
+            " ".join(str(item).split()).strip()
+            for item in constraints
+            if str(item).strip()
+        ],
         "evidence": [dict(item) for item in evidence],
         "proposed_action": str(proposed_action or "").strip(),
         "protocol_digest": str(protocol_digest).strip() if protocol_digest else None,
@@ -538,9 +686,13 @@ def record_feedback(
         "status": "open",
         "created_at": _now(),
     }
-    payload["digest"] = "sha256:" + hashlib.sha256(_canonical_bytes(payload)).hexdigest()
+    payload["digest"] = (
+        "sha256:" + hashlib.sha256(_canonical_bytes(payload)).hexdigest()
+    )
     validate_feedback(payload)
-    path = (_path(session["session_id"]).parent / "feedback" / f"{feedback_id}.json").resolve()
+    path = (
+        _path(session["session_id"]).parent / "feedback" / f"{feedback_id}.json"
+    ).resolve()
     with mutation_lock(path.parent / ".mutation.lock"):
         if path.is_file():
             restored = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -555,7 +707,12 @@ def record_feedback(
         DevelopmentFeedbackService().import_legacy_builder_feedback()
     except Exception:
         pass
-    return {"ok": True, "idempotent": idempotent, "feedback": payload, "state_path": str(path)}
+    return {
+        "ok": True,
+        "idempotent": idempotent,
+        "feedback": payload,
+        "state_path": str(path),
+    }
 
 
 def list_feedback(
@@ -580,7 +737,7 @@ def list_feedback(
             continue
         values.append(value)
     values.sort(key=lambda item: (str(item["created_at"]), str(item["feedback_id"])))
-    return values[-max(1, min(int(limit), 5000)):]
+    return values[-max(1, min(int(limit), 5000)) :]
 
 
 def create(
@@ -609,13 +766,19 @@ def create(
 ) -> dict[str, Any]:
     project = compositions.get(project_id)
     owned = {str(item["ref"]) for item in project["components"]["owned"]}
-    default_primary = next(str(item["ref"]) for item in project["components"]["owned"] if item["role"] == "primary")
+    default_primary = next(
+        str(item["ref"])
+        for item in project["components"]["owned"]
+        if item["role"] == "primary"
+    )
     primary = list(primary_targets or [default_primary])
     secondary = list(secondary_targets)
     requested = primary + secondary
     outside = sorted(set(requested) - owned)
     if outside:
-        raise DevelopmentSessionError(f"development targets are not owned by project:{project_id}: {outside}")
+        raise DevelopmentSessionError(
+            f"development targets are not owned by project:{project_id}: {outside}"
+        )
     if not requested:
         raise DevelopmentSessionError("at least one development target is required")
 
@@ -649,10 +812,14 @@ def create(
         group_id = str(source.get("group_id") or "").strip()
         audience = str(source.get("audience") or "").strip() or None
         if not source_skill or not group_id:
-            raise DevelopmentSessionError("artifact_sources require skill_id and group_id")
+            raise DevelopmentSessionError(
+                "artifact_sources require skill_id and group_id"
+            )
         ref = f"artifact://skill/{source_skill}/{group_id}"
         if ref in seen_artifact_refs:
-            raise DevelopmentSessionError(f"duplicate development artifact input: {ref}")
+            raise DevelopmentSessionError(
+                f"duplicate development artifact input: {ref}"
+            )
         seen_artifact_refs.add(ref)
         group = artifact_context.get_group(source_skill, group_id)
         descriptor = {
@@ -662,7 +829,9 @@ def create(
             "root_path": group["root_path"],
         }
         if audience:
-            view = artifact_context.materialize_context(source_skill, group_id, audience)
+            view = artifact_context.materialize_context(
+                source_skill, group_id, audience
+            )
             descriptor.update(
                 {
                     "root_path": view["root_path"],
@@ -676,8 +845,12 @@ def create(
     normalized_acceptance = [
         str(item).strip() for item in acceptance_profiles if str(item).strip()
     ]
-    normalized_acceptance_requirements = [dict(item) for item in acceptance_requirements]
-    requirement_ids = [str(item.get("id") or "").strip() for item in normalized_acceptance_requirements]
+    normalized_acceptance_requirements = [
+        dict(item) for item in acceptance_requirements
+    ]
+    requirement_ids = [
+        str(item.get("id") or "").strip() for item in normalized_acceptance_requirements
+    ]
     if len(requirement_ids) != len(set(requirement_ids)):
         raise DevelopmentSessionError("acceptance requirement ids must be unique")
     context_refs = {str(item.get("ref") or "").strip() for item in context_members}
@@ -703,13 +876,14 @@ def create(
         "contract_inputs": normalized_contracts,
         "acceptance_profiles": normalized_acceptance,
         "acceptance_requirements": normalized_acceptance_requirements,
-        "artifact_manifest_digests": [item["manifest_digest"] for item in artifact_inputs],
+        "artifact_manifest_digests": [
+            item["manifest_digest"] for item in artifact_inputs
+        ],
     }
     generic_seed = hashlib.sha256(_canonical_bytes(generic_identity)).hexdigest()[:16]
 
     token = _session_id(
-        session_id
-        or f"dev_{project['id']}_{legacy_seed or generic_seed}"
+        session_id or f"dev_{project['id']}_{legacy_seed or generic_seed}"
     )
     session_path = _path(token)
     scratch = (session_path.parent / "scratch").resolve()
@@ -722,7 +896,9 @@ def create(
     normalized_budget = None
     if execution_budget is not None:
         normalized_budget = {
-            "budget_view": str(execution_budget.get("budget_view") or "default").strip(),
+            "budget_view": str(
+                execution_budget.get("budget_view") or "default"
+            ).strip(),
             "max_wall_seconds": int(execution_budget.get("max_wall_seconds") or 0),
             "max_model_tokens": int(execution_budget.get("max_model_tokens") or 0),
             "max_attempts": int(execution_budget.get("max_attempts") or 0),
@@ -735,7 +911,9 @@ def create(
         normalized_agent_profile = {
             "provider": str(agent_profile.get("provider") or "").strip(),
             "model": str(agent_profile.get("model") or "").strip(),
-            "reasoning_effort": str(agent_profile.get("reasoning_effort") or "").strip(),
+            "reasoning_effort": str(
+                agent_profile.get("reasoning_effort") or ""
+            ).strip(),
             "tool_profile": str(agent_profile.get("tool_profile") or "").strip(),
         }
     validation_budget = derive_validation_budget(
@@ -765,7 +943,11 @@ def create(
         **({"request": str(request).strip()} if str(request or "").strip() else {}),
         **({"execution_budget": normalized_budget} if normalized_budget else {}),
         "validation_budget": validation_budget,
-        **({"agent_profile": normalized_agent_profile} if normalized_agent_profile else {}),
+        **(
+            {"agent_profile": normalized_agent_profile}
+            if normalized_agent_profile
+            else {}
+        ),
         "prohibited_actions": [
             str(item).strip() for item in prohibited_actions if str(item).strip()
         ],
@@ -774,7 +956,9 @@ def create(
         "schema": "adaos.builder.development_session.v1",
         "session_id": token,
         "project_ref": project["ref"],
-        "base_release": dict(base_release) if isinstance(base_release, Mapping) else None,
+        "base_release": dict(base_release)
+        if isinstance(base_release, Mapping)
+        else None,
         "focus": {"ref": str(focus_ref or primary[0])},
         "targets": {
             "primary": [target(ref) for ref in primary],
@@ -784,7 +968,11 @@ def create(
         "artifact_inputs": artifact_inputs,
         **({"subject_refs": normalized_subjects} if normalized_subjects else {}),
         **({"contract_inputs": normalized_contracts} if normalized_contracts else {}),
-        **({"acceptance_profiles": normalized_acceptance} if normalized_acceptance else {}),
+        **(
+            {"acceptance_profiles": normalized_acceptance}
+            if normalized_acceptance
+            else {}
+        ),
         **(
             {"acceptance_requirements": normalized_acceptance_requirements}
             if normalized_acceptance_requirements
@@ -813,9 +1001,13 @@ def create(
                 "acceptance_requirements",
                 "handoff",
             )
-            if all(previous.get(field) == payload.get(field) for field in identity_fields):
+            if all(
+                previous.get(field) == payload.get(field) for field in identity_fields
+            ):
                 return {"ok": True, "idempotent": True, "session": previous}
-            raise DevelopmentSessionError(f"development session {token!r} already exists with another scope")
+            raise DevelopmentSessionError(
+                f"development session {token!r} already exists with another scope"
+            )
         scratch.mkdir(parents=True, exist_ok=True)
         atomic_write_json(session_path, payload)
     return {"ok": True, "idempotent": False, "session": get(token)}
@@ -827,6 +1019,7 @@ __all__ = [
     "attach_instruction_file",
     "bind",
     "binding_for",
+    "binding_for_selection",
     "create",
     "get",
     "get_instruction",

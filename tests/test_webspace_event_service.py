@@ -13,6 +13,7 @@ def _operations() -> WebspaceEventOperations:
         rebuild_webspace=AsyncMock(),
         schedule_skill_runtime_rebuild=Mock(),
         reload_publication_webspaces=AsyncMock(),
+        recover_removed_scenario=AsyncMock(),
     )
 
 
@@ -46,3 +47,19 @@ async def test_scenario_sync_maps_to_semantic_rebuild_contract() -> None:
         scenario_resolution="projected_payload",
         source_of_truth="scenario_projection",
     )
+
+
+@pytest.mark.asyncio
+async def test_scenario_removal_routes_to_terminal_recovery() -> None:
+    operations = _operations()
+
+    await WebspaceEventService().scenario_removed(
+        {"id": "removed_scenario"},
+        operations,
+    )
+
+    operations.recover_removed_scenario.assert_awaited_once_with(
+        "removed_scenario",
+        {"id": "removed_scenario"},
+    )
+    operations.rebuild_webspace.assert_not_awaited()

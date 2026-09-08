@@ -1997,6 +1997,7 @@ class NamedEntityRegistry:
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
+        self._refresh_lock = threading.Lock()
         self._snapshots: dict[str, NamedEntityRegistrySnapshot] = {}
         self._refresh_total = 0
         self._changed_total = 0
@@ -2027,6 +2028,23 @@ class NamedEntityRegistry:
         return tuple(sorted(changed))
 
     def refresh(
+        self,
+        *,
+        webspace_id: str | None = None,
+        service: NamedEntityService | None = None,
+        dirty_sources: Iterable[str] | None = None,
+    ) -> NamedEntityRegistrySnapshot:
+        # Different webspaces can request the same expensive device projection at
+        # once. Build one snapshot at a time so worker threads do not contend for
+        # the GIL and starve the runtime event loop.
+        with self._refresh_lock:
+            return self._refresh_serialized(
+                webspace_id=webspace_id,
+                service=service,
+                dirty_sources=dirty_sources,
+            )
+
+    def _refresh_serialized(
         self,
         *,
         webspace_id: str | None = None,

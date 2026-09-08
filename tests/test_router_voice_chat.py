@@ -3161,7 +3161,11 @@ async def test_voice_chat_snapshot_ledger_recovery_does_not_block_event_loop(mon
     monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
 
+    event_loop_thread_id = threading.get_ident()
+    recovery_thread_ids: list[int] = []
+
     def _slow_recovery(*_args, **_kwargs):
+        recovery_thread_ids.append(threading.get_ident())
         time.sleep(0.2)
         return {"messages": [], "total_message_count": 0}
 
@@ -3173,7 +3177,6 @@ async def test_voice_chat_snapshot_ledger_recovery_does_not_block_event_loop(mon
     router = RouterService(eventbus=bus, base_dir=Path("."))
     await router.start()
 
-    started = time.perf_counter()
     bus.publish(
         Event(
             type="webio.stream.snapshot.requested",
@@ -3182,10 +3185,9 @@ async def test_voice_chat_snapshot_ledger_recovery_does_not_block_event_loop(mon
             payload={"receiver": "voice_chat.messages", "webspace_id": "desktop"},
         )
     )
-    await asyncio.sleep(0.02)
-
-    assert time.perf_counter() - started < 0.1
     assert await bus.wait_for_idle(timeout=1.0)
+    assert recovery_thread_ids
+    assert all(thread_id != event_loop_thread_id for thread_id in recovery_thread_ids)
 
 
 async def test_voice_chat_snapshot_identity_lookup_does_not_block_event_loop(monkeypatch) -> None:
@@ -3198,7 +3200,11 @@ async def test_voice_chat_snapshot_identity_lookup_does_not_block_event_loop(mon
     monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
 
+    event_loop_thread_id = threading.get_ident()
+    lookup_thread_ids: list[int] = []
+
     def _slow_active_channel(*_args, **_kwargs):
+        lookup_thread_ids.append(threading.get_ident())
         time.sleep(0.2)
         return None
 
@@ -3215,7 +3221,6 @@ async def test_voice_chat_snapshot_identity_lookup_does_not_block_event_loop(mon
     router = RouterService(eventbus=bus, base_dir=Path("."))
     await router.start()
 
-    started = time.perf_counter()
     bus.publish(
         Event(
             type="webio.stream.snapshot.requested",
@@ -3224,10 +3229,9 @@ async def test_voice_chat_snapshot_identity_lookup_does_not_block_event_loop(mon
             payload={"receiver": "voice_chat.messages", "webspace_id": "desktop"},
         )
     )
-    await asyncio.sleep(0.02)
-
-    assert time.perf_counter() - started < 0.1
     assert await bus.wait_for_idle(timeout=1.0)
+    assert lookup_thread_ids
+    assert all(thread_id != event_loop_thread_id for thread_id in lookup_thread_ids)
 
 
 async def test_voice_chat_snapshot_request_recovers_requested_thread_when_cache_has_another_thread(monkeypatch) -> None:

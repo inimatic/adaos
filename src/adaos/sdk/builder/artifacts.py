@@ -24,6 +24,7 @@ _LOCAL_CHECKPOINT_EXCLUDED_PARTS = {
     "build",
     "dist",
     "node_modules",
+    "ui_revisions",
 }
 _LOCAL_CHECKPOINT_EXCLUDED_NAMES = {"builder.draft.json", "prompt_state.json", "prep_result.json"}
 _LOCAL_CHECKPOINT_EXCLUDED_SUFFIXES = {".pyc", ".pyo"}

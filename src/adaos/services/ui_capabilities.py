@@ -19,7 +19,6 @@ _ABI_ROOT = Path(__file__).resolve().parents[1] / "abi"
 _CATALOG_PATH = _ABI_ROOT / "ui.capability_catalog.v1.json"
 _CATALOG_SCHEMA_PATH = _ABI_ROOT / "ui.capability_catalog.v1.schema.json"
 _WEBUI_SCHEMA_PATH = _ABI_ROOT / "webui.v1.schema.json"
-
 _NUMBER_WORDS = {
     "one": 1,
     "two": 2,
@@ -125,7 +124,9 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _digest(value: Any) -> str:
-    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    encoded = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
     return f"sha256:{hashlib.sha256(encoded.encode('utf-8')).hexdigest()}"
 
 
@@ -148,7 +149,12 @@ def _capability_search_text(item: Mapping[str, Any]) -> str:
         item.get("id"),
         item.get("title"),
         item.get("summary"),
-        *(alias for rows in aliases.values() if isinstance(rows, list) for alias in rows),
+        *(
+            alias
+            for rows in aliases.values()
+            if isinstance(rows, list)
+            for alias in rows
+        ),
     ]
     return _normalized_text(" ".join(str(value or "") for value in values))
 
@@ -190,7 +196,9 @@ def ui_capability_catalog() -> dict[str, Any]:
             "summary": "Client-supported WebUI renderer without a curated semantic profile yet.",
             "manifest": {"widget_type": str(widget_type)},
             "responsive": {"contract": "renderer-defined"},
-            "postconditions": ["The widget type resolves to a registered client renderer."],
+            "postconditions": [
+                "The widget type resolves to a registered client renderer."
+            ],
             "semantic_profile": "minimal",
         }
         for widget_type in widget_types
@@ -218,12 +226,18 @@ def search_ui_capabilities(
     if not text:
         raise ValueError("UI capability query is required")
     selected_kinds = {
-        str(item or "").strip().lower() for item in kinds or () if str(item or "").strip()
+        str(item or "").strip().lower()
+        for item in kinds or ()
+        if str(item or "").strip()
     }
     rows: list[tuple[int, int, dict[str, Any]]] = []
     ordinal = 0
     catalog = ui_capability_catalog()
-    for key, kind in (("layouts", "layout"), ("components", "component"), ("recipes", "recipe")):
+    for key, kind in (
+        ("layouts", "layout"),
+        ("components", "component"),
+        ("recipes", "recipe"),
+    ):
         if selected_kinds and kind not in selected_kinds:
             continue
         for item in catalog.get(key) or []:
@@ -319,7 +333,8 @@ def _literal_text_change(request: str) -> dict[str, Any] | None:
         return {
             "target_kind": (
                 "column"
-                if kind in {"колонку", "колонка", "столбец", "дорожку", "column", "lane"}
+                if kind
+                in {"колонку", "колонка", "столбец", "дорожку", "column", "lane"}
                 else "text"
             ),
             "from": old,
@@ -367,9 +382,124 @@ def _contains_shape(actual: Any, expected: Any) -> bool:
     return actual == expected
 
 
+def _prototype_iteration(request: str) -> dict[str, Any] | None:
+    match = re.search(
+        r"(?:prototype\s+(?:phase|iteration)|builder\s+phase)\s*[:#-]?\s*(\d+)\s*/\s*(\d+)",
+        str(request or ""),
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    index = int(match.group(1))
+    total = int(match.group(2))
+    if index < 1 or total < 1 or index > total:
+        return None
+    return {
+        "index": index,
+        "total": total,
+        "completion_required": index == total,
+    }
+
+
+def _recipe_iteration_phase(
+    recipe: Mapping[str, Any], iteration: Mapping[str, Any] | None
+) -> dict[str, Any] | None:
+    if not isinstance(iteration, Mapping):
+        return None
+    workflow = (
+        recipe.get("implementation_workflow")
+        if isinstance(recipe.get("implementation_workflow"), Mapping)
+        else {}
+    )
+    phases = workflow.get("phases") if isinstance(workflow.get("phases"), list) else []
+    index = int(iteration.get("index") or 0)
+    total = int(iteration.get("total") or 0)
+    if len(phases) != total or not 1 <= index <= len(phases):
+        return None
+    phase = phases[index - 1]
+    return copy.deepcopy(dict(phase)) if isinstance(phase, Mapping) else None
+
+
+def _focused_recipe_for_iteration(
+    recipe: Mapping[str, Any], iteration: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    result = copy.deepcopy(dict(recipe))
+    phase = _recipe_iteration_phase(recipe, iteration)
+    if not phase:
+        return result
+    composition = (
+        recipe.get("composition")
+        if isinstance(recipe.get("composition"), Mapping)
+        else {}
+    )
+    composition_keys = {
+        str(value or "").strip()
+        for value in phase.get("composition_keys") or []
+        if str(value or "").strip()
+    }
+    result["composition"] = {
+        key: copy.deepcopy(value)
+        for key, value in composition.items()
+        if key in composition_keys
+    }
+    result["active_implementation_phase"] = phase
+    workflow = (
+        result.get("implementation_workflow")
+        if isinstance(result.get("implementation_workflow"), Mapping)
+        else {}
+    )
+    result["implementation_workflow"] = {
+        "status_vocabulary": workflow.get("status_vocabulary"),
+        "current_phase": phase.get("id"),
+        "current_phase_index": iteration.get("index"),
+        "total_phases": iteration.get("total"),
+        "completion_required": iteration.get("completion_required"),
+        "phases": [
+            {
+                key: copy.deepcopy(item.get(key))
+                for key in ("id", "title", "outcome", "required_postconditions")
+                if item.get(key) is not None
+            }
+            for item in workflow.get("phases") or []
+            if isinstance(item, Mapping)
+        ],
+    }
+    return result
+
+
+def _required_recipe_postconditions(
+    recipe_id: str, iteration: Mapping[str, Any] | None
+) -> set[str] | None:
+    if not isinstance(iteration, Mapping):
+        return None
+    if bool(iteration.get("completion_required")):
+        return None
+    try:
+        recipe = get_ui_capability(recipe_id)
+    except (KeyError, ValueError):
+        return None
+    phase = _recipe_iteration_phase(recipe, iteration)
+    if not phase:
+        return None
+    required: set[str] = set()
+    phase_index = int(iteration.get("index") or 0)
+    workflow = recipe.get("implementation_workflow")
+    phases = workflow.get("phases") if isinstance(workflow, Mapping) else []
+    for item in phases[:phase_index]:
+        if not isinstance(item, Mapping):
+            continue
+        required.update(
+            str(value or "").strip()
+            for value in item.get("required_postconditions") or []
+            if str(value or "").strip()
+        )
+    return required
+
+
 def qualify_ui_request(request: str) -> dict[str, Any]:
     text = _normalized_text(request)
     literal_text_change = _literal_text_change(request)
+    prototype_iteration = _prototype_iteration(request)
     application_manager = "recipe.application_manager" in text or (
         "applications" in text
         and _contains_any(
@@ -454,11 +584,19 @@ def qualify_ui_request(request: str) -> dict[str, Any]:
                 "tabs": ["details", "versions", "operations", "reports"],
             }
         )
+    if prototype_iteration:
+        requirements["prototype_iteration"] = prototype_iteration
     gaps: list[dict[str, Any]] = []
     return {
         "schema": QUALIFICATION_SCHEMA,
         "request_digest": _digest({"request": request}),
-        "surface_kind": "application_manager" if application_manager else "board" if board else "ui" if literal_text_change else "unspecified",
+        "surface_kind": "application_manager"
+        if application_manager
+        else "board"
+        if board
+        else "ui"
+        if literal_text_change
+        else "unspecified",
         "concepts": concepts,
         "requirements": requirements,
         "capability_gaps": gaps,
@@ -484,17 +622,19 @@ def selected_ui_capabilities(request: str, *, limit: int = 8) -> dict[str, Any]:
         if value and value not in selected_ids:
             selected_ids.append(value)
     if (
-        requirements.get("resource_query")
-        or requirements.get("operation_kinds")
+        requirements.get("resource_query") or requirements.get("operation_kinds")
     ) and "recipe.resource_board_workbench" not in selected_ids:
         selected_ids.append("recipe.resource_board_workbench")
     request_text = str(request or "")
     for item_id in index:
-        if re.search(
-            rf"(?<![\w.-]){re.escape(item_id)}(?![\w.-])",
-            request_text,
-            flags=re.IGNORECASE,
-        ) and item_id not in selected_ids:
+        if (
+            re.search(
+                rf"(?<![\w.-]){re.escape(item_id)}(?![\w.-])",
+                request_text,
+                flags=re.IGNORECASE,
+            )
+            and item_id not in selected_ids
+        ):
             selected_ids.append(item_id)
     if not selected_ids and str(request or "").strip():
         selected_ids.extend(
@@ -523,7 +663,17 @@ def selected_ui_capabilities(request: str, *, limit: int = 8) -> dict[str, Any]:
                         break
             if len(expanded_ids) >= 24:
                 break
-    items = [get_ui_capability(item_id) for item_id in expanded_ids]
+    iteration = (
+        requirements.get("prototype_iteration")
+        if isinstance(requirements.get("prototype_iteration"), Mapping)
+        else None
+    )
+    items = [
+        _focused_recipe_for_iteration(get_ui_capability(item_id), iteration)
+        if item_id in root_ids
+        else get_ui_capability(item_id)
+        for item_id in expanded_ids
+    ]
     return {
         "schema": "adaos.ui.capability_selection.v1",
         "status": "present",
@@ -532,24 +682,42 @@ def selected_ui_capabilities(request: str, *, limit: int = 8) -> dict[str, Any]:
         "catalog_digest": catalog["catalog_digest"],
         "qualification": qualification,
         "root_item_ids": root_ids,
-        "dependency_closure": [item_id for item_id in expanded_ids if item_id not in root_ids],
+        "dependency_closure": [
+            item_id for item_id in expanded_ids if item_id not in root_ids
+        ],
         "items": items,
     }
 
 
 def _page_schemas(webui: Mapping[str, Any]) -> list[tuple[str, Mapping[str, Any]]]:
     ui = webui.get("ui") if isinstance(webui.get("ui"), Mapping) else {}
-    application = ui.get("application") if isinstance(ui.get("application"), Mapping) else {}
+    application = (
+        ui.get("application") if isinstance(ui.get("application"), Mapping) else {}
+    )
     result: list[tuple[str, Mapping[str, Any]]] = []
-    desktop = application.get("desktop") if isinstance(application.get("desktop"), Mapping) else {}
-    page = desktop.get("pageSchema") if isinstance(desktop.get("pageSchema"), Mapping) else None
+    desktop = (
+        application.get("desktop")
+        if isinstance(application.get("desktop"), Mapping)
+        else {}
+    )
+    page = (
+        desktop.get("pageSchema")
+        if isinstance(desktop.get("pageSchema"), Mapping)
+        else None
+    )
     if page is not None:
         result.append(("ui.application.desktop.pageSchema", page))
-    modals = application.get("modals") if isinstance(application.get("modals"), Mapping) else {}
+    modals = (
+        application.get("modals")
+        if isinstance(application.get("modals"), Mapping)
+        else {}
+    )
     for modal_id, modal in modals.items():
         if not isinstance(modal, Mapping):
             continue
-        schema = modal.get("schema") if isinstance(modal.get("schema"), Mapping) else None
+        schema = (
+            modal.get("schema") if isinstance(modal.get("schema"), Mapping) else None
+        )
         if schema is not None:
             result.append((f"ui.application.modals.{modal_id}.schema", schema))
     return result
@@ -588,7 +756,14 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
     for schema_path, page in _page_schemas(webui):
         layout = page.get("layout") if isinstance(page.get("layout"), Mapping) else {}
         layout_type = str(layout.get("type") or "").strip()
-        if layout_type not in {"single", "stack", "split", "grid", "custom", "responsive"}:
+        if layout_type not in {
+            "single",
+            "stack",
+            "split",
+            "grid",
+            "custom",
+            "responsive",
+        }:
             findings.append(
                 {
                     "code": "ui.layout.type_unsupported",
@@ -598,7 +773,11 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                 }
             )
         widgets = page.get("widgets") if isinstance(page.get("widgets"), list) else []
-        initial_state = page.get("initialState") if isinstance(page.get("initialState"), Mapping) else {}
+        initial_state = (
+            page.get("initialState")
+            if isinstance(page.get("initialState"), Mapping)
+            else {}
+        )
         for index, widget in enumerate(widgets):
             if not isinstance(widget, Mapping):
                 continue
@@ -614,9 +793,17 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                     }
                 )
                 continue
-            data_source = widget.get("dataSource") if isinstance(widget.get("dataSource"), Mapping) else {}
+            data_source = (
+                widget.get("dataSource")
+                if isinstance(widget.get("dataSource"), Mapping)
+                else {}
+            )
             if str(data_source.get("kind") or "") == "resourceQuery":
-                query = data_source.get("query") if isinstance(data_source.get("query"), Mapping) else {}
+                query = (
+                    data_source.get("query")
+                    if isinstance(data_source.get("query"), Mapping)
+                    else {}
+                )
                 state_refs = sorted(
                     set(
                         re.findall(
@@ -625,7 +812,9 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                         )
                     )
                 )
-                missing_refs = [ref for ref in state_refs if not _has_path(initial_state, ref)]
+                missing_refs = [
+                    ref for ref in state_refs if not _has_path(initial_state, ref)
+                ]
                 if missing_refs:
                     findings.append(
                         {
@@ -640,7 +829,11 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                     )
             if widget_type != "collection.board":
                 continue
-            inputs = widget.get("inputs") if isinstance(widget.get("inputs"), Mapping) else {}
+            inputs = (
+                widget.get("inputs")
+                if isinstance(widget.get("inputs"), Mapping)
+                else {}
+            )
             lanes = inputs.get("lanes") if isinstance(inputs.get("lanes"), list) else []
             lane_ids = [
                 str(item.get("id") or "").strip()
@@ -657,14 +850,19 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                     }
                 )
             lane_key = str(inputs.get("laneKey") or "").strip()
-            rows = data_source.get("value") if str(data_source.get("kind") or "") == "static" else None
+            rows = (
+                data_source.get("value")
+                if str(data_source.get("kind") or "") == "static"
+                else None
+            )
             if isinstance(rows, list) and lane_key and lane_ids:
                 unknown = sorted(
                     {
                         str(_read_path(row, lane_key) or "").strip()
                         for row in rows
                         if isinstance(row, Mapping)
-                        and str(_read_path(row, lane_key) or "").strip() not in set(lane_ids)
+                        and str(_read_path(row, lane_key) or "").strip()
+                        not in set(lane_ids)
                     }
                 )
                 if unknown:
@@ -673,13 +871,19 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                             "code": "ui.board.item_lane_unknown",
                             "severity": "error",
                             "path": f"{widget_path}.dataSource.value",
-                            "message": "Board items reference undeclared lanes: " + ", ".join(unknown),
+                            "message": "Board items reference undeclared lanes: "
+                            + ", ".join(unknown),
                         }
                     )
             if inputs.get("dragDrop") is True:
-                actions = widget.get("actions") if isinstance(widget.get("actions"), list) else []
+                actions = (
+                    widget.get("actions")
+                    if isinstance(widget.get("actions"), list)
+                    else []
+                )
                 if not any(
-                    isinstance(action, Mapping) and str(action.get("on") or "") == "move"
+                    isinstance(action, Mapping)
+                    and str(action.get("on") or "") == "move"
                     for action in actions
                 ):
                     findings.append(
@@ -692,11 +896,18 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                     )
                 resource_type = str(data_source.get("resourceType") or "").strip()
                 for action_index, action in enumerate(actions):
-                    if not isinstance(action, Mapping) or str(action.get("on") or "") != "move":
+                    if (
+                        not isinstance(action, Mapping)
+                        or str(action.get("on") or "") != "move"
+                    ):
                         continue
                     if str(action.get("type") or "") != "resourceOperation":
                         continue
-                    params = action.get("params") if isinstance(action.get("params"), Mapping) else {}
+                    params = (
+                        action.get("params")
+                        if isinstance(action.get("params"), Mapping)
+                        else {}
+                    )
                     if (
                         not resource_type
                         or str(action.get("target") or "") != resource_type
@@ -715,11 +926,20 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                                 ),
                             }
                         )
-            actions = widget.get("actions") if isinstance(widget.get("actions"), list) else []
+            actions = (
+                widget.get("actions") if isinstance(widget.get("actions"), list) else []
+            )
             for action_index, action in enumerate(actions):
-                if not isinstance(action, Mapping) or str(action.get("type") or "") != "resourceOperation":
+                if (
+                    not isinstance(action, Mapping)
+                    or str(action.get("type") or "") != "resourceOperation"
+                ):
                     continue
-                params = action.get("params") if isinstance(action.get("params"), Mapping) else {}
+                params = (
+                    action.get("params")
+                    if isinstance(action.get("params"), Mapping)
+                    else {}
+                )
                 payload = params.get("payload")
                 if isinstance(payload, Mapping) and payload.get("__noop") is True:
                     findings.append(
@@ -791,6 +1011,30 @@ def evaluate_ui_request(
             }
         )
     if requirements.get("application_manager"):
+        application_recipe = next(
+            (
+                item
+                for item in ui_capability_catalog().get("recipes") or []
+                if isinstance(item, Mapping)
+                and str(item.get("id") or "") == "recipe.application_manager"
+            ),
+            {},
+        )
+        application_composition = (
+            application_recipe.get("composition")
+            if isinstance(application_recipe.get("composition"), Mapping)
+            else {}
+        )
+        localization_contract = (
+            application_composition.get("localization")
+            if isinstance(application_composition.get("localization"), Mapping)
+            else {}
+        )
+        localization_glossary = {
+            str(source): str(target)
+            for source, target in (localization_contract.get("glossary") or {}).items()
+            if str(source).strip() and str(target).strip()
+        }
         pages = [page for _, page in _page_schemas(webui)]
         widgets = [
             widget
@@ -863,10 +1107,13 @@ def evaluate_ui_request(
                 )
         missing_localizations: list[str] = []
         invalid_localizations: list[dict[str, Any]] = []
+        locale_value_mismatches: list[dict[str, str]] = []
 
         def localized_text(spec: Any, locale: str) -> str:
             if isinstance(spec, str):
-                return resolved_locale_dictionaries[locale].get(spec.strip(), "").strip()
+                return (
+                    resolved_locale_dictionaries[locale].get(spec.strip(), "").strip()
+                )
             if not isinstance(spec, Mapping):
                 return ""
             translations = spec.get("translations") or spec.get("locales")
@@ -920,8 +1167,10 @@ def evaluate_ui_request(
                         )
                     else:
                         continue
-                    if not fallback or fallback.startswith("$state.") or (
-                        fallback.startswith("{") and fallback.endswith("}")
+                    if (
+                        not fallback
+                        or fallback.startswith("$state.")
+                        or (fallback.startswith("{") and fallback.endswith("}"))
                     ):
                         continue
                     sibling = value.get(f"{key_text}_i18n")
@@ -935,9 +1184,7 @@ def evaluate_ui_request(
                         for locale in ("en", "ru")
                     }
                     missing_locales = [
-                        locale
-                        for locale in ("en", "ru")
-                        if not localized[locale]
+                        locale for locale in ("en", "ru") if not localized[locale]
                     ]
                     english = localized["en"]
                     if not key_value or missing_locales or english != fallback:
@@ -947,6 +1194,17 @@ def evaluate_ui_request(
                                 "key": key_value,
                                 "missingLocales": missing_locales,
                                 "englishMatchesFallback": english == fallback,
+                            }
+                        )
+                    expected_russian = localization_glossary.get(fallback)
+                    if expected_russian and localized["ru"] != expected_russian:
+                        locale_value_mismatches.append(
+                            {
+                                "path": location,
+                                "key": key_value,
+                                "locale": "ru",
+                                "expected": expected_russian,
+                                "actual": localized["ru"],
                             }
                         )
             elif isinstance(value, list):
@@ -959,6 +1217,32 @@ def evaluate_ui_request(
 
         for index, page in enumerate(pages):
             inspect_localizations(page, path=("pages", str(index)))
+
+        placeholder_markers = {"placeholder", "todo", "tbd", "translate me"}
+        invalid_locale_entries = [
+            {
+                "key": key,
+                "locales": [
+                    locale
+                    for locale in ("en", "ru")
+                    if str(resolved_locale_dictionaries[locale].get(key) or "")
+                    .strip()
+                    .casefold()
+                    in placeholder_markers
+                ],
+            }
+            for key in sorted(
+                set(resolved_locale_dictionaries["en"])
+                & set(resolved_locale_dictionaries["ru"])
+            )
+            if any(
+                str(resolved_locale_dictionaries[locale].get(key) or "")
+                .strip()
+                .casefold()
+                in placeholder_markers
+                for locale in ("en", "ru")
+            )
+        ]
 
         expected_value_prefixes = {
             "application.lifecycle": "applications.lifecycle.",
@@ -1010,7 +1294,9 @@ def evaluate_ui_request(
                 for value_index, field in enumerate(values):
                     if not isinstance(field, Mapping):
                         continue
-                    path_value = str(field.get("path") or field.get("key") or "").strip()
+                    path_value = str(
+                        field.get("path") or field.get("key") or ""
+                    ).strip()
                     expected_prefix = expected_value_prefixes.get(path_value)
                     if not expected_prefix:
                         continue
@@ -1033,6 +1319,8 @@ def evaluate_ui_request(
                 "ok": (
                     not missing_localizations
                     and not invalid_localizations
+                    and not locale_value_mismatches
+                    and not invalid_locale_entries
                     and not missing_value_prefixes
                 ),
                 "expected": {
@@ -1040,11 +1328,15 @@ def evaluate_ui_request(
                     "fallbackLocale": "en",
                     "stableKeys": True,
                     "prototypeDictionariesOrInlineTranslations": True,
+                    "canonicalGlossary": True,
+                    "noPlaceholderEntries": True,
                     "canonicalValuePrefixes": True,
                 },
                 "actual": {
                     "missing": sorted(missing_localizations),
                     "invalid": invalid_localizations,
+                    "localeValueMismatches": locale_value_mismatches,
+                    "invalidLocaleEntries": invalid_locale_entries,
                     "missingValuePrefixes": missing_value_prefixes,
                 },
             }
@@ -1124,8 +1416,7 @@ def evaluate_ui_request(
             for source in mcp_sources
             if source.get("dryRun") is True
             and str(source.get("toolId") or "") == "applications.list"
-            and str(source.get("resultPath") or "")
-            == "response.result.applications"
+            and str(source.get("resultPath") or "") == "response.result.applications"
         }
         expected_catalog_arguments = {
             json.dumps(
@@ -1147,11 +1438,7 @@ def evaluate_ui_request(
                 "actual": sorted(exact_reads),
             }
         )
-        actions = [
-            action
-            for widget in widgets
-            for action in widget_actions(widget)
-        ]
+        actions = [action for widget in widgets for action in widget_actions(widget)]
         plan_actions = [
             action
             for action in actions
@@ -1191,7 +1478,11 @@ def evaluate_ui_request(
         }
         valid_plan_kinds: set[str] = set()
         for action in plan_actions:
-            params = action.get("params") if isinstance(action.get("params"), Mapping) else {}
+            params = (
+                action.get("params")
+                if isinstance(action.get("params"), Mapping)
+                else {}
+            )
             kind = str(params.get("kind") or "")
             expected = required_plan_params.get(kind)
             if not expected:
@@ -1239,7 +1530,9 @@ def evaluate_ui_request(
                 "id": "applications.reviewed_plan_apply",
                 "ok": (
                     required_plan_kinds == valid_plan_kinds
-                    and len(valid_apply_actions) == len(apply_actions) == len(required_plan_kinds)
+                    and len(valid_apply_actions)
+                    == len(apply_actions)
+                    == len(required_plan_kinds)
                     and valid_apply_kinds == required_plan_kinds
                 ),
                 "expected": {
@@ -1349,7 +1642,11 @@ def evaluate_ui_request(
         valid_confirmation_kinds: set[str] = set()
         cancel_review = False
         for widget in apply_widgets:
-            inputs = widget.get("inputs") if isinstance(widget.get("inputs"), Mapping) else {}
+            inputs = (
+                widget.get("inputs")
+                if isinstance(widget.get("inputs"), Mapping)
+                else {}
+            )
             buttons = {
                 str(button.get("id") or ""): str(button.get("label") or "")
                 for button in inputs.get("buttons", [])
@@ -1445,7 +1742,9 @@ def evaluate_ui_request(
                 page.get("initialState", {}).get("prototypeFixtures")
                 for page in pages
                 if isinstance(page.get("initialState"), Mapping)
-                and isinstance(page.get("initialState", {}).get("prototypeFixtures"), Mapping)
+                and isinstance(
+                    page.get("initialState", {}).get("prototypeFixtures"), Mapping
+                )
             ),
             {},
         )
@@ -1526,7 +1825,9 @@ def evaluate_ui_request(
                     and development.get("exists") is True
                     and isinstance(application, Mapping)
                 ):
-                    application_id = str(application.get("application_id") or "").strip()
+                    application_id = str(
+                        application.get("application_id") or ""
+                    ).strip()
                     if application_id:
                         development_examples[application_id] = value
                 for nested in value.values():
@@ -1547,11 +1848,14 @@ def evaluate_ui_request(
             if isinstance(value, Mapping):
                 if value.get("installed") is True:
                     application = value.get("application")
-                    application_id = str(
-                        application.get("application_id")
-                        if isinstance(application, Mapping)
-                        else ""
-                    ).strip() or "<unknown>"
+                    application_id = (
+                        str(
+                            application.get("application_id")
+                            if isinstance(application, Mapping)
+                            else ""
+                        ).strip()
+                        or "<unknown>"
+                    )
                     subscription = (
                         value.get("subscription")
                         if isinstance(value.get("subscription"), Mapping)
@@ -1592,7 +1896,9 @@ def evaluate_ui_request(
             if isinstance(resolved, Mapping):
                 application = resolved.get("application")
                 if isinstance(application, Mapping):
-                    application_id = str(application.get("application_id") or "").strip()
+                    application_id = str(
+                        application.get("application_id") or ""
+                    ).strip()
                     if application_id:
                         target.add(application_id)
             elif isinstance(resolved, list):
@@ -1605,9 +1911,13 @@ def evaluate_ui_request(
             if not isinstance(profile, Mapping):
                 continue
             collect_application_ids(profile.get("result"), selectable_application_ids)
-            for case in profile.get("cases") if isinstance(profile.get("cases"), list) else []:
+            for case in (
+                profile.get("cases") if isinstance(profile.get("cases"), list) else []
+            ):
                 if isinstance(case, Mapping):
-                    collect_application_ids(case.get("result"), selectable_application_ids)
+                    collect_application_ids(
+                        case.get("result"), selectable_application_ids
+                    )
 
         application_fixture = prototype_fixtures.get("application")
         covered_application_ids: set[str] = set()
@@ -1618,7 +1928,9 @@ def evaluate_ui_request(
             and isinstance(application_fixture.get("cases"), list)
             else []
         ):
-            if not isinstance(case, Mapping) or not isinstance(case.get("when"), Mapping):
+            if not isinstance(case, Mapping) or not isinstance(
+                case.get("when"), Mapping
+            ):
                 continue
             expected_id = str(case.get("when", {}).get("application_id") or "").strip()
             if not expected_id:
@@ -1635,7 +1947,10 @@ def evaluate_ui_request(
                 covered_application_ids.add(expected_id)
             elif expected_id in selectable_application_ids:
                 mismatched_application_cases.append(
-                    {"expectedApplicationId": expected_id, "actualApplicationId": actual_id}
+                    {
+                        "expectedApplicationId": expected_id,
+                        "actualApplicationId": actual_id,
+                    }
                 )
         uncovered_application_ids = selectable_application_ids - covered_application_ids
         required_development_states = {
@@ -1663,7 +1978,9 @@ def evaluate_ui_request(
             ).strip()
             and all(
                 str(
-                    ((value.get("local_development") or {}).get("builder") or {}).get(key)
+                    ((value.get("local_development") or {}).get("builder") or {}).get(
+                        key
+                    )
                     or ""
                 ).strip()
                 for key in (
@@ -1716,46 +2033,79 @@ def evaluate_ui_request(
                 case.get("result", {}).get("operation", {}).get("plan_digest") or ""
             ).strip()
             and str(
-                case.get("result", {})
-                .get("operation", {})
-                .get("application_id")
-                or ""
+                case.get("result", {}).get("operation", {}).get("application_id") or ""
             ).strip()
             and str(
-                (
-                    case.get("result", {})
-                    .get("operation", {})
-                    .get("plan", {})
-                    or {}
-                ).get("review_summary")
+                (case.get("result", {}).get("operation", {}).get("plan", {}) or {}).get(
+                    "review_summary"
+                )
                 or ""
             ).strip()
             and isinstance(
-                (
-                    case.get("result", {})
-                    .get("operation", {})
-                    .get("plan", {})
-                    or {}
-                ).get("permissions"),
+                (case.get("result", {}).get("operation", {}).get("plan", {}) or {}).get(
+                    "permissions"
+                ),
                 list,
             )
             and bool(
-                (
-                    case.get("result", {})
-                    .get("operation", {})
-                    .get("plan", {})
-                    or {}
-                ).get("permissions")
+                (case.get("result", {}).get("operation", {}).get("plan", {}) or {}).get(
+                    "permissions"
+                )
             )
         }
+        invalid_plan_fixture_kinds = sorted(
+            required_plan_kinds - valid_plan_fixture_kinds
+        )
+        plan_fixture_case_issues: list[dict[str, Any]] = []
+        for kind in invalid_plan_fixture_kinds:
+            matching_case = next(
+                (
+                    case
+                    for case in plan_fixture_cases
+                    if isinstance(case, Mapping)
+                    and isinstance(case.get("when"), Mapping)
+                    and str(case.get("when", {}).get("kind") or "") == kind
+                ),
+                None,
+            )
+            if not isinstance(matching_case, Mapping):
+                plan_fixture_case_issues.append(
+                    {"kind": kind, "missing": ["case"]}
+                )
+                continue
+            operation = (
+                matching_case.get("result", {}).get("operation", {})
+                if isinstance(matching_case.get("result"), Mapping)
+                and isinstance(matching_case.get("result", {}).get("operation"), Mapping)
+                else {}
+            )
+            plan = (
+                operation.get("plan")
+                if isinstance(operation.get("plan"), Mapping)
+                else {}
+            )
+            missing = [
+                name
+                for name, present in (
+                    ("matching operation.kind", operation.get("kind") == kind),
+                    ("operation_id", bool(str(operation.get("operation_id") or "").strip())),
+                    ("plan_digest", bool(str(operation.get("plan_digest") or "").strip())),
+                    ("application_id", bool(str(operation.get("application_id") or "").strip())),
+                    ("plan.review_summary", bool(str(plan.get("review_summary") or "").strip())),
+                    (
+                        "non-empty plan.permissions",
+                        isinstance(plan.get("permissions"), list)
+                        and bool(plan.get("permissions")),
+                    ),
+                )
+                if not present
+            ]
+            plan_fixture_case_issues.append({"kind": kind, "missing": missing})
         representative_plan_permissions = any(
             bool(
-                (
-                    case.get("result", {})
-                    .get("operation", {})
-                    .get("plan", {})
-                    or {}
-                ).get("permissions")
+                (case.get("result", {}).get("operation", {}).get("plan", {}) or {}).get(
+                    "permissions"
+                )
             )
             for case in plan_fixture_cases
             if isinstance(case, Mapping)
@@ -1765,13 +2115,18 @@ def evaluate_ui_request(
                 "id": "applications.prototype_fixtures",
                 "ok": (
                     required_fixture_profiles.issubset(executable_fixture_profiles)
-                    and (required_fixture_refs - {
-                        "$state.prototypeFixtures.plan",
-                        "$state.prototypeFixtures.apply",
-                    }).issubset(source_fixture_refs)
+                    and (
+                        required_fixture_refs
+                        - {
+                            "$state.prototypeFixtures.plan",
+                            "$state.prototypeFixtures.apply",
+                        }
+                    ).issubset(source_fixture_refs)
                     and "$state.prototypeFixtures.plan" in action_fixture_refs
                     and "$state.prototypeFixtures.apply" in action_fixture_refs
-                    and required_representative_states.issubset(representative_state_ids)
+                    and required_representative_states.issubset(
+                        representative_state_ids
+                    )
                     and len(valid_development_examples) >= 3
                     and required_development_states.issubset(actual_development_states)
                     and not source_fixture_diagnostics
@@ -1811,7 +2166,9 @@ def evaluate_ui_request(
                     "developmentExamples": sorted(valid_development_examples),
                     "developmentStates": sorted(actual_development_states),
                     "invalidSourceFixtures": source_fixture_diagnostics,
-                    "invalidSelectableFixtureRefs": sorted(invalid_selectable_fixture_refs),
+                    "invalidSelectableFixtureRefs": sorted(
+                        invalid_selectable_fixture_refs
+                    ),
                     "selectableApplicationIds": sorted(selectable_application_ids),
                     "coveredApplicationIds": sorted(covered_application_ids),
                     "uncoveredApplicationIds": sorted(uncovered_application_ids),
@@ -1820,15 +2177,28 @@ def evaluate_ui_request(
                         non_default_installed_fixtures
                     ),
                     "planKinds": sorted(valid_plan_fixture_kinds),
+                    "invalidPlanCases": plan_fixture_case_issues,
                     "representativePlanPermissions": representative_plan_permissions,
+                    "missingRequirements": [
+                        "make every required plan fixture case valid; fix exactly these cases: "
+                        + json.dumps(plan_fixture_case_issues, ensure_ascii=False)
+                    ]
+                    if plan_fixture_case_issues
+                    else [],
                 },
             }
         )
         tab_ids = set(requirements.get("tabs") or [])
         tab_controls = []
         for widget in widgets:
-            inputs = widget.get("inputs") if isinstance(widget.get("inputs"), Mapping) else {}
-            buttons = inputs.get("buttons") if isinstance(inputs.get("buttons"), list) else []
+            inputs = (
+                widget.get("inputs")
+                if isinstance(widget.get("inputs"), Mapping)
+                else {}
+            )
+            buttons = (
+                inputs.get("buttons") if isinstance(inputs.get("buttons"), list) else []
+            )
             ids = {
                 str(button.get("id") or "").strip()
                 for button in buttons
@@ -1886,8 +2256,16 @@ def evaluate_ui_request(
                 "subtitleKey": "application.display.summary",
                 "previewKey": "application.publisher.display_name",
                 "meta": [
-                    {"key": "local_development.phase", "label": "Phase", "kind": "badge"},
-                    {"key": "local_development.status", "label": "Status", "kind": "badge"},
+                    {
+                        "key": "local_development.phase",
+                        "label": "Phase",
+                        "kind": "badge",
+                    },
+                    {
+                        "key": "local_development.status",
+                        "label": "Status",
+                        "kind": "badge",
+                    },
                     {
                         "key": "local_development.publication_status",
                         "label": "Publication",
@@ -1936,7 +2314,8 @@ def evaluate_ui_request(
                 if not any(
                     action.get("on") == "select"
                     and action.get("type") == "updateState"
-                    and action.get("params") == {
+                    and action.get("params")
+                    == {
                         "selectedApplicationId": "$event.application.application_id",
                         "selectedReleaseDigest": "",
                         "reviewedPlan": {},
@@ -1968,8 +2347,7 @@ def evaluate_ui_request(
             and (widget.get("inputs") or {}).get("variant") == "segmented"
             and (widget.get("inputs") or {}).get("size") == "small"
             and (widget.get("inputs") or {}).get("stretch") is True
-            and (widget.get("inputs") or {}).get("selectedStateKey")
-            == "catalogSection"
+            and (widget.get("inputs") or {}).get("selectedStateKey") == "catalogSection"
             and {
                 str(button.get("id") or "")
                 for button in (widget.get("inputs") or {}).get("buttons") or []
@@ -1979,7 +2357,9 @@ def evaluate_ui_request(
             and any(
                 action.get("on") == "click"
                 and action.get("type") == "updateState"
-                and action.get("params") == {"catalogSection": "$event.id"}
+                and _contains_shape(
+                    action.get("params"), {"catalogSection": "$event.id"}
+                )
                 for action in widget_actions(widget)
             )
         ]
@@ -2018,21 +2398,29 @@ def evaluate_ui_request(
                 "path": "subscription.update_policy",
                 "default": "auto_compatible",
             },
-            "effectiveReleaseDigest": {"path": "effective_release.release_digest", "default": ""},
+            "effectiveReleaseDigest": {
+                "path": "effective_release.release_digest",
+                "default": "",
+            },
             "localDevelopmentAvailable": {
-                "path": "local_development.exists", "default": False,
+                "path": "local_development.exists",
+                "default": False,
             },
             "developmentObjectType": {
-                "path": "local_development.builder.selected_object_type", "default": "",
+                "path": "local_development.builder.selected_object_type",
+                "default": "",
             },
             "developmentObjectId": {
-                "path": "local_development.builder.selected_object_id", "default": "",
+                "path": "local_development.builder.selected_object_id",
+                "default": "",
             },
             "developmentSourceWebspaceId": {
-                "path": "local_development.builder.source_webspace_id", "default": "",
+                "path": "local_development.builder.source_webspace_id",
+                "default": "",
             },
             "developmentPreviewWebspaceId": {
-                "path": "local_development.builder.preview_webspace_id", "default": "",
+                "path": "local_development.builder.preview_webspace_id",
+                "default": "",
             },
         }
         application_detail_sources = [
@@ -2083,14 +2471,22 @@ def evaluate_ui_request(
             "Installation": [
                 {"label": "Installed version", "path": "installed_release.version"},
                 {"label": "Status", "path": "installation.status"},
-                {"label": "Updated", "path": "installation.updated_at", "format": "datetime"},
+                {
+                    "label": "Updated",
+                    "path": "installation.updated_at",
+                    "format": "datetime",
+                },
                 {"label": "Update track", "path": "subscription.update_track"},
                 {"label": "Update policy", "path": "subscription.update_policy"},
             ],
             "Marketplace": [
                 {"label": "Stable version", "path": "marketplace_release.version"},
                 {"label": "Pre-release version", "path": "prerelease_release.version"},
-                {"label": "Last released", "path": "marketplace_release.published_at", "format": "datetime"},
+                {
+                    "label": "Last released",
+                    "path": "marketplace_release.published_at",
+                    "format": "datetime",
+                },
                 {"label": "Visibility", "path": "application.visibility"},
             ],
             "Categories": [
@@ -2099,9 +2495,16 @@ def evaluate_ui_request(
             "My development": [
                 {"label": "Phase", "path": "local_development.phase"},
                 {"label": "Status", "path": "local_development.status"},
-                {"label": "Publication", "path": "local_development.publication_status"},
+                {
+                    "label": "Publication",
+                    "path": "local_development.publication_status",
+                },
                 {"label": "Revision", "path": "local_development.revision"},
-                {"label": "Updated", "path": "local_development.updated_at", "format": "datetime"},
+                {
+                    "label": "Updated",
+                    "path": "local_development.updated_at",
+                    "format": "datetime",
+                },
             ],
         }
         expected_detail_roles = {
@@ -2125,9 +2528,12 @@ def evaluate_ui_request(
                 == expected_detail_roles[title]
                 and (
                     title not in expected_detail_empty_titles
-                    or bool(str((widget.get("inputs") or {}).get("emptyText") or "").strip())
+                    or bool(
+                        str((widget.get("inputs") or {}).get("emptyText") or "").strip()
+                    )
                 )
-                and "$state.activeTab == 'details'" in str(widget.get("visibleIf") or "")
+                and "$state.activeTab == 'details'"
+                in str(widget.get("visibleIf") or "")
                 and "$state.selectedApplicationId" in str(widget.get("visibleIf") or "")
                 and (
                     title != "My development"
@@ -2141,13 +2547,15 @@ def evaluate_ui_request(
             widget
             for widget in widgets
             if widget.get("type") == "ui.list"
-            and (widget.get("dataSource") or {}).get("toolId") == "applications.list_releases"
+            and (widget.get("dataSource") or {}).get("toolId")
+            == "applications.list_releases"
             and (widget.get("inputs") or {}).get("itemIdKey") == "release_digest"
             and (widget.get("inputs") or {}).get("titleKey") == "version"
             and any(
                 action.get("on") == "select"
                 and action.get("type") == "updateState"
-                and action.get("params") == {
+                and action.get("params")
+                == {
                     "selectedReleaseDigest": "$event.release_digest",
                     "reviewedPlan": {},
                 }
@@ -2189,7 +2597,8 @@ def evaluate_ui_request(
             widget
             for widget in widgets
             if widget.get("type") == "ui.list"
-            and (widget.get("dataSource") or {}).get("toolId") == "applications.list_development_reports"
+            and (widget.get("dataSource") or {}).get("toolId")
+            == "applications.list_development_reports"
             and all(
                 _contains_shape((widget.get("inputs") or {}).get(key), value)
                 for key, value in expected_report_inputs.items()
@@ -2248,12 +2657,13 @@ def evaluate_ui_request(
             widget
             for widget in widgets
             if widget.get("type") == "ui.actions"
-            and set(expected_lifecycle_icons).issubset({
-                str(button.get("id") or "")
-                for button in (widget.get("inputs") or {}).get("buttons") or []
-                if isinstance(button, Mapping)
-            })
-            and any(action in plan_actions for action in widget_actions(widget))
+            and set(expected_lifecycle_icons).issubset(
+                {
+                    str(button.get("id") or "")
+                    for button in (widget.get("inputs") or {}).get("buttons") or []
+                    if isinstance(button, Mapping)
+                }
+            )
             and (widget.get("inputs") or {}).get("variant") == "toolbar"
             and all(
                 (lifecycle_buttons.get(button_id) or {}).get("icon") == icon
@@ -2265,17 +2675,28 @@ def evaluate_ui_request(
             len(lifecycle_widgets) == 1
             and len(application_headers) == 1
             and len(detail_sections) == len(expected_detail_sections)
-            and widgets.index(application_headers[0]) < widgets.index(lifecycle_widgets[0])
+            and widgets.index(lifecycle_widgets[0])
+            == widgets.index(application_headers[0]) + 1
             and all(
                 widgets.index(lifecycle_widgets[0]) < widgets.index(section)
-                for section in detail_sections.values()
+                for section in [
+                    *tab_controls,
+                    *release_selectors,
+                    *operation_lists,
+                    *reports,
+                    *detail_sections.values(),
+                ]
             )
         )
+        page_schemas = list(_page_schemas(webui))
         page_initial_states = [
-            page.get("initialState") if isinstance(page.get("initialState"), Mapping) else {}
-            for _, page in _page_schemas(webui)
+            page.get("initialState")
+            if isinstance(page.get("initialState"), Mapping)
+            else {}
+            for _, page in page_schemas
         ]
-        cas_defaults = any(
+        shadow_state_pages = [path for path, page in page_schemas if "state" in page]
+        exact_initial_state = any(
             state.get("installationRevision") == 0
             and state.get("subscriptionRevision") == 0
             and state.get("selectedReleaseDigest") == ""
@@ -2291,6 +2712,7 @@ def evaluate_ui_request(
             and state.get("reviewedPlan") == {}
             for state in page_initial_states
         )
+        cas_defaults = exact_initial_state and not shadow_state_pages
         selector_contracts = {
             "removeDataPolicy": {"retain", "delete", "snapshot_then_delete"},
         }
@@ -2298,7 +2720,11 @@ def evaluate_ui_request(
         for widget in widgets:
             if widget.get("type") != "input.selector":
                 continue
-            inputs = widget.get("inputs") if isinstance(widget.get("inputs"), Mapping) else {}
+            inputs = (
+                widget.get("inputs")
+                if isinstance(widget.get("inputs"), Mapping)
+                else {}
+            )
             option_values = {
                 str(option.get("value", option.get("id")) or "")
                 for option in inputs.get("options") or []
@@ -2314,7 +2740,8 @@ def evaluate_ui_request(
                 if any(
                     action.get("on") == "change"
                     and action.get("type") == "updateState"
-                    and action.get("params") == {
+                    and action.get("params")
+                    == {
                         state_key: "$event.value",
                         "reviewedPlan": {},
                     }
@@ -2372,11 +2799,14 @@ def evaluate_ui_request(
             and (widget.get("dataSource") or {}).get("kind") == "static"
             and (widget.get("dataSource") or {}).get("value") == "$state.installedOnly"
             and (widget.get("inputs") or {}).get("label") == "Installed only"
-            and "$state.catalogSection == 'applications'" in str(widget.get("visibleIf") or "")
+            and "$state.catalogSection == 'applications'"
+            in str(widget.get("visibleIf") or "")
             and any(
                 action.get("on") == "change"
                 and action.get("type") == "updateState"
-                and action.get("params") == {"installedOnly": "$event.checked"}
+                and _contains_shape(
+                    action.get("params"), {"installedOnly": "$event.checked"}
+                )
                 for action in widget_actions(widget)
             )
         ]
@@ -2412,64 +2842,95 @@ def evaluate_ui_request(
             if widget.get("type") == "item.details"
             and (widget.get("dataSource") or {}).get("kind") == "static"
             and (widget.get("dataSource") or {}).get("value") == "$state.reviewedPlan"
-            and "$state.reviewedPlan.operation.operation_id" in str(widget.get("visibleIf") or "")
+            and "$state.reviewedPlan.operation.operation_id"
+            in str(widget.get("visibleIf") or "")
             and "$state.reviewedPlan.status" in str(widget.get("visibleIf") or "")
+        ]
+        detail_state_binding_ok = bool(
+            len(application_details) == 1
+            and release_selectors
+            and operation_lists
+            and reports
+            and len(installed_filters) == 1
+        )
+        lifecycle_controls_ok = bool(
+            detail_state_binding_ok
+            and lifecycle_before_details
+            and "$state.applicationRemovable" in remove_visibility
+            and "$state.selectedReleaseDigest" in install_visibility
+            and "$state.effectiveReleaseDigest" in install_visibility
+            and "$state.updateAvailable" in update_visibility
+            and len(lifecycle_widgets) == 1
+            and cas_defaults
+            and set(selector_contracts) == valid_selectors
+            and set(expected_toggles) == valid_toggles
+            and len(builder_actions) == 1
+            and len(preview_actions) == 1
+            and "$state.localDevelopmentAvailable" in builder_visibility
+            and "$state.developmentObjectId" in builder_visibility
+            and "$state.localDevelopmentAvailable" in preview_visibility
+            and "$state.developmentPreviewWebspaceId" in preview_visibility
+            and "$state.developmentObjectId" in preview_visibility
+        )
+        lifecycle_missing_requirements = [
+            detail
+            for ok, detail in (
+                (
+                    detail_state_binding_ok,
+                    "preserve the qualified selected detail, release, operation, report, and Installed-only bindings",
+                ),
+                (
+                    lifecycle_before_details,
+                    "place the lifecycle toolbar immediately after the Application header and before tabs or detail content",
+                ),
+                (
+                    exact_initial_state,
+                    "merge every exact recipe.initial_state lifecycle and CAS default into page initialState",
+                ),
+                (
+                    not shadow_state_pages,
+                    "remove pageSchema.state; runtime defaults have one authority at pageSchema.initialState",
+                ),
+                (
+                    len(lifecycle_widgets) == 1,
+                    "create one toolbar with all six recipe.canonical_commands buttons and their exact icons",
+                ),
+                (
+                    set(selector_contracts) == valid_selectors,
+                    "add the exact removeDataPolicy selector and state update",
+                ),
+                (
+                    set(expected_toggles) == valid_toggles,
+                    "add the exact prereleaseFollowing and automaticUpdates toggles and state updates",
+                ),
+                (
+                    len(builder_actions) == 1 and len(preview_actions) == 1,
+                    "add exact Preview and Open in Builder actions for the existing local development target",
+                ),
+                (
+                    "$state.applicationRemovable" in remove_visibility,
+                    "guard Uninstall with applicationRemovable",
+                ),
+                (
+                    "$state.selectedReleaseDigest" in install_visibility
+                    and "$state.effectiveReleaseDigest" in install_visibility
+                    and "$state.updateAvailable" in update_visibility,
+                    "guard Install and Update with effective release and update state",
+                ),
+            )
+            if not ok
         ]
         postconditions.append(
             {
-                "id": "applications.concise_operable_detail",
-                "ok": bool(
-                    len(application_headers) == 1
-                    and len(detail_sections) == len(expected_detail_sections)
-                    and lifecycle_before_details
-                    and required_empty_state_tools.issubset(empty_state_tools)
-                ),
-                "expected": "one visible Application header, main Details, and unframed Installation, Marketplace, Categories, and My development metadata sections",
-                "actual": {
-                    "headers": len(application_headers),
-                    "detailSections": sorted(detail_sections),
-                    "lifecycleBeforeDetails": lifecycle_before_details,
-                    "emptyStateTools": sorted(empty_state_tools & required_empty_state_tools),
-                },
-            }
-        )
-        postconditions.append(
-            {
-                "id": "applications.detail_lifecycle_binding",
-                "ok": bool(
-                    application_details
-                    and release_selectors
-                    and operation_lists
-                    and reports
-                    and "$state.applicationRemovable" in remove_visibility
-                    and "$state.selectedReleaseDigest" in install_visibility
-                    and "$state.effectiveReleaseDigest" in install_visibility
-                    and "$state.updateAvailable" in update_visibility
-                    and len(lifecycle_widgets) == 1
-                    and cas_defaults
-                    and set(selector_contracts) == valid_selectors
-                    and set(expected_toggles) == valid_toggles
-                    and len(installed_filters) == 1
-                    and len(builder_actions) == 1
-                    and len(preview_actions) == 1
-                    and "$state.localDevelopmentAvailable" in builder_visibility
-                    and "$state.developmentObjectId" in builder_visibility
-                    and "$state.localDevelopmentAvailable" in preview_visibility
-                    and "$state.developmentPreviewWebspaceId" in preview_visibility
-                    and "$state.developmentObjectId" in preview_visibility
-                    and len(apply_widgets) == 1
-                    and "$state.reviewedPlan.operation.operation_id"
-                    in review_action_visibility
-                    and "$state.reviewedPlan.operation.plan_digest"
-                    in review_action_visibility
-                    and len(review_surfaces) == 1
-                ),
-                "expected": "selected detail binds exact lifecycle state, reviewed toggles, and existing local development",
+                "id": "applications.detail_state_binding",
+                "ok": detail_state_binding_ok,
+                "expected": "one selected applications.show state resolver plus operable release, operation, report, and Installed-only controls",
                 "actual": {
                     "details": len(application_details),
                     "detailSources": len(application_detail_sources),
                     "detailVisibleOnSelection": sum(
-                        "$state.selectedApplicationId" in str(widget.get("visibleIf") or "")
+                        "$state.selectedApplicationId"
+                        in str(widget.get("visibleIf") or "")
                         for widget in application_detail_sources
                     ),
                     "detailLifecycleBindings": sum(
@@ -2486,12 +2947,121 @@ def evaluate_ui_request(
                     "releaseSelectors": len(release_selectors),
                     "operationLists": len(operation_lists),
                     "filteredReports": len(reports),
-                    "removeProtected": "$state.applicationRemovable" in remove_visibility,
+                    "installedFilters": len(installed_filters),
+                },
+            }
+        )
+        postconditions.append(
+            {
+                "id": "applications.concise_operable_detail",
+                "ok": bool(
+                    len(application_headers) == 1
+                    and len(detail_sections) == len(expected_detail_sections)
+                    and required_empty_state_tools.issubset(empty_state_tools)
+                ),
+                "expected": "one visible Application header, main Details, and unframed Installation, Marketplace, Categories, and My development metadata sections",
+                "actual": {
+                    "headers": len(application_headers),
+                    "detailSections": sorted(detail_sections),
+                    "lifecycleBeforeDetails": lifecycle_before_details,
+                    "emptyStateTools": sorted(
+                        empty_state_tools & required_empty_state_tools
+                    ),
+                },
+            }
+        )
+        postconditions.append(
+            {
+                "id": "applications.lifecycle_controls",
+                "ok": lifecycle_controls_ok,
+                "expected": {
+                    "lifecycleBeforeDetails": True,
+                    "casDefaults": True,
+                    "noShadowState": True,
+                    "sixCommandToolbar": True,
+                    "reviewedSettings": True,
+                    "existingDevelopmentActions": True,
+                    "protectedRemoveGuard": True,
+                    "releaseGuards": True,
+                },
+                "actual": {
+                    "lifecycleBeforeDetails": lifecycle_before_details,
+                    "casDefaults": cas_defaults,
+                    "shadowStatePages": shadow_state_pages,
+                    "selectedLifecycleSurface": len(lifecycle_widgets),
+                    "lifecycleSelectors": sorted(valid_selectors),
+                    "lifecycleToggles": sorted(valid_toggles),
+                    "builderActions": len(builder_actions),
+                    "previewActions": len(preview_actions),
+                    "removeProtected": "$state.applicationRemovable"
+                    in remove_visibility,
                     "installReleaseGuarded": (
                         "$state.selectedReleaseDigest" in install_visibility
                         and "$state.effectiveReleaseDigest" in install_visibility
                     ),
-                    "updateAvailableGuarded": "$state.updateAvailable" in update_visibility,
+                    "updateAvailableGuarded": "$state.updateAvailable"
+                    in update_visibility,
+                    "missingRequirements": lifecycle_missing_requirements,
+                },
+            }
+        )
+        postconditions.append(
+            {
+                "id": "applications.detail_lifecycle_binding",
+                "ok": bool(
+                    lifecycle_controls_ok
+                    and len(apply_widgets) == 1
+                    and "$state.reviewedPlan.operation.operation_id"
+                    in review_action_visibility
+                    and "$state.reviewedPlan.operation.plan_digest"
+                    in review_action_visibility
+                    and len(review_surfaces) == 1
+                ),
+                "expected": {
+                    "detailStateBinding": True,
+                    "lifecycleBeforeDetails": True,
+                    "casDefaults": True,
+                    "releaseSelector": True,
+                    "operationList": True,
+                    "filteredReports": True,
+                    "protectedRemoveGuard": True,
+                    "releaseGuards": True,
+                    "lifecycleToolbar": True,
+                    "reviewedSettings": True,
+                    "existingDevelopmentActions": True,
+                    "reviewReceiptGuard": True,
+                },
+                "actual": {
+                    "details": len(application_details),
+                    "lifecycleBeforeDetails": lifecycle_before_details,
+                    "detailSources": len(application_detail_sources),
+                    "detailVisibleOnSelection": sum(
+                        "$state.selectedApplicationId"
+                        in str(widget.get("visibleIf") or "")
+                        for widget in application_detail_sources
+                    ),
+                    "detailLifecycleBindings": sum(
+                        _contains_shape(
+                            (widget.get("inputs") or {}).get("stateBindings"),
+                            expected_detail_bindings,
+                        )
+                        for widget in application_detail_sources
+                    ),
+                    "detailStateOnly": sum(
+                        (widget.get("inputs") or {}).get("stateOnly") is True
+                        for widget in application_detail_sources
+                    ),
+                    "releaseSelectors": len(release_selectors),
+                    "operationLists": len(operation_lists),
+                    "filteredReports": len(reports),
+                    "removeProtected": "$state.applicationRemovable"
+                    in remove_visibility,
+                    "installReleaseGuarded": (
+                        "$state.selectedReleaseDigest" in install_visibility
+                        and "$state.effectiveReleaseDigest" in install_visibility
+                    ),
+                    "updateAvailableGuarded": "$state.updateAvailable"
+                    in update_visibility,
                     "selectedLifecycleSurface": len(lifecycle_widgets),
                     "casDefaults": cas_defaults,
                     "lifecycleSelectors": sorted(valid_selectors),
@@ -2541,7 +3111,9 @@ def evaluate_ui_request(
         )
         if len(boards) == 1:
             board = boards[0]
-            inputs = board.get("inputs") if isinstance(board.get("inputs"), Mapping) else {}
+            inputs = (
+                board.get("inputs") if isinstance(board.get("inputs"), Mapping) else {}
+            )
             lanes = inputs.get("lanes") if isinstance(inputs.get("lanes"), list) else []
             expected_lanes = requirements.get("lane_count")
             if expected_lanes is not None:
@@ -2554,7 +3126,11 @@ def evaluate_ui_request(
                     }
                 )
             expected_items = requirements.get("items_per_lane")
-            data_source = board.get("dataSource") if isinstance(board.get("dataSource"), Mapping) else {}
+            data_source = (
+                board.get("dataSource")
+                if isinstance(board.get("dataSource"), Mapping)
+                else {}
+            )
             rows = (
                 data_source.get("value")
                 if str(data_source.get("kind") or "") == "static"
@@ -2569,7 +3145,8 @@ def evaluate_ui_request(
                         1
                         for row in rows
                         if isinstance(row, Mapping)
-                        and str(_read_path(row, lane_key) or "") == str(lane.get("id") or "")
+                        and str(_read_path(row, lane_key) or "")
+                        == str(lane.get("id") or "")
                     )
                     for lane in lanes
                     if isinstance(lane, Mapping)
@@ -2577,7 +3154,8 @@ def evaluate_ui_request(
                 postconditions.append(
                     {
                         "id": "kanban.items_per_lane",
-                        "ok": bool(counts) and all(count == expected_items for count in counts.values()),
+                        "ok": bool(counts)
+                        and all(count == expected_items for count in counts.values()),
                         "expected": expected_items,
                         "actual": counts,
                     }
@@ -2593,9 +3171,14 @@ def evaluate_ui_request(
                     }
                 )
             if requirements.get("drag_drop") is True:
-                actions = board.get("actions") if isinstance(board.get("actions"), list) else []
+                actions = (
+                    board.get("actions")
+                    if isinstance(board.get("actions"), list)
+                    else []
+                )
                 move_action = any(
-                    isinstance(action, Mapping) and str(action.get("on") or "") == "move"
+                    isinstance(action, Mapping)
+                    and str(action.get("on") or "") == "move"
                     for action in actions
                 )
                 postconditions.append(
@@ -2610,7 +3193,11 @@ def evaluate_ui_request(
                     }
                 )
             if requirements.get("resource_query") is True:
-                data_source = board.get("dataSource") if isinstance(board.get("dataSource"), Mapping) else {}
+                data_source = (
+                    board.get("dataSource")
+                    if isinstance(board.get("dataSource"), Mapping)
+                    else {}
+                )
                 postconditions.append(
                     {
                         "id": "kanban.resource_query",
@@ -2619,9 +3206,15 @@ def evaluate_ui_request(
                         "actual": data_source.get("kind"),
                     }
                 )
-                query = data_source.get("query") if isinstance(data_source.get("query"), Mapping) else {}
+                query = (
+                    data_source.get("query")
+                    if isinstance(data_source.get("query"), Mapping)
+                    else {}
+                )
                 serialized_query = json.dumps(query, ensure_ascii=False, sort_keys=True)
-                query_state_refs = set(re.findall(r"\$state\.([A-Za-z0-9_.-]+)", serialized_query))
+                query_state_refs = set(
+                    re.findall(r"\$state\.([A-Za-z0-9_.-]+)", serialized_query)
+                )
                 state_write_actions = [
                     action
                     for _, page in _page_schemas(webui)
@@ -2697,9 +3290,12 @@ def evaluate_ui_request(
                         for page_path, widget, action in resource_actions
                         if str(widget.get("type") or "") == "ui.form"
                         and str(action.get("on") or "") == "submit"
-                        and str(action.get("params", {}).get("operation_id") or "") == "create"
+                        and str(action.get("params", {}).get("operation_id") or "")
+                        == "create"
                         and "$event.values"
-                        in json.dumps(action.get("params", {}).get("payload"), sort_keys=True)
+                        in json.dumps(
+                            action.get("params", {}).get("payload"), sort_keys=True
+                        )
                     ]
                     title_key = str(inputs.get("titleKey") or "title").strip()
                     required_create_fields = {title_key, lane_key}
@@ -2709,7 +3305,9 @@ def evaluate_ui_request(
                         if required_create_fields.issubset(
                             {
                                 str(field.get("id") or "").strip()
-                                for field in (widget.get("inputs") or {}).get("fields", [])
+                                for field in (widget.get("inputs") or {}).get(
+                                    "fields", []
+                                )
                                 if isinstance(field, Mapping)
                             }
                         )
@@ -2738,7 +3336,11 @@ def evaluate_ui_request(
                         page_path == "ui.application.desktop.pageSchema"
                         for page_path, _, _ in complete_create_forms
                     )
-                    board_actions = board.get("actions") if isinstance(board.get("actions"), list) else []
+                    board_actions = (
+                        board.get("actions")
+                        if isinstance(board.get("actions"), list)
+                        else []
+                    )
                     create_entry_actions = [
                         action
                         for action in board_actions
@@ -2770,10 +3372,13 @@ def evaluate_ui_request(
                         for page_path, widget, action in resource_actions
                         if str(widget.get("type") or "") == "ui.form"
                         and str(action.get("on") or "") == "submit"
-                        and str(action.get("params", {}).get("operation_id") or "") == "update"
+                        and str(action.get("params", {}).get("operation_id") or "")
+                        == "update"
                         and str(action.get("params", {}).get("record_id") or "").strip()
                         and "$event.values"
-                        in json.dumps(action.get("params", {}).get("payload"), sort_keys=True)
+                        in json.dumps(
+                            action.get("params", {}).get("payload"), sort_keys=True
+                        )
                     ]
                     postconditions.append(
                         {
@@ -2797,7 +3402,11 @@ def evaluate_ui_request(
                         if page_path.startswith("ui.application.modals.")
                         and page_path.endswith(".schema")
                     }
-                    board_actions = board.get("actions") if isinstance(board.get("actions"), list) else []
+                    board_actions = (
+                        board.get("actions")
+                        if isinstance(board.get("actions"), list)
+                        else []
+                    )
                     modal_events = {
                         str(action.get("on") or "")
                         for action in board_actions
@@ -2816,7 +3425,8 @@ def evaluate_ui_request(
                         if isinstance(action, Mapping)
                         and str(action.get("type") or "") == "updateState"
                         and any(
-                            str(_read_path(action.get("params", {}), ref) or "") == "$event.id"
+                            str(_read_path(action.get("params", {}), ref) or "")
+                            == "$event.id"
                             for ref in edit_state_refs
                         )
                     }
@@ -2847,13 +3457,36 @@ def evaluate_ui_request(
                             },
                         }
                     )
-    failures = [item for item in postconditions if not item.get("ok")]
+    iteration = (
+        requirements.get("prototype_iteration")
+        if isinstance(requirements.get("prototype_iteration"), Mapping)
+        else None
+    )
+    required_recipe_postconditions = _required_recipe_postconditions(
+        str(requirements.get("recipe_id") or ""), iteration
+    )
+    if required_recipe_postconditions is not None:
+        for item in postconditions:
+            identifier = str(item.get("id") or "")
+            if identifier.startswith("applications."):
+                item["required"] = identifier in required_recipe_postconditions
+    failures = [
+        item
+        for item in postconditions
+        if not item.get("ok") and item.get("required") is not False
+    ]
+    outstanding = [
+        str(item.get("id") or "")
+        for item in postconditions
+        if not item.get("ok") and item.get("required") is False
+    ]
     gaps = list(qualification.get("capability_gaps") or [])
     return {
         "schema": "adaos.ui.request_evaluation.v1",
         "qualification": qualification,
         "capability_validation": capability_validation,
         "postconditions": postconditions,
+        "outstanding_postconditions": outstanding,
         "capability_gaps": gaps,
         "ok": capability_validation["ok"] and not failures and not gaps,
     }

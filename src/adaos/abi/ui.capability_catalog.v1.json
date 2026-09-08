@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "1.3.24",
+  "catalog_version": "1.3.31",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -398,7 +398,7 @@
             "My development": "Моя разработка",
             "Use pre-release version": "Использовать предварительную версию",
             "Auto update": "Автообновление",
-            "Save update settings": "Сохранить настройки обновления",
+            "Save update settings": "Сохранить настройки обновлений",
             "Uninstall": "Удалить",
             "Install": "Установить",
             "Update": "Обновить",
@@ -414,7 +414,7 @@
           }
         },
         "details": "A state-only item.details in the detail area reads applications.show whenever selectedApplicationId is non-empty and binds CAS revisions, install/protection/update booleans, track/policy state, effective release, and the existing local Builder object and source-Webspace identity. Missing installation, subscription, release, and development values use explicit defaults. A visible unframed item.details header follows it, then a segmented command bar exposes Details, Versions, Operations, and Reports.",
-        "details_widget": {"type": "item.details", "visibleIf": "$state.selectedApplicationId", "inputs": {"stateOnly": true, "stateBindings": {"installationRevision": {"path": "installation.revision", "default": 0}, "subscriptionRevision": {"path": "subscription.revision", "default": 0}, "applicationInstalled": "installed", "applicationRemovable": "application.protection.active_installation_removable", "updateAvailable": "update_available", "prereleaseFollowing": {"path": "prerelease_following", "default": false}, "automaticUpdates": {"path": "auto_update_enabled", "default": true}, "updateTrack": {"path": "subscription.update_track", "default": "stable"}, "updatePolicy": {"path": "subscription.update_policy", "default": "auto_compatible"}, "effectiveReleaseDigest": {"path": "effective_release.release_digest", "default": ""}, "localDevelopmentAvailable": {"path": "local_development.exists", "default": false}, "developmentObjectType": {"path": "local_development.builder.selected_object_type", "default": ""}, "developmentObjectId": {"path": "local_development.builder.selected_object_id", "default": ""}, "developmentSourceWebspaceId": {"path": "local_development.builder.source_webspace_id", "default": ""}, "developmentPreviewWebspaceId": {"path": "local_development.builder.preview_webspace_id", "default": ""}}}},
+        "details_widget": {"type": "item.details", "area": "detail", "visibleIf": "$state.selectedApplicationId", "dataSource": {"kind": "mcp", "toolId": "applications.show", "arguments": {"application_id": "$state.selectedApplicationId"}, "dryRun": true, "resultPath": "response.result.application", "prototypeFixture": "$state.prototypeFixtures.application"}, "inputs": {"stateOnly": true, "stateBindings": {"installationRevision": {"path": "installation.revision", "default": 0}, "subscriptionRevision": {"path": "subscription.revision", "default": 0}, "applicationInstalled": "installed", "applicationRemovable": "application.protection.active_installation_removable", "updateAvailable": "update_available", "prereleaseFollowing": {"path": "prerelease_following", "default": false}, "automaticUpdates": {"path": "auto_update_enabled", "default": true}, "updateTrack": {"path": "subscription.update_track", "default": "stable"}, "updatePolicy": {"path": "subscription.update_policy", "default": "auto_compatible"}, "effectiveReleaseDigest": {"path": "effective_release.release_digest", "default": ""}, "localDevelopmentAvailable": {"path": "local_development.exists", "default": false}, "developmentObjectType": {"path": "local_development.builder.selected_object_type", "default": ""}, "developmentObjectId": {"path": "local_development.builder.selected_object_id", "default": ""}, "developmentSourceWebspaceId": {"path": "local_development.builder.source_webspace_id", "default": ""}, "developmentPreviewWebspaceId": {"path": "local_development.builder.preview_webspace_id", "default": ""}}}},
         "application_header": {"type": "item.details", "title": "{application.display.title}", "visibleIf": "$state.selectedApplicationId", "dataSource": {"kind": "mcp", "toolId": "applications.show", "arguments": {"application_id": "$state.selectedApplicationId"}, "dryRun": true, "resultPath": "response.result.application", "prototypeFixture": "$state.prototypeFixtures.application"}, "inputs": {"presentation": "header", "fields": [{"label": "Summary", "path": "application.display.summary"}, {"label": "Publisher", "path": "application.publisher.display_name"}, {"label": "Installed", "path": "installed_release.version"}, {"label": "Marketplace", "path": "marketplace_release.version"}]}},
         "detail_sections": [
           {"id": "details-section", "area": "detail", "type": "item.details", "title": "Details", "visibleIf": "$state.activeTab == 'details' && $state.selectedApplicationId", "dataSource": {"kind": "mcp", "toolId": "applications.show", "arguments": {"application_id": "$state.selectedApplicationId"}, "dryRun": true, "resultPath": "response.result.application", "prototypeFixture": "$state.prototypeFixtures.application"}, "inputs": {"presentation": "section", "fields": [{"label": "Identifier", "path": "application.application_id"}, {"label": "Publisher", "path": "application.publisher.display_name"}, {"label": "Lifecycle", "path": "application.lifecycle", "valueI18nPrefix": "applications.lifecycle."}]}},
@@ -438,6 +438,7 @@
         "operations_widget": {"type": "ui.list", "inputs": {"itemIdKey": "operation_id", "titleKey": "summary", "subtitleKey": "kind", "subtitleI18nPrefix": "applications.operation.kind.", "previewKey": "kind", "previewI18nPrefix": "applications.operation.kind.", "meta": [{"key": "status", "label": "Status", "kind": "badge", "valueI18nPrefix": "applications.operation.status."}], "emptyText": "No operations yet."}},
         "reports_widget": {"type": "ui.list", "inputs": {"itemIdKey": "report_id", "titleKey": "title", "subtitleKey": "summary", "previewKey": "summary", "meta": [{"key": "status", "label": "Status", "kind": "badge", "valueI18nPrefix": "applications.operation.status."}], "filters": [{"key": "application_id", "stateKey": "selectedApplicationId"}], "emptyText": "No reports yet."}},
         "release_selection": "The Versions list writes selectedReleaseDigest and clears reviewedPlan because a receipt is valid only for its original release selection. Install/update plans may leave this state empty to resolve the effective channel.",
+        "initial_state_target": "Write the complete initial_state object to ui.application.desktop.pageSchema.initialState. pageSchema.state is not part of this contract and must not be created.",
         "initial_state": {"selectedApplicationId": "", "catalogSection": "applications", "installedOnly": false, "activeTab": "details", "selectedReleaseDigest": "", "effectiveReleaseDigest": "", "installationRevision": 0, "subscriptionRevision": 0, "prereleaseFollowing": false, "automaticUpdates": true, "updateTrack": "stable", "updatePolicy": "auto_compatible", "removeDataPolicy": "retain", "reviewedPlan": {}},
         "lifecycle_settings": {
           "defaults": {"prereleaseFollowing": false, "automaticUpdates": true, "updateTrack": "stable", "updatePolicy": "auto_compatible", "removeDataPolicy": "retain"},
@@ -563,6 +564,54 @@
           ]
         },
         "protection": "A protected system Application exposes no remove command in its active installation UI; CLI and MCP remain recovery surfaces."
+      },
+      "implementation_workflow": {
+        "status_vocabulary": ["not_started", "working", "qualified", "blocked"],
+        "completion_rule": "Each phase is cumulative. Intermediate phases must satisfy their accumulated postconditions; the final phase must satisfy the complete recipe.",
+        "phases": [
+          {
+            "id": "catalog_shell",
+            "title": "Catalog shell",
+            "outcome": "Create the responsive three-area shell, both catalog masters, exact MCP reads, selection state, and Installed only filtering.",
+            "composition_keys": ["page", "navigation", "catalog_widget", "development_catalog_widget", "catalog_sections", "installed_filter", "reads", "initial_state_target", "initial_state"],
+            "required_postconditions": ["applications.sidebar_layout", "applications.catalog_sections", "applications.master_selection", "applications.no_prototype_store"]
+          },
+          {
+            "id": "application_detail",
+            "title": "Application detail",
+            "outcome": "Add identity, details, metadata, tabs, release selection, operations, reports, and existing-development commands.",
+            "composition_keys": ["details", "details_widget", "application_header", "detail_sections", "detail_section_requirement", "ordering", "tab_action", "reads", "release_widget", "operations_widget", "reports_widget", "release_selection"],
+            "required_postconditions": ["applications.mcp_reads", "applications.tabs", "applications.concise_operable_detail", "applications.detail_state_binding"]
+          },
+          {
+            "id": "lifecycle_controls",
+            "title": "Lifecycle controls",
+            "outcome": "Bind selected application state, exact CAS defaults, update settings, protected removal, existing-development commands, and toolbar ordering without adding plan or apply actions.",
+            "composition_keys": ["details_widget", "ordering", "initial_state_target", "initial_state", "lifecycle_settings", "canonical_commands", "workflow_model", "protection"],
+            "required_postconditions": ["applications.lifecycle_controls"]
+          },
+          {
+            "id": "reviewed_operations",
+            "title": "Reviewed operations",
+            "outcome": "Bind install, update, update settings, and uninstall to exact plan receipts, one review surface, and separate guarded confirmations.",
+            "composition_keys": ["mutations", "review", "review_widget", "canonical_commands", "workflow_model", "protection"],
+            "required_postconditions": ["applications.reviewed_plan_apply", "applications.review_composition", "applications.detail_lifecycle_binding"]
+          },
+          {
+            "id": "prototype_fixtures",
+            "title": "Prototype fixtures",
+            "outcome": "Complete all seven executable Prototype states and argument-sensitive fixtures without remote mutation.",
+            "composition_keys": ["prototype_fixture_model", "workflow_model", "protection"],
+            "required_postconditions": ["applications.prototype_fixtures"]
+          },
+          {
+            "id": "localization_qualification",
+            "title": "Localization and qualification",
+            "outcome": "Add complete en/ru dictionaries, verify responsive behavior, and pass the full recipe qualification.",
+            "composition_keys": ["localization"],
+            "required_postconditions": ["applications.localization"]
+          }
+        ]
       },
       "postconditions": [
         "Applications and My developments come from explicitly filtered applications.list reads rather than static prototype records; Installed only refines the unified Applications read.",

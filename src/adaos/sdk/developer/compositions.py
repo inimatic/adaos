@@ -51,20 +51,29 @@ class ProjectCompositionNotFound(ProjectCompositionError):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _project_id(value: str) -> str:
     token = str(value or "").strip().lower()
     if not _ID_RE.fullmatch(token):
-        raise ProjectCompositionError("project_id must match ^[a-z0-9][a-z0-9_.-]{0,127}$")
+        raise ProjectCompositionError(
+            "project_id must match ^[a-z0-9][a-z0-9_.-]{0,127}$"
+        )
     return token
 
 
 def _root_parent() -> Path:
     ctx = require_ctx("sdk.developer.compositions")
     method = getattr(ctx.paths, "dev_projects_dir", None)
-    root = Path(method() if callable(method) else Path(ctx.paths.dev_dir()) / "projects").resolve()
+    root = Path(
+        method() if callable(method) else Path(ctx.paths.dev_dir()) / "projects"
+    ).resolve()
     return root
 
 
@@ -80,7 +89,9 @@ def resolve_root(project_id: str, *, required: bool = True) -> Path:
     if root.parent != parent:
         raise ProjectCompositionError("project path escapes DEV projects root")
     if required and not (root / "project.yaml").is_file():
-        raise ProjectCompositionNotFound(f"project:{project_id} was not found in DEV space")
+        raise ProjectCompositionNotFound(
+            f"project:{project_id} was not found in DEV space"
+        )
     return root
 
 
@@ -91,28 +102,49 @@ def _schema_path() -> Path:
 def validate(value: Mapping[str, Any]) -> dict[str, Any]:
     payload = dict(value)
     schema = json.loads(_schema_path().read_text(encoding="utf-8"))
-    errors = sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda item: list(item.absolute_path))
+    errors = sorted(
+        Draft202012Validator(schema).iter_errors(payload),
+        key=lambda item: list(item.absolute_path),
+    )
     if errors:
         error = errors[0]
         location = ".".join(str(part) for part in error.absolute_path) or "$"
-        raise ProjectCompositionError(f"project manifest invalid at {location}: {error.message}")
+        raise ProjectCompositionError(
+            f"project manifest invalid at {location}: {error.message}"
+        )
     owned_refs = [str(item.get("ref") or "") for item in payload["components"]["owned"]]
     if len(owned_refs) != len(set(owned_refs)):
         raise ProjectCompositionError("project owned component refs must be unique")
-    primaries = [item for item in payload["components"]["owned"] if item.get("role") == "primary"]
+    primaries = [
+        item for item in payload["components"]["owned"] if item.get("role") == "primary"
+    ]
     if owned_refs and len(primaries) != 1:
-        raise ProjectCompositionError("project with owned components must declare exactly one primary")
-    defaults = [item for item in payload.get("entrypoints") or [] if item.get("default") is True]
+        raise ProjectCompositionError(
+            "project with owned components must declare exactly one primary"
+        )
+    defaults = [
+        item for item in payload.get("entrypoints") or [] if item.get("default") is True
+    ]
     if len(defaults) > 1:
-        raise ProjectCompositionError("project may declare at most one default entrypoint")
-    dependency_refs = [str(item.get("ref") or "") for item in payload["components"]["dependencies"]]
+        raise ProjectCompositionError(
+            "project may declare at most one default entrypoint"
+        )
+    dependency_refs = [
+        str(item.get("ref") or "") for item in payload["components"]["dependencies"]
+    ]
     if len(dependency_refs) != len(set(dependency_refs)):
         raise ProjectCompositionError("project dependency refs must be unique")
     overlap = sorted(set(owned_refs).intersection(dependency_refs))
     if overlap:
-        raise ProjectCompositionError(f"owned components cannot also be dependencies: {overlap}")
-    required_entrypoints = set((payload.get("compatibility") or {}).get("required_entrypoints") or [])
-    declared_entrypoints = {str(item["id"]) for item in payload.get("entrypoints") or []}
+        raise ProjectCompositionError(
+            f"owned components cannot also be dependencies: {overlap}"
+        )
+    required_entrypoints = set(
+        (payload.get("compatibility") or {}).get("required_entrypoints") or []
+    )
+    declared_entrypoints = {
+        str(item["id"]) for item in payload.get("entrypoints") or []
+    }
     missing_entrypoints = sorted(required_entrypoints - declared_entrypoints)
     if missing_entrypoints:
         raise ProjectCompositionError(
@@ -205,6 +237,11 @@ def normalized_definition(value: Mapping[str, Any]) -> dict[str, Any]:
         "publication": publication,
         "install": install,
         "compatibility": dict(payload.get("compatibility") or {}),
+        **(
+            {"development": dict(payload["development"])}
+            if isinstance(payload.get("development"), Mapping)
+            else {}
+        ),
         "lifecycle": dict(payload["lifecycle"]),
     }
 
@@ -213,23 +250,32 @@ def _read(path: Path) -> dict[str, Any]:
     try:
         value = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
     except (OSError, yaml.YAMLError) as exc:
-        raise ProjectCompositionError(f"failed to read Project manifest: {exc}") from exc
+        raise ProjectCompositionError(
+            f"failed to read Project manifest: {exc}"
+        ) from exc
     if not isinstance(value, Mapping):
         raise ProjectCompositionError("Project manifest must be an object")
     return validate(value)
 
 
 def _manifest_digest(payload: Mapping[str, Any]) -> str:
-    return "sha256:" + hashlib.sha256(
-        json.dumps(dict(payload), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    return (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                dict(payload), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+    )
 
 
 def _write(path: Path, value: Mapping[str, Any]) -> None:
     payload = validate(value)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(yaml.safe_dump(payload, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    temporary.write_text(
+        yaml.safe_dump(payload, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
     temporary.replace(path)
 
 
@@ -244,18 +290,26 @@ def get(project_id: str) -> dict[str, Any]:
     }
 
 
-def list_projects(*, profile: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
+def list_projects(
+    *, profile: str | None = None, limit: int = 500
+) -> list[dict[str, Any]]:
     parent = _root_parent()
     if not parent.is_dir():
         return []
     result: list[dict[str, Any]] = []
     maximum = max(1, min(int(limit), 5000))
-    for manifest_path in sorted(parent.glob("*/project.yaml"), key=lambda item: item.parent.name.lower()):
+    for manifest_path in sorted(
+        parent.glob("*/project.yaml"), key=lambda item: item.parent.name.lower()
+    ):
         project = _read(manifest_path)
         if profile and str(profile) not in set(project.get("profiles") or []):
             continue
         primary = next(
-            (item for item in project["components"]["owned"] if item["role"] == "primary"),
+            (
+                item
+                for item in project["components"]["owned"]
+                if item["role"] == "primary"
+            ),
             {},
         )
         item = {
@@ -271,8 +325,12 @@ def list_projects(*, profile: str | None = None, limit: int = 500) -> list[dict[
             "publication": dict(project.get("publication") or {}),
             "install": dict(project.get("install") or {}),
             "stage": str((project.get("publication") or {}).get("stage") or "alpha"),
-            "visibility": str((project.get("publication") or {}).get("visibility") or "unlisted"),
-            "default_install": bool((project.get("install") or {}).get("default") is True),
+            "visibility": str(
+                (project.get("publication") or {}).get("visibility") or "unlisted"
+            ),
+            "default_install": bool(
+                (project.get("install") or {}).get("default") is True
+            ),
             "primary_ref": primary.get("ref"),
             "source_path": str(manifest_path.parent.resolve()),
             "manifest_digest": _manifest_digest(project),
@@ -342,7 +400,9 @@ def advance_version(
     if level not in {*levels, "none"}:
         raise ProjectCompositionError("bump must be patch, minor, major, or none")
     current = get(project_id)
-    expected = str(expected_manifest_digest or current["manifest_digest"]).strip().lower()
+    expected = (
+        str(expected_manifest_digest or current["manifest_digest"]).strip().lower()
+    )
     if expected != str(current["manifest_digest"]):
         raise ProjectCompositionError(
             "project manifest changed since it was read; refresh and retry"
@@ -393,7 +453,9 @@ def release_versions(project_id: str) -> dict[str, str]:
     get(token)
     versions = _service().project_release_versions(token)
     if not isinstance(versions, Mapping):
-        raise ProjectCompositionError("Project release version registry returned an invalid result")
+        raise ProjectCompositionError(
+            "Project release version registry returned an invalid result"
+        )
     return {
         str(version).strip(): str(digest).strip()
         for version, digest in versions.items()
@@ -414,6 +476,7 @@ def _new_project_definition(
     tags: Sequence[str] = (),
     member: Mapping[str, Any] | None = None,
     compatibility: Mapping[str, Any] | None = None,
+    development: Mapping[str, Any] | None = None,
     actor: str = "user:local",
 ) -> dict[str, Any]:
     token = _project_id(project_id)
@@ -439,12 +502,15 @@ def _new_project_definition(
         "catalog": {
             "title": str(title or token).strip(),
             "description": str(description or "").strip(),
-            "categories": [str(item).strip() for item in categories if str(item).strip()],
+            "categories": [
+                str(item).strip() for item in categories if str(item).strip()
+            ],
             "tags": [str(item).strip() for item in tags if str(item).strip()],
         },
         "publication": dict(_PUBLICATION_DEFAULTS),
         "install": {"default": False, "features": []},
         **({"compatibility": dict(compatibility)} if compatibility is not None else {}),
+        **({"development": dict(development)} if development is not None else {}),
         "lifecycle": {
             "uninstall": {
                 "components": "remove_if_unreferenced",
@@ -472,6 +538,7 @@ def create_with_primary_component(
     tags: Sequence[str] = (),
     member: Mapping[str, Any] | None = None,
     compatibility: Mapping[str, Any] | None = None,
+    development: Mapping[str, Any] | None = None,
     actor: str = "user:local",
 ) -> dict[str, Any]:
     """Atomically scaffold one component and its distributable Project.
@@ -523,6 +590,7 @@ def create_with_primary_component(
             tags=tags,
             member=member,
             compatibility=compatibility,
+            development=development,
             actor=actor,
         )
         result = create(payload)
@@ -535,12 +603,18 @@ def create_with_primary_component(
             ),
         }
     except Exception:
-        if (created_project or project_root.is_dir()) and project_root.parent == _root_parent():
+        if (
+            created_project or project_root.is_dir()
+        ) and project_root.parent == _root_parent():
             shutil.rmtree(project_root)
         expected_parent = component_projects.resolve_root(
             component_kind, target_component, required=False
         ).parent
-        if created_component and component_root.parent == expected_parent and component_root.is_dir():
+        if (
+            created_component
+            and component_root.parent == expected_parent
+            and component_root.is_dir()
+        ):
             shutil.rmtree(component_root)
         raise
 
@@ -559,6 +633,7 @@ def create_for_existing_component(
     tags: Sequence[str] = (),
     member: Mapping[str, Any] | None = None,
     compatibility: Mapping[str, Any] | None = None,
+    development: Mapping[str, Any] | None = None,
     actor: str = "user:local",
 ) -> dict[str, Any]:
     """Create a Project authority around one existing unowned DEV component."""
@@ -582,11 +657,11 @@ def create_for_existing_component(
         raise ProjectCompositionError(
             f"{component_ref} is already owned by {owner['ref']}"
         )
-    resolved_title = str(title or described.get("title") or described.get("name") or token).strip()
+    resolved_title = str(
+        title or described.get("title") or described.get("name") or token
+    ).strip()
     resolved_description = str(
-        description
-        if description is not None
-        else described.get("description") or ""
+        description if description is not None else described.get("description") or ""
     ).strip()
     resolved_entrypoints = (
         [
@@ -613,6 +688,7 @@ def create_for_existing_component(
             tags=tags,
             member=member,
             compatibility=compatibility,
+            development=development,
             actor=actor,
         )
     )
@@ -693,9 +769,7 @@ def ensure_dependency(
         get(dependency_id)
     else:
         component_projects.describe(kind, _project_id(dependency_id))
-    owned_refs = {
-        str(item.get("ref") or "") for item in project["components"]["owned"]
-    }
+    owned_refs = {str(item.get("ref") or "") for item in project["components"]["owned"]}
     if ref in owned_refs:
         raise ProjectCompositionError(f"{ref} is already owned by project:{project_id}")
     dependencies = [dict(item) for item in project["components"]["dependencies"]]
@@ -759,7 +833,9 @@ def create_research_direction(
                 "id": "research",
                 "presentation": "scenario:research_workbench",
                 "default": True,
-                "bindings": {"direction_ref": f"skill:{_project_id(skill_id or project_id)}"},
+                "bindings": {
+                    "direction_ref": f"skill:{_project_id(skill_id or project_id)}"
+                },
             },
         ),
         categories=categories,
@@ -782,12 +858,16 @@ def project_for_component(component_ref: str) -> dict[str, Any] | None:
     matches = []
     for item in list_projects(limit=5000):
         project = get(str(item["id"]))
-        if component_ref in {str(owned["ref"]) for owned in project["components"]["owned"]}:
+        if component_ref in {
+            str(owned["ref"]) for owned in project["components"]["owned"]
+        }:
             matches.append(project)
     if not matches:
         return None
     if len(matches) > 1:
-        raise ProjectCompositionError(f"component {component_ref} is owned by multiple local Projects")
+        raise ProjectCompositionError(
+            f"component {component_ref} is owned by multiple local Projects"
+        )
     return matches[0]
 
 
@@ -820,7 +900,9 @@ def prepare_candidate(
         dict.fromkeys(str(item).strip() for item in change_ids if str(item).strip())
     )
     if not bounded_changes:
-        raise ProjectCompositionError("candidate requires at least one Builder Change id")
+        raise ProjectCompositionError(
+            "candidate requires at least one Builder Change id"
+        )
     from adaos.services.root.service import RootDeveloperService
 
     return RootDeveloperService().prepare_project_candidate(
@@ -838,21 +920,39 @@ def prepare_candidate(
     )
 
 
-def resolve_presentation(component_ref: str, *, project_id: str | None = None) -> dict[str, Any]:
+def resolve_presentation(
+    component_ref: str, *, project_id: str | None = None
+) -> dict[str, Any]:
     """Resolve Project entrypoint, skill default, then generic preview fallback."""
 
     project = get(project_id) if project_id else project_for_component(component_ref)
     if project:
         entrypoints = list(project.get("entrypoints") or [])
-        selected = next((item for item in entrypoints if item.get("default") is True), entrypoints[0] if entrypoints else None)
+        selected = next(
+            (item for item in entrypoints if item.get("default") is True),
+            entrypoints[0] if entrypoints else None,
+        )
         if selected:
-            return {"source": "project", "project_ref": project["ref"], **dict(selected)}
+            return {
+                "source": "project",
+                "project_ref": project["ref"],
+                **dict(selected),
+            }
     kind, _, component_id = str(component_ref).partition(":")
     if kind == "skill" and component_id:
         root = component_projects.resolve_root("skill", component_id)
-        manifest = yaml.safe_load((root / "skill.yaml").read_text(encoding="utf-8-sig")) or {}
-        presentations = list(manifest.get("presentations") or []) if isinstance(manifest, Mapping) else []
-        selected = next((item for item in presentations if item.get("default") is True), presentations[0] if presentations else None)
+        manifest = (
+            yaml.safe_load((root / "skill.yaml").read_text(encoding="utf-8-sig")) or {}
+        )
+        presentations = (
+            list(manifest.get("presentations") or [])
+            if isinstance(manifest, Mapping)
+            else []
+        )
+        selected = next(
+            (item for item in presentations if item.get("default") is True),
+            presentations[0] if presentations else None,
+        )
         if isinstance(selected, Mapping) and selected.get("scenario"):
             return {
                 "source": "skill",

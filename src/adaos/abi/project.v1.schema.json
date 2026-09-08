@@ -149,6 +149,17 @@
       },
       "additionalProperties": false
     },
+    "development": {
+      "type": "object",
+      "required": ["initiator_ref"],
+      "properties": {
+        "initiator_ref": {
+          "type": "string",
+          "pattern": "^(project|skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        }
+      },
+      "additionalProperties": false
+    },
     "lifecycle": {
       "type": "object", "required": ["uninstall"],
       "properties": {

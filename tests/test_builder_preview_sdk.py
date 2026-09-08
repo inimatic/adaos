@@ -61,6 +61,27 @@ class _Workbench:
         return {"selection": dict(self.selection)}
 
 
+def test_set_selected_project_uses_public_sdk_boundary(monkeypatch) -> None:
+    service = _Workbench()
+    monkeypatch.setattr(preview, "_service", lambda: service)
+
+    result = preview.set_selected_project(
+        "scenario",
+        "applications",
+        source_webspace_id="desktop-dev",
+        title="Applications",
+        description="Application catalog",
+    )
+
+    assert result["selection"] == {
+        "object_type": "scenario",
+        "object_id": "applications",
+        "title": "Applications",
+        "description": "Application catalog",
+    }
+    assert service.selection == result["selection"]
+
+
 def test_materialize_revision_via_owner_uses_active_local_control(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -114,6 +135,58 @@ def test_materialize_revision_via_owner_uses_active_local_control(monkeypatch) -
     assert captured["json"]["scenario_id"] == "applications"
     assert captured["json"]["revision"] == "027"
     assert captured["json"]["request_id"] == "builder.ui.applications.027"
+    assert captured["trust_env"] is False
+    assert captured["closed"] is True
+
+
+def test_ensure_dev_webspace_via_owner_uses_active_local_control(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {
+                "ok": True,
+                "accepted": True,
+                "webspace_id": "preview-applications",
+                "source_mode": "dev",
+            }
+
+    class _Session:
+        trust_env = True
+
+        def post(self, url, **kwargs):
+            captured.update({"url": url, **kwargs, "trust_env": self.trust_env})
+            return _Response()
+
+        def close(self) -> None:
+            captured["closed"] = True
+
+    monkeypatch.setattr("requests.Session", _Session)
+    monkeypatch.setattr(
+        "adaos.apps.cli.active_control.resolve_control_base_url",
+        lambda **_kwargs: "http://127.0.0.1:8778",
+    )
+    monkeypatch.setattr(
+        "adaos.apps.cli.active_control.resolve_control_token",
+        lambda **_kwargs: "local-token",
+    )
+
+    result = preview.ensure_dev_webspace_via_owner(
+        "applications",
+        requested_id="preview-applications",
+        title="DEV: Builder",
+    )
+
+    assert result["source_mode"] == "dev"
+    assert captured["url"] == "http://127.0.0.1:8778/api/node/yjs/dev-webspaces/ensure"
+    assert captured["json"] == {
+        "scenario_id": "applications",
+        "requested_id": "preview-applications",
+        "title": "DEV: Builder",
+    }
     assert captured["trust_env"] is False
     assert captured["closed"] is True
 

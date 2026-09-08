@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -520,6 +523,42 @@ def test_named_entity_registry_refresh_rebuilds_only_dirty_sources(
     assert diagnostics["source_build_total"] == 9
     assert diagnostics["source_reuse_total"] == 3
     assert diagnostics["fingerprint_hit_total"] == 1
+
+
+def test_named_entity_registry_serializes_cross_webspace_refreshes() -> None:
+    registry = named_entities.NamedEntityRegistry()
+    state = {"active": 0, "maximum": 0}
+    state_lock = threading.Lock()
+
+    class _MeasuredService:
+        def list_source_entities(self, _source, **_kwargs):
+            with state_lock:
+                state["active"] += 1
+                state["maximum"] = max(state["maximum"], state["active"])
+            try:
+                time.sleep(0.01)
+                return []
+            finally:
+                with state_lock:
+                    state["active"] -= 1
+
+    service = _MeasuredService()
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(
+                registry.refresh,
+                webspace_id=webspace_id,
+                service=service,
+            )
+            for webspace_id in ("desktop", "preview-test")
+        ]
+        snapshots = [future.result(timeout=2.0) for future in futures]
+
+    assert [snapshot.webspace_id for snapshot in snapshots] == [
+        "desktop",
+        "preview-test",
+    ]
+    assert state["maximum"] == 1
 
 
 def test_entity_event_payload_carries_locale_metadata() -> None:

@@ -15,7 +15,9 @@ from adaos.services.ui_capabilities import (
 )
 
 
-def search(query: str, *, kinds: Sequence[str] | None = None, limit: int = 8) -> dict[str, Any]:
+def search(
+    query: str, *, kinds: Sequence[str] | None = None, limit: int = 8
+) -> dict[str, Any]:
     return _search_ui_capabilities(query, kinds=kinds, limit=limit)
 
 
@@ -50,4 +52,11 @@ def evaluate(
     )
 
 
-__all__ = ["evaluate", "get", "qualify", "search", "select", "validate"]
+__all__ = [
+    "evaluate",
+    "get",
+    "qualify",
+    "search",
+    "select",
+    "validate",
+]

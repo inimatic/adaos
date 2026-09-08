@@ -588,6 +588,57 @@ Prototype qualification renders both locales, and Prototype acceptance binds a
 digest of the declared resource definitions and dictionaries. A locale edit
 therefore invalidates the acceptance just as a `webui.json` edit does.
 
+### Builder Prototype Composition
+
+Builder starts every new scenario from the universal `scenario_default`.
+Domain recipes are versioned capability, composition, and postcondition
+contracts; they are not templates containing a finished subject UI and are not
+deterministic shortcuts around model-driven prototyping. A recipe may define a
+dependency graph of cumulative phases. Builder selects only the phases needed
+for the current request and may stop as soon as all requested postconditions
+are qualified. A large new surface can use the full graph; a narrow edit can
+run one applicable phase or a bounded repair without replaying unrelated work.
+
+Every model call has two context layers:
+
+- a stable, digest-addressed prefix containing the system contract, selected
+  ABI/capabilities, recipe phase, and invariant postconditions; this prefix is
+  ordered for provider prompt caching;
+- a bounded phase overlay containing the current instruction, exact base
+  revision/digest, failed postconditions, minimal current UI or semantic delta,
+  and only the project facets admitted for that phase.
+
+Builder stores the exact submitted messages, generation options, provider job
+identity, normalized candidate, validation result, and candidate digest before
+activation. A retry first validates and replays a matching stored candidate;
+it spends model tokens only when a bounded repair is still required. Provider
+output is evidence, never the source of truth: schema and recipe postconditions,
+scenario locale dictionaries, and browser qualification decide whether a
+revision can advance.
+
+### Client ABI Conformance
+
+A WebUI ABI or capability-catalog change is incomplete until its Client impact
+is declared. The declaration names affected schema paths, widget/action/state
+semantics, supported old/new catalog ranges, renderer components, migrations,
+and conformance fixtures. CI must reject an ABI change whose declared Client
+components or contract tests were not reviewed.
+
+The minimum conformance matrix is:
+
+| ABI change | Required Client evidence |
+| --- | --- |
+| widget/input shape | renderer and component contract tests |
+| action/event/state semantics | action/data service tests with exact event paths |
+| layout or overlay behavior | wide and compact browser captures plus overflow/focus checks |
+| locale/resource contract | EN/RU render and equal-key/resource-digest checks |
+| development-only fixture behavior | stable-space denial and canonical Builder preview proof |
+| compatibility break | explicit migration or bounded dual-reader window |
+
+Generated conformance examples should be shared by Core validation and Client
+tests so a recipe cannot be green in Core while its canonical preview identifier
+or data source is interpreted differently by the renderer.
+
 Application detail also includes visibility, exact effective release,
 permissions, component/dependency detail, release notes, Trial access where
 authorized, Development Reports, and operation history. `My development`
@@ -957,14 +1008,17 @@ Application UI corrections discovered during the proof should also pass
 through Builder. Core/SDK defects become Core Dev Tickets rather than hidden
 Application workarounds.
 
-Current dogfood checkpoint, 2026-09-08: Applications was created from Builder
-chat and revised through UI revision `027`. The exact Prototype is accepted and
-the governed workflow is `automation_ready`. It satisfies the Application-
-manager capability checks, direct lifecycle intent/review composition, EN/RU
-resource checks, representative lifecycle states, and compact/wide browser
-checks. Its catalog metadata was corrected through a durable, recoverable
-Builder operation rather than a direct store edit. Automation has not started,
-so this remains neither Trial nor stable evidence.
+Current dogfood checkpoint, 2026-09-08: the primary Applications scenario was
+created from Builder chat and revised through accepted UI revision `027`; its
+governed workflow is `automation_ready`. A separate reproducibility experiment,
+`applications_phased_prototype_experiment_c118d053`, started from the generic
+`scenario_default` and reached qualified revision `018` through six cumulative
+recipe phases and a structured review pass. It exposed and corrected
+candidate-replay, locale-validation, duplicate chat-result, canonical
+preview-fixture, synchronous checkpoint, and DEV preflight contract defects in
+their owning layers. The experiment is qualification evidence, not a second
+human acceptance or release. Automation has not started, so neither scenario
+is Trial or stable evidence.
 See
 [Applications Builder Dogfood Evidence - 2026-09-07](applications-builder-dogfood-evidence-2026-09-07.md).
 

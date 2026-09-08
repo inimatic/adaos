@@ -1,8 +1,9 @@
 # Browser Resources, Skill Assets, and Assistant Avatars Roadmap
 
-Browser-facing UI resources must not require a browser rebuild. The current
-client still registers a fixed Ionicons set at compile time, so missing icon
-names can produce runtime warnings and empty icons. Assistant avatars, skill
+Browser-facing UI resources must not require a browser rebuild. The Client
+serves the packaged Ionicons catalog as static SVG assets and resolves names on
+demand instead of embedding the complete icon barrel in its initial JavaScript.
+Assistant avatars, skill
 icons, preview images, templates, and localized dictionaries need the same
 delivery model: authored by the system, a skill, or a scenario; materialized by
 AdaOS; delivered through stable runtime URLs; cached close to the browser; and
@@ -286,6 +287,10 @@ Status as of 2026-07-02:
   blob copy. The manifest remains the authoritative descriptor while byte
   serving stays with the external store.
 - Private resources remain deferred.
+- Declarative Ionicon names use Ionicons' on-demand `svg/<name>.svg` resolver.
+  Component-owned icons may still be registered as tree-shaken inline SVGs.
+  This preserves runtime names contributed by scenarios while avoiding a full
+  icon-catalog import in the Client entry graph.
 
 ## Phases
 
@@ -309,3 +314,6 @@ Status as of 2026-07-02:
    manifest as the source of truth.
 10. [x] Add diagnostics for missing assets so compact phone layouts still provide
    usable controls, avatar fallbacks, and modal close actions.
+11. [x] Move generic Ionicon names from compile-time all-icon registration to
+    on-demand static SVG delivery and verify both named fetches and rendered
+    shadow-DOM SVGs in the local browser.

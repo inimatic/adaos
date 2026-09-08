@@ -1550,6 +1550,15 @@ def _maybe_sync_workspace_runtime(ctx: AgentContext, mgr: SkillManager, skill_na
             result.get("reason"),
             result.get("error") or result.get("path") or result.get("source_path"),
         )
+    elif isinstance(result, dict) and result.get("changed"):
+        _log.info(
+            "DEV runtime synchronized before tool preflight skill=%s version=%s slot=%s files=%d tools=%d",
+            skill_name,
+            result.get("version"),
+            result.get("slot"),
+            len(result.get("files") or []),
+            len(result.get("tools_added") or []),
+        )
 
 
 def _maybe_sync_dev_runtime(ctx: AgentContext, mgr: SkillManager, skill_name: str) -> None:
@@ -1562,6 +1571,8 @@ def _maybe_sync_dev_runtime(ctx: AgentContext, mgr: SkillManager, skill_name: st
         if _workspace_runtime_sync_recent(sync_key):
             return
         _mark_workspace_runtime_sync_attempt(sync_key)
+        if not _dev_runtime_source_changed(ctx, skill_name):
+            return
         try:
             result = mgr.runtime_update(skill_name, space="dev", notify_unchanged=False)
         except Exception:
@@ -1574,15 +1585,39 @@ def _maybe_sync_dev_runtime(ctx: AgentContext, mgr: SkillManager, skill_name: st
             result.get("reason"),
             result.get("error") or result.get("path") or result.get("source_path"),
         )
-    elif isinstance(result, dict) and result.get("changed"):
-        _log.info(
-            "DEV runtime synchronized before tool preflight skill=%s version=%s slot=%s files=%d tools=%d",
-            skill_name,
-            result.get("version"),
-            result.get("slot"),
-            len(result.get("files") or []),
-            len(result.get("tools_added") or []),
-        )
+
+
+def _dev_runtime_source_changed(ctx: AgentContext, skill_name: str) -> bool:
+    """Return whether DEV source may be newer than its active runtime marker."""
+
+    try:
+        skills_root = Path(ctx.paths.dev_skills_dir()).expanduser().resolve()
+        source_root = (skills_root / str(skill_name or "").strip()).resolve()
+        marker = (
+            skills_root / ".runtime" / str(skill_name or "").strip() / "current_runtime.json"
+        ).resolve()
+    except Exception:
+        return True
+    if not source_root.is_dir() or not marker.is_file():
+        return True
+    try:
+        marker_mtime_ns = int(marker.stat().st_mtime_ns)
+    except OSError:
+        return True
+    excluded = {".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", "__pycache__"}
+    try:
+        for path in source_root.rglob("*"):
+            try:
+                relative = path.relative_to(source_root)
+            except ValueError:
+                return True
+            if any(part in excluded for part in relative.parts) or not path.is_file():
+                continue
+            if int(path.stat().st_mtime_ns) > marker_mtime_ns:
+                return True
+    except OSError:
+        return True
+    return False
 
 
 def _runtime_contract_diagnostics(mgr: SkillManager, skill_name: str, *, dev: bool) -> dict[str, Any]:
