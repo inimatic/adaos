@@ -16,6 +16,7 @@ from adaos.services.builder.governed import (
     builder_change_definition,
     compiled_builder_change_definition,
 )
+from adaos.services.builder import workflow as builder_workflow
 from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService
 from adaos.services.governed_workflow import definition_review_report, export_statechart
 from adaos.services.governed_workflow import workflow_definition_digest
@@ -187,6 +188,39 @@ def test_dev_builder_skill_workflow_is_runtime_authority(tmp_path: Path) -> None
     described = service.describe("scenario", "recipes")
 
     assert described["governed"]["definition_version"] == "1.0.1"
+
+
+def test_dev_builder_inspection_reuses_admitted_definition_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    builder_skill = service.dev_skills_root / "builder_skill"
+    builder_skill.mkdir()
+    (builder_skill / "skill.yaml").write_text(
+        "name: builder_skill\nversion: 0.1.0\nworkflow:\n  manifest: workflow.json\n",
+        encoding="utf-8",
+    )
+    (builder_skill / "workflow.json").write_text(
+        json.dumps(builder_change_definition(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        builder_workflow,
+        "_inspect_workflow_definition",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("admitted Builder definition was revalidated")
+        ),
+    )
+
+    process = service.describe("scenario", "recipes")["workflow_inspection"][
+        "process"
+    ]
+
+    assert process["status"] == "admitted"
+    assert process["validation"]["valid"] is True
+    assert process["binding"]["binding_digest"].startswith("sha256:")
 
 
 def test_present_but_invalid_dev_builder_workflow_fails_closed(tmp_path: Path) -> None:

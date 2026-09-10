@@ -240,7 +240,7 @@ def _load_builder_skill_definition(
     skill_root: str,
     _manifest_signature: tuple[int, int],
     _definition_signature: tuple[int, int],
-) -> CompiledWorkflowDefinition:
+) -> tuple[CompiledWorkflowDefinition, dict[str, Any], dict[str, Any], str]:
     artifact = load_manifest_bound_workflow(
         Path(skill_root),
         manifest_name="skill.yaml",
@@ -252,8 +252,13 @@ def _load_builder_skill_definition(
         raise WorkflowArtifactError("builder_skill must reference workflow.json")
     if artifact.compiled.workflow_type != "builder.change":
         raise WorkflowArtifactError("builder_skill workflow_type must be builder.change")
-    platform_workflow_adapter_registry().bind(artifact.compiled)
-    return artifact.compiled
+    binding = platform_workflow_adapter_registry().bind(artifact.compiled)
+    return (
+        artifact.compiled,
+        copy.deepcopy(artifact.validation_report),
+        copy.deepcopy(binding),
+        artifact.definition_digest,
+    )
 
 
 def _now() -> str:
@@ -1030,6 +1035,11 @@ class BuilderWorkflowService:
     require_active_builder_package: bool | None = None
     _active_package_digest: str | None = field(init=False, default=None)
     _active_binding_digest: str | None = field(init=False, default=None)
+    _definition_digest: str | None = field(init=False, default=None)
+    _definition_validation_report: dict[str, Any] | None = field(
+        init=False, default=None
+    )
+    _definition_binding: dict[str, Any] | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         self.dev_skills_root = Path(self.dev_skills_root)
@@ -1102,11 +1112,18 @@ class BuilderWorkflowService:
         manifest_path = skill_root / "skill.yaml"
         definition_path = skill_root / "workflow.json"
         try:
-            return _load_builder_skill_definition(
-                str(skill_root),
-                _file_signature(manifest_path),
-                _file_signature(definition_path),
+            compiled, validation_report, binding, definition_digest = (
+                _load_builder_skill_definition(
+                    str(skill_root),
+                    _file_signature(manifest_path),
+                    _file_signature(definition_path),
+                )
             )
+            if self._definition_digest != definition_digest:
+                self._definition_digest = definition_digest
+                self._definition_validation_report = copy.deepcopy(validation_report)
+                self._definition_binding = copy.deepcopy(binding)
+            return compiled
         except (OSError, WorkflowArtifactError) as exc:
             raise BuilderWorkflowError(f"invalid declarative Builder workflow: {exc}") from exc
 
@@ -1185,17 +1202,31 @@ class BuilderWorkflowService:
             )
         self._active_package_digest = package.digest
         self._active_binding_digest = package.workflow_binding_digest
+        self._definition_digest = artifact.definition_digest
+        self._definition_validation_report = copy.deepcopy(
+            artifact.validation_report
+        )
+        self._definition_binding = copy.deepcopy(binding)
         return artifact.compiled
 
     def _workflow_inspection(self, object_type: str, object_id: str) -> dict[str, Any]:
         kind = _kind(object_type)
         definition = self._governed_definition()
-        process = copy.deepcopy(
-            _inspect_workflow_definition(
-                canonical_workflow_bytes(definition.source),
-                "builder_skill/workflow.json",
+        if self._definition_validation_report is not None:
+            process = {
+                "schema": "adaos.workflow.inspection.v1",
+                "source": "builder_skill/workflow.json",
+                "status": "admitted",
+                "validation": copy.deepcopy(self._definition_validation_report),
+                "binding": copy.deepcopy(self._definition_binding),
+            }
+        else:
+            process = copy.deepcopy(
+                _inspect_workflow_definition(
+                    canonical_workflow_bytes(definition.source),
+                    "builder_skill/workflow.json",
+                )
             )
-        )
         root = self.project_root(kind, object_id)
         manifest_name = _manifest_name(kind)
         if kind == "project":
