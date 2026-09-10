@@ -61,6 +61,7 @@ from adaos.services.skill.resolver import SkillPathResolver
 from adaos.services.capacity import install_skill_in_capacity, uninstall_skill_from_capacity
 from adaos.services.semver import bump_version
 from adaos.services.skill.version_policy import RESERVED_DATA_MIGRATION_FILE, bump_index, effective_skill_bump
+from adaos.services.skill_factory_sources import source_tree_digest
 from adaos.services.component_manifest_versioning import write_component_version_atomically
 from adaos.services.workspace_release_guard import (
     assert_workspace_component_maintenance_owned,
@@ -5698,6 +5699,10 @@ class SkillManager:
         manifest = self._load_manifest(skill_dir)
         self._ensure_core_compatible(manifest, skill_name=name, stage="prepare")
         version = version_override or str(manifest.get("version") or "dev")
+        source_manifest_digest = source_tree_digest(
+            skill_dir,
+            excluded_dirs=frozenset({".runtime"}),
+        )
 
         env = SkillRuntimeEnvironment(skills_root=dev_root, skill_name=name)
         env.prepare_version(version)
@@ -5802,6 +5807,8 @@ class SkillManager:
             "version": version,
             "runtime_bucket": env.runtime_bucket(version),
             "resolved_manifest": str(slot.resolved_manifest),
+            "source_manifest_digest": source_manifest_digest,
+            "preparation_identity": _runtime_preparation_identity(),
             "installed_at": datetime.now(timezone.utc).isoformat(),
             "tests": {name: result.status for name, result in tests.items()},
             "data_migration": dict(data_migration),
@@ -5855,11 +5862,18 @@ class SkillManager:
         manifest_path = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
         slot_version = self._prepared_slot_version(slot_meta=slot_meta, manifest_path=manifest_path)
         slot_source_root = slot_paths.src_dir / "skills" / name
+        source_manifest_digest = source_tree_digest(
+            skill_dir,
+            excluded_dirs=frozenset({".runtime"}),
+        )
         needs_prepare = (
             not manifest_path.exists()
             or slot_version != str(target_version).strip()
             or not slot_source_root.exists()
             or not any(slot_source_root.iterdir())
+            or str(slot_meta.get("source_manifest_digest") or "").strip()
+            != source_manifest_digest
+            or slot_meta.get("preparation_identity") != _runtime_preparation_identity()
         )
         if needs_prepare:
             # Prepare from DEV sources when the slot is absent, incomplete, or
