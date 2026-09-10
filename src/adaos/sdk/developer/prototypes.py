@@ -79,6 +79,7 @@ def _json_type(values: Sequence[Any]) -> dict[str, Any]:
     observed = set()
     for value in values:
         if value is None:
+            observed.add("null")
             continue
         if isinstance(value, bool):
             observed.add("boolean")
@@ -212,13 +213,15 @@ def derive_record_resource_spec(
         | {item_id_key, "revision"}
     )
     properties = {
-        key: _json_type([record.get(key) for record in normalized]) for key in fields
+        key: _json_type([record[key] for record in normalized if key in record])
+        for key in fields
     }
     properties[item_id_key] = {"type": "string", "minLength": 1}
     properties["revision"] = {"type": "integer", "minimum": 1}
-    required = [item_id_key, "revision"] + [
-        key for key, field in form_fields.items() if field.get("required") is True
-    ]
+    # Form submission requirements are UI constraints, not persistence
+    # invariants: a saved draft may legitimately omit an answer that is
+    # required only when the user submits the form.
+    required = [item_id_key, "revision"]
     record_schema = {
         "type": "object",
         "required": list(dict.fromkeys(required)),
@@ -402,7 +405,7 @@ def derive_board_resource_spec(
         raise ValueError("board Prototype records use undeclared lanes: " + ", ".join(unknown))
     fields = sorted({key for record in normalized for key in record} | {item_id_key, title_key, lane_key, "revision"})
     properties = {
-        key: _json_type([record.get(key) for record in normalized])
+        key: _json_type([record[key] for record in normalized if key in record])
         for key in fields
     }
     properties[item_id_key] = {"type": "string", "minLength": 1}
@@ -557,9 +560,23 @@ def materialize_resources(
     }
 
 
+def validate_resource_spec(
+    webui: Mapping[str, Any],
+    records: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Derive and execute the side-effect-free validation used by materialization."""
+
+    from adaos.services.builder.prototype_runtime import PrototypeDataRuntime
+
+    spec = derive_resource_spec(webui, records)
+    PrototypeDataRuntime.start(spec["data_definition"])
+    return spec
+
+
 __all__ = [
     "derive_board_resource_spec",
     "derive_record_resource_spec",
     "derive_resource_spec",
     "materialize_resources",
+    "validate_resource_spec",
 ]

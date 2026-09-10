@@ -512,6 +512,129 @@ def test_derive_generic_record_resource_spec_without_board() -> None:
     assert spec["data_definition"]["seed"][0]["revision"] == 1
 
 
+def test_optional_numeric_prototype_field_accepts_explicit_empty_value() -> None:
+    webui = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "widgets": [
+                            {
+                                "id": "inspections",
+                                "type": "ui.list",
+                                "inputs": {"itemIdKey": "id"},
+                                "dataSource": {
+                                    "kind": "resourceQuery",
+                                    "resourceType": "prototype.inspections",
+                                    "query": {},
+                                },
+                            },
+                            {
+                                "id": "inspection-form",
+                                "type": "ui.form",
+                                "inputs": {
+                                    "fields": [
+                                        {"id": "measure", "type": "number"},
+                                    ]
+                                },
+                                "actions": [
+                                    {
+                                        "on": "submit",
+                                        "type": "resourceOperation",
+                                        "target": "prototype.inspections",
+                                        "params": {
+                                            "operation_id": "update",
+                                            "payload": "$event.values",
+                                        },
+                                    }
+                                ],
+                            },
+                        ]
+                    }
+                }
+            }
+        },
+    }
+
+    spec = developer_prototypes.validate_resource_spec(
+        webui,
+        [
+            {"id": "inspection-1", "measure": 10.5},
+            {"id": "inspection-empty", "measure": None},
+        ],
+    )
+
+    measure_schema = spec["data_definition"]["record_schema"]["properties"][
+        "measure"
+    ]
+    assert measure_schema == {
+        "anyOf": [{"type": "null"}, {"type": "number"}]
+    }
+
+
+def test_required_form_answer_may_be_absent_from_saved_draft_record() -> None:
+    webui = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "widgets": [
+                            {
+                                "id": "inspections",
+                                "type": "ui.list",
+                                "inputs": {"itemIdKey": "id"},
+                                "dataSource": {
+                                    "kind": "resourceQuery",
+                                    "resourceType": "prototype.inspections",
+                                    "query": {},
+                                },
+                            },
+                            {
+                                "id": "inspection-form",
+                                "type": "ui.form",
+                                "inputs": {
+                                    "fields": [
+                                        {
+                                            "id": "result",
+                                            "type": "singleChoice",
+                                            "required": True,
+                                        }
+                                    ]
+                                },
+                                "actions": [
+                                    {
+                                        "on": "submit",
+                                        "type": "resourceOperation",
+                                        "target": "prototype.inspections",
+                                        "params": {
+                                            "operation_id": "update",
+                                            "payload": "$event.values",
+                                        },
+                                    }
+                                ],
+                            },
+                        ]
+                    }
+                }
+            }
+        },
+    }
+
+    spec = developer_prototypes.validate_resource_spec(
+        webui,
+        [
+            {"id": "draft-1", "status": "draft"},
+            {"id": "complete-1", "status": "complete", "result": "ok"},
+        ],
+    )
+
+    record_schema = spec["data_definition"]["record_schema"]
+    assert record_schema["required"] == ["id", "revision"]
+    assert record_schema["properties"]["result"] == {"type": "string"}
+
+
 def test_prototype_webui_digest_ignores_release_version_only() -> None:
     first = {
         "schema": "adaos.webui.v1",

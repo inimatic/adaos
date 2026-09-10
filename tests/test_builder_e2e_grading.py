@@ -80,6 +80,12 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
     assert request == recorded[0]
     assert grade["passed"] is False
     assert grade["score"] == 0.75
+    assert grade["gate"] == {
+        "passed": False,
+        "policy": "all_required_outcomes",
+        "threshold_passed": False,
+        "failed_dimensions": ["representative_state"],
+    }
     assert grade["dimensions"]["primary_jobs"]["checks"][0]["evidence"] == [
         "/ui"
     ]
@@ -91,6 +97,38 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
         "calls": 1,
         "duration_ms": grade["grader_metrics"]["duration_ms"],
     }
+    validate_builder_e2e_record("adaos.builder.prototype_grade.v1", grade)
+
+
+def test_prototype_grader_exposes_hard_gate_failure_above_score_threshold() -> None:
+    def submit(_messages, **_kwargs):
+        return {"job_id": "job-gate"}
+
+    def wait(_job_id, **_kwargs):
+        result = json.loads(_model_result())
+        result["representative_states"][0]["verdict"] = "partial"
+        result["representative_states"][0]["evidence"] = ["/ui"]
+        return {"status": "succeeded", "output_text": json.dumps(result)}
+
+    grade, _request = grade_builder_prototype(
+        artifact={"ui": {"control": {"action": "save"}}},
+        user_turns=["Build a useful editor."],
+        requirements={
+            "primary_jobs": ["save an item"],
+            "representative_states": ["empty"],
+        },
+        prohibited_assumptions=[],
+        locale="en",
+        threshold=0.7,
+        submitter=submit,
+        waiter=wait,
+    )
+
+    assert grade["score"] == 0.875
+    assert grade["gate"]["threshold_passed"] is True
+    assert grade["gate"]["passed"] is False
+    assert grade["gate"]["failed_dimensions"] == ["representative_state"]
+    assert grade["passed"] is False
     validate_builder_e2e_record("adaos.builder.prototype_grade.v1", grade)
 
 

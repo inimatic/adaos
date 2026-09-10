@@ -174,7 +174,8 @@
         "single_boolean_field_types": ["boolean", "toggle", "switch"],
         "multiple_boolean_field_types": ["checkboxes", "checkboxGroup", "checkbox_group"],
         "choice_field_types": ["select", "dropdown", "combobox", "singleChoice", "radio"],
-        "invalid_field_types": ["checkbox", "selector", "input.selector"]
+        "invalid_field_types": ["checkbox", "selector", "input.selector"],
+        "conditional_required": "Set required=true on the dependent field and use a string visibleIf expression such as $state.result === 'defect'. ui.form evaluates the expression against a snapshot that includes sibling form values and validates visible required fields before submit. Never use an object-shaped condition or synthesize errors with updateState."
       },
       "data_shape": { "kind": "record" },
       "events": ["submit", "validate", "save_draft", "reset", "change:<fieldId>"],

@@ -12,6 +12,21 @@
     "passed": {"type": "boolean"},
     "score": {"type": "number", "minimum": 0, "maximum": 1},
     "threshold": {"type": "number", "minimum": 0, "maximum": 1},
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "policy", "threshold_passed", "failed_dimensions"],
+      "properties": {
+        "passed": {"type": "boolean"},
+        "policy": {"const": "all_required_outcomes"},
+        "threshold_passed": {"type": "boolean"},
+        "failed_dimensions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"enum": ["primary_job", "representative_state", "prohibited_assumption"]}
+        }
+      }
+    },
     "dimensions": {
       "type": "object",
       "additionalProperties": false,

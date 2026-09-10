@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import time
+import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1751,7 +1752,14 @@ class BuilderE2ERunner:
                     status = "inconclusive"
                     retry_category = "unavailable"
                 except Exception as exc:
-                    output = {"error": type(exc).__name__, "detail": str(exc)}
+                    stack = "".join(
+                        traceback.format_exception(type(exc), exc, exc.__traceback__)
+                    ).strip()
+                    output = {
+                        "error": type(exc).__name__,
+                        "detail": str(exc),
+                        "traceback": stack[-12_000:],
+                    }
                     findings = [{"code": "step_exception", "detail": str(exc)}]
                     status = "failed"
                     retry_category = "exception"

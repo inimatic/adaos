@@ -366,7 +366,9 @@ def grade_builder_prototype(
     hard_gate = all(item["verdict"] == "supported" for item in job_checks) and all(
         item["verdict"] == "supported" for item in state_checks
     ) and all(item["verdict"] == "absent" for item in assumption_checks)
-    passed = hard_gate and score >= max(0.0, min(float(threshold), 1.0))
+    normalized_threshold = max(0.0, min(float(threshold), 1.0))
+    threshold_passed = score >= normalized_threshold
+    passed = hard_gate and threshold_passed
     findings = [
         {
             "dimension": dimension,
@@ -389,7 +391,15 @@ def grade_builder_prototype(
             "status": "passed" if passed else "failed",
             "passed": passed,
             "score": score,
-            "threshold": max(0.0, min(float(threshold), 1.0)),
+            "threshold": normalized_threshold,
+            "gate": {
+                "passed": hard_gate,
+                "policy": "all_required_outcomes",
+                "threshold_passed": threshold_passed,
+                "failed_dimensions": sorted(
+                    {item["dimension"] for item in findings}
+                ),
+            },
             "dimensions": {
                 "primary_jobs": {"score": round(job_score, 6), "checks": job_checks},
                 "representative_states": {

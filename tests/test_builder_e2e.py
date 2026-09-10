@@ -190,6 +190,43 @@ def test_required_failure_stops_case_but_optional_failure_does_not(
     assert [step["status"] for step in result["steps"]] == ["failed", "passed"]
 
 
+def test_step_exception_retains_bounded_traceback(tmp_path: Path) -> None:
+    case = _case()
+    case["steps"] = case["steps"][:1]
+    suite = _write_suite(tmp_path / "definitions", cases=[case])
+
+    class FailingExecutor(FixtureExecutor):
+        def execute(
+            self,
+            step_type: str,
+            inputs: Mapping[str, Any],
+            context: Mapping[str, Any],
+        ) -> Mapping[str, Any]:
+            raise RuntimeError("diagnostic failure")
+
+    report = BuilderE2ERunner(
+        suite,
+        output_root=tmp_path / "runs",
+        repo_root=tmp_path,
+        run_id="exception-evidence-run",
+        executor=FailingExecutor({}),
+    ).run()
+
+    assert report["status"] == "failed"
+    result = json.loads(
+        (
+            Path(report["bundle_dir"])
+            / "cases"
+            / "case-en"
+            / "attempt-01.json"
+        ).read_text(encoding="utf-8")
+    )
+    diagnostic = result["steps"][0]["output"]
+    assert diagnostic["error"] == "RuntimeError"
+    assert "diagnostic failure" in diagnostic["traceback"]
+    assert len(diagnostic["traceback"]) <= 12_000
+
+
 def test_cleanup_failure_makes_successful_case_inconclusive(tmp_path: Path) -> None:
     case = _case()
     case["steps"] = case["steps"][:1]
