@@ -204,3 +204,43 @@ def test_prototype_grader_uses_provider_usage_before_tool_usage() -> None:
     assert grade["grader_metrics"]["input_fresh_tokens"] == 605
     assert grade["grader_metrics"]["input_cached_tokens"] == 1000
     assert grade["grader_metrics"]["generated_tokens"] == 528
+
+
+def test_prototype_grader_accepts_revision_bound_record_evidence() -> None:
+    artifact = {
+        "schema": "adaos.builder.prototype_evaluation_artifact.v1",
+        "project_ref": "project:demo",
+        "revision": "002",
+        "webui": {"ui": {}},
+        "prototype_resources": [
+            {
+                "resource_type": "prototype.project.demo.items",
+                "records": [{"id": "item-1", "status": "blocked"}],
+            }
+        ],
+    }
+
+    def submit(_messages, **_kwargs):
+        return {"job_id": "job-record-evidence"}
+
+    def wait(_job_id, **_kwargs):
+        result = json.loads(_model_result())
+        result["primary_jobs"][0]["evidence"] = [
+            "/prototype_resources/0/records/0/status"
+        ]
+        return {"status": "succeeded", "output_text": json.dumps(result)}
+
+    grade, request = grade_builder_prototype(
+        artifact=artifact,
+        user_turns=["Show blocked items."],
+        requirements={"primary_jobs": ["show blocked items"]},
+        prohibited_assumptions=[],
+        locale="en",
+        submitter=submit,
+        waiter=wait,
+    )
+
+    assert grade["dimensions"]["primary_jobs"]["checks"][0]["evidence"] == [
+        "/prototype_resources/0/records/0/status"
+    ]
+    assert '"prototype_resources"' in request["messages"][1]["content"]

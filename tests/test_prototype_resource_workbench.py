@@ -9,6 +9,7 @@ from adaos.sdk.developer import prototypes as developer_prototypes
 from adaos.sdk.developer.prototypes import derive_board_resource_spec
 from adaos.services.resources.prototype import prototype_webui_digest
 from adaos.services.resources import (
+    PrototypeResourceConflict,
     PrototypeResourceService,
     ResourceConflict,
     ResourceWorkbenchService,
@@ -408,6 +409,25 @@ def test_board_projection_derives_typed_disposable_resource(tmp_path: Path) -> N
     assert snapshots[0]["record_count"] == 2
     assert snapshots[0]["records"] == materialized["state"]["records"]
     assert snapshots[0]["records_digest"].startswith("sha256:")
+
+    evaluation = service.evaluation_snapshots(
+        project_ref="project:delivery",
+        revision="003",
+        webui_digest="sha256:" + "3" * 64,
+        resource_types=["prototype.delivery.cards"],
+    )
+    assert evaluation[0]["records"] == materialized["state"]["records"]
+
+    with pytest.raises(
+        PrototypeResourceConflict,
+        match="not the evaluated revision: project_ref",
+    ):
+        service.evaluation_snapshots(
+            project_ref="project:another",
+            revision="003",
+            webui_digest="sha256:" + "3" * 64,
+            resource_types=["prototype.delivery.cards"],
+        )
 
 
 def test_materialize_resources_stamps_authoritative_revision_identity(monkeypatch) -> None:

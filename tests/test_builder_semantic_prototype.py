@@ -414,6 +414,24 @@ def test_public_sdk_exposes_semantic_compilation() -> None:
     assert prototype_sdk.semantic_contract()["$id"] == "adaos.webui.semantic.v1"
 
 
+def test_semantic_runtime_resource_is_scoped_by_project() -> None:
+    brief, semantic = _fixture()
+
+    result = prototype_sdk.compile_semantic(
+        semantic,
+        brief=brief,
+        project_ref="project:work-review",
+    )
+
+    widgets = result["webui"]["ui"]["application"]["desktop"]["pageSchema"][
+        "widgets"
+    ]
+    resource_types = {
+        widget["dataSource"]["resourceType"] for widget in widgets
+    }
+    assert resource_types == {"prototype.project.work-review.work_items"}
+
+
 @pytest.mark.parametrize(
     ("semantic_pattern", "runtime_type", "runtime_pattern"),
     [

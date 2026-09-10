@@ -32,7 +32,7 @@ CASE_RESULT_SCHEMA = "adaos.builder.e2e_case_result.v1"
 REPORT_SCHEMA = "adaos.builder.e2e_report.v1"
 BASELINE_SCHEMA = "adaos.builder.e2e_baseline.v1"
 CHECKPOINT_SCHEMA = "adaos.builder.e2e_checkpoint.v1"
-RUNNER_VERSION = "0.2.0"
+RUNNER_VERSION = "0.3.0"
 _INLINE_STEP_OUTPUT_BYTES = 16_384
 _RESULTS = {"passed", "failed", "inconclusive", "skipped"}
 _LOWER_IS_BETTER = {
@@ -992,6 +992,10 @@ class CompatibilityBuilderExecutor:
     ) -> Mapping[str, Any]:
         from adaos.e2e.builder_grading import grade_builder_prototype
         from adaos.services.agent_context import get_ctx
+        from adaos.services.resources.prototype import (
+            PrototypeResourceService,
+            prototype_webui_digest,
+        )
 
         path_value = str(inputs.get("path") or "").strip()
         scenario_id = str(inputs.get("scenario_id") or "").strip()
@@ -1006,9 +1010,68 @@ class CompatibilityBuilderExecutor:
         webui_path = scenario_path / "webui.json"
         if not webui_path.is_file():
             raise BuilderE2EError(f"prototype artifact is missing: {webui_path}")
-        artifact = json.loads(webui_path.read_text(encoding="utf-8"))
-        if not isinstance(artifact, Mapping):
+        webui = json.loads(webui_path.read_text(encoding="utf-8"))
+        if not isinstance(webui, Mapping):
             raise BuilderE2EError("prototype artifact must be a JSON object")
+        page_schema = (
+            dict(webui.get("ui") or {})
+            .get("application", {})
+            .get("desktop", {})
+            .get("pageSchema", {})
+        )
+        builder_meta = (
+            dict(page_schema.get("meta") or {}).get("builder", {})
+            if isinstance(page_schema, Mapping)
+            else {}
+        )
+        revision = str(
+            dict(builder_meta or {}).get("ui_revision")
+            or dict(builder_meta or {}).get("proto")
+            or ""
+        ).strip()
+        if not revision:
+            raise BuilderE2EError("prototype artifact has no Builder revision identity")
+        project_ref = str(
+            inputs.get("project_ref")
+            or (f"project:{scenario_id}" if scenario_id else "")
+        ).strip()
+        if not project_ref:
+            raise BuilderE2EError("prototype.grade requires input.project_ref")
+
+        resource_types: list[str] = []
+
+        def collect_resource_types(value: Any) -> None:
+            if isinstance(value, Mapping):
+                if str(value.get("kind") or "") == "resourceQuery":
+                    resource_type = str(value.get("resourceType") or "").strip()
+                    if (
+                        resource_type.startswith("prototype.")
+                        and resource_type not in resource_types
+                    ):
+                        resource_types.append(resource_type)
+                for nested in value.values():
+                    collect_resource_types(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    collect_resource_types(nested)
+
+        collect_resource_types(webui)
+        resources = PrototypeResourceService().evaluation_snapshots(
+            project_ref=project_ref,
+            revision=revision,
+            webui_digest=prototype_webui_digest(webui),
+            resource_types=resource_types,
+        )
+        artifact = validate_builder_e2e_record(
+            "adaos.builder.prototype_evaluation_artifact.v1",
+            {
+                "schema": "adaos.builder.prototype_evaluation_artifact.v1",
+                "project_ref": project_ref,
+                "revision": revision,
+                "webui": dict(webui),
+                "prototype_resources": resources,
+            },
+        )
         relative = (
             Path("evidence")
             / "grading"
@@ -2240,7 +2303,7 @@ class BuilderE2ERunner:
                     "prototype_grader": {
                         "kind": "model",
                         "model": self.grader_model,
-                        "version": "1",
+                        "version": "2",
                     }
                 },
                 "cases": [

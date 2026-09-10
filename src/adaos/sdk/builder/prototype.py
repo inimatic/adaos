@@ -80,13 +80,20 @@ def model_context(brief: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def compile_semantic(
-    document: Mapping[str, Any], *, brief: Mapping[str, Any] | None = None
+    document: Mapping[str, Any],
+    *,
+    brief: Mapping[str, Any] | None = None,
+    project_ref: str | None = None,
 ) -> dict[str, Any]:
     """Compile a semantic Prototype document into canonical runtime artifacts."""
 
     from adaos.services.builder.semantic_prototype import compile_semantic_prototype
 
-    return compile_semantic_prototype(document, brief=brief)
+    return compile_semantic_prototype(
+        document,
+        brief=brief,
+        project_ref=project_ref,
+    )
 
 
 def semantic_contract() -> dict[str, Any]:

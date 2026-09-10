@@ -221,6 +221,52 @@ class PrototypeResourceService:
             )
         return snapshots
 
+    def evaluation_snapshots(
+        self,
+        *,
+        project_ref: str,
+        revision: str,
+        webui_digest: str,
+        resource_types: Sequence[str],
+    ) -> list[dict[str, Any]]:
+        """Return records proven to belong to one executable Prototype revision."""
+
+        snapshots: list[dict[str, Any]] = []
+        expected = {
+            "project_ref": _text(project_ref),
+            "revision": _text(revision),
+            "webui_digest": _text(webui_digest),
+        }
+        for resource_type in dict.fromkeys(
+            _text(item) for item in resource_types if _text(item)
+        ):
+            state = self._require_state(resource_type)
+            mismatches = [
+                key for key, value in expected.items() if _text(state.get(key)) != value
+            ]
+            if mismatches:
+                raise PrototypeResourceConflict(
+                    f"prototype resource {resource_type} is not the evaluated revision: "
+                    + ", ".join(mismatches)
+                )
+            records = [
+                dict(item)
+                for item in state.get("records") or []
+                if isinstance(item, Mapping)
+            ]
+            snapshots.append(
+                {
+                    "resource_type": resource_type,
+                    "definition_digest": _text(state.get("definition_digest")),
+                    "bundle_digest": _text(state.get("bundle_digest")),
+                    "generation": int(state.get("generation") or 0),
+                    "record_count": len(records),
+                    "records_digest": _digest(records),
+                    "records": _clone(records),
+                }
+            )
+        return snapshots
+
     def query(
         self,
         resource_type: str,

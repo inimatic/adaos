@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from pathlib import Path
@@ -41,6 +42,21 @@ def _validator(filename: str = "webui.semantic.v1.schema.json") -> Draft202012Va
 def _digest(value: Any) -> str:
     raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return f"sha256:{hashlib.sha256(raw.encode('utf-8')).hexdigest()}"
+
+
+def _runtime_resource_type(resource_id: str, project_ref: str | None) -> str:
+    if not project_ref:
+        return f"prototype.{resource_id}"
+    kind, separator, identifier = str(project_ref).strip().partition(":")
+    if not separator or not kind or not identifier:
+        _fail("project_ref must be a typed reference")
+    scope = re.sub(r"[^A-Za-z0-9_.-]+", "-", f"{kind}.{identifier}").strip(".-")
+    if not scope:
+        _fail("project_ref does not provide a runtime resource namespace")
+    if len(scope) > 120:
+        suffix = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:16]
+        scope = f"{scope[:103].rstrip('.-')}-{suffix}"
+    return f"prototype.{scope}.{resource_id}"
 
 
 def _fail(detail: str) -> None:
@@ -367,7 +383,10 @@ def _guard_expression(guard: Mapping[str, Any]) -> str:
 
 
 def compile_semantic_prototype(
-    value: Mapping[str, Any], *, brief: Mapping[str, Any] | None = None
+    value: Mapping[str, Any],
+    *,
+    brief: Mapping[str, Any] | None = None,
+    project_ref: str | None = None,
 ) -> dict[str, Any]:
     """Compile a validated semantic document into canonical Prototype artifacts."""
 
@@ -376,7 +395,7 @@ def compile_semantic_prototype(
     resource = dict(document["resource"])
     fields = {str(item["id"]): dict(item) for item in resource["fields"]}
     commands = {str(item["id"]): dict(item) for item in document["commands"]}
-    resource_type = f"prototype.{resource['id']}"
+    resource_type = _runtime_resource_type(str(resource["id"]), project_ref)
     selection_ref = f"selected_{resource['id']}_id"
     initial_state: dict[str, Any] = {selection_ref: ""}
     widgets: list[dict[str, Any]] = []

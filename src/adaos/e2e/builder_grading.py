@@ -75,7 +75,11 @@ _MODEL_RESULT_SCHEMA: dict[str, Any] = {
 }
 
 _SYSTEM_PROMPT = """You are an independent evaluator of an AdaOS declarative UI prototype.
-Grade only the supplied artifact against the supplied user turns and rubric.
+Grade only the supplied evaluation artifact against the supplied user turns and rubric.
+The artifact contains executable WebUI under /webui and exact revision-bound local
+Prototype records under /prototype_resources. Records may prove representative data
+states, but they do not prove an interaction unless /webui exposes the required
+control and executable declarative action or binding.
 Do not reward intent, labels, hidden state, or static sample values as proof of an
 interactive job. A supported job must have visible controls/data and executable
 declarative actions or bindings sufficient for that job. A representative state
@@ -87,7 +91,7 @@ declares. They do not prove row editing, filtering, selection, navigation, file
 attachment, validation, or lifecycle transitions. Mutating jobs need both an
 available control and an executable action or binding that consumes its value.
 Every supported or partial verdict must cite one or more existing RFC 6901 JSON
-pointers in the artifact. Be conservative: use unclear when evidence is
+pointers in the evaluation artifact. Be conservative: use unclear when evidence is
 insufficient. Return only the requested JSON object.
 """
 
@@ -317,7 +321,7 @@ def grade_builder_prototype(
                 }
             },
             request_id=request_id,
-            prompt_cache_key="adaos-builder-e2e-prototype-grader-v1",
+            prompt_cache_key="adaos-builder-e2e-prototype-grader-v2",
             timeout=min(15.0, timeout_seconds),
         )
     )
@@ -415,7 +419,7 @@ def grade_builder_prototype(
             "summary": str(parsed.get("summary") or "").strip()[:1200],
             "grader": {
                 "kind": "model",
-                "version": "1",
+                "version": "2",
                 "model": response.get("model"),
                 "response_id": response.get("id")
                 or dict(response.get("response") or {}).get("id"),

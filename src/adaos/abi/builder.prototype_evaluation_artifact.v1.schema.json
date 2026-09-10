@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.prototype_evaluation_artifact.v1",
+  "title": "AdaOS Builder Prototype Evaluation Artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "project_ref", "revision", "webui", "prototype_resources"],
+  "properties": {
+    "schema": {"const": "adaos.builder.prototype_evaluation_artifact.v1"},
+    "project_ref": {"type": "string", "pattern": "^(project|scenario|skill):[A-Za-z0-9_.-]{1,160}$"},
+    "revision": {"type": "string", "minLength": 1, "maxLength": 200},
+    "webui": {"type": "object"},
+    "prototype_resources": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["resource_type", "definition_digest", "bundle_digest", "generation", "record_count", "records_digest", "records"],
+        "properties": {
+          "resource_type": {"type": "string", "pattern": "^prototype\\."},
+          "definition_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+          "bundle_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+          "generation": {"type": "integer", "minimum": 0},
+          "record_count": {"type": "integer", "minimum": 0, "maximum": 1000},
+          "records_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+          "records": {"type": "array", "maxItems": 1000, "items": {"type": "object"}}
+        }
+      }
+    }
+  }
+}
