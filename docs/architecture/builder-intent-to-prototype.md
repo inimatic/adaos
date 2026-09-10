@@ -207,15 +207,24 @@ The semantic document describes roles and relationships rather than Client
 constructor details:
 
 - surfaces, regions, views, content priority, and responsive behavior;
-- domain data shapes, selection, filters, and derived presentation;
+- domain entities, collection item granularity, fields, relationships,
+  selection, filters, and derived presentation;
 - semantic commands, expected outcomes, and authority;
 - states, visibility, empty/error/loading/denied behavior;
 - localization keys and content examples;
-- stable semantic refs and accepted constraints.
+- stable semantic refs, accepted constraints, and requirement bindings.
 
 The document must have a deterministic compiler to `adaos.webui.v1`. Unknown
 or lossy mappings fail with a capability gap. Direct full-WebUI generation is
 a compatibility fallback and must be measured separately.
+
+Every accepted brief requirement must bind to one or more semantic nodes, or
+to a typed capability gap. The compiler emits source maps from those semantic
+nodes to runtime resources, widgets, fields, actions, states, and locale keys.
+Validation fails when a binding is unresolved or the compiled nodes cannot
+provide the declared behavior. Sharing a runtime resource name is not evidence
+that a repeated collection has the requested item granularity; that decision
+must be explicit in the semantic data shape before component selection.
 
 This is not a second browser runtime ABI. For a new managed Builder Project,
 the semantic document is the authoring source and `webui.json` is its compiled,
@@ -284,6 +293,12 @@ Every route has independent ceilings for fresh input, cached input, output,
 wall time, model attempts, and repair attempts. Exceeding a ceiling produces a
 typed partial result or clarification. It does not silently widen context or
 switch to a more expensive route.
+
+Ceilings and timeouts are safety controls, not latency remediations. Stage
+timings must first distinguish local orchestration, validation, Root transport
+and queueing, provider time-to-first-token, provider execution, output volume,
+and repair. A timeout may enforce a measured SLO after diagnosis; lowering it
+must never be reported as a performance improvement.
 
 Provider-native schema-constrained output or typed tool calls are preferred.
 Text JSON extraction and bracket repair remain compatibility behavior and are

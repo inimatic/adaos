@@ -493,5 +493,23 @@ grader 9.2 seconds. Provider execution, not Root connection or disk pressure,
 dominated the observed calls. One qualification repair emitted an invalid
 prefixed JSON Pointer, and a later repair request approached 96 KB. The result
 therefore validates the failure taxonomy and sidecar boundary, while exposing
-a repeatable-field Client ABI candidate and the need for stage-specific compact
-repair context plus provider-native structured output.
+an unresolved repeated-collection granularity decision and the need for
+stage-specific compact repair context plus provider-native structured output.
+It does not by itself prove that the Client needs a nested repeatable-field
+primitive: the admitted generic list/form composition could represent each
+check as a separate record if the semantic plan selected that item boundary.
+
+Two later diagnostic runs isolated both measurement and architecture defects.
+The first report over-counted generation calls and tokens because terminal
+telemetry was copied into later retained records and aggregated again. The
+collector now deduplicates request/job identity. The first trustworthy run
+after that correction, `sdk-equipment-20260910-10`, used two Builder model
+calls: 4,327 fresh input, 7,808 cached input, and 4,551 output tokens. It still
+scored `0.89375` and failed the hard outcome gate because a typed
+`repeated_collection/capture_each` brief requirement did not prevent the model
+from emitting one `longText` checklist field. The local validator took 93 ms,
+Root queueing took 6-8 ms, primary provider execution took 36.3 seconds, and
+one repair took 4.8 seconds. This is evidence for explicit semantic entity/item
+granularity, requirement bindings, and deterministic source-map validation.
+It is not evidence for a shorter validator timeout; timeouts remain outer
+safety controls and may be tuned only after stage-specific SLO diagnosis.

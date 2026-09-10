@@ -183,15 +183,16 @@ collection grid, voice, media, vision, and desktop widget implementations are
 now explicitly product-owned and can be disabled by browser profile, but still
 require retained compatibility fixtures before the clean baseline.
 
-A clean-profile RU equipment-inspection E2E adds the first measured C2/C4
-candidate. The generic form renders an array as readable long text but has no
-contract for a bounded, editable repeated field group with per-item value,
-validation, add/remove policy, keyboard behavior, and compact layout. The
-candidate passed structural validation and scored `0.89375`, yet failed the
-hard task gate because checklist entries were read-only. This is one visible
-development archetype, not sufficient cross-domain evidence to add a
-component. The inventory must record the gap now; C4 admission requires the
-same semantic need from at least one unrelated archetype.
+A clean-profile RU equipment-inspection E2E is evidence of an unresolved
+semantic-granularity decision, not yet a measured Client gap. The generated
+candidate modeled inspections as records and collapsed checklist entries into
+one long-text field. Existing generic list/form components can plausibly model
+checks as separate records, so that composition must be evaluated first. A
+bounded nested repeated-field group remains a C2/C4 candidate only when the
+accepted semantic shape requires nesting and either generic composition is
+proven insufficient or an unrelated archetype supplies the second occurrence
+required by C4. The inventory should record the unresolved need without
+advertising a component contract that has not been admitted.
 
 - [ ] `[must]` Extract Builder, Applications/Marketplace, Infrastate, Voice,
   and Media Center behavior from generic widgets and runtime services into

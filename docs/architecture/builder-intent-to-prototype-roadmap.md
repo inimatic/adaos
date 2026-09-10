@@ -364,13 +364,15 @@ aliases. This is evidence for the single-source component contract below, not
 its completion: the same facts still exist separately in schema, Client,
 catalog, parser, and tests.
 
-The clean RU equipment development case adds a typed Client capability gap:
-the current generic form can display an array as read-only long text, but it
-cannot truthfully edit a bounded repeated field group with per-item values and
-validation. A repeatable editable collection is therefore a C2/C4 candidate.
-This single inspected archetype is not sufficient for admission; a second
-unrelated development archetype must demonstrate the same semantic need before
-the primitive is added to the cross-domain tranche.
+The clean RU equipment development case does not yet establish a Client
+capability gap. The generated design chose an inspection as its collection
+item and collapsed the requested checklist into one `longText` field, even
+though the existing generic list/form composition could instead model each
+check as a resource record. A nested repeatable form group remains a C2/C4
+candidate only if a flat generic composition cannot meet the accepted brief
+or a second unrelated archetype demonstrates the same nested semantic need.
+The immediate blocker is explicit data granularity and requirement bindings in
+the brief/semantic compiler, not admission of a case-shaped component.
 
 - [ ] `[must]` Publish the next component-contract/catalog schema as one source
   for semantic role, properties, events, actions, state, i18n, accessibility,
@@ -404,6 +406,11 @@ manual tables.
 
 - [ ] `[must]` Replace or promote `webui.semantic.v0` with a complete versioned
   semantic document for the currently supported Prototype component set.
+- [ ] `[must]` Represent entity and collection-item granularity explicitly;
+  prohibit the design stage from collapsing an accepted repeated collection
+  into an opaque scalar unless the brief says it is read-only text.
+- [ ] `[must]` Bind every accepted brief requirement to semantic data, view,
+  command, state, or typed capability-gap refs and reject unresolved bindings.
 - [ ] `[must]` Publish `adaos.builder.prototype_plan.v1` as an adaptive DAG with
   typed inputs, outputs, dependencies, validation, budget, and route class.
 - [ ] `[must]` Implement `D0` deterministic routing for supported rename, move,
@@ -411,7 +418,8 @@ manual tables.
   calls.
 - [ ] `[must]` Implement a deterministic semantic-document to `webui.v1`
   compiler, including locales, fixture declarations, responsive mappings,
-  stable refs, and source maps back to semantic nodes.
+  stable refs, and source maps from requirements through semantic nodes to
+  emitted runtime nodes.
 - [ ] `[must]` Define one-way authority: new managed Projects edit semantic
   source and compile runtime WebUI; legacy WebUI remains authoritative behind
   the compatibility adapter until an explicit reviewed conversion.
@@ -441,6 +449,17 @@ partial reuse of that prefix, but repair requests still accumulated roughly
 96 KB of dynamic context. Repairs now retain candidate sidecars explicitly;
 the complete-WebUI/project-memory reductions, stage-specific repair packets,
 provider-native typed output, and content-addressed retrieval path remain open.
+
+Measurement correction (2026-09-10): the usage collector previously counted
+the same generation telemetry again when retained diagnostic copies carried it
+through later steps. The collector now deduplicates request/job identity before
+aggregation. The first trustworthy retained RU equipment run after this fix
+used two Builder model calls, 4,327 fresh input, 7,808 cached input, and 4,551
+output tokens. Its local validator took 93 ms; primary provider execution took
+36.3 seconds and one repair 4.8 seconds. A validator timeout would therefore
+mask no measured bottleneck. Root queueing was 6-8 ms, while the draft
+checkpoint upload was about 3.4 seconds and remains a separate orchestration
+optimization target.
 
 - [ ] `[must]` Replace complete WebUI/project-memory/history inclusion with
   brief deltas, semantic slices, accepted constraints, findings, and retrievable
