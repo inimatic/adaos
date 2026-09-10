@@ -10,6 +10,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from jsonschema import Draft202012Validator
 
+from adaos.services.builder_intent import capture_intent, compile_prototype_brief
 from adaos.services.builder_domain_packs import (
     domain_pack_receipts,
     resolve_domain_packs,
@@ -566,6 +567,13 @@ def qualify_ui_request(
         result = copy.deepcopy(adapter.qualify_ui_request(request))
         result.update(_domain_metadata(domain_packs))
         return result
+    intent = capture_intent(request)
+    prototype_brief = compile_prototype_brief(intent)
+    brief_operation_kinds = [
+        str(item.get("kind") or "")
+        for item in prototype_brief.get("operations") or []
+        if isinstance(item, Mapping) and str(item.get("kind") or "")
+    ]
     text = _normalized_text(request)
     literal_text_change = _literal_text_change(request)
     prototype_iteration = _prototype_iteration(request)
@@ -629,19 +637,27 @@ def qualify_ui_request(
         requirements["literal_text_change"] = literal_text_change
     if prototype_iteration:
         requirements["prototype_iteration"] = prototype_iteration
+    requirements["prototype_brief_ref"] = prototype_brief["brief_id"]
+    requirements["brief_operation_kinds"] = brief_operation_kinds
     gaps: list[dict[str, Any]] = []
     return {
         "schema": QUALIFICATION_SCHEMA,
         "request_digest": _digest({"request": request}),
-        "surface_kind": "board"
-        if board
-        else "ui"
-        if literal_text_change
-        else "unspecified",
+        "surface_kind": (
+            "board"
+            if board
+            else "ui"
+            if literal_text_change
+            else "interactive_collection"
+            if brief_operation_kinds
+            else "unspecified"
+        ),
         "concepts": concepts,
         "requirements": requirements,
         "capability_gaps": gaps,
         "ready": not gaps,
+        "intent": intent,
+        "prototype_brief": prototype_brief,
         "input_attribution": {"profile": "generic", "domain_packs": []},
     }
 
@@ -667,6 +683,15 @@ def selected_ui_capabilities(
     }
     selected_ids: list[str] = []
     requirements = qualification.get("requirements") or {}
+    brief_operation_kinds = {
+        str(value or "").strip()
+        for value in requirements.get("brief_operation_kinds") or []
+        if str(value or "").strip()
+    }
+    representative_states = dict(
+        dict(qualification.get("prototype_brief") or {}).get("representative_states")
+        or {}
+    )
     for key in ("recipe_id", "component_type", "layout_id"):
         value = str(requirements.get(key) or "").strip()
         if value and value not in selected_ids:
@@ -675,6 +700,25 @@ def selected_ui_capabilities(
         requirements.get("resource_query") or requirements.get("operation_kinds")
     ) and "recipe.resource_board_workbench" not in selected_ids:
         selected_ids.append("recipe.resource_board_workbench")
+    if (
+        "transition" in brief_operation_kinds
+        and representative_states.get("state") == "known"
+        and "recipe.resource_board_workbench" not in selected_ids
+    ):
+        selected_ids.append("recipe.resource_board_workbench")
+    if (
+        brief_operation_kinds & {"inspect", "list"}
+        and brief_operation_kinds
+        & {"create", "update", "assign", "transition", "delete", "archive"}
+        and "recipe.master_detail" not in selected_ids
+    ):
+        selected_ids.append("recipe.master_detail")
+    if "create" in brief_operation_kinds and "recipe.data_entry" not in selected_ids:
+        selected_ids.append("recipe.data_entry")
+    if brief_operation_kinds & {"search", "filter"}:
+        for component_id in ("input.text", "input.selector"):
+            if component_id not in selected_ids:
+                selected_ids.append(component_id)
     request_text = str(request or "")
     for item_id in index:
         if (

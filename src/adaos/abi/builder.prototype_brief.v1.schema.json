@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.prototype_brief.v1",
+  "title": "AdaOS Builder interpreted Prototype brief",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "brief_id",
+    "digest",
+    "intent_ref",
+    "intent_digest",
+    "problem",
+    "outcome",
+    "actors",
+    "principal_jobs",
+    "entities",
+    "operations",
+    "representative_states",
+    "boundaries",
+    "constraints",
+    "assumptions",
+    "open_questions",
+    "capability_gaps",
+    "interpretation"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.builder.prototype_brief.v1" },
+    "brief_id": { "type": "string", "pattern": "^brief:[a-f0-9]{24}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "intent_ref": { "type": "string", "pattern": "^intent:[a-f0-9]{24}$" },
+    "intent_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "problem": { "$ref": "#/$defs/knowledgeField" },
+    "outcome": { "$ref": "#/$defs/knowledgeField" },
+    "actors": { "$ref": "#/$defs/knowledgeField" },
+    "principal_jobs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/evidencedStatement" }
+    },
+    "entities": { "$ref": "#/$defs/knowledgeField" },
+    "operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "statement", "target", "effect_scope", "authority", "evidence"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "kind": {
+            "enum": ["list", "inspect", "search", "filter", "sort", "create", "update", "assign", "transition", "delete", "archive", "other"]
+          },
+          "statement": { "type": "string", "minLength": 1 },
+          "target": { "$ref": "#/$defs/knowledgeField" },
+          "effect_scope": { "enum": ["read", "prototype", "external", "unknown"] },
+          "authority": { "enum": ["allowed", "denied", "unknown"] },
+          "evidence": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+        }
+      }
+    },
+    "representative_states": { "$ref": "#/$defs/knowledgeField" },
+    "boundaries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data_effects", "external_effects", "destructive_effects"],
+      "properties": {
+        "data_effects": { "$ref": "#/$defs/knowledgeField" },
+        "external_effects": { "$ref": "#/$defs/knowledgeField" },
+        "destructive_effects": { "$ref": "#/$defs/knowledgeField" }
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["locale", "responsive", "accessibility", "content_volume"],
+      "properties": {
+        "locale": { "$ref": "#/$defs/knowledgeField" },
+        "responsive": { "$ref": "#/$defs/knowledgeField" },
+        "accessibility": { "$ref": "#/$defs/knowledgeField" },
+        "content_volume": { "$ref": "#/$defs/knowledgeField" }
+      }
+    },
+    "assumptions": { "type": "array", "items": { "$ref": "#/$defs/evidencedStatement" } },
+    "open_questions": { "type": "array", "items": { "$ref": "#/$defs/evidencedStatement" } },
+    "capability_gaps": { "type": "array", "items": { "$ref": "#/$defs/evidencedStatement" } },
+    "interpretation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "confidence", "unresolved_fields"],
+      "properties": {
+        "mode": { "enum": ["deterministic_explicit", "model_assisted"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "unresolved_fields": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+      }
+    }
+  },
+  "$defs": {
+    "knowledgeField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "evidence"],
+      "properties": {
+        "state": { "enum": ["known", "unknown", "not_required"] },
+        "value": {},
+        "evidence": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "evidencedStatement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "statement", "evidence", "confidence"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "statement": { "type": "string", "minLength": 1 },
+        "evidence": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    }
+  }
+}

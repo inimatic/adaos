@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.intent.v1",
+  "title": "AdaOS Builder user intent evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "intent_id",
+    "digest",
+    "statement",
+    "locale",
+    "source",
+    "scope",
+    "explicit_refs",
+    "authority"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.builder.intent.v1" },
+    "intent_id": { "type": "string", "pattern": "^intent:[a-f0-9]{24}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "statement": { "type": "string", "minLength": 1 },
+    "locale": { "type": "string", "minLength": 2, "maxLength": 35 },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["chat", "api", "e2e", "unknown"] },
+        "ref": { "type": ["string", "null"], "minLength": 1 },
+        "turn_id": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_ref", "change_ref"],
+      "properties": {
+        "project_ref": { "type": ["string", "null"] },
+        "change_ref": { "type": ["string", "null"] }
+      }
+    },
+    "explicit_refs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime_scope", "external_effects", "destructive_effects"],
+      "properties": {
+        "runtime_scope": { "enum": ["prototype", "trial", "workspace", "unknown"] },
+        "external_effects": { "enum": ["allowed", "denied", "unknown"] },
+        "destructive_effects": { "enum": ["allowed", "denied", "unknown"] }
+      }
+    }
+  }
+}
