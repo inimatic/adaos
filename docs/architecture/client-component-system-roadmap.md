@@ -153,6 +153,16 @@ TypeScript compilation, profile tests, registry tests, inventory, and boundary
 checks pass. Compact/wide browser traces for both profiles are still required
 by C0/C3.
 
+Client commit `0e20627` removes the hidden Builder control injection from the
+generic command bar. Recognition by widget ID/title, the synthetic Issues
+button, and its Dev Tickets action now belong to the registered
+`builder.command-bar.compatibility.v1` extension and are absent from the
+generic profile. Declarative buttons/actions remain the normal universal path.
+The generated inventory records the behavior extension, and the boundary gate
+now covers the command bar implementation. Evidence is TypeScript compilation,
+18/18 focused command-bar tests, inventory, and boundary checks. Test bundle
+generation took 43.6 seconds; browser execution took 0.04 seconds.
+
 The gate remains open. The generated inventory makes the next failures
 explicit: the semantic contract advertises action kinds `apply_review_change`,
 `emit`, `navigate`, and `patch_y`, and binding kinds `projection` and `view`,
